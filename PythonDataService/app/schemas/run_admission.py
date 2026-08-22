@@ -91,6 +91,23 @@ class StrategyValidationAdmissionFact(BaseModel):
     next_step: str | None = None
 
 
+class ProgramBuildAdmissionFact(BaseModel):
+    """Admission-time proof that loaded program bytes match qualification."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["PROVEN", "UNPROVEN", "NOT_APPLICABLE"]
+    program_key: str
+    program_version: str | None = None
+    golden_trace_root: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    running_artifact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    qualification_receipt_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    verified_at_ms: int = Field(ge=0)
+    evidence_refs: tuple[str, ...] = ()
+    explanation: str
+    next_step: str | None = None
+
+
 class StartRunFacts(BaseModel):
     """Bot-owned immutable and runtime facts for a proposed first run."""
 
@@ -106,6 +123,7 @@ class StartRunFacts(BaseModel):
     # defaulted — every construction site must be explicit about which tier
     # it is admitting into.
     mode: Literal["log_only", "dry_run", "trade"]
+    program_build: ProgramBuildAdmissionFact
     validation: StrategyValidationAdmissionFact
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
@@ -158,6 +176,7 @@ class ResumeRunFacts(BaseModel):
     # tier the instance was created with. See StartRunFacts.mode for why this
     # is required, not defaulted.
     mode: Literal["log_only", "dry_run", "trade"]
+    program_build: ProgramBuildAdmissionFact
     validation: StrategyValidationAdmissionFact
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
@@ -180,6 +199,7 @@ class RunAdmissionFactAges(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    program_build: int
     runtime: int
     process: int
     market_data: int

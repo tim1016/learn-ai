@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "receipts": [
+    {
+      "schema_version": 1,
+      "program_key": "ema_crossover_signal",
+      "program_version": "ema-crossover-signal/v1",
+      "golden_trace_root": "82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
+      "artifact_digest": "26df6b41475cbd55a082d57657d68f72a78ee80f1e9c7c2461205a81f7a06e72",
+      "qualification_suite": "tests/engine/strategy/test_ema_signal_program.py::test_validated_ema_settings_corpus_has_a_pinned_trace_root",
+      "qualified_at_ms": 1787366133341,
+      "receipt_hash": "82ea2dc225a5d1f59ee15f4c9c6ec1d0fdaea77cad89e48ab9a7e8fb8382d450"
+    }
+  ]
+}

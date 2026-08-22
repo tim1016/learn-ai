@@ -273,6 +273,7 @@ class BotTaskRegistry:
             carryover_account_policy_enabled=self._carryover_allowed,
             session_capability=get_broker_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
+            legacy_migration_repository=self._bindings,
         )
         self._run_evidence = BotRunEvidenceService(
             self._bindings,
@@ -330,6 +331,9 @@ class BotTaskRegistry:
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
         strategy_params: dict[str, Any] | None = None,
+        strategy_param_origins: dict[
+            str, Literal["registered_default", "deploy_override"]
+        ] | None = None,
     ) -> AdmittedBotStart:
         """Start one bot and return the exact execution-time admission."""
         require_start_configuration(
@@ -349,6 +353,7 @@ class BotTaskRegistry:
             evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
             strategy_params=strategy_params,
+            strategy_param_origins=strategy_param_origins,
         )
         async with self._operation_lock(strategy_instance_id):
             try:
@@ -376,6 +381,9 @@ class BotTaskRegistry:
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
         strategy_params: dict[str, Any] | None = None,
+        strategy_param_origins: dict[
+            str, Literal["registered_default", "deploy_override"]
+        ] | None = None,
     ) -> RunAdmissionDecision:
         """Project the same Start decision used immediately before mutation."""
         require_start_configuration(
@@ -395,6 +403,7 @@ class BotTaskRegistry:
             evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
             strategy_params=strategy_params,
+            strategy_param_origins=strategy_param_origins,
         )
         async with self._operation_lock(strategy_instance_id):
             try:

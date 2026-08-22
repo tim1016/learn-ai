@@ -18,6 +18,7 @@ from app.schemas.market_liveness import (
 )
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
+    ProgramBuildAdmissionFact,
     ResumeCheckpointAdmissionFact,
     ResumeRunFacts,
     RunProcessAdmissionFact,
@@ -51,6 +52,23 @@ def _validation(observed_at_ms: int, *, state: str = "VERIFIED") -> StrategyVali
     )
 
 
+def _program_build(
+    observed_at_ms: int,
+    *,
+    state: str = "NOT_APPLICABLE",
+) -> ProgramBuildAdmissionFact:
+    return ProgramBuildAdmissionFact(
+        state=state,
+        program_key="deployment_validation",
+        verified_at_ms=observed_at_ms,
+        explanation=(
+            "The running program is unproven."
+            if state == "UNPROVEN"
+            else "No registered Signal Program applies."
+        ),
+    )
+
+
 def _bot(
     *,
     process_state: str = "ABSENT",
@@ -67,6 +85,7 @@ def _bot(
         configuration_hash="a" * 64,
         sealed_account_id="paper-account",
         mode=mode,
+        program_build=_program_build(observed_at_ms),
         validation=_validation(observed_at_ms),
         runtime=StartRuntimeAdmissionFact(
             state=runtime_state,
@@ -183,6 +202,7 @@ def _resume_bot(
         configuration_hash="b" * 64,
         sealed_account_id="paper-account",
         mode=mode,
+        program_build=_program_build(_NOW - 1_000),
         validation=_validation(_NOW - 1_000),
         runtime=StartRuntimeAdmissionFact(
             state="READY",
@@ -221,6 +241,7 @@ def test_start_admission_allows_only_proven_absence_and_flat_custody() -> None:
     assert decision.strategy_instance_id == _SID
     assert decision.proposed_run_id == "run-new"
     assert decision.fact_ages_ms.model_dump() == {
+        "program_build": 1_000,
         "runtime": 1_000,
         "process": 1_000,
         "market_data": 1_000,
@@ -228,6 +249,18 @@ def test_start_admission_allows_only_proven_absence_and_flat_custody() -> None:
         "clerk": 500,
     }
     assert "clerk:paper-account:7" in decision.evidence_refs
+
+
+def test_start_admission_rejects_an_unproven_program_build_before_runtime() -> None:
+    bot = _bot().model_copy(
+        update={"program_build": _program_build(_NOW - 1_000, state="UNPROVEN")}
+    )
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
+    assert decision.explanation == "The running program is unproven."
 
 
 def test_start_admission_blocks_a_different_sealed_account_before_effects() -> None:

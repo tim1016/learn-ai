@@ -10,12 +10,22 @@ import pytest
 import app.engine.live.durable_append_log as durable_append_log
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
+from app.schemas.run_admission import ProgramBuildAdmissionFact
+from app.schemas.signal_program_seal import (
+    ConfiguredSignalProgramSeal,
+    ResolvedSignalParameter,
+    SealedBotProgram,
+    SignalClockContract,
+    SignalDataContract,
+    seal_bot_program,
+)
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BotRunOutcomeRecord,
     BotRunRecord,
     BrokerBotBinding,
     CurrentRunBinding,
+    ProgramBuildRunEvidence,
     RunIdentityConflictError,
     RunOutcomeConflictError,
     StrategyInstanceConfigurationConflictError,
@@ -41,6 +51,8 @@ def _binding(
     symbol: str = "SPY",
     evidence_override: AlpacaPaperEvidenceOverride | None = None,
     strategy_params: dict[str, object] | None = None,
+    sealed_program: SealedBotProgram | None = None,
+    program_build: ProgramBuildAdmissionFact | None = None,
 ) -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id=_SID,
@@ -50,8 +62,57 @@ def _binding(
         evidence_override=evidence_override,
         action_plan=alpaca_v1_action_plan(symbol),
         strategy_params=strategy_params,
+        sealed_program=sealed_program,
+        program_build=program_build,
         run_id=run_id,
         created_at_ms=created_at_ms,
+    )
+
+
+def _sealed_program(*, run_id: str = "run-001") -> SealedBotProgram:
+    configured = ConfiguredSignalProgramSeal(
+        program_key="ema_crossover_signal",
+        program_version="ema-crossover-signal/v1",
+        golden_trace_root="a" * 64,
+        parameters={
+            "fast_period": ResolvedSignalParameter(value=12, unit="bars", origin="registered_default"),
+        },
+        parameters_match_validated_settings=True,
+        data=SignalDataContract(
+            provider="polygon",
+            symbol="SPY",
+            base_timeframe_ms=60_000,
+            decision_timeframe_ms=60_000,
+        ),
+        clock=SignalClockContract(use_rth=True, warmup_lookback_days=5),
+    )
+    return seal_bot_program(
+        strategy_instance_id=_SID,
+        configured_signal=configured,
+        configured_signal_hash=configured.semantic_hash(),
+        broker="alpaca",
+        sealed_account_id="acct-1",
+        mode="trade",
+        action_plan={"on_enter": [], "on_exit": []},
+        quantity=1,
+        carryover_policy="FORBID",
+        validation_event_id="event-1",
+        validation_snapshot_sha256="d" * 64,
+        sealed_at_ms=1_000,
+    )
+
+
+def _proven_program_build(seal: SealedBotProgram) -> ProgramBuildAdmissionFact:
+    return ProgramBuildAdmissionFact(
+        state="PROVEN",
+        program_key="ema_crossover_signal",
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=5_000,
+        evidence_refs=(f"program-build-digest:{'b' * 64}",),
+        explanation="The running Signal Program build matches its golden qualification receipt.",
     )
 
 
@@ -312,6 +373,76 @@ def test_terminal_outcome_rejects_a_run_record_with_a_mismatched_run_id(
         repository.record_outcome(outcome)
 
     assert not (tmp_path / "live_state" / _SID / "run_outcomes" / f"{binding.run_id}.json").exists()
+
+
+def test_program_build_evidence_is_recorded_at_launch_and_read_back(
+    tmp_path: Path,
+) -> None:
+    """#1728 Gap 2: the panel must read this exact per-run record, not a
+    fresh re-verification that can drift from what actually started running.
+    """
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    proof = _proven_program_build(seal)
+    binding = _binding(sealed_program=seal, program_build=proof)
+
+    assert repository.read_program_build_evidence(_SID, binding.run_id) is None
+
+    repository.record_launch(binding, launch_reason="deploy")
+
+    evidence = repository.read_program_build_evidence(_SID, binding.run_id)
+    assert evidence == ProgramBuildRunEvidence(
+        strategy_instance_id=_SID,
+        run_id=binding.run_id,
+        sealed_program_hash=seal.bot_configuration_hash,
+        program_version=proof.program_version,
+        golden_trace_root=proof.golden_trace_root,
+        running_artifact_digest=proof.running_artifact_digest,
+        qualification_receipt_hash=proof.qualification_receipt_hash,
+        verified_at_ms=proof.verified_at_ms,
+    )
+    # A different run identity for the same instance has no evidence of its own.
+    assert repository.read_program_build_evidence(_SID, "run-other") is None
+    assert repository.read_program_build_evidence("other-instance", binding.run_id) is None
+
+
+def test_program_build_evidence_is_absent_when_build_was_never_proven(
+    tmp_path: Path,
+) -> None:
+    """A build that closed UNPROVEN at Start writes no evidence file — the
+    panel must fall back to a live check rather than read a stale ``None``.
+    """
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    unproven = ProgramBuildAdmissionFact(
+        state="UNPROVEN",
+        program_key="ema_crossover_signal",
+        verified_at_ms=5_000,
+        explanation="The stored Signal Program seal does not match this instance or registry contract.",
+    )
+    binding = _binding(sealed_program=seal, program_build=unproven)
+
+    repository.record_launch(binding, launch_reason="deploy")
+
+    assert repository.read_program_build_evidence(_SID, binding.run_id) is None
+
+
+def test_program_build_evidence_rejects_a_record_with_a_mismatched_identity(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    binding = _binding(sealed_program=seal, program_build=_proven_program_build(seal))
+    repository.record_launch(binding, launch_reason="deploy")
+    evidence_path = (
+        tmp_path / "live_state" / _SID / "program_build_evidence" / f"{binding.run_id}.json"
+    )
+    corrupt = json.loads(evidence_path.read_text(encoding="utf-8"))
+    corrupt["run_id"] = "run-other"
+    evidence_path.write_text(json.dumps(corrupt), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="program-build evidence belongs"):
+        repository.read_program_build_evidence(_SID, binding.run_id)
 
 
 def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(

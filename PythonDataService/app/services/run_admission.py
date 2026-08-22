@@ -64,6 +64,7 @@ def _decision(
     next_step: str | None,
 ) -> RunAdmissionDecision:
     evidence_refs = [
+        *bot.program_build.evidence_refs,
         *bot.validation.evidence_refs,
         f"bot-process-registry:{bot.process.registry_generation}",
         f"market-data-feed:{bot.market_data.feed_id or 'unknown'}:{bot.market_data.observed_at_ms}",
@@ -108,6 +109,7 @@ def evaluate_run_admission(
 ) -> RunAdmissionDecision:
     """Decide Start or Resume from bot and Clerk facts; unknown blocks."""
     fact_ages_ms = RunAdmissionFactAges(
+        program_build=evaluated_at_ms - bot.program_build.verified_at_ms,
         runtime=evaluated_at_ms - bot.runtime.observed_at_ms,
         process=evaluated_at_ms - bot.process.observed_at_ms,
         market_data=evaluated_at_ms - bot.market_data.observed_at_ms,
@@ -168,6 +170,14 @@ def evaluate_run_admission(
             reason_code="SEALED_ACCOUNT_MISMATCH",
             explanation="The immutable run binding names a different custody account than this Clerk snapshot.",
             next_step="Redeploy against the selected account; do not adopt changed custody on Resume.",
+        )
+    if bot.program_build.state == "UNPROVEN":
+        return decide(
+            allowed=False,
+            reason_code="PROGRAM_BUILD_UNPROVEN",
+            explanation=bot.program_build.explanation,
+            next_step=bot.program_build.next_step
+            or "Re-run the program qualification job and deploy a new sealed instance.",
         )
     if bot.validation.state != "VERIFIED":
         return decide(
