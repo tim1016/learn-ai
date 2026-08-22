@@ -82,6 +82,45 @@ stop the current bot if needed and deploy a new `strategy_instance_id`.
 Resume creates a new run of the unchanged binding; it does not provide a
 rebinding path.
 
+## Signal Program build proof and legacy seal migration
+
+A strategy backed by a registered Signal Program (currently only EMA Crossover
+Signal) seals its exact resolved semantics — program version, golden trace
+root, every resolved parameter with its unit and origin — once at deploy time.
+Every Start and every Resume then re-hash the currently loaded program bytes
+and require a golden-qualification receipt proving those exact bytes were
+re-run against that program's own reference corpus for the sealed
+`(program_version, golden_trace_root)`. Missing, stale, or mismatched evidence
+refuses the run as `PROGRAM_BUILD_UNPROVEN` before any bar is evaluated or any
+effect can occur; the panel's `explanation` and `next_step` are backend-
+authored, so the recovery is always stated, never guessed. The usual recovery
+is re-running the golden qualification job from `PythonDataService/` against
+the currently deployed bytes —
+
+```bash
+.venv/bin/python -m scripts.run_signal_program_build_qualification
+```
+
+— which mints a fresh receipt only after that program's own golden-trace suite
+passes; a code change that was never re-qualified after moving the program
+version or trace root cannot produce an admissible receipt this way. If the
+loaded bytes are simply the wrong build, the fix is deploying a newly sealed
+instance instead. A strategy with no registered Signal Program at all (for
+example EMA Crossover 2 bps or the legacy EMA Crossover compatibility key)
+reports `NOT_APPLICABLE` rather than `PROGRAM_BUILD_UNPROVEN` and is not
+gated by this proof; it runs on its existing, non-sealed execution path.
+
+A strategy instance deployed before this seal existed has no v2 seal on file.
+Its first Resume after this feature migrates it automatically: if its
+persisted parameters still validate against the currently registered strategy
+contract, Resume appends an exact seal under the same `strategy_instance_id`
+and proceeds — no operator action needed. If they no longer validate, Resume
+instead refuses with `PROGRAM_BUILD_UNPROVEN` and a `next_step` naming the
+exact deterministically-derived clone instance id to deploy in its place; the
+original instance's configuration and history remain permanently inspectable,
+but it can never Resume again under its own id. Deploying the named clone
+requires fresh parameters — it is a new deployment, not a rebind.
+
 ## SQLite manual paper tickets
 
 The Alpaca Account Desk is the only manual-order entry point when its selected

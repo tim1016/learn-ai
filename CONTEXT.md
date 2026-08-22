@@ -1825,3 +1825,56 @@ The legacy IBKR account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` executable writers
 retired with #1583; durable rows remain readable as historical evidence.
 The two live Alpaca families are **Run registration** and **Runner restoration
 record** above, and they are never used interchangeably.
+
+## Signal Program build proof and legacy seal migration (resolved 2026-08-21)
+
+**Lineage: live.**
+
+Decision record: ADR 0043. Sharpens **Signal Program** and **Sealed account**
+above for the PRD Slice 2 build that actually seals a deployed program and
+proves its running build at Start/Resume.
+
+- **Configured-signal seal** — the inner, self-hashed identity of one deployed
+  Signal Program: program key/version, golden trace root, every resolved
+  parameter as an explicit value/unit/origin triple,
+  `parameters_match_validated_settings`, and the closed data/clock contracts
+  (provider, symbol, timeframes, calendar, RTH, warmup, pause/replay policy).
+  It carries no account, mode, or execution plan.
+  _Avoid_: signal hash, program hash (names a field, not the payload).
+- **Bot-configuration seal** — the outer, self-hashed identity that wraps a
+  configured-signal seal and adds account, mode, Action Plan, quantity,
+  carryover policy, and the selected validation event/snapshot.
+  `strategy_instance_id` binds exactly one. It is appended alongside — never in
+  place of — the strategy instance's original v1 `configuration_hash`; the two
+  live as separate create-once artifacts under the same instance directory.
+  _Avoid_: v2 hash, seal hash, bot hash.
+- **Program build proof** — the Start/Resume admission fact answering whether
+  the currently loaded program bytes have a golden-qualification receipt for
+  the sealed `(program_version, golden_trace_root)`. One of three closed
+  states: `PROVEN`; `UNPROVEN`, which refuses the run as
+  `PROGRAM_BUILD_UNPROVEN` before any run or effect; or `NOT_APPLICABLE` for a
+  `strategy_key` with no registered Signal Program at all, which does not gate.
+  A registration may never acquire this identity by inheriting another
+  registration's contract object — each sealed program authors its own.
+  _Avoid_: build hash, artifact proof.
+- **Program build receipt** — the golden-qualification job's committed
+  evidence binding one running-artifact digest to one `(program_version,
+  golden_trace_root)`. Minted only after that program's own golden-trace suite
+  passes as a fresh subprocess run; a hand-authored or stale receipt is not
+  evidence, and a behavior change without a matching version/root bump leaves
+  the prior, now digest-mismatched receipt unable to prove the new bytes.
+- **Signal-decision digest closure** — the exact file set a program's build
+  proof hashes: the transitive first-party import closure of its declared
+  artifact roots, minus a documented, reasoned exclusion list of files proven
+  unreachable from the decision math before the evaluation stage settles.
+  Neither the roots alone nor the full unfiltered import graph is this
+  closure; an undeclared drift in either direction fails a dedicated census
+  test before it can land.
+- **Legacy seal migration** — the append-or-clone rule for a strategy instance
+  that predates the v2 seal. Append an exact seal under the same
+  `strategy_instance_id` when every semantic field still reconstructs from
+  persisted v1 data; otherwise clone a new, deterministically-derived instance
+  id with durable, one-directional lineage evidence. Either path leaves the
+  original v1 bytes untouched forever; a clone is inspectable under its own id
+  but the original can never Resume again under its old one.
+  _Avoid_: seal migration, resealing, v2 upgrade.

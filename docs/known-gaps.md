@@ -125,3 +125,27 @@ No known-open items. The vocabulary-snapshot source-pinning, Broker V2 REST
 generated-type, and accepted-ADR `Vocabulary:` metadata gates previously tracked
 here (issues #1666, #1667, #1668) are closed and merged to master as of
 2026-08-19; git history is the record.
+
+## 8. Sealed Signal Program admission (verified 2026-08-21, issue #1728 / ADR 0043)
+
+- **`CANDIDATE_UNCAPTURED_AT_CRASH` is not implemented.** The PRD's executive
+  summary and FR-016 require replay to emit this named receipt when it finds a
+  staged candidate that crashed before Clerk intake, applying `DISCARD` and
+  creating no effect. No occurrence of `CANDIDATE_UNCAPTURED_AT_CRASH` exists
+  anywhere under `PythonDataService/app`; the `DecisionOutcome` literal in
+  `app/broker/alpaca/clerk/sqlite/decision_receipts.py` has no crash-window
+  outcome. This is distinct from — and not covered by — the separate,
+  already-merged Resume-after-crash work (PRD #1716, PRs #1717–#1720).
+- **`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
+  of their own.** Both were left with `signal_program_contract=None` /
+  `signal_program_factory=None` after the `dataclasses.replace()` identity-leak
+  fix (see ADR 0043 §4) rather than being given their own qualification, so
+  `prove_running_program_build` reports `NOT_APPLICABLE` and neither strategy's
+  running bytes are checked against any golden corpus. Already tracked in-code
+  and as issue #1730.
+- **Retention sizing for open cycles longer than 30 trading days remains
+  undecided** (PRD §27 item 3). `MAX_DECISION_RECEIPTS_PER_STRATEGY = 1_000`
+  (`app/broker/alpaca/clerk/sqlite/decision_receipts.py`) bounds the per-
+  strategy decision-receipt tail by row count, not by trading-day coverage;
+  whether 1,000 rows safely covers every retained, non-`protected_*` receipt
+  across a cycle longer than 30 trading days has not been demonstrated.
