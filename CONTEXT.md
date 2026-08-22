@@ -68,6 +68,14 @@ is archived while the code it names still runs.
   orders. Submission mode is part of immutable instance configuration, so
   changing an existing live-paper instance into a dry-run instance creates a
   new `strategy_instance_id`.
+- **Sealed custody account** — the exact Clerk account captured in the final
+  Start custody snapshot and made immutable with the strategy instance. Every
+  later Resume and Clerk registration must match it; a legacy instance without
+  a seal is readable evidence but cannot be resumed into newly selected custody.
+- **Validation admission fact** — the Start/Resume-time receipt that re-reads
+  the active human validation event and re-hashes each referenced validator,
+  settings, and audit artifact. A rendered deploy page is not this fact; stale,
+  missing, or unreadable proof refuses a new run.
 - **Command intent identity** — the durable identifier for one operator command
   intent across transport retries. Reusing it with the same action and payload
   asks for the original outcome; reusing it with a different action or payload
@@ -417,10 +425,11 @@ so they survive a broker change.
   account interpretation with this snapshot.
 - **Start admission decision** — the backend-authored answer to whether a new
   run may start for one immutable strategy instance. It is a pure function of
-  the bot process fact and Clerk custody snapshot; market-data readiness is
-  carried inside the bot-side facts together with runner boot-recovery and
-  restart-intensity evidence. Preview and execution call the same typed policy,
-  and Angular renders its explanation without recreating safety logic.
+  the bot process fact, validation admission fact, and Clerk custody snapshot;
+  market-data readiness is carried inside the bot-side facts together with
+  runner boot-recovery and restart-intensity evidence. Preview and execution
+  call the same typed policy, and Angular renders its explanation without
+  recreating safety logic.
 - **Start custody fence** — the Clerk intake lock held across the final Start
   decision and run activation. The fence proves that no new Clerk effect can
   change the exact custody journal cut between admission and activation. If the

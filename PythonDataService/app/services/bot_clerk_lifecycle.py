@@ -56,23 +56,10 @@ async def register_alpaca_duty_run(
     if clerk is None:
         raise ActiveClerkUnavailableError("The Alpaca Clerk is not installed.")
     if admission_snapshot is None or not isinstance(clerk, RevisionBoundRunRegistrar):
-        if binding.mode == "dry_run":
-            await clerk.register_strategy_run(
-                binding,
-                sealed_account_id=synthetic_account_id_for_strategy(binding.strategy_instance_id),
-            )
-        else:
-            await clerk.register_strategy_run(binding)
+        await clerk.register_strategy_run(binding)
         return
     try:
-        if binding.mode == "dry_run":
-            await clerk.register_strategy_run(
-                binding,
-                admission_snapshot=admission_snapshot,
-                sealed_account_id=synthetic_account_id_for_strategy(binding.strategy_instance_id),
-            )
-        else:
-            await clerk.register_strategy_run(binding, admission_snapshot=admission_snapshot)
+        await clerk.register_strategy_run(binding, admission_snapshot=admission_snapshot)
     except ClerkAdmissionSnapshotStaleError as exc:
         raise ClerkAdmissionTokenStaleError(str(exc)) from exc
 

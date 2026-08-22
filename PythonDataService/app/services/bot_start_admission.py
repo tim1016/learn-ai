@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
 
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.marketdata.feed import MarketDataFeed
@@ -22,18 +23,21 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
+    StrategyValidationAdmissionFact,
 )
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 from app.services.session_authority import session_state_at_ms
+from app.services.strategy_validation_admission import current_strategy_validation_fact
 
 logger = logging.getLogger(__name__)
 
 CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
+ValidationFactResolver = Callable[[BrokerBotBinding, int], StrategyValidationAdmissionFact]
 MarketLivenessFactResolver = Callable[[str, int], MarketLivenessFact]
 CustodyBoundActivator = Callable[
     [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot], Awaitable[BotStatusView]
@@ -228,9 +232,30 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         evidence_override=request.evidence_override,
         action_plan=request.action_plan,
         strategy_params=request.strategy_params,
+        sealed_account_id=(
+            synthetic_account_id_for_strategy(request.strategy_instance_id)
+            if request.mode == "dry_run"
+            else None
+        ),
         run_id=uuid4().hex,
         created_at_ms=now_ms,
     )
+
+
+def seal_binding_to_custody_snapshot(
+    binding: BrokerBotBinding,
+    custody: ClerkCustodySnapshot,
+) -> BrokerBotBinding:
+    """Seal an unbound first Start without ever replacing a known account.
+
+    Dry Run arrives with its deterministic ``sim:`` identity already bound.
+    If a broken authority returned another snapshot, preserving that identity
+    lets the pure admission policy author ``SEALED_ACCOUNT_MISMATCH`` before
+    registration rather than silently resealing the run to the wrong account.
+    """
+    if binding.sealed_account_id is not None:
+        return binding
+    return binding.model_copy(update={"sealed_account_id": custody.account_id})
 
 
 def log_run_launch(
@@ -263,6 +288,7 @@ class BotStartAdmission:
         custody_guard: CustodyGuard,
         process_fact: ProcessFactResolver,
         runtime_fact: RuntimeFactResolver,
+        validation_fact: ValidationFactResolver = current_strategy_validation_fact,
         activate: CustodyBoundActivator,
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
@@ -272,6 +298,7 @@ class BotStartAdmission:
         self._custody_guard = custody_guard
         self._process_fact = process_fact
         self._runtime_fact = runtime_fact
+        self._validation_fact = validation_fact
         self._activate = activate
         self._session_capability = session_capability
         self._market_liveness = market_liveness
@@ -279,13 +306,13 @@ class BotStartAdmission:
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
         """Evaluate without mutation while holding the same Clerk fence."""
         binding = new_run_binding(request, now_ms=self._now_ms())
-        async with self._decision(binding) as (decision, _feed, _custody):
+        async with self._decision(binding) as (_sealed_binding, decision, _feed, _custody):
             return decision
 
     async def start(self, request: StartRequest) -> AdmittedBotStart:
         """Evaluate and activate inside one stable Clerk custody cut."""
         binding = new_run_binding(request, now_ms=self._now_ms())
-        async with self._decision(binding) as (decision, feed, custody):
+        async with self._decision(binding) as (binding, decision, feed, custody):
             if not decision.allowed:
                 raise StartAdmissionDenied(decision)
             assert feed is not None
@@ -297,7 +324,7 @@ class BotStartAdmission:
     @asynccontextmanager
     async def _decision(
         self, binding: BrokerBotBinding
-    ) -> AsyncIterator[tuple[RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
+    ) -> AsyncIterator[tuple[BrokerBotBinding, RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
             # Fetched unconditionally for every mode, including dry_run: this
             # is a local/read-mostly Clerk-owned snapshot (not a live broker
@@ -306,6 +333,7 @@ class BotStartAdmission:
             # evaluate_run_admission, never what is *fetched* to build the
             # decision.
             async with self._custody_guard(binding) as custody:
+                binding = seal_binding_to_custody_snapshot(binding, custody)
                 observed_at_ms = self._now_ms()
                 runtime = await self._runtime_fact(binding.strategy_instance_id, observed_at_ms)
                 # Re-captured after the await: the market clock refreshes on
@@ -322,7 +350,9 @@ class BotStartAdmission:
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,
                     configuration_hash=configuration_hash(binding),
+                    sealed_account_id=binding.sealed_account_id or "",
                     mode=binding.mode,
+                    validation=self._validation_fact(binding, observed_at_ms),
                     runtime=runtime,
                     process=process,
                     market_data=market_data_admission_fact(
@@ -343,6 +373,7 @@ class BotStartAdmission:
                     ),
                 )
                 yield (
+                    binding,
                     evaluate_run_admission(
                         facts,
                         custody,

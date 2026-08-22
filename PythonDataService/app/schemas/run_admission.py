@@ -70,6 +70,27 @@ class StartRuntimeAdmissionFact(BaseModel):
     next_step: str | None = None
 
 
+class StrategyValidationAdmissionFact(BaseModel):
+    """Fresh verification of the exact strategy proof proposed for one run.
+
+    The validation manifest remains the source of the human decision.  This
+    fact is the admission-time receipt that its active event and referenced
+    artifacts were re-read and re-hashed immediately before Start or Resume.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["VERIFIED", "UNVERIFIED", "UNREADABLE"]
+    strategy_key: str
+    evidence_status: Literal["accepted", "evidence_only", "blocked", "unknown"]
+    event_id: str | None = None
+    evidence_snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    verified_at_ms: int = Field(ge=0)
+    evidence_refs: tuple[str, ...] = ()
+    explanation: str
+    next_step: str | None = None
+
+
 class StartRunFacts(BaseModel):
     """Bot-owned immutable and runtime facts for a proposed first run."""
 
@@ -79,11 +100,13 @@ class StartRunFacts(BaseModel):
     strategy_instance_id: str
     proposed_run_id: str
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sealed_account_id: str
     # First-class strictness tier (#1702): the pure admission policy branches
     # on this to relax evidence/custody-display gates for Dry Run only. Never
     # defaulted — every construction site must be explicit about which tier
     # it is admitting into.
     mode: Literal["log_only", "dry_run", "trade"]
+    validation: StrategyValidationAdmissionFact
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
@@ -130,10 +153,12 @@ class ResumeRunFacts(BaseModel):
     proposed_run_id: str
     prior_run_id: str
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sealed_account_id: str
     # Mode is immutable per instance (set at Start); Resume replays the same
     # tier the instance was created with. See StartRunFacts.mode for why this
     # is required, not defaulted.
     mode: Literal["log_only", "dry_run", "trade"]
+    validation: StrategyValidationAdmissionFact
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact

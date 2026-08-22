@@ -112,6 +112,7 @@ def _binding() -> BrokerBotBinding:
         mode="trade",
         quantity=1,
         carryover_policy="FORBID",
+        sealed_account_id="PA-TEST",
         action_plan=alpaca_v1_action_plan("SPY"),
         run_id="run-1",
         created_at_ms=1,

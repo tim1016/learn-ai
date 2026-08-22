@@ -110,17 +110,41 @@ async def test_sealed_account_mismatch_happens_before_any_run_is_created(tmp_pat
         strategy_instance_id="ema-1",
         broker="alpaca",
         symbol="SPY",
+        sealed_account_id="sim:ema-1",
         action_plan=alpaca_v1_action_plan("SPY"),
         run_id="run-1",
         created_at_ms=1,
     )
     try:
         with pytest.raises(SealedAccountMismatchError) as error:
-            await facade.register_strategy_run(binding, sealed_account_id="sim:ema-1")
+            await facade.register_strategy_run(binding)
 
         assert error.value.reason_code == "SEALED_ACCOUNT_MISMATCH"
         assert repo.strategy_instance("ema-1") is None
         assert repo.active_run("ema-1") is None
+    finally:
+        repo.close()
+
+
+async def test_missing_account_seal_happens_before_any_run_is_created(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-REAL", artifacts_root=tmp_path)
+    broker = SyntheticBroker(account_id="sim:unused")
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    binding = BrokerBotBinding(
+        strategy_instance_id="ema-unsealed",
+        broker="alpaca",
+        symbol="SPY",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-1",
+        created_at_ms=1,
+    )
+    try:
+        with pytest.raises(SealedAccountMismatchError) as error:
+            await facade.register_strategy_run(binding)
+
+        assert error.value.reason_code == "SEALED_ACCOUNT_MISMATCH"
+        assert repo.strategy_instance("ema-unsealed") is None
+        assert repo.active_run("ema-unsealed") is None
     finally:
         repo.close()
 

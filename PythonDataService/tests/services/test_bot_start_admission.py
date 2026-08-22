@@ -51,6 +51,7 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
+    StrategyValidationAdmissionFact,
 )
 from app.services.bot_binding_repository import alpaca_v1_action_plan
 from app.services.bot_start_admission import (
@@ -58,6 +59,8 @@ from app.services.bot_start_admission import (
     StartRequest,
     market_data_admission_fact,
     market_data_capability_account_id,
+    new_run_binding,
+    seal_binding_to_custody_snapshot,
 )
 from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import evaluate_run_admission
@@ -68,6 +71,18 @@ from tests._helpers.ibkr_feed_adversarial import (
 
 _NOW = 1_700_000_010_000
 _SID = "alpaca-start-1"
+
+
+def _validation(observed_at_ms: int) -> StrategyValidationAdmissionFact:
+    return StrategyValidationAdmissionFact(
+        state="VERIFIED",
+        strategy_key="deployment_validation",
+        evidence_status="accepted",
+        event_id="validation-event-1",
+        evidence_snapshot_sha256="c" * 64,
+        verified_at_ms=observed_at_ms,
+        explanation="The validation proof is current.",
+    )
 
 
 class _Feed:
@@ -85,6 +100,28 @@ class _RaisingFeed:
 
     def health(self, _symbol: str | None = None) -> FeedHealth:
         raise RuntimeError("simulated health-probe failure")
+
+
+def test_dry_run_keeps_its_deterministic_seal_when_a_custody_guard_disagrees() -> None:
+    binding = new_run_binding(
+        StartRequest(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            use_rth=True,
+            mode="dry_run",
+            quantity=1,
+            carryover_policy="FORBID",
+            evidence_override=None,
+            action_plan=alpaca_v1_action_plan("SPY"),
+        ),
+        now_ms=_NOW,
+    )
+
+    sealed = seal_binding_to_custody_snapshot(binding, _clerk())
+
+    assert sealed.sealed_account_id == f"sim:{_SID}"
 
 
 def _fake_connected_client() -> MagicMock:
@@ -168,7 +205,9 @@ def _start_facts(
         strategy_instance_id=_SID,
         proposed_run_id="run-new",
         configuration_hash="a" * 64,
+        sealed_account_id="paper-account",
         mode="trade",
+        validation=_validation(observed_at_ms),
         runtime=StartRuntimeAdmissionFact(
             state="READY",
             observed_at_ms=observed_at_ms,

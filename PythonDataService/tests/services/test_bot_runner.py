@@ -68,6 +68,7 @@ from app.schemas.market_liveness import (
     MarketLivenessFact,
     SymbolTradingStatusEvidence,
 )
+from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
     RunOutcomeConflictError,
@@ -127,6 +128,19 @@ def _tradable_market_liveness(symbol: str, observed_at_ms: int):
     )
 
 
+def _verified_validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
+    """Keep runner tests focused on task/custody behavior, not manifest fixtures."""
+    return StrategyValidationAdmissionFact(
+        state="VERIFIED",
+        strategy_key="deployment_validation",
+        evidence_status="accepted",
+        event_id="test-validation-event",
+        evidence_snapshot_sha256="a" * 64,
+        verified_at_ms=observed_at_ms,
+        explanation="Test validation evidence is current.",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bot_runner, "market_liveness_fact", _tradable_market_liveness)
@@ -140,6 +154,7 @@ def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     # bot_trade_strategy's, so it needs its own patch or it falls through to
     # the real (unconfigured, fail-closed) store and every ENTER is rejected.
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
+    monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
 
 
 @pytest.fixture
@@ -895,6 +910,7 @@ async def test_deploy_produces_running_task_and_durable_on_duty_evidence(tmp_pat
     assert view.desired_state == "RUNNING"
     assert view.broker == "alpaca"
     assert view.active_run_id is not None
+    assert _strategy_instance_json(tmp_path)["sealed_account_id"] == "paper-account"
 
     # Durable evidence readable WITHOUT the runner (raw files).
     lifecycle = _lifecycle_json(tmp_path)

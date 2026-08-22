@@ -569,7 +569,12 @@ def set_active_clerk_runtime(runtime: ActiveClerkRuntime | None) -> None:
     global _runtime
     _runtime = runtime
     _authority_registry.clear()
-    if runtime is not None and runtime.clerk is not None:
+    # The legacy real-paper compatibility seam can hold a test double before
+    # account configuration has selected a concrete authority.  Such a value
+    # remains readable through ``get_alpaca_clerk`` but must never become an
+    # account-keyed runtime: only a concrete account identity may enter the
+    # registry used by new custody paths.
+    if runtime is not None and runtime.clerk is not None and runtime.selected_account_id is not None:
         _authority_registry.register(runtime)
 
 

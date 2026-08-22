@@ -23,6 +23,7 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
+    StrategyValidationAdmissionFact,
     TerminalEvidenceAdmissionFact,
 )
 from app.services.market_liveness import compose_market_liveness
@@ -35,6 +36,19 @@ _READY_TERMINAL_EVIDENCE = TerminalEvidenceAdmissionFact(
     evidence_ref="terminal-evidence:run-prior:receipt:1:CRASHED:TypeError",
     explanation="An authoritative terminal receipt exists for the prior run.",
 )
+
+
+def _validation(observed_at_ms: int, *, state: str = "VERIFIED") -> StrategyValidationAdmissionFact:
+    return StrategyValidationAdmissionFact(
+        state=state,
+        strategy_key="deployment_validation",
+        evidence_status="accepted",
+        event_id="validation-event-1",
+        evidence_snapshot_sha256="c" * 64,
+        verified_at_ms=observed_at_ms,
+        evidence_refs=("strategy-validation:event:validation-event-1",),
+        explanation="The validation proof is current.",
+    )
 
 
 def _bot(
@@ -51,7 +65,9 @@ def _bot(
         strategy_instance_id=_SID,
         proposed_run_id="run-new",
         configuration_hash="a" * 64,
+        sealed_account_id="paper-account",
         mode=mode,
+        validation=_validation(observed_at_ms),
         runtime=StartRuntimeAdmissionFact(
             state=runtime_state,
             observed_at_ms=observed_at_ms,
@@ -165,7 +181,9 @@ def _resume_bot(
         proposed_run_id="run-resumed",
         prior_run_id="run-prior",
         configuration_hash="b" * 64,
+        sealed_account_id="paper-account",
         mode=mode,
+        validation=_validation(_NOW - 1_000),
         runtime=StartRuntimeAdmissionFact(
             state="READY",
             observed_at_ms=_NOW - 1_000,
@@ -210,6 +228,35 @@ def test_start_admission_allows_only_proven_absence_and_flat_custody() -> None:
         "clerk": 500,
     }
     assert "clerk:paper-account:7" in decision.evidence_refs
+
+
+def test_start_admission_blocks_a_different_sealed_account_before_effects() -> None:
+    decision = evaluate_run_admission(
+        _bot().model_copy(update={"sealed_account_id": "other-paper-account"}),
+        _clerk(),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "SEALED_ACCOUNT_MISMATCH"
+
+
+def test_start_admission_blocks_a_validation_proof_that_was_not_reverified() -> None:
+    decision = evaluate_run_admission(
+        _bot().model_copy(
+            update={
+                "validation": _validation(
+                    _NOW - 1_000,
+                    state="UNVERIFIED",
+                )
+            }
+        ),
+        _clerk(),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "STRATEGY_VALIDATION_UNVERIFIED"
 
 
 def test_start_admission_blocks_fresh_market_wide_closed_evidence() -> None:

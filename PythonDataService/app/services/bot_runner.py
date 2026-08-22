@@ -146,6 +146,7 @@ from app.services.bot_start_admission import (
 )
 from app.services.broker_capability_service import get_broker_capability_service
 from app.services.market_liveness import market_liveness_fact
+from app.services.strategy_validation_admission import current_strategy_validation_fact
 from app.utils.timestamps import now_ms_utc
 
 __all__ = [
@@ -254,6 +255,7 @@ class BotTaskRegistry:
             custody_guard=self._start_custody_guard,
             process_fact=self._start_process_fact,
             runtime_fact=self._start_runtime_fact,
+            validation_fact=current_strategy_validation_fact,
             activate=self._activate_start_binding,
             session_capability=get_broker_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
@@ -266,6 +268,7 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             checkpoint=self._resume_checkpoint_fact,
             terminal_evidence=self._resume_terminal_evidence_fact,
+            validation_fact=current_strategy_validation_fact,
             activate=self._activate_resume_binding,
             carryover_account_policy_enabled=self._carryover_allowed,
             session_capability=get_broker_capability_service().read_latest_for,

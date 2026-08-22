@@ -95,6 +95,10 @@ class BrokerBotBinding(BaseModel):
     # keeps its original configuration_hash (same rule `evidence_override`
     # already follows; see `test_absent_override_preserves_pre_override_configuration_hash_shape`).
     strategy_params: dict[str, Any] | None = None
+    # A Start obtains this exact account from its custody snapshot before it
+    # can persist or register the run. Legacy records remain readable with no
+    # seal, but cannot be resumed into a newly selected account.
+    sealed_account_id: str | None = None
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     created_at_ms: int
 
@@ -116,6 +120,7 @@ class StrategyInstanceRecord(BaseModel):
     evidence_override: AlpacaPaperEvidenceOverride | None = None
     action_plan: ActionPlan
     strategy_params: dict[str, Any] | None = None
+    sealed_account_id: str | None = None
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at_ms: int
 
@@ -133,6 +138,7 @@ class StrategyInstanceRecord(BaseModel):
             evidence_override=binding.evidence_override,
             action_plan=binding.action_plan,
             strategy_params=binding.strategy_params,
+            sealed_account_id=binding.sealed_account_id,
             configuration_hash=configuration_hash(binding),
             created_at_ms=binding.created_at_ms,
         )
@@ -515,6 +521,7 @@ class BotBindingRepository:
             evidence_override=instance.evidence_override,
             action_plan=instance.action_plan,
             strategy_params=instance.strategy_params,
+            sealed_account_id=instance.sealed_account_id,
             run_id=run.run_id,
             created_at_ms=run.started_at_ms,
         )
