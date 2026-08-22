@@ -438,6 +438,27 @@ class StrategyBarCadence:
     multiplier: int | ChartParamRef
 
 
+@dataclass(frozen=True, slots=True)
+class SignalProgramContract:
+    """Versioned qualification inputs for one registered Signal Program.
+
+    Artifact paths are relative to ``PythonDataService`` and intentionally
+    enumerate the executable math/session surface.  The qualification job
+    hashes their bytes and binds that digest to the golden trace root.
+    """
+
+    program_version: str
+    golden_trace_root: str
+    provider: str
+    base_timeframe_ms: int
+    decision_timeframe_ms: int
+    warmup_lookback_days: int
+    parameter_units: dict[str, str]
+    validated_settings: dict[str, str | int | float | bool]
+    validated_symbols: tuple[str, ...]
+    artifact_paths: tuple[str, ...]
+
+
 @dataclass
 class StrategyRegistration:
     display_name: str
@@ -526,6 +547,10 @@ class StrategyRegistration:
     # the legacy event-handler lifecycle. When present, this is the one
     # construction authority for the program and its staged SignalSession.
     signal_program_factory: Callable[[StrategyParamsBase], EmaCrossoverSignalProgram] | None = None
+    # Admission metadata is deliberately adjacent to the construction seam.
+    # A factory without a contract is an unqualified program and cannot be
+    # sealed for Start/Resume.
+    signal_program_contract: SignalProgramContract | None = None
 
 
 def public_params_schema(reg: StrategyRegistration, *, extra_hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
@@ -580,6 +605,50 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "ema_crossover_signal": StrategyRegistration(
         display_name="EMA Crossover Signal",
         class_name="EmaCrossoverSignalAlgorithm",
+        signal_program_contract=SignalProgramContract(
+            program_version="ema-crossover-signal/v1",
+            golden_trace_root="82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            decision_timeframe_ms=15 * 60_000,
+            warmup_lookback_days=5,
+            parameter_units={
+                "symbol": "ticker",
+                "gap": "quote_currency",
+                "rsi_min": "rsi_points",
+                "rsi_max": "rsi_points",
+            },
+            validated_settings={"gap": 0.20, "rsi_min": 50.0, "rsi_max": 70.0},
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            # Issue #1728 defect 2: this is not "every file the module
+            # graph reaches" — it is that transitive first-party import
+            # closure of the two roots below, MINUS the files proven (in
+            # scripts/run_signal_program_build_qualification.py's exclusion
+            # list) to be unreachable from evaluate_signal_bar()'s decision
+            # math: EmaCrossoverSignalSession.advance() (signal_program.py)
+            # builds and stores the EvaluationTrace *before* settle() ever
+            # calls commit_signal_decision(), so execution/fill/sizing/
+            # commission/Insight-publication bytes reached only through the
+            # commit path cannot retroactively change a trace that already
+            # exists. test_signal_decision_digest_closure.py recomputes the
+            # closure from these paths and fails the build if a newly
+            # introduced import isn't triaged into this list or that one.
+            artifact_paths=(
+                "app/engine/strategy/algorithms/ema_crossover_signal.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/indicators/base.py",
+                "app/engine/indicators/ema.py",
+                "app/engine/indicators/rsi.py",
+                "app/engine/indicators/sma.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Long-only intraday EMA signal generator. Bit-exact against the "
             "LEAN C# reference when the default SPY signal stream is used; "
@@ -1534,6 +1603,22 @@ _STRATEGY_REGISTRY["ema_crossover_2_bps"] = replace(
     ),
     lean_twin="ema_crossover_2_bps",
     lean_parameter_names=("gap_bps", "rsi_min", "rsi_max"),
+    # Issue #1728 defect 1: dataclasses.replace() shallow-copies every field
+    # not explicitly overridden, including signal_program_contract and
+    # signal_program_factory. This strategy uses a relative basis-point gap
+    # (EmaCrossover2BpsAlgorithm, param gap_bps) — genuinely different math
+    # from the canonical EMA Signal Program's absolute-price gap — and has
+    # never been through its own golden qualification. Left inherited, both
+    # bots on this key falsely claimed EMA's golden_trace_root as proof of
+    # their own build, AND signal_program_factory would hand
+    # _build_ema_crossover_signal_program a params instance it isn't typed
+    # for. Clearing both routes admission's prove_running_program_build to
+    # its NOT_APPLICABLE state (no registered Signal Program), which
+    # run_admission.py does not gate on, keeping this strategy's existing
+    # execution path working. Promoting it to a real sealed Signal Program
+    # is issue #1730 / Slice 5.
+    signal_program_contract=None,
+    signal_program_factory=None,
 )
 
 # Historical ledgers use this key and import path. Keep it executable but do
@@ -1548,6 +1633,17 @@ _STRATEGY_REGISTRY["spy_ema_crossover"] = replace(
     signal_intent_binding="signal_symbol",
     catalog_visible=False,
     lean_twin="ema_crossover",
+    # Issue #1728 defect 1: see the identical comment on ema_crossover_2_bps
+    # above. This legacy-compatibility key builds SpyEmaCrossoverAlgorithm
+    # (action_plan_contract="none"), not the canonical EMA Signal Program —
+    # inheriting its contract/factory via dataclasses.replace() let bots on
+    # this key falsely claim EMA's golden_trace_root, and
+    # prove_running_program_build's receipt lookup (keyed on
+    # binding.strategy_key) could never match, permanently bricking Start
+    # and Resume for every such bot. Clearing both is what routes it back to
+    # NOT_APPLICABLE — no registered Signal Program — instead of UNPROVEN.
+    signal_program_contract=None,
+    signal_program_factory=None,
 )
 
 

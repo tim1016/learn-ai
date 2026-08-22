@@ -196,6 +196,15 @@ def test_validated_ema_settings_corpus_has_a_pinned_trace_root() -> None:
     assert len(corpus["entries"]) == 10
     cells_root = fixture.parents[2] / "cross-engine-studies/cells"
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    # This is the runtime admission gate (PRD S11.4): a program edit that
+    # changes behavior without also updating the registry's sealed
+    # golden_trace_root must fail here, not slip through as a "qualified"
+    # receipt. `scripts/run_signal_program_build_qualification.py` binds its
+    # emitted receipt to `contract.golden_trace_root`, so this suite passing
+    # is what makes that receipt admissible evidence.
+    assert corpus["trace_root"] == contract.golden_trace_root
 
     for entry in corpus["entries"]:
         cell = cells_root / entry["cell"]
