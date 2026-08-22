@@ -13,6 +13,16 @@
     },
     {
       "schema_version": 1,
+      "program_key": "rsi_mean_reversion",
+      "program_version": "rsi-mean-reversion/v1",
+      "golden_trace_root": "46d0b13b5e3307d983b4d5b4a1a21ba790db5e5644d164364a787bb2a12acde7",
+      "artifact_digest": "29f8f149990a052d7699518503781ef141c01578e1d70b99810c4db7d24e35d1",
+      "qualification_suite": "tests/engine/strategy/test_rsi_signal_program.py::test_validated_rsi_mean_reversion_settings_corpus_has_a_pinned_trace_root",
+      "qualified_at_ms": 1787418752728,
+      "receipt_hash": "1e3f96e73faf1b5443f4ba79e5da6b6be40d3b468d0ee90fa9e876a6a5d82230"
+    },
+    {
+      "schema_version": 1,
       "program_key": "sma_crossover",
       "program_version": "sma-crossover/v1",
       "golden_trace_root": "b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",

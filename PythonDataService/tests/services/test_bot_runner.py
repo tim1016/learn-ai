@@ -299,9 +299,15 @@ async def test_binding_strategy_params_reach_the_constructed_live_strategy() -> 
     series' RSI range suppresses the EXIT intent the default parameters
     produce, proving ``strategy_params`` flows from the binding into the
     live-constructed strategy via the registry `build` callable (#1700).
+
+    ``rsi_mean_reversion`` is a registered Signal Program (issue #1730 Slice
+    5): ``bar_minutes=15`` and an explicit ``settle_stage`` commit are the
+    same two harness adaptations
+    ``test_human_override_strategies_emit_canonical_live_intents`` documents
+    -- see that test's docstring.
     """
     closes = [str(100 - index) for index in range(16)] + [str(85 + index * 5) for index in range(18)]
-    bars = _strategy_signal_bars(closes)
+    bars = _strategy_signal_bars(closes, bar_minutes=15)
 
     async def kinds_for(strategy_params: dict[str, float]) -> list[SignalIntentKind]:
         binding = BrokerBotBinding(
@@ -316,11 +322,12 @@ async def test_binding_strategy_params_reach_the_constructed_live_strategy() -> 
             strategy_params=strategy_params,
         )
         feed = _FakeFeed(bars, mode="finite")
-        return [
-            intent.kind
-            async for evaluation in strategy_evaluations(binding, feed)
-            for intent in evaluation.intents
-        ]
+        kinds: list[SignalIntentKind] = []
+        async for evaluation in strategy_evaluations(binding, feed):
+            if evaluation.settle_stage is not None:
+                evaluation.settle_stage(Settlement.COMMIT)
+            kinds.extend(intent.kind for intent in evaluation.intents)
+        return kinds
 
     assert await kinds_for({}) == [SignalIntentKind.ENTER, SignalIntentKind.EXIT]
     assert await kinds_for({"overbought": 99.9}) == [SignalIntentKind.ENTER]
@@ -3374,12 +3381,25 @@ class _WarmableFeed(_FakeFeed):
 @pytest.mark.asyncio
 async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_backfill(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#1708 review finding 3 regression: RSI(14) on 15-min bars needs 14
     consolidated bars of history, but a fresh RTH session provides none —
     a strategy deployed cold would silently withhold decisions through its
     first day(s) of live trading. With warmup backfill, the very first live
-    bucket of a brand-new deployment can already decide."""
+    bucket of a brand-new deployment can already decide.
+
+    ``rsi_mean_reversion`` is now a registered Signal Program (issue #1730
+    Slice 5): real ``mode="trade"`` admission is gated by the exact
+    (program, account) canary allowlist (#1729 AC4, see
+    ``test_ema_trade_bot_matches_first_lean_round_trip`` above). This test
+    exercises warmup backfill, not the allowlist itself, so it explicitly
+    enables the one pairing it deploys under.
+    """
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("rsi_mean_reversion", "paper-account")}),
+    )
     clerk = _FakeClerk()
     set_alpaca_clerk(clerk)
     try:
@@ -3416,13 +3436,24 @@ async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_bac
 @pytest.mark.asyncio
 async def test_final_rth_bucket_decides_without_waiting_for_the_next_session(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#1708 review finding 2 regression: the consolidator only fires a
     working bucket lazily, when a *later* bar arrives -- but an RTH-only
     stream never delivers one after the session closes. Before the fix,
     the final 15:45-16:00 bucket's decision would strand until the next
     session's bars started arriving. With the session-close force-flush,
-    it decides immediately, from the same bar that closes the session."""
+    it decides immediately, from the same bar that closes the session.
+
+    ``rsi_mean_reversion`` is now a registered Signal Program (issue #1730
+    Slice 5): see the canary-allowlist note on
+    ``test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_backfill``
+    above.
+    """
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("rsi_mean_reversion", "paper-account")}),
+    )
     clerk = _FakeClerk()
     set_alpaca_clerk(clerk)
     try:
