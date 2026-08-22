@@ -15,6 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.action_plan import ActionPlan
 
+# Canonical home for "how was this parameter's effective value chosen" (CLAUDE.md
+# guiding philosophy #5 — one source of truth per concept). Every other module
+# that needs this concept imports the alias rather than repeating the Literal.
+ParameterOrigin = Literal["registered_default", "deploy_override", "deployment_symbol"]
+
 
 class ResolvedSignalParameter(BaseModel):
     """One effective parameter with its unit and deploy-time origin."""
@@ -23,7 +28,7 @@ class ResolvedSignalParameter(BaseModel):
 
     value: str | int | float | bool
     unit: str
-    origin: Literal["registered_default", "deploy_override", "deployment_symbol"]
+    origin: ParameterOrigin
 
 
 class SignalDataContract(BaseModel):

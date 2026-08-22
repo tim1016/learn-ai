@@ -821,7 +821,7 @@ def build_panel(
     decision_causal_links: dict[int, DecisionCausalLinks] | None = None,
     resume_admission: RunAdmissionDecision | None = None,
     sealed_program: SealedBotProgram | None = None,
-    program_build: ProgramBuildAdmissionFact | None = None,
+    program_build: ProgramBuildAdmissionFact,
     dry_run_activity: list[DryRunActivity] | None = None,
     authority_account_id: str | None = None,
     market_pulse: MarketPulseView,
@@ -843,13 +843,16 @@ def build_panel(
     ``tests/broker/v2panel/test_panel_projection.py``) omit it, and it falls
     back to the Dry Run synthetic authority implied by ``status.mode`` /
     ``status.strategy_instance_id``, or to ``account_id`` otherwise.
+
+    ``program_build`` is required and must be the caller's real evidence cut
+    (``panel_data_source._program_build_for_display`` for the live router
+    path). This projection must never guess it: ADR 0043 reserves
+    ``state="NOT_APPLICABLE"`` for a strategy with no registered Signal
+    Program at all, so a caller that simply has no build evidence yet (e.g.
+    no per-run record and a fresh ``prove_running_program_build`` re-check)
+    must pass the honest ``state="UNPROVEN"`` fact instead — never omit the
+    argument to get a fabricated "not applicable" reading.
     """
-    resolved_program_build = program_build or ProgramBuildAdmissionFact(
-        state="NOT_APPLICABLE",
-        program_key=status.strategy_key,
-        verified_at_ms=now_ms,
-        explanation="No Signal Program build proof was supplied to this panel projection.",
-    )
     refs = transaction_refs_for_bot(status.strategy_instance_id, entries)
     transaction_ref = selected_transaction_ref or (refs[-1] if refs else None)
     latest_reconciliation = _latest_reconciliation_entry(entries)
@@ -943,7 +946,7 @@ def build_panel(
         symbol=status.symbol,
         mode=status.mode,
         sealed_program=sealed_program,
-        program_build=resolved_program_build,
+        program_build=program_build,
         resume_admission=resume_admission,
         updated_at_ms=now_ms,
         revision=revision,

@@ -41,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotHealthCard,
@@ -227,6 +228,35 @@ def _clerk_status(
     )
 
 
+def _default_program_build(strategy_key: str) -> ProgramBuildAdmissionFact:
+    """The truthful ``program_build`` fact for a fixture that never sets one.
+
+    ``build_panel`` requires real evidence for every call — it must never
+    guess (see the "require the argument" fix on its docstring). Every
+    fixture in this module uses
+    ``_status()``'s default ``strategy_key`` ("deployment_validation"), which
+    has no registered Signal Program (``app/engine/strategy/registry.py``),
+    so ``NOT_APPLICABLE`` is the actually-true state here, not a fabricated
+    placeholder. A fixture naming a strategy that DOES have a registered
+    Signal Program (e.g. "ema_crossover_signal") has no truthful default —
+    missing evidence for it is ``UNPROVEN``, never ``NOT_APPLICABLE`` — so
+    such a test must pass ``program_build`` explicitly instead of relying on
+    this default.
+    """
+    registration = _STRATEGY_REGISTRY.get(strategy_key)
+    if registration is None or registration.signal_program_factory is None:
+        return ProgramBuildAdmissionFact(
+            state="NOT_APPLICABLE",
+            program_key=strategy_key,
+            verified_at_ms=_NOW,
+            explanation="This compatibility strategy has no registered Signal Program.",
+        )
+    raise AssertionError(
+        f"'{strategy_key}' has a registered Signal Program; _panel() callers must "
+        "pass explicit program_build evidence rather than rely on a fabricated default."
+    )
+
+
 def _panel(
     status: BotStatusView,
     clerk: ClerkStatus,
@@ -302,7 +332,7 @@ def _panel(
         now_ms=_NOW,
         resume_admission=resume_admission,
         sealed_program=sealed_program,
-        program_build=program_build,
+        program_build=program_build or _default_program_build(status.strategy_key),
         decision_causal_links=decision_causal_links,
         dry_run_activity=dry_run_activity,
         market_pulse=_MARKET_PULSE,
@@ -1238,6 +1268,62 @@ def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() ->
     linked = next(row for row in panel.recent_decisions if row.seq == 3)
     assert linked.decision_id == "e" * 64
     assert linked.effect_operation_id == "effect-op-3"
+
+
+def test_build_panel_requires_program_build_evidence() -> None:
+    """Finding 1 regression: ``build_panel`` used to default a missing
+    ``program_build`` argument to a fabricated ``NOT_APPLICABLE`` fact — even
+    for "ema_crossover_signal", a strategy that DOES have a registered Signal
+    Program (``app/engine/strategy/registry.py``). ADR 0043 reserves
+    ``NOT_APPLICABLE`` for a strategy with no registered program at all; a
+    caller merely omitting evidence must never read as that. ``build_panel``
+    now requires the argument outright, so the previously-silent wrong
+    answer becomes a loud contract violation instead of a false reading.
+    """
+    status = _status().model_copy(update={"strategy_key": "ema_crossover_signal"})
+    with pytest.raises(TypeError, match="program_build"):
+        build_panel(
+            status,
+            _clerk_status(),
+            [],
+            account_id=ACCT,
+            exposure={"SPY": 100.0},
+            fills_today=0,
+            realized_pnl_today=0.0,
+            open_pnl=None,
+            latest_decision=None,
+            last_bar_at_ms=None,
+            journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
+            journal_tail_seq=None,
+            flatten_supported=True,
+            now_ms=_NOW,
+            market_pulse=_MARKET_PULSE,
+        )
+
+
+def test_panel_surfaces_unproven_for_a_registered_signal_program_with_no_evidence() -> None:
+    """Finding 1: a registered Signal Program strategy with no build evidence
+    yet must read as ``UNPROVEN``, never ``NOT_APPLICABLE`` — ``NOT_APPLICABLE``
+    is reserved (ADR 0043) for a strategy with no registered Signal Program at
+    all. "ema_crossover_signal" has one, so its honest no-evidence state is
+    the one ``prove_running_program_build`` itself would produce for e.g. an
+    instance with no complete v2 seal yet: ``UNPROVEN``.
+    """
+    status = _status().model_copy(update={"strategy_key": "ema_crossover_signal"})
+    program_build = ProgramBuildAdmissionFact(
+        state="UNPROVEN",
+        program_key="ema_crossover_signal",
+        verified_at_ms=_NOW,
+        explanation=(
+            "The instance has no complete v2 Signal Program seal. Legacy bytes remain "
+            "inspectable, but this instance must be cloned before it can Resume."
+        ),
+    )
+
+    panel = _panel(status, _clerk_status(), [], program_build=program_build)
+
+    assert panel.strategy_key == "ema_crossover_signal"
+    assert panel.program_build.state == "UNPROVEN"
 
 
 def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() -> None:

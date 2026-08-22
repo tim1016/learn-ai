@@ -23,6 +23,7 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContra
 from app.schemas.run_admission import ProgramBuildAdmissionFact, StrategyValidationAdmissionFact
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
+    ParameterOrigin,
     ResolvedSignalParameter,
     SealedBotProgram,
     SignalClockContract,
@@ -96,9 +97,7 @@ def build_start_program_seal(
     binding: BrokerBotBinding,
     validation: StrategyValidationAdmissionFact,
     *,
-    parameter_origins: dict[
-        str, Literal["registered_default", "deploy_override", "deployment_symbol"]
-    ]
+    parameter_origins: dict[str, ParameterOrigin]
     | None = None,
 ) -> SealedBotProgram | None:
     """Author a new v2 seal for a registered Signal Program.
@@ -275,9 +274,9 @@ def _legacy_parameter_origins(
     strategy_key: str,
     effective: dict[str, Any],
     requested: dict[str, Any],
-    recorded_origins: dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]]
+    recorded_origins: dict[str, ParameterOrigin]
     | None,
-) -> dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]]:
+) -> dict[str, ParameterOrigin]:
     """Build a complete, *factual* origin map for a pre-v2 instance, or refuse.
 
     Called only from :func:`reconstruct_legacy_program_seal`. Every entry
@@ -308,7 +307,7 @@ def _legacy_parameter_origins(
     exact identity.
     """
     recorded = recorded_origins or {}
-    origins: dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]] = {}
+    origins: dict[str, ParameterOrigin] = {}
     unresolved: list[str] = []
     for name in effective:
         if name == "symbol":

@@ -22,6 +22,7 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.signal_program_seal import ParameterOrigin
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
@@ -48,7 +49,7 @@ class ResolvedDeployParams:
 
     effective: dict[str, Any]
     diverges_from_defaults: tuple[str, ...]
-    origins: dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]]
+    origins: dict[str, ParameterOrigin]
 
 
 def strategy_gate_recovery(
@@ -116,7 +117,7 @@ def resolve_deploy_strategy_params(
     defaults = registration.param_schema().model_dump(exclude={"symbol"})
     effective = validated.model_dump(exclude={"symbol"})
     diverges = tuple(sorted(name for name, value in effective.items() if value != defaults.get(name)))
-    origins: dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]] = {}
+    origins: dict[str, ParameterOrigin] = {}
     for name in effective:
         if name in requested_parameters:
             origins[name] = "deploy_override"

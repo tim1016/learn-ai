@@ -32,8 +32,9 @@ from app.schemas.action_plan import (
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
+from app.schemas.canary_admission import CanaryRollbackDecision
 from app.schemas.run_admission import ProgramBuildAdmissionFact
-from app.schemas.signal_program_seal import SealedBotProgram
+from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
 from app.services.bot_carryover import configuration_hash
 
 logger = logging.getLogger(__name__)
@@ -123,9 +124,7 @@ class BrokerBotBinding(BaseModel):
     strategy_params: dict[str, Any] | None = None
     # Transient authoring metadata is persisted only inside the append-only v2
     # seal. Excluding it here preserves the historical v1 configuration hash.
-    strategy_param_origins: dict[
-        str, Literal["registered_default", "deploy_override", "deployment_symbol"]
-    ] | None = Field(default=None, exclude=True)
+    strategy_param_origins: dict[str, ParameterOrigin] | None = Field(default=None, exclude=True)
     sealed_program: SealedBotProgram | None = Field(default=None, exclude=True)
     program_build: ProgramBuildAdmissionFact | None = Field(default=None, exclude=True)
     # A Start obtains this exact account from its custody snapshot before it
@@ -249,6 +248,9 @@ class BotRunOutcomeRecord(BaseModel):
     reason_code: str = Field(min_length=1, max_length=128)
     recorded_at_ms: int = Field(ge=0)
     crash_diagnostic: BotCrashDiagnostic | None = None
+    # #1729 AC10: the Clerk-proved canary rollback verdict for this exact
+    # Stop, when one was computed. See ``BotDutyOutcome.canary_rollback``.
+    canary_rollback: CanaryRollbackDecision | None = None
 
     @model_validator(mode="after")
     def require_crashed_outcome_for_diagnostic(self) -> BotRunOutcomeRecord:

@@ -25,6 +25,7 @@ from app.schemas.run_admission import (
     StartRuntimeAdmissionFact,
     StrategyValidationAdmissionFact,
 )
+from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.market_liveness import market_liveness_fact
@@ -69,9 +70,15 @@ class StartRequest:
     # bot_binding_repository.py's ``BrokerBotBinding`` holds all the way
     # through construction.
     strategy_params: dict[str, Any] | None = None
-    strategy_param_origins: dict[
-        str, Literal["registered_default", "deploy_override"]
-    ] | None = None
+    # Widened to the canonical 3-member ParameterOrigin (not just
+    # registered_default/deploy_override): `make_start_request` below already
+    # types this field as the full set, and its one caller
+    # (`panel_data_source.py`) threads `resolve_deploy_strategy_params`'s
+    # `origins` straight through, which legitimately produces
+    # "deployment_symbol" once a caller supplies a `symbol_profile`. A
+    # narrower field here was already silently out of sync with its own
+    # producer, not a deliberate invariant.
+    strategy_param_origins: dict[str, ParameterOrigin] | None = None
 
 
 @dataclass(frozen=True)
@@ -140,9 +147,7 @@ def make_start_request(
     evidence_override: AlpacaPaperEvidenceOverride | None,
     action_plan: ActionPlan,
     strategy_params: dict[str, Any] | None = None,
-    strategy_param_origins: dict[
-        str, Literal["registered_default", "deploy_override", "deployment_symbol"]
-    ] | None = None,
+    strategy_param_origins: dict[str, ParameterOrigin] | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(

@@ -63,6 +63,7 @@ from app.schemas.broker_bots import (
     BotRunView,
     BotStatusView,
 )
+from app.schemas.canary_admission import CanaryRollbackDecision
 from app.schemas.run_admission import (
     ResumeCheckpointAdmissionFact,
     RunAdmissionDecision,
@@ -70,6 +71,7 @@ from app.schemas.run_admission import (
     StartRuntimeAdmissionFact,
     TerminalEvidenceAdmissionFact,
 )
+from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.bot_binding_authority import BindingAuthoritySelector
 from app.services.bot_binding_repository import (
@@ -145,6 +147,7 @@ from app.services.bot_start_admission import (
     resolve_start_runtime_fact,
 )
 from app.services.broker_capability_service import get_broker_capability_service
+from app.services.canary_admission import canary_gate_applies, evaluate_canary_rollback
 from app.services.market_liveness import market_liveness_fact
 from app.services.strategy_validation_admission import current_strategy_validation_fact
 from app.utils.timestamps import now_ms_utc
@@ -331,9 +334,14 @@ class BotTaskRegistry:
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
         strategy_params: dict[str, Any] | None = None,
-        strategy_param_origins: dict[
-            str, Literal["registered_default", "deploy_override"]
-        ] | None = None,
+        # Widened to the canonical 3-member ParameterOrigin: this is threaded
+        # straight through to `make_start_request` (bot_start_admission.py),
+        # whose one real caller (`panel_data_source.py`) supplies
+        # `resolve_deploy_strategy_params`'s `origins`, which legitimately
+        # produces "deployment_symbol" once a caller supplies a
+        # `symbol_profile`. A narrower type here was already silently out of
+        # sync with the value actually flowing through it.
+        strategy_param_origins: dict[str, ParameterOrigin] | None = None,
     ) -> AdmittedBotStart:
         """Start one bot and return the exact execution-time admission."""
         require_start_configuration(
@@ -381,9 +389,9 @@ class BotTaskRegistry:
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
         strategy_params: dict[str, Any] | None = None,
-        strategy_param_origins: dict[
-            str, Literal["registered_default", "deploy_override"]
-        ] | None = None,
+        # See the widening note on the matching parameter in
+        # `deploy_with_admission` above.
+        strategy_param_origins: dict[str, ParameterOrigin] | None = None,
     ) -> RunAdmissionDecision:
         """Project the same Start decision used immediately before mutation."""
         require_start_configuration(
@@ -898,15 +906,40 @@ class BotTaskRegistry:
         )
         self._terminal.reap(strategy_instance_id, managed.binding.run_id)
         outcome = "OPERATOR_STOP"
+        canary_rollback: CanaryRollbackDecision | None = None
         if broker == "alpaca" and managed.binding.mode == "trade":
             outcome = await prove_terminal_stop_outcome(
                 managed.binding,
                 checkpoint_path=self._carryover_checkpoint_path(strategy_instance_id),
                 now_ms=self._now_ms,
             )
+            # #1729 AC10: the rollback verdict is keyed off this run having
+            # been admitted as a Signal-Program-backed trade-mode instance
+            # (`program_build.state == "PROVEN"`, the same live-reproof
+            # `canary_gate_applies` checks at Start/Resume) -- never off
+            # current `CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS` membership. A
+            # rollback plausibly *means* removing the pairing from the
+            # allowlist, so keying the verdict off present membership would
+            # read "not a canary" at exactly the moment it matters. This is
+            # an evidence record, not a gate: it never influences whether
+            # Stop proceeds, only what gets recorded once it has.
+            program_build_state = (
+                managed.binding.program_build.state
+                if managed.binding.program_build is not None
+                else "NOT_APPLICABLE"
+            )
+            if canary_gate_applies(
+                mode=managed.binding.mode, program_build_state=program_build_state
+            ):
+                canary_rollback = evaluate_canary_rollback(
+                    strategy_instance_id=strategy_instance_id,
+                    stop_outcome=outcome,
+                    evaluated_at_ms=self._now_ms(),
+                )
         self._terminal.replace_provisional_stop(
             managed.binding,
             reason_code=outcome,
+            canary_rollback=canary_rollback,
         )
         await self._authority_for(managed.binding).release_if_unused()
         return self.status(broker, strategy_instance_id)
