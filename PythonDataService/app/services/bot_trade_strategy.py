@@ -7,8 +7,10 @@ stream, and routes only its semantic ENTER/EXIT intents to the Clerk.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
@@ -16,8 +18,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome, SqliteDecisionReceipts
+from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    DecisionOutcome,
+    SqliteDecisionReceipts,
+)
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
@@ -32,12 +38,14 @@ from app.engine.strategy.signal_program import (
     EmaCrossoverSignalProgram,
     EvaluationMode,
     EvaluationStage,
+    EvaluationTrace,
     Settlement,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_start_admission import market_data_capability_account_id
+from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
 from app.services.broker_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -69,6 +77,8 @@ class StrategyEvaluation:
     """One closed bar and the zero-or-one semantic intent it produced."""
 
     bar: MarketDataBar
+    evaluation_id: str
+    decision_bar_close_ms: int
     intents: tuple[SignalIntent, ...]
     # Undoes the strategy's own ENTER-time state mutation when the caller
     # blocks this evaluation's ENTER intent after signal emission (#1671
@@ -93,6 +103,21 @@ class StrategyEvaluation:
     # This mode was captured with the source bar before a consolidator could
     # turn it into a semantic decision. It must never be sampled later.
     evaluation_mode: EvaluationMode = EvaluationMode.DECIDE
+    # FR-016: warmup replay recreated this staged candidate but found no
+    # matching Clerk decision receipt -- the process crashed after the
+    # candidate was staged and before intake captured it. The caller must
+    # record `CANDIDATE_UNCAPTURED_AT_CRASH` and discard; it must never be
+    # routed through the ordinary no-action/blocked/effect branches.
+    crash_recovered: bool = False
+    # The full canonical trace this evaluation staged, when the strategy is
+    # a registered Signal Program (`registration.signal_program_factory` is
+    # not `None`). `None` for compatibility-mode strategies with no
+    # SignalSession (e.g. `deployment_validation`). Lets a caller that needs
+    # the complete decision-meaning payload -- not just the identity/intents
+    # subset above -- read it without re-deriving strategy state. Shadow-mode
+    # trace-parity comparison (issue #1729 AC #2) is the first such caller;
+    # see `app/broker/alpaca/clerk/sqlite/qualification_shadow_trace.py`.
+    trace: EvaluationTrace | None = None
 
 
 class _EffectReceipt(Protocol):
@@ -125,6 +150,19 @@ class _LiveSignalRuntime:
     def capture_source_bar(self, bar: TradeBar, *, mode: EvaluationMode) -> None:
         if self.program is not None:
             self.program.capture_source_bar(bar, mode=mode)
+
+    def replay_closed_bar(
+        self, context: StrategyContext, market_bar: MarketDataBar, *, mode: EvaluationMode
+    ) -> None:
+        """Capture then drain one closed bar -- the pairing every caller
+        needs (steady-state streaming in ``_signal_strategy_evaluations``
+        and FR-016 warmup replay in ``bot_trade_strategy_warmup`` alike) so
+        the two can never drift out of sync. Duck-typed by the warmup
+        module without it importing this class at runtime.
+        """
+        engine_bar = _engine_bar(market_bar)
+        self.capture_source_bar(engine_bar, mode=mode)
+        _drain_bar(self.strategy, context, engine_bar)
 
     def active_stage(self) -> EvaluationStage | None:
         return None if self.program is None else self.program.session.active_stage
@@ -288,7 +326,9 @@ def _evaluation_mode_for(feed: MarketDataFeed, bar: MarketDataBar) -> Evaluation
 async def _deployment_validation_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
+    captured_decisions: Mapping[str, str] | None,
 ) -> AsyncIterator[StrategyEvaluation]:
+    del captured_decisions  # no SignalSession here to recover a crash candidate from
     kernel = DeploymentValidationDecisionKernel()
     async for bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
         decision = kernel.on_closed_bar(
@@ -310,6 +350,8 @@ async def _deployment_validation_evaluations(
         )
         yield StrategyEvaluation(
             bar=bar,
+            evaluation_id=_generic_evaluation_id(binding, bar.end_ms),
+            decision_bar_close_ms=bar.end_ms,
             intents=intents,
             rollback_blocked_entry=kernel.rollback_blocked_entry,
             rollback_blocked_exit=kernel.rollback_blocked_exit,
@@ -344,19 +386,6 @@ def _build_signal_strategy(
     return _LiveSignalRuntime(strategy=registration.build(params), program=None)  # type: ignore[arg-type]
 
 
-_WARMUP_LOOKBACK_DAYS = 5
-"""Trailing calendar-day window backfilled before live decisions begin.
-
-Generous relative to any registered signal strategy's indicator: the
-largest known requirement is Strategy A's EMA(50) on 15-min bars (750
-minutes, roughly two RTH sessions). #1708 review finding 3: a fresh RTH
-session alone provides only ~26 fifteen-minute bars -- short of the
-ADX(28)/EMA(50)-class warmup several registered strategies need -- so a
-strategy deployed cold would silently withhold decisions for its first
-day(s) of live trading.
-"""
-
-
 def _drain_bar(strategy: _LiveSignalStrategy, context: StrategyContext, bar: TradeBar) -> None:
     """Feed one closed bar through the strategy/consolidator pipeline."""
     context.current_time_ms = bar.end_ms
@@ -370,32 +399,50 @@ async def _warm_up_signal_strategy(
     context: StrategyContext,
     feed: MarketDataFeed,
     binding: BrokerBotBinding,
-) -> None:
+    *,
+    captured_decisions: Mapping[str, str] | None,
+) -> StrategyEvaluation | None:
     """Replay recent closed bars so indicators are ready before live
-    decisions begin (#1708 review finding 3).
+    decisions begin, reapplying each bucket's own known Clerk disposition
+    so position-lifecycle state carries forward correctly (FR-016).
 
-    Replayed bars only prime indicator/consolidator state. Any position
-    the replay itself would have opened is discarded by ``on_force_flat``
-    afterward -- a freshly (re)deployed strategy instance always starts
-    flat regardless of what the replayed history implies; only its
-    indicator readiness carries forward.
+    The replay itself -- indicator/lifecycle reconstruction and
+    crash-candidate detection -- lives in
+    ``bot_trade_strategy_warmup.replay_warmup_bars``; see that function's
+    docstring for the full FR-016 rationale. This wrapper only shapes a
+    recovered candidate into the adapter's own ``StrategyEvaluation``
+    surface, which is why the warmup module never needs to import
+    anything back from this one (see the module docstring on
+    ``bot_trade_strategy_warmup``).
     """
-    warmup_bars = await feed.recent_closed_bars(
-        binding.symbol, use_rth=binding.use_rth, lookback_days=_WARMUP_LOOKBACK_DAYS
+    uncaptured = await replay_warmup_bars(
+        runtime, context, feed, binding, captured_decisions=captured_decisions
     )
-    for market_bar in warmup_bars:
-        engine_bar = _engine_bar(market_bar)
-        runtime.capture_source_bar(engine_bar, mode=EvaluationMode.OBSERVE_ONLY)
-        _drain_bar(runtime.strategy, context, engine_bar)
-        _settle_warmup_stage(runtime)
-        context.signal_intents.clear()
-        context.consolidated_bars.clear()
-    runtime.strategy.on_force_flat()
+    if uncaptured is None:
+        return None
+    candidate_bar, candidate_stage = uncaptured
+    intent = candidate_stage.decision.intent
+    assert intent is not None  # narrowed by replay_warmup_bars's own `is not None` check
+    return StrategyEvaluation(
+        bar=candidate_bar,
+        evaluation_id=candidate_stage.trace.evaluation_id,
+        decision_bar_close_ms=candidate_stage.trace.bar_close_ms,
+        intents=(intent,),
+        rollback_blocked_entry=runtime.strategy.rollback_blocked_entry,
+        rollback_blocked_exit=runtime.strategy.rollback_blocked_exit,
+        # Already settled DISCARD inside replay_warmup_bars when this stage
+        # was staged -- a second `settle()` call would raise ("no staged
+        # evaluation").
+        settle_stage=lambda _settlement: None,
+        evaluation_mode=EvaluationMode.OBSERVE_ONLY,
+        crash_recovered=True,
+    )
 
 
 async def _signal_strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
+    captured_decisions: Mapping[str, str] | None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     runtime = _build_signal_strategy(binding.strategy_key, binding.symbol, binding.strategy_params)
@@ -404,14 +451,22 @@ async def _signal_strategy_evaluations(
     strategy.ctx = context
     strategy.initialize()
     context.set_signal_intent_executor(_RecordingSignalIntentExecutor())
-    await _warm_up_signal_strategy(runtime, context, feed, binding)
+    uncaptured_candidate = await _warm_up_signal_strategy(
+        runtime,
+        context,
+        feed,
+        binding,
+        captured_decisions=captured_decisions,
+    )
+    if uncaptured_candidate is not None:
+        yield uncaptured_candidate
 
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
         mode = _evaluation_mode_for(feed, market_bar)
-        engine_bar = _engine_bar(market_bar)
-        runtime.capture_source_bar(engine_bar, mode=mode)
-        _drain_bar(strategy, context, engine_bar)
-        evaluation = _evaluation_from_active_stage(runtime, context, market_bar, mode=mode)
+        runtime.replay_closed_bar(context, market_bar, mode=mode)
+        evaluation = _evaluation_from_active_stage(
+            binding, runtime, context, market_bar, mode=mode
+        )
         if evaluation.settle_stage is not None or evaluation.intents:
             yield evaluation
         # #1708 review finding 2: the consolidator only fires a working
@@ -424,12 +479,15 @@ async def _signal_strategy_evaluations(
             for consolidator in context.get_consolidators(market_bar.symbol):
                 if consolidator.scan(market_bar.end_ms) is None:
                     continue
-                evaluation = _evaluation_from_active_stage(runtime, context, market_bar, mode=mode)
+                evaluation = _evaluation_from_active_stage(
+                    binding, runtime, context, market_bar, mode=mode
+                )
                 if evaluation.settle_stage is not None or evaluation.intents:
                     yield evaluation
 
 
 def _evaluation_from_active_stage(
+    binding: BrokerBotBinding,
     runtime: _LiveSignalRuntime,
     context: StrategyContext,
     market_bar: MarketDataBar,
@@ -446,6 +504,14 @@ def _evaluation_from_active_stage(
     context.consolidated_bars.clear()
     return StrategyEvaluation(
         bar=market_bar,
+        evaluation_id=(
+            stage.trace.evaluation_id
+            if stage is not None
+            else _generic_evaluation_id(binding, market_bar.end_ms)
+        ),
+        decision_bar_close_ms=(
+            stage.trace.bar_close_ms if stage is not None else market_bar.end_ms
+        ),
         intents=intents,
         rollback_blocked_entry=runtime.strategy.rollback_blocked_entry,
         rollback_blocked_exit=runtime.strategy.rollback_blocked_exit,
@@ -457,13 +523,8 @@ def _evaluation_from_active_stage(
             else lambda settlement: _settle_active_stage(runtime, context, settlement)
         ),
         evaluation_mode=(stage.trace.evaluation_mode if stage is not None else mode),
+        trace=stage.trace if stage is not None else None,
     )
-
-
-def _settle_warmup_stage(runtime: _LiveSignalRuntime) -> None:
-    """Warmup evolves math but never gives its staged candidate to custody."""
-    if runtime.active_stage() is not None:
-        runtime.settle(Settlement.DISCARD)
 
 
 def _settle_active_stage(
@@ -495,11 +556,23 @@ def _discard_evaluation(evaluation: StrategyEvaluation, intent: SignalIntent) ->
 async def strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
+    *,
+    captured_decisions: Mapping[str, str] | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
+    """Stream one strategy's evaluations.
+
+    ``captured_decisions`` maps this strategy instance's own recently
+    durable decision identities to their outcomes (FR-016) -- pass it so
+    warmup replay can reapply each bucket's own known disposition and
+    recognize a candidate a crash left uncaptured. Omitting it (the
+    default) means no such recovery is attempted, which is correct for
+    :func:`strategy_intents`, a read-only stream with no custody seam to
+    record or discard a recovered candidate through.
+    """
     evaluation_stream = _STRATEGY_EVALUATION_STREAMS.get(binding.strategy_key)
     if evaluation_stream is None:
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
-    async for evaluation in evaluation_stream(binding, feed):
+    async for evaluation in evaluation_stream(binding, feed, captured_decisions):
         yield evaluation
 
 
@@ -520,7 +593,7 @@ async def strategy_intents(
 
 
 _StrategyEvaluationStream = Callable[
-    ["BrokerBotBinding", MarketDataFeed],
+    ["BrokerBotBinding", MarketDataFeed, "Mapping[str, str] | None"],
     AsyncIterator[StrategyEvaluation],
 ]
 _STRATEGY_EVALUATION_STREAMS: dict[str, _StrategyEvaluationStream] = {
@@ -567,9 +640,26 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
-    async for evaluation in strategy_evaluations(binding, feed):
+    async for evaluation in strategy_evaluations(
+        binding,
+        feed,
+        captured_decisions=captured_decision_outcomes(decision_receipts),
+    ):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
+        if evaluation.crash_recovered:
+            # FR-016: DISCARD was already applied when replay staged this
+            # candidate (see `_warm_up_signal_strategy`) -- record the
+            # crash-window evidence and never route it to custody.
+            _settle_evaluation(evaluation, Settlement.DISCARD)
+            _append_decision_receipt(
+                decision_receipts,
+                binding=binding,
+                evaluation=evaluation,
+                outcome="candidate_uncaptured_at_crash",
+                reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+            )
+            continue
         if not evaluation.intents:
             _append_decision_receipt(
                 decision_receipts,
@@ -581,7 +671,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             _settle_evaluation(evaluation, Settlement.COMMIT)
             continue
         intent = evaluation.intents[0]
-        intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
+        decision_id = evaluation.evaluation_id
         if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
             _discard_evaluation(evaluation, intent)
             _append_decision_receipt(
@@ -590,7 +680,6 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                 evaluation=evaluation,
                 outcome="blocked",
                 reason_code="PAUSED_OBSERVE_ONLY",
-                intent_id=intent_id,
             )
             continue
         # The liveness gate applies only to ENTER — creating new exposure.
@@ -613,7 +702,6 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                     evaluation=evaluation,
                     outcome="blocked",
                     reason_code=liveness.reason_code,
-                    intent_id=intent_id,
                     liveness=liveness,
                 )
                 logger.warning(
@@ -628,14 +716,6 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                     },
                 )
                 continue
-        _append_decision_receipt(
-            decision_receipts,
-            binding=binding,
-            evaluation=evaluation,
-            outcome=("enter_intent" if intent.kind is SignalIntentKind.ENTER else "exit_intent"),
-            reason_code=f"STRATEGY_{intent.kind.value}",
-            intent_id=intent_id,
-        )
         logger.info(
             "Trade bot decision",
             extra={
@@ -650,12 +730,23 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
             run_id=binding.run_id,
-            decision_id=intent_id,
+            decision_id=decision_id,
             purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
             action_plan=binding.action_plan,
             quantity=binding.quantity,
             use_rth=binding.use_rth,
             capability_account_id=capability_account_id,
+            decision_evidence=EffectDecisionEvidence(
+                evaluation_id=decision_id,
+                bar_ref=_decision_bar_ref(binding, evaluation),
+                symbol=binding.symbol,
+                outcome=(
+                    "enter_intent"
+                    if intent.kind is SignalIntentKind.ENTER
+                    else "exit_intent"
+                ),
+                observed_at_ms=now_ms_utc(),
+            ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             # The strategy already committed its ENTER/EXIT-time state
@@ -669,13 +760,6 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             # symmetric rollback or the strategy believes it is flat while
             # the broker still holds the position (#1708 review finding 1).
             _discard_evaluation(evaluation, intent)
-            _record_blocked_decision(
-                decision_receipts,
-                binding=binding,
-                evaluation=evaluation,
-                intent_id=intent_id,
-                receipt=receipt,
-            )
         else:
             _settle_evaluation(evaluation, Settlement.COMMIT)
         logger.info(
@@ -691,6 +775,14 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         )
 
 
+_PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
+    "blocked": "protected_refusal",
+    # FR-016 / AC #9: crash-window evidence must survive the tail
+    # compaction in `decision_receipts.py` the same way a refusal does.
+    "candidate_uncaptured_at_crash": "protected_crash_evidence",
+}
+
+
 def _append_decision_receipt(
     receipts: SqliteDecisionReceipts,
     *,
@@ -698,13 +790,17 @@ def _append_decision_receipt(
     evaluation: StrategyEvaluation,
     outcome: DecisionOutcome,
     reason_code: str,
-    intent_id: str = "",
+    intent_id: str | None = None,
     order_ref: str = "",
     liveness: MarketLivenessFact | None = None,
 ) -> None:
     facts: dict[str, object] = {
-        "bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}",
+        "bar_ref": _decision_bar_ref(binding, evaluation),
+        "decision_id": evaluation.evaluation_id,
+        "evaluation_id": evaluation.evaluation_id,
+        "run_id": binding.run_id,
         "reason_code": reason_code,
+        "retention_class": _PROTECTED_RETENTION_CLASS_BY_OUTCOME.get(outcome, "tail"),
     }
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
@@ -713,40 +809,37 @@ def _append_decision_receipt(
         symbol=binding.symbol,
         observed_at_ms=now_ms_utc(),
         facts=facts,
-        intent_id=intent_id or None,
+        intent_id=intent_id or evaluation.evaluation_id,
         order_ref=order_ref or None,
-    )
-
-
-def _record_blocked_decision(
-    receipts: SqliteDecisionReceipts,
-    *,
-    binding: BrokerBotBinding,
-    evaluation: StrategyEvaluation,
-    intent_id: str,
-    receipt: _EffectReceipt,
-) -> None:
-    """Replace a provisional intent with the Clerk's final admission refusal."""
-    refusal_reason = str(
-        getattr(receipt, "next_step", None)
-        or getattr(receipt, "explanation", None)
-        or "The Account Clerk rejected this strategy submission."
-    )
-    receipts.update_final_outcome(
-        bar_ref=f"{binding.symbol}@{evaluation.bar.end_ms}",
-        outcome="blocked",
-        order_ref=None,
-        facts={
-            "bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}",
-            "reason_code": "CLERK_ADMISSION_REJECTED",
-            "refusal_reason": refusal_reason,
-        },
     )
 
 
 def _effect_state_value(receipt: _EffectReceipt) -> str:
     state = receipt.state
     return str(getattr(state, "value", state))
+
+
+def _generic_evaluation_id(binding: BrokerBotBinding, bar_close_ms: int) -> str:
+    """Give compatibility evaluators the same closed identity shape as sessions."""
+    payload = {
+        "program_key": binding.strategy_key,
+        "program_version": (
+            binding.sealed_program.configured_signal.program_version
+            if binding.sealed_program is not None
+            else f"{binding.strategy_key}/legacy-v1"
+        ),
+        "settings": {"symbol": binding.symbol, **(binding.strategy_params or {})},
+        "bar_close_ms": bar_close_ms,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
+    return (
+        f"decision-bar:{evaluation.bar.feed_id}:{binding.symbol}:"
+        f"{evaluation.decision_bar_close_ms}"
+    )
 
 
 async def run_dry_run_bot(
@@ -766,16 +859,54 @@ async def run_dry_run_bot(
     clerk = None if runtime is None else runtime.clerk
     if clerk is None or getattr(clerk, "authority_kind", None) != "synthetic":
         raise RuntimeError("Dry Run requires its activated synthetic Clerk authority.")
+    repository = getattr(clerk, "repository", None)
+    if repository is None:
+        raise RuntimeError("The synthetic Clerk has no decision-evidence repository.")
+    decision_receipts = SqliteDecisionReceipts(
+        repository,
+        strategy_instance_id=binding.strategy_instance_id,
+    )
     retained_feed = _RetainedSourceBarFeed(feed, source_bars)
-    async for evaluation in strategy_evaluations(binding, retained_feed):
+    async for evaluation in strategy_evaluations(
+        binding,
+        retained_feed,
+        captured_decisions=captured_decision_outcomes(decision_receipts),
+    ):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")
+        if evaluation.crash_recovered:
+            # FR-016: DISCARD was already applied when replay staged this
+            # candidate -- record the crash-window evidence and never route
+            # it to the synthetic authority's custody either.
+            _settle_evaluation(evaluation, Settlement.DISCARD)
+            _append_decision_receipt(
+                decision_receipts,
+                binding=binding,
+                evaluation=evaluation,
+                outcome="candidate_uncaptured_at_crash",
+                reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+            )
+            continue
         if not evaluation.intents:
+            _append_decision_receipt(
+                decision_receipts,
+                binding=binding,
+                evaluation=evaluation,
+                outcome="no_action",
+                reason_code="NO_ACTION",
+            )
             _settle_evaluation(evaluation, Settlement.COMMIT)
             continue
         intent = evaluation.intents[0]
         if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
             _discard_evaluation(evaluation, intent)
+            _append_decision_receipt(
+                decision_receipts,
+                binding=binding,
+                evaluation=evaluation,
+                outcome="blocked",
+                reason_code="PAUSED_OBSERVE_ONLY",
+            )
             logger.info(
                 "Dry-run candidate discarded while paused in observe-only mode",
                 extra={
@@ -800,13 +931,28 @@ async def run_dry_run_bot(
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
             run_id=binding.run_id,
-            decision_id=f"{intent.bar_close_ms}:{intent.kind.value}",
+            decision_id=evaluation.evaluation_id,
             purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
             action_plan=binding.action_plan,
             quantity=binding.quantity,
             use_rth=binding.use_rth,
             capability_account_id=market_data_capability_account_id(feed),
             retained_source_bar=retained,
+            decision_evidence=EffectDecisionEvidence(
+                evaluation_id=evaluation.evaluation_id,
+                bar_ref=(
+                    retained.bar_ref
+                    if retained is not None
+                    else _decision_bar_ref(binding, evaluation)
+                ),
+                symbol=binding.symbol,
+                outcome=(
+                    "enter_intent"
+                    if intent.kind is SignalIntentKind.ENTER
+                    else "exit_intent"
+                ),
+                observed_at_ms=now_ms_utc(),
+            ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             _discard_evaluation(evaluation, intent)
@@ -817,7 +963,7 @@ async def run_dry_run_bot(
                 "A synthetic effect was accepted without its exact retained decision-bar evidence."
             )
         order_ref = receipt.child_order_refs[0] if receipt.child_order_refs else (
-            f"simulated:{binding.run_id}:{intent.bar_close_ms}:{intent.kind.value}"
+            f"simulated:{binding.run_id}:{evaluation.evaluation_id}"
         )
         journal.append(
             DryRunActivity(

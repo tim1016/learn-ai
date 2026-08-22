@@ -1026,7 +1026,13 @@ async def test_reconcile_resolves_indeterminate_mismatch_only_once_proven_equal(
         and '"resolution_kind":"CLEAN_BROKER_RECONCILIATION"' in transition["facts_json"]
     ]
     assert len(resolutions) == 1
-    assert admit_new_exposure(repo, strategy_instance_id=SID).allowed
+    # The drift-specific blocker is gone, but the strategy's ENTER is still
+    # filled and open (never exited) — #1722's ENTER fence (ADR 0042, PRD
+    # FR-020) refuses a fresh ENTER whenever attributed exposure exists,
+    # independent of whether an unrelated uncertainty resolved cleanly.
+    admission = admit_new_exposure(repo, strategy_instance_id=SID)
+    assert not admission.allowed
+    assert admission.reason_code == "ATTRIBUTED_EXPOSURE_EXISTS"
 
     # A further clean pass must not re-resolve (idempotent — no phantom
     # second UNCERTAINTY_RESOLVED transition racing a fresh observation).
@@ -1572,7 +1578,13 @@ async def test_indeterminate_blocker_survives_restart_and_boot_recovery_stays_bl
             trade=_FakeTrade(),
         )
         assert cleared.verdict == "clean"
-        assert admit_new_exposure(after_restart, strategy_instance_id=SID).allowed
+        # The indeterminate-mismatch blocker is gone, but the strategy's
+        # ENTER is still filled and open (never exited) — #1722's ENTER
+        # fence (ADR 0042, PRD FR-020) refuses a fresh ENTER whenever
+        # attributed exposure exists, independent of this resolution.
+        admission = admit_new_exposure(after_restart, strategy_instance_id=SID)
+        assert not admission.allowed
+        assert admission.reason_code == "ATTRIBUTED_EXPOSURE_EXISTS"
         resolutions = [
             transition
             for transition in after_restart.custody_transitions()

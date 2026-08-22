@@ -6,7 +6,9 @@ property of a transaction (one order intent), not the whole bot (§7.1).
 
 Station derivation reads the durable evidence and never guesses:
 
-    SIGNAL      — the latest decision receipt from the bot's decision journal.
+    SIGNAL      — the decision receipt causally linked to the selected
+                  transaction (via order_ref/intent_id), or the bot's own
+                  latest decision when no transaction is selected.
     INTENT      — an ``intent_recorded`` line for the transaction's order_ref.
     SUBMIT_GATE — did the submit clear the holds/health gate, or was it held?
     BROKER_ACK  — ``submit_acked`` (satisfied) / ``submit_failed`` (blocked) /
@@ -111,9 +113,50 @@ def _freshness(state: StationState, evidence_at_ms: int | None, now_ms: int) -> 
     return state
 
 
-def _signal_station(latest_decision: DecisionReceipt | None, now_ms: int) -> StationView:
-    if latest_decision is None:
-        return _station("SIGNAL", "waiting", "No bar has been evaluated yet.")
+def _decision_for_transaction(
+    transaction_ref: str, decisions: list[DecisionReceipt]
+) -> DecisionReceipt | None:
+    """The bot's own most recent decision causally linked to ``transaction_ref``.
+
+    Mirrors the exact-key join
+    ``decision_receipts_by_transaction`` performs in storage
+    (``intent_id = ? OR order_ref = ?``) over the bounded in-memory window —
+    never the nearest-time or most-recent decision (PRD Sec 19).
+    """
+    matches = [
+        decision
+        for decision in decisions
+        if decision.order_ref == transaction_ref or decision.intent_id == transaction_ref
+    ]
+    return matches[-1] if matches else None
+
+
+def _signal_station(
+    transaction_ref: str | None,
+    decisions: list[DecisionReceipt],
+    now_ms: int,
+) -> StationView:
+    """Derive SIGNAL from the decision causally linked to ``transaction_ref``.
+
+    ``transaction_ref is None`` means no transaction is selected — SIGNAL then
+    falls back to the bot's own latest decision, which is an honest default,
+    not a substitution against an explicit request. When a transaction *is*
+    selected, SIGNAL must show that transaction's own decision (or explicit
+    absence) rather than an unrelated newer one (issue #1729 AC #6/#7).
+    """
+    if transaction_ref is None:
+        latest_decision = decisions[-1] if decisions else None
+        if latest_decision is None:
+            return _station("SIGNAL", "waiting", "No bar has been evaluated yet.")
+    else:
+        latest_decision = _decision_for_transaction(transaction_ref, decisions)
+        if latest_decision is None:
+            return _station(
+                "SIGNAL",
+                "not_applicable",
+                "No decision in the retained evidence window is linked to "
+                f"transaction {transaction_ref!r}.",
+            )
     state = _freshness("satisfied", latest_decision.ts_ms, now_ms)
     receipt = (
         f"Latest decision: {latest_decision.outcome} "
@@ -242,21 +285,30 @@ def derive_stations(
     sid: str,
     transaction_ref: str | None,
     all_entries: list[OrderJournalEntry],
-    latest_decision: DecisionReceipt | None,
+    decisions: list[DecisionReceipt],
     latest_reconciliation: OrderJournalEntry | None,
     now_ms: int,
 ) -> list[StationView]:
     """Derive the six-station rail for one selected transaction (§7.1).
 
-    ``transaction_ref`` selects the transaction; ``None`` means the bot has no
-    order intent yet, so every order-scoped station is ``waiting``. SIGNAL and
-    RECONCILED are bot/account-scoped and derived regardless.
+    ``transaction_ref`` selects the transaction; ``None`` means no transaction
+    is selected, so every order-scoped station is ``waiting`` and SIGNAL falls
+    back to the bot's own latest decision. RECONCILED is account-scoped and
+    derived regardless — it carries its own causal gate below.
+
+    ``decisions`` is the bot's own bounded decision-receipt window (ascending
+    by ``seq``), used to derive SIGNAL. When a transaction *is* selected,
+    SIGNAL must show the decision causally linked to it (via ``order_ref`` /
+    ``intent_id``) — never an unrelated, more recent decision (issue #1729
+    AC #6/#7; PRD Sec 19 forbids joining by "latest signal, latest
+    transaction"). A decision-receipt store call outside this bounded window
+    is the caller's responsibility if the deeper stored-key join is needed.
 
     Ownership validation: if ``transaction_ref`` is set but does not belong to
-    ``sid``'s namespace (cross-bot contamination), the order-scoped stations
-    (INTENT, SUBMIT_GATE, BROKER_ACK, FILL) are blocked with an explanatory
-    receipt. SIGNAL and RECONCILED are derived normally because they are
-    bot/account-scoped, not transaction-scoped.
+    ``sid``'s namespace (cross-bot contamination), every transaction-scoped
+    station (INTENT, SUBMIT_GATE, BROKER_ACK, FILL, and now SIGNAL) is
+    blocked with an explanatory receipt rather than leaking this bot's own
+    unrelated evidence into a foreign transaction's rail.
 
     Causal reconciliation gate: if the selected transaction has a SUBMIT_ACKED
     entry, any reconciliation sweep whose timestamp is <= the submission timestamp
@@ -284,6 +336,7 @@ def derive_stations(
         submit_gate_station = _submit_gate_station(txn_entries)
         broker_ack_station = _broker_ack_station(txn_entries)
         fill_station = _fill_station(txn_entries)
+        signal_station = _signal_station(transaction_ref, decisions, now_ms)
     else:
         _cross_bot_receipt = (
             f"Transaction {transaction_ref!r} belongs to a different bot; "
@@ -293,6 +346,7 @@ def derive_stations(
         submit_gate_station = _station("SUBMIT_GATE", "blocked", _cross_bot_receipt)
         broker_ack_station = _station("BROKER_ACK", "blocked", _cross_bot_receipt)
         fill_station = _station("FILL", "blocked", _cross_bot_receipt)
+        signal_station = _station("SIGNAL", "blocked", _cross_bot_receipt)
 
     submitted_at_ms = next(
         (e.recorded_at_ms for e in txn_entries if e.kind is ClerkEntryKind.SUBMIT_ACKED),
@@ -300,7 +354,7 @@ def derive_stations(
     )
 
     builders = {
-        "SIGNAL": _signal_station(latest_decision, now_ms),
+        "SIGNAL": signal_station,
         "INTENT": intent_station,
         "SUBMIT_GATE": submit_gate_station,
         "BROKER_ACK": broker_ack_station,

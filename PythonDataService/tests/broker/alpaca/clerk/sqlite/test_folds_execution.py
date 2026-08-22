@@ -688,12 +688,17 @@ def test_late_exact_execution_after_cumulative_recovery_auto_supersedes_coverage
             item["row_hash"]
             for item in repo.transitions_for_order(accepted.order_ref or "")[: len(cumulative_transitions)]
         ]
+        # The coverage supersession is clean, but the position is still 5.0
+        # (this ENTER was never exited) — #1722's ENTER fence (ADR 0042, PRD
+        # FR-020) refuses a fresh ENTER whenever attributed exposure exists,
+        # independent of how cleanly the underlying evidence reconciled.
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id="recovery-conflict-bot",
         )
-        assert admission.allowed is True
+        assert not admission.allowed
+        assert admission.reason_code == "ATTRIBUTED_EXPOSURE_EXISTS"
 
         transitions_after_supersession = repo.transitions_for_order(accepted.order_ref or "")
         assert _append_slice(repo, accepted=accepted, facts=late_exact) == "duplicate"
@@ -977,11 +982,18 @@ def test_partial_exact_coverage_accumulates_then_auto_supersedes_one_cumulative_
             abs=_ATOL,
             rel=0,
         )
-        assert decide_capability(
+        # The coverage quarantine is resolved with no residual admission
+        # uncertainty, but the position is still 5.0 (this ENTER was never
+        # exited) — #1722's ENTER fence (ADR 0042, PRD FR-020) refuses a
+        # fresh ENTER whenever attributed exposure exists, independent of
+        # how cleanly the underlying evidence reconciled.
+        admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id="coverage-multiple-exacts",
-        ).allowed
+        )
+        assert not admission.allowed
+        assert admission.reason_code == "ATTRIBUTED_EXPOSURE_EXISTS"
         transitions = repo.transitions_for_order(accepted.order_ref or "")
         assert _append_slice(repo, accepted=accepted, facts=second_exact) == "duplicate"
         assert repo.transitions_for_order(accepted.order_ref or "") == transitions

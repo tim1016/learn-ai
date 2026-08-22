@@ -25,11 +25,17 @@ from app.schemas.run_admission import (
     StartRuntimeAdmissionFact,
     StrategyValidationAdmissionFact,
 )
+from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 from app.services.session_authority import session_state_at_ms
+from app.services.signal_program_admission import (
+    SignalProgramSealError,
+    build_start_program_seal,
+    prove_running_program_build,
+)
 from app.services.strategy_validation_admission import current_strategy_validation_fact
 
 logger = logging.getLogger(__name__)
@@ -64,6 +70,15 @@ class StartRequest:
     # bot_binding_repository.py's ``BrokerBotBinding`` holds all the way
     # through construction.
     strategy_params: dict[str, Any] | None = None
+    # Widened to the canonical 3-member ParameterOrigin (not just
+    # registered_default/deploy_override): `make_start_request` below already
+    # types this field as the full set, and its one caller
+    # (`panel_data_source.py`) threads `resolve_deploy_strategy_params`'s
+    # `origins` straight through, which legitimately produces
+    # "deployment_symbol" once a caller supplies a `symbol_profile`. A
+    # narrower field here was already silently out of sync with its own
+    # producer, not a deliberate invariant.
+    strategy_param_origins: dict[str, ParameterOrigin] | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +109,18 @@ class StartAdmissionUnavailable(Exception):
         self.detail = detail
 
 
+class RunAdmissionInvariantError(RuntimeError):
+    """An admitted run lost evidence its own admission decision required.
+
+    ``evaluate_run_admission`` only allows Start/Resume once
+    ``market_data.state == "AVAILABLE"``, and ``market_data_admission_fact``
+    only reports that state when a feed was resolved — so an allowed
+    decision with no feed means that invariant broke upstream. Shared by
+    Start and Resume so both admission paths fail the same explicit way
+    instead of a bare ``assert`` that ``python -O`` would strip.
+    """
+
+
 def market_data_capability_account_id(feed: MarketDataFeed | None) -> str | None:
     """Return the account that owns the feed's capability evidence.
 
@@ -120,6 +147,7 @@ def make_start_request(
     evidence_override: AlpacaPaperEvidenceOverride | None,
     action_plan: ActionPlan,
     strategy_params: dict[str, Any] | None = None,
+    strategy_param_origins: dict[str, ParameterOrigin] | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(
@@ -134,6 +162,7 @@ def make_start_request(
         evidence_override=evidence_override,
         action_plan=action_plan,
         strategy_params=strategy_params,
+        strategy_param_origins=strategy_param_origins,
     )
 
 
@@ -232,6 +261,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         evidence_override=request.evidence_override,
         action_plan=request.action_plan,
         strategy_params=request.strategy_params,
+        strategy_param_origins=request.strategy_param_origins,
         sealed_account_id=(
             synthetic_account_id_for_strategy(request.strategy_instance_id)
             if request.mode == "dry_run"
@@ -315,7 +345,11 @@ class BotStartAdmission:
         async with self._decision(binding) as (binding, decision, feed, custody):
             if not decision.allowed:
                 raise StartAdmissionDenied(decision)
-            assert feed is not None
+            if feed is None:
+                raise RunAdmissionInvariantError(
+                    f"Start for '{binding.strategy_instance_id}' was admitted with no "
+                    "market-data feed resolved."
+                )
             activation_ms = self._now_ms()
             binding = binding.model_copy(update={"created_at_ms": activation_ms})
             bot = await self._activate(binding, feed, activation_ms, custody)
@@ -346,13 +380,30 @@ class BotStartAdmission:
                 process = self._process_fact(binding, observed_at_ms)
                 feed = self._feed_resolver()
                 capability_account_id = market_data_capability_account_id(feed)
+                validation = self._validation_fact(binding, observed_at_ms)
+                if binding.sealed_program is None:
+                    try:
+                        sealed_program = build_start_program_seal(
+                            binding,
+                            validation,
+                            parameter_origins=binding.strategy_param_origins,
+                        )
+                    except SignalProgramSealError:
+                        sealed_program = None
+                    binding = binding.model_copy(update={"sealed_program": sealed_program})
+                program_build = prove_running_program_build(
+                    binding,
+                    verified_at_ms=observed_at_ms,
+                )
+                binding = binding.model_copy(update={"program_build": program_build})
                 facts = StartRunFacts(
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,
                     configuration_hash=configuration_hash(binding),
                     sealed_account_id=binding.sealed_account_id or "",
                     mode=binding.mode,
-                    validation=self._validation_fact(binding, observed_at_ms),
+                    program_build=program_build,
+                    validation=validation,
                     runtime=runtime,
                     process=process,
                     market_data=market_data_admission_fact(

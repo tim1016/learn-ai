@@ -22,12 +22,17 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.signal_program_seal import ParameterOrigin
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
 from app.services.broker_v2_panel.strategy_catalog import compose_strategy_catalog
 from app.utils.timestamps import now_ms_utc
+
+
+class PaperDeployInvariantError(RuntimeError):
+    """A deploy-view computation reached a state its own gate should prevent."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +49,7 @@ class ResolvedDeployParams:
 
     effective: dict[str, Any]
     diverges_from_defaults: tuple[str, ...]
+    origins: dict[str, ParameterOrigin]
 
 
 def strategy_gate_recovery(
@@ -72,6 +78,8 @@ def resolve_deploy_strategy_params(
     strategy_key: str,
     symbol: str,
     requested_parameters: dict[str, Any],
+    *,
+    symbol_profile: dict[str, Any] | None = None,
 ) -> ResolvedDeployParams:
     """Validate deploy-time tunables against the strategy's own param_schema.
 
@@ -79,6 +87,14 @@ def resolve_deploy_strategy_params(
     there is no second, deploy-specific parameter contract. ``symbol`` is
     always deploy-authoritative, never a submittable tunable, regardless of
     whether the registration itself declares it in ``hidden_params``.
+
+    Resolution is the exact three-tier precedence PRD Sec 10.3 requires,
+    applied once here at deploy time and then sealed: registered program
+    defaults, then ``symbol_profile`` (a desk's per-``(strategy_key, symbol)``
+    tuning, when the caller has one), then ``requested_parameters`` (the
+    operator's explicit override). No caller currently supplies a profile —
+    omitting it is a clean no-op that resolves straight to the registered
+    default, not a fabricated dataset.
 
     Raises ``ValueError`` with a human-readable message for an unknown
     strategy, a hidden/live-only parameter, or a schema validation failure —
@@ -90,8 +106,9 @@ def resolve_deploy_strategy_params(
     hidden = hidden_params_present(registration, requested_parameters, extra_hidden=frozenset({"symbol"}))
     if hidden:
         raise ValueError(f"These parameters are not editable at deploy time: {', '.join(hidden)}.")
+    profile = dict(symbol_profile) if symbol_profile else {}
     try:
-        validated = registration.param_schema.model_validate({**requested_parameters, "symbol": symbol})
+        validated = registration.param_schema.model_validate({**profile, **requested_parameters, "symbol": symbol})
     except ValidationError as exc:
         problems = "; ".join(
             f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()
@@ -100,7 +117,19 @@ def resolve_deploy_strategy_params(
     defaults = registration.param_schema().model_dump(exclude={"symbol"})
     effective = validated.model_dump(exclude={"symbol"})
     diverges = tuple(sorted(name for name, value in effective.items() if value != defaults.get(name)))
-    return ResolvedDeployParams(effective=effective, diverges_from_defaults=diverges)
+    origins: dict[str, ParameterOrigin] = {}
+    for name in effective:
+        if name in requested_parameters:
+            origins[name] = "deploy_override"
+        elif name in profile:
+            origins[name] = "deployment_symbol"
+        else:
+            origins[name] = "registered_default"
+    return ResolvedDeployParams(
+        effective=effective,
+        diverges_from_defaults=diverges,
+        origins=origins,
+    )
 
 
 def _deploy_params_schema(strategy_key: str) -> StrategyParamsSchema:
@@ -400,7 +429,12 @@ def _dry_run_eligibility(
     any_runtime = any("dry_run" in strategy.admissible_modes for strategy in strategies)
     if not any_runtime:
         next_action = strategy_gate_recovery(strategies)
-        assert next_action is not None
+        if next_action is None:
+            raise PaperDeployInvariantError(
+                "No strategy is admissible for Dry Run, but strategy_gate_recovery reported no "
+                "recovery hint; a selectable strategy always makes 'dry_run' admissible, so "
+                "this should be unreachable."
+            )
         return AlpacaPaperDeployEligibility(
             eligible=False,
             reason_code="STRATEGY_NOT_ACCEPTED_FOR_DEPLOY",

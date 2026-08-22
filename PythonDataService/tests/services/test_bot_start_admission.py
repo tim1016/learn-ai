@@ -48,6 +48,7 @@ from app.schemas.market_liveness import (
 )
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
+    ProgramBuildAdmissionFact,
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
@@ -207,6 +208,12 @@ def _start_facts(
         configuration_hash="a" * 64,
         sealed_account_id="paper-account",
         mode="trade",
+        program_build=ProgramBuildAdmissionFact(
+            state="NOT_APPLICABLE",
+            program_key="deployment_validation",
+            verified_at_ms=observed_at_ms,
+            explanation="No registered Signal Program applies.",
+        ),
         validation=_validation(observed_at_ms),
         runtime=StartRuntimeAdmissionFact(
             state="READY",

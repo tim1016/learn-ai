@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.account_authority import (
     require_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ChannelHealth,
@@ -41,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     submit_start_run,
     submit_stop_run,
 )
+from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_accepted_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_accepted_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owned_entry
@@ -484,6 +486,7 @@ class SqliteAlpacaClerkFacade:
         use_rth: bool = True,
         capability_account_id: str | None = None,
         retained_source_bar: RetainedSourceBar | None = None,
+        decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
         """Route one semantic decision through SQLite ENTER/EXIT custody.
 
@@ -493,6 +496,8 @@ class SqliteAlpacaClerkFacade:
         reconciliation sweep recovers its exact identity.
         """
         key = (strategy_instance_id, decision_id)
+        if decision_evidence is not None and decision_evidence.evaluation_id != decision_id:
+            raise ValueError("decision_id must equal the Signal Program evaluation_id")
         task = self._effect_tasks.get(key)
         if task is None or task.done():
             task = asyncio.create_task(
@@ -506,6 +511,7 @@ class SqliteAlpacaClerkFacade:
                     use_rth=use_rth,
                     capability_account_id=capability_account_id,
                     retained_source_bar=retained_source_bar,
+                    decision_evidence=decision_evidence,
                 ),
                 name=f"alpaca-sqlite-effect:{strategy_instance_id}:{decision_id}",
             )
@@ -552,6 +558,7 @@ class SqliteAlpacaClerkFacade:
         use_rth: bool = True,
         capability_account_id: str | None = None,
         retained_source_bar: RetainedSourceBar | None = None,
+        decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
         def rejected(
             *,
@@ -560,6 +567,15 @@ class SqliteAlpacaClerkFacade:
             next_step: str | None = None,
             order_refs: tuple[str, ...] = (),
         ) -> EffectOperationReceipt:
+            if decision_evidence is not None:
+                _append_pre_custody_refusal(
+                    self._repo,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                    evidence=decision_evidence,
+                    reason_code=reason_code,
+                    explanation=explanation,
+                )
             return _effect_receipt(
                 strategy_instance_id=strategy_instance_id,
                 run_id=run_id,
@@ -573,18 +589,35 @@ class SqliteAlpacaClerkFacade:
                 next_step=next_step,
             )
 
-        if self.authority_kind == "synthetic" and retained_source_bar is None:
-            return rejected(
-                reason_code="SIMULATED_SOURCE_BAR_UNPROVEN",
-                explanation=(
-                    "Synthetic custody received no exact retained source bar for this decision."
-                ),
-                next_step="Replay or ingest the decision bar, then retry through the sealed program.",
-            )
-
         async with self._intake:
+            if self.authority_kind == "synthetic" and retained_source_bar is None:
+                return rejected(
+                    reason_code="SIMULATED_SOURCE_BAR_UNPROVEN",
+                    explanation=(
+                        "Synthetic custody received no exact retained source bar for this decision."
+                    ),
+                    next_step="Replay or ingest the decision bar, then retry through the sealed program.",
+                )
             entry = _entry_leg(action_plan)
             durable_decision_id = _durable_decision_id(decision_id)
+            atomic_receipt = (
+                None
+                if decision_evidence is None
+                else AtomicDecisionReceipt(
+                    outcome=decision_evidence.outcome,
+                    symbol=decision_evidence.symbol,
+                    decision_id=decision_evidence.evaluation_id,
+                    observed_at_ms=decision_evidence.observed_at_ms,
+                    facts_json=canonicalize(
+                        {
+                            "bar_ref": decision_evidence.bar_ref,
+                            "decision_id": decision_evidence.evaluation_id,
+                            "evaluation_id": decision_evidence.evaluation_id,
+                            "reason_code": decision_evidence.reason_code,
+                        }
+                    ),
+                )
+            )
             operation_leg = BrokerOrderLeg(
                 symbol=entry.instrument.underlying,
                 side=(OrderSide.BUY if entry.position == "long" else OrderSide.SELL),
@@ -644,6 +677,7 @@ class SqliteAlpacaClerkFacade:
                         decision_id=durable_decision_id,
                         lifecycle_run_id=run_id,
                         leg=operation_leg,
+                        decision_receipt=atomic_receipt,
                     )
                 except AdmissionBlockedError as exc:
                     return rejected(
@@ -653,6 +687,18 @@ class SqliteAlpacaClerkFacade:
             else:
                 active_exit = self._repo.active_exit_for_strategy(strategy_instance_id)
                 if active_exit is not None:
+                    # FR-019/FR-023: this evaluation reached the custody seam
+                    # and was answered by an effect that already exists. It is
+                    # still a decision that happened, so it leaves durable
+                    # evidence linked to the effect that resolved it -- without
+                    # that link the causal read (FR-030) cannot later explain
+                    # why this evaluation produced no effect of its own.
+                    if atomic_receipt is not None:
+                        self._repo.capture_decision_against_active_exit(
+                            strategy_instance_id=strategy_instance_id,
+                            run_id=run_id,
+                            decision_receipt=atomic_receipt,
+                        )
                     return _effect_receipt(
                         strategy_instance_id=strategy_instance_id,
                         run_id=run_id,
@@ -695,6 +741,7 @@ class SqliteAlpacaClerkFacade:
                         decision_id=durable_decision_id,
                         lifecycle_run_id=run_id,
                         entry_order_ref=candidates[-1].order_ref,
+                        decision_receipt=atomic_receipt,
                     )
                 except UnknownEntryOrderError:
                     # The lookup and accept both occur under the Clerk intake
@@ -1021,6 +1068,37 @@ def _entry_leg(action_plan: ActionPlan) -> StockEntryLeg:
     if len(action_plan.on_enter) != 1 or not isinstance(action_plan.on_enter[0], StockEntryLeg):
         raise ValueError("SQLite Alpaca effects require exactly one stock entry leg")
     return action_plan.on_enter[0]
+
+
+def _append_pre_custody_refusal(
+    repository: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    run_id: str,
+    evidence: EffectDecisionEvidence,
+    reason_code: str,
+    explanation: str,
+) -> None:
+    """Durably close one evaluation before returning a custody refusal."""
+    repository.append_decision_receipt(
+        strategy_instance_id=strategy_instance_id,
+        outcome="blocked",
+        symbol=evidence.symbol,
+        intent_id=evidence.evaluation_id,
+        order_ref=None,
+        observed_at_ms=evidence.observed_at_ms,
+        facts_json=canonicalize(
+            {
+                "bar_ref": evidence.bar_ref,
+                "decision_id": evidence.evaluation_id,
+                "evaluation_id": evidence.evaluation_id,
+                "run_id": run_id,
+                "reason_code": reason_code,
+                "refusal_reason": explanation,
+                "retention_class": "protected_refusal",
+            }
+        ),
+    )
 
 
 def _durable_decision_id(decision_id: str) -> str:

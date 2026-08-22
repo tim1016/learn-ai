@@ -353,7 +353,17 @@ def test_bot_snapshot_is_one_coherent_read_despite_a_concurrent_commit(
     assert snapshot.uncertainties == ()
 
 
-def test_operation_page_is_stable_when_a_new_operation_appends(tmp_path: Path) -> None:
+def test_operation_page_is_stable_when_a_new_operation_appends(tmp_path: Path, monkeypatch) -> None:
+    """This test is about `SqliteClerkProjectionReader`'s read-side keyset
+    pagination, not write-side admission — but exercising it needs more than
+    one ENTER effect operation live under one strategy at once, and #1722
+    fenced a fresh ENTER behind ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS
+    whenever attributed exposure or a nonterminal ENTER already exists (ADR
+    0042, PRD FR-020). The read layer must still paginate correctly over
+    however many operations exist (idempotent replay, legacy data, a future
+    carve-out), so bypass the fence to construct that state directly.
+    """
+    monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
     clock = _Clock()
     repo = _repository(tmp_path, clock)
     submit_start_run(
@@ -413,12 +423,21 @@ def test_operation_page_is_stable_when_a_new_operation_appends(tmp_path: Path) -
 
 def test_operation_page_does_not_drop_an_operation_whose_updated_at_ms_advances_mid_traversal(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """#1396 P2: the keyset cursor must anchor on an immutable key. Folding a
     fill (or any other evidence) onto a not-yet-paged operation moves its
     `updated_at_ms` forward — if the cursor anchored on that mutable column,
     the operation would jump above the anchor and vanish from every
-    remaining page. It must still be reachable via the next page."""
+    remaining page. It must still be reachable via the next page.
+
+    Exercising three simultaneously-live ENTER operations under one
+    strategy is itself now fenced (#1722, ADR 0042, PRD FR-020:
+    ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS) — bypass that write-side
+    fence here since this test is about read-side pagination, which must
+    still be correct over however many operations the ledger holds.
+    """
+    monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
     clock = _Clock()
     repo = _repository(tmp_path, clock)
     submit_start_run(
@@ -477,7 +496,14 @@ def test_operation_page_does_not_drop_an_operation_whose_updated_at_ms_advances_
 
 def test_recovery_policy_reads_working_orders_outside_the_operation_page(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    """Needs two simultaneously-live ENTER operations under one strategy,
+    which #1722's ENTER fence (ADR 0042, PRD FR-020) now refuses through the
+    normal decision path — bypass it here since this test is about the
+    read-side recovery policy, not write-side admission.
+    """
+    monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
     clock = _Clock()
     repo = _repository(tmp_path, clock)
     submit_start_run(

@@ -616,12 +616,17 @@ async def test_sqlite_late_exact_execution_after_recovery_auto_supersedes_across
         assert "EXECUTION_SLICE_FILLED" not in transition_kinds
         assert transition_kinds.count("EXECUTION_COVERAGE_SUPERSEDED") == 1
         assert "EXECUTION_COVERAGE_QUARANTINED" not in transition_kinds
+        # The coverage supersession is clean, but the position is still 5.0
+        # (this ENTER was never exited) — #1722's ENTER fence (ADR 0042, PRD
+        # FR-020) refuses a fresh ENTER whenever attributed exposure exists,
+        # independent of how cleanly the underlying evidence reconciled.
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id=STRATEGY_INSTANCE_ID,
         )
-        assert admission.allowed is True
+        assert admission.allowed is False
+        assert admission.reason_code == "ATTRIBUTED_EXPOSURE_EXISTS"
     finally:
         repo.close()
 
@@ -640,12 +645,15 @@ async def test_sqlite_late_exact_execution_after_recovery_auto_supersedes_across
         assert len(restarted.fills_for_order(order_ref)) == 1
         assert restarted.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
         assert restarted.transitions_for_order(order_ref) == transitions_before_redelivery
+        # Same #1722 ENTER fence (ADR 0042, PRD FR-020): the position is
+        # still 5.0 across the restart, so a fresh ENTER stays refused.
         admission = decide_capability(
             restarted,
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id=STRATEGY_INSTANCE_ID,
         )
-        assert admission.allowed is True
+        assert admission.allowed is False
+        assert admission.reason_code == "ATTRIBUTED_EXPOSURE_EXISTS"
     finally:
         restarted.close()
 

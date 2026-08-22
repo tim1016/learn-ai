@@ -42,7 +42,7 @@ from app.engine.live.identity import (
 from app.services.bot_binding_repository import (
     BINDING_FILENAME,
     STRATEGY_INSTANCE_FILENAME,
-    BotBindingRepository,
+    live_state_binding_repository,
 )
 
 
@@ -80,14 +80,7 @@ def read_quiescent_alpaca_roster(
             "runner artifacts and live_state roots must be regular directories"
         )
 
-    binding_repository = BotBindingRepository(
-        artifacts_root,
-        instance_dir_for=lambda strategy_instance_id: strategy_instance_artifact_dir(
-            artifacts_root,
-            "live_state",
-            strategy_instance_id,
-        ),
-    )
+    binding_repository = live_state_binding_repository(artifacts_root)
     try:
         safe_account_artifact_id(account_id)
     except AccountArtifactError as exc:

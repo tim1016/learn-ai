@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite import runtime as runtime_module
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
@@ -17,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
 )
+from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource
 from app.broker.alpaca.clerk.sqlite.reconcile import ReconciliationLockOrderError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import (
@@ -335,6 +337,75 @@ async def test_runtime_close_drains_shielded_effect_before_closing_repository(
     await closing
     assert runtime.sqlite_repository is None
     assert len(broker.submissions) == 1
+
+
+async def test_competing_exit_captures_the_losing_decision_receipt(tmp_path: Path) -> None:
+    """Independent-review finding (Spec 4): Clerk intake answers a second EXIT
+    with the already-active one and returns typed existing custody without
+    calling ``accept_exit`` again. The losing evaluation still reached the
+    custody seam, so FR-019/FR-023 require its receipt to be captured and
+    FR-030 requires a durable link to the effect that resolved it -- otherwise
+    the causal read can never explain why that evaluation produced no effect
+    of its own.
+
+    ``test_exit.py`` proves the repository primitive persists that evidence.
+    This proves intake actually *calls* it -- the primitive existing without a
+    caller is the defect, not the fix.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    broker.release_submit.set()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+
+    already_active = EffectOperationResource(
+        effect_operation_id="effect:already-exiting",
+        authority_generation=1,
+        idempotency_key="exit:already",
+        command_id="cmd:already",
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        kind="EXIT",
+        state="in_progress",
+        custody_owner="clerk",
+        created_at_ms=1,
+        updated_at_ms=1,
+        terminal_receipt_id=None,
+    )
+    captured: list[tuple[str, str, str]] = []
+
+    def _active_exit(strategy_instance_id: str) -> EffectOperationResource:
+        return already_active
+
+    def _capture(
+        *, strategy_instance_id: str, run_id: str, decision_receipt: Any
+    ) -> EffectOperationResource:
+        captured.append((strategy_instance_id, run_id, decision_receipt.decision_id))
+        return already_active
+
+    repo.active_exit_for_strategy = _active_exit  # type: ignore[method-assign]
+    repo.capture_decision_against_active_exit = _capture  # type: ignore[method-assign]
+
+    losing_id = "c" * 64
+    await facade.execute_for_instance(
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        decision_id=losing_id,
+        purpose=EffectPurpose.EXIT,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+        decision_evidence=EffectDecisionEvidence(
+            evaluation_id=losing_id,
+            bar_ref="decision-bar:test:SPY:3",
+            symbol=binding.symbol,
+            outcome="exit_intent",
+            observed_at_ms=1_700_000_000_000,
+        ),
+    )
+
+    assert captured == [(binding.strategy_instance_id, binding.run_id, losing_id)]
+    repo.close()
 
 
 async def test_cancel_verified_working_entry_records_intent_before_broker_contact(

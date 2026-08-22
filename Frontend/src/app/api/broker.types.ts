@@ -8409,6 +8409,7 @@ export interface components {
             /** Open Pnl */
             open_pnl: number | null;
             primary_action_by_lens: components["schemas"]["PrimaryActionByLens"];
+            program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
             readiness_blocked_count: number;
@@ -8422,8 +8423,10 @@ export interface components {
             recent_decisions: components["schemas"]["RecentDecisionView"][];
             /** Recent Fills */
             recent_fills: components["schemas"]["RecentFillView"][];
+            resume_admission: components["schemas"]["RunAdmissionDecision"] | null;
             /** Revision */
             revision: number;
+            sealed_program: components["schemas"]["SealedBotProgram"] | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Strategy Key */
@@ -8534,6 +8537,7 @@ export interface components {
          * @description Immutable terminal outcome and optional crash evidence for one run.
          */
         BotRunTerminalOutcomeView: {
+            canary_rollback?: components["schemas"]["CanaryRollbackDecision"] | null;
             crash_diagnostic?: components["schemas"]["BotCrashDiagnostic"] | null;
             /**
              * Kind
@@ -9577,6 +9581,34 @@ export interface components {
             ticker: string;
         };
         /**
+         * CanaryRollbackDecision
+         * @description Whether stopping one canary run is admitted at a Clerk-proved boundary.
+         *
+         *     A rollback is refused outright, not merely recorded, when the Clerk
+         *     cannot prove the resulting position is flat or an explicitly approved
+         *     carried exposure. This differs from an ordinary Stop, which always
+         *     persists an honest checkpoint even when custody is unprovable.
+         */
+        CanaryRollbackDecision: {
+            /** Allowed */
+            allowed: boolean;
+            /** Evaluated At Ms */
+            evaluated_at_ms: number;
+            /** Explanation */
+            explanation: string;
+            /** Next Step */
+            next_step: string | null;
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * Stop Outcome
+             * @enum {string}
+             */
+            stop_outcome: "STOPPED_FLAT" | "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE" | "STOP_REQUIRES_FLATTEN" | "STOPPED_CUSTODY_UNPROVABLE";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
          * CandidateFoldEvidence
          * @description One fixed-gap forward fold plus its matching training evidence.
          */
@@ -10569,6 +10601,43 @@ export interface components {
             entries: components["schemas"]["CommandTimelineEntry"][];
             /** Poll Interval Ms */
             poll_interval_ms: number;
+        };
+        /**
+         * ConfiguredSignalProgramSeal
+         * @description Inner seal: the exact semantic signal program selected by the user.
+         */
+        ConfiguredSignalProgramSeal: {
+            bar_integrity: components["schemas"]["SignalBarIntegrityContract"];
+            clock: components["schemas"]["SignalClockContract"];
+            data: components["schemas"]["SignalDataContract"];
+            /** Decision Streams */
+            decision_streams: string[];
+            exit_eligibility: components["schemas"]["ExitEligibilityContract"];
+            /** Golden Trace Root */
+            golden_trace_root: string;
+            numerical_provenance: components["schemas"]["NumericalProvenanceContract"];
+            /** Parameter Schema Version */
+            parameter_schema_version: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: components["schemas"]["ResolvedSignalParameter"];
+            };
+            /** Parameters Match Validated Settings */
+            parameters_match_validated_settings: boolean;
+            /** Program Key */
+            program_key: string;
+            /** Program Version */
+            program_version: string;
+            /** Protocol Version */
+            protocol_version: string;
+            /**
+             * Schema Version
+             * @default 2
+             * @constant
+             */
+            schema_version?: 2;
+            /** Signals */
+            signals: components["schemas"]["SignalSeriesContract"][];
         };
         /**
          * ConfirmInFormAction
@@ -12585,6 +12654,32 @@ export interface components {
              * @enum {string}
              */
             logic: "AND" | "OR";
+        };
+        /**
+         * ExitEligibilityContract
+         * @description Level/countdown exit rule — the evidence future carryover work would read.
+         *
+         *     PRD §11.1: "level/countdown exit eligibility evidence where carryover may
+         *     later be considered." ``ema_crossover_signal`` exits on a fixed
+         *     decision-clock countdown (``EmaCrossoverSignalAlgorithm.commit_signal_decision``
+         *     sets ``_bars_until_exit = 5`` at entry). ``countdown_state_persistable``
+         *     records a real, checked fact about today's implementation, not an
+         *     aspiration: ``EmaCrossoverSignalAlgorithm.report_state_for_persistence``
+         *     returns ``None`` whenever the strategy is mid-position, so an in-flight
+         *     countdown cannot currently survive a Pause/Resume — carryover work must
+         *     either change that or treat mid-countdown Resume as unsupported.
+         */
+        ExitEligibilityContract: {
+            /** Countdown Decision Clocks */
+            countdown_decision_clocks: number;
+            /** Countdown State Persistable */
+            countdown_state_persistable: boolean;
+            /**
+             * Rule
+             * @default fixed_bar_count_countdown
+             * @constant
+             */
+            rule?: "fixed_bar_count_countdown";
         };
         /**
          * ExposureSlice
@@ -16889,6 +16984,46 @@ export interface components {
             parent_value: number | null;
         };
         /**
+         * NumericalProvenanceContract
+         * @description The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.
+         *
+         *     Mirrors the ``Formula``/``Reference``/``Canonical implementation``/
+         *     ``Validated against`` block already required by the
+         *     ``learn-ai-validation`` skill and present in
+         *     ``ema_crossover_signal.py``'s own module docstring; this is that same
+         *     fact, made part of the immutable seal rather than living only in prose
+         *     that could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are
+         *     ``None`` at ``equivalence_level="bit_exact"`` — the trace/decision
+         *     identity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,
+         *     not tolerance-compared; the documented ``1e-9`` absolute tolerance in
+         *     ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
+         *     applies one level down, to the EMA/RSI *value* parity against LEAN.
+         */
+        NumericalProvenanceContract: {
+            /** Canonical Implementation */
+            canonical_implementation: string;
+            /**
+             * Equivalence Level
+             * @enum {string}
+             */
+            equivalence_level: "bit_exact" | "strict_float" | "behavioral";
+            /** Formula */
+            formula: string;
+            /**
+             * Parity Fixture Ids
+             * @default []
+             */
+            parity_fixture_ids?: string[];
+            /** Reference */
+            reference: string;
+            /** Tolerance Atol */
+            tolerance_atol?: number | null;
+            /** Tolerance Rtol */
+            tolerance_rtol?: number | null;
+            /** Validated Against */
+            validated_against: string;
+        };
+        /**
          * OHLCVBar
          * @description Single OHLCV bar.
          */
@@ -18309,6 +18444,44 @@ export interface components {
             /** Trader */
             trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority") | null;
         };
+        /**
+         * ProgramBuildAdmissionFact
+         * @description Admission-time proof that loaded program bytes match qualification.
+         */
+        ProgramBuildAdmissionFact: {
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: string[];
+            /** Explanation */
+            explanation: string;
+            /** Golden Trace Root */
+            golden_trace_root?: string | null;
+            /** Next Step */
+            next_step?: string | null;
+            /** Program Key */
+            program_key: string;
+            /** Program Version */
+            program_version?: string | null;
+            /** Qualification Receipt Hash */
+            qualification_receipt_hash?: string | null;
+            /** Running Artifact Digest */
+            running_artifact_digest?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "PROVEN" | "UNPROVEN" | "NOT_APPLICABLE";
+            /**
+             * Verification
+             * @default live_reproof
+             * @enum {string}
+             */
+            verification?: "live_reproof" | "frozen_run_evidence";
+            /** Verified At Ms */
+            verified_at_ms: number;
+        };
         /** ProjectedCommandResponse */
         ProjectedCommandResponse: {
             /** Action */
@@ -18888,13 +19061,17 @@ export interface components {
             authority_kind?: ("real_paper" | "synthetic") | null;
             /** Bar Ref */
             bar_ref: string;
+            /** Decision Id */
+            decision_id?: string | null;
+            /** Effect Operation Id */
+            effect_operation_id?: string | null;
             /** Order Ref */
             order_ref: string | null;
             /**
              * Outcome
              * @enum {string}
              */
-            outcome: "enter_intent" | "exit_intent" | "entered" | "exited" | "no_action" | "blocked";
+            outcome: "enter_intent" | "exit_intent" | "entered" | "exited" | "no_action" | "blocked" | "candidate_uncaptured_at_crash";
             /** Reason Code */
             reason_code: string;
             /** Recorded At Ms */
@@ -18906,6 +19083,12 @@ export interface components {
              * @default false
              */
             simulated?: boolean;
+            /**
+             * Source
+             * @default clerk_decision_receipt
+             * @enum {string}
+             */
+            source?: "clerk_decision_receipt" | "legacy_simulated_wal";
         };
         /**
          * RecentFillView
@@ -19338,6 +19521,21 @@ export interface components {
             strategy_default: boolean;
         };
         /**
+         * ResolvedSignalParameter
+         * @description One effective parameter with its unit and deploy-time origin.
+         */
+        ResolvedSignalParameter: {
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "registered_default" | "deploy_override" | "deployment_symbol";
+            /** Unit */
+            unit: string;
+            /** Value */
+            value: string | number | boolean;
+        };
+        /**
          * ResumeComparison
          * @description An already-evaluated Resume checkpoint comparison.
          */
@@ -19558,6 +19756,8 @@ export interface components {
             market_liveness: number;
             /** Process */
             process: number;
+            /** Program Build */
+            program_build: number;
             /** Runtime */
             runtime: number;
         };
@@ -20506,6 +20706,48 @@ export interface components {
              */
             warnings?: string[];
         };
+        /**
+         * SealedBotProgram
+         * @description Outer seal: signal identity plus execution-plan and validation choice.
+         */
+        SealedBotProgram: {
+            action_plan: components["schemas"]["ActionPlan"];
+            /** Bot Configuration Hash */
+            bot_configuration_hash: string;
+            /** Broker */
+            broker: string;
+            /**
+             * Carryover Policy
+             * @enum {string}
+             */
+            carryover_policy: "FORBID" | "ALLOW";
+            configured_signal: components["schemas"]["ConfiguredSignalProgramSeal"];
+            /** Configured Signal Hash */
+            configured_signal_hash: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "log_only" | "dry_run" | "trade";
+            /** Quantity */
+            quantity: number;
+            /**
+             * Schema Version
+             * @default 2
+             * @constant
+             */
+            schema_version?: 2;
+            /** Sealed Account Id */
+            sealed_account_id: string;
+            /** Sealed At Ms */
+            sealed_at_ms: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Validation Event Id */
+            validation_event_id: string;
+            /** Validation Snapshot Sha256 */
+            validation_snapshot_sha256: string;
+        };
         /** SeasonalityMonthResponse */
         SeasonalityMonthResponse: {
             /** Median Compounded Return */
@@ -20693,6 +20935,64 @@ export interface components {
             trend_window_sessions: number;
         };
         /**
+         * SignalBarIntegrityContract
+         * @description Duplicate/gap/out-of-order, watermark, and session-close ownership facts.
+         *
+         *     PRD §11.1 lists these beside ``revision_policy`` (``SignalDataContract``)
+         *     as sealed identity, not runtime evidence. Today every field is a single
+         *     system-wide policy — not a per-program choice — enforced by two modules
+         *     outside this schema:
+         *
+         *     * ``app.services.source_bar_ledger.SourceBarLedger`` fails closed on a
+         *       same-identity-different-payload bar (``SOURCE_BAR_IDENTITY_CONFLICT``),
+         *       is idempotent on an exact repeat, fails closed on a non-monotonic
+         *       ``end_ms`` (``SOURCE_BAR_NON_MONOTONIC_LIVE``/``_HISTORY``), tolerates a
+         *       missing bar rather than filling or rejecting it, and refuses
+         *       ``append_history`` once live delivery has started for that
+         *       provider/symbol seam (``SOURCE_BAR_HISTORY_AFTER_LIVE`` — the
+         *       history/live watermark).
+         *     * ``app.services.bot_trade_strategy._signal_strategy_evaluations`` is the
+         *       one router that owns bucket closing: it force-flushes the trailing
+         *       partial consolidator bucket exactly at the canonical calendar's
+         *       ``session_close_ms_utc`` boundary rather than leaving it stranded
+         *       until the next session's bars arrive (FR-011).
+         *
+         *     A second policy would need its own Literal member and a per-program field
+         *     here, not a silent default change on these.
+         */
+        SignalBarIntegrityContract: {
+            /**
+             * Duplicate Policy
+             * @default reject_conflicting_payload_else_idempotent
+             * @constant
+             */
+            duplicate_policy?: "reject_conflicting_payload_else_idempotent";
+            /**
+             * Gap Policy
+             * @default tolerated_not_filled
+             * @constant
+             */
+            gap_policy?: "tolerated_not_filled";
+            /**
+             * History Live Watermark Policy
+             * @default history_before_live_monotonic_seam
+             * @constant
+             */
+            history_live_watermark_policy?: "history_before_live_monotonic_seam";
+            /**
+             * Out Of Order Policy
+             * @default reject_non_monotonic_end_ms
+             * @constant
+             */
+            out_of_order_policy?: "reject_non_monotonic_end_ms";
+            /**
+             * Session Close Ownership
+             * @default single_router_forced_flush_at_session_close
+             * @constant
+             */
+            session_close_ownership?: "single_router_forced_flush_at_session_close";
+        };
+        /**
          * SignalBehaviorMetricsResponse
          * @description Signal behavior analysis on active bars.
          */
@@ -20722,6 +21022,86 @@ export interface components {
              * @default 0
              */
             skewness_active_returns?: number;
+        };
+        /**
+         * SignalClockContract
+         * @description Calendar, warmup, session, pause, and replay semantics.
+         */
+        SignalClockContract: {
+            /**
+             * Calendar
+             * @default XNYS
+             * @constant
+             */
+            calendar?: "XNYS";
+            /**
+             * Early Close Policy
+             * @default calendar_session_close
+             * @constant
+             */
+            early_close_policy?: "calendar_session_close";
+            /**
+             * Evaluation Modes
+             * @default [
+             *       "DECIDE",
+             *       "OBSERVE_ONLY"
+             *     ]
+             */
+            evaluation_modes?: ("DECIDE" | "OBSERVE_ONLY")[];
+            /**
+             * Pause Policy
+             * @default OBSERVE_ONLY
+             * @constant
+             */
+            pause_policy?: "OBSERVE_ONLY";
+            /**
+             * Replay Protocol
+             * @default retained_source_bars_in_decision_clock_order
+             * @constant
+             */
+            replay_protocol?: "retained_source_bars_in_decision_clock_order";
+            /**
+             * Session Timezone
+             * @default America/New_York
+             * @constant
+             */
+            session_timezone?: "America/New_York";
+            /** Use Rth */
+            use_rth: boolean;
+            /** Warmup Lookback Days */
+            warmup_lookback_days: number;
+        };
+        /**
+         * SignalDataContract
+         * @description Closed source-series and bar-semantics contract.
+         */
+        SignalDataContract: {
+            /**
+             * Bar Semantics
+             * @default closed_end_exclusive
+             * @constant
+             */
+            bar_semantics?: "closed_end_exclusive";
+            /** Base Timeframe Ms */
+            base_timeframe_ms: number;
+            /** Decision Timeframe Ms */
+            decision_timeframe_ms: number;
+            /** Provider */
+            provider: string;
+            /**
+             * Revision Policy
+             * @default exact_retained_source_bar
+             * @constant
+             */
+            revision_policy?: "exact_retained_source_bar";
+            /** Symbol */
+            symbol: string;
+            /**
+             * Timestamp Contract
+             * @default int64_ms_utc
+             * @constant
+             */
+            timestamp_contract?: "int64_ms_utc";
         };
         /**
          * SignalDiagnosticsResponse
@@ -20811,6 +21191,35 @@ export interface components {
             timespan?: "minute" | "hour" | "day";
             /** To Date */
             to_date: string;
+        };
+        /**
+         * SignalSeriesContract
+         * @description One named signal series a program consumes off the sealed data contract.
+         *
+         *     PRD §10.1/§11.1: "every signal series, field, and decision stream." A
+         *     program's ``data`` contract seals the *shared* provider/symbol/timeframe
+         *     pair every series reads from; this seals each named series drawn from
+         *     that shared stream — e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read
+         *     ``field="close"`` off the same 15-minute decision bar. ``warmup_bars`` is
+         *     the series' own ``is_ready`` threshold (PRD §11.1 "readiness"): the
+         *     ``app.engine.indicators`` base class exposes ``is_ready`` as
+         *     ``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI
+         *     overrides this to ``period + 1`` (one extra sample for the first delta).
+         */
+        SignalSeriesContract: {
+            /**
+             * Field
+             * @constant
+             */
+            field: "close";
+            /** Indicator */
+            indicator: string;
+            /** Name */
+            name: string;
+            /** Period */
+            period: number;
+            /** Warmup Bars */
+            warmup_bars: number;
         };
         /** SignalsRequest */
         SignalsRequest: {

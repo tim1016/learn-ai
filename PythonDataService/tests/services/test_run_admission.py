@@ -18,6 +18,7 @@ from app.schemas.market_liveness import (
 )
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
+    ProgramBuildAdmissionFact,
     ResumeCheckpointAdmissionFact,
     ResumeRunFacts,
     RunProcessAdmissionFact,
@@ -51,6 +52,23 @@ def _validation(observed_at_ms: int, *, state: str = "VERIFIED") -> StrategyVali
     )
 
 
+def _program_build(
+    observed_at_ms: int,
+    *,
+    state: str = "NOT_APPLICABLE",
+) -> ProgramBuildAdmissionFact:
+    return ProgramBuildAdmissionFact(
+        state=state,
+        program_key="deployment_validation",
+        verified_at_ms=observed_at_ms,
+        explanation=(
+            "The running program is unproven."
+            if state == "UNPROVEN"
+            else "No registered Signal Program applies."
+        ),
+    )
+
+
 def _bot(
     *,
     process_state: str = "ABSENT",
@@ -67,6 +85,7 @@ def _bot(
         configuration_hash="a" * 64,
         sealed_account_id="paper-account",
         mode=mode,
+        program_build=_program_build(observed_at_ms),
         validation=_validation(observed_at_ms),
         runtime=StartRuntimeAdmissionFact(
             state=runtime_state,
@@ -183,6 +202,7 @@ def _resume_bot(
         configuration_hash="b" * 64,
         sealed_account_id="paper-account",
         mode=mode,
+        program_build=_program_build(_NOW - 1_000),
         validation=_validation(_NOW - 1_000),
         runtime=StartRuntimeAdmissionFact(
             state="READY",
@@ -221,6 +241,7 @@ def test_start_admission_allows_only_proven_absence_and_flat_custody() -> None:
     assert decision.strategy_instance_id == _SID
     assert decision.proposed_run_id == "run-new"
     assert decision.fact_ages_ms.model_dump() == {
+        "program_build": 1_000,
         "runtime": 1_000,
         "process": 1_000,
         "market_data": 1_000,
@@ -228,6 +249,18 @@ def test_start_admission_allows_only_proven_absence_and_flat_custody() -> None:
         "clerk": 500,
     }
     assert "clerk:paper-account:7" in decision.evidence_refs
+
+
+def test_start_admission_rejects_an_unproven_program_build_before_runtime() -> None:
+    bot = _bot().model_copy(
+        update={"program_build": _program_build(_NOW - 1_000, state="UNPROVEN")}
+    )
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
+    assert decision.explanation == "The running program is unproven."
 
 
 def test_start_admission_blocks_a_different_sealed_account_before_effects() -> None:
@@ -743,3 +776,231 @@ def test_trade_mode_admission_is_byte_identical_to_pre_1702_behavior() -> None:
         decision = evaluate_run_admission(bot, clerk, evaluated_at_ms=_NOW)
         assert decision.allowed is expected_allowed
         assert decision.reason_code == expected_reason_code
+
+
+# ── #1729 AC4: canary allowlist composed into evaluate_run_admission ─────────
+#
+# `_bot()`/`_clerk()` default `program_build` to "NOT_APPLICABLE", so none of
+# the cases above ever exercise the canary gate -- these helpers build a
+# proven Signal-Program pairing (`mode="trade"`, `program_build.state ==
+# "PROVEN"`) that *is* canary-shaped, so the allowlist becomes the deciding
+# factor. Every test below monkeypatches
+# `app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS`
+# locally; the shipped constant stays empty (see
+# `tests/services/test_canary_admission.py::test_canary_allowlist_ships_empty`).
+
+
+def _canary_program_build(
+    *,
+    state: str = "PROVEN",
+    program_key: str = "ema_crossover_signal",
+    observed_at_ms: int = _NOW - 1_000,
+) -> ProgramBuildAdmissionFact:
+    proven_only: dict[str, object] = (
+        {
+            "program_version": "1",
+            "golden_trace_root": "a" * 64,
+            "running_artifact_digest": "b" * 64,
+            "qualification_receipt_hash": "c" * 64,
+            "evidence_refs": (f"program-build-digest:{'b' * 64}",),
+        }
+        if state == "PROVEN"
+        else {}
+    )
+    return ProgramBuildAdmissionFact(
+        state=state,
+        program_key=program_key,
+        verified_at_ms=observed_at_ms,
+        explanation=(
+            "The running Signal Program build matches its golden qualification receipt."
+            if state == "PROVEN"
+            else "The running program is unproven."
+        ),
+        **proven_only,
+    )
+
+
+def _canary_bot(
+    *,
+    program_key: str = "ema_crossover_signal",
+    program_build_state: str = "PROVEN",
+    sealed_account_id: str = "paper-account",
+    validation_state: str = "VERIFIED",
+    runtime_state: str = "READY",
+    observed_at_ms: int = _NOW - 1_000,
+) -> StartRunFacts:
+    return _bot(observed_at_ms=observed_at_ms, runtime_state=runtime_state).model_copy(
+        update={
+            "sealed_account_id": sealed_account_id,
+            "program_build": _canary_program_build(
+                state=program_build_state, program_key=program_key, observed_at_ms=observed_at_ms
+            ),
+            "validation": _validation(observed_at_ms, state=validation_state),
+        }
+    )
+
+
+def _canary_resume_bot(
+    *,
+    program_key: str = "ema_crossover_signal",
+    program_build_state: str = "PROVEN",
+    sealed_account_id: str = "paper-account",
+) -> ResumeRunFacts:
+    """A Resume attempt shaped like the one that follows a canary rollback:
+    the prior process is proven EXITED and a fresh run id is proposed."""
+    return _resume_bot().model_copy(
+        update={
+            "sealed_account_id": sealed_account_id,
+            "program_build": _canary_program_build(state=program_build_state, program_key=program_key),
+        }
+    )
+
+
+def _canary_clerk(*, account_id: str = "paper-account", **kwargs: object) -> ClerkCustodySnapshot:
+    return _clerk(**kwargs).model_copy(update={"account_id": account_id})
+
+
+def test_canary_admission_refuses_an_account_not_on_the_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "an-account-someone-else-enabled")}),
+    )
+
+    decision = evaluate_run_admission(_canary_bot(), _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "CANARY_PAIRING_NOT_ALLOWLISTED"
+
+
+def test_canary_admission_refuses_a_program_not_on_the_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("sma_crossover_signal", "paper-account")}),
+    )
+
+    decision = evaluate_run_admission(_canary_bot(), _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "CANARY_PAIRING_NOT_ALLOWLISTED"
+
+
+def test_canary_admission_refuses_the_right_program_with_the_wrong_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1729 AC4: the allowlist is exact by (program, account) -- an
+    allowlisted program alone is not enough; the account must match too."""
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+    bot = _canary_bot(sealed_account_id="a-different-canary-account")
+    clerk = _canary_clerk(account_id="a-different-canary-account")
+
+    decision = evaluate_run_admission(bot, clerk, evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "CANARY_PAIRING_NOT_ALLOWLISTED"
+
+
+def test_canary_admission_admits_the_exact_allowlisted_pairing_with_every_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+
+    decision = evaluate_run_admission(_canary_bot(), _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is True
+    assert decision.reason_code == "START_ADMITTED"
+
+
+def test_canary_admission_refuses_when_build_is_unproven_even_if_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+    bot = _canary_bot(program_build_state="UNPROVEN")
+
+    decision = evaluate_run_admission(bot, _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
+
+
+def test_canary_admission_refuses_when_validation_is_unverified_even_if_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+    bot = _canary_bot(validation_state="UNVERIFIED")
+
+    decision = evaluate_run_admission(bot, _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "STRATEGY_VALIDATION_UNVERIFIED"
+
+
+def test_canary_admission_refuses_when_replay_recovery_is_not_ready_even_if_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+    bot = _canary_bot(runtime_state="RECOVERY_UNCERTAIN")
+
+    decision = evaluate_run_admission(bot, _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "RECOVERY_UNCERTAIN"
+
+
+def test_canary_admission_refuses_when_clerk_custody_is_unprovable_even_if_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+    clerk = _canary_clerk(reconciliation_state="stale", reconciliation_fresh=False)
+
+    decision = evaluate_run_admission(_canary_bot(), clerk, evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "CLERK_CUSTODY_UNPROVABLE"
+
+
+def test_canary_resume_after_rollback_refuses_without_a_fresh_allowlist_entry() -> None:
+    """#1729 AC10: a rollback leaves no cached admission to replay -- Resume
+    is re-gated by the same allowlist as any other admission. The shipped
+    empty allowlist (no monkeypatch here) refuses it, exactly like it would
+    have refused the original Start."""
+    decision = evaluate_run_admission(_canary_resume_bot(), _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "CANARY_PAIRING_NOT_ALLOWLISTED"
+
+
+def test_canary_resume_after_rollback_mints_a_genuinely_new_admitted_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1729 AC10: once an operator re-enables the exact pairing, Resume
+    mints a fresh run rather than reviving the stopped one -- no process is
+    hot-swapped."""
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+
+    decision = evaluate_run_admission(_canary_resume_bot(), _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is True
+    assert decision.reason_code == "RESUME_ADMITTED"
+    assert decision.proposed_run_id == "run-resumed"
+    assert decision.proposed_run_id != "run-prior"

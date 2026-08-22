@@ -126,6 +126,15 @@ class EmaCrossoverSignalSession:
 
     PROGRAM_KEY = "ema_crossover_signal"
     PROGRAM_VERSION = "ema-crossover-signal/v1"
+    # Identifies the *shape* of this session's public contract — PRD §12's
+    # staged open/advance/settle protocol (EvaluationMode DECIDE/OBSERVE_ONLY,
+    # Settlement COMMIT/DISCARD, EvaluationTrace) — independent of
+    # PROGRAM_VERSION, which identifies the EMA/RSI decision math. A future
+    # program could reuse this exact protocol shape under a different
+    # PROGRAM_VERSION, or this shape could change under the same math.
+    # app.engine.strategy.registry mirrors this into the registry contract
+    # rather than re-declaring it, so the two cannot drift apart silently.
+    PROTOCOL_VERSION = "signal-session-protocol/v1"
     TIMEFRAME_MS = 15 * 60 * 1000
 
     def __init__(self, strategy: SignalProgramStrategy) -> None:

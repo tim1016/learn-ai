@@ -7,6 +7,8 @@ Every action and action token comes from the SQLite recovery catalog.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -16,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOrder,
     RecoveryCapability,
 )
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -63,6 +66,7 @@ def adapt_sqlite_panel(
     projection: ClerkProjection,
     *,
     economics: EconomicSnapshot | None = None,
+    repository: ClerkSqliteRepository | None = None,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot.
 
@@ -70,6 +74,11 @@ def adapt_sqlite_panel(
     ``projection``.  The optional form remains only for narrow historical
     adapter tests; the active source fails closed before calling this adapter
     without authoritative economic evidence.
+
+    ``repository`` is optional and used only as the PRD Sec 19 stored-key
+    fallback when the selected transaction ref is absent from the bounded
+    ``projection.operations`` window (§7.1's 50/100-row cap).  Without it, a
+    ref outside the window renders as "not found" rather than being resolved.
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
@@ -103,6 +112,7 @@ def adapt_sqlite_panel(
             "rail": _transaction_rail(
                 projection,
                 selected_ref=panel.rail.transaction_ref,
+                repository=repository,
             ),
             "journal_tail_ref": (
                 f"/api/alpaca-clerk-sqlite/accounts/{projection.account_id}/bots/"
@@ -133,7 +143,10 @@ def adapt_sqlite_panel(
             "recent_fills": (
                 []
                 if economics is None
-                else [_recent_fill_view(fill) for fill in economics.recent_fills]
+                else [
+                    _recent_fill_view(fill, authority_account_id=projection.account_id)
+                    for fill in economics.recent_fills
+                ]
             ),
             "fills_today": None if economics is None else economics.fills_today,
             "realized_pnl_today": (
@@ -423,8 +436,15 @@ def _working_order_view(
     )
 
 
-def _recent_fill_view(fill: FillRecord) -> RecentFillView:
-    """Adapt one S2 fill record to the existing panel wire contract."""
+def _recent_fill_view(fill: FillRecord, *, authority_account_id: str) -> RecentFillView:
+    """Adapt one S2 fill record to the existing panel wire contract.
+
+    Stamps the authority the fill was actually read from (#1729 AC #8). This
+    adapter overwrites whatever ``recent_fills`` the projector produced, so
+    without the stamp here a production fill row reaches the panel carrying no
+    authority at all while its sibling decision row carries one — the exact
+    asymmetry the single-authority guard exists to make impossible.
+    """
     return RecentFillView(
         order_ref=fill.order_ref,
         symbol=fill.symbol,
@@ -432,6 +452,11 @@ def _recent_fill_view(fill: FillRecord) -> RecentFillView:
         quantity=fill.quantity,
         price=fill.fill_price,
         filled_at_ms=fill.filled_at_ms,
+        simulated=authority_account_id.startswith("sim:"),
+        authority_account_id=authority_account_id,
+        authority_kind=(
+            "synthetic" if authority_account_id.startswith("sim:") else "real_paper"
+        ),
     )
 
 
@@ -454,12 +479,131 @@ def _require_coherent_economic_snapshot(
         )
 
 
+@dataclass(frozen=True)
+class _ResolvedOrderEvidence:
+    """Just enough order evidence for the rail, sourced outside the bounded window."""
+
+    broker_order_id: str | None
+    broker_state: str | None
+
+
+@dataclass(frozen=True)
+class _ResolvedOperationEvidence:
+    """One effect operation's rail-relevant evidence, resolved by exact stored key.
+
+    Mirrors the subset of ``ProjectedOperation`` the rail actually reads
+    (§7.1). Built from unbounded exact-key repository reads
+    (``ClerkSqliteRepository.effect_operation`` / ``.order`` /
+    ``.orders_for_effect_operation`` — already used throughout the SQLite
+    Clerk, e.g. ``exit_resolution.py``, ``reconcile.py``), never from a
+    hand-rolled second copy of the fold's operation-assembly query.
+    """
+
+    effect_operation_id: str
+    state: str
+    terminal_receipt_id: str | None
+    orders: tuple[_ResolvedOrderEvidence, ...]
+
+
+@dataclass(frozen=True)
+class _OperationSelection:
+    """The outcome of resolving one ``selected_ref`` against custody evidence.
+
+    ``unresolved_ref`` is set only when a caller-supplied ``selected_ref``
+    matched nothing anywhere — neither the bounded projection window nor an
+    unbounded stored-key lookup. That is a materially different state from
+    "no ref was requested" (``operation`` simply defaults to the most recent)
+    and must render as explicit, named absence rather than silently
+    substituting another transaction (PRD Sec 19; issue #1729 AC #6/#7).
+    """
+
+    operation: ProjectedOperation | _ResolvedOperationEvidence | None
+    unresolved_ref: str | None
+
+
+def _operation_matches_ref(operation: ProjectedOperation, ref: str) -> bool:
+    return operation.effect_operation_id == ref or any(
+        order.order_ref == ref for order in operation.orders
+    )
+
+
+def _resolve_operation_outside_window(
+    repository: ClerkSqliteRepository,
+    projection: ClerkProjection,
+    ref: str,
+) -> _ResolvedOperationEvidence | None:
+    """Stored-key join for a ref absent from the bounded operation window.
+
+    ``ref`` may name an effect operation directly or one of its orders — the
+    same two identities ``_operation_matches_ref`` checks in-window. Resolved
+    evidence is discarded (treated as not found) unless it belongs to the
+    bot this projection is scoped to; a real ref from a *different* bot must
+    not leak into this bot's rail (mirrors
+    ``station_derivation._validate_transaction_ownership``).
+    """
+    order = repository.order(ref)
+    effect_operation_id = order.effect_operation_id if order is not None else ref
+    effect = repository.effect_operation(effect_operation_id)
+    if effect is None or effect.strategy_instance_id != projection.strategy_instance_id:
+        return None
+    orders = repository.orders_for_effect_operation(effect_operation_id)
+    return _ResolvedOperationEvidence(
+        effect_operation_id=effect.effect_operation_id,
+        state=effect.state,
+        terminal_receipt_id=effect.terminal_receipt_id,
+        orders=tuple(
+            _ResolvedOrderEvidence(broker_order_id=o.broker_order_id, broker_state=o.broker_state)
+            for o in orders
+        ),
+    )
+
+
+def _select_operation(
+    projection: ClerkProjection,
+    selected_ref: str | None,
+    *,
+    repository: ClerkSqliteRepository | None,
+) -> _OperationSelection:
+    if selected_ref is None:
+        latest = projection.operations[0] if projection.operations else None
+        return _OperationSelection(operation=latest, unresolved_ref=None)
+    for operation in projection.operations:
+        if _operation_matches_ref(operation, selected_ref):
+            return _OperationSelection(operation=operation, unresolved_ref=None)
+    resolved = (
+        _resolve_operation_outside_window(repository, projection, selected_ref)
+        if repository is not None
+        else None
+    )
+    if resolved is not None:
+        return _OperationSelection(operation=resolved, unresolved_ref=None)
+    return _OperationSelection(operation=None, unresolved_ref=selected_ref)
+
+
 def _transaction_rail(
     projection: ClerkProjection,
     *,
     selected_ref: str | None,
+    repository: ClerkSqliteRepository | None = None,
 ) -> TransactionRail:
-    operation = _select_operation(projection, selected_ref)
+    selection = _select_operation(projection, selected_ref, repository=repository)
+    if selection.unresolved_ref is not None:
+        # Explicit, named absence (PRD Sec 19): the requested transaction does
+        # not exist anywhere in this bot's durable custody evidence. Echo the
+        # searched ref back rather than substituting another transaction.
+        return TransactionRail(
+            transaction_ref=selection.unresolved_ref,
+            stations=[
+                _station(
+                    station_id,
+                    "not_applicable",
+                    f"No custody operation or order matches transaction "
+                    f"{selection.unresolved_ref!r}.",
+                )
+                for station_id in _station_ids()
+            ],
+        )
+    operation = selection.operation
     if operation is None:
         return TransactionRail(
             transaction_ref=None,
@@ -502,19 +646,6 @@ def _transaction_rail(
         transaction_ref=operation.effect_operation_id,
         stations=stations,
     )
-
-
-def _select_operation(
-    projection: ClerkProjection,
-    selected_ref: str | None,
-) -> ProjectedOperation | None:
-    if selected_ref is not None:
-        for operation in projection.operations:
-            if operation.effect_operation_id == selected_ref or any(
-                order.order_ref == selected_ref for order in operation.orders
-            ):
-                return operation
-    return projection.operations[0] if projection.operations else None
 
 
 def _station_ids() -> tuple[str, ...]:

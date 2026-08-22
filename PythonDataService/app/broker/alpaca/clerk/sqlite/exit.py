@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 
+from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -60,6 +61,7 @@ def accept_exit(
     decision_id: str,
     lifecycle_run_id: str,
     entry_order_ref: str,
+    decision_receipt: AtomicDecisionReceipt | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact."""
     reject_colon("strategy_instance_id", strategy_instance_id)
@@ -125,6 +127,7 @@ def accept_exit(
         idempotency_key=idempotency_key,
         payload_hash=payload_hash,
         build_transition=build_transition,
+        decision_receipt=decision_receipt,
     )
     if isinstance(outcome, CommandExistingConflict):
         raise DurableConflictError(outcome.command)
@@ -155,6 +158,7 @@ async def submit_exit(
     lifecycle_run_id: str,
     entry_order_ref: str,
     trade: BrokerTradePort,
+    decision_receipt: AtomicDecisionReceipt | None = None,
 ) -> ExitSubmission:
     accepted = accept_exit(
         repo,
@@ -163,6 +167,7 @@ async def submit_exit(
         decision_id=decision_id,
         lifecycle_run_id=lifecycle_run_id,
         entry_order_ref=entry_order_ref,
+        decision_receipt=decision_receipt,
     )
     return await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
 

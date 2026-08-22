@@ -21,6 +21,7 @@ from app.engine.live.durable_append_log import (
     create_atomic_exclusive_durable_file,
     create_exclusive_durable_file,
 )
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.run_status import _atomic_write_json
 from app.schemas.action_plan import (
     ActionPlan,
@@ -31,6 +32,9 @@ from app.schemas.action_plan import (
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
+from app.schemas.canary_admission import CanaryRollbackDecision
+from app.schemas.run_admission import ProgramBuildAdmissionFact
+from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
 from app.services.bot_carryover import configuration_hash
 
 logger = logging.getLogger(__name__)
@@ -40,6 +44,9 @@ STRATEGY_INSTANCE_FILENAME = "strategy_instance.json"
 CURRENT_RUN_FILENAME = "current_run.json"
 RUNS_DIRECTORY = "runs"
 RUN_OUTCOMES_DIRECTORY = "run_outcomes"
+RUN_BUILD_EVIDENCE_DIRECTORY = "program_build_evidence"
+SEALED_PROGRAM_FILENAME = "sealed_program_v2.json"
+LEGACY_MIGRATION_LINEAGE_FILENAME = "legacy_migration_lineage.json"
 _RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 
 
@@ -53,6 +60,14 @@ class RunIdentityConflictError(ValueError):
 
 class RunOutcomeConflictError(ValueError):
     """One run received conflicting terminal evidence."""
+
+
+class SealedProgramConflictError(ValueError):
+    """One immutable instance was assigned different v2 program semantics."""
+
+
+class LegacyMigrationLineageConflictError(ValueError):
+    """One clone instance id was assigned a different migration origin."""
 
 
 def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
@@ -95,6 +110,11 @@ class BrokerBotBinding(BaseModel):
     # keeps its original configuration_hash (same rule `evidence_override`
     # already follows; see `test_absent_override_preserves_pre_override_configuration_hash_shape`).
     strategy_params: dict[str, Any] | None = None
+    # Transient authoring metadata is persisted only inside the append-only v2
+    # seal. Excluding it here preserves the historical v1 configuration hash.
+    strategy_param_origins: dict[str, ParameterOrigin] | None = Field(default=None, exclude=True)
+    sealed_program: SealedBotProgram | None = Field(default=None, exclude=True)
+    program_build: ProgramBuildAdmissionFact | None = Field(default=None, exclude=True)
     # A Start obtains this exact account from its custody snapshot before it
     # can persist or register the run. Legacy records remain readable with no
     # seal, but cannot be resumed into a newly selected account.
@@ -157,6 +177,42 @@ class BotRunRecord(BaseModel):
     started_at_ms: int
 
 
+class ProgramBuildRunEvidence(BaseModel):
+    """Per-run proof of the exact qualified bytes admitted to execute."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    strategy_instance_id: str
+    run_id: str = Field(pattern=_RUN_ID_PATTERN)
+    sealed_program_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    program_version: str
+    golden_trace_root: str = Field(pattern=r"^[0-9a-f]{64}$")
+    running_artifact_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    qualification_receipt_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verified_at_ms: int = Field(ge=0)
+
+
+class LegacyMigrationLineageRecord(BaseModel):
+    """Create-once evidence that one instance id is a PRD Sec 11.5 clone.
+
+    Written once, under the *clone*'s own instance directory, and never
+    under the original's — migration never touches the original's bytes.
+    A clone is otherwise an ordinary strategy instance: its own first
+    Start/Resume writes its own ``strategy_instance.json`` exactly like any
+    fresh deployment, so this sidecar is the only artifact that names the
+    lineage rather than colliding with that future write.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    strategy_instance_id: str
+    migrated_from_strategy_instance_id: str
+    reason: str = Field(min_length=1, max_length=512)
+    created_at_ms: int = Field(ge=0)
+
+
 class CurrentRunBinding(BaseModel):
     """Replaceable pointer to the newest run bound to one instance."""
 
@@ -180,6 +236,9 @@ class BotRunOutcomeRecord(BaseModel):
     reason_code: str = Field(min_length=1, max_length=128)
     recorded_at_ms: int = Field(ge=0)
     crash_diagnostic: BotCrashDiagnostic | None = None
+    # #1729 AC10: the Clerk-proved canary rollback verdict for this exact
+    # Stop, when one was computed. See ``BotDutyOutcome.canary_rollback``.
+    canary_rollback: CanaryRollbackDecision | None = None
 
     @model_validator(mode="after")
     def require_crashed_outcome_for_diagnostic(self) -> BotRunOutcomeRecord:
@@ -214,8 +273,10 @@ class BotBindingRepository:
 
         instance = StrategyInstanceRecord.from_binding(binding)
         self._ensure_instance(instance_dir, instance)
+        self._ensure_sealed_program(instance_dir, binding.sealed_program)
         run = self._run_from_binding(binding, launch_reason=launch_reason)
         self._ensure_run(instance_dir, run)
+        self._ensure_program_build_evidence(instance_dir, binding)
         _atomic_write_json(
             instance_dir / CURRENT_RUN_FILENAME,
             CurrentRunBinding(
@@ -379,6 +440,94 @@ class BotBindingRepository:
             raise ValueError("terminal outcome belongs to another run identity")
         return outcome
 
+    def read_program_build_evidence(
+        self,
+        strategy_instance_id: str,
+        run_id: str,
+    ) -> ProgramBuildRunEvidence | None:
+        """Return the exact build proof recorded for one run at Start/Resume.
+
+        ``None`` is an honest absence, not a missing read: it means either
+        this run's program build was never PROVEN at Start/Resume (see
+        ``_ensure_program_build_evidence`` — a build that closes as
+        UNPROVEN or NOT_APPLICABLE writes no evidence file), or the run
+        predates this evidence's introduction. Callers must never synthesize
+        a PROVEN record to fill the gap.
+        """
+        instance_dir = self._instance_dir_for(strategy_instance_id)
+        path = (
+            instance_dir
+            / RUN_BUILD_EVIDENCE_DIRECTORY
+            / f"{self._validate_run_id(run_id)}.json"
+        )
+        if not path.is_file():
+            return None
+        evidence = ProgramBuildRunEvidence.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+        if (
+            evidence.strategy_instance_id != strategy_instance_id
+            or evidence.run_id != run_id
+        ):
+            raise ValueError("program-build evidence belongs to another run identity")
+        return evidence
+
+    def ensure_legacy_migration_clone_lineage(
+        self,
+        *,
+        original_strategy_instance_id: str,
+        clone_instance_id: str,
+        reason: str,
+        now_ms: int,
+    ) -> LegacyMigrationLineageRecord:
+        """Idempotently record that a clone id succeeds an unprovable legacy instance.
+
+        PRD Sec 11.5: pure lineage evidence only. It never writes the
+        clone's own ``strategy_instance.json`` and never touches the
+        original's directory at all, so the original's v1 bytes are
+        untouched and the clone's own eventual first Start/Resume remains
+        an ordinary, unconflicted create-once deployment. Calling this
+        twice for the same original always computes and writes the
+        identical record (the same deterministic clone id maps to the same
+        origin), so a repeated Resume attempt cannot mint a second clone.
+        """
+        clone_dir = self._instance_dir_for(clone_instance_id)
+        clone_dir.mkdir(parents=True, exist_ok=True)
+        self._live_state_root.mkdir(parents=True, exist_ok=True)
+        candidate = LegacyMigrationLineageRecord(
+            strategy_instance_id=clone_instance_id,
+            migrated_from_strategy_instance_id=original_strategy_instance_id,
+            reason=reason,
+            created_at_ms=now_ms,
+        )
+        path = clone_dir / LEGACY_MIGRATION_LINEAGE_FILENAME
+        try:
+            self._create_atomic_once(path, candidate)
+            return candidate
+        except FileExistsError:
+            existing = LegacyMigrationLineageRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        if (
+            existing.strategy_instance_id != candidate.strategy_instance_id
+            or existing.migrated_from_strategy_instance_id != candidate.migrated_from_strategy_instance_id
+        ):
+            raise LegacyMigrationLineageConflictError(
+                f"Clone instance '{clone_instance_id}' already has different migration lineage."
+            )
+        return existing
+
+    def read_legacy_migration_lineage(
+        self,
+        strategy_instance_id: str,
+    ) -> LegacyMigrationLineageRecord | None:
+        """Return this instance's clone lineage evidence, when it exists."""
+        path = self._instance_dir_for(strategy_instance_id) / LEGACY_MIGRATION_LINEAGE_FILENAME
+        if not path.is_file():
+            return None
+        record = LegacyMigrationLineageRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        if record.strategy_instance_id != strategy_instance_id:
+            raise ValueError("migration lineage evidence belongs to another strategy instance")
+        return record
+
     def _migrate_legacy_binding(self, instance_dir: Path) -> None:
         """Replay-safe normalization when a later launch needs legacy history."""
         legacy = self._read_legacy_binding(instance_dir)
@@ -451,6 +600,59 @@ class BotBindingRepository:
         if existing != candidate:
             raise RunIdentityConflictError(f"Run '{candidate.run_id}' already has different durable launch evidence.")
 
+    def _ensure_sealed_program(
+        self,
+        instance_dir: Path,
+        candidate: SealedBotProgram | None,
+    ) -> None:
+        if candidate is None:
+            return
+        path = instance_dir / SEALED_PROGRAM_FILENAME
+        try:
+            self._create_atomic_once(path, candidate)
+            return
+        except FileExistsError:
+            existing = SealedBotProgram.model_validate_json(path.read_text(encoding="utf-8"))
+        if existing != candidate:
+            raise SealedProgramConflictError(
+                f"Strategy instance '{candidate.strategy_instance_id}' already has a different v2 program seal."
+            )
+
+    def _ensure_program_build_evidence(
+        self,
+        instance_dir: Path,
+        binding: BrokerBotBinding,
+    ) -> None:
+        proof = binding.program_build
+        seal = binding.sealed_program
+        if proof is None or proof.state != "PROVEN" or seal is None:
+            return
+        # ``ProgramBuildAdmissionFact``'s own model validator guarantees that
+        # a PROVEN fact always carries all four proof fields, so there is no
+        # completeness check left to do here.
+        candidate = ProgramBuildRunEvidence(
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=binding.run_id,
+            sealed_program_hash=seal.bot_configuration_hash,
+            program_version=proof.program_version,
+            golden_trace_root=proof.golden_trace_root,
+            running_artifact_digest=proof.running_artifact_digest,
+            qualification_receipt_hash=proof.qualification_receipt_hash,
+            verified_at_ms=proof.verified_at_ms,
+        )
+        evidence_dir = instance_dir / RUN_BUILD_EVIDENCE_DIRECTORY
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        path = evidence_dir / f"{self._validate_run_id(binding.run_id)}.json"
+        try:
+            self._create_atomic_once(path, candidate)
+            return
+        except FileExistsError:
+            existing = ProgramBuildRunEvidence.model_validate_json(path.read_text(encoding="utf-8"))
+        if existing != candidate:
+            raise RunIdentityConflictError(
+                f"Run '{binding.run_id}' already has different program-build evidence."
+            )
+
     @classmethod
     def _run_path(cls, instance_dir: Path, run_id: str) -> Path:
         return instance_dir / RUNS_DIRECTORY / f"{cls._validate_run_id(run_id)}.json"
@@ -509,6 +711,23 @@ class BotBindingRepository:
             or run.configuration_hash != instance.configuration_hash
         ):
             raise ValueError("current run evidence does not match its strategy instance")
+        seal_path = instance_dir / SEALED_PROGRAM_FILENAME
+        sealed_program = (
+            SealedBotProgram.model_validate_json(seal_path.read_text(encoding="utf-8"))
+            if seal_path.is_file()
+            else None
+        )
+        if sealed_program is not None and sealed_program.strategy_instance_id != instance.strategy_instance_id:
+            raise ValueError("v2 program seal belongs to another strategy instance")
+        parameter_origins = (
+            {
+                name: parameter.origin
+                for name, parameter in sealed_program.configured_signal.parameters.items()
+                if name != "symbol" and parameter.origin != "deployment_symbol"
+            }
+            if sealed_program is not None
+            else None
+        )
         binding = BrokerBotBinding(
             strategy_instance_id=instance.strategy_instance_id,
             strategy_key=instance.strategy_key,
@@ -521,6 +740,8 @@ class BotBindingRepository:
             evidence_override=instance.evidence_override,
             action_plan=instance.action_plan,
             strategy_params=instance.strategy_params,
+            strategy_param_origins=parameter_origins,
+            sealed_program=sealed_program,
             sealed_account_id=instance.sealed_account_id,
             run_id=run.run_id,
             created_at_ms=run.started_at_ms,
@@ -545,3 +766,20 @@ class BotBindingRepository:
                 "action_plan": alpaca_v1_action_plan(payload["symbol"]).model_dump(),
             }
         return BrokerBotBinding.model_validate(payload)
+
+
+def live_state_binding_repository(artifacts_root: Path) -> BotBindingRepository:
+    """Build the canonical ``live_state``-scoped ``BotBindingRepository``.
+
+    One-shot reader bound to the given ``artifacts_root``.
+    ``BotBindingRepository`` holds no state beyond that root and an
+    instance-dir resolver, so constructing one per read costs nothing and
+    never risks reading a stale singleton.
+    """
+    root = Path(artifacts_root)
+    return BotBindingRepository(
+        root,
+        instance_dir_for=lambda strategy_instance_id: strategy_instance_artifact_dir(
+            root, "live_state", strategy_instance_id
+        ),
+    )

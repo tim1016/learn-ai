@@ -9,6 +9,7 @@ operation-first timeline.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
@@ -67,6 +69,31 @@ def _leg(**overrides: Any) -> BrokerOrderLeg:
     base: dict[str, Any] = {"symbol": "SPY", "side": "buy", "quantity": 10}
     base.update(overrides)
     return BrokerOrderLeg(**base)
+
+
+def _atomic_receipt(
+    *,
+    decision_id: str,
+    outcome: str = "exit_intent",
+    bar_ref: str = "decision-bar:test:SPY:1700000000000",
+    observed_at_ms: int = 1_700_000_000_000,
+) -> AtomicDecisionReceipt:
+    return AtomicDecisionReceipt(
+        outcome=outcome,  # type: ignore[arg-type]
+        symbol="SPY",
+        decision_id=decision_id,
+        observed_at_ms=observed_at_ms,
+        facts_json=json.dumps(
+            {
+                "bar_ref": bar_ref,
+                "decision_id": decision_id,
+                "evaluation_id": decision_id,
+                "reason_code": "STRATEGY_EXIT",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
 
 
 def _broker_order(
@@ -313,8 +340,23 @@ async def test_accept_exit_links_resolution_custody_without_reparenting_origin(
 
 async def test_accept_exit_captures_every_same_symbol_sibling_entry(
     repo: ClerkSqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A strategy can no longer *create* two live sibling entries through the
+    normal decision path: #1722 fenced a fresh ENTER behind
+    ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS whenever attributed exposure
+    or a nonterminal ENTER already exists (ADR 0042, PRD §16/FR-020). But
+    `entry_orders_for_strategy` deliberately does not filter by terminal
+    state (see its docstring in reads.py), and `accept_exit` still links
+    every same-symbol ENTRY-role order it finds — so a ledger that reached
+    this state before the fence existed, or through an out-of-band repair,
+    must still be captured and attributed correctly. Bypass the fence only
+    for the second entry to model that ledger state.
+    """
     first = await _make_entry(repo, decision_id="enter-1", quantity=5, status="filled", filled_quantity=5)
+    monkeypatch.setattr(
+        "app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *args, **kwargs: None
+    )
     second = await _make_entry(repo, decision_id="enter-2", quantity=5, status="filled", filled_quantity=5)
     accepted = accept_exit(
         repo,
@@ -457,6 +499,90 @@ async def test_accept_exit_rejects_an_entry_order_already_under_a_live_exit(
         )
 
 
+async def test_capture_decision_against_active_exit_persists_losing_evaluation_receipt_linked_to_existing_effect(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Independent-review finding (Spec 4 -- the same seam as
+    ``commit_first_transition``'s decision-receipt gap): when a competing
+    EXIT loses the race against an already-active one, Clerk intake returns
+    typed existing custody (FR-022) without ever calling ``accept_exit``
+    again for the losing decision -- so its receipt and its causal link to
+    the effect it resolved to must be captured through a dedicated atomic
+    path instead of vanishing. FR-018 requires every intake outcome to
+    capture its decision receipt, including this one."""
+    entry_ref = await _make_entry(repo)
+    run_id = repo.active_run(SID).run_id
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+        decision_receipt=_atomic_receipt(decision_id="exit-1"),
+    )
+    assert accepted.effect_operation_id is not None
+
+    # No EXIT active for a strategy with none in flight -- nothing to link
+    # against; the caller should proceed with the normal accept path.
+    repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="qqq-bot", lifecycle_run_id="run-q")
+    assert (
+        repo.capture_decision_against_active_exit(
+            strategy_instance_id="qqq-bot",
+            run_id=repo.active_run("qqq-bot").run_id,
+            decision_receipt=_atomic_receipt(decision_id="qqq-exit-1"),
+        )
+        is None
+    )
+
+    # A genuinely different, competing decision for the SAME strategy loses
+    # the race and must still leave durable evidence, linked to the effect
+    # it resolved to instead of one of its own.
+    competing = _atomic_receipt(decision_id="exit-2", bar_ref="decision-bar:test:SPY:2")
+    resolved = repo.capture_decision_against_active_exit(
+        strategy_instance_id=SID,
+        run_id=run_id,
+        decision_receipt=competing,
+    )
+    assert resolved is not None
+    assert resolved.effect_operation_id == accepted.effect_operation_id
+
+    receipts = repo.decision_receipt_tail(strategy_instance_id=SID, limit=10)
+    losing = next(r for r in receipts if r.intent_id == "exit-2")
+    losing_facts = json.loads(losing.facts_json)
+    assert losing_facts["effect_operation_id"] == accepted.effect_operation_id
+    assert losing_facts["resolved_to_existing_effect"] is True
+    assert losing_facts["retention_class"] == "protected_competing_exit"
+
+    # A causal reader can traverse from the losing decision to the effect
+    # it resolved to using the same field every other receipt uses.
+    assert losing_facts["effect_operation_id"] == repo.effect_operation(accepted.effect_operation_id).effect_operation_id
+
+    # Idempotent: replaying the identical losing decision does not
+    # duplicate the row or move its sequence number.
+    before = repo.decision_receipt_tail(strategy_instance_id=SID, limit=10)
+    again = repo.capture_decision_against_active_exit(
+        strategy_instance_id=SID,
+        run_id=run_id,
+        decision_receipt=competing,
+    )
+    assert again is not None and again.effect_operation_id == accepted.effect_operation_id
+    assert repo.decision_receipt_tail(strategy_instance_id=SID, limit=10) == before
+
+    # A decision replaying the EXIT's OWN identity (not a competing one)
+    # passes through the same path safely -- idempotent against the receipt
+    # already captured atomically at accept, not a duplicate or conflict.
+    own_replay = repo.capture_decision_against_active_exit(
+        strategy_instance_id=SID,
+        run_id=run_id,
+        decision_receipt=_atomic_receipt(decision_id="exit-1"),
+    )
+    assert own_replay is not None and own_replay.effect_operation_id == accepted.effect_operation_id
+    unchanged = repo.decision_receipt_tail(strategy_instance_id=SID, limit=10)
+    assert len(unchanged) == 2  # exit-1 (from accept) + exit-2 (competing) -- no third row
+
+
 async def test_accept_exit_rejects_when_no_active_run_matches(repo: ClerkSqliteRepository) -> None:
     entry_ref = await _make_entry(repo)
     with pytest.raises(NoActiveRunError):
@@ -494,8 +620,20 @@ async def test_accept_exit_same_decision_is_a_transport_retry(repo: ClerkSqliteR
 
 async def test_accept_exit_same_decision_id_different_entry_is_a_durable_conflict(
     repo: ClerkSqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Same rationale as
+    `test_accept_exit_captures_every_same_symbol_sibling_entry`: two live
+    entries for one strategy can no longer arise through the fenced decision
+    path (ADR 0042, PRD FR-020), so the second entry needed to exercise
+    EXIT's own durable-conflict detection is constructed by bypassing the
+    fence, modeling a ledger that reached this state before the fence
+    existed or through an out-of-band repair.
+    """
     entry_ref_1 = await _make_entry(repo, decision_id="enter-1")
+    monkeypatch.setattr(
+        "app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *args, **kwargs: None
+    )
     entry_ref_2 = await _make_entry(repo, decision_id="enter-2")
     accept_exit(
         repo,

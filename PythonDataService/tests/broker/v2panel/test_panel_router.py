@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,8 +17,11 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.models import BrokerOrderLeg
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
@@ -93,10 +97,21 @@ class _FakeRegistry:
 
     def binding_for_control(self, broker: str, sid: str) -> SimpleNamespace:
         self.status(broker, sid)
-        return SimpleNamespace(symbol="SPY", use_rth=True)
+        return SimpleNamespace(
+            strategy_instance_id=sid,
+            run_id="run-1",
+            symbol="SPY",
+            use_rth=True,
+            strategy_key="deployment_validation",
+            sealed_program=None,
+        )
 
     def dry_run_activity(self, broker: str, sid: str) -> list:
         self.status(broker, sid)
+        return []
+
+    def bindings_for_broker(self, broker: str) -> list:
+        """No durable dry-run bindings — the catalog is the plain SQLite roster."""
         return []
 
 
@@ -115,6 +130,10 @@ def api(tmp_path: Path):
         config_hash="config-1",
         strategy_key="deployment_validation",
         display_name="Deployment Validation",
+        # Production always writes the full binding dump here; the roster now
+        # reads the bot's declared mode/quantity/carryover from it rather than
+        # assuming `trade`.
+        config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
     )
     submit_start_run(
         repo,
@@ -182,6 +201,79 @@ async def test_panel_scoped_uses_sqlite_projection(api) -> None:
     assert "revision" in body
     assert {action["action_id"] for action in body["actions"]}.isdisjoint(
         {"clear_hold", "record_inventory_baseline"}
+    )
+    # PRD Sec 11.1-11.4: "deployment_validation" is a legacy compatibility
+    # strategy with no registered Signal Program, so the panel renders the
+    # seal/build-proof absence explicitly rather than guessing.
+    assert body["sealed_program"] is None
+    assert body["program_build"]["state"] == "NOT_APPLICABLE"
+    assert body["program_build"]["program_key"] == "deployment_validation"
+
+
+def _accept_enter_then_exit(repo: ClerkSqliteRepository) -> tuple[str, str]:
+    """Two real, durable effect operations for SID with no broker contact."""
+    entered = accept_enter(
+        repo,
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        decision_id="dec-old",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    exited = accept_exit(
+        repo,
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        decision_id="dec-new",
+        lifecycle_run_id="run-1",
+        entry_order_ref=entered.order_ref,
+    )
+    assert exited.effect_operation_id is not None
+    return entered.effect_operation_id, exited.effect_operation_id
+
+
+async def test_panel_selects_the_requested_older_transaction_not_the_newest(api) -> None:
+    """#1729 AC #7: selecting an older transaction must render that
+    transaction, not the newest unrelated one, through the real HTTP panel
+    endpoint."""
+    app, repo = api
+    old_ref, newest_ref = _accept_enter_then_exit(repo)
+    assert old_ref != newest_ref
+
+    async with _client(app) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel",
+            params={"transaction_ref": old_ref},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["rail"]["transaction_ref"] == old_ref
+    assert body["rail"]["transaction_ref"] != newest_ref
+
+
+async def test_panel_unresolvable_transaction_ref_is_explicit_absence_not_the_newest_operation(
+    api,
+) -> None:
+    """#1729 AC #6/#7: a ``transaction_ref`` that names no durable transaction
+    must render explicit, named absence — never silently substitute the
+    bot's newest unrelated operation for it."""
+    app, repo = api
+    _old_ref, newest_ref = _accept_enter_then_exit(repo)
+
+    async with _client(app) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel",
+            params={"transaction_ref": "effect:never-existed"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["rail"]["transaction_ref"] == "effect:never-existed"
+    assert body["rail"]["transaction_ref"] != newest_ref
+    assert all(station["state"] == "not_applicable" for station in body["rail"]["stations"])
+    assert all(
+        "effect:never-existed" in station["receipt"] for station in body["rail"]["stations"]
     )
 
 

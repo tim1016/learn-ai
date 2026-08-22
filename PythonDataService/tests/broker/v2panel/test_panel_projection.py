@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -22,7 +23,10 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     ReconciliationSummary,
 )
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedCommand,
@@ -34,7 +38,10 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectionGuidance,
     RecoveryCapability,
 )
-from app.broker.contract.models import OrderSide
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.contract.models import BrokerOrderLeg, OrderSide
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotHealthCard,
@@ -46,12 +53,30 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.operator_blocker import AccountOperatorPosture
-from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
+from app.schemas.run_admission import (
+    ProgramBuildAdmissionFact,
+    RunAdmissionDecision,
+    RunAdmissionFactAges,
+)
+from app.schemas.signal_program_seal import (
+    ConfiguredSignalProgramSeal,
+    ExitEligibilityContract,
+    NumericalProvenanceContract,
+    ResolvedSignalParameter,
+    SignalBarIntegrityContract,
+    SignalClockContract,
+    SignalDataContract,
+    SignalSeriesContract,
+    seal_bot_program,
+)
+from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
+from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
     evaluate_channel_health,
+    program_build_view_from_run_evidence,
     select_primary_action_by_lens,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
@@ -206,6 +231,35 @@ def _clerk_status(
     )
 
 
+def _default_program_build(strategy_key: str) -> ProgramBuildAdmissionFact:
+    """The truthful ``program_build`` fact for a fixture that never sets one.
+
+    ``build_panel`` requires real evidence for every call — it must never
+    guess (see the "require the argument" fix on its docstring). Every
+    fixture in this module uses
+    ``_status()``'s default ``strategy_key`` ("deployment_validation"), which
+    has no registered Signal Program (``app/engine/strategy/registry.py``),
+    so ``NOT_APPLICABLE`` is the actually-true state here, not a fabricated
+    placeholder. A fixture naming a strategy that DOES have a registered
+    Signal Program (e.g. "ema_crossover_signal") has no truthful default —
+    missing evidence for it is ``UNPROVEN``, never ``NOT_APPLICABLE`` — so
+    such a test must pass ``program_build`` explicitly instead of relying on
+    this default.
+    """
+    registration = _STRATEGY_REGISTRY.get(strategy_key)
+    if registration is None or registration.signal_program_factory is None:
+        return ProgramBuildAdmissionFact(
+            state="NOT_APPLICABLE",
+            program_key=strategy_key,
+            verified_at_ms=_NOW,
+            explanation="This compatibility strategy has no registered Signal Program.",
+        )
+    raise AssertionError(
+        f"'{strategy_key}' has a registered Signal Program; _panel() callers must "
+        "pass explicit program_build evidence rather than rely on a fabricated default."
+    )
+
+
 def _panel(
     status: BotStatusView,
     clerk: ClerkStatus,
@@ -217,6 +271,9 @@ def _panel(
     dry_run_activity: list[DryRunActivity] | None = None,
     last_bar_at_ms: int | None = _NOW - 300,
     admission_evidence_refs: tuple[str, ...] = ("test:resume-admission",),
+    sealed_program=None,
+    program_build: ProgramBuildAdmissionFact | None = None,
+    authority_account_id: str | None = None,
 ):
     resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
     if resume_allowed is None:
@@ -250,6 +307,7 @@ def _panel(
         account_id=ACCT,
         evaluated_at_ms=_NOW,
         fact_ages_ms=RunAdmissionFactAges(
+            program_build=0,
             runtime=0,
             process=0,
             market_data=0,
@@ -263,6 +321,7 @@ def _panel(
         clerk,
         entries,
         account_id=ACCT,
+        authority_account_id=authority_account_id,
         exposure=resolved_exposure,
         fills_today=0,
         realized_pnl_today=0.0,
@@ -274,6 +333,8 @@ def _panel(
         flatten_supported=True,
         now_ms=_NOW,
         resume_admission=resume_admission,
+        sealed_program=sealed_program,
+        program_build=program_build or _default_program_build(status.strategy_key),
         dry_run_activity=dry_run_activity,
         market_pulse=_MARKET_PULSE,
     )
@@ -394,10 +455,176 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
     assert [item.action_id for item in adapted.actions] == ["reconcile_now"]
     assert adapted.actions[0].concurrency_token == "sqlite-token"
     assert adapted.readiness_checks[0].scope == "bot"
-    assert adapted.rail.transaction_ref == "effect:enter"
+    # #1729 AC #6/#7 regression: `base`'s rail selected a *legacy* JSONL
+    # transaction that does not exist in the SQLite fold. The adapter must
+    # echo back that unresolved ref as explicit, named absence — never
+    # silently substitute the newest unrelated SQLite operation
+    # ("effect:enter") for it.
+    assert adapted.rail.transaction_ref != "effect:enter"
+    assert adapted.rail.transaction_ref == base.rail.transaction_ref
+    assert all(station.state == "not_applicable" for station in adapted.rail.stations)
     assert adapted.working_orders[0].order_ref == "order:enter"
     assert adapted.working_orders[0].filled_quantity is None
     assert adapted.recent_fills == []
+
+
+def _monotonic_test_clock(start_ms: int) -> Callable[[], int]:
+    """A strictly-increasing fake clock so two operations accepted back-to-back
+    get distinct, orderable ``created_at_ms`` values (real wall-clock calls
+    can tie at 1ms resolution and make "the newest operation" nondeterministic)."""
+    state = {"value": start_ms}
+
+    def clock() -> int:
+        state["value"] += 1
+        return state["value"]
+
+    return clock
+
+
+def _real_repo(tmp_path: Path, *, account_id: str = ACCT) -> ClerkSqliteRepository:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=account_id,
+        artifacts_root=tmp_path,
+        clock=_monotonic_test_clock(_NOW),
+    )
+    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    submit_start_run(repo, account_id=account_id, strategy_instance_id=SID, lifecycle_run_id="run-1")
+    return repo
+
+
+def _two_real_operations(repo: ClerkSqliteRepository) -> tuple[str, str]:
+    """Accept a real ENTER then immediately EXIT it — two distinct, genuinely
+    durable effect operations for one bot with no broker contact needed
+    (capture-before-contact commits both before any broker attempt)."""
+    entered = accept_enter(
+        repo,
+        account_id=repo.account_id,
+        strategy_instance_id=SID,
+        decision_id="dec-old",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    exited = accept_exit(
+        repo,
+        account_id=repo.account_id,
+        strategy_instance_id=SID,
+        decision_id="dec-new",
+        lifecycle_run_id="run-1",
+        entry_order_ref=entered.order_ref,
+    )
+    assert exited.effect_operation_id is not None
+    return entered.effect_operation_id, exited.effect_operation_id
+
+
+def test_transaction_rail_resolves_old_transaction_outside_bounded_window(
+    tmp_path: Path,
+) -> None:
+    """#1729 AC #6/#7 regression, end-to-end over a real SQLite repository:
+    a ref that is a genuine durable transaction — just not one of the most
+    recent operations the bounded projection window carries — must resolve
+    to itself via the stored-key join, never to the newest unrelated
+    operation."""
+    repo = _real_repo(tmp_path)
+    try:
+        old_ref, newest_ref = _two_real_operations(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo)
+        try:
+            # A window of 1 only carries the newest operation (EXIT); the
+            # ENTER `old_ref` genuinely exists in storage but falls outside it.
+            windowed_projection = reader.bot_snapshot(SID, operation_limit=1)
+        finally:
+            reader.close()
+        assert windowed_projection is not None
+        assert [op.effect_operation_id for op in windowed_projection.operations] == [newest_ref]
+
+        base = _panel(_status(), _clerk_status(), [])
+        base = base.model_copy(
+            update={"rail": base.rail.model_copy(update={"transaction_ref": old_ref})}
+        )
+
+        adapted = adapt_sqlite_panel(base, windowed_projection, repository=repo)
+
+        assert adapted.rail.transaction_ref == old_ref
+        assert adapted.rail.transaction_ref != newest_ref
+    finally:
+        repo.close()
+
+
+def test_transaction_rail_reports_explicit_absence_for_a_ref_that_does_not_exist(
+    tmp_path: Path,
+) -> None:
+    """A ref that matches nothing anywhere — not the bounded window, not the
+    stored-key join — must render explicit, named absence, never silently
+    fall back to the newest operation."""
+    repo = _real_repo(tmp_path)
+    try:
+        _old_ref, newest_ref = _two_real_operations(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo)
+        try:
+            projection = reader.bot_snapshot(SID)
+        finally:
+            reader.close()
+        assert projection is not None
+
+        base = _panel(_status(), _clerk_status(), [])
+        base = base.model_copy(
+            update={
+                "rail": base.rail.model_copy(update={"transaction_ref": "effect:never-existed"})
+            }
+        )
+
+        adapted = adapt_sqlite_panel(base, projection, repository=repo)
+
+        assert adapted.rail.transaction_ref == "effect:never-existed"
+        assert adapted.rail.transaction_ref != newest_ref
+        assert all(station.state == "not_applicable" for station in adapted.rail.stations)
+        assert all("effect:never-existed" in station.receipt for station in adapted.rail.stations)
+    finally:
+        repo.close()
+
+
+def test_transaction_rail_never_leaks_a_real_ref_from_a_different_bot(
+    tmp_path: Path,
+) -> None:
+    """A real, resolvable effect operation belonging to a *different* bot
+    must not leak into this bot's rail via the stored-key join fallback."""
+    repo = _real_repo(tmp_path)
+    try:
+        other_sid = "bot-gamma"
+        repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="SPY", config_hash="h2")
+        submit_start_run(repo, account_id=ACCT, strategy_instance_id=other_sid, lifecycle_run_id="run-2")
+        foreign = accept_enter(
+            repo,
+            account_id=ACCT,
+            strategy_instance_id=other_sid,
+            decision_id="dec-foreign",
+            lifecycle_run_id="run-2",
+            leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        )
+
+        reader = SqliteClerkProjectionReader.from_repository(repo)
+        try:
+            projection = reader.bot_snapshot(SID)
+        finally:
+            reader.close()
+        assert projection is not None
+        assert projection.operations == ()
+
+        base = _panel(_status(), _clerk_status(), [])
+        base = base.model_copy(
+            update={
+                "rail": base.rail.model_copy(
+                    update={"transaction_ref": foreign.effect_operation_id}
+                )
+            }
+        )
+
+        adapted = adapt_sqlite_panel(base, projection, repository=repo)
+
+        assert adapted.rail.transaction_ref == foreign.effect_operation_id
+        assert all(station.state == "not_applicable" for station in adapted.rail.stations)
+    finally:
+        repo.close()
 
 
 def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_details() -> None:
@@ -487,6 +714,15 @@ def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_d
     assert adapted.fills_today == 3
     assert adapted.realized_pnl_today == 25.0
     assert adapted.open_pnl == 0.0
+    # #1729 AC #8: this adapter overwrites whatever `recent_fills` the projector
+    # produced, so it owes every row the authority it was read from. Without the
+    # stamp a production fill reaches the panel with no authority while its
+    # sibling decision row carries one, and the single-authority guard can no
+    # longer tell a real-paper fill from a synthetic one.
+    assert [
+        (fill.authority_account_id, fill.authority_kind, fill.simulated)
+        for fill in adapted.recent_fills
+    ] == [(ACCT, "real_paper", False)] * 3
     assert [order.model_dump() for order in adapted.working_orders] == [
         {
             "order_ref": "order:googl",
@@ -924,6 +1160,203 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     )
 
 
+def _sealed_bot_program():
+    configured = ConfiguredSignalProgramSeal(
+        program_key="ema_crossover_signal",
+        program_version="ema-crossover-signal/v1",
+        protocol_version="signal-session-protocol/v1",
+        parameter_schema_version="ema-crossover-signal-params/v1",
+        golden_trace_root="a" * 64,
+        parameters={
+            "fast_period": ResolvedSignalParameter(value=12, unit="bars", origin="registered_default"),
+        },
+        parameters_match_validated_settings=True,
+        data=SignalDataContract(
+            provider="polygon",
+            symbol="SPY",
+            base_timeframe_ms=60_000,
+            decision_timeframe_ms=60_000,
+        ),
+        clock=SignalClockContract(use_rth=True, warmup_lookback_days=5),
+        signals=(SignalSeriesContract(name="fast", indicator="ema", field="close", period=12, warmup_bars=12),),
+        decision_streams=("ENTER", "EXIT"),
+        bar_integrity=SignalBarIntegrityContract(),
+        exit_eligibility=ExitEligibilityContract(countdown_decision_clocks=5, countdown_state_persistable=False),
+        numerical_provenance=NumericalProvenanceContract(
+            formula="test formula",
+            reference="test reference",
+            canonical_implementation="test canonical implementation",
+            validated_against="test validated against",
+            equivalence_level="bit_exact",
+        ),
+    )
+    return seal_bot_program(
+        strategy_instance_id=SID,
+        configured_signal=configured,
+        configured_signal_hash=configured.semantic_hash(),
+        broker="alpaca",
+        sealed_account_id=ACCT,
+        mode="trade",
+        action_plan={"on_enter": [], "on_exit": []},
+        quantity=1,
+        carryover_policy="FORBID",
+        validation_event_id="event-1",
+        validation_snapshot_sha256="d" * 64,
+        sealed_at_ms=_NOW,
+    )
+
+
+def test_program_build_view_from_run_evidence_replays_the_proven_verdict() -> None:
+    """#1728 Gap 2: the frozen per-run record maps losslessly onto the same
+    ``ProgramBuildAdmissionFact`` shape a fresh proof would produce."""
+    seal = _sealed_bot_program()
+    evidence = ProgramBuildRunEvidence(
+        strategy_instance_id=SID,
+        run_id="run-1",
+        sealed_program_hash=seal.bot_configuration_hash,
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=1_000,
+    )
+
+    fact = program_build_view_from_run_evidence("ema_crossover_signal", evidence)
+
+    assert fact.state == "PROVEN"
+    assert fact.program_key == "ema_crossover_signal"
+    assert fact.program_version == evidence.program_version
+    assert fact.golden_trace_root == evidence.golden_trace_root
+    assert fact.running_artifact_digest == evidence.running_artifact_digest
+    assert fact.qualification_receipt_hash == evidence.qualification_receipt_hash
+    # The frozen verified_at_ms is replayed verbatim — never today's clock.
+    assert fact.verified_at_ms == 1_000
+    assert fact.evidence_refs == (
+        f"signal-program-seal:{seal.bot_configuration_hash}",
+        "program-build-receipt:" + "c" * 64,
+        "program-build-digest:" + "b" * 64,
+    )
+
+
+def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() -> None:
+    """PRD Sec 11.1-11.4, 19: seal + build proof + FR-030 causal links reach the panel."""
+    decision = decision_receipt(
+        seq=3,
+        ts_ms=_NOW - 500,
+        outcome="entered",
+        reason_code="CROSS_UP",
+        decision_id="e" * 64,
+        effect_operation_id="effect-op-3",
+    )
+    seal = _sealed_bot_program()
+    program_build = ProgramBuildAdmissionFact(
+        state="PROVEN",
+        program_key="ema_crossover_signal",
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=_NOW,
+        evidence_refs=(f"program-build-digest:{'b' * 64}",),
+        explanation="The running Signal Program build matches its golden qualification receipt.",
+    )
+    panel = _panel(
+        _status(mode="trade"),
+        _clerk_status(),
+        [],
+        decision,
+        sealed_program=seal,
+        program_build=program_build,
+    )
+
+    # Seal content reused verbatim — never re-derived.
+    assert panel.sealed_program == seal
+    assert panel.sealed_program.configured_signal.parameters["fast_period"].value == 12
+    assert panel.sealed_program.configured_signal.parameters["fast_period"].origin == "registered_default"
+    assert panel.sealed_program.configured_signal.parameters_match_validated_settings is True
+
+    # Build proof is dynamic run evidence, distinct from the seal above.
+    assert panel.program_build == program_build
+    assert panel.program_build.state == "PROVEN"
+
+    # Admission policy verdict reaches the panel.
+    assert panel.resume_admission is not None
+
+    # Durable causal links (decision_id/effect_operation_id) attach to the
+    # exact receipt that carries them; order_ref was already present.
+    linked = next(row for row in panel.recent_decisions if row.seq == 3)
+    assert linked.decision_id == "e" * 64
+    assert linked.effect_operation_id == "effect-op-3"
+
+
+def test_build_panel_requires_program_build_evidence() -> None:
+    """Finding 1 regression: ``build_panel`` used to default a missing
+    ``program_build`` argument to a fabricated ``NOT_APPLICABLE`` fact — even
+    for "ema_crossover_signal", a strategy that DOES have a registered Signal
+    Program (``app/engine/strategy/registry.py``). ADR 0043 reserves
+    ``NOT_APPLICABLE`` for a strategy with no registered program at all; a
+    caller merely omitting evidence must never read as that. ``build_panel``
+    now requires the argument outright, so the previously-silent wrong
+    answer becomes a loud contract violation instead of a false reading.
+    """
+    status = _status().model_copy(update={"strategy_key": "ema_crossover_signal"})
+    with pytest.raises(TypeError, match="program_build"):
+        build_panel(
+            status,
+            _clerk_status(),
+            [],
+            account_id=ACCT,
+            exposure={"SPY": 100.0},
+            fills_today=0,
+            realized_pnl_today=0.0,
+            open_pnl=None,
+            latest_decision=None,
+            last_bar_at_ms=None,
+            journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
+            journal_tail_seq=None,
+            flatten_supported=True,
+            now_ms=_NOW,
+            market_pulse=_MARKET_PULSE,
+        )
+
+
+def test_panel_surfaces_unproven_for_a_registered_signal_program_with_no_evidence() -> None:
+    """Finding 1: a registered Signal Program strategy with no build evidence
+    yet must read as ``UNPROVEN``, never ``NOT_APPLICABLE`` — ``NOT_APPLICABLE``
+    is reserved (ADR 0043) for a strategy with no registered Signal Program at
+    all. "ema_crossover_signal" has one, so its honest no-evidence state is
+    the one ``prove_running_program_build`` itself would produce for e.g. an
+    instance with no complete v2 seal yet: ``UNPROVEN``.
+    """
+    status = _status().model_copy(update={"strategy_key": "ema_crossover_signal"})
+    program_build = ProgramBuildAdmissionFact(
+        state="UNPROVEN",
+        program_key="ema_crossover_signal",
+        verified_at_ms=_NOW,
+        explanation=(
+            "The instance has no complete v2 Signal Program seal. Legacy bytes remain "
+            "inspectable, but this instance must be cloned before it can Resume."
+        ),
+    )
+
+    panel = _panel(status, _clerk_status(), [], program_build=program_build)
+
+    assert panel.strategy_key == "ema_crossover_signal"
+    assert panel.program_build.state == "UNPROVEN"
+
+
+def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() -> None:
+    """PRD Sec 19: an absent link/seal is an explicit state, never inferred."""
+    decision = decision_receipt(seq=4, ts_ms=_NOW - 500, outcome="no_action", reason_code="NO_SIGNAL")
+    panel = _panel(_status(mode="trade"), _clerk_status(), [], decision)
+
+    assert panel.sealed_program is None
+    assert panel.program_build.state == "NOT_APPLICABLE"
+    row = next(r for r in panel.recent_decisions if r.seq == 4)
+    assert row.decision_id is None
+    assert row.effect_operation_id is None
+
+
 def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -> None:
     panel = _panel(_status(), _clerk_status(), [], exposure={"SPY": 2.0})
     changed_exposure = _panel(_status(), _clerk_status(), [], exposure={"SPY": 3.0})
@@ -1270,6 +1703,65 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
     assert "broker writes are impossible" in panel.execution_policy
     assert panel.recent_decisions[0].simulated is True
     assert panel.recent_decisions[0].reason_code == "SIMULATED_ENTER"
+    # #1728 Gap 1: with no SQLite decision-receipt evidence for this Dry Run
+    # instance, the causal links render the explicit absence, never a guess.
+    assert panel.recent_decisions[0].decision_id is None
+    assert panel.recent_decisions[0].effect_operation_id is None
+    assert panel.recent_fills[0].simulated is True
+    assert panel.recent_fills[0].order_ref.startswith("simulated:")
+
+
+def test_dry_run_decisions_use_sqlite_causal_links_when_evidence_exists() -> None:
+    """#1728 Gap 1: Dry Run runs through the same governed synthetic Clerk
+    (PR #1722) and durably records every decision through the identical
+    SQLite decision-receipt path Paper uses. Whenever that SQLite evidence
+    exists, the panel must expose its real causal links, not the legacy WAL.
+    """
+    activity = DryRunActivity(
+        seq=1,
+        strategy_instance_id=SID,
+        run_id="run-dry",
+        authority_account_id=f"sim:{SID}",
+        authority_kind="synthetic",
+        recorded_at_ms=_NOW - 100,
+        bar_ref="SPY@1699999999900",
+        intent="ENTER",
+        order_ref="simulated:run-dry:1699999999900:ENTER",
+        symbol="SPY",
+        side="buy",
+        quantity=1,
+        fill_price=401.25,
+    )
+    decision = decision_receipt(
+        seq=5,
+        ts_ms=_NOW - 50,
+        outcome="entered",
+        reason_code="CROSS_UP",
+        decision_id="f" * 64,
+        effect_operation_id="effect-op-5",
+    )
+
+    panel = _panel(
+        _status(running=True, mode="dry_run"),
+        _clerk_status(),
+        [],
+        decision,
+        dry_run_activity=[activity],
+    )
+
+    assert panel.mode == "dry_run"
+    row = panel.recent_decisions[0]
+    assert row.seq == 5
+    # Sourced from the SQLite receipt, not the WAL's "SIMULATED_ENTER" — proves
+    # the SQLite-backed path was used, not the legacy fallback.
+    assert row.reason_code == "CROSS_UP"
+    assert row.simulated is True
+    assert row.authority_account_id == f"sim:{SID}"
+    assert row.authority_kind == "synthetic"
+    assert row.decision_id == "f" * 64
+    assert row.effect_operation_id == "effect-op-5"
+    # Fills remain WAL-sourced — Gap 1 is about decision causal links, and
+    # SQLite decision receipts carry no fill quantity/price.
     assert panel.recent_fills[0].simulated is True
     assert panel.recent_fills[0].order_ref.startswith("simulated:")
     assert panel.recent_decisions[0].authority_account_id == f"sim:{SID}"
@@ -1278,6 +1770,102 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
     assert panel.recent_fills[0].authority_kind == "synthetic"
     assert panel.health.last_decision_at_ms == _NOW - 100
     assert panel.health.last_bar_at_ms == 1_699_999_999_900
+
+
+def test_real_paper_decisions_and_fills_carry_real_paper_account_authority() -> None:
+    """Issue #1729 AC #8: ``authority_kind`` must survive to every panel row,
+    not only the Dry Run rows the pre-existing tests already covered. Before
+    this fix, ``recent_decisions``/``recent_fills`` for a real Paper (mode
+    ``trade``) bot carried ``authority_account_id=None``/``authority_kind=
+    None`` — the field existed on the contract but was never populated for
+    the real-money-adjacent path.
+    """
+    decision = decision_receipt(seq=1, ts_ms=_NOW, outcome="entered", reason_code="CROSS_UP")
+    entries = [
+        intent_entry(sid=SID, intent="open", ts_ms=_NOW - 1_000),
+        submit_acked_entry(sid=SID, intent="open", ts_ms=_NOW - 900),
+        fill_entry(sid=SID, intent="open", ts_ms=_NOW - 800),
+    ]
+
+    panel = _panel(_status(mode="trade"), _clerk_status(), entries, decision)
+
+    assert panel.recent_decisions[0].authority_account_id == ACCT
+    assert panel.recent_decisions[0].authority_kind == "real_paper"
+    assert panel.recent_decisions[0].simulated is False
+    assert panel.recent_fills[0].authority_account_id == ACCT
+    assert panel.recent_fills[0].authority_kind == "real_paper"
+
+
+def test_build_panel_honors_the_explicit_authority_account_id_from_the_selected_facade() -> None:
+    """Production wiring (``panel_data_source._get_panel_with_entries_from_authority``)
+    passes the exact account id of the SQLite facade it actually opened, not
+    a recomputed guess — proving Gap 2's "cannot be mislabeled in the read
+    path" claim. This pins that ``build_panel`` honors that explicit value
+    rather than silently recomputing its own.
+    """
+    decision = decision_receipt(seq=5, ts_ms=_NOW - 50, outcome="entered", reason_code="CROSS_UP")
+    activity = DryRunActivity(
+        seq=1,
+        strategy_instance_id=SID,
+        run_id="run-dry",
+        authority_account_id=f"sim:{SID}",
+        authority_kind="synthetic",
+        recorded_at_ms=_NOW - 100,
+        bar_ref="SPY@1699999999900",
+        intent="ENTER",
+        order_ref="simulated:run-dry:1699999999900:ENTER",
+        symbol="SPY",
+        side="buy",
+        quantity=1,
+        fill_price=401.25,
+    )
+
+    panel = _panel(
+        _status(running=True, mode="dry_run"),
+        _clerk_status(),
+        [],
+        decision,
+        dry_run_activity=[activity],
+        authority_account_id=f"sim:{SID}",
+    )
+
+    assert panel.recent_decisions[0].authority_account_id == f"sim:{SID}"
+    assert panel.recent_decisions[0].authority_kind == "synthetic"
+
+
+def test_build_panel_rejects_dry_run_activity_from_a_different_synthetic_authority() -> None:
+    """Issue #1729 AC #8: "mixed synthetic/real aggregate requests are
+    rejected." Before this fix, ``_recent_activity_views`` trusted whatever
+    ``dry_run_activity`` it was handed, with no check that its authority
+    actually matched the bot being projected. If the WAL evidence resolved
+    for a panel ever named a *different* strategy instance's synthetic
+    authority (e.g. a resolver bug), the mixed aggregate would have rendered
+    silently. This proves the new ``SingleAuthorityAggregate``-backed guard
+    refuses to serve it instead.
+    """
+    foreign_activity = DryRunActivity(
+        seq=1,
+        strategy_instance_id="other-bot",
+        run_id="run-dry",
+        authority_account_id="sim:other-bot",
+        authority_kind="synthetic",
+        recorded_at_ms=_NOW - 100,
+        bar_ref="SPY@1699999999900",
+        intent="ENTER",
+        order_ref="simulated:run-dry:1699999999900:ENTER",
+        symbol="SPY",
+        side="buy",
+        quantity=1,
+        fill_price=401.25,
+    )
+
+    with pytest.raises(MixedAuthorityAggregateError):
+        _panel(
+            _status(running=True, mode="dry_run"),  # SID == "bot-alpha"
+            _clerk_status(),
+            [],
+            dry_run_activity=[foreign_activity],
+        )
 
 
 def test_resume_token_ignores_market_data_observation_timestamp() -> None:

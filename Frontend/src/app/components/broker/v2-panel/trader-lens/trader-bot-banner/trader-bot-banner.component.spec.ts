@@ -13,6 +13,14 @@ const PANEL: BotPanelView = {
   account_id: 'acc-1',
   symbol: 'SPY',
   mode: 'trade',
+  sealed_program: null,
+  program_build: {
+    state: 'NOT_APPLICABLE',
+    program_key: 'ema_crossover',
+    verified_at_ms: 1_753_800_000_000,
+    explanation: 'No Signal Program build proof supplied.',
+  },
+  resume_admission: null,
   updated_at_ms: 1_753_800_000_000,
   revision: 1,
   market_pulse: {

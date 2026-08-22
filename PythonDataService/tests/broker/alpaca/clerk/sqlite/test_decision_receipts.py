@@ -160,6 +160,48 @@ def test_append_prunes_receipts_beyond_the_retention_bound(
     assert retained[-1].seq == MAX_DECISION_RECEIPTS_PER_STRATEGY + 2
 
 
+def test_candidate_uncaptured_at_crash_survives_retention_pruning(
+    receipts: SqliteDecisionReceipts,
+    repository: ClerkSqliteRepository,
+) -> None:
+    """FR-016 / AC #9: crash-window evidence must outlive the ordinary
+    sequence-tail compaction the same way ``protected_effect`` and
+    ``protected_refusal`` already do (decision_receipts.py:218-229)."""
+    crash_receipt = receipts.append(
+        outcome="candidate_uncaptured_at_crash",
+        symbol="SPY",
+        observed_at_ms=0,
+        intent_id="crash-candidate-1",
+        facts={
+            "bar_ref": "SPY@0",
+            "reason_code": "CANDIDATE_UNCAPTURED_AT_CRASH",
+            "retention_class": "protected_crash_evidence",
+        },
+    )
+    for index in range(1, MAX_DECISION_RECEIPTS_PER_STRATEGY + 6):
+        receipts.append(
+            outcome="no_action",
+            symbol="SPY",
+            observed_at_ms=index,
+            facts={"bar_ref": f"SPY@{index}", "reason_code": "NO_ACTION"},
+        )
+
+    retained = repository.decision_receipt_tail(
+        strategy_instance_id="spy-bot",
+        limit=MAX_DECISION_RECEIPTS_PER_STRATEGY + 10,
+    )
+    retained_by_seq = {receipt.seq: receipt for receipt in retained}
+
+    # Ordinary tail retention alone would have pruned seq 1 (and seq 2-6):
+    # the newest row is seq MAX+6, so anything at or below seq 6 falls
+    # outside the last MAX_DECISION_RECEIPTS_PER_STRATEGY rows.
+    assert len(retained) == MAX_DECISION_RECEIPTS_PER_STRATEGY + 1
+    assert 2 not in retained_by_seq
+    survivor = retained_by_seq[crash_receipt.seq]
+    assert survivor.outcome == "candidate_uncaptured_at_crash"
+    assert json.loads(survivor.facts_json)["retention_class"] == "protected_crash_evidence"
+
+
 def test_by_transaction_matches_intent_or_order_and_stays_bounded(
     repository: ClerkSqliteRepository,
     receipts: SqliteDecisionReceipts,

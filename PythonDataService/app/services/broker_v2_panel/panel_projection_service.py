@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
+from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
@@ -45,8 +47,14 @@ from app.schemas.broker_v2_panel import (
     TransactionRail,
     WorkingOrderView,
 )
-from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
+from app.schemas.signal_program_seal import SealedBotProgram
+from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
+from app.services.broker_v2_panel.panel_authority_guard import (
+    default_authority_account_id,
+    reject_mixed_authority,
+)
 from app.services.broker_v2_panel.presented_actions import build_actions
 from app.services.broker_v2_panel.station_derivation import (
     STALE_THRESHOLD_MS,
@@ -375,7 +383,14 @@ def _account_working_order_count(entries: list[OrderJournalEntry]) -> int:
     )
 
 
-def _recent_decision_views(receipts: list[DecisionReceipt], *, limit: int = 8) -> list[RecentDecisionView]:
+def _recent_decision_views(
+    receipts: list[DecisionReceipt],
+    *,
+    limit: int = 8,
+    simulated: bool = False,
+    authority_account_id: str | None = None,
+    authority_kind: Literal["real_paper", "synthetic"] | None = None,
+) -> list[RecentDecisionView]:
     return [
         RecentDecisionView(
             seq=receipt.seq,
@@ -384,12 +399,24 @@ def _recent_decision_views(receipts: list[DecisionReceipt], *, limit: int = 8) -
             reason_code=receipt.reason_code,
             bar_ref=receipt.bar_ref,
             order_ref=receipt.order_ref or None,
+            decision_id=receipt.decision_id,
+            effect_operation_id=receipt.effect_operation_id,
+            simulated=simulated,
+            authority_account_id=authority_account_id,
+            authority_kind=authority_kind,
         )
         for receipt in reversed(receipts[-limit:])
     ]
 
 
-def _recent_fill_views(sid: str, entries: list[OrderJournalEntry], *, limit: int = 8) -> list[RecentFillView]:
+def _recent_fill_views(
+    sid: str,
+    entries: list[OrderJournalEntry],
+    *,
+    limit: int = 8,
+    authority_account_id: str | None = None,
+    authority_kind: Literal["real_paper", "synthetic"] | None = None,
+) -> list[RecentFillView]:
     fills = project_instance_fills(sid, entries)
     return [
         RecentFillView(
@@ -399,6 +426,8 @@ def _recent_fill_views(sid: str, entries: list[OrderJournalEntry], *, limit: int
             quantity=fill.quantity,
             price=fill.fill_price,
             filled_at_ms=fill.filled_at_ms,
+            authority_account_id=authority_account_id,
+            authority_kind=authority_kind,
         )
         for fill in reversed(fills[-limit:])
     ]
@@ -417,6 +446,10 @@ def _dry_run_decision_views(
             reason_code=f"SIMULATED_{row.intent}",
             bar_ref=row.bar_ref,
             order_ref=row.order_ref,
+            # The WAL predates causal capture and has no decision_id /
+            # effect_operation_id columns at all, so these rows render the
+            # absence explicitly rather than borrowing a guess from SQLite.
+            source="legacy_simulated_wal",
             simulated=True,
             authority_account_id=row.authority_account_id,
             authority_kind=row.authority_kind,
@@ -446,6 +479,41 @@ def _dry_run_fill_views(
     ]
 
 
+def program_build_view_from_run_evidence(
+    strategy_key: str,
+    evidence: ProgramBuildRunEvidence,
+) -> ProgramBuildAdmissionFact:
+    """PRD Sec 11.3 run evidence: the exact build proven and durably recorded
+    when this run passed Start/Resume admission (#1728 Gap 2) — not a fresh
+    re-check, which can drift from what is actually running if the
+    qualification manifest or artifacts change underfoot after Start. The
+    evidence this reads from is only ever written by
+    ``BotBindingRepository._ensure_program_build_evidence`` after the same
+    canonical ``prove_running_program_build`` closed ``state="PROVEN"``, so
+    reconstructing that state here is a lossless replay of that verdict, not
+    a new proof.
+    """
+    return ProgramBuildAdmissionFact(
+        state="PROVEN",
+        program_key=strategy_key,
+        program_version=evidence.program_version,
+        golden_trace_root=evidence.golden_trace_root,
+        running_artifact_digest=evidence.running_artifact_digest,
+        qualification_receipt_hash=evidence.qualification_receipt_hash,
+        verified_at_ms=evidence.verified_at_ms,
+        evidence_refs=(
+            f"signal-program-seal:{evidence.sealed_program_hash}",
+            f"program-build-receipt:{evidence.qualification_receipt_hash}",
+            f"program-build-digest:{evidence.running_artifact_digest}",
+        ),
+        explanation=(
+            "The Signal Program build proven and recorded when this run started "
+            "matches its golden qualification receipt."
+        ),
+        verification="frozen_run_evidence",
+    )
+
+
 def _execution_policy(mode: str) -> str:
     policies = {
         "dry_run": (
@@ -465,17 +533,78 @@ def _recent_activity_views(
     entries: list[OrderJournalEntry],
     decision_receipts: list[DecisionReceipt],
     dry_run_activity: list[DryRunActivity],
+    *,
+    authority_account_id: str,
+    authority_kind: Literal["real_paper", "synthetic"],
 ) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
-    """Project real or simulated activity behind one explicit mode boundary."""
+    """Project real or simulated activity behind one explicit mode boundary.
+
+    Dry Run runs through its own isolated synthetic Clerk authority (PR
+    #1722) and durably records every decision through the identical SQLite
+    decision-receipt path Paper uses — the caller already reads
+    ``decision_receipts`` (each row already carrying its own causal identity)
+    from that Dry-Run-scoped authority (see
+    ``sqlite_panel_source.read_sqlite_decision_receipts`` and the synthetic
+    facade selected by ``panel_data_source._panel_authority_for_binding``),
+    so PRD Sec 19 causal links (``decision_id``/``effect_operation_id``)
+    render for Dry Run exactly like Paper whenever that SQLite evidence
+    exists. Only a Dry Run instance with no SQLite decision-receipt evidence
+    at all — one that never ran under the governed synthetic Clerk — falls
+    back to the legacy simulated-activity WAL, and that fallback's
+    causal-link fields still render the explicit absence (``None``), never a
+    guess borrowed from the SQLite path.
+
+    Simulated fills always come from the WAL (#1728 Gap 1 is about decision
+    causal links, not fills — the WAL is Dry Run's genuine fill record; SQLite
+    decision receipts carry no fill quantity/price).
+
+    ``authority_account_id``/``authority_kind`` name the one Clerk account
+    authority ``build_panel`` resolved this evidence cut from (issue #1729
+    AC #8). Every branch below stamps every row with these same values —
+    except the legacy WAL fallback, whose rows carry authority metadata
+    baked in at ``DryRunActivity`` construction time. Stamping uniformly
+    rather than trusting each branch to agree by construction is exactly
+    what lets ``panel_authority_guard.reject_mixed_authority`` catch a real
+    divergence (e.g. a caller accidentally handing this projector another
+    bot's synthetic activity) instead of only what convention makes probable.
+    """
     if status.mode == "dry_run":
-        return (
-            _dry_run_decision_views(dry_run_activity),
-            _dry_run_fill_views(dry_run_activity),
+        if decision_receipts:
+            decision_views, fill_views = (
+                _recent_decision_views(
+                    decision_receipts,
+                    simulated=True,
+                    authority_account_id=authority_account_id,
+                    authority_kind=authority_kind,
+                ),
+                _dry_run_fill_views(dry_run_activity),
+            )
+        else:
+            decision_views, fill_views = (
+                _dry_run_decision_views(dry_run_activity),
+                _dry_run_fill_views(dry_run_activity),
+            )
+    else:
+        decision_views, fill_views = (
+            _recent_decision_views(
+                decision_receipts,
+                authority_account_id=authority_account_id,
+                authority_kind=authority_kind,
+            ),
+            _recent_fill_views(
+                status.strategy_instance_id,
+                entries,
+                authority_account_id=authority_account_id,
+                authority_kind=authority_kind,
+            ),
         )
-    return (
-        _recent_decision_views(decision_receipts),
-        _recent_fill_views(status.strategy_instance_id, entries),
+    reject_mixed_authority(
+        authority_account_id=authority_account_id,
+        authority_kind=authority_kind,
+        decision_views=decision_views,
+        fill_views=fill_views,
     )
+    return decision_views, fill_views
 
 
 def _dry_run_last_bar_at_ms(activity: list[DryRunActivity]) -> int | None:
@@ -678,23 +807,52 @@ def build_panel(
     selected_transaction_ref: str | None = None,
     recent_decisions: list[DecisionReceipt] | None = None,
     resume_admission: RunAdmissionDecision | None = None,
+    sealed_program: SealedBotProgram | None = None,
+    program_build: ProgramBuildAdmissionFact,
     dry_run_activity: list[DryRunActivity] | None = None,
+    authority_account_id: str | None = None,
     market_pulse: MarketPulseView,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
 
     ``entries`` is the account order journal (read once). ``selected_transaction_ref``
     defaults to the bot's most recent transaction (§7.1).
+
+    ``authority_account_id`` names the exact Clerk account authority this
+    evidence cut (``recent_decisions``/``recent_fills``) was actually read
+    from. Callers with a selected SQLite facade (``panel_data_source.
+    _get_panel_with_entries_from_authority``) pass the facade's real
+    ``account_id`` so the row-level authority label can never drift from
+    which physically account-scoped repository the evidence came from — the
+    same account-namespace check that gates a repository open
+    (``ClerkSqliteRepository.open``/``DatabaseIdentityMismatch``) also backs
+    this label. Callers without a selected facade (every direct test in
+    ``tests/broker/v2panel/test_panel_projection.py``) omit it, and it falls
+    back to the Dry Run synthetic authority implied by ``status.mode`` /
+    ``status.strategy_instance_id``, or to ``account_id`` otherwise.
+
+    ``program_build`` is required and must be the caller's real evidence cut
+    (``panel_data_source._program_build_for_display`` for the live router
+    path). This projection must never guess it: ADR 0043 reserves
+    ``state="NOT_APPLICABLE"`` for a strategy with no registered Signal
+    Program at all, so a caller that simply has no build evidence yet (e.g.
+    no per-run record and a fresh ``prove_running_program_build`` re-check)
+    must pass the honest ``state="UNPROVEN"`` fact instead — never omit the
+    argument to get a fabricated "not applicable" reading.
     """
     refs = transaction_refs_for_bot(status.strategy_instance_id, entries)
     transaction_ref = selected_transaction_ref or (refs[-1] if refs else None)
     latest_reconciliation = _latest_reconciliation_entry(entries)
+    # Ascending by seq (oldest first); `derive_stations` reads its own
+    # transaction-linked match out of this bounded window, and
+    # `_recent_activity_views` below reuses the identical fallback.
+    decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])
 
     stations = derive_stations(
         sid=status.strategy_instance_id,
         transaction_ref=transaction_ref,
         all_entries=entries,
-        latest_decision=latest_decision,
+        decisions=decision_receipts,
         latest_reconciliation=latest_reconciliation,
         now_ms=now_ms,
     )
@@ -748,12 +906,16 @@ def build_panel(
         resume_admission=resume_admission,
     )
 
-    decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])
+    resolved_authority_account_id = authority_account_id or default_authority_account_id(
+        status, account_id
+    )
     decision_views, fill_views = _recent_activity_views(
         status,
         entries,
         decision_receipts,
         activity,
+        authority_account_id=resolved_authority_account_id,
+        authority_kind=authority_kind_for_account(resolved_authority_account_id),
     )
     readiness_checks = _readiness_checks(actions, now_ms)
     readiness_ready_count = sum(check.ready for check in readiness_checks)
@@ -769,6 +931,9 @@ def build_panel(
         account_id=account_id,
         symbol=status.symbol,
         mode=status.mode,
+        sealed_program=sealed_program,
+        program_build=program_build,
+        resume_admission=resume_admission,
         updated_at_ms=now_ms,
         revision=revision,
         market_pulse=market_pulse,

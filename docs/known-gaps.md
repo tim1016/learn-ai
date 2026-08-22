@@ -125,3 +125,52 @@ No known-open items. The vocabulary-snapshot source-pinning, Broker V2 REST
 generated-type, and accepted-ADR `Vocabulary:` metadata gates previously tracked
 here (issues #1666, #1667, #1668) are closed and merged to master as of
 2026-08-19; git history is the record.
+
+## 8. Sealed Signal Program admission (verified 2026-08-21, issue #1728 / ADR 0043)
+
+- **`CANDIDATE_UNCAPTURED_AT_CRASH` (FR-016) is scoped to `ema_crossover_signal`
+  only.** Implemented in `_warm_up_signal_strategy`
+  (`app/services/bot_trade_strategy.py`): warmup replay now reapplies each
+  bucket's own known Clerk disposition (COMMIT for an effect-bearing outcome,
+  DISCARD otherwise) instead of blanket-discarding every replayed bucket, so
+  position-lifecycle state carries forward correctly; the first bucket with a
+  live candidate and no known disposition is recorded as
+  `candidate_uncaptured_at_crash` (retention class `protected_crash_evidence`)
+  and discarded, never reaching custody. This only applies to strategies with
+  a registered `signal_program_factory` (currently `ema_crossover_signal`
+  alone) — legacy strategies (`sma_crossover`, `rsi_mean_reversion`,
+  `spy_strategy_a/b/c`) have no `SignalSession`/`EvaluationStage` staging
+  record to recreate a candidate from, and remain uncovered until PRD Slice 5
+  promotes them. See `tests/services/test_candidate_uncaptured_at_crash.py`.
+- **`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
+  of their own.** Both were left with `signal_program_contract=None` /
+  `signal_program_factory=None` after the `dataclasses.replace()` identity-leak
+  fix (see ADR 0043 §4) rather than being given their own qualification, so
+  `prove_running_program_build` reports `NOT_APPLICABLE` and neither strategy's
+  running bytes are checked against any golden corpus. Already tracked in-code
+  and as issue #1730.
+- **The external repository-writer census is a convention nudge, not a sound
+  safety gate.** `app/broker/alpaca/clerk/sqlite/repository_boundary.py` plus
+  `tests/broker/alpaca/clerk/sqlite/test_repository_writer_boundary.py` are
+  widely read as proving "an unaudited SQLite Clerk writer is impossible". They
+  do not. The AST visitor matches on *spelling*, not type: `_is_repository`
+  recognises exactly two parameter names (`repo`, `repository`), one attribute
+  (`self._repo`), and two facade patterns. An adversarial review on 2026-08-21
+  fed synthetic source through the real visitor and confirmed five false-negative
+  classes, none of them exotic — renaming the parameter to `db`, holding the
+  handle as `self._store`, reaching it via `getattr`, dropping the underscore
+  (`self.repo`), or calling a mutation method not yet listed in
+  `REPOSITORY_MUTATION_METHODS`. Each returns `Detected calls: set()`, so a
+  genuine unaudited custody mutation passes CI silently. The asymmetry is the
+  danger: false positives fail loud (see `sqlite_panel_source.py`, which had to
+  rename a plain local list off `receipts` to satisfy the matcher), while false
+  negatives fail silent. Treat the census as enforcing the `repo`/`self._repo`
+  convention, not as proof of writer exhaustiveness. A sound replacement needs a
+  type-based walk or an explicit capability token minted only at the enumerated
+  call sites. Pre-existing; not introduced or worsened by #1728.
+- **Retention sizing for open cycles longer than 30 trading days remains
+  undecided** (PRD §27 item 3). `MAX_DECISION_RECEIPTS_PER_STRATEGY = 1_000`
+  (`app/broker/alpaca/clerk/sqlite/decision_receipts.py`) bounds the per-
+  strategy decision-receipt tail by row count, not by trading-day coverage;
+  whether 1,000 rows safely covers every retained, non-`protected_*` receipt
+  across a cycle longer than 30 trading days has not been demonstrated.

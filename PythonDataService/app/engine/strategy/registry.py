@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -44,7 +44,17 @@ from app.engine.strategy.algorithms.spy_strategy_a import SpyStrategyAAlgorithm
 from app.engine.strategy.algorithms.spy_strategy_b import SpyStrategyBAlgorithm
 from app.engine.strategy.algorithms.spy_strategy_c import SpyStrategyCAlgorithm
 from app.engine.strategy.base import Strategy
-from app.engine.strategy.signal_program import EmaCrossoverSignalProgram
+from app.engine.strategy.signal_intent import SignalIntentKind
+from app.engine.strategy.signal_program import (
+    EmaCrossoverSignalProgram,
+    EmaCrossoverSignalSession,
+)
+from app.schemas.signal_program_seal import (
+    ExitEligibilityContract,
+    NumericalProvenanceContract,
+    SignalBarIntegrityContract,
+    SignalSeriesContract,
+)
 
 
 class StrategyParamsBase(BaseModel):
@@ -83,6 +93,14 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
     Defaults preserve the validated LEAN-parity point exactly (absolute gap
     0.20, RSI band 50–70); the Recency Chart sweeps them.
     """
+
+    # FR-002: versions this schema's own legal type/unit/range contract —
+    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
+    # future change to the ``ge``/``le`` bounds below is a provable identity
+    # change without duplicating every bound into the seal itself. A
+    # ``ClassVar`` is invisible to Pydantic's field machinery, so it never
+    # becomes part of the JSON schema or a constructor argument.
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "ema-crossover-signal-params/v1"
 
     gap: float = Field(
         0.20,
@@ -438,6 +456,50 @@ class StrategyBarCadence:
     multiplier: int | ChartParamRef
 
 
+@dataclass(frozen=True, slots=True)
+class SignalProgramContract:
+    """Versioned qualification inputs for one registered Signal Program.
+
+    Artifact paths are relative to ``PythonDataService`` and intentionally
+    enumerate the executable math/session surface.  The qualification job
+    hashes their bytes and binds that digest to the golden trace root.
+
+    This is the single canonical description of a Signal Program's semantic
+    surface (issue #1728 sibling finding: the v2 seal was materially
+    incomplete against PRD §11.1 because half of it had no declared source at
+    all). ``app.services.signal_program_admission.build_start_program_seal``
+    copies the ``signals``/``decision_streams``/``bar_integrity``/
+    ``exit_eligibility``/``numerical_provenance`` values straight from this
+    contract into ``ConfiguredSignalProgramSeal`` — the same objects, not a
+    re-derived or hand-duplicated copy — so a semantic field added here is
+    automatically part of the sealed identity rather than a second list that
+    can silently fall out of sync.
+    """
+
+    program_version: str
+    # Distinct from PROGRAM_VERSION (the decision math) — identifies the
+    # shape of the session's construction/staging protocol. Mirrors
+    # EmaCrossoverSignalSession.PROTOCOL_VERSION rather than re-declaring it,
+    # so the two constants cannot drift apart unnoticed (see
+    # tests/engine/strategy/test_registry_signal_program_identity.py).
+    protocol_version: str
+    parameter_schema_version: str
+    golden_trace_root: str
+    provider: str
+    base_timeframe_ms: int
+    decision_timeframe_ms: int
+    warmup_lookback_days: int
+    signals: tuple[SignalSeriesContract, ...]
+    decision_streams: tuple[str, ...]
+    bar_integrity: SignalBarIntegrityContract
+    exit_eligibility: ExitEligibilityContract
+    numerical_provenance: NumericalProvenanceContract
+    parameter_units: dict[str, str]
+    validated_settings: dict[str, str | int | float | bool]
+    validated_symbols: tuple[str, ...]
+    artifact_paths: tuple[str, ...]
+
+
 @dataclass
 class StrategyRegistration:
     display_name: str
@@ -526,6 +588,10 @@ class StrategyRegistration:
     # the legacy event-handler lifecycle. When present, this is the one
     # construction authority for the program and its staged SignalSession.
     signal_program_factory: Callable[[StrategyParamsBase], EmaCrossoverSignalProgram] | None = None
+    # Admission metadata is deliberately adjacent to the construction seam.
+    # A factory without a contract is an unqualified program and cannot be
+    # sealed for Start/Resume.
+    signal_program_contract: SignalProgramContract | None = None
 
 
 def public_params_schema(reg: StrategyRegistration, *, extra_hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
@@ -580,6 +646,130 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "ema_crossover_signal": StrategyRegistration(
         display_name="EMA Crossover Signal",
         class_name="EmaCrossoverSignalAlgorithm",
+        signal_program_contract=SignalProgramContract(
+            program_version="ema-crossover-signal/v1",
+            protocol_version=EmaCrossoverSignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            decision_timeframe_ms=15 * 60_000,
+            warmup_lookback_days=5,
+            # EmaCrossoverSignalAlgorithm.initialize() constructs exactly
+            # these three named series (EMA5, EMA10, RSI14), each fed
+            # bar.close at bar.end_ms. Periods are fixed at construction, not
+            # parameterized, so they are facts about this program version,
+            # not user-configurable settings. warmup_bars mirrors each
+            # indicator's own is_ready threshold
+            # (app/engine/indicators/base.py: samples >= period; RSI
+            # overrides to period + 1 for its first delta) — any drift
+            # between these constants and the real indicators would already
+            # change the golden trace root and fail
+            # test_validated_ema_settings_corpus_has_a_pinned_trace_root, so
+            # this cannot silently go stale.
+            signals=(
+                SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=5, warmup_bars=5),
+                SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=10, warmup_bars=10),
+                SignalSeriesContract(
+                    name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15
+                ),
+            ),
+            # SignalIntentKind's complete member set (signal_intent.py) —
+            # every decision this program can stage collapses to one of
+            # these two named streams.
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            # System-wide today (app.services.source_bar_ledger /
+            # app.services.bot_trade_strategy own these facts, not this
+            # program) — see SignalBarIntegrityContract's docstring for the
+            # exact enforcing code. Explicit here rather than relying on the
+            # schema default so a future program that needs a different
+            # policy must set its own value, not silently inherit this one.
+            bar_integrity=SignalBarIntegrityContract(),
+            # EmaCrossoverSignalAlgorithm.commit_signal_decision hardcodes
+            # self._bars_until_exit = 5 at entry (75 minutes on 15-minute
+            # bars); report_state_for_persistence returns None while
+            # _in_position, so a mid-countdown position cannot currently
+            # survive Pause/Resume.
+            exit_eligibility=ExitEligibilityContract(
+                countdown_decision_clocks=5,
+                countdown_state_persistable=False,
+            ),
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only EMA(5)/EMA(10) crossover on 15-minute signal bars with an "
+                    "RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND "
+                    "(EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Exit: 5 consolidated bars "
+                    "(75 minutes) after entry."
+                ),
+                reference=(
+                    "Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); "
+                    "TradingView Pine validation docs/validation/SPY_EMA_Crossover_RSI.pine; "
+                    "validation report docs/validation/SPY_EMA_Crossover_Validation_Report.pdf"
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/ema_crossover_signal.py::EmaCrossoverSignalAlgorithm"
+                ),
+                validated_against=(
+                    "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
+                    "tests/engine/strategy/test_ema_signal_program.py::"
+                    "test_validated_ema_settings_corpus_has_a_pinned_trace_root; "
+                    "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared (signal_program.py), not
+                # tolerance-compared — see test_validated_ema_settings_corpus_
+                # has_a_pinned_trace_root's byte-exact trace_root assertion.
+                equivalence_level="bit_exact",
+                # One level down (the EMA/RSI *value* parity against LEAN,
+                # not the trace-identity hash above): documented absolute
+                # tolerance from the reconciliation report.
+                tolerance_atol=1e-9,
+                tolerance_rtol=0.0,
+                parity_fixture_ids=(
+                    "tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json",
+                    "tests/fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30",
+                    "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W3mo_2026-02-02_to_2026-04-30",
+                    "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30",
+                    "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30",
+                ),
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "gap": "quote_currency",
+                "rsi_min": "rsi_points",
+                "rsi_max": "rsi_points",
+            },
+            validated_settings={"gap": 0.20, "rsi_min": 50.0, "rsi_max": 70.0},
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            # Issue #1728 defect 2: this is not "every file the module
+            # graph reaches" — it is that transitive first-party import
+            # closure of the two roots below, MINUS the files proven (in
+            # scripts/run_signal_program_build_qualification.py's exclusion
+            # list) to be unreachable from evaluate_signal_bar()'s decision
+            # math: EmaCrossoverSignalSession.advance() (signal_program.py)
+            # builds and stores the EvaluationTrace *before* settle() ever
+            # calls commit_signal_decision(), so execution/fill/sizing/
+            # commission/Insight-publication bytes reached only through the
+            # commit path cannot retroactively change a trace that already
+            # exists. test_signal_decision_digest_closure.py recomputes the
+            # closure from these paths and fails the build if a newly
+            # introduced import isn't triaged into this list or that one.
+            artifact_paths=(
+                "app/engine/strategy/algorithms/ema_crossover_signal.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/indicators/base.py",
+                "app/engine/indicators/ema.py",
+                "app/engine/indicators/rsi.py",
+                "app/engine/indicators/sma.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Long-only intraday EMA signal generator. Bit-exact against the "
             "LEAN C# reference when the default SPY signal stream is used; "
@@ -1534,6 +1724,22 @@ _STRATEGY_REGISTRY["ema_crossover_2_bps"] = replace(
     ),
     lean_twin="ema_crossover_2_bps",
     lean_parameter_names=("gap_bps", "rsi_min", "rsi_max"),
+    # Issue #1728 defect 1: dataclasses.replace() shallow-copies every field
+    # not explicitly overridden, including signal_program_contract and
+    # signal_program_factory. This strategy uses a relative basis-point gap
+    # (EmaCrossover2BpsAlgorithm, param gap_bps) — genuinely different math
+    # from the canonical EMA Signal Program's absolute-price gap — and has
+    # never been through its own golden qualification. Left inherited, both
+    # bots on this key falsely claimed EMA's golden_trace_root as proof of
+    # their own build, AND signal_program_factory would hand
+    # _build_ema_crossover_signal_program a params instance it isn't typed
+    # for. Clearing both routes admission's prove_running_program_build to
+    # its NOT_APPLICABLE state (no registered Signal Program), which
+    # run_admission.py does not gate on, keeping this strategy's existing
+    # execution path working. Promoting it to a real sealed Signal Program
+    # is issue #1730 / Slice 5.
+    signal_program_contract=None,
+    signal_program_factory=None,
 )
 
 # Historical ledgers use this key and import path. Keep it executable but do
@@ -1548,6 +1754,17 @@ _STRATEGY_REGISTRY["spy_ema_crossover"] = replace(
     signal_intent_binding="signal_symbol",
     catalog_visible=False,
     lean_twin="ema_crossover",
+    # Issue #1728 defect 1: see the identical comment on ema_crossover_2_bps
+    # above. This legacy-compatibility key builds SpyEmaCrossoverAlgorithm
+    # (action_plan_contract="none"), not the canonical EMA Signal Program —
+    # inheriting its contract/factory via dataclasses.replace() let bots on
+    # this key falsely claim EMA's golden_trace_root, and
+    # prove_running_program_build's receipt lookup (keyed on
+    # binding.strategy_key) could never match, permanently bricking Start
+    # and Resume for every such bot. Clearing both is what routes it back to
+    # NOT_APPLICABLE — no registered Signal Program — instead of UNPROVEN.
+    signal_program_contract=None,
+    signal_program_factory=None,
 )
 
 

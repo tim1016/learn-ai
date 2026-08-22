@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import json
 import random
+import re
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime
@@ -45,7 +47,6 @@ from app.broker.alpaca.clerk.models import (
     ReconciliationVerdict,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
-from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -58,6 +59,7 @@ from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhase
 from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.engine.strategy.signal_program import EvaluationMode, Settlement
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
@@ -515,6 +517,25 @@ class _TestDecisionReceiptRepository:
         self._rows[key] = updated
         return updated
 
+    def decision_receipt_tail(
+        self,
+        *,
+        strategy_instance_id: str,
+        limit: int,
+    ) -> list[DecisionReceiptResource]:
+        """FR-016: warmup replay reads this to reapply known dispositions.
+
+        Dict insertion order matches ascending ``seq`` order here (``seq``
+        is assigned once at append; ``update_decision_receipt_for_bar``
+        replaces a row in place without reordering it), mirroring the real
+        repository's "bounded newest suffix in ascending sequence order".
+        """
+        matching = [
+            row for (sid, _bar_ref), row in self._rows.items() if sid == strategy_instance_id
+        ]
+        matching.sort(key=lambda row: row.seq)
+        return matching[-limit:] if limit > 0 else []
+
 
 class _CustodyClerk:
     authority_kind = "sqlite"
@@ -555,8 +576,9 @@ class _CustodyClerk:
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        decision_evidence=None,
     ) -> EffectOperationReceipt:
-        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth, capability_account_id
+        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth, capability_account_id, decision_evidence
         raise AssertionError("custody-only test Clerk cannot execute effects")
 
     async def stop_strategy_run(
@@ -2497,6 +2519,7 @@ class _FakeClerk:
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        decision_evidence=None,
     ) -> _FakeEffectResult:
         del use_rth, capability_account_id
         if self._should_raise is not None:
@@ -2511,6 +2534,35 @@ class _FakeClerk:
             "action_plan": action_plan,
         }
         self.calls.append(call)
+        if decision_evidence is not None and isinstance(
+            self.repository, ClerkSqliteRepository
+        ):
+            rejected = self._effect_state == "rejected"
+            facts = {
+                "bar_ref": decision_evidence.bar_ref,
+                "decision_id": decision_evidence.evaluation_id,
+                "evaluation_id": decision_evidence.evaluation_id,
+                "run_id": run_id,
+                "reason_code": (
+                    "CLERK_ADMISSION_REJECTED"
+                    if rejected
+                    else decision_evidence.reason_code
+                ),
+                "retention_class": (
+                    "protected_refusal" if rejected else "protected_effect"
+                ),
+            }
+            if rejected:
+                facts["refusal_reason"] = "The test Clerk rejected this strategy submission."
+            self.repository.append_decision_receipt(
+                strategy_instance_id=strategy_instance_id,
+                outcome=("blocked" if rejected else decision_evidence.outcome),
+                symbol=decision_evidence.symbol,
+                intent_id=decision_evidence.evaluation_id,
+                order_ref=None,
+                observed_at_ms=decision_evidence.observed_at_ms,
+                facts_json=json.dumps(facts, sort_keys=True, separators=(",", ":")),
+            )
         return _FakeEffectResult(
             order_ref=f"learn-ai/{strategy_instance_id}/v1:fake{len(self.calls):02d}",
             state=self._effect_state,
@@ -2558,6 +2610,30 @@ def _ema_parity_bars_through_first_exit() -> list[MarketDataBar]:
     return bars
 
 
+def _ema_signal_evaluation_id(bar_close_ms: int, *, symbol: str = "SPY") -> str:
+    """Independently recompute the Signal Program's documented evaluation
+    identity (see the Formula note in ``app/engine/strategy/signal_program.py``:
+    SHA-256 of the canonical JSON of program version, settings, and bar-close
+    clock) from the real registered strategy -- not a hand-typed guess at the
+    hash bytes. Proves ``decision_id`` really is the deterministic per-bar
+    Signal Program identity the PRD requires (``decision_id = evaluation_id``,
+    issue #1728 / PRD section 16), rather than merely echoing whatever the
+    current build happens to emit.
+    """
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    assert registration.signal_program_factory is not None
+    params = registration.param_schema(symbol=symbol)
+    program = registration.signal_program_factory(params)
+    payload = {
+        "program_key": program.session.PROGRAM_KEY,
+        "program_version": program.session.PROGRAM_VERSION,
+        "settings": program.strategy.signal_program_settings(),
+        "bar_close_ms": bar_close_ms,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 @pytest.mark.asyncio
 async def test_ema_trade_bot_matches_first_lean_round_trip(
     tmp_path: Path,
@@ -2565,6 +2641,15 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
 ) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    # #1729 AC4: real Alpaca Paper ("trade" mode) admission of a
+    # Signal-Program-backed strategy is gated by an exact (program, account)
+    # canary allowlist that ships empty in production. This test exercises
+    # engine round-trip parity, not the allowlist itself, so it explicitly
+    # enables the one pairing it deploys under.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
     bars = _ema_parity_bars_through_first_exit()
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
@@ -2581,9 +2666,18 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
     await _wait_for(lambda: len(clerk.calls) >= 2)
     await registry.stop("alpaca", _SID)
 
-    assert [(call["decision_id"], call["purpose"], call["quantity"]) for call in clerk.calls[:2]] == [
-        (f"{_EMA_FIRST_ENTER_MS}:ENTER", "ENTER", 3),
-        (f"{_EMA_FIRST_EXIT_MS}:EXIT", "EXIT", 3),
+    # Slice 2 (#1728): decision_id is now evaluation_id -- a content-addressed
+    # SHA-256 of program identity + settings + bar-close, not the old
+    # "{bar_close_ms}:{kind}" string. Assert both the shape (a 64-char lower-
+    # hex digest, the same pattern EffectDecisionEvidence.evaluation_id
+    # requires) and the meaning (it equals the documented per-bar formula),
+    # so this test still fails if decision_id ever stops being evaluation_id.
+    enter_call, exit_call = clerk.calls[:2]
+    for call in (enter_call, exit_call):
+        assert re.fullmatch(r"[0-9a-f]{64}", call["decision_id"])
+    assert [(call["decision_id"], call["purpose"], call["quantity"]) for call in (enter_call, exit_call)] == [
+        (_ema_signal_evaluation_id(_EMA_FIRST_ENTER_MS), "ENTER", 3),
+        (_ema_signal_evaluation_id(_EMA_FIRST_EXIT_MS), "EXIT", 3),
     ]
 
 
@@ -2591,6 +2685,8 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
 async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
     tmp_path: Path,
 ) -> None:
+    from types import SimpleNamespace
+
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     transitions_before_decisions = repo.custody_transitions()
@@ -2623,10 +2719,36 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
             "enter_intent",
             "no_action",
         ]
+        # Slice 2 (#1728): bar_ref is now "decision-bar:{feed_id}:{symbol}:
+        # {bar_close_ms}", not the old "SYMBOL@ms" string -- assert the new
+        # shape/meaning directly (feed_id + symbol + the closed bar's own
+        # close timestamp), not a value copied from the current build's
+        # output.
         assert [fact["bar_ref"] for fact in facts] == [
-            f"SPY@{_RTH_MS + offset * 60_000 + 60_000}" for offset in range(3)
+            f"decision-bar:ibkr:SPY:{_RTH_MS + offset * 60_000 + 60_000}" for offset in range(3)
         ]
-        assert decisions[1].intent_id.endswith(":ENTER")
+        # decision_id/intent_id are now evaluation_id (decision_id ==
+        # evaluation_id, PRD section 16) -- a content-addressed SHA-256, not
+        # a "{ms}:{KIND}" string. Recompute it from the real
+        # `_generic_evaluation_id` compatibility formula so this proves the
+        # identity is really the deterministic per-bar evaluation id, not
+        # just whatever hash the current build happens to emit.
+        expected_ids = [
+            bot_trade_strategy._generic_evaluation_id(
+                SimpleNamespace(
+                    strategy_key="deployment_validation",
+                    sealed_program=None,
+                    symbol="SPY",
+                    strategy_params=None,
+                ),
+                _RTH_MS + offset * 60_000 + 60_000,
+            )
+            for offset in range(3)
+        ]
+        for evaluation_id in expected_ids:
+            assert re.fullmatch(r"[0-9a-f]{64}", evaluation_id)
+        assert [fact["decision_id"] for fact in facts] == expected_ids
+        assert decisions[1].intent_id == expected_ids[1]
         assert decisions[1].order_ref is None
         # Decision receipts are product evidence, not custody. The only new
         # authority transitions are the run's required duty boundaries.
@@ -3087,6 +3209,7 @@ class _RejectFirstExitClerk(_FakeClerk):
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        decision_evidence=None,
     ) -> _FakeEffectResult:
         if purpose == EffectPurpose.EXIT:
             self._exit_attempts += 1
@@ -3100,6 +3223,7 @@ class _RejectFirstExitClerk(_FakeClerk):
             quantity=quantity,
             use_rth=use_rth,
             capability_account_id=capability_account_id,
+            decision_evidence=decision_evidence,
         )
 
 
@@ -3294,27 +3418,42 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Slice 2 (#1728) moved decision-receipt capture off the old
+    provisional/final two-step pattern (a ``SqliteDecisionReceipts.append``
+    call bracketing the broker request) onto one atomic write:
+    ``append_atomic_decision_receipt_row``, committed by
+    ``ClerkSqliteRepository._commit_transition_row`` inside the SAME SQLite
+    transaction as the ENTER/EXIT custody transition, before any broker
+    contact (PRD section 16; FR-018). This test used to fault-inject
+    ``SqliteDecisionReceipts.append`` -- a boundary the new atomic path never
+    calls for an effect-bearing decision, so the injected fault was inert and
+    the test only ever timed out. Retargeting the fault at the real boundary
+    re-proves the original R1 invariant: if the atomic decision receipt
+    cannot be durably written, the whole transaction (including the custody
+    transition) rolls back and the broker is never contacted -- using the
+    real ``SqliteAlpacaClerkFacade``/``ClerkSqliteRepository``, not the
+    ``_FakeClerk`` double (which never exercises the atomic write path at
+    all)."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
-    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
-    clerk = _FakeClerk(repository=repo)
-    clerk.authority_kind = "sqlite"
-    clerk.account_id = "PA-TEST"
-    original = SqliteDecisionReceipts.append
+    broker = _SqliteRuntimeBroker()
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
 
-    def fail_enter_receipt(
-        self: SqliteDecisionReceipts,
-        **fields: Any,
-    ) -> DecisionReceiptResource:
-        if fields["outcome"] == "enter_intent":
-            raise OSError("injected decision receipt failure")
-        return original(self, **fields)
+    def raise_atomic_receipt_failure(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("injected atomic decision receipt failure")
 
-    monkeypatch.setattr(SqliteDecisionReceipts, "append", fail_enter_receipt)
+    monkeypatch.setattr(
+        "app.broker.alpaca.clerk.sqlite.repository.append_atomic_decision_receipt_row",
+        raise_atomic_receipt_failure,
+    )
     feed = _FakeFeed(
-        [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
+        [_green_bar(_WIN_START_MS + 60_000), _green_bar(_WIN_START_MS + 120_000)],
         mode="hold",
     )
-    registry = _registry(tmp_path, feed)
+    registry = _registry(
+        tmp_path / "runner",
+        feed,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
@@ -3327,10 +3466,24 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
         )
         await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
-        assert clerk.calls == []
+        # No broker contact: R1 held even after the fault moved to the new
+        # atomic boundary.
+        assert broker.orders == {}
+        # No orphaned custody effect: ENTER_ACCEPTED, its fold, and the
+        # atomic receipt are one SQLite transaction -- the failed receipt
+        # write rolled the whole thing back, not just itself.
+        assert not any(row["transition_kind"] == "ENTER_ACCEPTED" for row in repo.custody_transitions())
+        recorded_outcomes = [
+            receipt.outcome
+            for receipt in repo.decision_receipt_tail(strategy_instance_id=_SID, limit=10)
+        ]
+        assert "enter_intent" not in recorded_outcomes
         outcome = registry.status("alpaca", _SID).duty_outcome
         assert outcome is not None
         assert outcome.kind == "CRASHED"
+        # Pin the crash to the injected OSError specifically, not to some
+        # unrelated failure that would make the assertions above vacuous.
+        assert outcome.reason_code == "OSError"
     finally:
         set_alpaca_clerk(None)
         repo.close()
@@ -3439,6 +3592,13 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
 
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    # #1729 AC4: see test_ema_trade_bot_matches_first_lean_round_trip above —
+    # this test exercises chart-bar release, not the canary allowlist, so it
+    # explicitly enables the one pairing it deploys under.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
     contexts: list[StrategyContext] = []
     context_factory = bot_trade_strategy.StrategyContext
 
@@ -3652,3 +3812,81 @@ async def test_log_only_bot_unchanged_after_trade_mode_added(tmp_path: Path, cap
 
     instance = _strategy_instance_json(tmp_path)
     assert instance["mode"] == "log_only"
+
+
+@pytest.mark.asyncio
+async def test_resume_admission_wiring_persists_legacy_migration_clone_lineage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the ``legacy_migration_repository=self._bindings``
+    argument in ``BotTaskRegistry.__init__``'s construction of
+    ``self._resume_admission`` (``app/services/bot_runner.py`` ~line 276).
+
+    ``BotResumeAdmission`` computes the correct ``PROGRAM_BUILD_UNPROVEN``
+    decision and clone id for a legacy instance whose persisted parameters no
+    longer validate -- with or without that argument. Without it, the
+    ``if mutating and self._legacy_migration_repository is not None:`` guard
+    in ``app/services/bot_resume_admission.py`` silently skips the durable
+    clone-lineage sidecar write (`bot_resume_admission_repository
+    .ensure_legacy_migration_clone_lineage`), even though the decision itself
+    still looks right. This drives Resume through the REAL registry-
+    constructed ``self._resume_admission`` -- the exact object
+    ``bot_runner.py.__init__`` builds -- so it fails if that argument is ever
+    dropped and passes only because it is wired through.
+    """
+    from app.services.bot_start_admission import StartAdmissionDenied
+    from app.services.signal_program_admission import legacy_migration_clone_instance_id
+
+    # The autouse `_fresh_live_market_liveness` fixture patches
+    # `current_strategy_validation_fact` to always report strategy_key
+    # "deployment_validation" -- override it here so the validation evidence
+    # matches this test's own strategy_key, which
+    # `reconstruct_legacy_program_seal` checks.
+    monkeypatch.setattr(
+        bot_runner,
+        "current_strategy_validation_fact",
+        lambda binding, observed_at_ms: StrategyValidationAdmissionFact(
+            state="VERIFIED",
+            strategy_key=binding.strategy_key,
+            evidence_status="accepted",
+            event_id="test-validation-event",
+            evidence_snapshot_sha256="a" * 64,
+            verified_at_ms=observed_at_ms,
+            explanation="Test validation evidence is current.",
+        ),
+    )
+    registry = _registry(tmp_path, None)
+
+    # A "legacy" prior binding: no v2 seal, and a parameter set (`gap`
+    # negative) that no longer validates against the registered
+    # `ema_crossover_signal` param schema -- unreconstructible, forcing the
+    # clone path rather than an ordinary append-a-seal Resume.
+    prior = BrokerBotBinding(
+        strategy_instance_id=_SID,
+        strategy_key="ema_crossover_signal",
+        broker="alpaca",
+        symbol="SPY",
+        use_rth=True,
+        mode="trade",
+        quantity=1,
+        carryover_policy="FORBID",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        strategy_params={"gap": -1.0, "rsi_min": 50.0, "rsi_max": 70.0},
+        sealed_account_id="paper-account",
+        run_id="run-prior",
+        created_at_ms=_T0,
+    )
+    registry._bindings.record_launch(prior, launch_reason="deploy")
+    clone_id = legacy_migration_clone_instance_id(prior.strategy_instance_id)
+    status = registry.status("alpaca", _SID)
+
+    with pytest.raises(StartAdmissionDenied) as exc_info:
+        await registry._resume_admission.resume(prior, status)
+
+    assert exc_info.value.decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
+    assert clone_id in (exc_info.value.decision.next_step or "")
+
+    lineage = registry._bindings.read_legacy_migration_lineage(clone_id)
+    assert lineage is not None
+    assert lineage.migrated_from_strategy_instance_id == _SID

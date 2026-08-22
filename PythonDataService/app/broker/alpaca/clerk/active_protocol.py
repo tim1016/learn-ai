@@ -6,6 +6,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
     from app.broker.alpaca.clerk.models import (
         ClerkCustodySnapshot,
         EffectOperationReceipt,
@@ -75,6 +76,7 @@ class ActiveAlpacaClerk(Protocol):
         use_rth: bool = True,
         capability_account_id: str | None = None,
         retained_source_bar: RetainedSourceBar | None = None,
+        decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt: ...
 
     async def reconcile_once(self) -> ReconciliationVerdict: ...

@@ -91,6 +91,61 @@ class StrategyValidationAdmissionFact(BaseModel):
     next_step: str | None = None
 
 
+#: The four fields that jointly constitute a PROVEN build's proof. Kept as a
+#: single named tuple so the ``model_validator`` below and its tests share
+#: one source of truth for "what does PROVEN require" rather than each
+#: hand-listing the same four names.
+PROGRAM_BUILD_PROOF_FIELDS: tuple[str, ...] = (
+    "program_version",
+    "golden_trace_root",
+    "running_artifact_digest",
+    "qualification_receipt_hash",
+)
+
+
+class ProgramBuildAdmissionFact(BaseModel):
+    """Admission-time proof that loaded program bytes match qualification."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["PROVEN", "UNPROVEN", "NOT_APPLICABLE"]
+    program_key: str
+    program_version: str | None = None
+    golden_trace_root: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    running_artifact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    qualification_receipt_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    verified_at_ms: int = Field(ge=0)
+    evidence_refs: tuple[str, ...] = ()
+    explanation: str
+    next_step: str | None = None
+    # How this verdict was obtained. Admission (Start/Resume) always proves the
+    # running bytes live, which is the default. A panel read replays the durable
+    # per-run record instead, and says so rather than leaving a stale
+    # ``verified_at_ms`` as the only clue that no re-proof happened.
+    verification: Literal["live_reproof", "frozen_run_evidence"] = "live_reproof"
+
+    @model_validator(mode="after")
+    def _proven_carries_its_full_proof(self) -> ProgramBuildAdmissionFact:
+        """``state == "PROVEN"`` must carry the full proof, not a partial one.
+
+        UNPROVEN and NOT_APPLICABLE are deliberately left unconstrained here:
+        both producers (``prove_running_program_build`` and
+        ``program_build_view_from_run_evidence``) only ever leave the proof
+        fields absent for those states today, but nothing about "not proven"
+        requires that — a future diagnostic case that attaches a partial,
+        non-authoritative proof to an UNPROVEN fact would be legitimate, and
+        must not be refused by this validator.
+        """
+        if self.state != "PROVEN":
+            return self
+        missing = [name for name in PROGRAM_BUILD_PROOF_FIELDS if getattr(self, name) is None]
+        if missing:
+            raise ValueError(f"a PROVEN program-build fact requires {', '.join(missing)}")
+        if not self.evidence_refs:
+            raise ValueError("a PROVEN program-build fact requires non-empty evidence_refs")
+        return self
+
+
 class StartRunFacts(BaseModel):
     """Bot-owned immutable and runtime facts for a proposed first run."""
 
@@ -106,6 +161,7 @@ class StartRunFacts(BaseModel):
     # defaulted — every construction site must be explicit about which tier
     # it is admitting into.
     mode: Literal["log_only", "dry_run", "trade"]
+    program_build: ProgramBuildAdmissionFact
     validation: StrategyValidationAdmissionFact
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
@@ -158,6 +214,7 @@ class ResumeRunFacts(BaseModel):
     # tier the instance was created with. See StartRunFacts.mode for why this
     # is required, not defaulted.
     mode: Literal["log_only", "dry_run", "trade"]
+    program_build: ProgramBuildAdmissionFact
     validation: StrategyValidationAdmissionFact
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
@@ -180,6 +237,7 @@ class RunAdmissionFactAges(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    program_build: int
     runtime: int
     process: int
     market_data: int

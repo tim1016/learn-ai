@@ -30,6 +30,8 @@ from app.broker.v2panel.vocabulary import (
     StationState,
 )
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
+from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
+from app.schemas.signal_program_seal import SealedBotProgram
 
 
 def _validate_simulated_authority_metadata(
@@ -358,10 +360,33 @@ class RecentDecisionView(BaseModel):
         "exited",
         "no_action",
         "blocked",
+        # FR-016: replay recreated a staged candidate with no Clerk
+        # disposition (a crash between `SignalSession.advance()` and
+        # intake); DISCARD applied, no effect created. Mirrors
+        # `DecisionOutcome` in app/broker/alpaca/clerk/sqlite/decision_receipts.py.
+        "candidate_uncaptured_at_crash",
     ]
     reason_code: str
     bar_ref: str
     order_ref: str | None
+    # PRD Sec 19 causal provenance: the durable evaluation/effect identities
+    # the Clerk stored at intake time (`decision_id` == `evaluation_id`;
+    # `effect_operation_id` binds the decision to its accepted custody
+    # operation). The projector never infers these from timing or ordering —
+    # `None` renders the explicit absence of a stored link (e.g. a `no_action`
+    # / `blocked` decision that never reached Clerk intake, or a Dry Run row
+    # sourced from evidence that does not yet carry these identities).
+    decision_id: str | None = None
+    effect_operation_id: str | None = None
+    # Which record this row was projected from. Both Paper and governed Dry Run
+    # read ``clerk_decision_receipt``; only a Dry Run instance that never ran
+    # under the synthetic Clerk falls back to ``legacy_simulated_wal``, whose
+    # rows structurally cannot carry causal identities. Without this, a `None`
+    # ``decision_id`` is ambiguous between "this decision never reached Clerk
+    # intake" and "this row came from a source that has no such column".
+    source: Literal["clerk_decision_receipt", "legacy_simulated_wal"] = (
+        "clerk_decision_receipt"
+    )
     simulated: bool = False
     authority_account_id: str | None = None
     authority_kind: Literal["real_paper", "synthetic"] | None = None
@@ -443,6 +468,30 @@ class BotPanelView(BaseModel):
     account_id: str
     symbol: str
     mode: Literal["log_only", "dry_run", "trade"]
+    # PRD Sec 11.1/11.2 immutable identity: the exact versioned seal bound to
+    # this strategy instance, reused verbatim from its single canonical shape
+    # (``app.schemas.signal_program_seal``) rather than re-derived here. This
+    # is seal content only — never health, custody, current policy, checkpoint
+    # codec, or simulated fill policy (PRD Sec 11.3 draws that line; those
+    # stay on ``health`` / ``clerk`` / ``execution_policy`` below). ``None``
+    # is an explicit absence: a legacy pre-seal instance or a compatibility
+    # strategy with no registered Signal Program, never an inferred one.
+    sealed_program: SealedBotProgram | None
+    # PRD Sec 11.3/11.4 dynamic run evidence: whether the program bytes this
+    # run was admitted on are proven compatible with the sealed
+    # ``(program_version, golden_trace_root)``. This replays the durable
+    # per-run record written at Start/Resume when one exists, and only proves
+    # the currently loaded bytes live when it does not; read ``verification``
+    # to tell which — a panel read must never be mistaken for a fresh proof.
+    # Always present — ``NOT_APPLICABLE`` for a compatibility strategy with no
+    # registered Signal Program, ``UNPROVEN`` when the seal or receipt evidence
+    # does not (yet) close, ``PROVEN`` otherwise.
+    program_build: ProgramBuildAdmissionFact
+    # PRD Sec 11.3 "current admission-policy version and verdict": the most
+    # recent Start/Resume admission decision this panel observed. ``None``
+    # while the bot is running — Resume admission is not evaluated for a live
+    # run, which is an explicit absence, not a missing read.
+    resume_admission: RunAdmissionDecision | None
     updated_at_ms: int
     revision: int
     market_pulse: MarketPulseView

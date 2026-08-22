@@ -125,6 +125,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (`live` / `historical (ADR 0037/0038)` / `compatibility evidence (ADR 0038)` / `neutral`); the dangling §16.4 deferral is deleted; every newly accepted ADR carries a `Vocabulary:` line |
 | 0041 | The operator manual's Button Reference (and Glossary tables) are generated from `OPERATOR_COPY`, not hand-written; "When available" prose is dropped in favour of the panel's runtime gate reasons; CI regenerate-and-diff, as for the OpenAPI/GraphQL snapshots |
 | 0042 | Sealed signal decisions meet account-scoped custody at one semantic seam |
+| 0043 | Signal Program build proof, two-level seal identity, and append-or-clone legacy migration |
 
 ---
 

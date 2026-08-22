@@ -122,13 +122,6 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
         rationale="SqliteDecisionReceipts appends one decision receipt under the repository write coordinator and does not advance custody control revision.",
     ),
     ExternalRepositoryWriter(
-        path="app/services/bot_trade_strategy.py",
-        owner="_record_blocked_decision",
-        call="update_decision_final_outcome",
-        classification=RepositoryWriterClassification.ATOMIC,
-        rationale="SqliteDecisionReceipts atomically replaces the provisional decision receipt outcome under the repository write coordinator.",
-    ),
-    ExternalRepositoryWriter(
         path="app/services/broker_v2_panel/sqlite_panel_source.py",
         owner="execute_sqlite_panel_action",
         call="execute_recovery_action",

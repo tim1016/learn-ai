@@ -82,6 +82,128 @@ stop the current bot if needed and deploy a new `strategy_instance_id`.
 Resume creates a new run of the unchanged binding; it does not provide a
 rebinding path.
 
+## Signal Program build proof and legacy seal migration
+
+A strategy backed by a registered Signal Program (currently only EMA Crossover
+Signal) seals its exact resolved semantics — program version, golden trace
+root, every resolved parameter with its unit and origin — once at deploy time.
+Every Start and every Resume then re-hash the currently loaded program bytes
+and require a golden-qualification receipt proving those exact bytes were
+re-run against that program's own reference corpus for the sealed
+`(program_version, golden_trace_root)`. Missing, stale, or mismatched evidence
+refuses the run as `PROGRAM_BUILD_UNPROVEN` before any bar is evaluated or any
+effect can occur; the panel's `explanation` and `next_step` are backend-
+authored, so the recovery is always stated, never guessed. The usual recovery
+is re-running the golden qualification job from `PythonDataService/` against
+the currently deployed bytes —
+
+```bash
+.venv/bin/python -m scripts.run_signal_program_build_qualification
+```
+
+— which mints a fresh receipt only after that program's own golden-trace suite
+passes; a code change that was never re-qualified after moving the program
+version or trace root cannot produce an admissible receipt this way. If the
+loaded bytes are simply the wrong build, the fix is deploying a newly sealed
+instance instead. A strategy with no registered Signal Program at all (for
+example EMA Crossover 2 bps or the legacy EMA Crossover compatibility key)
+reports `NOT_APPLICABLE` rather than `PROGRAM_BUILD_UNPROVEN` and is not
+gated by this proof; it runs on its existing, non-sealed execution path.
+
+A strategy instance deployed before this seal existed has no v2 seal on file.
+Its first Resume after this feature attempts migration, and migration
+succeeds only when the v1 configuration is *exactly* reconstructible — never
+by guessing. Two things must hold: the persisted parameters still validate
+against the currently registered strategy contract, and every parameter's
+deploy-time origin is a recorded fact rather than an inference. A parameter
+that was never supplied at deploy time is factually a registered default and
+qualifies. A parameter that *was* explicitly supplied but whose origin was
+never recorded does not: comparing its stored value against today's default
+cannot prove it was never an override, because the registered default may have
+drifted since. When both conditions hold, Resume appends an exact seal under
+the same `strategy_instance_id` and proceeds — no operator action needed.
+
+Otherwise Resume refuses with `PROGRAM_BUILD_UNPROVEN` and a `next_step`
+naming the exact deterministically-derived clone instance id to deploy in its
+place. The original instance's configuration and history remain permanently
+inspectable, but it can never Resume again under its own id. Deploying the
+named clone requires fresh parameters — it is a new deployment, not a rebind.
+The clone's lineage back to the original is written before that instruction is
+ever shown; if the lineage cannot be recorded, Resume fails rather than
+promising a link it did not persist.
+
+## The guarded Paper canary
+
+Running a Signal Program against a real Alpaca paper account is deliberately
+harder to reach than any other mode. Three things gate it, and none of them
+can be satisfied by a code change alone.
+
+**Shadow evaluation comes first.** Before a program is considered for the
+canary, its canonical `EvaluationTrace` sequence is computed twice over the
+same qualified bars — once through the Backtest engine, once through the same
+session seam a running Paper or Dry Run bot uses — and the two are compared
+field by field. The comparison stops at the *first* disagreement rather than
+accumulating a diff, so what you are shown is the earliest point the two
+authorities diverge, not a summary. Neither side can reach a broker: the
+comparison never constructs a Clerk or a broker port, and the bars come from
+memory.
+
+**Admission requires an exact pairing.** The canary allowlist admits one
+exact `(program, account)` tuple — never a program on any account, never an
+account running any program. It **ships empty**. A pairing appears on it only
+because a person put it there after reviewing the full composed proof, and a
+test fails if the shipped list is ever non-empty. Enabling a canary is an
+operational act, not a deployment step; nothing in CI, migration, or startup
+can perform it, and no bot is started automatically as a result. A run whose
+pairing is absent refuses with `CANARY_PAIRING_NOT_ALLOWLISTED` before any
+bar is evaluated.
+
+That gate is the *last* of seven proofs, not the only one. The seal and build
+proof, the strategy validation disposition, the sealed provider identity, the
+replay/boot-recovery readiness, and the Clerk's own custody state are all
+re-proved on every Start and every Resume first. Being on the allowlist
+exempts a run from nothing — it is the deciding factor only once everything
+else would already have passed. Dry Run is never subject to it; it runs under
+its own synthetic authority.
+
+**Rollback stops at a proved boundary.** When a canary is stopped, the Clerk
+proves the instance's custody state and the resulting stop outcome is
+classified into a rollback verdict recorded alongside it. `STOPPED_FLAT` and
+`STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE` are safe boundaries to roll back
+at. `CANARY_ROLLBACK_REQUIRES_FLATTEN` means attributed exposure remains and
+this instance's carryover policy does not approve carrying it through
+rollback; `CANARY_ROLLBACK_BOUNDARY_UNPROVABLE` means the Clerk cannot
+currently prove a safe boundary at all, usually because a freeze is active,
+reconciliation is not clean, or working orders or unresolved intents remain.
+
+A refusing verdict never prevents the Stop. Stopping a bot is a safety
+action and always completes; the verdict is a record of whether the *canary*
+may be considered rolled back, not a veto over terminating the process.
+Resuming afterwards is not a resumption of the old run — it re-enters
+admission, is re-gated by every proof above, and mints a new run. No running
+process is ever hot-swapped, and no seal evidence is rewritten.
+
+## Reading canary evidence
+
+Every decision row names the authority it was read from. `authority_kind` is
+`real_paper` for a genuine Alpaca paper account and `synthetic` for a Dry Run
+`sim:` authority, and it is stamped from the account the evidence physically
+came from rather than inferred at render time. A request that would mix the
+two into one aggregate is rejected rather than silently blended.
+
+Selecting an older transaction follows that transaction's own stored links.
+Where a link does not exist, the panel says so explicitly; it never falls back
+to attaching the newest unrelated decision, which would make an old
+transaction appear to have caused a recent signal.
+
+A decision that was staged but never captured before a crash is recorded as
+`CANDIDATE_UNCAPTURED_AT_CRASH` on replay rather than being silently dropped
+or replayed as if it had been decided. Evidence that is causally relevant —
+effect-bearing, refused, crash, uncertainty, correction, validation, and seal
+rows — is exempt from sequence-tail pruning. The bounded list the panel shows
+is a display window, not the retention boundary: an older decision scrolled
+out of that tail is still on file.
+
 ## SQLite manual paper tickets
 
 The Alpaca Account Desk is the only manual-order entry point when its selected

@@ -1,0 +1,33 @@
+<section class="recent-decisions" aria-labelledby="recent-decisions-title">
+  <header class="recent-decisions__header">
+    <span class="recent-decisions__kicker">Simulation</span>
+    <h3 id="recent-decisions-title" class="recent-decisions__title">Recent decisions</h3>
+  </header>
+
+  @if (hasDecisions()) {
+    <table class="recent-decisions__table" aria-label="Recent decisions">
+      <thead>
+        <tr>
+          <th scope="col">Time</th>
+          <th scope="col">Outcome</th>
+          <th scope="col">Reason</th>
+          <th scope="col">Authority</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (decision of decisions(); track trackDecision($index, decision)) {
+          <tr>
+            <td><app-timestamp-display [value]="decision.recorded_at_ms" mode="local" granularity="time" /></td>
+            <td>{{ decision.outcome | receiptLabel }}</td>
+            <td>{{ decision.reason_code | receiptLabel }}</td>
+            <td>
+              <span class="recent-decisions__authority">{{ decision.authority_kind | receiptLabel }}</span>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  } @else {
+    <p class="recent-decisions__empty" role="status">No simulated decisions recorded yet.</p>
+  }
+</section>
