@@ -18,15 +18,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.signal_intent import SignalIntent
-
-logger = logging.getLogger(__name__)
 
 
 class Settlement(StrEnum):
@@ -88,10 +85,24 @@ class EvaluationStage:
 
 @dataclass(frozen=True)
 class StageQuarantine:
-    """A fail-closed result which never invokes strategy or execution code."""
+    """A fail-closed result which never invokes strategy or execution code.
+
+    Carries the refused bucket's own window because "which bar was refused"
+    is part of the refusal, not a diagnostic decoration: whoever surfaces it
+    (``app.services.bot_trade_strategy``) sees only the *source* bar that
+    happened to trigger the consolidator, never the bucket the session
+    actually turned down.
+    """
 
     status: StageStatus
     reason: str
+    bar_start_ms: int
+    bar_end_ms: int
+
+    @property
+    def observed_timeframe_ms(self) -> int:
+        """Width of the refused bucket, for comparison against the clock."""
+        return self.bar_end_ms - self.bar_start_ms
 
 
 @dataclass(frozen=True)
@@ -181,11 +192,11 @@ class SignalSession:
     ) -> EvaluationStage | StageQuarantine:
         """Evaluate one complete bucket under its captured immutable mode."""
         if self._active_stage is not None:
-            return StageQuarantine(StageStatus.UNSETTLED_STAGE, "UNSETTLED_STAGE")
+            return self._quarantine(bar, StageStatus.UNSETTLED_STAGE, "UNSETTLED_STAGE")
         if bar.end_ms - bar.start_ms != self.timeframe_ms:
-            return StageQuarantine(StageStatus.REJECTED_BAR, "TIMEFRAME_MISMATCH")
+            return self._quarantine(bar, StageStatus.REJECTED_BAR, "TIMEFRAME_MISMATCH")
         if self._last_bar_close_ms is not None and bar.end_ms <= self._last_bar_close_ms:
-            return StageQuarantine(StageStatus.REJECTED_BAR, "NON_MONOTONIC_DECISION_CLOCK")
+            return self._quarantine(bar, StageStatus.REJECTED_BAR, "NON_MONOTONIC_DECISION_CLOCK")
         decision = self._strategy.evaluate_signal_bar(bar)
         intents = () if decision.intent is None else (decision.intent,)
         trace = self._build_trace(bar=bar, decision=decision, mode=mode)
@@ -219,6 +230,15 @@ class SignalSession:
         """Backtest compatibility adapter: apply each staged result immediately."""
         if self._active_stage is not None:
             self.settle(Settlement.COMMIT)
+
+    @staticmethod
+    def _quarantine(bar: TradeBar, status: StageStatus, reason: str) -> StageQuarantine:
+        return StageQuarantine(
+            status=status,
+            reason=reason,
+            bar_start_ms=bar.start_ms,
+            bar_end_ms=bar.end_ms,
+        )
 
     def _build_trace(
         self,
@@ -263,7 +283,7 @@ class SignalProgram:
     _default_evaluation_mode: EvaluationMode | None = None
     _captured_modes_by_close_ms: dict[int, EvaluationMode] = field(default_factory=dict)
     _completed_stages: list[EvaluationStage] = field(default_factory=list)
-    _quarantine_counts: dict[str, int] = field(default_factory=dict)
+    _quarantines: list[StageQuarantine] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -308,27 +328,21 @@ class SignalProgram:
             raise RuntimeError("SignalProgram requires a captured evaluation mode for every live bar")
         stage = self.session.advance(bar, mode=mode)
         if isinstance(stage, StageQuarantine):
-            # A quarantine used to fall through this method with no branch,
-            # no log and no counter: the session refused the bar, the runner
-            # never learned of it, and the bot went on consuming data while
-            # producing zero decisions. "Running but deciding nothing" is the
-            # hardest live failure to notice, so every refusal is surfaced —
-            # a quarantine is an anomaly (a mis-shaped bucket, a clock that
-            # went backwards, an unsettled stage), never routine.
-            self._quarantine_counts[stage.reason] = self._quarantine_counts.get(stage.reason, 0) + 1
-            logger.warning(
-                "Signal Program quarantined a decision bar",
-                extra={
-                    "program_key": self.session.program_key,
-                    "reason": stage.reason,
-                    "status": str(stage.status),
-                    "bar_start_ms": bar.start_ms,
-                    "bar_end_ms": bar.end_ms,
-                    "expected_timeframe_ms": self.session.timeframe_ms,
-                    "observed_timeframe_ms": bar.end_ms - bar.start_ms,
-                    "quarantined_so_far": self._quarantine_counts[stage.reason],
-                },
-            )
+            # A quarantine used to fall through this method with no branch at
+            # all: the session refused the bar, the runner never learned of
+            # it, and the bot went on consuming data while producing zero
+            # decisions. "Running but deciding nothing" is the hardest live
+            # failure to notice, so every refusal is retained for its owner to
+            # drain, exactly as a settled stage is.
+            #
+            # Retained here, diagnosed elsewhere: this module is listed in
+            # every registered program's ``artifact_paths``
+            # (``app.engine.strategy.registry``), so its bytes ARE the sealed
+            # decision identity. A log level or payload tweak here would
+            # invalidate every qualification receipt, so the counting and
+            # logging live in ``app.services.bot_trade_strategy``, which
+            # already owns the runner's operator surface.
+            self._quarantines.append(stage)
             return
         if stage.settlement is not None:
             self._completed_stages.append(stage)
@@ -337,10 +351,9 @@ class SignalProgram:
         """Return an already-settled observation for runner audit projection."""
         return self._completed_stages.pop(0) if self._completed_stages else None
 
-    @property
-    def quarantine_counts(self) -> dict[str, int]:
-        """Refused decision bars by reason, for operator-visible diagnosis."""
-        return dict(self._quarantine_counts)
+    def take_quarantine(self) -> StageQuarantine | None:
+        """Return one refused decision bar for its owner to surface."""
+        return self._quarantines.pop(0) if self._quarantines else None
 
 
 def trace_root(traces: list[EvaluationTrace]) -> str:

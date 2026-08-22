@@ -64,17 +64,22 @@ _COMMIT_WORTHY_OUTCOMES: frozenset[str] = frozenset(
 def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
     """Resolve the trailing calendar-day warmup window for this binding.
 
-    Looks up ``binding.strategy_key`` against ``_STRATEGY_REGISTRY`` -- the
-    same lookup pattern ``build_start_program_seal``
-    (``app/services/signal_program_admission.py``) already uses -- and
-    prefers the sealed program's own declared
-    ``SignalProgramContract.warmup_lookback_days`` over the module-level
-    floor. ``max()`` against ``_WARMUP_LOOKBACK_DAYS`` means a registered
-    contract can only ever lengthen warmup relative to today's behavior,
-    never shorten it. An unregistered ``strategy_key``, or a registration
-    with no ``signal_program_contract`` at all (legacy/explicit strategies
-    predating Signal Programs), falls back to the floor unchanged.
+    Prefers the value on the instance's own seal. A sealed program has
+    already had that field proven against the live registry at Start/Resume
+    (``_seal_checks``' ``clock.warmup_lookback_days`` row), so reading the
+    seal is both authoritative and consistent with what admission verified —
+    whereas reading the registry directly would let an edit between sealing
+    and Resume silently change how far back the bot warms.
+
+    No ``max()`` against the module floor. Flooring the sealed value would
+    reintroduce exactly the defect repaired for ``decision_timeframe_ms``:
+    the seal would attest one number while the bot used another. The floor
+    remains only for an instance with no seal at all — a legacy or
+    non-Signal-Program strategy, which has no attestation to contradict.
     """
+    seal = binding.sealed_program
+    if seal is not None:
+        return seal.configured_signal.clock.warmup_lookback_days
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
     contract = None if registration is None else registration.signal_program_contract
     if contract is None:

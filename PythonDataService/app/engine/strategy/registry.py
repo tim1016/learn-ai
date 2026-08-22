@@ -67,6 +67,31 @@ class StrategyParamsBase(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+_DECISION_CLOCK_FIELD = "resolution_minutes"
+
+
+def decision_timeframe_ms_for(params: StrategyParamsBase, *, qualified_ms: int) -> int:
+    """The decision clock one resolved parameter set implies.
+
+    A program is deploy-configurable exactly when its parameter model
+    declares ``resolution_minutes``; one that does not runs the cadence its
+    contract was qualified at. The parameter model is the declaration, so
+    this reads the declaration rather than keeping a second list of which
+    programs are tunable.
+
+    Both the registry factories and
+    ``app.services.signal_program_admission.build_start_program_seal`` call
+    this. That matters: the seal hashes the cadence it claims the bot will
+    run, so a second copy of this arithmetic anywhere is precisely the drift
+    the seal exists to detect. Five factories previously each computed
+    ``resolution_minutes * 60_000`` inline, and admission built an entire
+    strategy object graph purely to read the result back off the session.
+    """
+    if _DECISION_CLOCK_FIELD not in type(params).model_fields:
+        return qualified_ms
+    return int(getattr(params, _DECISION_CLOCK_FIELD)) * 60_000
+
+
 class EmaCrossoverParams(StrategyParamsBase):
     """EMA crossover signal parameters.
 
@@ -720,11 +745,7 @@ def _build_sma_crossover_signal_program(params: StrategyParamsBase) -> SignalPro
         strategy,
         program_key=_SMA_SIGNAL_PROGRAM_KEY,
         program_version=_SMA_SIGNAL_PROGRAM_VERSION,
-        # Derived from the resolved parameter, not the contract's validated
-        # value: this program's decision clock is deploy-time configurable,
-        # and a session pinned to the validated 15 minutes would reject
-        # every bar of a bot deployed at any other resolution.
-        timeframe_ms=typed.resolution_minutes * 60_000,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program
@@ -752,11 +773,7 @@ def _build_rsi_mean_reversion_signal_program(params: StrategyParamsBase) -> Sign
         strategy,
         program_key=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY,
         program_version=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
-        # Derived from the resolved parameter, not the contract's validated
-        # value: this program's decision clock is deploy-time configurable,
-        # and a session pinned to the validated 15 minutes would reject
-        # every bar of a bot deployed at any other resolution.
-        timeframe_ms=typed.resolution_minutes * 60_000,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program
@@ -791,12 +808,7 @@ def _build_spy_strategy_a_signal_program(params: StrategyParamsBase) -> SignalPr
         strategy,
         program_key=_SPY_STRATEGY_A_SIGNAL_PROGRAM_KEY,
         program_version=_SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
-        # Derived from the resolved parameter, not the contract's validated
-        # value — same reasoning as sma_crossover's factory above: this
-        # program's decision clock is deploy-time configurable, and a
-        # session pinned to the validated 15 minutes would reject every bar
-        # of a bot deployed at any other resolution.
-        timeframe_ms=typed.resolution_minutes * 60_000,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program
@@ -833,12 +845,7 @@ def _build_spy_strategy_b_signal_program(params: StrategyParamsBase) -> SignalPr
         strategy,
         program_key=_SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY,
         program_version=_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
-        # Derived from the resolved parameter, not the contract's validated
-        # value: this program's decision clock is deploy-time configurable,
-        # and a session pinned to the validated 15 minutes would reject
-        # every bar of a bot deployed at any other resolution (same reasoning
-        # as sma_crossover's own factory, above).
-        timeframe_ms=typed.resolution_minutes * 60_000,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program
@@ -869,10 +876,7 @@ def _build_spy_strategy_c_signal_program(params: StrategyParamsBase) -> SignalPr
         strategy,
         program_key=_SPY_C_SIGNAL_PROGRAM_KEY,
         program_version=_SPY_C_SIGNAL_PROGRAM_VERSION,
-        # Derived from the resolved parameter, not the contract's validated
-        # value: this program's decision clock is deploy-time configurable,
-        # same reasoning as sma_crossover's own timeframe_ms above.
-        timeframe_ms=typed.resolution_minutes * 60_000,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program
@@ -1126,25 +1130,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             golden_trace_root="b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
             provider="polygon",
             base_timeframe_ms=60_000,
-            # Matches validated_settings' resolution_minutes=15 below, the
-            # only resolution this contract is qualified for. SmaCrossoverParams
-            # also accepts a different resolution_minutes (1-1440) for
-            # backtesting, but a deploy that resolves a non-default value
-            # today seals with this fixed 15-minute figure regardless --
-            # build_start_program_seal (app/services/signal_program_admission.py)
-            # sources SignalDataContract.decision_timeframe_ms from the
-            # contract, not the resolved parameter. parameters_match_validated_settings
-            # already reports False for such a deploy (the resolved
-            # resolution_minutes disagrees with validated_settings), so the
-            # divergence is visible evidence, not a silent one -- but the
-            # seal's decision_timeframe_ms field itself is inaccurate for
-            # that case. This is a pre-existing gap in the seal (latent
-            # since ema_crossover_signal never exposed a tunable
-            # resolution), newly reachable now that a tunable-resolution
-            # program is sealed; fixing it means sourcing
-            # decision_timeframe_ms from the resolved parameter in
-            # signal_program_admission.py, an admission-service change
-            # outside this registration's scope.
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
             # SmaCrossoverAlgorithm.initialize() builds SMA(long_window=30),
             # needing 30 consolidated 15-minute bars (450 minutes) ~= 2
@@ -1408,18 +1398,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             golden_trace_root="46d0b13b5e3307d983b4d5b4a1a21ba790db5e5644d164364a787bb2a12acde7",
             provider="polygon",
             base_timeframe_ms=60_000,
-            # Matches validated_settings' resolution_minutes=15 below, the
-            # only resolution this contract is qualified for -- same known
-            # gap as sma_crossover's own comment here:
-            # build_start_program_seal (app/services/signal_program_admission.py)
-            # sources SignalDataContract.decision_timeframe_ms from the
-            # contract, not the resolved parameter, so a deploy at a
-            # non-default resolution_minutes seals a decision_timeframe_ms
-            # that disagrees with its own running decision clock (visible via
-            # parameters_match_validated_settings=False, but not corrected by
-            # it). Outside this registration's scope; sourcing
-            # decision_timeframe_ms from the resolved parameter is an
-            # admission-service change.
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
             # RsiMeanReversionAlgorithm.initialize() builds RSI(window=14),
             # needing 15 consolidated 15-minute bars (period + 1, same
@@ -1909,16 +1892,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             golden_trace_root="7ee88013046505a9df88fa9c83b94e1f5f4c4de92718dd874ca157b5eea25f5f",
             provider="polygon",
             base_timeframe_ms=60_000,
-            # Matches validated_settings' resolution_minutes=15 below, the
-            # only resolution this contract is qualified for. Same known gap
-            # as sma_crossover's contract above: build_start_program_seal
-            # sources SignalDataContract.decision_timeframe_ms from this
-            # fixed contract value, not the resolved parameter, so a deploy
-            # at a non-default resolution_minutes seals with an inaccurate
-            # decision_timeframe_ms even though
-            # parameters_match_validated_settings already reports False for
-            # it. Pre-existing gap, not introduced here — fixing it means an
-            # admission-service change outside this registration's scope.
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
             # RsiRangeStrategy.initialize() + SpyStrategyAAlgorithm's
             # _init_extra_indicators() build five indicators; the longest
@@ -2163,16 +2141,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             golden_trace_root="775a5dfd4a98090111c4aa0f643f647b4b14cf27c9334ac266ebc9565b7485b4",
             provider="polygon",
             base_timeframe_ms=60_000,
-            # Matches validated_settings' resolution_minutes=15 below, the
-            # only resolution this contract is qualified for -- same known
-            # gap as sma_crossover's own contract comment: build_start_program_seal
-            # (app/services/signal_program_admission.py) sources
-            # SignalDataContract.decision_timeframe_ms from the contract, not
-            # the resolved parameter, so a deploy at a non-default resolution
-            # is visible via parameters_match_validated_settings=False but the
-            # sealed decision_timeframe_ms itself would still be wrong. Fixing
-            # it is an admission-service change outside this registration's
-            # scope.
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
             # SpyStrategyBAlgorithm.initialize() (via RsiRangeStrategy) builds
             # RSI(14), ADX(14), Supertrend(atr_period=10), and
@@ -2416,18 +2389,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             golden_trace_root="9efc77718f0028e78ad6ea7d56ffda19a510cbba7f5ea3b5a6d5cccade6a75c6",
             provider="polygon",
             base_timeframe_ms=60_000,
-            # Matches validated_settings' resolution_minutes=15 below, the
-            # only resolution this contract is qualified for -- same known
-            # gap as sma_crossover's own decision_timeframe_ms comment:
-            # build_start_program_seal (app/services/signal_program_admission.py)
-            # sources this from the contract, not the resolved parameter, so
-            # a deploy at a non-default resolution_minutes seals with this
-            # fixed 15-minute figure regardless. parameters_match_validated_settings
-            # already reports False for such a deploy, so the divergence is
-            # visible evidence, not silent -- but the seal's
-            # decision_timeframe_ms field itself is inaccurate for that
-            # case. Fixing it is an admission-service change, out of scope
-            # for this registration.
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
             decision_timeframe_ms=15 * 60_000,
             # SpyStrategyCAlgorithm's longest warmup dependency is ADX,
             # needing 2 * adx_period = 28 consolidated 15-minute bars (420

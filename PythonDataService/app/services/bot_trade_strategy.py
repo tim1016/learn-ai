@@ -11,7 +11,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -40,6 +40,7 @@ from app.engine.strategy.signal_program import (
     EvaluationTrace,
     Settlement,
     SignalProgram,
+    StageQuarantine,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
@@ -140,12 +141,70 @@ class _LiveSignalStrategy(Protocol):
     def on_force_flat(self) -> None: ...
 
 
+# A systematically mis-shaped feed -- a program whose decision clock never
+# matches the bucket width it is fed -- refuses *every* bar, so one warning
+# per refusal would be one line per bar forever. Log the first of each reason
+# immediately, then every _QUARANTINE_LOG_EVERY-th, always carrying the
+# running count so the intervening refusals are represented rather than lost.
+_QUARANTINE_LOG_EVERY = 50
+
+# The one refusal reason for which the decision-clock pair means anything.
+# ``SignalSession.advance`` owns these strings; its other two reasons
+# (UNSETTLED_STAGE, NON_MONOTONIC_DECISION_CLOCK) refuse a bucket of exactly
+# the right width, so reporting expected/observed alongside them is noise.
+_TIMEFRAME_MISMATCH_REASON = "TIMEFRAME_MISMATCH"
+
+
+class _QuarantineLog:
+    """Operator-visible record of decision bars the sealed session refused.
+
+    ``SignalProgram.on_consolidated_bar`` only *retains* a
+    ``StageQuarantine``: ``app/engine/strategy/signal_program.py`` is listed
+    in every registered program's ``artifact_paths``
+    (``app.engine.strategy.registry``), so its bytes are the sealed decision
+    identity and a log level or payload tweak there would invalidate every
+    qualification receipt. Counting and logging live here, on the side of the
+    boundary that already owns this run's operator surface.
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+
+    def record(
+        self,
+        quarantine: StageQuarantine,
+        *,
+        binding: BrokerBotBinding,
+        expected_timeframe_ms: int,
+    ) -> None:
+        seen = self._counts.get(quarantine.reason, 0) + 1
+        self._counts[quarantine.reason] = seen
+        if seen > 1 and seen % _QUARANTINE_LOG_EVERY != 0:
+            return
+        payload: dict[str, object] = {
+            "action": "bot_decision_bar_quarantined",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "strategy_key": binding.strategy_key,
+            "symbol": binding.symbol,
+            "reason": quarantine.reason,
+            "status": quarantine.status.value,
+            "bar_start_ms": quarantine.bar_start_ms,
+            "bar_end_ms": quarantine.bar_end_ms,
+            "quarantined_so_far": seen,
+        }
+        if quarantine.reason == _TIMEFRAME_MISMATCH_REASON:
+            payload["expected_timeframe_ms"] = expected_timeframe_ms
+            payload["observed_timeframe_ms"] = quarantine.observed_timeframe_ms
+        logger.warning("Trade bot quarantined a decision bar", extra=payload)
+
+
 @dataclass(frozen=True)
 class _LiveSignalRuntime:
     """Typed program/strategy composition for one runner-owned instance."""
 
     strategy: _LiveSignalStrategy
     program: SignalProgram | None
+    quarantine_log: _QuarantineLog = field(default_factory=_QuarantineLog)
 
     def capture_source_bar(self, bar: TradeBar, *, mode: EvaluationMode) -> None:
         if self.program is not None:
@@ -169,6 +228,17 @@ class _LiveSignalRuntime:
 
     def take_completed_stage(self) -> EvaluationStage | None:
         return None if self.program is None else self.program.take_completed_stage()
+
+    def surface_quarantines(self, binding: BrokerBotBinding) -> None:
+        """Log every decision bar the session refused since the last drain."""
+        if self.program is None:
+            return
+        while (quarantine := self.program.take_quarantine()) is not None:
+            self.quarantine_log.record(
+                quarantine,
+                binding=binding,
+                expected_timeframe_ms=self.program.session.timeframe_ms,
+            )
 
     def settle(self, settlement: Settlement) -> None:
         if self.program is None:
@@ -458,6 +528,10 @@ async def _signal_strategy_evaluations(
         binding,
         captured_decisions=captured_decisions,
     )
+    # Warmup replays backfilled buckets through the same entrypoint, so it is
+    # the first place a mis-shaped decision clock shows up. Drain here too, or
+    # a run that never reaches a live bar would never report why.
+    runtime.surface_quarantines(binding)
     if uncaptured_candidate is not None:
         yield uncaptured_candidate
 
@@ -495,6 +569,10 @@ def _evaluation_from_active_stage(
     mode: EvaluationMode,
 ) -> StrategyEvaluation:
     """Drain one strategy stage and release adapter-only output buffers."""
+    # A refused bar produces no stage at all, so it would leave no trace in
+    # anything below. Drain and log it here or a bot that keeps consuming
+    # data while deciding nothing stays invisible.
+    runtime.surface_quarantines(binding)
     stage = runtime.active_stage() or runtime.take_completed_stage()
     intents = stage.intents if stage is not None else tuple(context.signal_intents)
     context.signal_intents.clear()

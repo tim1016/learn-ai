@@ -14,12 +14,13 @@ v2 seal is append-only evidence and never rewrites v1 identity bytes.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract, decision_timeframe_ms_for
 from app.schemas.run_admission import ProgramBuildAdmissionFact, StrategyValidationAdmissionFact
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
@@ -164,21 +165,16 @@ def build_start_program_seal(
         )
 
     # The cadence the seal attests to must be the cadence the bot will run,
-    # not the one the contract was qualified at. `resolution_minutes` is a
-    # deploy-overridable parameter for every program except the fixed-cadence
-    # EMA one, and the registry factory derives the session clock from the
-    # *resolved* value -- so copying `contract.decision_timeframe_ms` into the
-    # hash made the immutable attestation describe a different decision stream
-    # than the one executing. `parameters_match_validated_settings` records
-    # that an override happened, but a flag beside a wrong hashed field does
-    # not make the field right.
-    #
-    # Read back from the constructed program rather than recomputing
-    # `resolution_minutes * 60_000` here: the factory is the authority on how
-    # parameters become a decision clock, and a second copy of that arithmetic
-    # in this module is exactly the drift the seal exists to detect.
-    running_program = registration.signal_program_factory(validated)
-    decision_timeframe_ms = running_program.session.timeframe_ms
+    # not the one the contract was qualified at: `resolution_minutes` is
+    # deploy-overridable on every program but the fixed-cadence EMA one, so
+    # copying `contract.decision_timeframe_ms` into the hash made the
+    # immutable attestation describe a different decision stream than the one
+    # executing. `decision_timeframe_ms_for` is the one authority the registry
+    # factories also build their sessions from, so the sealed cadence and the
+    # running cadence cannot diverge.
+    decision_timeframe_ms = decision_timeframe_ms_for(
+        validated, qualified_ms=contract.decision_timeframe_ms
+    )
 
     configured = ConfiguredSignalProgramSeal(
         program_key=binding.strategy_key,
@@ -382,49 +378,9 @@ def prove_running_program_build(
             ),
         )
     configured = seal.configured_signal
-    if (
-        seal.strategy_instance_id != binding.strategy_instance_id
-        or seal.sealed_account_id != binding.sealed_account_id
-        or seal.mode != binding.mode
-        or configured.program_key != binding.strategy_key
-        or configured.program_version != contract.program_version
-        or configured.golden_trace_root != contract.golden_trace_root
-        # #1729 AC4 "provider" proof: the sealed qualification-lineage
-        # identity (PRD Sec 11.6) must still be present and unchanged
-        # against the currently registered contract. This is not a
-        # live-feed parity gate — see SignalDataContract.provider's
-        # docstring — just an identity check at the same cadence as the
-        # program_version/golden_trace_root checks above.
-        or configured.data.provider != contract.provider
-        # The decision cadence is not a descriptive field: `golden_trace_root`
-        # pins one decision *stream*, and a program clocked at a different
-        # resolution reads different bars and reaches different decisions, so
-        # the qualification corpus does not describe it at all. The seal now
-        # records the cadence the program will really run (see
-        # `build_start_program_seal`), which makes this comparison meaningful
-        # -- previously both sides were copied from the same contract constant
-        # and it could never fail. A deploy that overrides `resolution_minutes`
-        # is therefore UNPROVEN rather than silently PROVEN against evidence
-        # gathered at another cadence.
-        # The sealed-semantics completeness fix (sibling to #1729): every
-        # field newly widened onto the seal (PRD Sec 11.1) must still match
-        # the currently registered contract, at the same cadence as the
-        # checks above — a stale or hand-edited seal on any of these must
-        # fail build-proof just as surely as a stale program_version would.
-        or configured.protocol_version != contract.protocol_version
-        or configured.parameter_schema_version != contract.parameter_schema_version
-        or configured.signals != contract.signals
-        or configured.decision_streams != contract.decision_streams
-        or configured.bar_integrity != contract.bar_integrity
-        or configured.exit_eligibility != contract.exit_eligibility
-        or configured.numerical_provenance != contract.numerical_provenance
-        or configured.data.decision_timeframe_ms != contract.decision_timeframe_ms
-    ):
-        return _unproven(
-            binding.strategy_key,
-            verified_at_ms,
-            explanation="The stored Signal Program seal does not match this instance or registry contract.",
-        )
+    failed = next((check for check in _seal_checks(binding, seal, contract) if not check.holds), None)
+    if failed is not None:
+        return _unproven(binding.strategy_key, verified_at_ms, explanation=failed.explanation)
     try:
         running_digest = running_artifact_digest(contract)
         manifest = ProgramBuildQualificationManifest.model_validate_json(
@@ -499,6 +455,141 @@ def qualification_receipt_payload(
         "qualified_at_ms": qualified_at_ms,
     }
     return {**payload, "receipt_hash": semantic_payload_hash(payload)}
+
+
+@dataclass(frozen=True)
+class _SealCheck:
+    """One named agreement between a stored seal and the live registry.
+
+    Replaces a seventeen-term ``or`` chain whose comments had drifted away
+    from the conditions they described, and whose every failure collapsed
+    into one sentence -- an operator who overrode a parameter read the same
+    message as one whose account identity had drifted. Each row carries its
+    own explanation, so the refusal says which agreement broke.
+    """
+
+    name: str
+    holds: bool
+    explanation: str
+
+
+def _seal_checks(
+    binding: BrokerBotBinding,
+    seal: SealedBotProgram,
+    contract: SignalProgramContract,
+) -> tuple[_SealCheck, ...]:
+    """Every agreement a sealed program must still hold to prove its build.
+
+    Evaluated in order; the first failure is the reported reason. Adding a
+    field to the seal means adding a row here, which is why this is a table
+    rather than a boolean -- the previous shape made each widening one more
+    clause in an expression nobody could scan, and two fields
+    (``warmup_lookback_days``, ``base_timeframe_ms``) were widened onto the
+    seal without ever being gated.
+    """
+    configured = seal.configured_signal
+    return (
+        _SealCheck(
+            "strategy_instance_id",
+            seal.strategy_instance_id == binding.strategy_instance_id,
+            "The stored Signal Program seal belongs to a different strategy instance.",
+        ),
+        _SealCheck(
+            "sealed_account_id",
+            seal.sealed_account_id == binding.sealed_account_id,
+            "The stored Signal Program seal was issued for a different account.",
+        ),
+        _SealCheck(
+            "mode",
+            seal.mode == binding.mode,
+            "The stored Signal Program seal was issued for a different execution mode.",
+        ),
+        _SealCheck(
+            "program_key",
+            configured.program_key == binding.strategy_key,
+            "The stored Signal Program seal names a different program than this instance runs.",
+        ),
+        _SealCheck(
+            "program_version",
+            configured.program_version == contract.program_version,
+            "The registered program version has moved since this instance was sealed.",
+        ),
+        _SealCheck(
+            "golden_trace_root",
+            configured.golden_trace_root == contract.golden_trace_root,
+            "The registered golden trace root has moved since this instance was sealed.",
+        ),
+        # #1729 AC4 "provider" proof: the sealed qualification-lineage identity
+        # (PRD Sec 11.6) must still be present and unchanged against the
+        # currently registered contract. Not a live-feed parity gate -- see
+        # SignalDataContract.provider's docstring.
+        _SealCheck(
+            "data.provider",
+            configured.data.provider == contract.provider,
+            "The sealed qualification lineage no longer matches the registered contract.",
+        ),
+        # The sealed-semantics completeness fix (sibling to #1729): every field
+        # widened onto the seal (PRD Sec 11.1) must still match the registered
+        # contract, at the same cadence as the identity checks above.
+        _SealCheck(
+            "protocol_version",
+            configured.protocol_version == contract.protocol_version,
+            "The registered session protocol has moved since this instance was sealed.",
+        ),
+        _SealCheck(
+            "parameter_schema_version",
+            configured.parameter_schema_version == contract.parameter_schema_version,
+            "The registered parameter schema has moved since this instance was sealed.",
+        ),
+        _SealCheck(
+            "signals",
+            configured.signals == contract.signals,
+            "The registered signal semantics have moved since this instance was sealed.",
+        ),
+        _SealCheck(
+            "decision_streams",
+            configured.decision_streams == contract.decision_streams,
+            "The registered decision streams have moved since this instance was sealed.",
+        ),
+        _SealCheck(
+            "bar_integrity",
+            configured.bar_integrity == contract.bar_integrity,
+            "The registered bar-integrity contract has moved since this instance was sealed.",
+        ),
+        _SealCheck(
+            "exit_eligibility",
+            configured.exit_eligibility == contract.exit_eligibility,
+            "The registered exit-eligibility rule has moved since this instance was sealed.",
+        ),
+        _SealCheck(
+            "numerical_provenance",
+            configured.numerical_provenance == contract.numerical_provenance,
+            "The registered numerical provenance has moved since this instance was sealed.",
+        ),
+        _SealCheck(
+            "data.base_timeframe_ms",
+            configured.data.base_timeframe_ms == contract.base_timeframe_ms,
+            "The sealed source-bar cadence no longer matches the registered contract.",
+        ),
+        _SealCheck(
+            "clock.warmup_lookback_days",
+            configured.clock.warmup_lookback_days == contract.warmup_lookback_days,
+            "The sealed warmup requirement no longer matches the registered contract.",
+        ),
+        # `golden_trace_root` pins one decision *stream*, produced by specific
+        # math at a specific cadence over specific symbols. Any resolved value
+        # outside `validated_settings`/`validated_symbols` means the corpus
+        # does not describe the running program, so it cannot prove its build.
+        # This subsumes the decision cadence: `resolution_minutes` is itself a
+        # validated setting on every tunable program, so gating cadence alone
+        # refused a 30-minute override while admitting an overridden RSI
+        # threshold against evidence gathered at another one.
+        _SealCheck(
+            "parameters_match_validated_settings",
+            configured.parameters_match_validated_settings,
+            "This instance resolved parameters the golden qualification corpus does not cover.",
+        ),
+    )
 
 
 def _parameters_match(contract: SignalProgramContract, effective: dict[str, Any]) -> bool:

@@ -575,3 +575,85 @@ def test_qualified_cadence_still_proves_its_running_build() -> None:
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
 
     assert proof.state == "PROVEN"
+
+
+def _rsi_binding(**params: object) -> BrokerBotBinding:
+    return _binding(
+        strategy_instance_id="sealed-rsi-1",
+        strategy_key="rsi_mean_reversion",
+        strategy_params=dict(params),
+        strategy_param_origins={name: "deploy_override" for name in params},
+        sealed_account_id="sim:sealed-rsi-1",
+    )
+
+
+def _rsi_validation() -> StrategyValidationAdmissionFact:
+    return StrategyValidationAdmissionFact(
+        state="VERIFIED",
+        strategy_key="rsi_mean_reversion",
+        evidence_status="accepted",
+        event_id="validation-rsi-1",
+        evidence_snapshot_sha256="c" * 64,
+        verified_at_ms=_NOW,
+        explanation="The exact validation snapshot was re-hashed.",
+    )
+
+
+def test_overridden_non_cadence_parameter_cannot_prove_its_running_build() -> None:
+    """Any resolved value the corpus does not cover must fail build proof.
+
+    Gating the decision cadence alone produced a policy that could not be
+    explained: overriding ``resolution_minutes`` was UNPROVEN while
+    overriding ``oversold`` stayed PROVEN against a ``golden_trace_root``
+    qualified at the registered value. Both equally invalidate the corpus.
+    The gate is the whole validated-settings match, which subsumes cadence
+    because ``resolution_minutes`` is itself a validated setting.
+    """
+    binding = _rsi_binding(oversold=25.0)
+    seal = build_start_program_seal(
+        binding, _rsi_validation(), parameter_origins=binding.strategy_param_origins
+    )
+    assert seal is not None
+    assert seal.configured_signal.data.decision_timeframe_ms == 15 * 60_000
+    binding = binding.model_copy(update={"sealed_program": seal})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+    assert proof.explanation is not None
+    assert "golden qualification corpus does not cover" in proof.explanation
+
+
+def test_registered_defaults_still_prove_their_running_build() -> None:
+    """The gate above must not refuse a deploy that resolved every default."""
+    binding = _rsi_binding()
+    seal = build_start_program_seal(
+        binding, _rsi_validation(), parameter_origins=binding.strategy_param_origins
+    )
+    assert seal is not None
+    binding = binding.model_copy(update={"sealed_program": seal})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "PROVEN"
+
+
+def test_build_proof_names_which_agreement_broke() -> None:
+    """Each refusal must say which agreement failed, not one generic sentence.
+
+    Every one of the seventeen terms in the previous ``or`` chain collapsed
+    into "does not match this instance or registry contract", so an operator
+    who overrode a parameter read exactly what one whose account identity had
+    drifted read.
+    """
+    binding = _sealed_binding()
+    seal = binding.sealed_program
+    assert seal is not None
+    drifted = seal.model_copy(update={"sealed_account_id": "sim:some-other-account"})
+    binding = binding.model_copy(update={"sealed_program": drifted})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+    assert proof.explanation is not None
+    assert "different account" in proof.explanation

@@ -149,3 +149,51 @@ async def test_replay_warmup_bars_requests_the_floor_for_an_unregistered_strateg
     )
 
     assert feed.recorded_lookback_days == _WARMUP_LOOKBACK_DAYS
+
+
+def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> None:
+    """A sealed instance warms to the window its own seal attests.
+
+    Admission has already proven that field against the live registry, so the
+    seal is authoritative. Reading the registry instead would let an edit
+    between sealing and Resume silently change how far back the bot warms,
+    with the seal still claiming the original number — the same divergence
+    between attested and actual that was repaired for the decision cadence.
+    """
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+    from app.schemas.run_admission import StrategyValidationAdmissionFact
+    from app.services.signal_program_admission import build_start_program_seal
+
+    binding = _binding(strategy_key="spy_strategy_a").model_copy(
+        update={"sealed_account_id": "sim:warmup-seal", "strategy_params": {}, "strategy_param_origins": {}}
+    )
+    seal = build_start_program_seal(
+        binding,
+        StrategyValidationAdmissionFact(
+            state="VERIFIED",
+            strategy_key="spy_strategy_a",
+            evidence_status="accepted",
+            event_id="validation-warmup-1",
+            evidence_snapshot_sha256="d" * 64,
+            verified_at_ms=1_787_356_800_000,
+            explanation="The exact validation snapshot was re-hashed.",
+        ),
+        parameter_origins={},
+    )
+    assert seal is not None
+    sealed_binding = binding.model_copy(update={"sealed_program": seal})
+
+    contract = _STRATEGY_REGISTRY["spy_strategy_a"].signal_program_contract
+    assert contract is not None
+    assert seal.configured_signal.clock.warmup_lookback_days == contract.warmup_lookback_days
+
+    # The seal is the source: a stale seal keeps its own window rather than
+    # silently adopting whatever the registry says today.
+    stale_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": 11})
+    stale_configured = seal.configured_signal.model_copy(update={"clock": stale_clock})
+    stale_binding = sealed_binding.model_copy(
+        update={"sealed_program": seal.model_copy(update={"configured_signal": stale_configured})}
+    )
+
+    assert _warmup_lookback_days_for(sealed_binding) == contract.warmup_lookback_days
+    assert _warmup_lookback_days_for(stale_binding) == 11
