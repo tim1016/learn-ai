@@ -20,23 +20,21 @@ candidate is later COMMITted or DISCARDed — see
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.portfolio import Portfolio
-from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
 from app.engine.strategy.algorithms.spy_strategy_c import SpyStrategyCAlgorithm
 from app.engine.strategy.base import StrategyContext
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.engine.strategy.signal_intent import SignalIntent
 from app.engine.strategy.signal_program import (
     EvaluationMode,
     EvaluationStage,
     Settlement,
     SignalProgram,
 )
+from tests._helpers.signal_program import RecordingExecutor
+from tests.engine.strategy.conftest import build_program
 
 
 @dataclass
@@ -82,14 +80,6 @@ class _ReadyRsi:
         return True
 
 
-@dataclass
-class _RecordingExecutor:
-    intents: list[SignalIntent] = field(default_factory=list)
-
-    def execute(self, _context: SignalIntentExecutionContext, intent: SignalIntent) -> None:
-        self.intents.append(intent)
-
-
 def _bar(offset: int = 0) -> TradeBar:
     start = datetime(2026, 7, 17, 14, 45, tzinfo=UTC) + timedelta(minutes=15 * offset)
     return TradeBar(
@@ -104,22 +94,15 @@ def _bar(offset: int = 0) -> TradeBar:
     )
 
 
-def _prepared_program() -> tuple[SignalProgram, SpyStrategyCAlgorithm, StrategyContext]:
-    registration = _STRATEGY_REGISTRY["spy_strategy_c"]
-    assert registration.signal_program_factory is not None
-    program = registration.signal_program_factory(registration.param_schema())
+def _prepared_program() -> tuple[SignalProgram, SpyStrategyCAlgorithm, RecordingExecutor, StrategyContext]:
+    program, _params, executor, context = build_program("spy_strategy_c")
     strategy = program.strategy
     assert isinstance(strategy, SpyStrategyCAlgorithm)
-    program.activate_for_backtest()
-    context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
-    strategy.ctx = context
-    strategy.initialize()
-    context.set_signal_intent_executor(_RecordingExecutor())
     # RSI parked in-range for the whole test; only ADX's bar-over-bar
     # relation is under test here.
     strategy._rsi = _ReadyRsi(current_value=Decimal("50"))
     strategy._adx = _SteppingAdx(values=[Decimal("18"), Decimal("25"), Decimal("30")])
-    return program, strategy, context
+    return program, strategy, executor, context
 
 
 def test_discarded_entry_does_not_corrupt_the_next_bar_adx_rising_comparison() -> None:
@@ -128,9 +111,7 @@ def test_discarded_entry_does_not_corrupt_the_next_bar_adx_rising_comparison() -
     indicator's own previous-bar tracking, which would make the next
     decision clock re-compare against a stale pair instead of advancing.
     """
-    program, strategy, context = _prepared_program()
-    executor = context._signal_intent_executor
-    assert isinstance(executor, _RecordingExecutor)
+    program, strategy, executor, _context = _prepared_program()
 
     first = program.session.advance(_bar(), mode=EvaluationMode.DECIDE)
     assert isinstance(first, EvaluationStage)
@@ -162,9 +143,7 @@ def test_discarded_exit_does_not_corrupt_in_position_custody() -> None:
     contract ``sma_crossover``/``ema_crossover_signal`` already prove for
     their own exit rules.
     """
-    program, strategy, context = _prepared_program()
-    executor = context._signal_intent_executor
-    assert isinstance(executor, _RecordingExecutor)
+    program, strategy, executor, _context = _prepared_program()
     strategy._in_position = True
     # ADX below the default exit threshold (15) triggers EXIT.
     strategy._adx = _SteppingAdx(values=[Decimal("20"), Decimal("10")], _index=0)
