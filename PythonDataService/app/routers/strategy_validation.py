@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
+import app.services.strategy_validation_manifest as strategy_validation_manifest
 from app.schemas.strategy_validation import (
     StrategyValidationCatalog,
     StrategyValidationDetail,
@@ -11,7 +12,6 @@ from app.schemas.strategy_validation import (
     StrategyValidationRefreshResult,
 )
 from app.services.strategy_validation_manifest import (
-    DEFAULT_FLAG_EVENTS_PATH,
     DEFAULT_MANIFEST_PATH,
     StrategyValidationManifestError,
     StrategyValidationNotFoundError,
@@ -31,7 +31,12 @@ def get_strategy_validation_manifest_path() -> Path:
 
 
 def get_strategy_validation_flag_events_path() -> Path:
-    return DEFAULT_FLAG_EVENTS_PATH
+    # Read the module attribute dynamically (not `from ... import
+    # DEFAULT_FLAG_EVENTS_PATH`, which would freeze a copy at router-import
+    # time) so this dependency's default tracks whatever
+    # tests/conftest.py's isolation fixture (#1739) has it pointed at,
+    # without a separate app.dependency_overrides seam.
+    return strategy_validation_manifest.DEFAULT_FLAG_EVENTS_PATH
 
 
 def get_strategy_validation_actor() -> str:

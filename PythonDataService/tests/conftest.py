@@ -49,6 +49,42 @@ def _clerk_market_liveness_defaults_tradable(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_strategy_validation_flag_ledger(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """#1739: the strategy-validation flag ledger
+    (``artifacts/strategy_validation/flag_events.json``) is gitignored and
+    machine-local. A developer who has ever used the flag UI has real
+    entries there that CI never sees, so any reader that falls through to
+    ``DEFAULT_FLAG_EVENTS_PATH`` silently makes local pytest diverge from
+    CI (see PR #1733, where this produced a locally-green, CI-red run).
+    Every test gets an isolated, empty-by-default ledger location instead;
+    a test that wants a populated ledger builds its own fixture under its
+    own ``tmp_path`` and passes ``flag_events_path`` explicitly (several
+    already do, e.g. ``tests/broker/v2panel/conftest.py``).
+
+    Patching this one module attribute is enough for every reader:
+    ``strategy_validation_manifest._resolve_flag_events_path`` re-reads it
+    at call time (not at import time) for every caller that omits
+    ``flag_events_path``, including
+    ``app/services/broker_v2_panel/panel_data_source.py`` and
+    ``app/services/strategy_validation_admission.py``, and the FastAPI
+    dependency in ``app/routers/strategy_validation.py`` reads the same
+    module attribute dynamically rather than a name frozen at router-import
+    time. A test that needs a *different* ledger through the HTTP layer
+    can still use ``app.dependency_overrides`` per-test, as
+    ``tests/routers/test_strategy_validation.py`` already does — that
+    always takes priority over this fixture's default.
+
+    Production behavior is untouched: DEFAULT_FLAG_EVENTS_PATH and the
+    router's default dependency still resolve to the real ledger outside
+    pytest.
+    """
+    import app.services.strategy_validation_manifest as strategy_validation_manifest
+
+    isolated_path = tmp_path / "strategy_validation_flag_events.json"
+    monkeypatch.setattr(strategy_validation_manifest, "DEFAULT_FLAG_EVENTS_PATH", isolated_path)
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
