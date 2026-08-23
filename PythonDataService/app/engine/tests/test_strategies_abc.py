@@ -227,7 +227,7 @@ def test_rollback_blocked_entry_resets_lifecycle_and_re_arms(strategy_cls, seed)
         b = _bar(t + timedelta(minutes=15 * i), f"{price:.2f}")
         ctx.current_time_ms = b.end_ms
         ctx.portfolio.update_reference_price("SPY", b.close)
-        s._on_bar(b)
+        s._on_consolidated_bar(b)
         if s._in_position:
             break
     assert s._in_position
@@ -257,7 +257,7 @@ def test_base_strategy_exits_when_adx_below_threshold():
     for i in range(40):
         b = _bar(t + timedelta(minutes=15 * i), str(100 + i * 0.1))
         ctx.current_time_ms = b.end_ms
-        s._on_bar(b)
+        s._on_consolidated_bar(b)
     assert not s._in_position
     assert any(o.quantity == -100 for o in ctx.portfolio.pending_orders)
 

@@ -36,6 +36,7 @@ from app.services.bot_trade_strategy import (
     alpaca_paper_strategy_default_symbol,
     supported_alpaca_paper_strategy_keys,
 )
+from app.services.canary_admission import canary_pairing_admitted
 from app.services.strategy_validation_manifest import (
     strategy_audit_copy_is_current,
     strategy_settings_file_is_current,
@@ -47,6 +48,14 @@ NO_RUNTIME_BLOCKED_EXPLANATION = (
     "This strategy has no registered live-decision runtime. It is validated, "
     "but the Python runner cannot dispatch it yet — this is a 'not built "
     "yet' block, distinct from an unmet validation or a stale evidence proof."
+)
+CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION = (
+    "This strategy is a sealed Signal Program, and Paper launch is admitted "
+    "one (program, account) pairing at a time. This account is not on the "
+    "canary allowlist, so a Paper start would be refused. Dry Run is "
+    "unaffected — it uses its own isolated synthetic authority and is never "
+    "canary-gated. This is a 'not activated for this account yet' block, "
+    "distinct from a missing runtime or a stale evidence proof."
 )
 _EVIDENCE_ONLY_OVERRIDE_EXPLANATION = (
     "A human marked this strategy validated, but its behavioral evidence is "
@@ -193,13 +202,23 @@ def _disposition(
     event: StrategyValidationFlagEvent,
     *,
     has_runtime: bool,
+    account_id: str,
 ) -> _Disposition:
     """Derive one entry's launch disposition from the validation facet and the runtime fact.
 
     Precedence, most restrictive first: no runtime blocks regardless of
-    behavioral verdict (#1703); evidence-only is Paper-selectable on the
+    behavioral verdict (#1703); a sealed Signal Program whose
+    ``(program, account)`` pairing is not canary-allowlisted cannot reach
+    Paper at all (#1730); evidence-only is Paper-selectable on the
     human-validated flag alone (#1706); otherwise the accepted proof must
     still re-verify (#1698), or the row demotes to blocked.
+
+    The canary branch keeps ``has_runtime=True`` on purpose: the gate is
+    scoped to ``mode == "trade"``, so Dry Run stays available and
+    ``_admissible_modes`` still yields ``("dry_run",)``. Selectability is
+    account-scoped for exactly the same reason the gate is — the identical
+    program is launchable for an allowlisted account and refused for every
+    other one, which a global flag cannot express.
     """
     if not has_runtime:
         return _Disposition(
@@ -208,6 +227,18 @@ def _disposition(
             selectable=False,
             override_explanation=None,
             blocked_explanation=NO_RUNTIME_BLOCKED_EXPLANATION,
+        )
+    registration = _STRATEGY_REGISTRY.get(entry.strategy_key)
+    is_sealed_program = registration is not None and registration.signal_program_contract is not None
+    if is_sealed_program and not canary_pairing_admitted(
+        program_key=entry.strategy_key, account_id=account_id
+    ):
+        return _Disposition(
+            has_runtime=True,
+            evidence_status="blocked",
+            selectable=False,
+            override_explanation=None,
+            blocked_explanation=CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION,
         )
     if event.behavioral_equivalence.verdict == "evidence_only":
         return _Disposition(
@@ -230,6 +261,8 @@ def _disposition(
 
 def compose_strategy_catalog(
     entries: list[StrategyValidationEntry],
+    *,
+    account_id: str,
 ) -> tuple[CatalogEntry, ...]:
     """Compose the strategy catalog from the definition and validation facets.
 
@@ -246,7 +279,12 @@ def compose_strategy_catalog(
         event = entry.current_flag_event
         if entry.validation_state != "validated" or event is None or event.flag != "validated":
             continue
-        disposition = _disposition(entry, event, has_runtime=entry.strategy_key in runtime_keys)
+        disposition = _disposition(
+            entry,
+            event,
+            has_runtime=entry.strategy_key in runtime_keys,
+            account_id=account_id,
+        )
         snapshot = event.evidence_snapshot
         validation_case_symbol = snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(
             entry.strategy_key

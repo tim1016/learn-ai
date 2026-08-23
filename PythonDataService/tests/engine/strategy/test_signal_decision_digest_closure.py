@@ -18,7 +18,7 @@ other direction: it also drags in ``app/engine/execution/*`` (commission,
 order, portfolio, sizing, the signal-intent executor) and
 ``app/engine/framework/insight*.py`` via ``app/engine/strategy/base.py``.
 None of those can affect a bar's ``EvaluationTrace`` —
-``EmaCrossoverSignalSession.advance()`` (``app/engine/strategy/signal_program.py``)
+``SignalSession.advance()`` (``app/engine/strategy/signal_program.py``)
 builds and stores the trace from ``evaluate_signal_bar()``'s return value
 *before* ``settle()`` ever calls ``commit_signal_decision()``, so bytes
 reached only through the commit path cannot retroactively change a trace

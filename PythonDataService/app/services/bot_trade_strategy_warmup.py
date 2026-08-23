@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     SqliteDecisionReceipts,
 )
 from app.engine.strategy.base import StrategyContext
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationStage, Settlement
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 
@@ -36,20 +37,54 @@ if TYPE_CHECKING:
     from app.services.bot_trade_strategy import _LiveSignalRuntime
 
 _WARMUP_LOOKBACK_DAYS = 5
-"""Trailing calendar-day window backfilled before live decisions begin.
+"""Floor for the trailing calendar-day window backfilled before live
+decisions begin.
 
-Generous relative to any registered signal strategy's indicator: the
-largest known requirement is Strategy A's EMA(50) on 15-min bars (750
-minutes, roughly two RTH sessions). #1708 review finding 3: a fresh RTH
-session alone provides only ~26 fifteen-minute bars -- short of the
+This is no longer the lookback every strategy gets -- it is only the floor
+:func:`_warmup_lookback_days_for` falls back to for an unregistered
+``strategy_key`` or a registration with no ``signal_program_contract`` (see
+that function's docstring). #1708 review finding 3: a fresh RTH session
+alone provides only ~26 fifteen-minute bars -- short of the
 ADX(28)/EMA(50)-class warmup several registered strategies need -- so a
 strategy deployed cold would silently withhold decisions for its first
-day(s) of live trading.
+day(s) of live trading. Review finding (post-#1708): the floor alone was
+not generous enough for every registered program either -- Strategy A's
+sealed contract declares 9 days, not 5 -- so a fixed constant let a
+program silently start deciding on incomplete history. Each sealed
+program's own ``SignalProgramContract.warmup_lookback_days`` (see
+``app/engine/strategy/registry.py``) is now the primary source; this
+constant only floors it.
 """
 
 _COMMIT_WORTHY_OUTCOMES: frozenset[str] = frozenset(
     {"enter_intent", "exit_intent", "entered", "exited"}
 )
+
+
+def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
+    """Resolve the trailing calendar-day warmup window for this binding.
+
+    Prefers the value on the instance's own seal. A sealed program has
+    already had that field proven against the live registry at Start/Resume
+    (``_seal_checks``' ``clock.warmup_lookback_days`` row), so reading the
+    seal is both authoritative and consistent with what admission verified —
+    whereas reading the registry directly would let an edit between sealing
+    and Resume silently change how far back the bot warms.
+
+    No ``max()`` against the module floor. Flooring the sealed value would
+    reintroduce exactly the defect repaired for ``decision_timeframe_ms``:
+    the seal would attest one number while the bot used another. The floor
+    remains only for an instance with no seal at all — a legacy or
+    non-Signal-Program strategy, which has no attestation to contradict.
+    """
+    seal = binding.sealed_program
+    if seal is not None:
+        return seal.configured_signal.clock.warmup_lookback_days
+    registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
+    contract = None if registration is None else registration.signal_program_contract
+    if contract is None:
+        return _WARMUP_LOOKBACK_DAYS
+    return max(contract.warmup_lookback_days, _WARMUP_LOOKBACK_DAYS)
 
 
 async def replay_warmup_bars(
@@ -74,7 +109,7 @@ async def replay_warmup_bars(
     the permanently-flat state a blanket discard would leave. This is why
     warmup no longer captures every bar as ``OBSERVE_ONLY`` (which
     forces an unconditional auto-discard, see
-    ``EmaCrossoverSignalSession.advance``): a bucket must stay inspectable
+    ``SignalSession.advance``): a bucket must stay inspectable
     in ``DECIDE`` mode so its settlement can be chosen per bucket.
 
     FR-016: a process can die after ``SignalSession.advance()`` stages a
@@ -110,7 +145,7 @@ async def replay_warmup_bars(
     it does not resurrect exposure.
     """
     warmup_bars = await feed.recent_closed_bars(
-        binding.symbol, use_rth=binding.use_rth, lookback_days=_WARMUP_LOOKBACK_DAYS
+        binding.symbol, use_rth=binding.use_rth, lookback_days=_warmup_lookback_days_for(binding)
     )
     captured = captured_decisions or {}
     uncaptured: tuple[MarketDataBar, EvaluationStage] | None = None
@@ -149,10 +184,11 @@ def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> dict[str, st
     disposition and recognize the one bucket that has none.
     ``MAX_DECISION_RECEIPT_READ`` bounds the read the same way every other
     decision-receipt read in this codebase is bounded; it comfortably
-    covers ``_WARMUP_LOOKBACK_DAYS`` (5 trading days is at most a few
-    hundred 15-minute buckets for a registered signal program) with wide
-    margin. An empty result means this instance has never captured a
-    decision -- there is no crash to recover from.
+    covers even the longest lookback :func:`_warmup_lookback_days_for`
+    resolves today (9 trading days is at most a few hundred 15-minute
+    buckets for a registered signal program) with wide margin. An empty
+    result means this instance has never captured a decision -- there is
+    no crash to recover from.
     """
     return {
         receipt.intent_id: receipt.outcome

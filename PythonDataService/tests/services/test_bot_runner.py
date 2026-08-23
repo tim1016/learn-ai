@@ -169,18 +169,35 @@ def _isolated_synthetic_authority() -> None:
     reset_alpaca_clerk_for_testing()
 
 
-def _strategy_signal_bars(closes: list[str]) -> list[MarketDataBar]:
+def _strategy_signal_bars(closes: list[str], *, bar_minutes: int = 1) -> list[MarketDataBar]:
+    """One synthetic bar per 15-minute decision window, spaced 15 minutes apart.
+
+    ``bar_minutes`` (default 1) is the bar's own width -- a legacy
+    compatibility strategy's ``_on_consolidated_bar`` never checks a
+    consolidated bar's width, so a narrow 1-minute source bar landing in an
+    otherwise-empty 15-minute bucket is a fine, cheap stand-in for a full
+    bucket's worth of source bars. A registered Signal Program is stricter:
+    ``SignalSession.advance()`` (``app/engine/strategy/signal_program.py``)
+    rejects any consolidated bar whose width isn't exactly the session's
+    own ``timeframe_ms`` as ``TIMEFRAME_MISMATCH`` -- a 1-minute source bar
+    alone in its bucket produces a 1-minute-wide consolidated bar,
+    quarantining every decision clock. The strategies covered here build a
+    15-minute decision clock from their default parameters, so pass
+    ``bar_minutes=15`` and each source bar alone already spans its full
+    decision window.
+    """
+    width_ms = bar_minutes * 60_000
     return [
         MarketDataBar(
             symbol="SPY",
             start_ms=_RTH_MS + index * 15 * 60_000,
-            end_ms=_RTH_MS + index * 15 * 60_000 + 60_000,
+            end_ms=_RTH_MS + index * 15 * 60_000 + width_ms,
             open=Decimal(close),
             high=Decimal(close),
             low=Decimal(close),
             close=Decimal(close),
             volume=100,
-            fetched_at_ms=_RTH_MS + index * 15 * 60_000 + 60_100,
+            fetched_at_ms=_RTH_MS + index * 15 * 60_000 + width_ms + 100,
             feed_id="canonical-signal-test",
             session_phase="RTH",
         )
@@ -227,6 +244,30 @@ async def test_human_override_strategies_emit_canonical_live_intents(
     closes: list[str],
     expected_kinds: list[SignalIntentKind],
 ) -> None:
+    """Both compatibility strategies (no ``SignalSession``, e.g.
+    ``rsi_mean_reversion``) and registered Signal Programs (e.g.
+    ``sma_crossover``, issue #1730 Slice 5) appear in this parametrize list.
+
+    Two adaptations keep both families working through the same harness:
+
+    * Bar shape: a registered Signal Program's ``SignalSession.advance()``
+      rejects a consolidated bar whose width isn't exactly 15 minutes
+      (``TIMEFRAME_MISMATCH``) -- see ``_strategy_signal_bars``'s
+      ``bar_minutes`` docstring. Every strategy this test currently covers
+      that IS a Signal Program needs ``bar_minutes=15``; strategies not yet
+      promoted (PRD Slice 5 has not reached them) keep the cheaper
+      1-minute default.
+    * Settlement: a Signal Program leaves its stage pending until a runner
+      reports an explicit disposition (``evaluation.settle_stage`` is
+      non-``None``, mirroring
+      ``test_ema_live_adapter_exposes_and_settles_signal_program_stages``'s
+      pattern) — an unsettled stage would otherwise quarantine every later
+      decision clock (``UNSETTLED_STAGE``). Immediately committing each
+      staged evaluation matches ``strategy_intents``' own "no custody seam,
+      therefore immediate commit" semantics; it is a no-op for
+      compatibility strategies, whose evaluations never carry a stage to
+      settle.
+    """
     binding = BrokerBotBinding(
         strategy_instance_id=f"{strategy_key}-live-test",
         strategy_key=strategy_key,
@@ -237,13 +278,14 @@ async def test_human_override_strategies_emit_canonical_live_intents(
         run_id="run-001",
         created_at_ms=_T0,
     )
-    feed = _FakeFeed(_strategy_signal_bars(closes), mode="finite")
+    is_signal_program = _STRATEGY_REGISTRY[strategy_key].signal_program_factory is not None
+    feed = _FakeFeed(_strategy_signal_bars(closes, bar_minutes=15 if is_signal_program else 1), mode="finite")
 
-    kinds = [
-        intent.kind
-        async for evaluation in strategy_evaluations(binding, feed)
-        for intent in evaluation.intents
-    ]
+    kinds: list[SignalIntentKind] = []
+    async for evaluation in strategy_evaluations(binding, feed):
+        if evaluation.settle_stage is not None:
+            evaluation.settle_stage(Settlement.COMMIT)
+        kinds.extend(intent.kind for intent in evaluation.intents)
 
     assert kinds == expected_kinds
 
@@ -257,9 +299,15 @@ async def test_binding_strategy_params_reach_the_constructed_live_strategy() -> 
     series' RSI range suppresses the EXIT intent the default parameters
     produce, proving ``strategy_params`` flows from the binding into the
     live-constructed strategy via the registry `build` callable (#1700).
+
+    ``rsi_mean_reversion`` is a registered Signal Program (issue #1730 Slice
+    5): ``bar_minutes=15`` and an explicit ``settle_stage`` commit are the
+    same two harness adaptations
+    ``test_human_override_strategies_emit_canonical_live_intents`` documents
+    -- see that test's docstring.
     """
     closes = [str(100 - index) for index in range(16)] + [str(85 + index * 5) for index in range(18)]
-    bars = _strategy_signal_bars(closes)
+    bars = _strategy_signal_bars(closes, bar_minutes=15)
 
     async def kinds_for(strategy_params: dict[str, float]) -> list[SignalIntentKind]:
         binding = BrokerBotBinding(
@@ -274,11 +322,12 @@ async def test_binding_strategy_params_reach_the_constructed_live_strategy() -> 
             strategy_params=strategy_params,
         )
         feed = _FakeFeed(bars, mode="finite")
-        return [
-            intent.kind
-            async for evaluation in strategy_evaluations(binding, feed)
-            for intent in evaluation.intents
-        ]
+        kinds: list[SignalIntentKind] = []
+        async for evaluation in strategy_evaluations(binding, feed):
+            if evaluation.settle_stage is not None:
+                evaluation.settle_stage(Settlement.COMMIT)
+            kinds.extend(intent.kind for intent in evaluation.intents)
+        return kinds
 
     assert await kinds_for({}) == [SignalIntentKind.ENTER, SignalIntentKind.EXIT]
     assert await kinds_for({"overbought": 99.9}) == [SignalIntentKind.ENTER]
@@ -2625,8 +2674,8 @@ def _ema_signal_evaluation_id(bar_close_ms: int, *, symbol: str = "SPY") -> str:
     params = registration.param_schema(symbol=symbol)
     program = registration.signal_program_factory(params)
     payload = {
-        "program_key": program.session.PROGRAM_KEY,
-        "program_version": program.session.PROGRAM_VERSION,
+        "program_key": program.session.program_key,
+        "program_version": program.session.program_version,
         "settings": program.strategy.signal_program_settings(),
         "bar_close_ms": bar_close_ms,
     }
@@ -3332,12 +3381,25 @@ class _WarmableFeed(_FakeFeed):
 @pytest.mark.asyncio
 async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_backfill(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#1708 review finding 3 regression: RSI(14) on 15-min bars needs 14
     consolidated bars of history, but a fresh RTH session provides none —
     a strategy deployed cold would silently withhold decisions through its
     first day(s) of live trading. With warmup backfill, the very first live
-    bucket of a brand-new deployment can already decide."""
+    bucket of a brand-new deployment can already decide.
+
+    ``rsi_mean_reversion`` is now a registered Signal Program (issue #1730
+    Slice 5): real ``mode="trade"`` admission is gated by the exact
+    (program, account) canary allowlist (#1729 AC4, see
+    ``test_ema_trade_bot_matches_first_lean_round_trip`` above). This test
+    exercises warmup backfill, not the allowlist itself, so it explicitly
+    enables the one pairing it deploys under.
+    """
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("rsi_mean_reversion", "paper-account")}),
+    )
     clerk = _FakeClerk()
     set_alpaca_clerk(clerk)
     try:
@@ -3374,13 +3436,24 @@ async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_bac
 @pytest.mark.asyncio
 async def test_final_rth_bucket_decides_without_waiting_for_the_next_session(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#1708 review finding 2 regression: the consolidator only fires a
     working bucket lazily, when a *later* bar arrives -- but an RTH-only
     stream never delivers one after the session closes. Before the fix,
     the final 15:45-16:00 bucket's decision would strand until the next
     session's bars started arriving. With the session-close force-flush,
-    it decides immediately, from the same bar that closes the session."""
+    it decides immediately, from the same bar that closes the session.
+
+    ``rsi_mean_reversion`` is now a registered Signal Program (issue #1730
+    Slice 5): see the canary-allowlist note on
+    ``test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_backfill``
+    above.
+    """
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("rsi_mean_reversion", "paper-account")}),
+    )
     clerk = _FakeClerk()
     set_alpaca_clerk(clerk)
     try:

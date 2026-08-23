@@ -34,6 +34,28 @@ def _entries_for(*strategy_keys: str) -> list[StrategyValidationEntry]:
     return [entry for entry in load_strategy_validation_entries(seeds) if entry.strategy_key in strategy_keys]
 
 
+def _synthetic_validated_entry(strategy_key: str) -> StrategyValidationEntry:
+    """Re-key a real, currently-accepted entry onto another strategy key.
+
+    The committed manifest seeds only two validated strategies; every other
+    key is validated at runtime by a human flagging it, which lands in the
+    gitignored ``artifacts/strategy_validation/flag_events.json``. A test
+    that reads a real entry for one of those keys therefore passes on a
+    developer machine that happens to have flagged it and fails in CI,
+    which has no such file. Re-keying an accepted entry keeps the row
+    deterministically validated wherever the suite runs.
+    """
+    entry = _accepted_deploy_entry()
+    event = entry.current_flag_event
+    assert event is not None
+    return entry.model_copy(
+        update={
+            "strategy_key": strategy_key,
+            "current_flag_event": event.model_copy(update={"strategy_key": strategy_key}),
+        }
+    )
+
+
 def _synthetic_blocked_entry(strategy_key: str) -> StrategyValidationEntry:
     """Force one real validated entry into a deterministic blocked state.
 
@@ -47,11 +69,20 @@ def _synthetic_blocked_entry(strategy_key: str) -> StrategyValidationEntry:
     return entry.model_copy(update={"audit_copy_sha256": "0" * 64})
 
 
-def test_deploy_demotes_manifest_proof_that_differs_from_accepted_snapshot() -> None:
+def test_deploy_demotes_manifest_proof_that_differs_from_accepted_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
+    # about accepted-snapshot drift detection, not the canary allowlist, so
+    # explicitly enable the one pairing it deploys under to reach that check.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
     entry = _accepted_deploy_entry()
     changed = entry.model_copy(update={"qc_cloud_backtest_id": "a-different-qc-backtest-id"})
 
-    rows = _strategy_views([changed])
+    rows = _strategy_views([changed], account_id=ACCT)
 
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
@@ -61,7 +92,14 @@ def test_deploy_demotes_manifest_proof_that_differs_from_accepted_snapshot() -> 
     assert "no longer matches the proof snapshot" in row.blocked_explanation
 
 
-def test_deploy_reverifies_the_accepted_audit_copy_hash() -> None:
+def test_deploy_reverifies_the_accepted_audit_copy_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
+    # about audit-copy hash re-verification, not the canary allowlist, so
+    # explicitly enable the one pairing it deploys under to reach that check.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
     entry = _accepted_deploy_entry()
     event = entry.current_flag_event
     assert event is not None
@@ -75,7 +113,7 @@ def test_deploy_reverifies_the_accepted_audit_copy_hash() -> None:
         }
     )
 
-    rows = _strategy_views([changed])
+    rows = _strategy_views([changed], account_id=ACCT)
 
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
@@ -86,29 +124,60 @@ def test_deploy_reverifies_the_accepted_audit_copy_hash() -> None:
     assert "no longer matches its recorded hash" in row.blocked_explanation
 
 
-def test_strategy_views_admissible_modes_track_selectable() -> None:
-    """#1702: every row admits dry_run (runtime-backed); paper tracks
+def test_strategy_views_admissible_modes_track_selectable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1702/#1730: every runtime-backed row admits dry_run; paper tracks
     selectable exactly — accepted and evidence-only rows admit both modes,
-    a blocked row admits dry_run only."""
+    a blocked row (whether a stale proof or a #1730 canary-not-allowlisted
+    sealed program) admits dry_run only, never both and never neither."""
+    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
+    # about admissible-mode tracking, not the canary allowlist, so
+    # explicitly enable the one pairing it deploys under so `accepted`
+    # reaches "accepted" rather than being blocked by the allowlist first.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
     accepted = _accepted_deploy_entry()
-    blocked = _synthetic_blocked_entry("deployment_validation")
+    stale_proof_blocked = _synthetic_blocked_entry("deployment_validation")
+    # rsi_mean_reversion is also a sealed Signal Program and is deliberately
+    # left off the allowlist above, so it demonstrates the canary-blocked
+    # case distinctly from the stale-proof-blocked case. Its validated state
+    # is synthesized rather than read from the manifest: only two strategies
+    # are validated in the committed seed, so reading a real entry here would
+    # pass only on a machine whose runtime flag-events file happens to have
+    # flagged it.
+    canary_blocked = _synthetic_validated_entry("rsi_mean_reversion")
 
-    rows = _strategy_views([accepted, blocked])
+    rows = _strategy_views([accepted, stale_proof_blocked, canary_blocked], account_id=ACCT)
 
     rows_by_key = {row.strategy_key: row for row in rows}
     accepted_row = rows_by_key[accepted.strategy_key]
     blocked_row = rows_by_key["deployment_validation"]
+    canary_blocked_row = rows_by_key["rsi_mean_reversion"]
     assert accepted_row.evidence_status == "accepted"
     assert accepted_row.selectable is True
     assert accepted_row.admissible_modes == ("dry_run", "paper")
     assert blocked_row.evidence_status == "blocked"
     assert blocked_row.selectable is False
     assert blocked_row.admissible_modes == ("dry_run",)
+    assert canary_blocked_row.evidence_status == "blocked"
+    assert canary_blocked_row.selectable is False
+    assert canary_blocked_row.admissible_modes == ("dry_run",)
 
 
-def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(tmp_path: Path) -> None:
+def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#1702: an evidence-only row is Paper-selectable — its behavioral
     verdict no longer gates Paper, only the human-validated flag does."""
+    # sma_crossover is a sealed Signal Program (#1730); this test is about
+    # evidence-only Paper admissibility, not the canary allowlist, so
+    # explicitly enable the one pairing it deploys under to reach that check.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("sma_crossover", ACCT)}),
+    )
     seeds = strategy_registry_seeds()
     flag_events_path = tmp_path / "strategy-validation" / "flag-events.json"
     append_strategy_validation_flag_event(
@@ -128,7 +197,7 @@ def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(t
         if entry.strategy_key == "sma_crossover"
     ]
 
-    rows = _strategy_views([entry])
+    rows = _strategy_views([entry], account_id=ACCT)
 
     assert len(rows) == 1
     row = rows[0]
@@ -138,7 +207,14 @@ def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(t
     assert row.override_explanation is not None
 
 
-def test_deploy_demotes_accepted_event_with_gating_divergence() -> None:
+def test_deploy_demotes_accepted_event_with_gating_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
+    # about gating-divergence detection, not the canary allowlist, so
+    # explicitly enable the one pairing it deploys under to reach that check.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
     entry = _accepted_deploy_entry()
     event = entry.current_flag_event
     assert event is not None
@@ -151,7 +227,7 @@ def test_deploy_demotes_accepted_event_with_gating_divergence() -> None:
     )
     changed = entry.model_copy(update={"current_flag_event": changed_event})
 
-    rows = _strategy_views([changed])
+    rows = _strategy_views([changed], account_id=ACCT)
 
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
@@ -168,6 +244,13 @@ async def test_deploy_view_shows_blocked_strategy_but_stays_eligible_when_anothe
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fast_app, _registry = deploy_app
+    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
+    # about a blocked row coexisting with a selectable one, not the canary
+    # allowlist, so explicitly enable the one pairing it deploys under.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
     monkeypatch.setattr(
         panel_data_source,
         "load_strategy_validation_entries",

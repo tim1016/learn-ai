@@ -19,10 +19,23 @@ from httpx import ASGITransport
 from tests.broker.v2panel.conftest import _BODY
 from tests.broker.v2panel.fixtures import ACCT
 
+# ema_crossover_signal is a sealed Signal Program (#1730); every test below
+# is about deploy-time parameter resolution/validation, not the canary
+# allowlist, so each explicitly enables the one pairing `_BODY` deploys
+# under before submitting through the route.
+_ALLOW_BODY_STRATEGY = frozenset({("ema_crossover_signal", ACCT)})
+
 
 @pytest.mark.asyncio
-async def test_deploy_with_no_parameters_resolves_registered_defaults(deploy_app) -> None:
+async def test_deploy_with_no_parameters_resolves_registered_defaults(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots", json=_BODY)
@@ -35,8 +48,15 @@ async def test_deploy_with_no_parameters_resolves_registered_defaults(deploy_app
 
 
 @pytest.mark.asyncio
-async def test_deploy_with_an_override_resolves_full_set_and_flags_divergence(deploy_app) -> None:
+async def test_deploy_with_an_override_resolves_full_set_and_flags_divergence(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
@@ -55,8 +75,15 @@ async def test_deploy_with_an_override_resolves_full_set_and_flags_divergence(de
 
 
 @pytest.mark.asyncio
-async def test_admission_preview_resolves_the_same_parameters_as_deploy(deploy_app) -> None:
+async def test_admission_preview_resolves_the_same_parameters_as_deploy(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, _registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
@@ -68,8 +95,15 @@ async def test_admission_preview_resolves_the_same_parameters_as_deploy(deploy_a
 
 
 @pytest.mark.asyncio
-async def test_deploy_rejects_an_invalid_parameter_with_a_clear_message(deploy_app) -> None:
+async def test_deploy_rejects_an_invalid_parameter_with_a_clear_message(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
@@ -87,8 +121,15 @@ async def test_deploy_rejects_an_invalid_parameter_with_a_clear_message(deploy_a
 
 
 @pytest.mark.asyncio
-async def test_deploy_rejects_symbol_submitted_inside_parameters(deploy_app) -> None:
+async def test_deploy_rejects_symbol_submitted_inside_parameters(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
@@ -105,8 +146,15 @@ async def test_deploy_rejects_symbol_submitted_inside_parameters(deploy_app) -> 
 
 
 @pytest.mark.asyncio
-async def test_deploy_rejects_an_unknown_parameter_name(deploy_app) -> None:
+async def test_deploy_rejects_an_unknown_parameter_name(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(

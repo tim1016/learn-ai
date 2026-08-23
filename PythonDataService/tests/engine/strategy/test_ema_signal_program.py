@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import csv
-import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
@@ -18,13 +15,15 @@ from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent
 from app.engine.strategy.signal_program import (
-    EmaCrossoverSignalProgram,
     EvaluationMode,
+    EvaluationStage,
     EvaluationTrace,
     Settlement,
+    SignalDecision,
+    SignalProgram,
+    SignalSession,
     StageQuarantine,
     StageStatus,
-    trace_corpus_root,
     trace_root,
 )
 from app.services.spec_strategy_runner import InMemoryDataReader
@@ -61,7 +60,7 @@ def _bar(offset: int = 0) -> TradeBar:
     )
 
 
-def _prepared_program() -> tuple[EmaCrossoverSignalProgram, EmaCrossoverSignalAlgorithm, StrategyContext]:
+def _prepared_program() -> tuple[SignalProgram, EmaCrossoverSignalAlgorithm, StrategyContext]:
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     assert registration.signal_program_factory is not None
     program = registration.signal_program_factory(registration.param_schema())
@@ -76,6 +75,74 @@ def _prepared_program() -> tuple[EmaCrossoverSignalProgram, EmaCrossoverSignalAl
     strategy._rsi14 = _ReadyIndicator(Decimal("60"))
     strategy._prev_ema5_above_ema10 = False
     return program, strategy, context
+
+
+@dataclass
+class _StubSignalStrategy:
+    """Minimal ``SignalProgramStrategy`` double, independent of EMA/RSI math.
+
+    Used only to prove SignalSession's identity handling is genuinely
+    per-instance -- not to exercise any strategy's decision math, which
+    stays covered by the EMA-specific tests above and below.
+    """
+
+    settings: dict[str, str] = field(default_factory=dict)
+
+    def evaluate_signal_bar(self, _bar: TradeBar) -> SignalDecision:
+        return SignalDecision(
+            intent=None,
+            ready=True,
+            relation_facts={},
+            signal_facts={},
+            reason_evidence={},
+            action_plan_request=None,
+        )
+
+    def commit_signal_decision(self, _bar: TradeBar, _intent: SignalIntent) -> None:
+        """No custody effect -- this double never stages an intent."""
+
+    def discard_signal_decision(self, _bar: TradeBar, _intent: SignalIntent | None) -> None:
+        """No custody effect -- this double never stages an intent."""
+
+    def signal_program_settings(self) -> dict[str, str]:
+        return self.settings
+
+
+def test_two_programs_constructed_through_the_session_never_share_an_evaluation_id() -> None:
+    """Regression for issue #1730: before this fix, PROGRAM_KEY/PROGRAM_VERSION
+    were class constants on ``EmaCrossoverSignalSession``, so any second
+    program constructed through that class silently inherited EMA's identity.
+    Two independently constructed sessions -- same bar, same settings --
+    produced byte-identical ``evaluation_id``s (confirmed by reproducing the
+    collision against the pre-fix code before this test was added). Identity
+    is now a required constructor argument, so it is per-instance by
+    construction, not by convention.
+    """
+    strategy_a = _StubSignalStrategy(settings={"gap": "0.20"})
+    strategy_b = _StubSignalStrategy(settings={"gap": "0.20"})
+    session_a = SignalSession(
+        strategy_a,
+        program_key="ema_crossover_signal",
+        program_version="ema-crossover-signal/v1",
+        timeframe_ms=15 * 60_000,
+    )
+    session_b = SignalSession(
+        strategy_b,
+        program_key="rsi_mean_reversion_signal",
+        program_version="rsi-mean-reversion-signal/v1",
+        timeframe_ms=15 * 60_000,
+    )
+
+    stage_a = session_a.advance(_bar(), mode=EvaluationMode.DECIDE)
+    stage_b = session_b.advance(_bar(), mode=EvaluationMode.DECIDE)
+
+    assert isinstance(stage_a, EvaluationStage)
+    assert isinstance(stage_b, EvaluationStage)
+    assert stage_a.trace.evaluation_id != stage_b.trace.evaluation_id
+    assert session_a.program_key != session_b.program_key
+    assert session_a.program_version != session_b.program_version
+    assert stage_a.trace.program_key == "ema_crossover_signal"
+    assert stage_b.trace.program_key == "rsi_mean_reversion_signal"
 
 
 def test_registry_factory_is_the_single_public_ema_program_construction_seam() -> None:
@@ -186,46 +253,3 @@ def test_trace_root_changes_only_when_trace_semantics_change() -> None:
 
     assert trace_root([trace]) == trace_root([replace(trace)])
     assert trace_root([trace]) != trace_root([replace(trace, staged_candidate="EXIT")])
-
-
-def test_validated_ema_settings_corpus_has_a_pinned_trace_root() -> None:
-    fixture = Path(__file__).resolve().parents[2] / "fixtures/golden/ema-signal-session/v1/trace-corpus.json"
-    corpus = json.loads(fixture.read_text(encoding="utf-8"))
-
-    assert trace_corpus_root(corpus["entries"]) == corpus["trace_root"]
-    assert len(corpus["entries"]) == 10
-    cells_root = fixture.parents[2] / "cross-engine-studies/cells"
-    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
-    contract = registration.signal_program_contract
-    assert contract is not None
-    # This is the runtime admission gate (PRD S11.4): a program edit that
-    # changes behavior without also updating the registry's sealed
-    # golden_trace_root must fail here, not slip through as a "qualified"
-    # receipt. `scripts/run_signal_program_build_qualification.py` binds its
-    # emitted receipt to `contract.golden_trace_root`, so this suite passing
-    # is what makes that receipt admissible evidence.
-    assert corpus["trace_root"] == contract.golden_trace_root
-
-    for entry in corpus["entries"]:
-        cell = cells_root / entry["cell"]
-        minute_bars: list[TradeBar] = []
-        with (cell / "lean" / "observations.csv").open(encoding="utf-8", newline="") as handle:
-            for row in csv.DictReader(handle):
-                end_ms = int(row["ms_utc"])
-                minute_bars.append(
-                    TradeBar(
-                        symbol=entry["settings"]["symbol"],
-                        start_ms=end_ms - 60_000,
-                        end_ms=end_ms,
-                        open=Decimal(row["open"]),
-                        high=Decimal(row["high"]),
-                        low=Decimal(row["low"]),
-                        close=Decimal(row["close"]),
-                        volume=int(Decimal(row["volume"])),
-                    )
-                )
-        strategy = registration.build(registration.param_schema(**entry["settings"]))
-        BacktestEngine(InMemoryDataReader(minute_bars)).run(strategy)
-        assert strategy.signal_program is not None
-        assert len(strategy.signal_program.session.traces) == entry["trace_count"]
-        assert trace_root(strategy.signal_program.session.traces) == entry["trace_root"]

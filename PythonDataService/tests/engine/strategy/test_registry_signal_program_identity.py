@@ -31,7 +31,7 @@ from __future__ import annotations
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, EmaCrossoverSignalParams
-from app.engine.strategy.signal_program import EmaCrossoverSignalSession
+from app.engine.strategy.signal_program import SignalSession
 
 
 def test_each_sealed_signal_program_identity_is_unique_to_its_registry_key() -> None:
@@ -98,10 +98,51 @@ def test_ema_crossover_derivatives_do_not_inherit_the_canonical_contract() -> No
         assert reg.signal_program_factory is None, f"'{key}' must not carry a signal_program_factory"
 
 
+def test_every_factory_built_program_carries_its_registration_identity() -> None:
+    """The constructed program's identity must equal its registration's.
+
+    ``program_version`` reaches two independent consumers by two independent
+    routes: the factory stamps it onto ``SignalSession``, where it is hashed
+    into every ``evaluation_id``; the contract declares it, where it becomes
+    the sealed build-proof identity. Neither hash looks wrong on its own, so
+    a drift between them yields a bot whose decision traces claim a
+    different program than its seal -- visible only as an unexplained
+    mismatch far downstream. ``program_key`` has the same exposure against
+    the registry key that ``prove_running_program_build`` looks receipts up
+    by.
+
+    Checking the relationship for *every* registered program (rather than
+    pinning EMA's literals) is what makes this survive slice 5: each program
+    promoted through the governed seam is covered the moment it is
+    registered, with no per-program test to remember.
+    """
+    sealed = [(key, reg) for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is not None]
+    assert sealed, "expected at least one registered Signal Program factory"
+
+    for key, reg in sealed:
+        contract = reg.signal_program_contract
+        assert contract is not None  # paired invariant, asserted by the test above
+        program = reg.signal_program_factory(reg.param_schema())  # type: ignore[misc]
+
+        assert program.session.program_key == key, (
+            f"'{key}' builds a session claiming program_key="
+            f"{program.session.program_key!r}. prove_running_program_build() looks "
+            "the build receipt up by the registry key, so a session that names a "
+            "different key traces its decisions under a program whose bytes were "
+            "never qualified for it."
+        )
+        assert program.session.program_version == contract.program_version, (
+            f"'{key}' builds a session at program_version="
+            f"{program.session.program_version!r} but its contract declares "
+            f"{contract.program_version!r}. Declare the identity once and "
+            "reference it from both the factory and the contract."
+        )
+
+
 def test_registry_protocol_and_parameter_schema_versions_mirror_their_one_declaration() -> None:
     """PRD §11.1 sealed-completeness fix: ``protocol_version`` and
     ``parameter_schema_version`` are each declared exactly once — on
-    ``EmaCrossoverSignalSession``/``EmaCrossoverSignalParams`` respectively —
+    ``SignalSession``/``EmaCrossoverSignalParams`` respectively —
     and the registry contract only ever mirrors that constant. This is the
     guard that keeps the mirror from drifting the way ``program_version``'s
     hand-duplicated literal already can: catching it here, not only via a
@@ -110,7 +151,7 @@ def test_registry_protocol_and_parameter_schema_versions_mirror_their_one_declar
     contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
     assert contract is not None
 
-    assert contract.protocol_version == EmaCrossoverSignalSession.PROTOCOL_VERSION
+    assert contract.protocol_version == SignalSession.PROTOCOL_VERSION
     assert contract.parameter_schema_version == EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION
 
 
@@ -142,3 +183,80 @@ def test_registry_signal_series_periods_match_the_constructed_indicators() -> No
     assert warmup_by_name["ema_fast"] == ema_fast.period
     assert warmup_by_name["ema_slow"] == ema_slow.period
     assert warmup_by_name["rsi"] == rsi.period + 1
+
+
+def test_validated_against_only_names_evidence_that_actually_exists() -> None:
+    """A sealed contract's ``validated_against`` is audit metadata: it names
+    the evidence a reader is supposed to be able to go read. If it names a
+    test that was deleted or renamed, the seal still verifies and every test
+    still passes -- the receipt just quietly points at nothing, which is the
+    exact failure mode ``.claude/rules/numerical-rigor.md`` exists to prevent.
+
+    This is a real regression, not a hypothetical: the six per-program
+    ``test_validated_*_settings_corpus_has_a_pinned_trace_root`` functions
+    these fields used to name were collapsed into
+    ``test_signal_program_qualification_matrix.py``'s parameterized node, and
+    every one of the six ``validated_against`` strings kept naming the
+    deleted function. Nothing failed, because nothing checked.
+
+    Resolving each named path (and, for a ``file::test`` node id, the test
+    function itself, via AST rather than a pytest sub-run) makes the class of
+    bug impossible instead of fixing the six instances.
+    """
+    import ast
+    import re
+    from pathlib import Path
+
+    service_root = Path(__file__).resolve().parents[3]
+    repo_root = service_root.parent
+
+    def _resolve(candidate: str) -> Path | None:
+        for root in (service_root, repo_root):
+            path = root / candidate
+            if path.exists():
+                return path
+        return None
+
+    # Matches "a/b/c.py", "a/b/c.md" and "a/b/c.py::test_name[param]".
+    # Requires a real "/" and a concrete file extension, so surrounding prose
+    # ("(gate-wiring unit tests)", "ENG-008", "level/edge entry/exit") cannot
+    # be mistaken for a path. Bare directory references are deliberately not
+    # validated -- they are too ambiguous to distinguish from prose, and the
+    # evidence that matters is a concrete file.
+    token = re.compile(r"[\w.-]+(?:/[\w.-]+)+(?:\.py|\.md)(?:::[\w\[\]./-]+)?")
+
+    checked = 0
+    for key, registration in _STRATEGY_REGISTRY.items():
+        contract = registration.signal_program_contract
+        if contract is None:
+            continue
+        provenance = contract.numerical_provenance
+        # ``reference`` deliberately excluded: it names external sources
+        # (LEAN C# revisions, a TradingView Pine script, a validation PDF)
+        # that are not required to exist inside this repo.
+        evidence = f"{provenance.validated_against}; {provenance.canonical_implementation}"
+        for raw in token.findall(evidence):
+            file_part, _, node_part = raw.partition("::")
+            resolved = _resolve(file_part)
+            assert resolved is not None, (
+                f"'{key}' validated_against names '{file_part}', which does not "
+                f"exist under {service_root} or {repo_root}. Update the field to "
+                "name the evidence that replaced it."
+            )
+            checked += 1
+            if not node_part:
+                continue
+            function_name = node_part.split("[", 1)[0]
+            module = ast.parse(resolved.read_text(encoding="utf-8"))
+            defined = {
+                node.name
+                for node in ast.walk(module)
+                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+            }
+            assert function_name in defined, (
+                f"'{key}' validated_against names '{raw}', but "
+                f"'{function_name}' is not defined in {resolved}. A renamed or "
+                "deleted test or class leaves this receipt pointing at nothing."
+            )
+
+    assert checked, "expected at least one sealed contract to name its evidence"

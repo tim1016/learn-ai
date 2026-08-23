@@ -115,7 +115,7 @@ class _QualifiedBarFeed:
     exposes an ``evaluation_mode_for`` attribute, so
     ``bot_trade_strategy._evaluation_mode_for`` falls back to
     ``EvaluationMode.DECIDE`` for every bar -- the same mode
-    ``EmaCrossoverSignalProgram.activate_for_backtest`` uses for the
+    ``SignalProgram.activate_for_backtest`` uses for the
     reference path, so the two sides are comparable on that field too.
     """
 

@@ -46,8 +46,8 @@ from app.engine.strategy.algorithms.spy_strategy_c import SpyStrategyCAlgorithm
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.engine.strategy.signal_program import (
-    EmaCrossoverSignalProgram,
-    EmaCrossoverSignalSession,
+    SignalProgram,
+    SignalSession,
 )
 from app.schemas.signal_program_seal import (
     ExitEligibilityContract,
@@ -65,6 +65,31 @@ class StrategyParamsBase(BaseModel):
     """
 
     model_config = {"extra": "forbid"}
+
+
+_DECISION_CLOCK_FIELD = "resolution_minutes"
+
+
+def decision_timeframe_ms_for(params: StrategyParamsBase, *, qualified_ms: int) -> int:
+    """The decision clock one resolved parameter set implies.
+
+    A program is deploy-configurable exactly when its parameter model
+    declares ``resolution_minutes``; one that does not runs the cadence its
+    contract was qualified at. The parameter model is the declaration, so
+    this reads the declaration rather than keeping a second list of which
+    programs are tunable.
+
+    Both the registry factories and
+    ``app.services.signal_program_admission.build_start_program_seal`` call
+    this. That matters: the seal hashes the cadence it claims the bot will
+    run, so a second copy of this arithmetic anywhere is precisely the drift
+    the seal exists to detect. Five factories previously each computed
+    ``resolution_minutes * 60_000`` inline, and admission built an entire
+    strategy object graph purely to read the result back off the session.
+    """
+    if _DECISION_CLOCK_FIELD not in type(params).model_fields:
+        return qualified_ms
+    return int(getattr(params, _DECISION_CLOCK_FIELD)) * 60_000
 
 
 class EmaCrossoverParams(StrategyParamsBase):
@@ -169,6 +194,13 @@ class EmaCrossover2BpsParams(EmaCrossoverParams):
 
 
 class SmaCrossoverParams(StrategyParamsBase):
+    # FR-002: versions this schema's own legal type/unit/range contract —
+    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
+    # future change to the ``ge``/``le`` bounds below is a provable identity
+    # change without duplicating every bound into the seal itself. Mirrors
+    # ``EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION``'s pattern.
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "sma-crossover-params/v1"
+
     symbol: str = Field("SPY", min_length=1, max_length=20)
     short_window: int = Field(10, ge=2, le=500)
     long_window: int = Field(30, ge=3, le=1000)
@@ -206,6 +238,13 @@ class DailySmaCrossoverParams(StrategyParamsBase):
 
 
 class RsiMeanReversionParams(StrategyParamsBase):
+    # FR-002: versions this schema's own legal type/unit/range contract —
+    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
+    # future change to the ``ge``/``le`` bounds below is a provable identity
+    # change without duplicating every bound into the seal itself. Mirrors
+    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "rsi-mean-reversion-params/v1"
+
     symbol: str = Field("SPY", min_length=1, max_length=20)
     window: int = Field(14, ge=2, le=500)
     oversold: float = Field(30.0, gt=0, lt=100)
@@ -310,6 +349,13 @@ class RsiRangeStrategyAParams(StrategyParamsBase):
     same bar while flat. Pyramiding=1 prevents re-entry while holding.
     """
 
+    # FR-002: versions this schema's own legal type/unit/range contract —
+    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
+    # future change to the ``ge``/``le`` bounds below is a provable identity
+    # change without duplicating every bound into the seal itself. Mirrors
+    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "rsi-range-strategy-a-params/v1"
+
     symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
     ema_fast_period: int = Field(20, ge=2, le=500, description="Fast EMA period.")
     ema_slow_period: int = Field(50, ge=3, le=1000, description="Slow EMA period.")
@@ -362,6 +408,14 @@ class RsiRangeStrategyAParams(StrategyParamsBase):
 class RsiRangeStrategyBParams(StrategyParamsBase):
     """Strategy B — Supertrend + ADX-entry + MACD + RSI-range, ADX-exit."""
 
+    # FR-002: versions this schema's own legal type/unit/range contract —
+    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
+    # future change to the ``ge``/``le`` bounds below is a provable identity
+    # change without duplicating every bound into the seal itself. Mirrors
+    # ``EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION`` /
+    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "spy-strategy-b-params/v1"
+
     symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
     supertrend_atr_period: int = Field(
         10, ge=2, le=200, description="ATR period for Supertrend. Default 10 (Pine default)."
@@ -406,6 +460,13 @@ class RsiRangeStrategyCParams(StrategyParamsBase):
     RSI inside the range filter, ADX above a threshold, AND ADX rising
     bar-over-bar.
     """
+
+    # FR-002: versions this schema's own legal type/unit/range contract —
+    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
+    # future change to the ``ge``/``le`` bounds below is a provable identity
+    # change without duplicating every bound into the seal itself. Mirrors
+    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "spy-strategy-c-params/v1"
 
     symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
     adx_entry_threshold: float = Field(
@@ -477,10 +538,10 @@ class SignalProgramContract:
     """
 
     program_version: str
-    # Distinct from PROGRAM_VERSION (the decision math) — identifies the
+    # Distinct from program_version (the decision math) — identifies the
     # shape of the session's construction/staging protocol. Mirrors
-    # EmaCrossoverSignalSession.PROTOCOL_VERSION rather than re-declaring it,
-    # so the two constants cannot drift apart unnoticed (see
+    # SignalSession.PROTOCOL_VERSION rather than re-declaring it, so the
+    # two constants cannot drift apart unnoticed (see
     # tests/engine/strategy/test_registry_signal_program_identity.py).
     protocol_version: str
     parameter_schema_version: str
@@ -587,7 +648,7 @@ class StrategyRegistration:
     # A Signal Program is optional because existing strategies may still use
     # the legacy event-handler lifecycle. When present, this is the one
     # construction authority for the program and its staged SignalSession.
-    signal_program_factory: Callable[[StrategyParamsBase], EmaCrossoverSignalProgram] | None = None
+    signal_program_factory: Callable[[StrategyParamsBase], SignalProgram] | None = None
     # Admission metadata is deliberately adjacent to the construction seam.
     # A factory without a contract is an unqualified program and cannot be
     # sealed for Start/Resume.
@@ -627,7 +688,21 @@ def hidden_params_present(
     return sorted(hidden.intersection(params))
 
 
-def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> EmaCrossoverSignalProgram:
+# One declaration of this program's sealed identity, referenced by both its
+# construction seam (below, where it becomes the evaluation_id hash input)
+# and its registry contract (where it becomes the build-proof admission
+# identity). Declared once rather than restated as a literal in each place:
+# a factory whose program_version drifts from its contract's would produce
+# a bot whose evaluation traces claim a different program than its seal,
+# and neither hash would look wrong on its own.
+# test_registry_signal_program_identity.py enforces the relationship for
+# every registered program, so a new program that restates a literal here
+# instead of following this pattern fails loudly rather than silently.
+_EMA_SIGNAL_PROGRAM_KEY = "ema_crossover_signal"
+_EMA_SIGNAL_PROGRAM_VERSION = "ema-crossover-signal/v1"
+
+
+def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
     """Construct the sole broker-neutral EMA Signal Program from registry params."""
     typed = params
     assert isinstance(typed, EmaCrossoverSignalParams)
@@ -637,18 +712,183 @@ def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> EmaCrosso
         rsi_min=typed.rsi_min,
         rsi_max=typed.rsi_max,
     )
-    program = EmaCrossoverSignalProgram.create(strategy)
+    program = SignalProgram.create(
+        strategy,
+        program_key=_EMA_SIGNAL_PROGRAM_KEY,
+        program_version=_EMA_SIGNAL_PROGRAM_VERSION,
+        # Fixed cadence: this program exposes no resolution parameter, and
+        # its registration declares StrategyBarCadence("minute", 15).
+        timeframe_ms=15 * 60_000,
+    )
+    strategy.signal_program = program
+    return program
+
+
+# Same pattern as the EMA identity above (issue #1730 Slice 5, first
+# additional promotion): declared once here, referenced by both the
+# construction seam and the registry contract below.
+_SMA_SIGNAL_PROGRAM_KEY = "sma_crossover"
+_SMA_SIGNAL_PROGRAM_VERSION = "sma-crossover/v1"
+
+
+def _build_sma_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
+    """Construct the sole broker-neutral SMA Signal Program from registry params."""
+    typed = params
+    assert isinstance(typed, SmaCrossoverParams)
+    strategy = SmaCrossoverAlgorithm(
+        symbol=typed.symbol,
+        short_window=typed.short_window,
+        long_window=typed.long_window,
+        resolution_minutes=typed.resolution_minutes,
+    )
+    program = SignalProgram.create(
+        strategy,
+        program_key=_SMA_SIGNAL_PROGRAM_KEY,
+        program_version=_SMA_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+    )
+    strategy.signal_program = program
+    return program
+
+
+# Same pattern as the EMA/SMA identities above (issue #1730 Slice 5, second
+# additional promotion): declared once here, referenced by both the
+# construction seam and the registry contract below.
+_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY = "rsi_mean_reversion"
+_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION = "rsi-mean-reversion/v1"
+
+
+def _build_rsi_mean_reversion_signal_program(params: StrategyParamsBase) -> SignalProgram:
+    """Construct the sole broker-neutral RSI Signal Program from registry params."""
+    typed = params
+    assert isinstance(typed, RsiMeanReversionParams)
+    strategy = RsiMeanReversionAlgorithm(
+        symbol=typed.symbol,
+        window=typed.window,
+        oversold=typed.oversold,
+        overbought=typed.overbought,
+        resolution_minutes=typed.resolution_minutes,
+    )
+    program = SignalProgram.create(
+        strategy,
+        program_key=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY,
+        program_version=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+    )
+    strategy.signal_program = program
+    return program
+
+
+# Same pattern as the identities above (issue #1730 Slice 5): declared once
+# here, referenced by both the construction seam and the registry contract.
+_SPY_STRATEGY_A_SIGNAL_PROGRAM_KEY = "spy_strategy_a"
+_SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION = "spy-strategy-a/v1"
+
+
+def _build_spy_strategy_a_signal_program(params: StrategyParamsBase) -> SignalProgram:
+    """Construct the sole broker-neutral Strategy A Signal Program from registry params."""
+    typed = params
+    assert isinstance(typed, RsiRangeStrategyAParams)
+    strategy = SpyStrategyAAlgorithm(
+        symbol=typed.symbol,
+        ema_fast_period=typed.ema_fast_period,
+        ema_slow_period=typed.ema_slow_period,
+        ema_gap_threshold=typed.ema_gap_threshold,
+        macd_fast=typed.macd_fast,
+        macd_slow=typed.macd_slow,
+        macd_signal=typed.macd_signal,
+        rsi_period=typed.rsi_period,
+        rsi_low_gate=typed.rsi_low_gate,
+        rsi_high_gate=typed.rsi_high_gate,
+        adx_period=typed.adx_period,
+        adx_exit_threshold=typed.adx_exit_threshold,
+        resolution_minutes=typed.resolution_minutes,
+    )
+    program = SignalProgram.create(
+        strategy,
+        program_key=_SPY_STRATEGY_A_SIGNAL_PROGRAM_KEY,
+        program_version=_SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+    )
+    strategy.signal_program = program
+    return program
+
+
+# Same pattern as the EMA/SMA identities above (issue #1730 Slice 5, second
+# additional promotion, first out of the RSI-range family A/B/C): declared
+# once here, referenced by both the construction seam and the registry
+# contract below.
+_SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY = "spy_strategy_b"
+_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION = "spy-strategy-b/v1"
+
+
+def _build_spy_strategy_b_signal_program(params: StrategyParamsBase) -> SignalProgram:
+    """Construct the sole broker-neutral Strategy B Signal Program from registry params."""
+    typed = params
+    assert isinstance(typed, RsiRangeStrategyBParams)
+    strategy = SpyStrategyBAlgorithm(
+        symbol=typed.symbol,
+        supertrend_atr_period=typed.supertrend_atr_period,
+        supertrend_multiplier=typed.supertrend_multiplier,
+        adx_entry_threshold=typed.adx_entry_threshold,
+        macd_fast=typed.macd_fast,
+        macd_slow=typed.macd_slow,
+        macd_signal=typed.macd_signal,
+        rsi_period=typed.rsi_period,
+        rsi_low_gate=typed.rsi_low_gate,
+        rsi_high_gate=typed.rsi_high_gate,
+        adx_period=typed.adx_period,
+        adx_exit_threshold=typed.adx_exit_threshold,
+        resolution_minutes=typed.resolution_minutes,
+    )
+    program = SignalProgram.create(
+        strategy,
+        program_key=_SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY,
+        program_version=_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+    )
+    strategy.signal_program = program
+    return program
+
+
+# Same pattern as the EMA/SMA identities above (issue #1730 Slice 5, second
+# additional promotion): declared once here, referenced by both the
+# construction seam and the registry contract below.
+_SPY_C_SIGNAL_PROGRAM_KEY = "spy_strategy_c"
+_SPY_C_SIGNAL_PROGRAM_VERSION = "spy-strategy-c/v1"
+
+
+def _build_spy_strategy_c_signal_program(params: StrategyParamsBase) -> SignalProgram:
+    """Construct the sole broker-neutral Strategy C Signal Program from registry params."""
+    typed = params
+    assert isinstance(typed, RsiRangeStrategyCParams)
+    strategy = SpyStrategyCAlgorithm(
+        symbol=typed.symbol,
+        adx_entry_threshold=typed.adx_entry_threshold,
+        rsi_period=typed.rsi_period,
+        rsi_low_gate=typed.rsi_low_gate,
+        rsi_high_gate=typed.rsi_high_gate,
+        adx_period=typed.adx_period,
+        adx_exit_threshold=typed.adx_exit_threshold,
+        resolution_minutes=typed.resolution_minutes,
+    )
+    program = SignalProgram.create(
+        strategy,
+        program_key=_SPY_C_SIGNAL_PROGRAM_KEY,
+        program_version=_SPY_C_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+    )
     strategy.signal_program = program
     return program
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    "ema_crossover_signal": StrategyRegistration(
+    _EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
         class_name="EmaCrossoverSignalAlgorithm",
         signal_program_contract=SignalProgramContract(
-            program_version="ema-crossover-signal/v1",
-            protocol_version=EmaCrossoverSignalSession.PROTOCOL_VERSION,
+            program_version=_EMA_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
             provider="polygon",
@@ -711,8 +951,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 ),
                 validated_against=(
                     "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
-                    "tests/engine/strategy/test_ema_signal_program.py::"
-                    "test_validated_ema_settings_corpus_has_a_pinned_trace_root; "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[ema_crossover_signal]; "
                     "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md"
                 ),
                 # The trace/decision identity is Decimal-exact and
@@ -746,7 +986,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # closure of the two roots below, MINUS the files proven (in
             # scripts/run_signal_program_build_qualification.py's exclusion
             # list) to be unreachable from evaluate_signal_bar()'s decision
-            # math: EmaCrossoverSignalSession.advance() (signal_program.py)
+            # math: SignalSession.advance() (signal_program.py)
             # builds and stores the EvaluationTrace *before* settle() ever
             # calls commit_signal_decision(), so execution/fill/sizing/
             # commission/Insight-publication bytes reached only through the
@@ -883,6 +1123,122 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
         class_name="SmaCrossoverAlgorithm",
+        signal_program_contract=SignalProgramContract(
+            program_version=_SMA_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=SmaCrossoverParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
+            decision_timeframe_ms=15 * 60_000,
+            # SmaCrossoverAlgorithm.initialize() builds SMA(long_window=30),
+            # needing 30 consolidated 15-minute bars (450 minutes) ~= 2
+            # trading sessions (390 min/session, NYSE regular hours) before
+            # is_ready. 7 calendar days is a comfortable buffer over that
+            # 2-session minimum, covering weekends/holidays -- the same
+            # margin-over-minimum convention as ema_crossover_signal's 5-day
+            # buffer over its own (smaller, ~0.6-session) RSI(14) warmup.
+            warmup_lookback_days=7,
+            # SmaCrossoverAlgorithm.initialize() constructs exactly these two
+            # named series (SMA{short_window}, SMA{long_window}), each fed
+            # bar.close at bar.end_ms. SimpleMovingAverage has no recursive
+            # seeding (app/engine/indicators/sma.py): is_ready flips at
+            # samples >= period like every other indicator
+            # (app/engine/indicators/base.py), so warmup_bars == period for
+            # both series -- unlike EMA's RSI, there is no period+1 warmup
+            # override to account for.
+            signals=(
+                SignalSeriesContract(name="sma_short", indicator="sma", field="close", period=10, warmup_bars=10),
+                SignalSeriesContract(name="sma_long", indicator="sma", field="close", period=30, warmup_bars=30),
+            ),
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            bar_integrity=SignalBarIntegrityContract(),
+            # SmaCrossoverAlgorithm.evaluate_signal_bar exits the instant its
+            # relation (a fresh death cross) is true on a decision clock --
+            # there is no held countdown the way EMA's fixed 5-bar exit
+            # timer works, so this seals as "level_true"
+            # (ExitEligibilityContract's second rule, added for this
+            # promotion) rather than restating EMA's countdown rule
+            # dishonestly. countdown_state_persistable=False for the
+            # stronger reason that SmaCrossoverAlgorithm has not implemented
+            # report_state_for_persistence/restore_state_from_persistence/
+            # validate_state_payload at all yet -- no state, flat or
+            # otherwise, currently survives a Pause/Resume, not just a
+            # mid-exit one.
+            exit_eligibility=ExitEligibilityContract(
+                rule="level_true",
+                countdown_state_persistable=False,
+            ),
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only golden-cross / death-cross. Enter long on a fresh SMA(short_window) "
+                    "> SMA(long_window) crossover; exit on a fresh SMA(short_window) < "
+                    "SMA(long_window) crossover."
+                ),
+                reference=(
+                    "Internal strategy retained from the retired pandas-ta service implementation; "
+                    "LEAN inspiration but no line-for-line port. No LEAN or TradingView "
+                    "reconciliation exists for this promotion -- Polygon live data is unavailable, "
+                    "so per PRD direction this program is qualified against its own deterministic "
+                    "replay of the committed cross-engine-study cells (Polygon-captured "
+                    "one-minute bars) only, with no cross-engine parity claim."
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm"
+                ),
+                validated_against=(
+                    "app/engine/tests/test_sma_crossover_parity.py; "
+                    "app/engine/strategy/spec/tests/test_spec_sma_parity.py; "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[sma_crossover]"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared (signal_program.py), not
+                # tolerance-compared -- see
+                # test_validated_sma_settings_corpus_has_a_pinned_trace_root's
+                # byte-exact trace_root assertion. Unlike EMA, there is no
+                # second, one-level-down LEAN-value-parity claim here (no
+                # tolerance_atol/tolerance_rtol/parity_fixture_ids) --
+                # nothing beyond this corpus's own self-consistency has been
+                # established for this promotion.
+                equivalence_level="bit_exact",
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "short_window": "bars",
+                "long_window": "bars",
+                "resolution_minutes": "minutes",
+            },
+            validated_settings={"short_window": 10, "long_window": 30, "resolution_minutes": 15},
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            # Same triage rule as ema_crossover_signal's artifact_paths
+            # (issue #1728 defect 2): the transitive first-party import
+            # closure of the root below, MINUS the files in
+            # _SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
+            # (scripts/run_signal_program_build_qualification.py) that are
+            # provably unreachable from evaluate_signal_bar()'s decision
+            # math. test_sma_signal_decision_digest_closure.py recomputes
+            # the closure from these paths and fails the build if a newly
+            # introduced import isn't triaged into one bucket or the other.
+            artifact_paths=(
+                "app/engine/strategy/algorithms/sma_crossover.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/indicators/base.py",
+                "app/engine/indicators/sma.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Classic golden-cross / death-cross. Enters long when the short "
             "SMA crosses above the long SMA, exits on the opposite cross. "
@@ -948,12 +1304,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        build=lambda p: SmaCrossoverAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
-            short_window=p.short_window,  # type: ignore[attr-defined]
-            long_window=p.long_window,  # type: ignore[attr-defined]
-            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
-        ),
+        build=lambda p: _build_sma_crossover_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=_build_sma_crossover_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -1039,6 +1391,117 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
         class_name="RsiMeanReversionAlgorithm",
+        signal_program_contract=SignalProgramContract(
+            program_version=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=RsiMeanReversionParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="46d0b13b5e3307d983b4d5b4a1a21ba790db5e5644d164364a787bb2a12acde7",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
+            decision_timeframe_ms=15 * 60_000,
+            # RsiMeanReversionAlgorithm.initialize() builds RSI(window=14),
+            # needing 15 consolidated 15-minute bars (period + 1, same
+            # Wilders warmup override as ema_crossover_signal's own RSI
+            # series) before is_ready. 5 calendar days is the same
+            # margin-over-minimum buffer ema_crossover_signal uses for that
+            # identical ~0.6-session warmup.
+            warmup_lookback_days=5,
+            # RsiMeanReversionAlgorithm.initialize() constructs exactly this
+            # one named series (RSI{window}), fed bar.close at bar.end_ms.
+            # warmup_bars is period + 1 -- RelativeStrengthIndex.is_ready
+            # overrides the base Indicator's samples >= period to
+            # samples >= period + 1 (app/engine/indicators/rsi.py), the same
+            # override ema_crossover_signal's own "rsi" series declares.
+            signals=(
+                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
+            ),
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            bar_integrity=SignalBarIntegrityContract(),
+            # RsiMeanReversionAlgorithm.evaluate_signal_bar exits the instant
+            # its relation (RSI strictly above overbought) is true on a
+            # decision clock while in position -- there is no held countdown,
+            # so this seals as "level_true" (the same rule sma_crossover
+            # uses) rather than restating ema_crossover_signal's fixed 5-bar
+            # countdown dishonestly. countdown_state_persistable=False for
+            # the same reason as sma_crossover: RsiMeanReversionAlgorithm has
+            # not implemented report_state_for_persistence/
+            # restore_state_from_persistence/validate_state_payload at all
+            # yet -- no state, flat or otherwise, currently survives a
+            # Pause/Resume.
+            exit_eligibility=ExitEligibilityContract(
+                rule="level_true",
+                countdown_state_persistable=False,
+            ),
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only RSI(window) mean reversion. Entry: RSI(window) drops strictly "
+                    "below oversold; exit: RSI(window) rises strictly above overbought. No "
+                    "time-based exit -- position is held for as long as RSI stays inside the band."
+                ),
+                reference=(
+                    "Internal strategy retained from the retired pandas-ta service implementation; "
+                    "LEAN inspiration but no line-for-line port. No LEAN or TradingView "
+                    "reconciliation exists for this promotion -- Polygon live data is unavailable, "
+                    "so per PRD direction this program is qualified against its own deterministic "
+                    "replay of the committed cross-engine-study cells (Polygon-captured "
+                    "one-minute bars) only, with no cross-engine parity claim."
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm"
+                ),
+                validated_against=(
+                    "app/engine/tests/test_rsi_mean_reversion_parity.py; "
+                    "app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py; "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[rsi_mean_reversion]"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared (signal_program.py), not
+                # tolerance-compared -- see
+                # test_validated_rsi_mean_reversion_settings_corpus_has_a_pinned_trace_root's
+                # byte-exact trace_root assertion. Same as sma_crossover:
+                # no second, one-level-down LEAN-value-parity claim here --
+                # nothing beyond this corpus's own self-consistency has been
+                # established for this promotion.
+                equivalence_level="bit_exact",
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "window": "bars",
+                "oversold": "rsi_points",
+                "overbought": "rsi_points",
+                "resolution_minutes": "minutes",
+            },
+            validated_settings={"window": 14, "oversold": 30.0, "overbought": 70.0, "resolution_minutes": 15},
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            # Same triage rule as ema_crossover_signal's and sma_crossover's
+            # artifact_paths (issue #1728 defect 2): the transitive
+            # first-party import closure of the root below, MINUS the files
+            # in _RSI_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
+            # (scripts/run_signal_program_build_qualification.py) that are
+            # provably unreachable from evaluate_signal_bar()'s decision
+            # math. test_rsi_signal_decision_digest_closure.py recomputes the
+            # closure from these paths and fails the build if a newly
+            # introduced import isn't triaged into one bucket or the other.
+            artifact_paths=(
+                "app/engine/strategy/algorithms/rsi_mean_reversion.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/indicators/base.py",
+                "app/engine/indicators/rsi.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Long-only RSI threshold strategy. Buys oversold (RSI < oversold), "
             "sells overbought (RSI > overbought). Configurable symbol, window, "
@@ -1096,13 +1559,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         param_schema=RsiMeanReversionParams,
         chart_indicators=(StrategyChartIndicator("rsi", {"length": ChartParamRef("window")}),),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        build=lambda p: RsiMeanReversionAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
-            window=p.window,  # type: ignore[attr-defined]
-            oversold=p.oversold,  # type: ignore[attr-defined]
-            overbought=p.overbought,  # type: ignore[attr-defined]
-            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
-        ),
+        build=lambda p: _build_rsi_mean_reversion_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=_build_rsi_mean_reversion_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -1427,6 +1885,173 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
         class_name="SpyStrategyAAlgorithm",
+        signal_program_contract=SignalProgramContract(
+            program_version=_SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=RsiRangeStrategyAParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="7ee88013046505a9df88fa9c83b94e1f5f4c4de92718dd874ca157b5eea25f5f",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
+            decision_timeframe_ms=15 * 60_000,
+            # RsiRangeStrategy.initialize() + SpyStrategyAAlgorithm's
+            # _init_extra_indicators() build five indicators; the longest
+            # warmup is EMA_slow(50) = 50 consolidated 15-minute bars = 750
+            # minutes, ~1.92 trading sessions (390 min/session, NYSE regular
+            # hours). That is much closer to the 2-session boundary (780 min)
+            # than sma_crossover's 30-bar/450-minute warmup (58% of 2
+            # sessions vs. this program's 96%), so a single early close
+            # inside the lookback window could push the true requirement
+            # past 2 full sessions -- 9 calendar days is a slightly larger
+            # buffer than sma_crossover's 7 for that reason, still covering
+            # weekends/holidays.
+            warmup_lookback_days=9,
+            # SpyStrategyAAlgorithm.initialize() and _init_extra_indicators()
+            # construct exactly these five named indicators, each fed
+            # bar.close (RSI, EMA_fast, EMA_slow, MACD) or the full bar
+            # (ADX) at bar.end_ms. warmup_bars mirrors each indicator's own
+            # is_ready threshold (app/engine/indicators/base.py: samples >=
+            # period for Indicator/BarIndicator; RelativeStrengthIndex
+            # overrides to period + 1; AverageDirectionalIndex overrides to
+            # 2 * period; MovingAverageConvergenceDivergence's own `period`
+            # bookkeeping value already equals slow_period + signal_period -
+            # 1, the sample count at which its internal signal EMA becomes
+            # ready) -- any drift between these constants and the real
+            # indicators would already change the golden trace root and fail
+            # test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root,
+            # so this cannot silently go stale.
+            signals=(
+                SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=20, warmup_bars=20),
+                SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=50, warmup_bars=50),
+                SignalSeriesContract(name="macd", indicator="macd", field="close", period=34, warmup_bars=34),
+                SignalSeriesContract(
+                    name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15
+                ),
+                # ADX reads high/low/close off the full bar (Wilder's
+                # directional-movement calculation needs the high/low swing,
+                # not just the close) -- "close" would misdescribe what this
+                # series actually consumes, hence the wider field literal.
+                SignalSeriesContract(
+                    name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28
+                ),
+            ),
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            bar_integrity=SignalBarIntegrityContract(),
+            # SpyStrategyAAlgorithm/RsiRangeStrategy.evaluate_signal_bar exits
+            # the instant its exit relation (ADX < adx_exit_threshold) is
+            # true on a decision clock -- there is no held countdown, so this
+            # seals as "level_true" (same rule sma_crossover's promotion
+            # added) rather than dishonestly restating EMA's fixed-countdown
+            # rule. countdown_state_persistable=False because
+            # RsiRangeStrategy has not implemented
+            # report_state_for_persistence/restore_state_from_persistence/
+            # validate_state_payload at all -- no state, flat or otherwise,
+            # currently survives a Pause/Resume.
+            exit_eligibility=ExitEligibilityContract(
+                rule="level_true",
+                countdown_state_persistable=False,
+            ),
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only trend-follower. Entry (while flat): rsi_low_gate <= RSI(rsi_period) <= "
+                    "rsi_high_gate AND (EMA(ema_fast_period) - EMA(ema_slow_period)) > ema_gap_threshold AND "
+                    "MACD(macd_fast, macd_slow, macd_signal) line > 0. Exit (while in position): "
+                    "ADX(adx_period) < adx_exit_threshold."
+                ),
+                reference=(
+                    "Internal strategy, RsiRangeStrategy family (app/engine/strategy/algorithms/"
+                    "_rsi_range_base.py); RSI/ADX per Wilder (1978). No LEAN or TradingView "
+                    "reconciliation exists for THIS Signal Program promotion -- Polygon live data is "
+                    "unavailable, so per PRD direction this program is qualified against its own "
+                    "deterministic replay of the committed cross-engine-study cells "
+                    "(Polygon-captured one-minute bars) only, with no cross-engine parity "
+                    "claim. This is distinct from golden fixture ENG-008 (tests/fixtures/"
+                    "test_strategy_parity_fixtures.py), which pins the base class's own pre/post #1700 "
+                    "SignalIntent-port self-equivalence and predates -- and does not establish -- this "
+                    "promotion's qualification."
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/spy_strategy_a.py::SpyStrategyAAlgorithm"
+                ),
+                validated_against=(
+                    "app/engine/tests/ (gate-wiring unit tests); golden fixture ENG-008 "
+                    "(tests/fixtures/test_strategy_parity_fixtures.py); "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[spy_strategy_a]"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared (signal_program.py), not
+                # tolerance-compared -- see
+                # test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root's
+                # byte-exact trace_root assertion. Same as sma_crossover:
+                # nothing beyond this corpus's own self-consistency has been
+                # established for this promotion, so no
+                # tolerance_atol/tolerance_rtol/parity_fixture_ids either.
+                equivalence_level="bit_exact",
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "ema_fast_period": "bars",
+                "ema_slow_period": "bars",
+                "ema_gap_threshold": "quote_currency",
+                "macd_fast": "bars",
+                "macd_slow": "bars",
+                "macd_signal": "bars",
+                "rsi_period": "bars",
+                "rsi_low_gate": "rsi_points",
+                "rsi_high_gate": "rsi_points",
+                "adx_period": "bars",
+                "adx_exit_threshold": "adx_points",
+                "resolution_minutes": "minutes",
+            },
+            validated_settings={
+                "ema_fast_period": 20,
+                "ema_slow_period": 50,
+                "ema_gap_threshold": 0.5,
+                "macd_fast": 12,
+                "macd_slow": 26,
+                "macd_signal": 9,
+                "rsi_period": 14,
+                "rsi_low_gate": 38.0,
+                "rsi_high_gate": 70.0,
+                "adx_period": 14,
+                "adx_exit_threshold": 15.0,
+                "resolution_minutes": 15,
+            },
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            # Same triage rule as sma_crossover's artifact_paths (issue #1728
+            # defect 2): the transitive first-party import closure of the two
+            # roots below, MINUS the files in
+            # _SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
+            # (scripts/run_signal_program_build_qualification.py) that are
+            # provably unreachable from evaluate_signal_bar()'s decision
+            # math. test_spy_strategy_a_signal_decision_digest_closure.py
+            # recomputes the closure from these paths and fails the build if
+            # a newly introduced import isn't triaged into one bucket or the
+            # other.
+            artifact_paths=(
+                "app/engine/strategy/algorithms/spy_strategy_a.py",
+                "app/engine/strategy/algorithms/_rsi_range_base.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/indicators/base.py",
+                "app/engine/indicators/ema.py",
+                "app/engine/indicators/sma.py",
+                "app/engine/indicators/macd.py",
+                "app/engine/indicators/rsi.py",
+                "app/engine/indicators/adx.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Long-only 15-minute trend-follower. On each bar while flat, enters "
             "long if RSI is inside the [rsi_low_gate, rsi_high_gate] range AND "
@@ -1500,21 +2125,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_a_pine,
-        build=lambda p: SpyStrategyAAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
-            ema_fast_period=p.ema_fast_period,  # type: ignore[attr-defined]
-            ema_slow_period=p.ema_slow_period,  # type: ignore[attr-defined]
-            ema_gap_threshold=p.ema_gap_threshold,  # type: ignore[attr-defined]
-            macd_fast=p.macd_fast,  # type: ignore[attr-defined]
-            macd_slow=p.macd_slow,  # type: ignore[attr-defined]
-            macd_signal=p.macd_signal,  # type: ignore[attr-defined]
-            rsi_period=p.rsi_period,  # type: ignore[attr-defined]
-            rsi_low_gate=p.rsi_low_gate,  # type: ignore[attr-defined]
-            rsi_high_gate=p.rsi_high_gate,  # type: ignore[attr-defined]
-            adx_period=p.adx_period,  # type: ignore[attr-defined]
-            adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
-            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
-        ),
+        build=lambda p: _build_spy_strategy_a_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=_build_spy_strategy_a_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -1522,6 +2134,164 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
         class_name="SpyStrategyBAlgorithm",
+        signal_program_contract=SignalProgramContract(
+            program_version=_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=RsiRangeStrategyBParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="775a5dfd4a98090111c4aa0f643f647b4b14cf27c9334ac266ebc9565b7485b4",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
+            decision_timeframe_ms=15 * 60_000,
+            # SpyStrategyBAlgorithm.initialize() (via RsiRangeStrategy) builds
+            # RSI(14), ADX(14), Supertrend(atr_period=10), and
+            # MACD(fast=12, slow=26, signal=9). MACD's own warmup (34 bars,
+            # signal_period-1 samples past its slow EMA) is the binding
+            # constraint at 510 minutes (34 * 15) -- just over one RTH
+            # session (390 min) but under two. 7 calendar days is the same
+            # comfortable buffer-over-2-session-minimum convention as
+            # sma_crossover's own 7-day figure, covering weekends/holidays.
+            warmup_lookback_days=7,
+            # Each series' warmup_bars is its own is_ready threshold
+            # (app/engine/indicators/base.py: samples >= period, except RSI's
+            # period + 1 override and ADX's 2 * period override -- see each
+            # indicator's own docstring). MACD's period is set to
+            # slow_period + signal_period - 1 = 34 at construction
+            # (app/engine/indicators/macd.py), which is also its own
+            # is_ready threshold since MACD delegates is_ready to its
+            # internal signal EMA. Any drift between these constants and the
+            # real indicators would already change the golden trace root and
+            # fail test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root,
+            # so this cannot silently go stale.
+            signals=(
+                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
+                SignalSeriesContract(name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28),
+                SignalSeriesContract(
+                    name="supertrend", indicator="supertrend", field="high_low_close", period=10, warmup_bars=10
+                ),
+                SignalSeriesContract(name="macd", indicator="macd", field="close", period=34, warmup_bars=34),
+            ),
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            bar_integrity=SignalBarIntegrityContract(),
+            # RsiRangeStrategy.evaluate_signal_bar exits the instant its
+            # relation (ADX < adx_exit_threshold) is true on a decision
+            # clock -- there is no held countdown, the same shape as
+            # sma_crossover's own death-cross exit, so this seals as
+            # "level_true" rather than restating EMA's countdown rule
+            # dishonestly. countdown_state_persistable=False because
+            # RsiRangeStrategy has not implemented
+            # report_state_for_persistence/restore_state_from_persistence/
+            # validate_state_payload at all yet -- no state, flat or
+            # otherwise, currently survives a Pause/Resume.
+            exit_eligibility=ExitEligibilityContract(
+                rule="level_true",
+                countdown_state_persistable=False,
+            ),
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only. Enter when RSI(rsi_period) is within [rsi_low_gate, rsi_high_gate] "
+                    "AND Supertrend(supertrend_atr_period, supertrend_multiplier) is long AND "
+                    "ADX(adx_period) > adx_entry_threshold AND MACD(macd_fast, macd_slow, "
+                    "macd_signal) line > 0. Exit when ADX(adx_period) < adx_exit_threshold."
+                ),
+                reference=(
+                    "Internal -- no external port reference; long-only 15-min RTH SPY strategy. "
+                    "No LEAN or TradingView reconciliation exists for this promotion -- Polygon "
+                    "live data is unavailable, so per PRD direction this program is qualified "
+                    "against its own deterministic replay of the committed cross-engine-study "
+                    "cells (Polygon-captured one-minute bars) only, with "
+                    "no cross-engine parity claim."
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/spy_strategy_b.py::SpyStrategyBAlgorithm "
+                    "(entry/exit orchestration and shared RSI/ADX math in "
+                    "app/engine/strategy/algorithms/_rsi_range_base.py::RsiRangeStrategy)"
+                ),
+                validated_against=(
+                    "app/engine/tests/test_strategies_abc.py; "
+                    "tests/fixtures/test_strategy_parity_fixtures.py (ENG-008); "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[spy_strategy_b]"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared (signal_program.py), not
+                # tolerance-compared -- see
+                # test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root's
+                # byte-exact trace_root assertion. Same as sma_crossover: no
+                # second, one-level-down LEAN-value-parity claim exists for
+                # this promotion (no tolerance_atol/tolerance_rtol/
+                # parity_fixture_ids) -- nothing beyond this corpus's own
+                # self-consistency has been established.
+                equivalence_level="bit_exact",
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "supertrend_atr_period": "bars",
+                "supertrend_multiplier": "atr_multiple",
+                "adx_entry_threshold": "adx_points",
+                "macd_fast": "bars",
+                "macd_slow": "bars",
+                "macd_signal": "bars",
+                "rsi_period": "bars",
+                "rsi_low_gate": "rsi_points",
+                "rsi_high_gate": "rsi_points",
+                "adx_period": "bars",
+                "adx_exit_threshold": "adx_points",
+                "resolution_minutes": "minutes",
+            },
+            validated_settings={
+                "supertrend_atr_period": 10,
+                "supertrend_multiplier": 3.0,
+                "adx_entry_threshold": 20.0,
+                "macd_fast": 12,
+                "macd_slow": 26,
+                "macd_signal": 9,
+                "rsi_period": 14,
+                "rsi_low_gate": 38.0,
+                "rsi_high_gate": 70.0,
+                "adx_period": 14,
+                "adx_exit_threshold": 20.0,
+                "resolution_minutes": 15,
+            },
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            # Same triage rule as ema_crossover_signal's / sma_crossover's own
+            # artifact_paths (issue #1728 defect 2): the transitive
+            # first-party import closure of the two roots below, MINUS the
+            # files in _SPY_STRATEGY_B_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
+            # (scripts/run_signal_program_build_qualification.py) that are
+            # provably unreachable from evaluate_signal_bar()'s decision
+            # math. test_spy_strategy_b_signal_decision_digest_closure.py
+            # recomputes the closure from these paths and fails the build if
+            # a newly introduced import isn't triaged into one bucket or the
+            # other. indicators/ema.py and indicators/sma.py are both real,
+            # non-obvious members of this closure: macd.py's fast/slow lines
+            # are ExponentialMovingAverage instances, and ema.py itself seeds
+            # its warmup from SimpleMovingAverage -- both are load-bearing
+            # for the MACD entry gate, not padding.
+            artifact_paths=(
+                "app/engine/strategy/algorithms/spy_strategy_b.py",
+                "app/engine/strategy/algorithms/_rsi_range_base.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/indicators/base.py",
+                "app/engine/indicators/rsi.py",
+                "app/engine/indicators/adx.py",
+                "app/engine/indicators/supertrend.py",
+                "app/engine/indicators/macd.py",
+                "app/engine/indicators/ema.py",
+                "app/engine/indicators/sma.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Long-only 15-minute momentum strategy. Same RSI-range filter as "
             "Strategy A. On each bar while flat, enters long if RSI is in "
@@ -1603,21 +2373,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_b_pine,
-        build=lambda p: SpyStrategyBAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
-            supertrend_atr_period=p.supertrend_atr_period,  # type: ignore[attr-defined]
-            supertrend_multiplier=p.supertrend_multiplier,  # type: ignore[attr-defined]
-            adx_entry_threshold=p.adx_entry_threshold,  # type: ignore[attr-defined]
-            macd_fast=p.macd_fast,  # type: ignore[attr-defined]
-            macd_slow=p.macd_slow,  # type: ignore[attr-defined]
-            macd_signal=p.macd_signal,  # type: ignore[attr-defined]
-            rsi_period=p.rsi_period,  # type: ignore[attr-defined]
-            rsi_low_gate=p.rsi_low_gate,  # type: ignore[attr-defined]
-            rsi_high_gate=p.rsi_high_gate,  # type: ignore[attr-defined]
-            adx_period=p.adx_period,  # type: ignore[attr-defined]
-            adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
-            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
-        ),
+        build=lambda p: _build_spy_strategy_b_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=_build_spy_strategy_b_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -1625,6 +2382,150 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_c": StrategyRegistration(
         display_name="Strategy C — ADX-rising + RSI-range",
         class_name="SpyStrategyCAlgorithm",
+        signal_program_contract=SignalProgramContract(
+            program_version=_SPY_C_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=RsiRangeStrategyCParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="9efc77718f0028e78ad6ea7d56ffda19a510cbba7f5ea3b5a6d5cccade6a75c6",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            # The cadence this contract is qualified at, and the fallback
+            # `decision_timeframe_ms_for` returns for a program whose
+            # parameters do not override it. A deploy that resolves a
+            # different `resolution_minutes` seals its own cadence and
+            # cannot prove its running build against this corpus.
+            decision_timeframe_ms=15 * 60_000,
+            # SpyStrategyCAlgorithm's longest warmup dependency is ADX,
+            # needing 2 * adx_period = 28 consolidated 15-minute bars (420
+            # minutes) before is_ready. A single NYSE RTH session is only
+            # 390 minutes (26 bars of 15 minutes), so warmup spans into a
+            # 2nd session -- the same "~2 trading sessions" situation as
+            # sma_crossover's own SMA(30) warmup. 7 calendar days is the
+            # same comfortable buffer over that 2-session minimum,
+            # covering weekends/holidays.
+            warmup_lookback_days=7,
+            # SpyStrategyCAlgorithm.initialize() (via RsiRangeStrategy)
+            # builds RSI(rsi_period=14) and ADX(adx_period=14) -- the only
+            # two indicators this program constructs (no
+            # _init_extra_indicators() override). Both are fed
+            # bar.close/bar at bar.end_ms. RSI's is_ready flips at
+            # samples >= period + 1 (app/engine/indicators/rsi.py, one
+            # extra sample for the first delta); ADX's is_ready flips at
+            # samples >= 2 * period (app/engine/indicators/adx.py -- true
+            # range and directional movement both need a *prior* bar
+            # before the Wilder smoothing itself needs `period` more
+            # samples). Any drift between these constants and the real
+            # indicators would already change the golden trace root and
+            # fail test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root,
+            # so this cannot silently go stale.
+            signals=(
+                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
+                SignalSeriesContract(name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28),
+            ),
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            bar_integrity=SignalBarIntegrityContract(),
+            # SpyStrategyCAlgorithm.evaluate_signal_bar (via RsiRangeStrategy)
+            # exits the instant ADX < adx_exit_threshold is true on a
+            # decision clock -- there is no held countdown, so this seals
+            # as "level_true" (the same rule sma_crossover's own promotion
+            # added) rather than restating EMA's fixed-countdown rule
+            # dishonestly. countdown_state_persistable=False because
+            # RsiRangeStrategy has not implemented
+            # report_state_for_persistence/restore_state_from_persistence/
+            # validate_state_payload at all (Strategy's base defaults apply
+            # unchanged) -- no state, flat or otherwise, currently
+            # survives a Pause/Resume, not just a mid-exit one.
+            exit_eligibility=ExitEligibilityContract(
+                rule="level_true",
+                countdown_state_persistable=False,
+            ),
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only. While flat: enter when RSI(14) is within [rsi_low_gate, "
+                    "rsi_high_gate], ADX(14) > adx_entry_threshold (default 20), AND ADX is "
+                    "strictly rising bar-over-bar (ADX[i] > ADX[i-1]). While in position: exit "
+                    "the instant ADX(14) < adx_exit_threshold (default 15)."
+                ),
+                reference=(
+                    "Internal -- no external port reference; RSI per LEAN Wilder's method "
+                    "(app/engine/indicators/rsi.py), ADX per Wilder, J. Welles, New Concepts in "
+                    "Technical Trading Systems (1978) (app/engine/indicators/adx.py). No LEAN or "
+                    "TradingView reconciliation exists for this promotion -- Polygon live data is "
+                    "unavailable, so per PRD direction this program is qualified against its own "
+                    "deterministic replay of the committed cross-engine-study cells "
+                    "(Polygon-captured one-minute bars) only, with no cross-engine "
+                    "parity claim."
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/spy_strategy_c.py::SpyStrategyCAlgorithm "
+                    "(extends app/engine/strategy/algorithms/_rsi_range_base.py::RsiRangeStrategy)"
+                ),
+                validated_against=(
+                    "app/engine/tests/test_strategies_abc.py; "
+                    "tests/fixtures/test_strategy_parity_fixtures.py (ENG-008 self-equivalence); "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[spy_strategy_c]"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared (signal_program.py), not
+                # tolerance-compared -- see
+                # test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root's
+                # byte-exact trace_root assertion. Same as sma_crossover:
+                # no second, one-level-down LEAN-value-parity claim here
+                # (no tolerance_atol/tolerance_rtol/parity_fixture_ids) --
+                # nothing beyond this corpus's own self-consistency has
+                # been established for this promotion.
+                equivalence_level="bit_exact",
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "adx_entry_threshold": "adx_points",
+                "rsi_period": "bars",
+                "rsi_low_gate": "rsi_points",
+                "rsi_high_gate": "rsi_points",
+                "adx_period": "bars",
+                "adx_exit_threshold": "adx_points",
+                "resolution_minutes": "minutes",
+            },
+            validated_settings={
+                "adx_entry_threshold": 20.0,
+                "rsi_period": 14,
+                "rsi_low_gate": 38.0,
+                "rsi_high_gate": 70.0,
+                "adx_period": 14,
+                "adx_exit_threshold": 15.0,
+                "resolution_minutes": 15,
+            },
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            # Same triage rule as ema_crossover_signal's/sma_crossover's
+            # artifact_paths (issue #1728 defect 2): the transitive
+            # first-party import closure of the root below, MINUS the files
+            # in _SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
+            # (scripts/run_signal_program_build_qualification.py) that are
+            # provably unreachable from evaluate_signal_bar()'s decision
+            # math. test_spy_strategy_c_signal_decision_digest_closure.py
+            # recomputes the closure from these paths and fails the build
+            # if a newly introduced import isn't triaged into one bucket or
+            # the other. RsiRangeStrategy (the shared base) is a root
+            # alongside the leaf module because evaluate_signal_bar/
+            # commit_signal_decision/discard_signal_decision all live on
+            # the base, not on SpyStrategyCAlgorithm itself.
+            artifact_paths=(
+                "app/engine/strategy/algorithms/spy_strategy_c.py",
+                "app/engine/strategy/algorithms/_rsi_range_base.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/indicators/base.py",
+                "app/engine/indicators/adx.py",
+                "app/engine/indicators/rsi.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Long-only 15-minute strategy with the simplest gate: on each "
             "bar while flat, enter long if RSI is in range, ADX > 20 AND "
@@ -1678,16 +2579,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_c_pine,
-        build=lambda p: SpyStrategyCAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
-            adx_entry_threshold=p.adx_entry_threshold,  # type: ignore[attr-defined]
-            rsi_period=p.rsi_period,  # type: ignore[attr-defined]
-            rsi_low_gate=p.rsi_low_gate,  # type: ignore[attr-defined]
-            rsi_high_gate=p.rsi_high_gate,  # type: ignore[attr-defined]
-            adx_period=p.adx_period,  # type: ignore[attr-defined]
-            adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
-            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
-        ),
+        build=lambda p: _build_spy_strategy_c_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=_build_spy_strategy_c_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",

@@ -55,7 +55,7 @@ from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
-from app.engine.strategy.signal_program import EmaCrossoverSignalProgram, SignalDecision
+from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
 
 
@@ -147,7 +147,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # Set only by the registry's Signal Program factory. Direct
         # construction stays a compatibility surface for historical tests and
         # ledgers; public Backtest construction goes through this program.
-        self.signal_program: EmaCrossoverSignalProgram | None = None
+        self.signal_program: SignalProgram | None = None
 
     def initialize(self) -> None:
         # LEAN-parity defaults — match the C# reference Initialize().
@@ -424,10 +424,6 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             f"ENTRY SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f} "
             f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
         )
-
-    def discard_signal_decision(self, _bar: TradeBar, _intent: SignalIntent | None) -> None:
-        """A staged candidate has no speculative lifecycle state to unwind."""
-        return
 
     def rollback_blocked_entry(self) -> None:
         """Undo the ENTER-time state committed by ``_on_fifteen_minute_bar``
