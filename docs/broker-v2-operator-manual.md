@@ -85,8 +85,8 @@ rebinding path.
 ## Signal Program build proof and legacy seal migration
 
 A strategy backed by a registered Signal Program (EMA Crossover Signal, SMA
-Crossover, RSI Mean Reversion, and SPY Strategies A, B, and C) seals its exact
-resolved semantics — program version, golden trace
+Crossover, RSI Mean Reversion, SPY Strategies A, B, and C, and Deployment
+Validation) seals its exact resolved semantics — program version, golden trace
 root, every resolved parameter with its unit and origin — once at deploy time.
 Every Start and every Resume then re-hash the currently loaded program bytes
 and require a golden-qualification receipt proving those exact bytes were

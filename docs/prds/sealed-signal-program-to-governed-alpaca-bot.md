@@ -1,7 +1,7 @@
 # PRD — Sealed Signal Programs to Governed Alpaca Bots
 
 - **Date:** 2026-08-21
-- **Status:** ADR 0042 captured the authority decision; delivery remains underway
+- **Status:** ADR 0042 captured the authority decision. Slices 0–5 delivered (#1722 → slices 0/1a/1b/1c, #1732 → slices 2/3/4, #1733 and #1734 → slice 5, tracker #1723). Slice 6 (optional per-program carryover, #1731) is unscheduled and carryover remains globally disabled; deferred hardening is filed as #1735, #1736, and #1737
 - **Product surface:** Alpaca Broker V2 under `/brokers/alpaca/...`; Backtest, Dry Run, and Alpaca Paper strategy execution
 - **Decision boundary:** No real-money Live mode; no deprecated IBKR bot-control work
 - **Research basis:** Completed strategy-to-bot Wayfinder map, eight resolved architecture tickets, and two adversarial senior-architect reviews

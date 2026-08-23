@@ -87,6 +87,7 @@ audit copy under `references/qc-shadow/`.
 
 ## Validation
 
+- Signal Program promotion (issue #1730): sealed contract, pinned trace root, build receipt, and the custody split are recorded in [`deployment-validation-signal.md`](deployment-validation-signal.md); seam behaviour is pinned by `PythonDataService/tests/engine/strategy/test_deployment_validation_signal_program.py`
 - Engine behavior: `PythonDataService/tests/engine/test_deployment_validation_strategy.py`
 - Cross-implementation session-window parity (canonical Python, QC shadow copy, LEAN trusted template): `PythonDataService/tests/engine/test_deployment_validation_session_window_parity.py` against `PythonDataService/tests/fixtures/golden/deployment-validation-session-window/`
 - Deployment artifacts: `PythonDataService/tests/engine/live/test_deployment_validation_deploy_artifacts.py`

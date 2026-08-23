@@ -48,7 +48,7 @@ a byte-stable trace root proving the running bytes reproduce the decisions they
 were qualified on — and deliberately not cross-engine parity claims; each
 corpus's `attribution.md` states which it is.
 
-- `PythonDataService/tests/fixtures/golden/{ema-signal-session,sma-crossover-signal,rsi-mean-reversion-signal,spy-strategy-a-signal,spy-strategy-b-signal,spy-strategy-c-signal}/v1/`
+- `PythonDataService/tests/fixtures/golden/{ema-signal-session,sma-crossover-signal,rsi-mean-reversion-signal,spy-strategy-a-signal,spy-strategy-b-signal,spy-strategy-c-signal,deployment-validation-signal}/v1/`
   - Per-program `EvaluationTrace` corpus, `attribution.md` (source cells,
     parameters, regeneration command, replay window, tolerance), and pinned root.
 - `PythonDataService/tests/engine/strategy/test_signal_program_qualification_matrix.py`
@@ -58,6 +58,13 @@ corpus's `attribution.md` states which it is.
 - `PythonDataService/tests/engine/strategy/test_signal_program_discard_safety.py`
   - A discarded evaluation never advances position custody; a suppressed EXIT
     stays re-proposable.
+- `PythonDataService/tests/engine/strategy/test_signal_program_session_boundaries.py`,
+  `test_signal_program_exit_and_fill_semantics.py`, and
+  `PythonDataService/tests/services/test_signal_program_crash_replay.py`
+  - Per-program session-boundary handling, declared-vs-actual exit
+    eligibility and fill-independence, and crash-window replay; all
+    parameterized off the registry so a promotion is covered on
+    registration.
 - `PythonDataService/app/data/signal_program_build_receipts.json`
   - Build receipts minted only by
     `scripts/run_signal_program_build_qualification.py` after a fresh golden
