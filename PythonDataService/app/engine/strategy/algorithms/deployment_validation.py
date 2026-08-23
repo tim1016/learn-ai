@@ -174,10 +174,16 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         which makes an ``OBSERVE_ONLY`` bar permanently non-actionable even
         when an operator presses Continue immediately afterward.
 
-        Position-lifecycle fields (``_in_position``, ``_entry_pending``,
-        ``_bars_until_exit_signal``, ``_pending_signal_time_ms``) are only
-        ever mutated from ``commit_signal_decision``: a discarded evaluation
-        must not advance them as though it had been committed. The
+        Position custody (``_in_position``, ``_entry_pending``,
+        ``_pending_signal_time_ms``) is only ever mutated from
+        ``commit_signal_decision``: a discarded evaluation must not advance
+        it as though it had been committed.
+        ``_bars_until_exit_signal`` is the deliberate exception, and the
+        distinction matters because this sentence is the stated
+        justification for discard safety. Its *terminal* value is never
+        persisted here -- only the non-terminal countdown advance is, on the
+        branch that proposes nothing -- so a discarded EXIT re-evaluates
+        from the same prior countdown rather than one bar closer. The
         green-streak detector and the exit hold-counter follow
         ``EmaCrossoverSignalAlgorithm.evaluate_signal_bar``'s countdown
         pattern exactly — the terminal (trigger) value is computed locally
@@ -202,17 +208,16 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         if bar.end_ms >= self._stop_and_flatten_ms:
             self._stopped_for_day = True
             self._green_streak = 0
-            # NOTE (pre-existing defect, preserved verbatim — see the
-            # promotion commit for the report): the pre-split
-            # implementation reset ``_entry_pending`` to False via
-            # ``_reset_detection()`` immediately before checking
-            # ``self._in_position or self._entry_pending`` here, which made
-            # the ``or self._entry_pending`` half of that condition
-            # permanently dead — an order submitted but not yet filled at
-            # the exact instant the barrier fires was never observably
-            # caught by it. Reading only ``prior_in_position`` below
-            # reproduces that exact (buggy) observable behavior rather than
-            # silently fixing it as part of this seam promotion.
+            # Reading only ``prior_in_position`` is complete, not a
+            # preserved bug. ``commit_signal_decision`` sets
+            # ``_entry_pending`` and ``_in_position`` together and every
+            # site that clears one clears the other, so
+            # ``_entry_pending`` implies ``_in_position``: the case an
+            # ``or self._entry_pending`` would add -- an order submitted
+            # but not yet filled when the barrier fires -- is already
+            # caught here. An earlier note called that half a preserved
+            # pre-existing defect; after the promotion it describes a
+            # state combination that cannot occur.
             if prior_in_position:
                 intent: SignalIntent | None = SignalIntent(
                     kind=SignalIntentKind.EXIT, bar_close_ms=bar.end_ms, intended_price=bar.close
@@ -274,16 +279,14 @@ class DeploymentValidationConsecutiveGreen(Strategy):
                 ),
             )
 
-        if self._entry_pending:
-            self._publish_decision(bar, "HOLD")
-            return SignalDecision(
-                intent=None,
-                ready=True,
-                relation_facts={"green_streak_met": False, "was_in_position": False},
-                signal_facts={"decision": "HOLD", "timeframe": timeframe},
-                reason_evidence={"entry_pending": True},
-                action_plan_request=None,
-            )
+        # Not a branch: unreachable. ``_entry_pending`` implies
+        # ``_in_position`` (see the barrier note above), so the
+        # ``prior_in_position`` return above always wins first and this
+        # decision's ``reason_evidence={"entry_pending": True}`` could never
+        # be emitted. Asserted rather than deleted silently so the invariant
+        # the deletion relies on fails loudly if a future edit breaks it,
+        # instead of decaying into another comment that no longer holds.
+        assert not self._entry_pending, "entry_pending without in_position"
 
         prior_streak = self._green_streak
         candidate_streak = prior_streak + 1 if bar.close > bar.open else 0

@@ -40,6 +40,7 @@ import pytest
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import AccountFreezeState
 from app.schemas.run_admission import ProgramBuildAdmissionFact
+from tests._helpers.canary_admission import admit_canary_pairing
 from tests.services.test_bot_runner import (
     _SID,
     _T0,
@@ -96,6 +97,7 @@ async def _deploy_trade_bot_as_simulated_canary(
     registry,
     monkeypatch: pytest.MonkeyPatch,
     *,
+    admitted_pairing: tuple[str, str] = _REAL_DEPLOY_PROGRAM_ACCOUNT_PAIR,
     binding_overrides: dict | None = None,
 ):
     """Deploy a real (non-canary) trade bot, then substitute its running
@@ -107,15 +109,14 @@ async def _deploy_trade_bot_as_simulated_canary(
     real deployed strategy ("deployment_validation") became a registered
     Signal Program (issue #1730 Slice 5) and its real build proves PROVEN at
     deploy time, so the front door's own canary gate applies before any
-    simulated override runs. Admitting exactly this one pairing for the
-    duration of the deploy call is unrelated to whatever allowlist state an
-    individual test wants in place afterward, at Stop -- callers are free to
-    monkeypatch the allowlist again once this returns.
+    simulated override runs. Admitting ``admitted_pairing`` (exactly one
+    pairing, for the duration of the deploy call) is a real, visible
+    mutation of the shared module-level allowlist and is unrelated to
+    whatever allowlist state an individual test wants in place afterward, at
+    Stop -- callers are free to admit a different pairing again once this
+    returns.
     """
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({_REAL_DEPLOY_PROGRAM_ACCOUNT_PAIR}),
-    )
+    admit_canary_pairing(monkeypatch, *admitted_pairing)
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
     managed = registry._bots[_SID]
     managed.binding = managed.binding.model_copy(
@@ -271,8 +272,8 @@ async def test_canary_rollback_verdict_absent_for_legacy_non_program_instance(
     Simulated here, unlike before issue #1730 Slice 5: this file's real
     deployed strategy ("deployment_validation") was itself promoted through
     the governed Signal Program seam, and no strategy remains in
-    ``app.services.bot_trade_strategy._SIGNAL_PROGRAM_STRATEGY_KEYS`` with a
-    real, undecorated NOT_APPLICABLE build any more -- there is no live
+    ``app.services.bot_trade_strategy.supported_alpaca_paper_strategy_keys()``
+    with a real, undecorated NOT_APPLICABLE build any more -- there is no live
     trade-deployable subject left to exercise unmodified. The override below
     reproduces exactly the fact shape a real legacy (no registered Signal
     Program) instance's binding carried when this test could still get one

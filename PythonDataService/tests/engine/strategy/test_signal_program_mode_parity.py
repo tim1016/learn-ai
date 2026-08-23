@@ -29,8 +29,9 @@ stage is *settled*.
   and both callers -- ``run_trade_bot`` (Paper) and ``run_dry_run_bot`` (Dry
   Run) -- stream every sealed program through the identical
   ``strategy_evaluations`` generator (see
-  ``test_dry_run_and_paper_share_the_same_evaluation_stream`` below, and the
-  ``_STRATEGY_EVALUATION_STREAMS`` table both funnel through). Per closed
+  ``test_dry_run_and_paper_share_the_same_evaluation_stream`` below; the
+  set of keys that stream is derived from ``_STRATEGY_REGISTRY`` by
+  ``supported_alpaca_paper_strategy_keys()``, not from a second table). Per closed
   bar, the mode comes from ``_evaluation_mode_for(feed, bar)``, which
   returns ``EvaluationMode.DECIDE`` for any ordinary, unpaused feed -- i.e.
   precisely the "qualified bar" case this criterion names. Settlement is
@@ -85,7 +86,13 @@ from app.engine.strategy.signal_program import (
     trace_root,
 )
 from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
-from tests._helpers.signal_program import SEALED_KEYS, bind_strategy_context, indexed_bucket
+from tests._helpers.signal_program import (
+    SEALED_KEYS,
+    BarBody,
+    bind_strategy_context,
+    indexed_bucket,
+    mark_bar_arrival,
+)
 
 
 def _zigzag(n: int, *, up: float, down: float, period: int, start: float) -> list[float]:
@@ -145,13 +152,28 @@ def _qualified_bar_sequence(symbol: str, width_ms: int) -> list[TradeBar]:
        trend for ADX to clear its threshold without RSI pinning at an
        extreme, in both directions.
 
+    5. Every bucket carries a real BODY (``open`` on its own low when the
+       path rose into this bar, on its own high when it fell), because
+       ``deployment_validation`` is gated on the bar body itself -- two
+       consecutive green bars, ``close > open`` -- and not on any indicator.
+       With the builder's former ``open == close`` shape it could not
+       propose a single ENTER here, so its parametrization would have
+       compared ``None`` to ``None`` for all 761 bars and the
+       ``saw_a_real_action_plan_request`` guard would have caught it. Only
+       ``open`` moves; ``high``/``low``/``close`` are unchanged (see
+       ``tests/_helpers/signal_program.bucket``), so every other program's
+       indicator inputs are byte-identical to before.
+
     Every bar is built at the program's own ``timeframe_ms`` with a
     strictly increasing index, so it cannot hit either of
     ``SignalSession.advance``'s two quarantine reasons
-    (``TIMEFRAME_MISMATCH``, ``NON_MONOTONIC_DECISION_CLOCK``).
+    (``TIMEFRAME_MISMATCH``, ``NON_MONOTONIC_DECISION_CLOCK``), and the run
+    is anchored at a real NYSE session open (``indexed_bucket``) so a
+    calendar-aware program can resolve every bar's session.
     """
+    start_level = 300.0
     levels: list[float] = []
-    level = 300.0
+    level = start_level
     for _ in range(60):  # 1. decline -- seed "below trend", oversold RSI
         level -= 2.0
         levels.append(level)
@@ -165,7 +187,14 @@ def _qualified_bar_sequence(symbol: str, width_ms: int) -> list[TradeBar]:
         levels.append(level)
     levels += _zigzag(300, up=2.0, down=1.0, period=4, start=levels[-1])  # 4a. ADX up-trend
     levels += _zigzag(300, up=-2.0, down=-1.0, period=4, start=levels[-1])  # 4b. ADX down-trend
-    return [indexed_bucket(symbol, index + 1, width_ms, f"{level:.2f}") for index, level in enumerate(levels)]
+
+    bars: list[TradeBar] = []
+    previous = start_level
+    for index, level in enumerate(levels):
+        body: BarBody = "green" if level > previous else "red"
+        bars.append(indexed_bucket(symbol, index + 1, width_ms, f"{level:.2f}", body=body))
+        previous = level
+    return bars
 
 
 def _assert_nothing_was_quarantined(program: SignalProgram, bar: TradeBar, *, label: str) -> None:
@@ -198,10 +227,11 @@ def _replay_backtest(program: SignalProgram, bars: list[TradeBar]) -> list[Evalu
     axis this file claims to vary, so the replay must go through the same
     entrypoint that reads it.
     """
-    bind_strategy_context(program.strategy)
+    context, _executor = bind_strategy_context(program.strategy)
     program.activate_for_backtest()
     session = program.session
     for bar in bars:
+        mark_bar_arrival(context, bar)
         program.on_consolidated_bar(bar)
         _assert_nothing_was_quarantined(program, bar, label="backtest")
         session.commit_if_staged()
@@ -229,10 +259,11 @@ def _replay_runner(program: SignalProgram, bars: list[TradeBar]) -> list[Evaluat
     default. Both replays go through ``on_consolidated_bar``, because that is
     the only place either default or capture is ever read.
     """
-    bind_strategy_context(program.strategy)
+    context, _executor = bind_strategy_context(program.strategy)
     program.activate_for_runner()
     session = program.session
     for bar in bars:
+        mark_bar_arrival(context, bar)
         program.capture_source_bar(bar, mode=EvaluationMode.DECIDE)
         program.on_consolidated_bar(bar)
         _assert_nothing_was_quarantined(program, bar, label="runner")

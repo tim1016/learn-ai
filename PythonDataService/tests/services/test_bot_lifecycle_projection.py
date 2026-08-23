@@ -27,6 +27,7 @@ from app.services.bot_lifecycle_projection import (
 )
 from app.services.bot_runner import BotTaskRegistry
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.canary_admission import admit_canary_pairing
 from tests.services.test_bot_runner import (  # noqa: F401 -- _fresh_live_market_liveness is an autouse fixture, registered by import
     _FakeFeed,
     _fresh_live_market_liveness,
@@ -266,15 +267,7 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
         start_custody_guard=clerk.start_admission_snapshot,
         now_ms=now_ms_utc,
     )
-    # The default deployed strategy ("deployment_validation") is a
-    # registered Signal Program (issue #1730 Slice 5) whose real build now
-    # proves PROVEN, so a `mode="trade"` deploy needs its own canary
-    # allowlist entry for this fixture's account -- unrelated to what this
-    # test itself is about (duty commit ordering before projection).
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("deployment_validation", "PA-TEST")}),
-    )
+    admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
     try:
         deployed = await registry.deploy(
             broker="alpaca",

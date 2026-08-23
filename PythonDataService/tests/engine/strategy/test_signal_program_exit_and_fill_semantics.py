@@ -64,7 +64,8 @@ import pytest
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
-from app.engine.strategy.base import Strategy
+from app.engine.strategy.algorithms.deployment_validation import _session_decision_window_ms
+from app.engine.strategy.base import Strategy, StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import (
@@ -75,13 +76,21 @@ from app.engine.strategy.signal_program import (
     SignalProgram,
     StageQuarantine,
 )
-from tests._helpers.signal_program import SEALED_KEYS, indexed_bucket
+from tests._helpers.signal_program import (
+    SEALED_KEYS,
+    BarBody,
+    anchor_session_date,
+    indexed_bucket,
+    mark_bar_arrival,
+    session_open_anchor_ms,
+)
 from tests.engine.strategy.conftest import build_program
 
 _FLAT_CLOSE = "500"
 """Every bar this file drives carries the same close: entry and exit
 conditions here are produced entirely by the installed indicator doubles
-below, never by price movement."""
+below -- or, for the one program with no indicators at all, by the bar
+BODY (``_ProgramRig.bar_body``) -- never by price movement."""
 
 
 # ---------------------------------------------------------------------------
@@ -148,12 +157,17 @@ class _ReadySupertrend:
 # ``arm_seed``/``arm_entry``/``arm_exit`` install or mutate indicator doubles
 # on an already-``initialize()``d strategy. ``pre_entry_hold_bars`` is the
 # number of HOLD decision clocks needed before the entry-triggering bar
-# (only ``sma_crossover`` needs one, to seed its ``_prev_short_above_long``
+# (``sma_crossover`` needs one, to seed its ``_prev_short_above_long``
 # crossover-relation flag so the entry bar is a *fresh* cross rather than the
-# very first observation). ``post_entry_hold_bars`` is the number of HOLD
-# clocks needed after ENTER commits before the exit condition is checked
-# (only ``ema_crossover_signal``'s fixed 5-clock countdown needs these; every
-# ``level_true`` program's exit is checked starting the very next clock).
+# very first observation; ``deployment_validation`` needs a derived run of
+# them -- see ``_deployment_validation_pre_entry_hold_bars``).
+# ``post_entry_hold_bars`` is the number of HOLD clocks needed after ENTER
+# commits before the exit condition is checked (the countdown programs --
+# ``ema_crossover_signal``'s fixed 5 clocks, ``deployment_validation``'s
+# fixed 3 -- need these; every ``level_true`` program's exit is checked
+# starting the very next clock). ``bar_body`` shapes the driven bars
+# themselves, for the one program whose entry condition IS the bar body and
+# which therefore has no indicator to double.
 # ---------------------------------------------------------------------------
 
 
@@ -164,6 +178,7 @@ class _ProgramRig:
     arm_seed: Callable[[Strategy], None] = lambda _strategy: None
     pre_entry_hold_bars: int = 0
     post_entry_hold_bars: int = 0
+    bar_body: BarBody = "flat"
 
 
 def _arm_entry_ema(strategy: Strategy) -> None:
@@ -231,6 +246,44 @@ def _arm_entry_strategy_c(strategy: Strategy) -> None:
     strategy._adx.previous_value = Decimal("20")  # type: ignore[attr-defined]  # current(25) > previous -> rising
 
 
+def _arm_noop_deployment_validation(_strategy: Strategy) -> None:
+    """No-op: ``deployment_validation`` owns no indicator to double.
+
+    Its entry gate is the bar body itself (two consecutive green minute
+    bars, ``close > open``) and its exit gate is a fixed countdown, so both
+    are driven entirely by ``_ProgramRig.bar_body`` and by the number of
+    decision clocks the driver runs -- there is no relation to flip on the
+    strategy object.
+    """
+
+
+def _deployment_validation_pre_entry_hold_bars() -> int:
+    """HOLD decision clocks ``deployment_validation`` needs before an ENTER.
+
+    Both terms are derived, never hardcoded:
+
+    * the buckets whose close falls before the program's own detection
+      start. That instant comes from the algorithm's own
+      ``_session_decision_window_ms`` -- the same canonical-calendar-anchored
+      helper the strategy calls -- evaluated on the anchor session
+      ``indexed_bucket`` builds against, so an early close or a DST shift
+      moves the test with the code instead of against it. Every such bucket
+      is a forced HOLD (``barrier="OUTSIDE_DETECTION_WINDOW"``).
+    * one further in-window green bucket, because two *consecutive* green
+      bars are required and only the second stages an ENTER.
+    """
+    registration = _STRATEGY_REGISTRY["deployment_validation"]
+    width_ms = registration.signal_program_factory(registration.param_schema()).session.timeframe_ms
+    anchor_ms = session_open_anchor_ms()
+    detection_start_ms, _stop_and_flatten_ms = _session_decision_window_ms(anchor_session_date())
+    # Bucket ``i`` closes at ``anchor + (i + 1) * width`` and is refused by
+    # the detection gate while that close is strictly before the start, so
+    # the count of refused buckets is ceil(offset / width) - 1.
+    detection_offset_ms = detection_start_ms - anchor_ms
+    buckets_before_detection = -(-detection_offset_ms // width_ms) - 1
+    return buckets_before_detection + 1
+
+
 _RIGS: dict[str, _ProgramRig] = {
     "ema_crossover_signal": _ProgramRig(
         arm_entry=_arm_entry_ema,
@@ -250,6 +303,23 @@ _RIGS: dict[str, _ProgramRig] = {
     "spy_strategy_a": _ProgramRig(arm_entry=_arm_entry_strategy_a, arm_exit=_arm_exit_rsi_range_common),
     "spy_strategy_b": _ProgramRig(arm_entry=_arm_entry_strategy_b, arm_exit=_arm_exit_rsi_range_common),
     "spy_strategy_c": _ProgramRig(arm_entry=_arm_entry_strategy_c, arm_exit=_arm_exit_rsi_range_common),
+    "deployment_validation": _ProgramRig(
+        arm_entry=_arm_noop_deployment_validation,
+        arm_exit=_arm_noop_deployment_validation,
+        pre_entry_hold_bars=_deployment_validation_pre_entry_hold_bars(),
+        # `commit_signal_decision` sets `_bars_until_exit_signal` to 3 at the
+        # ENTER clock; `evaluate_signal_bar` decrements it and only stages
+        # EXIT when it reaches 0. So clocks 1 and 2 after ENTER are HOLDs and
+        # clock 3 is the exit bar the driver advances itself -- which is
+        # exactly what this program's sealed contract declares
+        # (`exit_eligibility.countdown_decision_clocks=3`).
+        post_entry_hold_bars=2,
+        # Every driven bar is green, which is what gets the streak detector
+        # to two consecutive greens. Greenness is ignored on the bars where
+        # the program is already in position, so one setting covers the
+        # whole drive.
+        bar_body="green",
+    ),
 }
 
 
@@ -259,9 +329,16 @@ class _DriveResult:
     next_offset: int
 
 
+def _driven_bucket(rig: _ProgramRig, symbol: str, offset: int, width_ms: int) -> TradeBar:
+    """One bar of a rig's drive, shaped by that rig's declared body."""
+    return indexed_bucket(symbol, offset, width_ms, _FLAT_CLOSE, body=rig.bar_body)
+
+
 def _drive_to_first_exit(
     program: SignalProgram,
+    context: StrategyContext,
     rig: _ProgramRig,
+    symbol: str,
     *,
     on_commit: Callable[[EvaluationStage], None] | None = None,
 ) -> _DriveResult:
@@ -269,16 +346,25 @@ def _drive_to_first_exit(
 
     The EXIT stage is returned un-settled -- the caller decides whether to
     DISCARD it (criterion A) or COMMIT it (criterion B).
+
+    ``symbol`` is the registration's own ``param_schema().symbol`` rather
+    than a private attribute read off the strategy: the sealed programs do
+    NOT share one such attribute (``deployment_validation`` names its two
+    ``_signal_symbol_name``/``_trade_symbol_name``, because it is the one
+    program that can trade a different instrument than it signals on), so
+    reaching for ``strategy._symbol_name`` broke the moment a seventh
+    program was promoted.
     """
     strategy = program.strategy
     session = program.session
-    symbol = strategy._symbol_name  # type: ignore[attr-defined]  # every sealed program sets this in __init__
     width = session.timeframe_ms
     offset = 0
 
     def _advance_commit(*, expect_candidate: str | None, label: str) -> EvaluationStage:
         nonlocal offset
-        stage = session.advance(indexed_bucket(symbol, offset, width, _FLAT_CLOSE), mode=EvaluationMode.DECIDE)
+        bar = _driven_bucket(rig, symbol, offset, width)
+        mark_bar_arrival(context, bar)
+        stage = session.advance(bar, mode=EvaluationMode.DECIDE)
         assert not isinstance(stage, StageQuarantine), f"{label}: quarantined ({stage.reason})"
         assert stage.trace.staged_candidate == expect_candidate, (
             f"{label}: expected staged_candidate={expect_candidate!r}, got "
@@ -303,7 +389,9 @@ def _drive_to_first_exit(
 
     rig.arm_exit(strategy)
     exit_offset = offset
-    stage = session.advance(indexed_bucket(symbol, exit_offset, width, _FLAT_CLOSE), mode=EvaluationMode.DECIDE)
+    exit_bar = _driven_bucket(rig, symbol, exit_offset, width)
+    mark_bar_arrival(context, exit_bar)
+    stage = session.advance(exit_bar, mode=EvaluationMode.DECIDE)
     assert not isinstance(stage, StageQuarantine), f"exit bar: quarantined ({stage.reason})"
     assert stage.trace.staged_candidate == "EXIT", (
         f"exit bar: expected staged_candidate='EXIT', got {stage.trace.staged_candidate!r} "
@@ -330,17 +418,16 @@ def test_suppressed_exit_reproposal_matches_declared_exit_eligibility(key: str) 
         "would be exactly the coverage loss issue #1730 exists to prevent."
     )
 
-    program = build_program(key).program
-    strategy = program.strategy
+    program, params, _executor, context = build_program(key)
+    symbol = params.symbol  # type: ignore[attr-defined]  # every param schema declares one
     session = program.session
 
-    drive = _drive_to_first_exit(program, rig)
+    drive = _drive_to_first_exit(program, context, rig, symbol)
     session.settle(Settlement.DISCARD)
 
-    reproposal = session.advance(
-        indexed_bucket(strategy._symbol_name, drive.next_offset, session.timeframe_ms, _FLAT_CLOSE),  # type: ignore[attr-defined]
-        mode=EvaluationMode.DECIDE,
-    )
+    reproposal_bar = _driven_bucket(rig, symbol, drive.next_offset, session.timeframe_ms)
+    mark_bar_arrival(context, reproposal_bar)
+    reproposal = session.advance(reproposal_bar, mode=EvaluationMode.DECIDE)
     assert not isinstance(reproposal, StageQuarantine), f"reproposal bar quarantined: {reproposal.reason}"
 
     declared_rule = contract.exit_eligibility.rule
@@ -364,10 +451,10 @@ def test_suppressed_exit_reproposal_matches_declared_exit_eligibility(key: str) 
 # ---------------------------------------------------------------------------
 
 
-def _synthetic_fill(strategy: Strategy, stage: EvaluationStage, intent: SignalIntent, order_id: int) -> OrderEvent:
+def _synthetic_fill(symbol: str, stage: EvaluationStage, intent: SignalIntent, order_id: int) -> OrderEvent:
     return OrderEvent(
         order_id=order_id,
-        symbol=strategy._symbol_name,  # type: ignore[attr-defined]
+        symbol=symbol,
         fill_price=stage.bar.close,
         fill_quantity=1,
         direction=Direction.LONG if intent.kind is SignalIntentKind.ENTER else Direction.FLAT,
@@ -392,7 +479,8 @@ def _traces_for_one_enter_exit_cycle(key: str, *, apply_fills: bool) -> list[Eva
     program itself computes -- this test does not assert which.
     """
     rig = _RIGS[key]
-    program = build_program(key).program
+    program, params, _executor, context = build_program(key)
+    symbol = params.symbol  # type: ignore[attr-defined]  # every param schema declares one
     strategy = program.strategy
     session = program.session
     order_ids = count(1)
@@ -401,15 +489,16 @@ def _traces_for_one_enter_exit_cycle(key: str, *, apply_fills: bool) -> list[Eva
         if not apply_fills:
             return
         for intent in stage.intents:
-            strategy.on_order_event(_synthetic_fill(strategy, stage, intent, next(order_ids)))
+            strategy.on_order_event(_synthetic_fill(symbol, stage, intent, next(order_ids)))
 
-    drive = _drive_to_first_exit(program, rig, on_commit=_deliver_fill)
+    drive = _drive_to_first_exit(program, context, rig, symbol, on_commit=_deliver_fill)
     session.settle(Settlement.COMMIT)
     _deliver_fill(drive.stage)
 
     rig.arm_entry(strategy)
-    symbol = strategy._symbol_name  # type: ignore[attr-defined]
-    post_exit_stage = session.advance(indexed_bucket(symbol, drive.next_offset, session.timeframe_ms, _FLAT_CLOSE), mode=EvaluationMode.DECIDE)
+    post_exit_bar = _driven_bucket(rig, symbol, drive.next_offset, session.timeframe_ms)
+    mark_bar_arrival(context, post_exit_bar)
+    post_exit_stage = session.advance(post_exit_bar, mode=EvaluationMode.DECIDE)
     assert not isinstance(post_exit_stage, StageQuarantine), (
         f"'{key}': post-exit observation bar quarantined ({post_exit_stage.reason})"
     )

@@ -24,6 +24,7 @@ from app.services.strategy_validation_manifest import (
     load_strategy_validation_entries,
     strategy_registry_seeds,
 )
+from tests._helpers.canary_admission import admit_canary_pairing
 from tests.broker.v2panel.conftest import _BODY, _accepted_deploy_entry, _FakeDeployRegistry
 from tests.broker.v2panel.fixtures import ACCT
 
@@ -72,13 +73,7 @@ def _synthetic_blocked_entry(strategy_key: str) -> StrategyValidationEntry:
 def test_deploy_demotes_manifest_proof_that_differs_from_accepted_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
-    # about accepted-snapshot drift detection, not the canary allowlist, so
-    # explicitly enable the one pairing it deploys under to reach that check.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", ACCT)}),
-    )
+    admit_canary_pairing(monkeypatch, "ema_crossover_signal", ACCT)
     entry = _accepted_deploy_entry()
     changed = entry.model_copy(update={"qc_cloud_backtest_id": "a-different-qc-backtest-id"})
 
@@ -93,13 +88,7 @@ def test_deploy_demotes_manifest_proof_that_differs_from_accepted_snapshot(
 
 
 def test_deploy_reverifies_the_accepted_audit_copy_hash(monkeypatch: pytest.MonkeyPatch) -> None:
-    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
-    # about audit-copy hash re-verification, not the canary allowlist, so
-    # explicitly enable the one pairing it deploys under to reach that check.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", ACCT)}),
-    )
+    admit_canary_pairing(monkeypatch, "ema_crossover_signal", ACCT)
     entry = _accepted_deploy_entry()
     event = entry.current_flag_event
     assert event is not None
@@ -129,14 +118,7 @@ def test_strategy_views_admissible_modes_track_selectable(monkeypatch: pytest.Mo
     selectable exactly — accepted and evidence-only rows admit both modes,
     a blocked row (whether a stale proof or a #1730 canary-not-allowlisted
     sealed program) admits dry_run only, never both and never neither."""
-    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
-    # about admissible-mode tracking, not the canary allowlist, so
-    # explicitly enable the one pairing it deploys under so `accepted`
-    # reaches "accepted" rather than being blocked by the allowlist first.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", ACCT)}),
-    )
+    admit_canary_pairing(monkeypatch, "ema_crossover_signal", ACCT)
     accepted = _accepted_deploy_entry()
     stale_proof_blocked = _synthetic_blocked_entry("deployment_validation")
     # rsi_mean_reversion is also a sealed Signal Program and is deliberately
@@ -171,13 +153,7 @@ def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(
 ) -> None:
     """#1702: an evidence-only row is Paper-selectable — its behavioral
     verdict no longer gates Paper, only the human-validated flag does."""
-    # sma_crossover is a sealed Signal Program (#1730); this test is about
-    # evidence-only Paper admissibility, not the canary allowlist, so
-    # explicitly enable the one pairing it deploys under to reach that check.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("sma_crossover", ACCT)}),
-    )
+    admit_canary_pairing(monkeypatch, "sma_crossover", ACCT)
     seeds = strategy_registry_seeds()
     flag_events_path = tmp_path / "strategy-validation" / "flag-events.json"
     append_strategy_validation_flag_event(
@@ -208,13 +184,7 @@ def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(
 
 
 def test_deploy_demotes_accepted_event_with_gating_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
-    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
-    # about gating-divergence detection, not the canary allowlist, so
-    # explicitly enable the one pairing it deploys under to reach that check.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", ACCT)}),
-    )
+    admit_canary_pairing(monkeypatch, "ema_crossover_signal", ACCT)
     entry = _accepted_deploy_entry()
     event = entry.current_flag_event
     assert event is not None
@@ -244,13 +214,7 @@ async def test_deploy_view_shows_blocked_strategy_but_stays_eligible_when_anothe
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fast_app, _registry = deploy_app
-    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
-    # about a blocked row coexisting with a selectable one, not the canary
-    # allowlist, so explicitly enable the one pairing it deploys under.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", ACCT)}),
-    )
+    admit_canary_pairing(monkeypatch, "ema_crossover_signal", ACCT)
     monkeypatch.setattr(
         panel_data_source,
         "load_strategy_validation_entries",
@@ -444,16 +408,7 @@ async def test_deploy_names_the_blocked_strategy_reason_even_when_every_strategy
         "load_strategy_validation_entries",
         lambda _registry: [blocked],
     )
-    # deployment_validation became a sealed Signal Program in this commit, so
-    # the canary allowlist is now checked ahead of accepted-proof
-    # re-verification and would otherwise answer with its own (correct, but
-    # different) reason. This test is about a stale proof naming itself, not
-    # about the allowlist, so admit the one pairing it deploys under to reach
-    # that check -- the same idiom its sibling tests in this file use.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("deployment_validation", ACCT)}),
-    )
+    admit_canary_pairing(monkeypatch, "deployment_validation", ACCT)
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(

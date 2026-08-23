@@ -105,7 +105,8 @@ class StrategyEvaluation:
     # The full canonical trace this evaluation staged, when the strategy is
     # a registered Signal Program (`registration.signal_program_factory` is
     # not `None`). `None` for a compatibility-mode strategy with no
-    # SignalSession. Every key in `_SIGNAL_PROGRAM_STRATEGY_KEYS` is a
+    # SignalSession. Every key `supported_alpaca_paper_strategy_keys()`
+    # admits is a
     # registered Signal Program (issue #1730 Slice 5), so this is `None`
     # only for a compatibility-mode strategy reaching this dataclass by
     # another route. Lets a caller that needs
@@ -606,7 +607,7 @@ async def strategy_evaluations(
     :func:`strategy_intents`, a read-only stream with no custody seam to
     record or discard a recovered candidate through.
     """
-    if binding.strategy_key not in _SIGNAL_PROGRAM_STRATEGY_KEYS:
+    if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
     async for evaluation in _signal_strategy_evaluations(binding, feed, captured_decisions):
         yield evaluation
@@ -628,31 +629,34 @@ async def strategy_intents(
         _settle_evaluation(evaluation, Settlement.COMMIT)
 
 
-# Retiring DeploymentValidationDecisionKernel made this an allowlist rather
-# than a dispatch table. It was previously a genuine mapping --
-# "deployment_validation" resolved to a second, Kernel-based stream while
-# every other key resolved to _signal_strategy_evaluations -- so a
-# Callable-valued dict was doing real work. With that outlier gone, every
-# key routed to the same function: a dispatch table with nothing to
-# dispatch on, plus a Callable type alias describing a value that no longer
-# varies. What the set actually expresses is membership, so it says that
-# directly and the one call site names its single stream.
-_SIGNAL_PROGRAM_STRATEGY_KEYS: frozenset[str] = frozenset(
-    {
-        "deployment_validation",
-        "ema_crossover_signal",
-        "sma_crossover",
-        "rsi_mean_reversion",
-        "spy_strategy_a",
-        "spy_strategy_b",
-        "spy_strategy_c",
-    }
-)
-
-
 def supported_alpaca_paper_strategy_keys() -> frozenset[str]:
-    """Return the registry keys backed by an executable Clerk intent stream."""
-    return _SIGNAL_PROGRAM_STRATEGY_KEYS
+    """Registry keys backed by an executable Clerk intent stream.
+
+    Retiring DeploymentValidationDecisionKernel emptied what used to be a
+    real dispatch table: "deployment_validation" resolved to a second,
+    Kernel-based stream while every other key resolved to
+    `_signal_strategy_evaluations`, so a Callable-valued dict was doing real
+    work. With that outlier gone every key routes to the same function, and
+    what remained was membership.
+
+    Membership is derived here, not enumerated. A hand-written set would be a
+    second authority for a fact `_STRATEGY_REGISTRY` already owns, and
+    nothing would hold the two equal -- they happen to agree today, which is
+    exactly how such a list looks right up until a promotion forgets it.
+    This repo has already paid that bill: `sma_crossover` shipped with no
+    discard-safety coverage because the list of programs to cover was a
+    matter of who remembered, which is why the test suites derive theirs the
+    same way.
+
+    So this function states the rule once -- a strategy is live-executable
+    exactly when it has a registered Signal Program factory -- and the guard
+    in `strategy_evaluations` cannot drift from the registry it guards.
+    """
+    return frozenset(
+        key
+        for key, registration in _STRATEGY_REGISTRY.items()
+        if registration.signal_program_factory is not None
+    )
 
 
 def alpaca_paper_strategy_default_symbol(strategy_key: str) -> str:

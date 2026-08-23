@@ -41,7 +41,7 @@ def test_discarded_evaluation_leaves_position_custody_untouched(key: str) -> Non
     # ``build_program`` warms through the session itself rather than
     # BacktestEngine -- see ``bind_strategy_context`` for why that matters
     # for these fixed-backtest-window strategies.
-    program, params, _executor = build_program(key)
+    program, params, _executor, _context = build_program(key)
     strategy = program.strategy
     session = program.session
     width = session.timeframe_ms
@@ -132,7 +132,7 @@ def test_sma_discarded_exit_stays_reproposable() -> None:
     to move on every ordinary bar, so only its value across a discarded EXIT
     is invariant.
     """
-    program, params, _executor = build_program("sma_crossover")
+    program, params, _executor, _context = build_program("sma_crossover")
     strategy = program.strategy
     session = program.session
     width = session.timeframe_ms

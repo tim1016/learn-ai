@@ -16,7 +16,10 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
+from datetime import date, timedelta
 from decimal import Decimal
+from functools import lru_cache
+from typing import Literal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
@@ -24,6 +27,7 @@ from app.engine.execution.signal_intent_executor import SignalIntentExecutionCon
 from app.engine.strategy.base import Strategy, StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
 from app.engine.strategy.signal_intent import SignalIntent
+from app.lean_sidecar import trading_calendar
 
 # ---------------------------------------------------------------------------
 # Registry-derived program list -- never a hand-written key list.
@@ -92,30 +96,141 @@ def bind_strategy_context(strategy: Strategy) -> tuple[StrategyContext, Recordin
     return context, executor
 
 
+def mark_bar_arrival(context: StrategyContext, bar: TradeBar) -> None:
+    """Stamp the decision clock and refresh the reference price, as both
+    production drivers do before a bucket's handler runs.
+
+    ``StrategyContext.register_consolidator``'s ``_on_emit`` wrapper
+    (``app/engine/strategy/base.py``) sets exactly these two fields on every
+    fired bucket, and ``bot_trade_strategy._drain_bar`` sets
+    ``current_time_ms`` again per minute bar. A test that drives
+    ``SignalSession.advance`` directly bypasses both, so it calls this
+    instead, before every ``advance``.
+
+    Not cosmetic: a program whose ``commit_signal_decision`` reaches the
+    portfolio directly rather than through ``ctx.emit_signal_intent``
+    (``instrument_surface="explicit"`` -- ``deployment_validation`` calls
+    ``ctx.set_holdings``/``ctx.liquidate``) asserts on ``current_time_ms``
+    and raises without a reference price, so a COMMIT would crash instead
+    of committing -- or, in a live-loop continuation, stamp every order
+    with one stale clock and look like duplicate broker contact.
+    """
+    context.current_time_ms = bar.end_ms
+    context.portfolio.update_reference_price(bar.symbol, bar.close)
+
+
 # ---------------------------------------------------------------------------
 # Decision-bucket builders.
 # ---------------------------------------------------------------------------
 
 _BUCKET_VOLUME = 1_000
+_BUCKET_WICK = Decimal("1")
+
+BarBody = Literal["flat", "green", "red"]
+"""Which way a synthetic bucket's body points -- ``close`` vs ``open``.
+
+Not decoration: ``deployment_validation`` is the one sealed program whose
+*entry condition is the bar body itself* ("two consecutive green minute
+bars", ``close > open``). Every bucket this module built used to carry
+``open == close``, so that program could never propose a single ENTER
+anywhere in these suites -- the parametrized assertions would have passed
+while proving nothing about it.
+"""
+
+_BODY_OPEN_OFFSET: dict[BarBody, Decimal] = {
+    "flat": Decimal("0"),
+    "green": -_BUCKET_WICK,
+    "red": _BUCKET_WICK,
+}
 
 
-def bucket(symbol: str, start_ms: int, end_ms: int, close: str) -> TradeBar:
-    """One decision bucket with explicit ``int64 ms UTC`` bounds."""
+def bucket(symbol: str, start_ms: int, end_ms: int, close: str, *, body: BarBody = "flat") -> TradeBar:
+    """One decision bucket with explicit ``int64 ms UTC`` bounds.
+
+    ``body`` moves only ``open``, onto the bucket's own low (``green``) or
+    high (``red``); ``high``/``low``/``close`` are identical for all three
+    values. That is deliberate: every indicator any other sealed program
+    reads is fed from ``high``/``low``/``close``, so a caller may make a
+    bucket green or red for ``deployment_validation`` without perturbing a
+    single indicator input anywhere else. ``flat`` (the default) is the
+    original ``open == close`` shape, byte-for-byte.
+    """
     price = Decimal(close)
     return TradeBar(
         symbol=symbol,
         start_ms=start_ms,
         end_ms=end_ms,
-        open=price,
-        high=price + Decimal("1"),
-        low=price - Decimal("1"),
+        open=price + _BODY_OPEN_OFFSET[body],
+        high=price + _BUCKET_WICK,
+        low=price - _BUCKET_WICK,
         close=price,
         volume=_BUCKET_VOLUME,
     )
 
 
-def indexed_bucket(symbol: str, index: int, width_ms: int, close: str) -> TradeBar:
-    """The ``index``-th epoch-anchored bucket of a run at ``width_ms``.
+# ---------------------------------------------------------------------------
+# Calendar-derived anchors.
+#
+# Synthetic buckets used to be epoch-anchored (``index * width_ms``, i.e.
+# 1970-01-01) or pinned to a bare epoch literal that happened to land on a
+# real session. Neither survives a calendar-aware program:
+# ``deployment_validation`` asks the canonical NYSE calendar which session a
+# bar belongs to, and an epoch-anchored bucket kills it outright with
+# ``LookupError: 1970-01-01 is not a NYSE session``. Both anchors below are
+# therefore derived from ``app.lean_sidecar.trading_calendar`` -- the repo's
+# sole ``mcal.get_calendar`` caller -- never from a hardcoded session
+# literal or a fixed ET offset, per ``.claude/rules/temporal-rigor.md``.
+# ---------------------------------------------------------------------------
+
+_ANCHOR_SEARCH_START = date(2024, 1, 2)
+_ANCHOR_SEARCH_HORIZON_DAYS = 30
+
+
+@lru_cache(maxsize=1)
+def anchor_session_date() -> date:
+    """The real, ordinary (non-early-close) NYSE session both anchors sit in.
+
+    Ordinary rather than merely "a trading day": an early close would put a
+    half-day's shortened stop/flatten barrier in the middle of a long
+    synthetic run, which is a boundary case
+    ``test_signal_program_session_boundaries.py`` covers deliberately and
+    every other suite would only trip over by accident.
+    """
+    horizon = _ANCHOR_SEARCH_START + timedelta(days=_ANCHOR_SEARCH_HORIZON_DAYS)
+    for window in trading_calendar.session_windows_ms_utc(_ANCHOR_SEARCH_START, horizon):
+        if not trading_calendar.is_early_close(window.session_date):
+            return window.session_date
+    raise AssertionError(
+        f"no ordinary NYSE session found within {_ANCHOR_SEARCH_HORIZON_DAYS} days of {_ANCHOR_SEARCH_START}"
+    )
+
+
+@lru_cache(maxsize=1)
+def session_open_anchor_ms() -> int:
+    """``int64 ms UTC`` of :func:`anchor_session_date`'s scheduled open."""
+    return trading_calendar.session_open_ms_utc(anchor_session_date())
+
+
+@lru_cache(maxsize=1)
+def session_midpoint_anchor_ms() -> int:
+    """``int64 ms UTC`` halfway through :func:`anchor_session_date`'s session.
+
+    Distinct from :func:`session_open_anchor_ms` for one concrete reason:
+    ``sequential_bucket`` below is the builder that must accept a NEGATIVE
+    index (that is how a "backwards" pre-clock bucket is built), and only a
+    mid-session anchor can promise that index ``-1`` still lands inside the
+    same real session rather than before its open.
+    """
+    session_date = anchor_session_date()
+    open_ms = trading_calendar.session_open_ms_utc(session_date)
+    close_ms = trading_calendar.session_close_ms_utc(session_date)
+    return open_ms + (close_ms - open_ms) // 2
+
+
+def indexed_bucket(
+    symbol: str, index: int, width_ms: int, close: str, *, body: BarBody = "flat"
+) -> TradeBar:
+    """The ``index``-th bucket of a run starting at the anchor session's open.
 
     Callers pass the *session's own* ``timeframe_ms`` as ``width_ms`` and a
     strictly increasing ``index``, so a bucket built here cannot trip either
@@ -123,25 +238,26 @@ def indexed_bucket(symbol: str, index: int, width_ms: int, close: str) -> TradeB
     ``NON_MONOTONIC_DECISION_CLOCK``). That is what makes a quarantine
     observed while driving these buckets a real signal worth failing on
     rather than skipping past.
+
+    Anchored at the real scheduled open (not epoch 0) so ``index`` is also a
+    meaningful *offset into a session* for a calendar-aware program: index 0
+    is that session's first bucket.
     """
-    start = index * width_ms
-    return bucket(symbol, start, start + width_ms, close)
+    start = session_open_anchor_ms() + index * width_ms
+    return bucket(symbol, start, start + width_ms, close, body=body)
 
 
-SEQUENTIAL_BASE_MS = 1_700_000_000_000
-"""Arbitrary well-formed epoch anchor for tests that only need internally
-consistent, sequential decision buckets -- not calendar-derived, and kept
-large enough that a "backwards" offset never goes negative."""
-
-
-def sequential_bucket(symbol: str, index: int, width_ms: int, close: str) -> TradeBar:
-    """The ``index``-th bucket of a run anchored at ``SEQUENTIAL_BASE_MS``.
+def sequential_bucket(
+    symbol: str, index: int, width_ms: int, close: str, *, body: BarBody = "flat"
+) -> TradeBar:
+    """The ``index``-th bucket of a run anchored mid-session.
 
     ``index`` may be negative, which is how a "backwards" (pre-clock) bucket
-    is built without reaching for a negative absolute timestamp.
+    is built without reaching for a negative absolute timestamp -- and, with
+    the mid-session anchor, without leaving the anchor session either.
     """
-    start = SEQUENTIAL_BASE_MS + index * width_ms
-    return bucket(symbol, start, start + width_ms, close)
+    start = session_midpoint_anchor_ms() + index * width_ms
+    return bucket(symbol, start, start + width_ms, close, body=body)
 
 
 # ---------------------------------------------------------------------------

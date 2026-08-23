@@ -105,11 +105,18 @@ def _run_signal_only(bars: list[TradeBar]) -> list[str]:
     return decisions
 
 
-def test_signal_only_decision_clock_emits_semantic_enter_then_exit_without_execution_state() -> None:
-    """Same semantic sequence ``test_signal_kernel_emits_semantic_enter_
-    then_exit_without_execution_state`` proved against the now-retired
-    ``DeploymentValidationDecisionKernel``, reproduced through the canonical
-    ``evaluate_signal_bar``/``commit_signal_decision`` split."""
+def test_signal_decision_split_emits_the_same_sequence_the_retired_kernel_did() -> None:
+    """Same semantic sequence the now-retired ``DeploymentValidationDecisionKernel``
+    proved, reproduced through the canonical
+    ``evaluate_signal_bar``/``commit_signal_decision`` split.
+
+    Renamed from ``..._without_execution_state``. That claim was inherited
+    from the Kernel test and is no longer true of this one: ``_run_signal_only``
+    drives the strategy's compatibility callback, which commits any intent it
+    describes, and ``commit_signal_decision`` calls ``set_holdings`` /
+    ``liquidate``. The thing that had no execution state was the Kernel, not
+    this surface. What this test actually holds invariant is the decision
+    *sequence* across the promotion, which is what its name now says."""
     bars = [
         _bar(9, 44, "100", "101"),
         _bar(9, 45, "101", "102"),
@@ -224,8 +231,8 @@ def test_on_closed_bar_emits_exit_at_half_day_barrier() -> None:
 
     Reproduced through the canonical signal-only decision clock
     (``_run_signal_only``, see the docstring on
-    ``test_signal_only_decision_clock_emits_semantic_enter_then_exit_
-    without_execution_state`` above) rather than the now-retired
+    ``test_signal_decision_split_emits_the_same_sequence_the_retired_kernel_did``
+    above) rather than the now-retired
     ``DeploymentValidationDecisionKernel`` this test used to drive
     directly."""
     half_day = date(2024, 11, 29)

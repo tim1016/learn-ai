@@ -6,10 +6,10 @@
       "program_key": "deployment_validation",
       "program_version": "deployment-validation/v1",
       "golden_trace_root": "5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8",
-      "artifact_digest": "428c34631e7e73befeffe0b980efdc6c00aa8cf027fe95305d867f266f82f1bd",
+      "artifact_digest": "b237dbbae7ad1354b8b1ba4b25709eb361eca10facfc707f766bb0df0cd058f7",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[deployment_validation]",
-      "qualified_at_ms": 1787429871241,
-      "receipt_hash": "689de65685b1fbc58c94f13a01a8515f38dda5aff0a3f415f3ad1b15e56f326e"
+      "qualified_at_ms": 1787444990285,
+      "receipt_hash": "96601256f798676fef646b19aa4d5f70daa7754477cd56efa52870d62ad6d74a"
     },
     {
       "schema_version": 1,

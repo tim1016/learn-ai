@@ -1728,11 +1728,29 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # no consolidated resolution, unlike every other promoted
             # program in this slice.
             decision_timeframe_ms=60_000,
-            # No rolling indicator window: DeploymentValidationConsecutiveGreen
-            # resets its green-streak detector and hold countdown every
-            # session (_reset_day(), called the instant on_minute_bar sees a
-            # new calendar date). There is nothing to warm up across days.
-            warmup_lookback_days=0,
+            # One day, not zero, and the reason is not indicators.
+            # DeploymentValidationConsecutiveGreen resets its green-streak
+            # detector and hold countdown every session (`_reset_day()`, the
+            # instant `on_minute_bar` sees a new calendar date), so on
+            # indicator grounds alone nothing needs warming and zero would be
+            # the honest figure.
+            #
+            # But this field governs a second thing: `replay_warmup_bars`
+            # (app/services/bot_trade_strategy_warmup.py) sizes FR-016
+            # crash-candidate recreation from it. At zero, that replay reads
+            # zero bars -- `recent_closed_bars(lookback_days=0)` builds the
+            # IBKR duration string "0 D", which is not valid, and the failure
+            # is caught and degraded to a cold start. A Resume after a crash
+            # would therefore never recreate the candidate, silently
+            # switching off a shipped recovery path from a field whose
+            # justification only mentioned indicators.
+            #
+            # One day covers the intra-session state this strategy actually
+            # has. This is deliberately not solved by flooring the value in
+            # the warmup resolver: a floor would make the seal attest one
+            # number while the bot used another, which is the exact defect
+            # repaired for `decision_timeframe_ms` in this same slice.
+            warmup_lookback_days=1,
             # Not indicator-driven -- evaluate_signal_bar reads only
             # bar.open/bar.close (a green-bar pattern) and the calendar-derived
             # session window, so there is no named series to seal here. An
@@ -1754,6 +1772,22 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # in tests/engine/test_deployment_validation_strategy.py), so no
             # state -- flat or mid-countdown -- currently survives a
             # Pause/Resume.
+            # Scope, stated because the seal would otherwise imply more than
+            # it says: this program has TWO exit paths, and only one of them
+            # is describable here. The countdown below is the ordinary exit.
+            # The session stop/flatten barrier is the other, and
+            # `ExitEligibilityContract`'s vocabulary -- built for PRD §17's
+            # "level- or countdown-true" question of when a discarded EXIT
+            # must re-emit -- has no word for a session-time barrier.
+            #
+            # That gap is a missing word, not a false statement. The barrier
+            # exit was verified to behave correctly and independently
+            # (`test_discarded_barrier_exit_keeps_custody_and_reproposes_on_the_next_clock`):
+            # a discarded barrier EXIT keeps custody and re-proposes on the
+            # next clock, because `prior_in_position` is read as a level on
+            # every bar at or past the barrier. Extending the vocabulary
+            # would change the seal schema for all seven programs, so it is
+            # tracked separately rather than landed at the end of a stack.
             exit_eligibility=ExitEligibilityContract(
                 rule="fixed_bar_count_countdown",
                 countdown_decision_clocks=3,
