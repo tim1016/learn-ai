@@ -69,6 +69,77 @@ def test_default_runtime_flag_event_path_uses_ignored_service_artifacts() -> Non
     )
 
 
+def test_flag_events_ledger_path_resolves_outside_the_real_artifacts_tree() -> None:
+    """#1739 regression: guards the autouse isolation fixture in
+    tests/conftest.py (``_isolate_strategy_validation_flag_ledger``). If
+    that fixture is ever removed, disabled, or stops patching the
+    module-level default, a developer's real, gitignored
+    artifacts/strategy_validation/flag_events.json resolves as the ledger
+    for every test that reads it through the default path, and local runs
+    silently diverge from CI (see PR #1733, where this happened).
+
+    ``strategy_validation_manifest`` is imported module-qualified here
+    (not the ``DEFAULT_FLAG_EVENTS_PATH`` name already imported at the top
+    of this file) so the assertion reads the *live* value, honoring
+    whatever tests/conftest.py's autouse fixture monkeypatched it to."""
+    import app.services.strategy_validation_manifest as strategy_validation_manifest
+
+    real_default_path = (
+        Path(strategy_validation_manifest.__file__).resolve().parents[2]
+        / "artifacts"
+        / "strategy_validation"
+        / "flag_events.json"
+    )
+
+    assert strategy_validation_manifest.DEFAULT_FLAG_EVENTS_PATH != real_default_path
+
+
+def test_bare_load_strategy_validation_entries_call_tracks_the_patched_ledger_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1739 regression: app/services/broker_v2_panel/panel_data_source.py
+    and app/services/strategy_validation_admission.py both call
+    ``load_strategy_validation_entries(registry)`` with no explicit
+    flag_events_path, relying on the function to resolve the omitted
+    argument against whatever DEFAULT_FLAG_EVENTS_PATH currently is. A
+    plain ``flag_events_path: Path = DEFAULT_FLAG_EVENTS_PATH`` default is
+    bound once, at import time, so if load_strategy_validation_entries
+    ever regresses to that form, this bare call keeps reading whatever
+    DEFAULT_FLAG_EVENTS_PATH pointed to when the module was first
+    imported -- ignoring tests/conftest.py's isolation fixture (and, in
+    production, ignoring a hypothetical config reload) -- and this test
+    fails."""
+    import app.services.strategy_validation_manifest as strategy_validation_manifest
+
+    registry = [
+        StrategyRegistrySeed(
+            strategy_key="sma_crossover",
+            display_name="SMA Crossover",
+            description="#1739 regression fixture: default-path tracking.",
+        ),
+    ]
+    fake_ledger_path = tmp_path / "flag_events.json"
+    append_strategy_validation_flag_event(
+        "sma_crossover",
+        StrategyValidationFlagRequest(
+            flag="validated",
+            reason="Regression fixture for #1739 default-path tracking.",
+        ),
+        registry,
+        flag_events_path=fake_ledger_path,
+        flagged_by=TEST_FLAG_ACTOR,
+        now_ms=1_700_000_000_000,
+    )
+    monkeypatch.setattr(strategy_validation_manifest, "DEFAULT_FLAG_EVENTS_PATH", fake_ledger_path)
+
+    (entry,) = load_strategy_validation_entries(registry)
+
+    assert entry.validation_state == "validated"
+    assert entry.current_flag_event is not None
+    assert entry.current_flag_event.flag == "validated"
+
+
 def test_seed_manifest_marks_deployment_validation_deployable() -> None:
     registry = [
         StrategyRegistrySeed(
