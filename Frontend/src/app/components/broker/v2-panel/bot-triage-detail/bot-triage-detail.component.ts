@@ -78,26 +78,47 @@ export class BotTriageDetailComponent {
   private readonly pollTick = signal(0);
 
   /** `undefined` parks both resources until a bot is selected. */
-  private readonly readParams = computed(() => {
+  private readonly selection = computed(() => {
     const sid = this.sid();
     return sid === null
       ? undefined
-      : {
-          broker: this.broker(),
-          accountId: this.accountId(),
-          sid,
-          token: this.refreshToken() + this.pollTick(),
-        };
+      : { broker: this.broker(), accountId: this.accountId(), sid };
+  });
+
+  /**
+   * The panel projection is a plain read, designed for a 5s poll cadence.
+   */
+  private readonly panelParams = computed(() => {
+    const selection = this.selection();
+    if (selection === undefined) return undefined;
+    return { ...selection, token: this.refreshToken() + this.pollTick() };
+  });
+
+  /**
+   * Evidence is deliberately NOT on the timer.
+   *
+   * `read_evidence_page` appends one `EvidenceAuditEntry` per call, stamped
+   * with `operator_identity` and `read_at_ms` — the record asserts that an
+   * operator read this bot's raw evidence at that instant. Nothing rotates or
+   * prunes `evidence_audit.jsonl`; `_append_audit_entry` is its only writer.
+   * A background poll would forge ~240 of those assertions an hour per
+   * selected bot and bury the genuine reads, so this reads only on a real
+   * operator action: selecting a bot, retrying, or acting on one.
+   */
+  private readonly journalParams = computed(() => {
+    const selection = this.selection();
+    if (selection === undefined) return undefined;
+    return { ...selection, token: this.refreshToken() };
   });
 
   protected readonly panel = resource({
-    params: this.readParams,
+    params: this.panelParams,
     loader: ({ params }) =>
       this.panelService.getPanel(params.broker, params.accountId, params.sid),
   });
 
   protected readonly journal = resource({
-    params: this.readParams,
+    params: this.journalParams,
     loader: ({ params }) =>
       this.panelService.getEvidence(params.broker, params.accountId, params.sid, {
         pageSize: JOURNAL_PAGE_SIZE,
@@ -106,9 +127,10 @@ export class BotTriageDetailComponent {
 
   constructor() {
     // The per-bot panel route streams its panel over SSE. This pane is a
-    // summary, so it re-reads on the account cadence instead of standing up a
-    // second subscription — enough that a diagnosis cannot sit stale while the
-    // rail beside it keeps updating.
+    // summary, so it re-reads on a timer instead of standing up a second
+    // subscription — enough that a diagnosis cannot sit stale while the rail
+    // beside it keeps updating. The panel projection alone: see
+    // `journalParams` for why evidence must never be polled.
     const timer = setInterval(() => {
       if (this.document.visibilityState === 'visible' && !this.panel.isLoading()) {
         this.pollTick.update((tick) => tick + 1);

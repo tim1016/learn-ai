@@ -164,6 +164,45 @@ describe('BotTriageDetailComponent', () => {
     await vi.waitFor(() => expect(mockPanelService.getPanel).toHaveBeenCalled());
   });
 
+  /**
+   * `read_evidence_page` appends an `EvidenceAuditEntry` per call, asserting an
+   * operator read at that instant, into a log nothing prunes. Polling it would
+   * forge those assertions, so the timer must move the panel only.
+   */
+  it('polls the panel but never the audit-logged evidence read', async () => {
+    vi.useFakeTimers();
+    try {
+      const { mockPanelService, fixture } = await renderDetail();
+      await vi.waitFor(() => expect(mockPanelService.getPanel).toHaveBeenCalled());
+
+      const panelReads = mockPanelService.getPanel.mock.calls.length;
+      const evidenceReads = mockPanelService.getEvidence.mock.calls.length;
+      expect(evidenceReads).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(46_000);
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(mockPanelService.getPanel.mock.calls.length).toBeGreaterThan(panelReads);
+      expect(mockPanelService.getEvidence.mock.calls.length).toBe(evidenceReads);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-reads evidence when the operator acts, since that read is genuine', async () => {
+    const view = await renderDetail();
+    await vi.waitFor(() => expect(view.mockPanelService.getEvidence).toHaveBeenCalled());
+    const before = view.mockPanelService.getEvidence.mock.calls.length;
+
+    view.fixture.componentRef.setInput('refreshToken', 1);
+    view.fixture.detectChanges();
+
+    await vi.waitFor(() =>
+      expect(view.mockPanelService.getEvidence.mock.calls.length).toBeGreaterThan(before),
+    );
+  });
+
   /** A stale panel from the previously selected bot must never render as the new one. */
   it('does not render another bot\'s panel while the selected one loads', async () => {
     const view = await renderDetail(fakeBotPanelView({ strategy_instance_id: 'spy-momentum-01' }));
