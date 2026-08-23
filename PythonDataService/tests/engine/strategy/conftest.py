@@ -26,17 +26,19 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyParamsBase
 from app.engine.strategy.signal_program import SignalProgram
 from tests._helpers.signal_program import RecordingExecutor, bind_strategy_context
 
 
 class PreparedProgram(NamedTuple):
-    """A constructed program, the params it was built from, and its bound executor."""
+    """A constructed program, the params it was built from, its bound context, and its executor."""
 
     program: SignalProgram
     params: StrategyParamsBase
     executor: RecordingExecutor
+    context: StrategyContext
 
 
 def build_program(key: str) -> PreparedProgram:
@@ -53,5 +55,5 @@ def build_program(key: str) -> PreparedProgram:
     assert registration.signal_program_factory is not None, f"'{key}' has no signal_program_factory"
     params = registration.param_schema()
     program = registration.signal_program_factory(params)
-    _context, executor = bind_strategy_context(program.strategy)
-    return PreparedProgram(program=program, params=params, executor=executor)
+    context, executor = bind_strategy_context(program.strategy)
+    return PreparedProgram(program=program, params=params, executor=executor, context=context)

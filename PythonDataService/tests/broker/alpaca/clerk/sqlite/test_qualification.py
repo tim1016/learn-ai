@@ -113,7 +113,7 @@ def test_polygon_fixture_replays_through_live_feed_path() -> None:
     assert evidence.decision_outcomes == ("HOLD", "HOLD", "HOLD")
     assert evidence.aggregation_path == ("stream_minute_bars/aggregate_realtime_bar/IbkrMarketDataFeed")
     assert evidence.timestamp_contract == "int64_ms_utc"
-    assert evidence.decision_consumer_path == ("strategy_evaluations/DeploymentValidationDecisionKernel")
+    assert evidence.decision_consumer_path == ("strategy_evaluations/SignalSession")
 
 
 @pytest.mark.slow

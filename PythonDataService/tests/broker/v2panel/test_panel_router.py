@@ -202,11 +202,14 @@ async def test_panel_scoped_uses_sqlite_projection(api) -> None:
     assert {action["action_id"] for action in body["actions"]}.isdisjoint(
         {"clear_hold", "record_inventory_baseline"}
     )
-    # PRD Sec 11.1-11.4: "deployment_validation" is a legacy compatibility
-    # strategy with no registered Signal Program, so the panel renders the
-    # seal/build-proof absence explicitly rather than guessing.
+    # "deployment_validation" is a registered Signal Program (issue #1730
+    # Slice 5); this fixture's bot has no v2 seal at all (no sealed_program,
+    # no build receipt for this instance's bytes), so the honest build
+    # verdict is UNPROVEN, not a fabricated NOT_APPLICABLE -- see
+    # prove_running_program_build's docstring in
+    # app/services/signal_program_admission.py.
     assert body["sealed_program"] is None
-    assert body["program_build"]["state"] == "NOT_APPLICABLE"
+    assert body["program_build"]["state"] == "UNPROVEN"
     assert body["program_build"]["program_key"] == "deployment_validation"
 
 

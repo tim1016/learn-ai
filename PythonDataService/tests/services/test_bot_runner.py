@@ -101,6 +101,7 @@ from app.services.bot_runtime import PauseAwareFeed
 from app.services.bot_trade_strategy import StrategyEvaluation, strategy_evaluations
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.canary_admission import admit_canary_pairing
 
 _SID = "alpaca-skeleton-1"
 _T0 = 1_700_000_000_000
@@ -2134,6 +2135,7 @@ async def test_default_start_status_exposes_carryover_as_disabled(tmp_path: Path
 @pytest.mark.asyncio
 async def test_trade_run_registration_precedes_order_capable_task_creation(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clerk = _OrderingClerk(_custody_proof(exposure={}))
     feed = _StopOrderingFeed(clerk)
@@ -2143,6 +2145,7 @@ async def test_trade_run_registration_precedes_order_capable_task_creation(
         start_custody_guard=clerk.start_admission_snapshot,
     )
     set_alpaca_clerk(clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
         deployed = await registry.deploy(
             broker="alpaca",
@@ -2159,7 +2162,9 @@ async def test_trade_run_registration_precedes_order_capable_task_creation(
 
 
 @pytest.mark.asyncio
-async def test_stop_commits_clerk_stop_before_task_cancellation(tmp_path: Path) -> None:
+async def test_stop_commits_clerk_stop_before_task_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     clerk = _OrderingClerk(_custody_proof(exposure={}))
     feed = _StopOrderingFeed(clerk)
     registry = _registry(
@@ -2168,6 +2173,7 @@ async def test_stop_commits_clerk_stop_before_task_cancellation(tmp_path: Path) 
         start_custody_guard=clerk.start_admission_snapshot,
     )
     set_alpaca_clerk(clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
         deployed = await registry.deploy(
             broker="alpaca",
@@ -2187,6 +2193,7 @@ async def test_stop_commits_clerk_stop_before_task_cancellation(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clerk = _OrderingClerk(_custody_proof(exposure={}))
     feed = _StopOrderingFeed(clerk)
@@ -2196,6 +2203,7 @@ async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
         start_custody_guard=clerk.start_admission_snapshot,
     )
     set_alpaca_clerk(clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
         await registry.deploy(
             broker="alpaca",
@@ -2226,6 +2234,7 @@ async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
 @pytest.mark.asyncio
 async def test_failed_clerk_stop_closes_run_gate_without_cancelling_task(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clerk = _OrderingClerk(_custody_proof(exposure={}))
     feed = _StopOrderingFeed(clerk)
@@ -2235,6 +2244,7 @@ async def test_failed_clerk_stop_closes_run_gate_without_cancelling_task(
         start_custody_guard=clerk.start_admission_snapshot,
     )
     set_alpaca_clerk(clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
         await registry.deploy(
             broker="alpaca",
@@ -2261,6 +2271,7 @@ async def test_failed_clerk_stop_closes_run_gate_without_cancelling_task(
 @pytest.mark.asyncio
 async def test_stop_all_commits_each_trade_run_before_task_cancellation(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clerk = _OrderingClerk(_custody_proof(exposure={}))
     feed = _StopOrderingFeed(clerk)
@@ -2270,6 +2281,7 @@ async def test_stop_all_commits_each_trade_run_before_task_cancellation(
         start_custody_guard=clerk.start_admission_snapshot,
     )
     set_alpaca_clerk(clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
         deployed = await registry.deploy(
             broker="alpaca",
@@ -2344,12 +2356,20 @@ async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path
         # .lock sidecars belong to the canonical repos' advisory-lock protocol.
         if p.is_file() and p.suffix != ".lock"
     )
+    # "deployment_validation" is a registered Signal Program (issue #1730
+    # Slice 5): every deploy now also writes the v2 seal
+    # (sealed_program_v2.json) and, since its build proves PROVEN, the
+    # per-run program-build evidence record -- both new, correct artifacts
+    # for a sealed program's deploy, not present for a legacy compatibility
+    # strategy.
     assert written == [
         f"live_state/{_SID}/current_run.json",
         f"live_state/{_SID}/desired_state.json",
         f"live_state/{_SID}/lifecycle_state.json",
+        f"live_state/{_SID}/program_build_evidence/{registry.binding_for_control('alpaca', _SID).run_id}.json",
         f"live_state/{_SID}/run_outcomes/{registry.binding_for_control('alpaca', _SID).run_id}.json",
         f"live_state/{_SID}/runs/{registry.binding_for_control('alpaca', _SID).run_id}.json",
+        f"live_state/{_SID}/sealed_program_v2.json",
         f"live_state/{_SID}/strategy_instance.json",
     ]
 
@@ -2410,7 +2430,9 @@ def _green_bar(end_ms: int, symbol: str = "SPY") -> MarketDataBar:
 @pytest.mark.asyncio
 async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST",
         artifacts_root=tmp_path / "clerk",
@@ -2690,15 +2712,7 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
 ) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
-    # #1729 AC4: real Alpaca Paper ("trade" mode) admission of a
-    # Signal-Program-backed strategy is gated by an exact (program, account)
-    # canary allowlist that ships empty in production. This test exercises
-    # engine round-trip parity, not the allowlist itself, so it explicitly
-    # enables the one pairing it deploys under.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", "paper-account")}),
-    )
+    admit_canary_pairing(monkeypatch, "ema_crossover_signal", "paper-account")
     bars = _ema_parity_bars_through_first_exit()
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
@@ -2733,9 +2747,9 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
 @pytest.mark.asyncio
 async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from types import SimpleNamespace
-
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     transitions_before_decisions = repo.custody_transitions()
@@ -2778,22 +2792,32 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
         ]
         # decision_id/intent_id are now evaluation_id (decision_id ==
         # evaluation_id, PRD section 16) -- a content-addressed SHA-256, not
-        # a "{ms}:{KIND}" string. Recompute it from the real
-        # `_generic_evaluation_id` compatibility formula so this proves the
-        # identity is really the deterministic per-bar evaluation id, not
-        # just whatever hash the current build happens to emit.
-        expected_ids = [
-            bot_trade_strategy._generic_evaluation_id(
-                SimpleNamespace(
-                    strategy_key="deployment_validation",
-                    sealed_program=None,
-                    symbol="SPY",
-                    strategy_params=None,
-                ),
-                _RTH_MS + offset * 60_000 + 60_000,
-            )
-            for offset in range(3)
-        ]
+        # a "{ms}:{KIND}" string. "deployment_validation" is now a
+        # registered Signal Program (issue #1730 Slice 5), so its
+        # evaluation_id comes from the real SignalSession's own trace, not
+        # the `_generic_evaluation_id` compatibility formula (still used by
+        # strategies with no registered program). Recompute it by replaying
+        # the exact same three bars through a fresh instance of the same
+        # registered program, so this proves the identity really is the
+        # deterministic per-bar SignalSession evaluation id, not just
+        # whatever hash the current build happens to emit.
+        expected_registration = _STRATEGY_REGISTRY["deployment_validation"]
+        assert expected_registration.signal_program_factory is not None
+        expected_program = expected_registration.signal_program_factory(
+            expected_registration.param_schema(symbol="SPY")
+        )
+        expected_strategy = expected_program.strategy
+        expected_context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
+        expected_strategy.ctx = expected_context
+        expected_strategy.initialize()
+        expected_ids = []
+        for offset in range(3):
+            engine_bar = bot_trade_strategy._engine_bar(_bar(_RTH_MS + offset * 60_000))
+            expected_context.current_time_ms = engine_bar.end_ms
+            expected_context.portfolio.update_reference_price(engine_bar.symbol, engine_bar.close)
+            stage = expected_program.session.advance(engine_bar, mode=EvaluationMode.DECIDE)
+            expected_program.session.settle(Settlement.COMMIT)
+            expected_ids.append(stage.trace.evaluation_id)
         for evaluation_id in expected_ids:
             assert re.fullmatch(r"[0-9a-f]{64}", evaluation_id)
         assert [fact["decision_id"] for fact in facts] == expected_ids
@@ -2821,6 +2845,7 @@ async def test_unknown_liveness_blocks_entry(
     clerk = _FakeClerk(repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     monkeypatch.setattr(
         bot_trade_strategy,
         "market_liveness_fact",
@@ -2876,6 +2901,7 @@ async def test_halted_liveness_blocks_entry(
     clerk = _FakeClerk(repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     monkeypatch.setattr(
         bot_trade_strategy,
         "market_liveness_fact",
@@ -2942,18 +2968,21 @@ async def test_blocked_entry_is_rolled_back_and_can_re_enter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#1671 AC6 regression: before the rollback fix, a blocked ENTER left
-    ``DeploymentValidationDecisionKernel._cycle_active`` set, so the *next*
-    green-bar pair was consumed by the stale exit countdown instead of
-    starting a fresh entry attempt — and the phantom EXIT it eventually
-    emitted had no real custody to close, crashing the bot run with
-    ``MissingEntryCustodyError``. With the rollback, the blocked bar leaves
-    no trace: the following two green bars start a clean entry, and the
-    three red bars after that close it out normally."""
+    the strategy's own position-lifecycle state set (``_entry_pending``/
+    ``_in_position``), so the *next* green-bar pair was consumed by the
+    stale exit countdown instead of starting a fresh entry attempt — and the
+    phantom EXIT it eventually emitted had no real custody to close,
+    crashing the bot run with ``MissingEntryCustodyError``. With the
+    rollback (``DeploymentValidationConsecutiveGreen.rollback_blocked_
+    entry``, issue #1730 Slice 5's Signal Program promotion), the blocked
+    bar leaves no trace: the following two green bars start a clean entry,
+    and the three red bars after that close it out normally."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     clerk = _FakeClerk(repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     # market_liveness_fact is only ever queried on an ENTER intent (#1671
     # AC3), so the Nth call corresponds exactly to the Nth ENTER attempt —
     # a reliable way to block just the first one. Bar-relative fixture
@@ -3171,12 +3200,14 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
 @pytest.mark.asyncio
 async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     clerk = _FakeClerk(effect_state="uncertain", repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     feed = _FakeFeed(
         [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
         mode="hold",
@@ -3206,12 +3237,14 @@ async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
 @pytest.mark.asyncio
 async def test_sqlite_trade_bot_records_a_rejected_enter_as_a_blocked_decision(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     clerk = _FakeClerk(effect_state="rejected", repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     feed = _FakeFeed(
         [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
         mode="hold",
@@ -3277,19 +3310,24 @@ class _RejectFirstExitClerk(_FakeClerk):
 
 
 @pytest.mark.asyncio
-async def test_rejected_exit_is_rolled_back_and_retried(tmp_path: Path) -> None:
+async def test_rejected_exit_is_rolled_back_and_retried(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#1708 review finding 1 regression: before the rollback fix, a
-    rejected EXIT left ``DeploymentValidationDecisionKernel._cycle_active``
-    cleared even though the broker never actually closed the position --
-    the kernel believed it was flat with custody still open. With the
-    rollback, the rejected bar leaves no trace: the very next eligible bar
-    re-fires EXIT and it succeeds, rather than the kernel silently starting
-    a fresh ENTER cycle over an unclosed position."""
+    rejected EXIT left the strategy's own position-lifecycle state cleared
+    even though the broker never actually closed the position -- it believed
+    it was flat with custody still open. With the rollback
+    (``DeploymentValidationConsecutiveGreen.rollback_blocked_exit``, issue
+    #1730 Slice 5's Signal Program promotion), the rejected bar leaves no
+    trace: the very next eligible bar re-fires EXIT and it succeeds, rather
+    than silently starting a fresh ENTER cycle over an unclosed position."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     clerk = _RejectFirstExitClerk(repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
 
     base = _WIN_START_MS + 60_000
     bars = [
@@ -3388,18 +3426,8 @@ async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_bac
     a strategy deployed cold would silently withhold decisions through its
     first day(s) of live trading. With warmup backfill, the very first live
     bucket of a brand-new deployment can already decide.
-
-    ``rsi_mean_reversion`` is now a registered Signal Program (issue #1730
-    Slice 5): real ``mode="trade"`` admission is gated by the exact
-    (program, account) canary allowlist (#1729 AC4, see
-    ``test_ema_trade_bot_matches_first_lean_round_trip`` above). This test
-    exercises warmup backfill, not the allowlist itself, so it explicitly
-    enables the one pairing it deploys under.
     """
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("rsi_mean_reversion", "paper-account")}),
-    )
+    admit_canary_pairing(monkeypatch, "rsi_mean_reversion", "paper-account")
     clerk = _FakeClerk()
     set_alpaca_clerk(clerk)
     try:
@@ -3444,16 +3472,8 @@ async def test_final_rth_bucket_decides_without_waiting_for_the_next_session(
     the final 15:45-16:00 bucket's decision would strand until the next
     session's bars started arriving. With the session-close force-flush,
     it decides immediately, from the same bar that closes the session.
-
-    ``rsi_mean_reversion`` is now a registered Signal Program (issue #1730
-    Slice 5): see the canary-allowlist note on
-    ``test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_backfill``
-    above.
     """
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("rsi_mean_reversion", "paper-account")}),
-    )
+    admit_canary_pairing(monkeypatch, "rsi_mean_reversion", "paper-account")
     clerk = _FakeClerk()
     set_alpaca_clerk(clerk)
     try:
@@ -3510,6 +3530,7 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     broker = _SqliteRuntimeBroker()
     clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
 
     def raise_atomic_receipt_failure(*_args: Any, **_kwargs: Any) -> Any:
         raise OSError("injected atomic decision receipt failure")
@@ -3665,13 +3686,7 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
 
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
-    # #1729 AC4: see test_ema_trade_bot_matches_first_lean_round_trip above —
-    # this test exercises chart-bar release, not the canary allowlist, so it
-    # explicitly enables the one pairing it deploys under.
-    monkeypatch.setattr(
-        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
-        frozenset({("ema_crossover_signal", "paper-account")}),
-    )
+    admit_canary_pairing(monkeypatch, "ema_crossover_signal", "paper-account")
     contexts: list[StrategyContext] = []
     context_factory = bot_trade_strategy.StrategyContext
 
@@ -3708,6 +3723,7 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
 async def test_trade_bot_enters_after_two_green_bars_in_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
 
     # One red bar then two green bars inside the detection window, then hold.
     bars = [
@@ -3737,6 +3753,7 @@ async def test_trade_bot_enters_after_two_green_bars_in_window(tmp_path: Path, m
 async def test_trade_bot_no_entry_before_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
 
     # Two green bars strictly before the 09:45 ET window start.
     pre_window_1 = _SESSION_OPEN_MS + 60_000  # 09:31 ET
@@ -3762,6 +3779,7 @@ async def test_trade_bot_no_entry_before_window(tmp_path: Path, monkeypatch: pyt
 async def test_trade_bot_exits_three_bars_after_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
 
     base = _WIN_START_MS + 60_000
     bars = [
@@ -3790,6 +3808,7 @@ async def test_trade_bot_exits_three_bars_after_entry(tmp_path: Path, monkeypatc
 async def test_trade_bot_flattens_at_window_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
 
     base = _WIN_START_MS + 60_000
     bars = [
@@ -3816,6 +3835,7 @@ async def test_trade_bot_flattens_at_window_end(tmp_path: Path, monkeypatch: pyt
 async def test_trade_bot_quantity_plumbed_from_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
 
     base = _WIN_START_MS + 60_000
     bars = [_green_bar(base), _green_bar(base + 60_000)]
@@ -3845,6 +3865,7 @@ async def test_trade_bot_submit_exception_crashes_task(tmp_path: Path, monkeypat
     error = BrokerError("forced failure", detail="test")
     clerk = _FakeClerk(should_raise=error)
     _install_fake_clerk(monkeypatch, clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
 
     base = _WIN_START_MS + 60_000
     bars = [_green_bar(base), _green_bar(base + 60_000)]

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "program_key": "deployment_validation",
+  "program_version": "deployment-validation/v1",
+  "entries": [
+    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "AAPL", "trade_symbol": "AAPL"}, "trace_count": 43320, "trace_root": "361c4e0a76c46a2e953f5ccdb2b1ff253cd021e7dd6f92796465597b45c055da"},
+    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "AAPL", "trade_symbol": "AAPL"}, "trace_count": 93060, "trace_root": "61e63337e593baf4d8b9baa4ab10f4569ae3154ad7e997377588d030217d5727"},
+    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"symbol": "QQQ", "trade_symbol": "QQQ"}, "trace_count": 19890, "trace_root": "5f13190c2455c5af4dba3d9fad88339114b5a0d8dad5e87a0b97d1ae750a86f7"},
+    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "QQQ", "trade_symbol": "QQQ"}, "trace_count": 43320, "trace_root": "87d20d72d55fe96f4cf6ba6177065700a82ba40bae1e8d27357490dfd2471a53"},
+    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "QQQ", "trade_symbol": "QQQ"}, "trace_count": 93060, "trace_root": "fa3ba74b9c57319512c5fecedc8211a71fe7f49c9d4a523291b4bbdbe983ca6a"},
+    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"symbol": "SPY", "trade_symbol": "SPY"}, "trace_count": 19890, "trace_root": "92065976e54c493f491b873bc9203e7f6e35b1b0fb5854a98d1c8440a0532ac2"},
+    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "SPY", "trade_symbol": "SPY"}, "trace_count": 43320, "trace_root": "680bb99b9d5c784f54c5d41ea1b870f7de776a3c2c4ee29dbd2a7b6706de48b0"},
+    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "SPY", "trade_symbol": "SPY"}, "trace_count": 93060, "trace_root": "34a78f3d019286eda407ad9379326a157265f60c3b806b245555c78e1afea0ae"},
+    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"symbol": "TSLA", "trade_symbol": "TSLA"}, "trace_count": 43320, "trace_root": "700d7414b3edac6c092ba5d3489fe42c66b275dc5ae26b1c5e6bc9baec20b9e7"},
+    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"symbol": "TSLA", "trade_symbol": "TSLA"}, "trace_count": 93060, "trace_root": "523e5788d1343cd31f0062597a922c1b1e141204674d226abef3e1675ef5bb1f"}
+  ],
+  "trace_root": "5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8"
+}

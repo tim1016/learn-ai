@@ -14,14 +14,21 @@ and must stay empty (see ``test_canary_admission.py::test_canary_allowlist_ships
 which means a real "canary" bot can never reach RUNNING through the public
 ``deploy``/``deploy_with_admission`` surface in this test process either --
 the same allowlist gate that protects production also blocks the front door
-here. Every test below therefore deploys a bot normally (unaffected by the
-canary gate: default ``deployment_validation`` legacy strategy under
-``mode="trade"``) and then substitutes the *running* binding's
-``program_build`` with a simulated ``PROVEN`` Signal-Program fact -- exactly
-the fact shape a real admitted canary Start/Resume would have attached. This
-isolates the thing under test (does Stop's wiring key off the running
-binding's program-build proof and record a verdict?) from Start-admission
-policy, which is already exercised by ``test_run_admission.py``.
+here. Every test below therefore deploys a bot and then substitutes the *running*
+binding's ``program_build`` with a simulated ``PROVEN`` Signal-Program fact
+-- exactly the fact shape a real admitted canary Start/Resume would have
+attached. This isolates the thing under test (does Stop's wiring key off the
+running binding's program-build proof and record a verdict?) from
+Start-admission policy, which is already exercised by
+``test_run_admission.py``.
+
+Note that the deploy step itself is no longer outside the canary gate.
+``deployment_validation`` -- this file's real deployed strategy -- was
+promoted through the governed Signal Program seam (issue #1730 Slice 5), so
+its build now resolves ``PROVEN`` at deploy time and the real allowlist gate
+applies at the front door. Each ``_deploy_trade_bot_as_simulated_canary``
+caller admits exactly the one pairing it deploys under; see
+``_REAL_DEPLOY_PROGRAM_ACCOUNT_PAIR`` below.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ import pytest
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import AccountFreezeState
 from app.schemas.run_admission import ProgramBuildAdmissionFact
+from tests._helpers.canary_admission import admit_canary_pairing
 from tests.services.test_bot_runner import (
     _SID,
     _T0,
@@ -45,6 +53,19 @@ from tests.services.test_bot_runner import (
 
 _PROGRAM_KEY = "ema_crossover_signal"
 _ACCOUNT_ID = "paper-account"
+# "deployment_validation" -- this file's real, undecorated deployed
+# strategy_key (module docstring / `_deploy_trade_bot_as_simulated_canary`)
+# -- was promoted through the governed Signal Program seam (issue #1730
+# Slice 5) after this file was written. Its real build now resolves PROVEN
+# at deploy time (a real, committed qualification receipt matches its
+# current bytes), which means the real (not simulated) canary-allowlist
+# gate now applies at the front door too, before any test ever reaches the
+# simulated-canary override this file's tests are actually about. Every
+# `_deploy_trade_bot_as_simulated_canary` caller admits exactly this
+# pairing for the deploy step alone -- distinct from `_PROGRAM_KEY`/
+# `_ACCOUNT_ID` above, which simulate a *different* fabricated PROVEN fact
+# for the Stop-side wiring under test.
+_REAL_DEPLOY_PROGRAM_ACCOUNT_PAIR = ("deployment_validation", _ACCOUNT_ID)
 
 
 def _proven_build() -> ProgramBuildAdmissionFact:
@@ -74,13 +95,28 @@ def _active_freeze() -> AccountFreezeState:
 
 async def _deploy_trade_bot_as_simulated_canary(
     registry,
+    monkeypatch: pytest.MonkeyPatch,
     *,
+    admitted_pairing: tuple[str, str] = _REAL_DEPLOY_PROGRAM_ACCOUNT_PAIR,
     binding_overrides: dict | None = None,
 ):
     """Deploy a real (non-canary) trade bot, then substitute its running
     binding's ``program_build`` (and any extra overrides) to simulate what a
     genuinely admitted canary run's binding carries. See module docstring for
-    why the front door itself cannot produce this."""
+    why the front door itself cannot produce this.
+
+    The deploy step itself now needs its own allowlist entry: this file's
+    real deployed strategy ("deployment_validation") became a registered
+    Signal Program (issue #1730 Slice 5) and its real build proves PROVEN at
+    deploy time, so the front door's own canary gate applies before any
+    simulated override runs. Admitting ``admitted_pairing`` (exactly one
+    pairing, for the duration of the deploy call) is a real, visible
+    mutation of the shared module-level allowlist and is unrelated to
+    whatever allowlist state an individual test wants in place afterward, at
+    Stop -- callers are free to admit a different pairing again once this
+    returns.
+    """
+    admit_canary_pairing(monkeypatch, *admitted_pairing)
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
     managed = registry._bots[_SID]
     managed.binding = managed.binding.model_copy(
@@ -129,6 +165,7 @@ async def _deploy_trade_bot_as_simulated_canary(
 )
 async def test_canary_rollback_recorded_for_each_stop_custody_outcome(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     proof_kwargs: dict,
     binding_overrides: dict,
     expected_stop_outcome: str,
@@ -139,7 +176,9 @@ async def test_canary_rollback_recorded_for_each_stop_custody_outcome(
     set_alpaca_clerk(clerk)
     try:
         registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-        await _deploy_trade_bot_as_simulated_canary(registry, binding_overrides=binding_overrides)
+        await _deploy_trade_bot_as_simulated_canary(
+            registry, monkeypatch, binding_overrides=binding_overrides
+        )
         clerk.proof = _custody_proof(**proof_kwargs)
 
         view = await registry.stop("alpaca", _SID)
@@ -163,6 +202,7 @@ async def test_canary_rollback_recorded_for_each_stop_custody_outcome(
 @pytest.mark.asyncio
 async def test_stop_completes_and_records_outcome_when_rollback_verdict_refuses(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Constraint 1 (#1729): rollback must NEVER block, delay, or refuse a
     Stop. An operator must always be able to stop a running bot; the verdict
@@ -175,7 +215,7 @@ async def test_stop_completes_and_records_outcome_when_rollback_verdict_refuses(
     set_alpaca_clerk(clerk)
     try:
         registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-        await _deploy_trade_bot_as_simulated_canary(registry)
+        await _deploy_trade_bot_as_simulated_canary(registry, monkeypatch)
 
         view = await registry.stop("alpaca", _SID)
 
@@ -224,16 +264,36 @@ async def test_canary_rollback_verdict_absent_for_dry_run_instance(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_canary_rollback_verdict_absent_for_legacy_non_program_instance(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Constraint 5 (#1729): legacy strategies with no registered Signal
-    Program (``program_build.state == "NOT_APPLICABLE"``) are untouched. No
-    simulated override here -- this is the real, unmodified admission
-    outcome for the default ``deployment_validation`` strategy."""
+    Program (``program_build.state == "NOT_APPLICABLE"``) are untouched.
+
+    Simulated here, unlike before issue #1730 Slice 5: this file's real
+    deployed strategy ("deployment_validation") was itself promoted through
+    the governed Signal Program seam, and no strategy remains in
+    ``app.services.bot_trade_strategy.supported_alpaca_paper_strategy_keys()``
+    with a real, undecorated NOT_APPLICABLE build any more -- there is no live
+    trade-deployable subject left to exercise unmodified. The override below
+    reproduces exactly the fact shape a real legacy (no registered Signal
+    Program) instance's binding carried when this test could still get one
+    for real."""
     clerk = _CustodyClerk(_custody_proof(exposure={}))
     set_alpaca_clerk(clerk)
     try:
         registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
+        await _deploy_trade_bot_as_simulated_canary(
+            registry,
+            monkeypatch,
+            binding_overrides={
+                "program_build": ProgramBuildAdmissionFact(
+                    state="NOT_APPLICABLE",
+                    program_key="deployment_validation",
+                    verified_at_ms=_T0,
+                    explanation="test: simulated legacy strategy with no registered Signal Program.",
+                )
+            },
+        )
         managed = registry._bots[_SID]
         assert managed.binding.program_build is not None
         assert managed.binding.program_build.state == "NOT_APPLICABLE"
@@ -268,7 +328,7 @@ async def test_canary_rollback_verdict_ignores_current_allowlist_membership(
         set_alpaca_clerk(clerk)
         try:
             registry = _registry(root, _FakeFeed([], mode="hold"))
-            await _deploy_trade_bot_as_simulated_canary(registry)
+            await _deploy_trade_bot_as_simulated_canary(registry, monkeypatch)
             monkeypatch.setattr(
                 "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
                 pairs,

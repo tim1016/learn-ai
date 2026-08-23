@@ -12,7 +12,6 @@ from app.engine.execution.order import Direction, FillMode
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.algorithms.deployment_validation import (
     DeploymentValidationConsecutiveGreen,
-    DeploymentValidationDecisionKernel,
 )
 from app.engine.strategy.base import StrategyContext
 
@@ -81,8 +80,43 @@ def test_two_green_bars_from_0945_enter_next_bar_open_and_exit_cycle() -> None:
     assert strategy.trade_log[0].signal_reason == "two_consecutive_green_minute_bars"
 
 
-def test_signal_kernel_emits_semantic_enter_then_exit_without_execution_state() -> None:
-    kernel = DeploymentValidationDecisionKernel()
+def _run_signal_only(bars: list[TradeBar]) -> list[str]:
+    """Drive bars through the strategy's own compatibility callback (direct
+    construction, no signal_program attached -- see
+    ``DeploymentValidationConsecutiveGreen._on_consolidated_bar``) and
+    collect the published decision per bar. This is the canonical
+    "signal-only decision clock" surface today (issue #1730 Slice 5's
+    Signal Program promotion retired ``DeploymentValidationDecisionKernel``,
+    the module this test used to drive directly, in favor of
+    ``evaluate_signal_bar``/``commit_signal_decision``)."""
+    strategy = DeploymentValidationConsecutiveGreen()
+    portfolio = Portfolio(initial_cash=Decimal("100000"))
+    ctx = StrategyContext(portfolio=portfolio)
+    strategy.ctx = ctx
+    strategy.initialize()
+    portfolio.update_reference_price("SPY", Decimal("100"))
+
+    decisions = []
+    for bar in bars:
+        ctx.current_time_ms = bar.end_ms
+        strategy.on_minute_bar(bar)
+        assert strategy.last_decision_snapshot is not None
+        decisions.append(strategy.last_decision_snapshot.signal)
+    return decisions
+
+
+def test_signal_decision_split_emits_the_same_sequence_the_retired_kernel_did() -> None:
+    """Same semantic sequence the now-retired ``DeploymentValidationDecisionKernel``
+    proved, reproduced through the canonical
+    ``evaluate_signal_bar``/``commit_signal_decision`` split.
+
+    Renamed from ``..._without_execution_state``. That claim was inherited
+    from the Kernel test and is no longer true of this one: ``_run_signal_only``
+    drives the strategy's compatibility callback, which commits any intent it
+    describes, and ``commit_signal_decision`` calls ``set_holdings`` /
+    ``liquidate``. The thing that had no execution state was the Kernel, not
+    this surface. What this test actually holds invariant is the decision
+    *sequence* across the promotion, which is what its name now says."""
     bars = [
         _bar(9, 44, "100", "101"),
         _bar(9, 45, "101", "102"),
@@ -91,14 +125,7 @@ def test_signal_kernel_emits_semantic_enter_then_exit_without_execution_state() 
         _bar(9, 48, "100", "99"),
     ]
 
-    decisions = [
-        kernel.on_closed_bar(
-            end_ms=bar.end_ms,
-            open_price=bar.open,
-            close_price=bar.close,
-        )
-        for bar in bars
-    ]
+    decisions = _run_signal_only(bars)
 
     assert decisions == ["HOLD", "ENTER", "HOLD", "HOLD", "EXIT"]
 
@@ -200,24 +227,24 @@ def test_on_closed_bar_emits_exit_at_half_day_barrier() -> None:
     """Regression for #1672: on a half day the stop/flatten EXIT branch must
     fire well before the 13:00 ET close — 12:45 ET here — since a fixed
     15:45 ET literal would never be reached within the session and an active
-    cycle would ride unflattened into (and past) the actual close."""
-    kernel = DeploymentValidationDecisionKernel()
+    cycle would ride unflattened into (and past) the actual close.
+
+    Reproduced through the canonical signal-only decision clock
+    (``_run_signal_only``, see the docstring on
+    ``test_signal_decision_split_emits_the_same_sequence_the_retired_kernel_did``
+    above) rather than the now-retired
+    ``DeploymentValidationDecisionKernel`` this test used to drive
+    directly."""
     half_day = date(2024, 11, 29)
-    entry_bars = [
+    bars = [
         _bar(9, 44, "100", "101", day=half_day),
         _bar(9, 45, "101", "102", day=half_day),  # ENTER
+        _bar(12, 44, "106", "105", day=half_day),  # ends 12:45, the half-day barrier
     ]
-    for bar in entry_bars:
-        kernel.on_closed_bar(end_ms=bar.end_ms, open_price=bar.open, close_price=bar.close)
 
-    barrier_bar = _bar(12, 44, "106", "105", day=half_day)  # ends 12:45, the half-day barrier
-    decision = kernel.on_closed_bar(
-        end_ms=barrier_bar.end_ms,
-        open_price=barrier_bar.open,
-        close_price=barrier_bar.close,
-    )
+    decisions = _run_signal_only(bars)
 
-    assert decision == "EXIT"
+    assert decisions[-1] == "EXIT"
 
 
 def test_live_start_registry_class_name_resolves_strategy_class() -> None:

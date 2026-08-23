@@ -27,6 +27,7 @@ from app.services.bot_lifecycle_projection import (
 )
 from app.services.bot_runner import BotTaskRegistry
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.canary_admission import admit_canary_pairing
 from tests.services.test_bot_runner import (  # noqa: F401 -- _fresh_live_market_liveness is an autouse fixture, registered by import
     _FakeFeed,
     _fresh_live_market_liveness,
@@ -248,6 +249,7 @@ def test_projection_retries_when_sqlite_revision_changes_during_file_write(
 @pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
 async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     mode: Literal["trade", "dry_run", "log_only"],
 ) -> None:
     repo = ClerkSqliteRepository.initialize(
@@ -265,6 +267,7 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
         start_custody_guard=clerk.start_admission_snapshot,
         now_ms=now_ms_utc,
     )
+    admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
     try:
         deployed = await registry.deploy(
             broker="alpaca",

@@ -217,7 +217,7 @@ def _fixed_est_open_ms(d: date) -> int:
 
 @pytest.mark.parametrize("key", SEALED_KEYS)
 def test_ordinary_day_full_session_accepted_end_to_end(key: str) -> None:
-    program, params, _executor = _construct_program(key)
+    program, params, _executor, _context = _construct_program(key)
     width = program.session.timeframe_ms
     day = _first_ordinary_trading_day(date(2024, 1, 2))
 
@@ -247,7 +247,7 @@ def test_ordinary_day_full_session_accepted_end_to_end(key: str) -> None:
 
 @pytest.mark.parametrize("key", SEALED_KEYS)
 def test_early_close_short_session_accepted_end_to_end(key: str) -> None:
-    program, params, _executor = _construct_program(key)
+    program, params, _executor, _context = _construct_program(key)
     width = program.session.timeframe_ms
     day = _first_early_close_day(date(2024, 1, 1))
     assert trading_calendar.is_early_close(day)
@@ -293,7 +293,7 @@ def test_early_close_minute_feed_through_real_consolidator_flushes_finalbucket()
     Scoped to one representative program (see the module docstring for why).
     """
     key = SEALED_KEYS[0]
-    program, params, _executor = _construct_program(key)
+    program, params, _executor, _context = _construct_program(key)
     width = program.session.timeframe_ms
 
     day = _first_early_close_day(date(2024, 1, 1))
@@ -378,7 +378,7 @@ def test_dst_transition_fixed_offset_would_have_been_wrong_by_one_hour() -> None
 
 @pytest.mark.parametrize("key", SEALED_KEYS)
 def test_dst_transition_decision_clock_accepts_bars_from_both_sides(key: str) -> None:
-    program, params, _executor = _construct_program(key)
+    program, params, _executor, _context = _construct_program(key)
     width = program.session.timeframe_ms
     day_before, day_after = _dst_spring_forward_trading_days()
 
@@ -400,7 +400,7 @@ def test_dst_transition_decision_clock_accepts_bars_from_both_sides(key: str) ->
 
 @pytest.mark.parametrize("key", SEALED_KEYS)
 def test_missing_bucket_gap_is_tolerated(key: str) -> None:
-    program, params, _executor = _construct_program(key)
+    program, params, _executor, _context = _construct_program(key)
     width = program.session.timeframe_ms
 
     first = sequential_bucket(params.symbol, 0, width, "100")
@@ -432,7 +432,7 @@ def test_duplicate_revised_or_backwards_bucket_is_refused_and_counted(
     offending_index_delta: int,
     offending_close: str,
 ) -> None:
-    program, params, _executor = _construct_program(key)
+    program, params, _executor, _context = _construct_program(key)
     width = program.session.timeframe_ms
 
     first = sequential_bucket(params.symbol, 0, width, "100")
@@ -463,7 +463,7 @@ def test_duplicate_revised_or_backwards_bucket_is_refused_and_counted(
 
 @pytest.mark.parametrize("key", SEALED_KEYS)
 def test_history_live_overlap_bar_produces_no_second_decision(key: str) -> None:
-    program, params, _executor = _construct_program(key)
+    program, params, _executor, _context = _construct_program(key)
     width = program.session.timeframe_ms
 
     # A short warmup/history replay: three sequential decision buckets.
@@ -501,7 +501,7 @@ def test_history_live_overlap_bar_produces_no_second_decision(key: str) -> None:
 def test_pause_observe_only_records_trace_without_commit_and_program_still_decides_after(
     key: str,
 ) -> None:
-    program, params, executor = _construct_program(key)
+    program, params, executor, _context = _construct_program(key)
     strategy = program.strategy
     session = program.session
     width = session.timeframe_ms
@@ -565,7 +565,7 @@ def test_timeframe_mismatched_bucket_is_refused_and_counted(key: str) -> None:
     sealed program, closing the "relevant multi-timeframe boundaries...per
     program" gap that test left open.
     """
-    program, params, _executor = _construct_program(key)
+    program, params, _executor, _context = _construct_program(key)
     width = program.session.timeframe_ms
     mis_shaped = bucket(params.symbol, 0, width - 60_000, "100")
     refused = _feed_through_program(program, mis_shaped)
