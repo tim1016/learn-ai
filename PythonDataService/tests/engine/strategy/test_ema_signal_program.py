@@ -8,8 +8,6 @@ from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
-from app.engine.execution.portfolio import Portfolio
-from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -27,6 +25,8 @@ from app.engine.strategy.signal_program import (
     trace_root,
 )
 from app.services.spec_strategy_runner import InMemoryDataReader
+from tests._helpers.signal_program import RecordingExecutor
+from tests.engine.strategy.conftest import build_program
 
 
 @dataclass
@@ -36,14 +36,6 @@ class _ReadyIndicator:
 
     def update(self, _timestamp_ms: int, _value: Decimal) -> None:
         """Keep the one-cycle program fixture independent of indicator math."""
-
-
-@dataclass
-class _RecordingExecutor:
-    intents: list[SignalIntent] = field(default_factory=list)
-
-    def execute(self, _context: SignalIntentExecutionContext, intent: SignalIntent) -> None:
-        self.intents.append(intent)
 
 
 def _bar(offset: int = 0) -> TradeBar:
@@ -60,21 +52,14 @@ def _bar(offset: int = 0) -> TradeBar:
     )
 
 
-def _prepared_program() -> tuple[SignalProgram, EmaCrossoverSignalAlgorithm, StrategyContext]:
-    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
-    assert registration.signal_program_factory is not None
-    program = registration.signal_program_factory(registration.param_schema())
+def _prepared_program() -> tuple[SignalProgram, EmaCrossoverSignalAlgorithm, RecordingExecutor, StrategyContext]:
+    program, _params, executor, context = build_program("ema_crossover_signal")
     strategy = program.strategy
-    program.activate_for_backtest()
-    context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
-    strategy.ctx = context
-    strategy.initialize()
-    context.set_signal_intent_executor(_RecordingExecutor())
     strategy._ema5 = _ReadyIndicator(Decimal("500.50"))
     strategy._ema10 = _ReadyIndicator(Decimal("500.00"))
     strategy._rsi14 = _ReadyIndicator(Decimal("60"))
     strategy._prev_ema5_above_ema10 = False
-    return program, strategy, context
+    return program, strategy, executor, context
 
 
 @dataclass
@@ -146,7 +131,7 @@ def test_two_programs_constructed_through_the_session_never_share_an_evaluation_
 
 
 def test_registry_factory_is_the_single_public_ema_program_construction_seam() -> None:
-    program, strategy, _context = _prepared_program()
+    program, strategy, _executor, _context = _prepared_program()
 
     assert strategy.signal_program is program
     assert _STRATEGY_REGISTRY["ema_crossover_signal"].build(
@@ -179,9 +164,7 @@ def test_backtest_commits_each_registered_program_stage_at_its_existing_order_se
 
 
 def test_session_quarantines_a_second_advance_until_the_first_stage_settles() -> None:
-    program, _strategy, context = _prepared_program()
-    executor = context._signal_intent_executor
-    assert isinstance(executor, _RecordingExecutor)
+    program, _strategy, executor, _context = _prepared_program()
 
     stage = program.session.advance(_bar(), mode=EvaluationMode.DECIDE)
 
@@ -199,11 +182,9 @@ def test_session_quarantines_a_second_advance_until_the_first_stage_settles() ->
 
 
 def test_discarded_countdown_exit_reemits_on_the_next_eligible_clock() -> None:
-    program, strategy, context = _prepared_program()
+    program, strategy, executor, _context = _prepared_program()
     strategy._in_position = True
     strategy._bars_until_exit = 1
-    executor = context._signal_intent_executor
-    assert isinstance(executor, _RecordingExecutor)
 
     first = program.session.advance(_bar(), mode=EvaluationMode.DECIDE)
     assert first.trace.staged_candidate == "EXIT"
@@ -221,9 +202,7 @@ def test_discarded_countdown_exit_reemits_on_the_next_eligible_clock() -> None:
 
 
 def test_observe_only_candidate_is_discarded_before_continue_can_change_mode() -> None:
-    program, strategy, context = _prepared_program()
-    executor = context._signal_intent_executor
-    assert isinstance(executor, _RecordingExecutor)
+    program, strategy, executor, _context = _prepared_program()
 
     observed = program.session.advance(_bar(), mode=EvaluationMode.OBSERVE_ONLY)
 

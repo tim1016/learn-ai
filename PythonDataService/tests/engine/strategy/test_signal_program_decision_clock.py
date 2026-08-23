@@ -22,11 +22,7 @@ from decimal import Decimal
 import pytest
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.portfolio import Portfolio
-from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
-from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.engine.strategy.signal_intent import SignalIntent
 from app.engine.strategy.signal_program import (
     EvaluationMode,
     SignalProgram,
@@ -39,6 +35,7 @@ from app.services.bot_trade_strategy import (
     _build_signal_strategy,
     _LiveSignalRuntime,
 )
+from tests._helpers.signal_program import bind_strategy_context, bucket, sealed_programs
 
 _RESOLUTIONS_TO_PROVE = (1, 5, 15, 30)
 
@@ -72,12 +69,8 @@ def _width_is_accepted(program: object, bar: TradeBar) -> bool:
     return not (isinstance(stage, StageQuarantine) and stage.reason == "TIMEFRAME_MISMATCH")
 
 
-def _sealed_programs() -> list[tuple[str, object]]:
-    return [(key, reg) for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is not None]
-
-
 def test_every_signal_program_accepts_bars_at_its_registered_default_cadence() -> None:
-    programs = _sealed_programs()
+    programs = sealed_programs()
     assert programs, "expected at least one registered Signal Program"
 
     for key, reg in programs:
@@ -98,7 +91,7 @@ def test_configurable_resolution_programs_track_the_resolved_decision_clock() ->
     """
     configurable = [
         (key, reg)
-        for key, reg in _sealed_programs()
+        for key, reg in sealed_programs()
         if "resolution_minutes" in reg.param_schema.model_fields  # type: ignore[attr-defined]
     ]
     assert configurable, "expected at least one resolution-configurable Signal Program"
@@ -143,13 +136,6 @@ _RUNNER_LOGGER = "app.services.bot_trade_strategy"
 _BASE_MS = 1_700_000_000_000
 
 
-class _RecordingExecutor:
-    """Absorbs committed intents so a program can stage without a broker."""
-
-    def execute(self, _context: SignalIntentExecutionContext, _intent: SignalIntent) -> None:
-        return
-
-
 def _binding() -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id="sid-decision-clock",
@@ -164,32 +150,16 @@ def _binding() -> BrokerBotBinding:
     )
 
 
-def _bucket(symbol: str, start_ms: int, end_ms: int) -> TradeBar:
-    return TradeBar(
-        symbol=symbol,
-        start_ms=start_ms,
-        end_ms=end_ms,
-        open=Decimal("100"),
-        high=Decimal("101"),
-        low=Decimal("99"),
-        close=Decimal("100"),
-        volume=1_000,
-    )
-
-
 def _mis_shaped(width_ms: int, index: int = 0) -> TradeBar:
     """A bucket one minute short of the session's own cadence."""
     start = _BASE_MS + index * width_ms
-    return _bucket(_QUARANTINE_SYMBOL, start, start + width_ms - 60_000)
+    return bucket(_QUARANTINE_SYMBOL, start, start + width_ms - 60_000, "100")
 
 
 def _runner_runtime() -> _LiveSignalRuntime:
     """The real live composition: ``_build_signal_strategy`` and nothing else."""
     runtime = _build_signal_strategy(_QUARANTINE_KEY, _QUARANTINE_SYMBOL, None)
-    strategy = runtime.strategy
-    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
-    strategy.initialize()
-    strategy.ctx.set_signal_intent_executor(_RecordingExecutor())
+    bind_strategy_context(runtime.strategy)
     return runtime
 
 
@@ -301,9 +271,9 @@ def test_a_refusal_that_is_not_a_clock_mismatch_omits_the_decision_clock_pair(
 
     # Stage a well-formed bucket and deliberately never settle it, so the
     # next bucket is refused for a reason that has nothing to do with width.
-    _feed(program, _bucket(_QUARANTINE_SYMBOL, _BASE_MS, _BASE_MS + width))
+    _feed(program, bucket(_QUARANTINE_SYMBOL, _BASE_MS, _BASE_MS + width, "100"))
     assert program.session.active_stage is not None, "setup failed: the first bucket did not stage"
-    following = _bucket(_QUARANTINE_SYMBOL, _BASE_MS + width, _BASE_MS + 2 * width)
+    following = bucket(_QUARANTINE_SYMBOL, _BASE_MS + width, _BASE_MS + 2 * width, "100")
     _feed(program, following)
 
     with caplog.at_level(logging.WARNING, logger=_RUNNER_LOGGER):
