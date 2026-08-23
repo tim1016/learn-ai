@@ -2794,9 +2794,10 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
         # evaluation_id, PRD section 16) -- a content-addressed SHA-256, not
         # a "{ms}:{KIND}" string. "deployment_validation" is now a
         # registered Signal Program (issue #1730 Slice 5), so its
-        # evaluation_id comes from the real SignalSession's own trace, not
-        # the `_generic_evaluation_id` compatibility formula (still used by
-        # strategies with no registered program). Recompute it by replaying
+        # evaluation_id comes from the real SignalSession's own trace. The
+        # `_generic_evaluation_id` compatibility formula it used to fall back
+        # to is gone: the live adapter builds only registered programs, so
+        # there is no evaluator left to need it. Recompute it by replaying
         # the exact same three bars through a fresh instance of the same
         # registered program, so this proves the identity really is the
         # deterministic per-bar SignalSession evaluation id, not just

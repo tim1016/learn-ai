@@ -264,9 +264,23 @@ def sequential_bucket(
 # Custody-surface reflection.
 #
 # The custody surface is DERIVED, not hand-listed. ``rollback_blocked_entry``
-# and ``rollback_blocked_exit`` exist for exactly one purpose -- to undo the
-# custody a commit applied -- so the attributes they assign are that
-# program's authoritative statement of what "position custody" means for it.
+# and ``rollback_blocked_exit`` name exactly the state a commit advances, so
+# the attributes they assign are that program's authoritative statement of what
+# "position custody" means for it.
+#
+# READ THIS BEFORE DELETING THEM AS DEAD CODE. Nothing at runtime calls these
+# two methods any more. Under the staged protocol (#1730) a strategy mutates
+# position custody only in ``commit_signal_decision``, so a discarded candidate
+# has nothing to undo and ``bot_trade_strategy._discard_evaluation`` simply
+# settles DISCARD; the compensating-rollback branches that used to call them
+# were removed. Their remaining job is to be READ, not run: this module derives
+# each program's custody surface from what they assign, and the
+# session-boundary, discard-safety and pause invariants assert against that
+# derived surface. Both consumers already refuse an empty surface explicitly
+# (``assert surface, ...``), so deleting these methods fails loudly rather than
+# passing vacuously -- but it fails saying "this program declares no custody
+# surface", which reads like a problem with the program rather than with the
+# removal. This paragraph is here so the next reader recognizes which it is.
 #
 # An earlier version of this reflection hard-coded
 # ``("_in_position", "_pending_entry", "_open_trade", "_bars_until_exit")``
