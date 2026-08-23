@@ -7,8 +7,6 @@ stream, and routes only its semantic ENTER/EXIT intents to the Clerk.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
@@ -73,26 +71,11 @@ class StrategyEvaluation:
     evaluation_id: str
     decision_bar_close_ms: int
     intents: tuple[SignalIntent, ...]
-    # Undoes the strategy's own ENTER-time state mutation when the caller
-    # blocks this evaluation's ENTER intent after signal emission (#1671
-    # AC6). Both signal generators commit lifecycle state (an active
-    # cycle / an open position) unconditionally at emission time, before
-    # the liveness gate has a chance to veto — without this, a blocked
-    # ENTER still leaves the strategy believing it holds a position, and
-    # the later EXIT it emits has no real custody to close, crashing the
-    # run with ``MissingEntryCustodyError``.
-    rollback_blocked_entry: Callable[[], None]
-    # Symmetric undo for a blocked/rejected EXIT (#1708 review finding 1).
-    # Both signal generators flip their position-tracking flag to "flat" at
-    # EXIT *emission*, before the caller knows whether the Clerk will admit
-    # it. Without this, a rejected EXIT leaves the strategy believing it is
-    # flat while the broker still holds the position, and the next eligible
-    # bar can emit a fresh ENTER that overwrites bookkeeping for a position
-    # that was never actually closed.
-    rollback_blocked_exit: Callable[[], None]
     # A registry-backed SignalSession owns the staged decision cycle.  The
     # execution adapter supplies exactly one disposition before the next bar.
-    settle_stage: Callable[[Settlement], None] | None = None
+    # Never optional: an evaluation exists only because a bucket closed and
+    # staged one, so there is always exactly one transaction to settle.
+    settle_stage: Callable[[Settlement], None]
     # This mode was captured with the source bar before a consolidator could
     # turn it into a semantic decision. It must never be sampled later.
     evaluation_mode: EvaluationMode = EvaluationMode.DECIDE
@@ -129,10 +112,6 @@ class _LiveSignalStrategy(Protocol):
     def initialize(self) -> None: ...
 
     def on_minute_bar(self, bar: TradeBar) -> None: ...
-
-    def rollback_blocked_entry(self) -> None: ...
-
-    def rollback_blocked_exit(self) -> None: ...
 
     def on_force_flat(self) -> None: ...
 
@@ -199,12 +178,11 @@ class _LiveSignalRuntime:
     """Typed program/strategy composition for one runner-owned instance."""
 
     strategy: _LiveSignalStrategy
-    program: SignalProgram | None
+    program: SignalProgram
     quarantine_log: _QuarantineLog = field(default_factory=_QuarantineLog)
 
     def capture_source_bar(self, bar: TradeBar, *, mode: EvaluationMode) -> None:
-        if self.program is not None:
-            self.program.capture_source_bar(bar, mode=mode)
+        self.program.capture_source_bar(bar, mode=mode)
 
     def replay_closed_bar(
         self, context: StrategyContext, market_bar: MarketDataBar, *, mode: EvaluationMode
@@ -220,15 +198,13 @@ class _LiveSignalRuntime:
         _drain_bar(self.strategy, context, engine_bar)
 
     def active_stage(self) -> EvaluationStage | None:
-        return None if self.program is None else self.program.session.active_stage
+        return self.program.session.active_stage
 
     def take_completed_stage(self) -> EvaluationStage | None:
-        return None if self.program is None else self.program.take_completed_stage()
+        return self.program.take_completed_stage()
 
     def surface_quarantines(self, binding: BrokerBotBinding) -> None:
         """Log every decision bar the session refused since the last drain."""
-        if self.program is None:
-            return
         while (quarantine := self.program.take_quarantine()) is not None:
             self.quarantine_log.record(
                 quarantine,
@@ -237,8 +213,6 @@ class _LiveSignalRuntime:
             )
 
     def settle(self, settlement: Settlement) -> None:
-        if self.program is None:
-            raise RuntimeError("This legacy strategy has no SignalSession to settle.")
         self.program.session.settle(settlement)
 
 
@@ -408,12 +382,19 @@ def _build_signal_strategy(
     live-executable if its registry registration builds it.
     """
     registration = _STRATEGY_REGISTRY[strategy_key]
+    if registration.signal_program_factory is None:
+        # Refused where the impossibility is constructed rather than tolerated
+        # downstream. The live adapter's decision cycle *is* the SignalSession:
+        # without one there is no stage to settle, so a program-less runtime
+        # could only stream bars and decide nothing -- the failure shape this
+        # module works hardest to make impossible. `strategy_evaluations`
+        # rejects the same condition one layer up; this keeps the two from
+        # drifting by making the bad value unconstructable.
+        raise ValueError(f"strategy is not live-executable (no Signal Program): {strategy_key}")
     params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})  # type: ignore[arg-type]
-    if registration.signal_program_factory is not None:
-        program = registration.signal_program_factory(params)
-        program.activate_for_runner()
-        return _LiveSignalRuntime(strategy=program.strategy, program=program)  # type: ignore[arg-type]
-    return _LiveSignalRuntime(strategy=registration.build(params), program=None)  # type: ignore[arg-type]
+    program = registration.signal_program_factory(params)
+    program.activate_for_runner()
+    return _LiveSignalRuntime(strategy=program.strategy, program=program)  # type: ignore[arg-type]
 
 
 def _drain_bar(strategy: _LiveSignalStrategy, context: StrategyContext, bar: TradeBar) -> None:
@@ -458,8 +439,6 @@ async def _warm_up_signal_strategy(
         evaluation_id=candidate_stage.trace.evaluation_id,
         decision_bar_close_ms=candidate_stage.trace.bar_close_ms,
         intents=(intent,),
-        rollback_blocked_entry=runtime.strategy.rollback_blocked_entry,
-        rollback_blocked_exit=runtime.strategy.rollback_blocked_exit,
         # Already settled DISCARD inside replay_warmup_bars when this stage
         # was staged -- a second `settle()` call would raise ("no staged
         # evaluation").
@@ -498,10 +477,8 @@ async def _signal_strategy_evaluations(
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
         mode = _evaluation_mode_for(feed, market_bar)
         runtime.replay_closed_bar(context, market_bar, mode=mode)
-        evaluation = _evaluation_from_active_stage(
-            binding, runtime, context, market_bar, mode=mode
-        )
-        if evaluation.settle_stage is not None or evaluation.intents:
+        evaluation = _evaluation_from_active_stage(binding, runtime, context, market_bar)
+        if evaluation is not None:
             yield evaluation
         # #1708 review finding 2: the consolidator only fires a working
         # bucket lazily, when a *later* bar arrives. RTH streaming stops
@@ -513,10 +490,8 @@ async def _signal_strategy_evaluations(
             for consolidator in context.get_consolidators(market_bar.symbol):
                 if consolidator.scan(market_bar.end_ms) is None:
                     continue
-                evaluation = _evaluation_from_active_stage(
-                    binding, runtime, context, market_bar, mode=mode
-                )
-                if evaluation.settle_stage is not None or evaluation.intents:
+                evaluation = _evaluation_from_active_stage(binding, runtime, context, market_bar)
+                if evaluation is not None:
                     yield evaluation
 
 
@@ -525,43 +500,41 @@ def _evaluation_from_active_stage(
     runtime: _LiveSignalRuntime,
     context: StrategyContext,
     market_bar: MarketDataBar,
-    *,
-    mode: EvaluationMode,
-) -> StrategyEvaluation:
-    """Drain one strategy stage and release adapter-only output buffers."""
+) -> StrategyEvaluation | None:
+    """Drain one strategy stage, or report that this bar closed no bucket.
+
+    ``None`` means the consolidator did not fire: there is no decision cycle,
+    so there is nothing for a caller to dispose of. Every evaluation this
+    adapter produces therefore carries the session that staged it, which is
+    what lets ``settle_stage`` be non-optional and both settlement helpers stay
+    branch-free.
+    """
     # A refused bar produces no stage at all, so it would leave no trace in
     # anything below. Drain and log it here or a bot that keeps consuming
     # data while deciding nothing stays invisible.
     runtime.surface_quarantines(binding)
-    stage = runtime.active_stage() or runtime.take_completed_stage()
-    intents = stage.intents if stage is not None else tuple(context.signal_intents)
-    context.signal_intents.clear()
     # StrategyContext retains consolidated bars for finite backtest charting.
     # This adapter is long-lived and has no chart consumer, so release each
     # emitted bar after the strategy has processed it.
     context.consolidated_bars.clear()
+    context.signal_intents.clear()
+    stage = runtime.active_stage() or runtime.take_completed_stage()
+    if stage is None:
+        return None
     return StrategyEvaluation(
         bar=market_bar,
-        evaluation_id=(
-            stage.trace.evaluation_id
-            if stage is not None
-            else _generic_evaluation_id(binding, market_bar.end_ms)
-        ),
-        decision_bar_close_ms=(
-            stage.trace.bar_close_ms if stage is not None else market_bar.end_ms
-        ),
-        intents=intents,
-        rollback_blocked_entry=runtime.strategy.rollback_blocked_entry,
-        rollback_blocked_exit=runtime.strategy.rollback_blocked_exit,
+        evaluation_id=stage.trace.evaluation_id,
+        decision_bar_close_ms=stage.trace.bar_close_ms,
+        intents=stage.intents,
+        # An OBSERVE_ONLY bucket was already settled inside `advance`; accept
+        # the caller's disposition and do nothing rather than settling twice.
         settle_stage=(
-            None
-            if stage is None
-            else (lambda _settlement: None)
+            (lambda _settlement: None)
             if stage.settlement is not None
             else lambda settlement: _settle_active_stage(runtime, context, settlement)
         ),
-        evaluation_mode=(stage.trace.evaluation_mode if stage is not None else mode),
-        trace=stage.trace if stage is not None else None,
+        evaluation_mode=stage.trace.evaluation_mode,
+        trace=stage.trace,
     )
 
 
@@ -576,19 +549,24 @@ def _settle_active_stage(
 
 
 def _settle_evaluation(evaluation: StrategyEvaluation, settlement: Settlement) -> None:
-    """Settle a staged evaluation exactly once when the runner owns one."""
-    if evaluation.settle_stage is not None:
-        evaluation.settle_stage(settlement)
+    """Settle this evaluation's decision cycle exactly once."""
+    evaluation.settle_stage(settlement)
 
 
-def _discard_evaluation(evaluation: StrategyEvaluation, intent: SignalIntent) -> None:
-    """Restore local strategy state after an intent cannot reach custody."""
-    if evaluation.settle_stage is not None:
-        _settle_evaluation(evaluation, Settlement.DISCARD)
-    elif intent.kind is SignalIntentKind.ENTER:
-        evaluation.rollback_blocked_entry()
-    else:
-        evaluation.rollback_blocked_exit()
+def _discard_evaluation(evaluation: StrategyEvaluation) -> None:
+    """Refuse one staged candidate. Nothing needs unwinding.
+
+    A Signal Program mutates position custody only inside
+    ``commit_signal_decision``, which a session runs only on
+    ``Settlement.COMMIT``. A candidate refused anywhere between staging and
+    the Clerk therefore leaves the strategy exactly as the bar found it, so
+    DISCARD is the whole disposition -- there is no emission-time mutation to
+    compensate for. The strategies still carry ``rollback_blocked_entry`` /
+    ``rollback_blocked_exit``, but as each program's declaration of what
+    position custody *means* for it, read reflectively by the session-boundary
+    tests; the live adapter no longer calls them.
+    """
+    _settle_evaluation(evaluation, Settlement.DISCARD)
 
 
 async def strategy_evaluations(
@@ -720,7 +698,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         intent = evaluation.intents[0]
         decision_id = evaluation.evaluation_id
         if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
-            _discard_evaluation(evaluation, intent)
+            _discard_evaluation(evaluation)
             _append_decision_receipt(
                 decision_receipts,
                 binding=binding,
@@ -738,11 +716,13 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         if intent.kind is SignalIntentKind.ENTER:
             liveness = market_liveness_fact(binding.symbol, now_ms_utc())
             if _liveness_blocks_entry(binding, capability_account_id, liveness):
-                # Undo the ENTER-time state mutation the strategy already
-                # committed at signal emission — otherwise it believes it
-                # holds a position it was never actually granted, and its
-                # later EXIT has no real custody to close (#1671 AC6).
-                _discard_evaluation(evaluation, intent)
+                # Settle the staged candidate as refused. The strategy has not
+                # taken the position — it mutates position custody only in
+                # ``commit_signal_decision``, which never ran — so DISCARD is
+                # the entire disposition. (#1671 AC6 predates the staged
+                # protocol and described undoing an emission-time mutation;
+                # since #1730 there is no such mutation to undo.)
+                _discard_evaluation(evaluation)
                 _append_decision_receipt(
                     decision_receipts,
                     binding=binding,
@@ -796,17 +776,15 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
-            # The strategy already committed its ENTER/EXIT-time state
-            # before this call — the outer liveness gate above only catches
-            # evidence that was already stale/blocking *before* the Clerk
-            # was reached. This Clerk-boundary rejection is a distinct
-            # failure mode: evidence that changed *while* the intent
-            # awaited the Clerk's sole-writer intake lock. A rejected ENTER
-            # needs the identical rollback or a later EXIT has no real
-            # custody to close (#1671 AC6); a rejected EXIT needs the
-            # symmetric rollback or the strategy believes it is flat while
-            # the broker still holds the position (#1708 review finding 1).
-            _discard_evaluation(evaluation, intent)
+            # A distinct failure mode from the liveness gate above: that one
+            # catches evidence already stale *before* the Clerk was reached,
+            # this one catches evidence that changed *while* the intent awaited
+            # the Clerk's sole-writer intake lock. The disposition is identical
+            # and for the same reason — the candidate was never committed, so
+            # refusing it leaves nothing to unwind. (#1671 AC6 / #1708 review
+            # finding 1 described compensating rollbacks; the staged protocol
+            # in #1730 removed the emission-time mutation they compensated.)
+            _discard_evaluation(evaluation)
         else:
             _settle_evaluation(evaluation, Settlement.COMMIT)
         logger.info(
@@ -864,22 +842,6 @@ def _append_decision_receipt(
 def _effect_state_value(receipt: _EffectReceipt) -> str:
     state = receipt.state
     return str(getattr(state, "value", state))
-
-
-def _generic_evaluation_id(binding: BrokerBotBinding, bar_close_ms: int) -> str:
-    """Give compatibility evaluators the same closed identity shape as sessions."""
-    payload = {
-        "program_key": binding.strategy_key,
-        "program_version": (
-            binding.sealed_program.configured_signal.program_version
-            if binding.sealed_program is not None
-            else f"{binding.strategy_key}/legacy-v1"
-        ),
-        "settings": {"symbol": binding.symbol, **(binding.strategy_params or {})},
-        "bar_close_ms": bar_close_ms,
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
@@ -946,7 +908,7 @@ async def run_dry_run_bot(
             continue
         intent = evaluation.intents[0]
         if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
-            _discard_evaluation(evaluation, intent)
+            _discard_evaluation(evaluation)
             _append_decision_receipt(
                 decision_receipts,
                 binding=binding,
@@ -1002,7 +964,7 @@ async def run_dry_run_bot(
             ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
-            _discard_evaluation(evaluation, intent)
+            _discard_evaluation(evaluation)
             continue
         _settle_evaluation(evaluation, Settlement.COMMIT)
         if retained is None:

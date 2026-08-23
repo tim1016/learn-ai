@@ -123,10 +123,10 @@ async def replay_warmup_bars(
     ``captured_decisions`` (this instance has never captured a decision at
     all) never flags anything: every bucket here would then predate this
     instance's own live-decision authority, so none of it can be a genuine
-    crash artifact. Legacy strategies with no ``SignalSession``
-    (``runtime.program is None``) never produce a stage and are therefore
-    never flagged -- FR-016 is scoped to sealed signal programs (PRD
-    Slice 5 has not yet promoted the others).
+    crash artifact. FR-016 is scoped to sealed signal programs, and since
+    #1730 that is the only kind the live adapter builds --
+    ``_build_signal_strategy`` refuses a strategy with no registered
+    Signal Program rather than returning a runtime that cannot stage.
 
     Returns the ``(bar, stage)`` pair for the one bucket a crash left
     staged but uncaptured, or ``None`` when replay found no such bucket.
