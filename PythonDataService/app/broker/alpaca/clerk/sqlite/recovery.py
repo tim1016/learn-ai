@@ -7,6 +7,7 @@ overwritten, and an immutable receipt records what became active.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
@@ -44,24 +45,44 @@ from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
     exclusive_recovery_fence,
     startup_recovery_fence,
 )
-from app.broker.alpaca.paths import SOURCE_BAR_LEDGER_FILENAME, fsync_directory, fsync_directory_chain
+from app.broker.alpaca.paths import fsync_directory, fsync_directory_chain
+from app.services.source_bar_ledger import (
+    SOURCE_BAR_LEDGER_FILENAME,
+    SourceBarLedgerCorruptError,
+    verify_ledger_file,
+)
 from app.utils.timestamps import Clock, now_ms_utc
 
 BACKUP_DIRECTORY = "verified-backups"
 LATEST_BACKUP_FILENAME = "latest.json"
 PRESERVED_DIRECTORY = "recovery-preserved"
-BACKUP_MANIFEST_SCHEMA_VERSION = 2
-"""Bundle manifest schema. Version 2 (#1740) adds ``source_bars``: the
+_MANIFEST_FIELDS_V1 = frozenset(
+    {
+        "schema_version",
+        "account_id",
+        "authority_generation",
+        "db_identity_token",
+        "created_at_ms",
+        "snapshot_filename",
+        "snapshot_sha256",
+        "verification",
+    }
+)
+BACKUP_MANIFEST_FIELDS_BY_VERSION: Mapping[int, frozenset[str]] = {
+    1: _MANIFEST_FIELDS_V1,
+    2: _MANIFEST_FIELDS_V1 | {"source_bars"},
+}
+"""Bundle manifest schemas. Version 2 (#1740) adds ``source_bars``: the
 retained source-bar ledger snapshot, or ``null`` when the account had no
 ledger at backup time. Version 1 bundles (Clerk database only) remain
 verifiable and restorable; restoring one leaves any live ledger untouched.
 """
-_DATABASE_FILENAMES = (DB_FILENAME, f"{DB_FILENAME}-wal", f"{DB_FILENAME}-shm")
-_SOURCE_BAR_FILENAMES = (
-    SOURCE_BAR_LEDGER_FILENAME,
-    f"{SOURCE_BAR_LEDGER_FILENAME}-wal",
-    f"{SOURCE_BAR_LEDGER_FILENAME}-shm",
-)
+BACKUP_MANIFEST_SCHEMA_VERSION = max(BACKUP_MANIFEST_FIELDS_BY_VERSION)
+
+
+def _sqlite_family(filename: str) -> tuple[str, str, str]:
+    """The main file plus the WAL and shared-memory sidecars SQLite keeps beside it."""
+    return (filename, f"{filename}-wal", f"{filename}-shm")
 RECEIPT_DIRECTORY = "recovery-receipts"
 
 
@@ -86,16 +107,54 @@ class RecoveryRefused(Exception):
 
 
 @dataclass(frozen=True)
+class SourceBarSnapshot:
+    """The retained source-bar ledger as cut into one bundle (#1740)."""
+
+    path: Path
+    sha256: str
+    retained_rows: int
+
+    def manifest_entry(self) -> dict[str, Any]:
+        return {"filename": self.path.name, "sha256": self.sha256, "retained_rows": self.retained_rows}
+
+    @classmethod
+    def from_manifest(cls, bundle: Path, entry: object) -> SourceBarSnapshot:
+        """Check one manifest ``source_bars`` entry against the bundle's file."""
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"filename", "sha256", "retained_rows"}
+            or entry["filename"] != SOURCE_BAR_LEDGER_FILENAME
+        ):
+            raise RecoveryRefused("backup manifest source_bars entry is unsupported")
+        snapshot = bundle / SOURCE_BAR_LEDGER_FILENAME
+        if snapshot.is_symlink() or not snapshot.is_file():
+            raise RecoveryRefused(
+                "backup source-bar snapshot must be a regular non-symbolic-link file",
+                reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+            )
+        if sha256_file(snapshot) != entry["sha256"]:
+            raise RecoveryRefused(
+                "backup source-bar snapshot SHA-256 does not match its manifest",
+                reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+            )
+        if _verified_ledger_rows(snapshot) != entry["retained_rows"]:
+            raise RecoveryRefused(
+                "backup source-bar snapshot row count does not match its manifest",
+                reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+            )
+        return cls(path=snapshot, sha256=entry["sha256"], retained_rows=entry["retained_rows"])
+
+
+@dataclass(frozen=True)
 class BackupPublication:
     bundle_path: Path
     manifest_path: Path
     snapshot_path: Path
     snapshot_sha256: str
     verification: DatabaseVerification
-    # The retained source-bar ledger snapshot (#1740). ``None`` when the
-    # account had no ledger at backup time, or for a schema-version-1 bundle.
-    source_bars_snapshot_path: Path | None = None
-    source_bars_sha256: str | None = None
+    # ``None`` when the account had no ledger at backup time, or for a
+    # schema-version-1 bundle.
+    source_bars: SourceBarSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -227,7 +286,7 @@ def _create_verified_backup_fenced(
             "snapshot_filename": DB_FILENAME,
             "snapshot_sha256": snapshot_sha256,
             "verification": asdict(verification),
-            "source_bars": source_bars,
+            "source_bars": None if source_bars is None else source_bars.manifest_entry(),
         }
         manifest_path = candidate / "manifest.json"
         manifest_sha256 = atomic_write_json(manifest_path, manifest)
@@ -255,10 +314,11 @@ def _create_verified_backup_fenced(
             snapshot_path=bundle / DB_FILENAME,
             snapshot_sha256=snapshot_sha256,
             verification=verification,
-            source_bars_snapshot_path=(
-                None if source_bars is None else bundle / SOURCE_BAR_LEDGER_FILENAME
+            source_bars=(
+                None
+                if source_bars is None
+                else dataclasses.replace(source_bars, path=bundle / SOURCE_BAR_LEDGER_FILENAME)
             ),
-            source_bars_sha256=None if source_bars is None else source_bars["sha256"],
         )
     except Exception:
         # The incomplete directory is retained and never selected by latest.json.
@@ -291,21 +351,12 @@ def verify_backup_bundle(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise RecoveryRefused(f"backup manifest cannot be read: {exc}") from exc
-    required_v1 = {
-        "schema_version",
-        "account_id",
-        "authority_generation",
-        "db_identity_token",
-        "created_at_ms",
-        "snapshot_filename",
-        "snapshot_sha256",
-        "verification",
-    }
-    required_by_version = {1: required_v1, 2: required_v1 | {"source_bars"}}
     if not isinstance(manifest, dict):
         raise RecoveryRefused("backup manifest must be a JSON object")
     schema_version = manifest.get("schema_version")
-    required = required_by_version.get(schema_version) if isinstance(schema_version, int) else None
+    required = (
+        BACKUP_MANIFEST_FIELDS_BY_VERSION.get(schema_version) if isinstance(schema_version, int) else None
+    )
     if required is None or manifest.get("snapshot_filename") != DB_FILENAME:
         raise RecoveryRefused("backup manifest schema or snapshot filename is unsupported")
     if set(manifest) != required:
@@ -349,15 +400,14 @@ def verify_backup_bundle(
             "backup verification receipt does not match snapshot contents",
             reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
         )
-    source_bars = _verify_source_bar_snapshot(bundle, manifest.get("source_bars"))
+    entry = manifest.get("source_bars")
     return BackupPublication(
         bundle_path=bundle,
         manifest_path=manifest_path,
         snapshot_path=snapshot,
         snapshot_sha256=manifest["snapshot_sha256"],
         verification=verification,
-        source_bars_snapshot_path=None if source_bars is None else bundle / SOURCE_BAR_LEDGER_FILENAME,
-        source_bars_sha256=None if source_bars is None else source_bars["sha256"],
+        source_bars=None if entry is None else SourceBarSnapshot.from_manifest(bundle, entry),
     )
 
 
@@ -477,46 +527,50 @@ def _restore_verified_backup_fenced(
         process_stop_proof=process_stop_proof,
         max_process_stop_proof_age_ms=max_process_stop_proof_age_ms,
     )
+    # Every file the bundle carries is staged, verified, and only then swapped
+    # in, ledger first: the two renames are each atomic but not jointly, so a
+    # hard crash between them must leave "bars present, authority missing"
+    # (startup fails closed, loudly) rather than "authority present, bars
+    # gone" (FR-016 replay would run against missing evidence). A bundle with
+    # no ledger says nothing about whether one should exist now, so the live
+    # ledger is then neither replaced nor preserved.
     restore_token = secrets.token_hex(8)
-    candidate = account_dir / f".{DB_FILENAME}.restore-{restore_token}"
-    shutil.copyfile(publication.snapshot_path, candidate)
-    _fsync_file(candidate)
+    staged: list[tuple[Path, Path]] = []
+    if publication.source_bars is not None:
+        ledger_candidate = account_dir / f".{SOURCE_BAR_LEDGER_FILENAME}.restore-{restore_token}"
+        shutil.copyfile(publication.source_bars.path, ledger_candidate)
+        _fsync_file(ledger_candidate)
+        _verified_ledger_rows(ledger_candidate)
+        staged.append(
+            (
+                ledger_candidate,
+                writes.confined_account_file(artifacts_root, account_id, SOURCE_BAR_LEDGER_FILENAME),
+            )
+        )
+    db_candidate = account_dir / f".{DB_FILENAME}.restore-{restore_token}"
+    shutil.copyfile(publication.snapshot_path, db_candidate)
+    _fsync_file(db_candidate)
     verify_database(
-        candidate,
+        db_candidate,
         expected_account_id=account_id,
         expected_generation=publication.verification.authority_generation,
         expected_db_identity=publication.verification.db_identity_token,
     )
-    # A bundle with no ledger (schema version 1, or an account that had no
-    # ledger when it was cut) says nothing about whether a ledger should
-    # exist now, so the live one is neither replaced nor preserved.
-    ledger_candidate: Path | None = None
-    preserved_names: tuple[str, ...] = _DATABASE_FILENAMES
-    if publication.source_bars_snapshot_path is not None:
-        ledger_candidate = account_dir / f".{SOURCE_BAR_LEDGER_FILENAME}.restore-{restore_token}"
-        shutil.copyfile(publication.source_bars_snapshot_path, ledger_candidate)
-        _fsync_file(ledger_candidate)
-        _require_intact_sqlite(ledger_candidate, label="restored source-bar ledger")
-        preserved_names = _DATABASE_FILENAMES + _SOURCE_BAR_FILENAMES
+    staged.append((db_candidate, db_path))
     preserved = _preserve_database_files(
         account_dir=account_dir,
         recorded_at_ms=recorded_at_ms,
         label="pre-restore",
-        names=preserved_names,
+        names=[name for _candidate, live in staged for name in _sqlite_family(live.name)],
     )
     try:
-        os.replace(candidate, db_path)
-        if ledger_candidate is not None:
-            os.replace(
-                ledger_candidate,
-                writes.confined_account_file(artifacts_root, account_id, SOURCE_BAR_LEDGER_FILENAME),
-            )
+        for candidate, live in staged:
+            os.replace(candidate, live)
         fsync_directory(account_dir)
     except Exception:
-        candidate.unlink(missing_ok=True)
-        if ledger_candidate is not None:
-            ledger_candidate.unlink(missing_ok=True)
-        _restore_preserved_database(account_dir=account_dir, preserved=preserved, names=preserved_names)
+        for candidate, _live in staged:
+            candidate.unlink(missing_ok=True)
+        _restore_preserved_database(account_dir=account_dir, preserved=preserved)
         raise
     receipt = RecoveryReceipt(
         operation="RESTORE_VERIFIED_BACKUP",
@@ -679,7 +733,7 @@ def _reset_authority_fenced(
     established = _require_established(accounts_root, account_id)
     _preflight_regular_files(
         account_dir,
-        (DB_FILENAME, f"{DB_FILENAME}-wal", f"{DB_FILENAME}-shm", MIRROR_FILENAME),
+        (*_sqlite_family(DB_FILENAME), MIRROR_FILENAME),
         label="generation",
     )
     process_stop_reference = _assert_no_live_lease(
@@ -807,14 +861,13 @@ def _snapshot_source_bar_ledger(
     account_id: str,
     candidate: Path,
     progress: Callable[[int, int, int], None] | None,
-) -> dict[str, Any] | None:
+) -> SourceBarSnapshot | None:
     """Cut the account's retained source-bar ledger into ``candidate``.
 
-    Returns the manifest ``source_bars`` entry, or ``None`` when the account
-    has no ledger (an account that never ran a bot). The ledger is written by
-    ``app.services.source_bar_ledger`` in WAL mode; the SQLite online-backup
-    API reads a consistent cut that includes un-checkpointed WAL content, so
-    no checkpoint is forced on the live file.
+    ``None`` when the account has no ledger (it never ran a bot). The ledger
+    is written by ``app.services.source_bar_ledger`` in WAL mode; the SQLite
+    online-backup API reads a consistent cut that includes un-checkpointed
+    WAL content, so no checkpoint is forced on the live file.
     """
     ledger_path = writes.confined_account_file(artifacts_root, account_id, SOURCE_BAR_LEDGER_FILENAME)
     if not ledger_path.exists():
@@ -823,63 +876,19 @@ def _snapshot_source_bar_ledger(
         raise RecoveryRefused("source-bar ledger must be a regular non-symbolic-link file")
     snapshot = candidate / SOURCE_BAR_LEDGER_FILENAME
     _online_backup(ledger_path, snapshot, progress=progress)
-    retained_rows = _require_intact_sqlite(snapshot, label="source-bar ledger snapshot")
-    return {
-        "filename": SOURCE_BAR_LEDGER_FILENAME,
-        "sha256": sha256_file(snapshot),
-        "retained_rows": retained_rows,
-    }
+    return SourceBarSnapshot(
+        path=snapshot, sha256=sha256_file(snapshot), retained_rows=_verified_ledger_rows(snapshot)
+    )
 
 
-def _verify_source_bar_snapshot(bundle: Path, entry: object) -> dict[str, Any] | None:
-    """Check a manifest's ``source_bars`` entry against the bundle's files."""
-    if entry is None:
-        return None
-    if (
-        not isinstance(entry, dict)
-        or set(entry) != {"filename", "sha256", "retained_rows"}
-        or entry["filename"] != SOURCE_BAR_LEDGER_FILENAME
-    ):
-        raise RecoveryRefused("backup manifest source_bars entry is unsupported")
-    snapshot = bundle / SOURCE_BAR_LEDGER_FILENAME
-    if snapshot.is_symlink() or not snapshot.is_file():
-        raise RecoveryRefused(
-            "backup source-bar snapshot must be a regular non-symbolic-link file",
-            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
-        )
-    if sha256_file(snapshot) != entry["sha256"]:
-        raise RecoveryRefused(
-            "backup source-bar snapshot SHA-256 does not match its manifest",
-            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
-        )
-    if _require_intact_sqlite(snapshot, label="source-bar ledger snapshot") != entry["retained_rows"]:
-        raise RecoveryRefused(
-            "backup source-bar snapshot row count does not match its manifest",
-            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
-        )
-    return entry
-
-
-def _require_intact_sqlite(path: Path, *, label: str) -> int:
-    """Integrity-check one read-only SQLite file; return its retained-bar row count."""
-    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+def _verified_ledger_rows(path: Path) -> int:
+    """The ledger module's own integrity check, translated into a recovery refusal."""
     try:
-        conn.execute("PRAGMA query_only = ON")
-        integrity = conn.execute("PRAGMA integrity_check").fetchone()
-        if integrity is None or integrity[0] != "ok":
-            raise RecoveryRefused(
-                f"{label} failed integrity_check",
-                reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
-            )
-        row = conn.execute("SELECT COUNT(*) FROM source_bars").fetchone()
-    except sqlite3.DatabaseError as exc:
+        return verify_ledger_file(path)
+    except SourceBarLedgerCorruptError as exc:
         raise RecoveryRefused(
-            f"{label} is not a readable source-bar ledger: {exc}",
-            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+            str(exc), reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT
         ) from exc
-    finally:
-        conn.close()
-    return int(row[0])
 
 
 def _require_established(
@@ -986,7 +995,7 @@ def _preserve_database_files(
     account_dir: Path,
     recorded_at_ms: int,
     label: str,
-    names: Sequence[str] = _DATABASE_FILENAMES,
+    names: Sequence[str] = _sqlite_family(DB_FILENAME),
 ) -> Path | None:
     existing = _preflight_regular_files(account_dir, names, label="database")
     if not existing:
@@ -1016,7 +1025,7 @@ def _preserve_database_files(
 def _preserve_generation_files(
     *, account_dir: Path, recorded_at_ms: int, generation: int
 ) -> Path:
-    names = (DB_FILENAME, f"{DB_FILENAME}-wal", f"{DB_FILENAME}-shm", MIRROR_FILENAME)
+    names = (*_sqlite_family(DB_FILENAME), MIRROR_FILENAME)
     existing = _preflight_regular_files(account_dir, names, label="generation")
     destination = (
         account_dir
@@ -1058,12 +1067,12 @@ def _preserved_identity(destination: Path) -> str:
             conn.close()
 
 
-def _restore_preserved_database(
-    *, account_dir: Path, preserved: Path | None, names: Sequence[str] = _DATABASE_FILENAMES
-) -> None:
+def _restore_preserved_database(*, account_dir: Path, preserved: Path | None) -> None:
+    """Move a preserved directory's files back; its manifest lists exactly what was moved."""
     if preserved is None:
         return
-    for name in names:
+    manifest = json.loads((preserved / "manifest.json").read_text(encoding="utf-8"))
+    for name in manifest["files"]:
         source = preserved / name
         destination = account_dir / name
         if source.is_file() and not destination.exists():

@@ -18,8 +18,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.broker.alpaca.paths import SOURCE_BAR_LEDGER_FILENAME, resolve_contained_path, safe_path_component
+from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.marketdata.feed import MarketDataBar
+
+SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
+"""Indexed durable authority store for retained source observations."""
 
 _LEGACY_SOURCE_BAR_LEDGER_FILENAME = "source_bars.jsonl"
 SOURCE_BAR_STREAM_CAPACITY = 200_000
@@ -30,7 +33,6 @@ and requires a reviewed rollover (#1740). The registry-parametrized floor test
 (``tests/services/test_signal_program_retention_floor.py``) pins that this exceeds
 every sealed program's declared warmup plus one open decision cycle.
 """
-_MAX_ROWS_PER_STREAM = SOURCE_BAR_STREAM_CAPACITY
 
 
 class RetainedSourceBar(BaseModel):
@@ -89,6 +91,32 @@ class SourceBarConflictError(RuntimeError):
 
 class SourceBarRetentionLimitError(RuntimeError):
     """A stream reached its bounded evidence capacity and must roll over safely."""
+
+
+class SourceBarLedgerCorruptError(RuntimeError):
+    """A ledger file failed SQLite integrity or is not a source-bar ledger at all."""
+
+
+def verify_ledger_file(path: Path) -> int:
+    """Integrity-check one ledger file read-only and return its retained-bar count.
+
+    The schema knowledge (which table holds the bars) stays here, next to the
+    ``CREATE TABLE`` that defines it; the Clerk recovery tooling calls this
+    when it cuts and verifies a backup bundle (#1740) rather than querying the
+    ledger's tables itself.
+    """
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()
+        if integrity is None or integrity[0] != "ok":
+            raise SourceBarLedgerCorruptError(f"{path.name} failed integrity_check")
+        row = conn.execute("SELECT COUNT(*) FROM source_bars").fetchone()
+    except sqlite3.DatabaseError as exc:
+        raise SourceBarLedgerCorruptError(f"{path.name} is not a readable source-bar ledger: {exc}") from exc
+    finally:
+        conn.close()
+    return int(row[0])
 
 
 class SourceBarLedger:
@@ -259,10 +287,10 @@ class SourceBarLedger:
                     (candidate.provider, candidate.symbol),
                 ).fetchone()
                 assert count is not None
-                if int(count["count"]) >= _MAX_ROWS_PER_STREAM:
+                if int(count["count"]) >= SOURCE_BAR_STREAM_CAPACITY:
                     raise SourceBarRetentionLimitError(
                         "SOURCE_BAR_RETENTION_LIMIT: "
-                        f"{candidate.provider}:{candidate.symbol} reached {_MAX_ROWS_PER_STREAM} retained bars"
+                        f"{candidate.provider}:{candidate.symbol} reached {SOURCE_BAR_STREAM_CAPACITY} retained bars"
                     )
 
                 cursor = self._conn.execute(
@@ -452,5 +480,7 @@ __all__ = [
     "RetainedSourceBar",
     "SourceBarConflictError",
     "SourceBarLedger",
+    "SourceBarLedgerCorruptError",
     "SourceBarRetentionLimitError",
+    "verify_ledger_file",
 ]

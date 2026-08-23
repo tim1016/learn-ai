@@ -229,14 +229,21 @@ but never a disposition whose bar is missing. The bundle manifest (schema
 version 2) records both files' SHA-256 and the ledger's retained-row count.
 `verify` checks the stopped authority database against its finalized mirror
 head; a bundle itself is verified as the first step of `restore`. `restore
---bundle <path> --process-stop-evidence <file>` is refused unless the process
-is stopped (a fresh process-stop proof and no live execution lease), the bundle
-belongs to this account, generation, and database identity, and both
-snapshots pass integrity and hash checks; it then replaces both files
-atomically and preserves the previous ones under `recovery-preserved/`. There
-is no restore into a running instance, by construction. Bundles published
-before schema version 2 contain only `clerk.db`; they still restore, and
-restoring one leaves the live ledger untouched.
+--bundle <path>` is refused while a live execution lease exists (and, if the
+database is too damaged to read its lease, unless `--process-stop-evidence
+<file>` carries a fresh process-stop proof), unless the bundle belongs to this
+account, generation, and database identity, and unless both snapshots pass
+integrity and hash checks. It then moves the previous files under
+`recovery-preserved/` and swaps the snapshots in, ledger first. Each swap is
+atomic; the pair is not: an in-process failure rolls the previous files back
+from `recovery-preserved/`, while a hard crash between the two swaps leaves
+the bars restored and the authority still missing — startup then fails
+closed and the operator re-runs `restore`. That ordering is deliberate: the
+opposite crash state (authority present, bars gone) would let crash replay
+run against missing evidence. There is no restore into a running instance,
+by construction. Bundles published before schema version 2 contain only
+`clerk.db`; they still restore, and restoring one leaves the live ledger
+untouched.
 
 **Dry Run accounts are disposable.** A `sim:` directory is a clean-slate
 simulation (ADR 0035): it is not part of any backup or restore procedure and
@@ -248,9 +255,9 @@ ledger: a provider/symbol stream fails closed at 200,000 retained minute
 bars (`SOURCE_BAR_RETENTION_LIMIT`, roughly two years of regular sessions)
 and needs a reviewed rollover, never a silent deletion. Decision receipts
 keep the most recent 1,000 ordinary rows per strategy instance — every
-decision clock writes one, `no_action` included — while causally relevant
-rows (effects, refusals, crash candidates, corrections, seals) are exempt
-from pruning entirely. A registry-parameterized test pins that both budgets
+decision clock writes one, `no_action` included — while rows in a
+`protected_*` retention class (effects, refusals, crash evidence, competing
+exits) are exempt from pruning entirely. A registry-parameterized test pins that both budgets
 exceed every sealed program's declared warmup plus one full open session at
 its qualified decision clock; the tightest margin today is Deployment
 Validation, whose one-minute clock and one-day warmup consume 780 of the

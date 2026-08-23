@@ -98,7 +98,7 @@ def test_source_bar_ledger_fails_closed_at_its_explicit_retention_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(source_bar_ledger, "_MAX_ROWS_PER_STREAM", 1)
+    monkeypatch.setattr(source_bar_ledger, "SOURCE_BAR_STREAM_CAPACITY", 1)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
     ledger.append(_bar())
 

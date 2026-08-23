@@ -16,6 +16,14 @@ Both are asserted against each program's own sealed contract, derived from
 the registry so a future promotion is covered on registration. "The open
 cycle" is bounded here by one full session -- the widest any sealed exit
 path (countdown or session barrier) can stay open without a new decision.
+
+Two stated limits of this floor: the session span is the regular RTH
+session from the canonical calendar (a program deciding in extended hours
+would consume receipts faster than this model assumes), and the bar-capacity
+assertion only guards absurd inputs -- 200,000 bars is ~511 sessions, so it
+exists to state the invariant, not because any sealed program is near it.
+The receipt budget is the one that bites: ``deployment_validation`` uses 780
+of 1,000 today.
 """
 
 from __future__ import annotations

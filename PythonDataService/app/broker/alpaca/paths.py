@@ -17,14 +17,6 @@ from pathlib import Path
 # ``sim:`` is the intentionally reserved synthetic-account namespace.  A
 # colon is not a path separator on the supported POSIX artifact store, and the
 # containment check below remains the authority against traversal.
-SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
-"""Per-account retained source-bar ledger (``app.services.source_bar_ledger``).
-
-Declared here, below both the ledger and the Clerk recovery tooling, because
-the verified backup bundle carries this file alongside the Clerk database
-(#1740) and the recovery module must not import from ``app.services``.
-"""
-
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _RESERVED_COMPONENTS = frozenset({".", ".."})
 

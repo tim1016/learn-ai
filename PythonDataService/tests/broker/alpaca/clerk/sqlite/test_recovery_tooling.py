@@ -35,14 +35,14 @@ from app.broker.alpaca.clerk.sqlite.recovery import (
     verify_backup_bundle,
 )
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
-from app.marketdata.feed import MarketDataBar
-from app.services.source_bar_ledger import SOURCE_BAR_LEDGER_FILENAME, SourceBarLedger
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     IntegrityCheckFailed,
     RecoveryInProgress,
     UnsupportedWalFilesystem,
 )
+from app.marketdata.feed import MarketDataBar
+from app.services.source_bar_ledger import SOURCE_BAR_LEDGER_FILENAME, SourceBarLedger
 
 ACCOUNT_ID = "PA-RECOVERY"
 NOW_MS = 1_800_000_000_000
@@ -790,18 +790,17 @@ def test_backup_bundle_carries_the_source_bar_ledger_and_restore_brings_it_back(
 
     backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
 
-    assert backup.source_bars_snapshot_path is not None
-    assert backup.source_bars_snapshot_path == backup.bundle_path / SOURCE_BAR_LEDGER_FILENAME
+    assert backup.source_bars is not None
+    assert backup.source_bars.path == backup.bundle_path / SOURCE_BAR_LEDGER_FILENAME
     manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 2
     assert manifest["source_bars"] == {
         "filename": SOURCE_BAR_LEDGER_FILENAME,
-        "sha256": backup.source_bars_sha256,
+        "sha256": backup.source_bars.sha256,
         "retained_rows": 2,
     }
-    assert verify_backup_bundle(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, bundle_path=backup.bundle_path
-    ).source_bars_sha256 == backup.source_bars_sha256
+    verified = verify_backup_bundle(account_id=ACCOUNT_ID, artifacts_root=tmp_path, bundle_path=backup.bundle_path)
+    assert verified.source_bars == backup.source_bars
 
     # The live ledger moves on after the backup; a restore must bring the
     # ledger back to the bundle's cut and keep the newer ledger as evidence.
@@ -828,7 +827,7 @@ def test_backup_without_a_source_bar_ledger_records_the_absence_and_restore_crea
 
     backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
 
-    assert backup.source_bars_snapshot_path is None
+    assert backup.source_bars is None
     manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 2
     assert manifest["source_bars"] is None
@@ -837,18 +836,54 @@ def test_backup_without_a_source_bar_ledger_records_the_absence_and_restore_crea
     assert not (account_dir / SOURCE_BAR_LEDGER_FILENAME).exists()
 
 
-def test_restore_refuses_a_tampered_source_bar_snapshot(tmp_path: Path) -> None:
+def _tamper_snapshot_bytes(backup: recovery_module.BackupPublication) -> None:
+    assert backup.source_bars is not None
+    backup.source_bars.path.write_bytes(backup.source_bars.path.read_bytes() + b"tamper")
+
+
+def _tamper_manifest_row_count(backup: recovery_module.BackupPublication) -> None:
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    manifest["source_bars"]["retained_rows"] += 1
+    backup.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _tamper_manifest_shape(backup: recovery_module.BackupPublication) -> None:
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    del manifest["source_bars"]["retained_rows"]
+    backup.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _swap_snapshot_for_symlink(backup: recovery_module.BackupPublication) -> None:
+    assert backup.source_bars is not None
+    real = backup.source_bars.path.with_name("elsewhere.sqlite3")
+    backup.source_bars.path.rename(real)
+    backup.source_bars.path.symlink_to(real)
+
+
+@pytest.mark.parametrize(
+    ("tamper", "match"),
+    [
+        (_tamper_snapshot_bytes, "source-bar snapshot SHA-256"),
+        (_tamper_manifest_row_count, "row count does not match"),
+        (_tamper_manifest_shape, "source_bars entry is unsupported"),
+        (_swap_snapshot_for_symlink, "regular non-symbolic-link file"),
+    ],
+    ids=["snapshot-bytes", "manifest-row-count", "manifest-shape", "symlink"],
+)
+def test_restore_refuses_a_tampered_source_bar_snapshot(
+    tmp_path: Path,
+    tamper: Any,
+    match: str,
+) -> None:
     repo = _initialized(tmp_path)
     repo.close()
     _ledger_with_bars(tmp_path, closes=["100"])
     backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
-    assert backup.source_bars_snapshot_path is not None
-    backup.source_bars_snapshot_path.write_bytes(backup.source_bars_snapshot_path.read_bytes() + b"tamper")
+    tamper(backup)
 
-    with pytest.raises(RecoveryRefused, match="source-bar snapshot SHA-256") as captured:
+    with pytest.raises(RecoveryRefused, match=match):
         _stopped_restore(tmp_path, backup.bundle_path)
 
-    assert captured.value.reason is RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT
     assert _ledger_closes(tmp_path) == ["100"]
 
 
@@ -856,9 +891,9 @@ def test_schema_version_1_bundle_still_restores_dispositions_and_leaves_the_ledg
     tmp_path: Path,
 ) -> None:
     """Bundles published before #1740 carry no ledger. They remain restorable
-    (dispositions only), and a restore from one must not delete the live
-    ledger -- the absence of a ledger in the bundle is not evidence that
-    there should be none."""
+    (dispositions only), and a restore from one must neither replace nor
+    preserve the live ledger -- the absence of a ledger in the bundle is not
+    evidence that there should be none."""
     repo = _initialized(tmp_path)
     repo.close()
     _ledger_with_bars(tmp_path, closes=["100"])
@@ -866,15 +901,17 @@ def test_schema_version_1_bundle_still_restores_dispositions_and_leaves_the_ledg
     manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
     del manifest["source_bars"]
     manifest["schema_version"] = 1
-    assert backup.source_bars_snapshot_path is not None
-    backup.source_bars_snapshot_path.unlink()
+    assert backup.source_bars is not None
+    backup.source_bars.path.unlink()
     backup.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     verified = verify_backup_bundle(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, bundle_path=backup.bundle_path
     )
-    assert verified.source_bars_snapshot_path is None
+    assert verified.source_bars is None
     receipt = _stopped_restore(tmp_path, backup.bundle_path)
 
     assert receipt.operation == "RESTORE_VERIFIED_BACKUP"
     assert _ledger_closes(tmp_path) == ["100"]
+    assert receipt.preserved_path is not None
+    assert not (tmp_path / receipt.preserved_path / SOURCE_BAR_LEDGER_FILENAME).exists()
