@@ -7,8 +7,9 @@ import { MessageService } from 'primeng/api';
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../../testing/operator-blocker-fixtures';
+import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import type { BotCatalogView } from '../lib/broker-v2-panel.types';
+import type { BotCatalogView, PanelAction } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
@@ -68,27 +69,13 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
   };
 }
 
-function fakeRowAction(
-  actionId: 'resume' | 'stop',
-): NonNullable<BotCatalogView['row_action']> {
-  return {
-    action_id: actionId,
-    label: actionId === 'resume' ? 'Resume' : 'Stop',
-    explanation: `${actionId} this bot.`,
-    enabled: true,
-    blockers: [],
-    confirmation: null,
-    revision: 1,
-    concurrency_token: `${actionId}-token`,
-  };
-}
-
 async function renderPage(
   bots: BotCatalogView[] = [],
   overrides: {
     account?: BrokerAccountSnapshot;
     clerk?: ClerkStatus;
     getCatalog?: (broker: string, accountId: string) => Promise<BotCatalogView[]>;
+    panelActions?: PanelAction[];
   } = {},
 ) {
   const account = overrides.account ?? fakeAccount();
@@ -102,7 +89,12 @@ async function renderPage(
   const mockPanelService = {
     getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
     getDeployView: vi.fn(() => new Promise<never>(() => undefined)),
-    getPanel: vi.fn(() => Promise.reject(new Error('full-panel preflight is forbidden'))),
+    getPanel: vi.fn((_b: string, _a: string, sid: string) =>
+      Promise.resolve(
+        fakeBotPanelView({ strategy_instance_id: sid, actions: overrides.panelActions ?? [] }),
+      ),
+    ),
+    getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
     runBotAction: vi.fn(() =>
       Promise.resolve({
         action_id: 'resume',
@@ -142,35 +134,41 @@ describe('BotsListPageComponent', () => {
     expect(within(accountPosture).getByText('Paper')).toBeTruthy();
   });
 
-  it('renders "Working" status label for an ON_DUTY bot', async () => {
-    const bot = fakeBot({ status_label: 'Working', phase: 'ON_DUTY', running: true });
-    await renderPage([bot]);
+  it('carries the backend status label on the rail row', async () => {
+    await renderPage([fakeBot({ status_label: 'Working', phase: 'ON_DUTY', running: true })]);
 
-    // "Working" appears in both the status-filter toggle and the bot status chip;
-    // verify the chip is present by finding it within the table row.
-    const cells = await screen.findAllByText('Working');
-    expect(cells.length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByRole('heading', { name: 'Running · 1' })).toBeTruthy();
+    expect(screen.getByText(/^Working ·/)).toBeTruthy();
   });
 
-  it('renders attention marker for bots with needs_attention=true', async () => {
-    const bot = fakeBot({ needs_attention: true });
-    await renderPage([bot]);
+  it('names attention state on the rail row rather than relying on colour', async () => {
+    await renderPage([fakeBot({ needs_attention: true })]);
 
-    const attentionEl = await screen.findByLabelText('Working, needs attention');
-    expect(attentionEl).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: /spy-momentum-01, needs attention/ }),
+    ).toBeTruthy();
   });
 
-  it('renders a server-presented Stop button for an on-duty bot', async () => {
-    const bot = fakeBot({ row_action: fakeRowAction('stop') });
-    await renderPage([bot]);
+  it('presents the selected bot\'s panel actions in the detail pane', async () => {
+    await renderPage([fakeBot()], { panelActions: [fakePanelAction('stop')] });
 
-    expect(await screen.findByRole('button', { name: /Stop spy-momentum-01/i })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeTruthy();
   });
 
-  it('renders "Fees not reported" note', async () => {
+  it('keeps the fee disclaimer beside the P&L it qualifies', async () => {
     await renderPage();
 
     expect(await screen.findByText(/Fees not reported/i)).toBeTruthy();
+  });
+
+  it('auto-selects the most urgent bot so the detail pane is never blank', async () => {
+    await renderPage([
+      fakeBot({ strategy_instance_id: 'calm-bot' }),
+      fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
+    ]);
+
+    const selected = await screen.findByRole('button', { name: /urgent-bot/ });
+    expect(selected.getAttribute('aria-current')).toBe('true');
   });
 
   it('renders empty state message when no bots', async () => {
@@ -193,7 +191,7 @@ describe('BotsListPageComponent', () => {
 
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close deploy strategy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close deploy a bot' }));
 
     expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
     expect(screen.getByRole('heading', { name: 'Alpaca bots' })).toBeTruthy();
@@ -236,22 +234,36 @@ describe('BotsListPageComponent', () => {
     expect(await screen.findByText('pa10-bot')).toBeTruthy();
   });
 
-  it('executes the catalog-presented action without a full-panel preflight', async () => {
-    const bot = fakeBot({ row_action: fakeRowAction('stop') });
-    const view = await renderPage([bot]);
+  /**
+   * The triage board reads one panel per *selection*. An action must still
+   * submit straight from the action the pane already holds — no extra
+   * preflight read between the click and the POST.
+   */
+  it('submits the presented action without an extra panel preflight', async () => {
+    const view = await renderPage([fakeBot()], { panelActions: [fakePanelAction('stop')] });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Stop spy-momentum-01' }));
+    const stop = await screen.findByRole('button', { name: 'Stop' });
+    const readsBeforeClick = view.mockPanelService.getPanel.mock.calls.length;
+    fireEvent.click(stop);
 
     await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
-    expect(view.mockPanelService.getPanel).not.toHaveBeenCalled();
+    expect(view.mockPanelService.runBotAction).toHaveBeenCalledWith(
+      'alpaca',
+      'PA9',
+      'spy-momentum-01',
+      expect.objectContaining({ action_id: 'stop', concurrency_token: 'stop-token' }),
+      null,
+    );
+    expect(view.mockPanelService.getPanel.mock.calls.length).toBe(readsBeforeClick);
     expect(view.mockMessageService.add).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'success', detail: 'ok' }),
     );
   });
 
   it('toasts the backend-authored reason and refreshes the fleet on a rejected action', async () => {
-    const bot = fakeBot({ row_action: fakeRowAction('resume') });
-    const view = await renderPage([bot]);
+    const view = await renderPage([fakeBot()], {
+      panelActions: [fakePanelAction('resume')],
+    });
     view.mockPanelService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 409,
@@ -268,7 +280,7 @@ describe('BotsListPageComponent', () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Resume spy-momentum-01' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume' }));
 
     await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
     expect(view.mockMessageService.add).toHaveBeenCalledWith(

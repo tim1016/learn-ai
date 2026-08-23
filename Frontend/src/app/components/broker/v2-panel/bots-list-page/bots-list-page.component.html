@@ -1,49 +1,45 @@
 <main class="bots-page" aria-labelledby="bots-page-title">
   <header class="bots-page__header">
-    <div class="bots-page__title-row">
-      <div>
-        <span class="bots-page__eyebrow">{{ broker() | receiptLabel }} · paper fleet</span>
-        <h1 id="bots-page-title">Alpaca bots</h1>
-        <p>Supervise strategy custody, exposure, and the next safe action.</p>
-      </div>
-      <div class="bots-page__commands">
-        <button
-          type="button"
-          class="command-button command-button--quiet"
-          [disabled]="initialLoading()"
-          [attr.aria-busy]="refreshing()"
-          (click)="refreshFleet()"
-          aria-label="Refresh fleet"
-        >
-          <span aria-hidden="true">↻</span>
-          {{ refreshing() ? 'Refreshing' : 'Refresh' }}
-        </button>
-        <a
-          class="command-button command-button--quiet"
-          [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'gallery']"
-        >
-          <span aria-hidden="true">⊞</span>
-          Gallery
-        </a>
-        <button
-          type="button"
-          class="command-button command-button--primary"
-          (click)="openDeploy()"
-        >
-          <span aria-hidden="true">＋</span>
-          Deploy strategy
-        </button>
-      </div>
+    <div class="bots-page__identity">
+      <h1 id="bots-page-title">Alpaca bots</h1>
+      <app-account-strip
+        [account]="accountValue()"
+        [clerkStatus]="clerkValue()"
+        [loading]="postureLoading()"
+        [refreshing]="postureRefreshing()"
+        [accountUnavailable]="!!account.error()"
+        [clerkUnavailable]="!!clerkStatus.error()"
+      />
     </div>
 
-    <app-account-strip
-      [account]="accountValue()"
-      [clerkStatus]="clerkValue()"
-      [loading]="postureLoading()"
-      [refreshing]="postureRefreshing()"
-      [accountUnavailable]="!!account.error()"
-      [clerkUnavailable]="!!clerkStatus.error()"
-    />
+    <div class="bots-page__commands">
+      <button
+        type="button"
+        class="command-button command-button--quiet"
+        [disabled]="initialLoading()"
+        [attr.aria-busy]="refreshing()"
+        (click)="refreshFleet()"
+        aria-label="Refresh fleet"
+      >
+        <span aria-hidden="true">↻</span>
+        {{ refreshing() ? 'Refreshing' : 'Refresh' }}
+      </button>
+      <a
+        class="command-button command-button--quiet"
+        [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'gallery']"
+      >
+        <span aria-hidden="true">⊞</span>
+        Gallery
+      </a>
+      <button
+        type="button"
+        class="command-button command-button--primary"
+        (click)="openDeploy()"
+      >
+        <span aria-hidden="true">＋</span>
+        Deploy strategy
+      </button>
+    </div>
   </header>
 
   @if (actionNotice(); as notice) {
@@ -62,44 +58,40 @@
     </div>
   }
 
-  <section class="bots-page__roster" aria-label="Bot fleet">
-    <div class="roster-heading">
-      <div>
-        <span class="roster-heading__eyebrow">Fleet roster</span>
-        <strong>
-          {{ bots().length }} configured {{ bots().length === 1 ? 'bot' : 'bots' }}
-        </strong>
-      </div>
-      @if (catalogUpdatedAtMs(); as updatedAt) {
-        <span class="roster-heading__freshness">
-          {{ refreshing() ? 'Refreshing · last updated' : 'Updated' }}
-          <app-timestamp-display [value]="updatedAt" mode="local" />
-        </span>
+  <div class="bots-page__board">
+    <section class="bots-page__rail" aria-label="Bot fleet">
+      @if (initialLoading()) {
+        <div class="rail-skeleton" role="status" aria-label="Loading bots">
+          @for (row of [1, 2, 3, 4, 5, 6]; track row) {
+            <span aria-hidden="true"></span>
+          }
+        </div>
+      } @else if (unavailable()) {
+        <div class="fleet-unavailable" role="alert">
+          <strong>Fleet unavailable</strong>
+          <span>The bot catalog could not be loaded. Account posture remains visible.</span>
+          <button type="button" (click)="refreshFleet()">Try again</button>
+        </div>
+      } @else {
+        <app-bots-roster
+          [bots]="bots()"
+          [selectedSid]="selectedSid()"
+          [updatedAtMs]="catalogUpdatedAtMs()"
+          (botSelected)="selectBot($event)"
+        />
       }
-    </div>
+    </section>
 
-    @if (initialLoading()) {
-      <div class="roster-skeleton" role="status" aria-label="Loading bots">
-        @for (row of [1, 2, 3, 4, 5]; track row) {
-          <span aria-hidden="true"></span>
-        }
-      </div>
-    } @else if (unavailable()) {
-      <div class="fleet-unavailable" role="alert">
-        <strong>Fleet unavailable</strong>
-        <span>The bot catalog could not be loaded. Account posture remains visible.</span>
-        <button type="button" (click)="refreshFleet()">Try again</button>
-      </div>
-    } @else {
-      <app-bots-roster
-        [bots]="bots()"
-        [broker]="broker()"
-        [accountId]="accountId()"
-        [pendingBotIds]="pendingBotIds()"
-        (rowAction)="onRowAction($event)"
-      />
-    }
-  </section>
+    <app-bot-triage-detail
+      class="bots-page__detail"
+      [broker]="broker()"
+      [accountId]="accountId()"
+      [sid]="selectedSid()"
+      [pending]="selectionPending()"
+      [refreshToken]="detailRefreshToken()"
+      (actionTriggered)="onPanelAction($event)"
+    />
+  </div>
 </main>
 
 <app-alpaca-deploy-drawer

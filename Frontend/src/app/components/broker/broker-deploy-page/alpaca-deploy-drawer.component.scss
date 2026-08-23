@@ -4,10 +4,17 @@
 
 .deploy-drawer-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
   width: 100%;
+}
+
+.deploy-drawer-header p {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
 }
 
 .deploy-drawer-header span {
@@ -64,6 +71,19 @@
   color: var(--bear);
 }
 
+// The workflow owns its own scrolling (form column, admission column) and pins
+// a launch footer, so the drawer body must hand it the full height rather than
+// scrolling as one long page.
 :host ::ng-deep .alpaca-deploy-drawer .p-drawer-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
   padding: 0;
+  overflow: hidden;
+}
+
+:host ::ng-deep .alpaca-deploy-drawer app-alpaca-deploy-workflow {
+  flex: 1;
+  min-height: 0;
 }

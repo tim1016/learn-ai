@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { Router } from '@angular/router';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
@@ -33,6 +33,13 @@ interface AccountStatusView {
  * combines `trading_blocked`/`account_blocked`/`freeze`/`hold` into a
  * client-derived verdict, and it renders that projection's declared move,
  * not just its problem statement.
+ *
+ * The triage header shows a one-line summary (account, mode, equity, buying
+ * power, reconciliation). Broker status, cash, channels, and the operator
+ * posture move sit behind a disclosure rather than being dropped — the
+ * compact header has no room for them, but the move is the only
+ * account-recovery route this surface can dispatch. Freeze and hold alerts
+ * stay outside the disclosure because they gate order-producing activity.
  */
 @Component({
   selector: 'app-account-strip',
@@ -52,6 +59,7 @@ export class AccountStripComponent {
   readonly clerkUnavailable = input(false);
 
   protected readonly fmtCurrency = fmtCurrency;
+  protected readonly expanded = signal(false);
 
   protected readonly channels = computed<readonly ChannelPosture[]>(() =>
     (this.clerkStatus()?.channel_healths ?? []).map((channel) => ({
@@ -87,6 +95,10 @@ export class AccountStripComponent {
     const [move = null] = movesForBlocker(blocker).filter((candidate) => candidate.action.kind === 'navigate');
     return { headline: blocker.headline, detail: blocker.detail ?? null, move };
   });
+
+  protected toggleExpanded(): void {
+    this.expanded.update((open) => !open);
+  }
 
   protected requestMove(move: OperatorMove): void {
     if (move.action.kind !== 'navigate' || this.router === null) return;

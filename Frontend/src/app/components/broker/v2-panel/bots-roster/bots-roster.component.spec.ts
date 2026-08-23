@@ -1,6 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/angular';
-import { provideRouter } from '@angular/router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BotCatalogView } from '../lib/broker-v2-panel.types';
 import { BotsRosterComponent } from './bots-roster.component';
@@ -29,153 +28,145 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
   };
 }
 
-function fakeRowAction(
-  actionId: 'resume' | 'stop' = 'stop',
-): NonNullable<BotCatalogView['row_action']> {
-  return {
-    action_id: actionId,
-    label: actionId === 'resume' ? 'Resume' : 'Stop',
-    explanation: `${actionId} this bot.`,
-    enabled: true,
-    blockers: [],
-    confirmation: null,
-    revision: 1,
-    concurrency_token: `${actionId}-token`,
-  };
-}
-
-async function renderRoster(
+async function renderRail(
   bots: BotCatalogView[],
-  pendingBotIds: ReadonlySet<string> = new Set(),
+  inputs: { selectedSid?: string | null } = {},
 ) {
   return render(BotsRosterComponent, {
-    providers: [provideRouter([])],
-    componentInputs: {
-      bots,
-      broker: 'alpaca',
-      pendingBotIds,
-    },
+    componentInputs: { bots, selectedSid: inputs.selectedSid ?? null },
+  });
+}
+
+function searchBox(): HTMLElement {
+  return screen.getByRole('searchbox', {
+    name: 'Filter bots by name, symbol, or strategy',
   });
 }
 
 describe('BotsRosterComponent', () => {
   it('renders all bot rows', async () => {
-    const bots = [
-      fakeBot({ strategy_instance_id: 'spy-01', symbol: 'SPY', strategy_label: 'Opening Range Breakout' }),
+    await renderRail([
+      fakeBot({ strategy_instance_id: 'spy-01', symbol: 'SPY' }),
       fakeBot({ strategy_instance_id: 'qqq-01', symbol: 'QQQ' }),
-    ];
-    const { container } = await renderRoster(bots);
+    ]);
 
     expect(await screen.findByText('spy-01')).toBeTruthy();
     expect(screen.getByText('qqq-01')).toBeTruthy();
-    expect(screen.getByText(/Opening Range Breakout/)).toBeTruthy();
-    expect(container.querySelectorAll('app-asset-identity')).toHaveLength(2);
   });
 
   it('filters by search term', async () => {
-    const bots = [
+    await renderRail([
       fakeBot({ strategy_instance_id: 'spy-01', symbol: 'SPY' }),
       fakeBot({ strategy_instance_id: 'qqq-01', symbol: 'QQQ' }),
-    ];
-    await renderRoster(bots);
+    ]);
 
-    const search = screen.getByRole('searchbox', { name: 'Search bots' });
-    fireEvent.input(search, { target: { value: 'qqq' } });
+    fireEvent.input(searchBox(), { target: { value: 'qqq' } });
 
     expect(await screen.findByText('qqq-01')).toBeTruthy();
     expect(screen.queryByText('spy-01')).toBeNull();
   });
 
   it('filters by the human strategy label', async () => {
-    const bots = [
-      fakeBot({
-        strategy_instance_id: 'validation-01',
-        strategy_key: 'deployment_validation',
-        strategy_label: 'Opening Range Breakout',
-      }),
-      fakeBot({
-        strategy_instance_id: 'other-01',
-        strategy_key: 'ema_crossover_signal',
-        strategy_label: 'Moving Average Crossover',
-      }),
-    ];
-    await renderRoster(bots);
+    await renderRail([
+      fakeBot({ strategy_instance_id: 'validation-01', strategy_label: 'Opening Range Breakout' }),
+      fakeBot({ strategy_instance_id: 'other-01', strategy_label: 'Moving Average Crossover' }),
+    ]);
 
-    fireEvent.input(screen.getByRole('searchbox', { name: 'Search bots' }), {
-      target: { value: 'opening range breakout' },
-    });
+    fireEvent.input(searchBox(), { target: { value: 'opening range breakout' } });
 
     expect(await screen.findByText('validation-01')).toBeTruthy();
     expect(screen.queryByText('other-01')).toBeNull();
   });
 
-  it('filters bots that need attention', async () => {
-    const bots = [
-      fakeBot({ strategy_instance_id: 'normal-bot' }),
+  it('groups bots by attention, running, and stopped with whole-fleet counts', async () => {
+    await renderRail([
       fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
-    ];
-    await renderRoster(bots);
+      fakeBot({ strategy_instance_id: 'running-bot' }),
+      fakeBot({ strategy_instance_id: 'stopped-bot', running: false, phase: 'OFF_DUTY' }),
+    ]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Needs attention' }));
+    expect(await screen.findByRole('heading', { name: 'Needs attention · 1' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Running · 1' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Stopped · 1' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Needs attention 1' })).toBeTruthy();
+  });
+
+  it('narrows to one group when its chip is pressed, and clears when pressed again', async () => {
+    await renderRail([
+      fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
+      fakeBot({ strategy_instance_id: 'running-bot' }),
+    ]);
+
+    const chip = await screen.findByRole('button', { name: 'Needs attention 1' });
+    fireEvent.click(chip);
 
     expect(await screen.findByText('urgent-bot')).toBeTruthy();
-    expect(screen.queryByText('normal-bot')).toBeNull();
+    expect(screen.queryByText('running-bot')).toBeNull();
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(chip);
+
+    expect(await screen.findByText('running-bot')).toBeTruthy();
+    expect(chip.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  /** Retired bots have no chip in the design, but must not vanish from the fleet. */
+  it('still groups retired bots, and only then offers their chip', async () => {
+    await renderRail([fakeBot({ strategy_instance_id: 'gone-bot', phase: 'RETIRED', running: false })]);
+
+    expect(await screen.findByRole('heading', { name: 'Retired · 1' })).toBeTruthy();
+    expect(screen.getByText('gone-bot')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retired 1' })).toBeTruthy();
+  });
+
+  it('omits the retired chip when no bot is retired', async () => {
+    await renderRail([fakeBot()]);
+
+    await screen.findByText('spy-01');
+    expect(screen.queryByRole('button', { name: /Retired/ })).toBeNull();
   });
 
   it('renders a dedicated empty-fleet state', async () => {
-    await renderRoster([]);
+    await renderRail([]);
     expect(await screen.findByText(/No Alpaca bots yet/i)).toBeTruthy();
   });
 
   it('renders a dedicated empty-filter state', async () => {
-    await renderRoster([fakeBot()]);
-    fireEvent.input(screen.getByRole('searchbox', { name: 'Search bots' }), {
-      target: { value: 'missing' },
-    });
-    expect(await screen.findByText(/No bots match these filters/i)).toBeTruthy();
+    await renderRail([fakeBot()]);
+    fireEvent.input(searchBox(), { target: { value: 'missing' } });
+    expect(await screen.findByText(/No bots match this filter/i)).toBeTruthy();
   });
 
-  it('renders one semantic six-column roster', async () => {
-    await renderRoster([fakeBot()]);
-
-    expect(screen.getAllByRole('columnheader').map((header) => header.textContent?.trim())).toEqual([
-      'Bot',
-      'State',
-      'Exposure',
-      'Today',
-      'Last activity',
-      'Action',
+  it('carries the backend status label and derived facts on each row', async () => {
+    await renderRail([
+      fakeBot({ status_label: 'Working', exposure: { SPY: 12 }, fills_today: 3 }),
     ]);
-    expect(screen.getByText(/Deployment Validation/)).toBeTruthy();
-    expect(screen.getByText('Running under Account Clerk custody.')).toBeTruthy();
+
+    expect(await screen.findByText('Working · +12 SPY · 3 fills')).toBeTruthy();
   });
 
-  it('sorts attention bots first', async () => {
-    const bots = [
-      fakeBot({ strategy_instance_id: 'normal-bot', needs_attention: false }),
+  it('orders attention bots ahead of running bots', async () => {
+    await renderRail([
+      fakeBot({ strategy_instance_id: 'normal-bot' }),
       fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
-    ];
-    await renderRoster(bots);
+    ]);
 
-    // Wait for both to render, then check order in page text.
     await screen.findByText('urgent-bot');
-    await screen.findByText('normal-bot');
     const bodyText = document.body.textContent ?? '';
-    const urgentIdx = bodyText.indexOf('urgent-bot');
-    const normalIdx = bodyText.indexOf('normal-bot');
-    expect(urgentIdx).toBeLessThan(normalIdx);
+    expect(bodyText.indexOf('urgent-bot')).toBeLessThan(bodyText.indexOf('normal-bot'));
   });
 
-  it('renders the server-presented row action as pending and disabled', async () => {
-    await renderRoster(
-      [fakeBot({ row_action: fakeRowAction('stop') })],
-      new Set(['spy-01']),
-    );
+  it('marks the selected row and emits the sid on click', async () => {
+    const botSelected = vi.fn();
+    await render(BotsRosterComponent, {
+      componentInputs: { bots: [fakeBot({ strategy_instance_id: 'spy-01' })], selectedSid: 'spy-01' },
+      componentOutputs: { botSelected: { emit: botSelected } as never },
+    });
 
-    const action = await screen.findByRole('button', { name: 'Stop spy-01' });
-    if (!(action instanceof HTMLButtonElement)) throw new Error('Expected a button action.');
-    expect(action.getAttribute('aria-busy')).toBe('true');
-    expect(action.disabled).toBe(true);
-    expect(action.textContent).toContain('Stopping…');
+    const row = await screen.findByRole('button', { name: /spy-01/ });
+    expect(row.getAttribute('aria-current')).toBe('true');
+
+    fireEvent.click(row);
+    expect(botSelected).toHaveBeenCalledWith('spy-01');
   });
 });

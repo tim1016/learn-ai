@@ -138,6 +138,7 @@ describe('AccountStripComponent', () => {
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
     const posture = screen.getByLabelText('Alpaca account posture');
+    fireEvent.click(within(posture).getByRole('button', { name: 'Account detail' }));
     fireEvent.click(within(posture).getByRole('button', { name: 'Connect the broker' }));
 
     expect(navigate).toHaveBeenCalledWith(['/broker'], { fragment: undefined });
@@ -163,7 +164,14 @@ describe('AccountStripComponent', () => {
     });
 
     const posture = screen.getByLabelText('Alpaca account posture');
-    expect(within(posture).queryByRole('button')).toBeNull();
+    fireEvent.click(within(posture).getByRole('button', { name: 'Account detail' }));
+
+    // Only the disclosure toggle itself remains: the move is not self-dispatchable.
+    expect(
+      within(posture)
+        .getAllByRole('button')
+        .map((button) => button.textContent?.trim()),
+    ).toEqual(['Hide account detail']);
   });
 
   it('fails closed to Loading rather than re-deriving a verdict when posture has not loaded', async () => {
@@ -181,8 +189,11 @@ describe('AccountStripComponent', () => {
       componentInputs: { account, clerkUnavailable: true },
     });
 
-    expect(screen.getAllByText('Unavailable')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Account detail' }));
+
+    expect(screen.getAllByText('Unavailable')).toHaveLength(2);
     expect(screen.getByText('Custody not observed')).toBeTruthy();
+    expect(screen.getByText('Reconciliation unavailable')).toBeTruthy();
   });
 
   it('preserves backend-authored hold prose in an alert', async () => {

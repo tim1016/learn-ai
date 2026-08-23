@@ -1,36 +1,37 @@
-<section class="readiness" aria-labelledby="deploy-readiness-title">
-  <header>
-    <h2 id="deploy-readiness-title">Admission authority</h2>
-    <p>These checks come from the same server path that admits or rejects launch.</p>
-  </header>
-
+<section class="readiness" aria-label="Admission gates">
   <p-accordion class="readiness-gates" [multiple]="true" [value]="defaultOpenGateIds()">
     @for (check of checks(); track check.gate_id) {
       <p-accordion-panel [value]="check.gate_id" [class.readiness-gate--blocked]="!check.ready">
         <p-accordion-header>
-          <span class="flex w-full min-w-0 flex-wrap items-center gap-3 text-left">
+          <span class="readiness-gate__head">
             <span class="readiness-gate__state">{{ check.ready ? 'Ready' : 'Blocked' }}</span>
-            <strong class="min-w-28">{{ check.label }}</strong>
-            <code class="min-w-0 basis-full [overflow-wrap:anywhere] text-[length:var(--fs-xs)] text-[var(--text-muted)]">{{ check.gate_id | receiptLabel }}</code>
+            <span class="readiness-gate__title">
+              <strong>{{ check.label }}</strong>
+              <!--
+                The collapsed row carries the evidence that settles the gate,
+                not its raw id — a satisfied gate should read as a fact
+                ("reconciled 18:42:07"), and the id stays one expand away.
+              -->
+              <small>{{ check.evidence_summary }}</small>
+            </span>
           </span>
         </p-accordion-header>
         <p-accordion-content>
-          <h3 class="m-0 text-[length:var(--fs-md)] text-[var(--text-primary)]">{{ check.headline }}</h3>
-          <p class="m-0 mt-2 text-[var(--text-secondary)] leading-normal">{{ check.explanation }}</p>
-          <dl class="readiness-gate__authority m-0 mt-3 grid gap-2">
-            <div class="flex min-w-0 justify-between gap-3"><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
-            <div class="flex min-w-0 justify-between gap-3"><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
-            <div class="flex min-w-0 justify-between gap-3"><dt>Evidence</dt><dd>{{ check.evidence_summary }}</dd></div>
-          </dl>
+          <h3 class="readiness-gate__headline">{{ check.headline }}</h3>
+          <p class="readiness-gate__explanation">{{ check.explanation }}</p>
           @if (check.recovery) {
-            <p class="readiness-gate__recovery m-0 mt-3 font-medium"><strong>Next:</strong> {{ check.recovery }}</p>
+            <p class="readiness-gate__recovery"><strong>Next:</strong> {{ check.recovery }}</p>
           }
+          <dl class="readiness-gate__authority">
+            <div><dt>Gate</dt><dd><code>{{ check.gate_id | receiptLabel }}</code></dd></div>
+            <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
+            <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
+          </dl>
           @let entries = evidenceEntries(check);
           @if (entries.length !== 0) {
-            <h4 class="m-0 mt-3 text-[length:var(--fs-sm)] text-[var(--text-secondary)]">Structured evidence</h4>
-            <dl class="readiness-gate__evidence m-0 mt-2 grid gap-2 rounded-[var(--radius-sm)] bg-[var(--bg-sunken)] p-3">
+            <dl class="readiness-gate__evidence">
               @for (entry of entries; track entry[0]) {
-                <div class="flex min-w-0 justify-between gap-3"><dt>{{ entry[0] | receiptLabel }}</dt><dd>{{ entry[1] }}</dd></div>
+                <div><dt>{{ entry[0] | receiptLabel }}</dt><dd>{{ entry[1] }}</dd></div>
               }
             </dl>
           }
