@@ -20,9 +20,15 @@ floors an unregistered ``strategy_key``.
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    MAX_DECISION_RECEIPT_READ,
+    SqliteDecisionReceipts,
+)
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import MarketDataBar
@@ -30,6 +36,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.bot_trade_strategy_warmup import (
     _WARMUP_LOOKBACK_DAYS,
     _warmup_lookback_days_for,
+    captured_decision_outcomes,
     replay_warmup_bars,
 )
 
@@ -197,3 +204,40 @@ def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> Non
 
     assert _warmup_lookback_days_for(sealed_binding) == contract.warmup_lookback_days
     assert _warmup_lookback_days_for(stale_binding) == 11
+
+
+def test_captured_decision_outcomes_sees_decisions_older_than_the_presentation_cap(
+    tmp_path: Path,
+) -> None:
+    """``deployment_validation`` decides every minute, so a one-day warmup is
+    ~780 buckets -- more than ``MAX_DECISION_RECEIPT_READ``. Reading only the
+    presentation cap would make the earliest replayed bucket that staged an
+    intent look like the crash-recreated candidate (#1740)."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    try:
+        repo.register_strategy_instance(
+            strategy_instance_id="spy-bot", symbol="SPY", config_hash="test-config-hash"
+        )
+        receipts = SqliteDecisionReceipts(repo, strategy_instance_id="spy-bot")
+        receipts.append(
+            outcome="entered",
+            symbol="SPY",
+            observed_at_ms=0,
+            intent_id="0:ENTER",
+            facts={"bar_ref": "SPY@0", "reason_code": "STRATEGY_ENTER"},
+        )
+        for index in range(1, MAX_DECISION_RECEIPT_READ + 1):
+            receipts.append(
+                outcome="no_action",
+                symbol="SPY",
+                observed_at_ms=index,
+                intent_id=f"{index}:NO_ACTION",
+                facts={"bar_ref": f"SPY@{index}", "reason_code": "NO_ACTION"},
+            )
+
+        captured = captured_decision_outcomes(receipts)
+    finally:
+        repo.close()
+
+    assert captured["0:ENTER"] == "entered"
+    assert len(captured) == MAX_DECISION_RECEIPT_READ + 1

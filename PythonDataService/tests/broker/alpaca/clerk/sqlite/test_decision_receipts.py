@@ -81,6 +81,30 @@ def test_tail_clamps_and_returns_ascending_suffix(
     assert tail[-1].seq == MAX_DECISION_RECEIPT_READ + 2
 
 
+def test_retained_window_reads_the_whole_retention_not_the_presentation_cap(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    """FR-016 replay (``captured_decision_outcomes``) must see every ordinary
+    receipt still retained. A one-minute program writes more receipts over
+    its warmup than ``MAX_DECISION_RECEIPT_READ`` returns; read through the
+    presentation cap and the earliest buckets look uncaptured (#1740)."""
+    for index in range(MAX_DECISION_RECEIPT_READ + 2):
+        receipts.append(
+            outcome="no_action",
+            symbol="SPY",
+            observed_at_ms=index,
+            intent_id=f"{index}:NO_ACTION",
+            facts={"bar_ref": f"SPY@{index}", "reason_code": "NO_ACTION"},
+        )
+
+    window = receipts.retained_window()
+
+    assert len(window) == MAX_DECISION_RECEIPT_READ + 2
+    assert window[0].seq == 1
+    assert window[-1].seq == MAX_DECISION_RECEIPT_READ + 2
+    assert len(receipts.tail(MAX_DECISION_RECEIPT_READ + 10)) == MAX_DECISION_RECEIPT_READ
+
+
 def test_append_is_idempotent_per_closed_bar_and_rejects_conflicting_replay(
     receipts: SqliteDecisionReceipts,
 ) -> None:

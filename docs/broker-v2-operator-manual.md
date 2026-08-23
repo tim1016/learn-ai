@@ -205,6 +205,75 @@ rows — is exempt from sequence-tail pruning. The bounded list the panel shows
 is a display window, not the retention boundary: an older decision scrolled
 out of that tail is still on file.
 
+## Storage, backup, and retention
+
+Every account authority — a real Alpaca paper account or a Dry Run's
+synthetic `sim:<strategy_instance_id>` account — owns one directory under
+the artifacts root: `accounts/alpaca/<account_id>/`. Two SQLite files in it
+are the canonical recovery evidence named by the sealed-program PRD:
+`clerk.db`, the account-scoped Clerk (dispositions, custody, effects, decision
+receipts), and `source_bars.sqlite3`, the retained source-bar ledger (every
+exact closed bar the bot evaluated, before any session filtering). Both run
+in WAL mode with `synchronous=FULL`; the ledger auto-checkpoints every 1,000
+pages and runs an explicit truncating checkpoint when its handle is closed,
+even if a verifier or backup reader is still attached. If that reader still
+pins the log after the five-second busy timeout, the close fails with
+`SOURCE_BAR_CHECKPOINT_BUSY` and leaves the handle open rather than
+reporting a folded WAL it did not fold; release the reader and close again.
+Provider re-fetch is never accepted as recovery evidence; only these two
+files are.
+
+**Backup and restore.** `python -m scripts.manage_alpaca_sqlite_clerk
+--artifacts-root <root> --account-id <id> backup` publishes a verified bundle
+under `accounts/alpaca/<id>/verified-backups/`, cut online through SQLite's
+backup API (WAL-safe, no stop required) and verified before it is published:
+the Clerk database first, then the source-bar ledger, so a bundle can carry
+bars that have no disposition yet — the crash window replay already handles —
+but never a disposition whose bar is missing. The bundle manifest (schema
+version 2) records both files' SHA-256 and the ledger's retained-row count.
+`verify` checks the stopped authority database against its finalized mirror
+head; a bundle itself is verified as the first step of `restore`. `restore
+--bundle <path>` is refused while a live execution lease exists (and, if the
+database is too damaged to read its lease, unless `--process-stop-evidence
+<file>` carries a fresh process-stop proof), unless the bundle belongs to this
+account, generation, and database identity, and unless both snapshots pass
+integrity and hash checks — for the ledger, that includes every retained row
+carrying this account's id, so a structurally sound ledger cut for another
+account is refused even with a matching manifest. It then moves the previous
+files under `recovery-preserved/` and swaps the snapshots in, ledger first.
+Each swap is atomic; the pair is not: an in-process failure takes any
+already-swapped snapshot back out and returns the previous files from
+`recovery-preserved/`, while a hard crash between the two swaps leaves
+the bars restored and the authority still missing — startup then fails
+closed and the operator re-runs `restore`. That ordering is deliberate: the
+opposite crash state (authority present, bars gone) would let crash replay
+run against missing evidence. There is no restore into a running instance,
+by construction. Bundles published before schema version 2 contain only
+`clerk.db`; they still restore, and restoring one leaves the live ledger
+untouched.
+
+**Dry Run accounts are disposable.** A `sim:` directory is a clean-slate
+simulation (ADR 0035): it is not part of any backup or restore procedure and
+may be deleted when its instance is retired. Back up real paper accounts
+only.
+
+**Retention is a floor, not a window.** Nothing prunes the source-bar
+ledger: a provider/symbol stream fails closed at 200,000 retained minute
+bars (`SOURCE_BAR_RETENTION_LIMIT`, roughly two years of regular sessions)
+and needs a reviewed rollover, never a silent deletion. Decision receipts
+keep the most recent 1,000 ordinary rows per strategy instance — every
+decision clock writes one, `no_action` included — while rows in a
+`protected_*` retention class (effects, refusals, crash evidence, competing
+exits) are exempt from pruning entirely. Crash replay reads that whole
+1,000-row window, not the 500-row cap that bounds the panel's receipt reads.
+A registry-parameterized test pins that both budgets exceed every sealed
+program's declared warmup plus one full open session at its qualified
+decision clock; the tightest margin today is Deployment
+Validation, whose one-minute clock and one-day warmup consume 780 of the
+1,000 ordinary receipts. A new program with a one-minute clock and a warmup
+of two days or more would fail that test and needs the receipt budget raised
+first.
+
 ## SQLite manual paper tickets
 
 The Alpaca Account Desk is the only manual-order entry point when its selected

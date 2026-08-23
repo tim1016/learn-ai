@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 from pathlib import Path
 from threading import Event
 from typing import Any
@@ -40,6 +41,8 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RecoveryInProgress,
     UnsupportedWalFilesystem,
 )
+from app.marketdata.feed import MarketDataBar
+from app.services.source_bar_ledger import SOURCE_BAR_LEDGER_FILENAME, SourceBarLedger
 
 ACCOUNT_ID = "PA-RECOVERY"
 NOW_MS = 1_800_000_000_000
@@ -720,3 +723,261 @@ def test_flat_reset_rotates_generation_and_preserves_old_authority(tmp_path: Pat
     )
     assert verification.transition_count == 0
     assert json.loads((preserved / "manifest.json").read_text())["authority_generation"] == 2
+
+
+# ---------------------------------------------------------------------------
+# #1740: the verified backup bundle carries the retained source-bar ledger.
+#
+# #1727 states that "retained bars plus durable Clerk dispositions are
+# canonical recovery evidence; provider re-fetch is never accepted as
+# recovery evidence". A bundle that restored dispositions without the bars
+# they were decided on restored half the evidence.
+# ---------------------------------------------------------------------------
+
+
+def _market_bar(symbol: str, end_ms: int, close: str) -> MarketDataBar:
+    price = Decimal(close)
+    return MarketDataBar(
+        symbol=symbol,
+        start_ms=end_ms - 60_000,
+        end_ms=end_ms,
+        open=price,
+        high=price,
+        low=price,
+        close=price,
+        volume=1,
+        fetched_at_ms=end_ms,
+        feed_id="test-recovery",
+        session_phase="RTH",
+    )
+
+
+def _ledger_with_bars(tmp_path: Path, *, closes: list[str]) -> Path:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
+    for index, close in enumerate(closes):
+        ledger.append_history(_market_bar("SPY", NOW_MS + (index + 1) * 60_000, close))
+    ledger.close()
+    return ledger.path
+
+
+def _ledger_closes(tmp_path: Path) -> list[str]:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
+    try:
+        return [str(bar.close) for bar in ledger.bars(provider="test-recovery", symbol="SPY")]
+    finally:
+        ledger.close()
+
+
+def _stopped_restore(tmp_path: Path, bundle_path: Path) -> recovery_module.RecoveryReceipt:
+    return restore_verified_backup(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        bundle_path=bundle_path,
+        process_stop_proof=ProcessStopProof(
+            account_id=ACCOUNT_ID,
+            observed_at_ms=NOW_MS,
+            proof_reference="container-supervisor:stopped",
+        ),
+        max_process_stop_proof_age_ms=1_000,
+        clock=_clock,
+    )
+
+
+def test_backup_bundle_carries_the_source_bar_ledger_and_restore_brings_it_back(tmp_path: Path) -> None:
+    repo = _initialized(tmp_path)
+    repo.close()
+    ledger_path = _ledger_with_bars(tmp_path, closes=["100", "101"])
+
+    backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+
+    assert backup.source_bars is not None
+    assert backup.source_bars.path == backup.bundle_path / SOURCE_BAR_LEDGER_FILENAME
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 2
+    assert manifest["source_bars"] == {
+        "filename": SOURCE_BAR_LEDGER_FILENAME,
+        "sha256": backup.source_bars.sha256,
+        "retained_rows": 2,
+    }
+    verified = verify_backup_bundle(account_id=ACCOUNT_ID, artifacts_root=tmp_path, bundle_path=backup.bundle_path)
+    assert verified.source_bars == backup.source_bars
+
+    # The live ledger moves on after the backup; a restore must bring the
+    # ledger back to the bundle's cut and keep the newer ledger as evidence.
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
+    ledger.append(_market_bar("SPY", NOW_MS + 3 * 60_000, "102"))
+    ledger.close()
+    assert _ledger_closes(tmp_path) == ["100", "101", "102"]
+
+    receipt = _stopped_restore(tmp_path, backup.bundle_path)
+
+    assert _ledger_closes(tmp_path) == ["100", "101"]
+    assert receipt.preserved_path is not None
+    preserved = tmp_path / receipt.preserved_path
+    assert (preserved / "clerk.db").is_file()
+    assert (preserved / SOURCE_BAR_LEDGER_FILENAME).is_file()
+    assert ledger_path.is_file()
+    assert not [path.name for path in ledger_path.parent.iterdir() if ".restore-" in path.name], (
+        "verifying the staged copies must not leave their WAL/shm sidecars behind"
+    )
+
+
+def test_backup_without_a_source_bar_ledger_records_the_absence_and_restore_creates_none(
+    tmp_path: Path,
+) -> None:
+    repo = _initialized(tmp_path)
+    repo.close()
+
+    backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+
+    assert backup.source_bars is None
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 2
+    assert manifest["source_bars"] is None
+    _stopped_restore(tmp_path, backup.bundle_path)
+    _accounts_root, account_dir = recovery_module.writes.account_paths(tmp_path, ACCOUNT_ID)
+    assert not (account_dir / SOURCE_BAR_LEDGER_FILENAME).exists()
+
+
+def _tamper_snapshot_bytes(backup: recovery_module.BackupPublication) -> None:
+    assert backup.source_bars is not None
+    backup.source_bars.path.write_bytes(backup.source_bars.path.read_bytes() + b"tamper")
+
+
+def _tamper_manifest_row_count(backup: recovery_module.BackupPublication) -> None:
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    manifest["source_bars"]["retained_rows"] += 1
+    backup.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _tamper_manifest_shape(backup: recovery_module.BackupPublication) -> None:
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    del manifest["source_bars"]["retained_rows"]
+    backup.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _swap_snapshot_for_symlink(backup: recovery_module.BackupPublication) -> None:
+    assert backup.source_bars is not None
+    real = backup.source_bars.path.with_name("elsewhere.sqlite3")
+    backup.source_bars.path.rename(real)
+    backup.source_bars.path.symlink_to(real)
+
+
+@pytest.mark.parametrize(
+    ("tamper", "match"),
+    [
+        (_tamper_snapshot_bytes, "source-bar snapshot SHA-256"),
+        (_tamper_manifest_row_count, "row count does not match"),
+        (_tamper_manifest_shape, "source_bars entry is unsupported"),
+        (_swap_snapshot_for_symlink, "regular non-symbolic-link file"),
+    ],
+    ids=["snapshot-bytes", "manifest-row-count", "manifest-shape", "symlink"],
+)
+def test_restore_refuses_a_tampered_source_bar_snapshot(
+    tmp_path: Path,
+    tamper: Any,
+    match: str,
+) -> None:
+    repo = _initialized(tmp_path)
+    repo.close()
+    _ledger_with_bars(tmp_path, closes=["100"])
+    backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+    tamper(backup)
+
+    with pytest.raises(RecoveryRefused, match=match):
+        _stopped_restore(tmp_path, backup.bundle_path)
+
+    assert _ledger_closes(tmp_path) == ["100"]
+
+
+def test_restore_that_fails_between_the_two_swaps_takes_the_published_ledger_back_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ledger and the Clerk database are swapped in by two renames that
+    are each atomic but not jointly. If the second one fails, the first must
+    be undone before the preserved originals return -- otherwise the
+    bundle's ledger stays live beside the pre-restore authority and the
+    "failed" restore has silently mixed two evidence cuts (#1740 review)."""
+    repo = _initialized(tmp_path)
+    repo.close()
+    _ledger_with_bars(tmp_path, closes=["100", "101"])
+    backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
+    ledger.append(_market_bar("SPY", NOW_MS + 3 * 60_000, "102"))
+    ledger.close()
+    _accounts_root, account_dir = recovery_module.writes.account_paths(tmp_path, ACCOUNT_ID)
+    db_before = (account_dir / "clerk.db").read_bytes()
+
+    real_replace = recovery_module.os.replace
+
+    def replace_but_fail_the_database(src: Path, dst: Path) -> None:
+        if Path(dst).name == "clerk.db" and ".restore-" in Path(src).name:
+            raise OSError("simulated rename failure after the ledger was published")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(recovery_module.os, "replace", replace_but_fail_the_database)
+    with pytest.raises(OSError, match="simulated rename failure"):
+        _stopped_restore(tmp_path, backup.bundle_path)
+    monkeypatch.undo()
+
+    assert _ledger_closes(tmp_path) == ["100", "101", "102"], "the pre-restore ledger must be back"
+    assert (account_dir / "clerk.db").read_bytes() == db_before
+    assert not [path for path in account_dir.iterdir() if ".restore-" in path.name]
+    preserved_dirs = list((account_dir / recovery_module.PRESERVED_DIRECTORY).iterdir())
+    assert preserved_dirs and not any(
+        (directory / SOURCE_BAR_LEDGER_FILENAME).exists() for directory in preserved_dirs
+    ), "nothing may stay behind in recovery-preserved once it has been moved back"
+
+
+def test_backup_verification_refuses_a_valid_ledger_cut_for_another_account(tmp_path: Path) -> None:
+    """Integrity and row count say nothing about whose evidence a ledger
+    holds. A structurally sound ledger from another account, with the
+    manifest rewritten to match, must still be refused (#1740 review)."""
+    repo = _initialized(tmp_path)
+    repo.close()
+    _ledger_with_bars(tmp_path, closes=["100"])
+    backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+    assert backup.source_bars is not None
+    foreign = SourceBarLedger(artifacts_root=tmp_path / "elsewhere", account_id="PA-OTHER")
+    foreign.append_history(_market_bar("SPY", NOW_MS + 60_000, "100"))
+    foreign.close()
+    backup.source_bars.path.write_bytes(foreign.path.read_bytes())
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    manifest["source_bars"]["sha256"] = recovery_module.sha256_file(backup.source_bars.path)
+    backup.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RecoveryRefused, match="'PA-OTHER', not") as refusal:
+        _stopped_restore(tmp_path, backup.bundle_path)
+
+    assert refusal.value.reason is RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT
+    assert _ledger_closes(tmp_path) == ["100"]
+
+
+def test_schema_version_1_bundle_still_restores_dispositions_and_leaves_the_ledger_alone(
+    tmp_path: Path,
+) -> None:
+    """Bundles published before #1740 carry no ledger. They remain restorable
+    (dispositions only), and a restore from one must neither replace nor
+    preserve the live ledger -- the absence of a ledger in the bundle is not
+    evidence that there should be none."""
+    repo = _initialized(tmp_path)
+    repo.close()
+    _ledger_with_bars(tmp_path, closes=["100"])
+    backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    del manifest["source_bars"]
+    manifest["schema_version"] = 1
+    assert backup.source_bars is not None
+    backup.source_bars.path.unlink()
+    backup.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    verified = verify_backup_bundle(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, bundle_path=backup.bundle_path
+    )
+    assert verified.source_bars is None
+    receipt = _stopped_restore(tmp_path, backup.bundle_path)
+
+    assert receipt.operation == "RESTORE_VERIFIED_BACKUP"
+    assert _ledger_closes(tmp_path) == ["100"]
+    assert receipt.preserved_path is not None
+    assert not (tmp_path / receipt.preserved_path / SOURCE_BAR_LEDGER_FILENAME).exists()
