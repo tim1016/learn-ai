@@ -27,6 +27,14 @@
               (strategyKeyChange)="setStrategyKey($event)"
             />
 
+            @if (selectedStrategy(); as strategy) {
+              <app-deploy-paper-access
+                [accountId]="view.account_id"
+                [strategy]="strategy"
+                (accessChanged)="paperAccessChanged()"
+              />
+            }
+
             <app-deploy-execution-section
               [executionModes]="view.execution_modes"
               [paperUnavailableReason]="paperUnavailableReason()"

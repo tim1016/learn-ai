@@ -18,10 +18,16 @@ import type {
 } from '../../services/strategy-validation.types';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-code/quantconnect-reference-code.component';
+import { StrategyProofPipelineComponent } from './strategy-proof-pipeline/strategy-proof-pipeline.component';
 
 @Component({
   selector: 'app-strategy-validation',
-  imports: [RouterLink, ReceiptLabelPipe, QuantConnectReferenceCodeComponent],
+  imports: [
+    RouterLink,
+    ReceiptLabelPipe,
+    QuantConnectReferenceCodeComponent,
+    StrategyProofPipelineComponent,
+  ],
   templateUrl: './strategy-validation.component.html',
   styleUrl: './strategy-validation.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -86,7 +92,26 @@ export class StrategyValidationComponent {
   }
 
   protected stateLabel(strategy: StrategyValidationSummary | StrategyValidationDetail): string {
-    return strategy.validation_state === 'validated' ? 'Validated' : 'Needs validation';
+    switch (strategy.proof.state) {
+      case 'current':
+        return 'Proof current';
+      case 'stale':
+        return 'Proof stale';
+      case 'rejected':
+        return 'Review rejected';
+      case 'unreadable':
+        return 'Proof unreadable';
+      case 'blocked':
+        return 'Proof blocked';
+      default:
+        return 'Proof missing';
+    }
+  }
+
+  protected isOperationalHarness(
+    strategy: StrategyValidationSummary | StrategyValidationDetail,
+  ): boolean {
+    return strategy.strategy_category === 'operational_validation_harness';
   }
 
   protected isAcceptedForDeploy(
@@ -162,7 +187,7 @@ export class StrategyValidationComponent {
     this.actionMessage.set(null);
     try {
       const result = await this.service.refreshValidationEvidence(key);
-      this.actionMessage.set(`Validation evidence refreshed from ${result.refresh_id}.`);
+      this.actionMessage.set(`Stored proof rechecked from ${result.refresh_id}.`);
       this.catalog.reload();
       this.detail.reload();
     } catch {
@@ -181,7 +206,8 @@ export class StrategyValidationComponent {
       return;
     }
     const backtestId = this.backtestId().trim() || this.detail.value()?.qc_cloud_backtest_id?.trim() || '';
-    if (this.flagChoice() === 'validated' && backtestId === '') {
+    const requiresQuantConnect = this.detail.value()?.strategy_category === 'production_candidate';
+    if (this.flagChoice() === 'validated' && requiresQuantConnect && backtestId === '') {
       this.actionError.set('A QC Cloud backtest ID is required to accept validation evidence.');
       return;
     }
@@ -192,7 +218,9 @@ export class StrategyValidationComponent {
       const detail = await this.service.flagValidation(key, {
         flag: this.flagChoice(),
         reason,
-        ...(this.flagChoice() === 'validated' ? { qc_cloud_backtest_id: backtestId } : {}),
+        ...(this.flagChoice() === 'validated' && requiresQuantConnect && backtestId !== ''
+          ? { qc_cloud_backtest_id: backtestId }
+          : {}),
       });
       this.actionMessage.set(`${this.flagLabel(detail.current_flag_event?.flag ?? this.flagChoice())} flag saved.`);
       this.flagReason.set('');

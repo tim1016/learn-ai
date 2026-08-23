@@ -49,6 +49,12 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
     PanelProfile,
 )
+from app.schemas.canary_admission import (
+    CanaryActivationConfirmation,
+    CanaryActivationPlan,
+    CanaryActivationRequest,
+    CanaryAdmissionEvent,
+)
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import panel_data_source as ds
 from app.services.broker_v2_panel.action_execution_service import (
@@ -71,6 +77,11 @@ from app.services.broker_v2_panel.live_projection import (
     schedule_live_projection_refresh,
 )
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
+from app.services.broker_v2_panel.paper_access_service import (
+    confirm_paper_access,
+    prepare_paper_access,
+)
+from app.services.canary_admission import CanaryActivationRefused, CanaryAdmissionLedgerError
 from app.services.surface_hub import SnapshotUnavailableError, SurfaceHubRefreshFailure
 from app.utils.timestamps import now_ms_utc
 
@@ -119,6 +130,19 @@ def _raise_alpaca_deploy_error(error: ds.PanelDataError) -> NoReturn:
                 if isinstance(error, ds.PanelRunnerError) and error.admission_decision is not None
                 else None
             ),
+        },
+    ) from error
+
+
+def _raise_paper_access_error(
+    error: CanaryActivationRefused | CanaryAdmissionLedgerError,
+) -> NoReturn:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": "Paper access could not be changed.",
+            "why": str(error),
+            "next_action": "Prepare a fresh review after resolving the named blocker.",
         },
     ) from error
 
@@ -210,6 +234,57 @@ async def get_alpaca_paper_deploy_view(
         return await ds.get_alpaca_paper_deploy_view(broker, account_id)
     except ds.PanelDataError as error:
         _raise_panel_error(error)
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/plan",
+    response_model=CanaryActivationPlan,
+    summary="Prepare a proof-bound review for one strategy/account Paper pairing",
+)
+async def prepare_strategy_paper_access(
+    broker: str,
+    account_id: str,
+    program_key: str,
+    request: CanaryActivationRequest,
+) -> CanaryActivationPlan:
+    try:
+        return await prepare_paper_access(
+            broker=broker,
+            account_id=account_id,
+            program_key=program_key,
+            actor=settings.PANEL_OPERATOR_IDENTITY,
+            reason=request.reason,
+        )
+    except ds.PanelDataError as error:
+        _raise_panel_error(error)
+    except (CanaryActivationRefused, CanaryAdmissionLedgerError) as error:
+        _raise_paper_access_error(error)
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm",
+    response_model=CanaryAdmissionEvent,
+    status_code=201,
+    summary="Confirm the exact reviewed strategy/account Paper pairing",
+)
+async def confirm_strategy_paper_access(
+    broker: str,
+    account_id: str,
+    program_key: str,
+    request: CanaryActivationConfirmation,
+) -> CanaryAdmissionEvent:
+    try:
+        return await confirm_paper_access(
+            broker=broker,
+            account_id=account_id,
+            program_key=program_key,
+            plan=request.plan,
+            confirmation_token=request.confirmation_token,
+        )
+    except ds.PanelDataError as error:
+        _raise_panel_error(error)
+    except (CanaryActivationRefused, CanaryAdmissionLedgerError) as error:
+        _raise_paper_access_error(error)
 
 
 @router.post(

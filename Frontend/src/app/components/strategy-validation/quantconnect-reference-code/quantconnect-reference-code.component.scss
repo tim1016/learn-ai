@@ -40,6 +40,15 @@
   color: var(--text-secondary);
 }
 
+.qc-reference__warning {
+  margin: 0;
+  padding: var(--space-3);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--text-primary);
+}
+
 .qc-reference__copy {
   display: inline-flex;
   align-items: center;
@@ -110,6 +119,13 @@
   color: var(--accent);
   font-family: var(--font-mono);
   font-weight: var(--fw-bold);
+}
+
+.qc-reference__steps a {
+  display: inline-flex;
+  margin-left: var(--space-1);
+  color: var(--accent);
+  font-weight: var(--fw-semi);
 }
 
 .qc-reference__error {

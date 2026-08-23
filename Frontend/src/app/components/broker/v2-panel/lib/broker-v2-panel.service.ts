@@ -33,6 +33,8 @@ export type DeployReadinessCheck = components['schemas']['AlpacaPaperDeployReadi
 export type DeployExecutionMode = components['schemas']['AlpacaPaperExecutionMode'];
 export type DeploySizingOption = components['schemas']['AlpacaPaperSizingOption'];
 export type RunAdmissionDecision = components['schemas']['RunAdmissionDecision'];
+export type PaperAccessPlan = components['schemas']['CanaryActivationPlan'];
+export type PaperAccessEvent = components['schemas']['CanaryAdmissionEvent'];
 
 /**
  * HTTP client for the broker-v2 panel surface.
@@ -88,6 +90,34 @@ export class BrokerV2PanelService {
     return firstValueFrom(
       this.http.get<DeployBotView>(
         `${this.base(broker, accountId)}/bots/deploy`,
+      ),
+    );
+  }
+
+  preparePaperAccess(
+    broker: string,
+    accountId: string,
+    strategyKey: string,
+    reason: string,
+  ): Promise<PaperAccessPlan> {
+    return firstValueFrom(
+      this.http.post<PaperAccessPlan>(
+        `${this.base(broker, accountId)}/strategies/${encodeURIComponent(strategyKey)}/paper-access/plan`,
+        { reason },
+      ),
+    );
+  }
+
+  confirmPaperAccess(
+    broker: string,
+    accountId: string,
+    strategyKey: string,
+    plan: PaperAccessPlan,
+  ): Promise<PaperAccessEvent> {
+    return firstValueFrom(
+      this.http.post<PaperAccessEvent>(
+        `${this.base(broker, accountId)}/strategies/${encodeURIComponent(strategyKey)}/paper-access/confirm`,
+        { plan, confirmation_token: plan.confirmation_token },
       ),
     );
   }

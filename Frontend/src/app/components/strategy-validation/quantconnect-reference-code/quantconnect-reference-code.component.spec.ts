@@ -6,6 +6,8 @@ import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-cod
 const REFERENCE_CODE = {
   path: 'references/qc-shadow/SpyEmaCrossoverAlgorithm.py',
   sha256: 'cfc7f18877b8dcf9b99af4bb26e4f36f0b7ac6799fa5f4d6dc286945653d6078',
+  recorded_sha256: 'cfc7f18877b8dcf9b99af4bb26e4f36f0b7ac6799fa5f4d6dc286945653d6078',
+  state: 'current' as const,
   language: 'python',
   source: 'class SpyEmaCrossoverAlgorithm(QCAlgorithm):\n    pass\n',
 };
@@ -33,7 +35,7 @@ describe('QuantConnectReferenceCodeComponent', () => {
 
     expect(screen.getByRole('heading', { name: 'QuantConnect reference algorithm' })).toBeTruthy();
     expect(screen.getByText('references/qc-shadow/SpyEmaCrossoverAlgorithm.py')).toBeTruthy();
-    expect(screen.getByText(REFERENCE_CODE.sha256)).toBeTruthy();
+    expect(screen.getAllByText(REFERENCE_CODE.sha256)).toHaveLength(2);
 
     const copyButton = screen.getByRole('button', { name: 'Copy QuantConnect algorithm' });
     fireEvent.click(copyButton);

@@ -1,0 +1,85 @@
+@if (strategy().paper_access_state === 'disabled' || strategy().paper_access_state === 'enabled') {
+  @if (flow(); as state) {
+    <section class="paper-access" aria-labelledby="paper-access-title">
+    <header class="paper-access__header">
+      <div>
+        <span class="paper-access__eyebrow">Account permission</span>
+        <h2 id="paper-access-title">Paper access</h2>
+      </div>
+      @if (strategy().paper_access_state === 'enabled' || state.kind === 'complete') {
+        <span class="paper-access__state paper-access__state--enabled">Enabled</span>
+      } @else {
+        <span class="paper-access__state">Off</span>
+      }
+    </header>
+
+    @if (strategy().paper_access_state === 'enabled' || state.kind === 'complete') {
+      <div class="paper-access__enabled" role="status">
+        <strong>Paper access enabled</strong>
+        <p>This strategy may use Paper on this account. Deploying a bot remains a separate action.</p>
+      </div>
+    } @else {
+      @switch (state.kind) {
+        @case ('idle') {
+          <p>
+            Paper trading is off for <strong>{{ strategy().label }}</strong> on this account.
+            Dry Run stays available.
+          </p>
+          <button class="paper-access__primary" type="button" (click)="prepare()">
+            Review &amp; enable Paper
+          </button>
+        }
+        @case ('preparing') {
+          <p class="paper-access__progress" role="status">Checking the current validation and program build…</p>
+        }
+        @case ('review') {
+          <div class="paper-access__review" role="region" aria-label="Review Paper access">
+            <div>
+              <span class="paper-access__eyebrow">Final confirmation</span>
+              <h3>Confirm Paper access</h3>
+              <p>
+                This enables eligibility for one exact strategy and account. It does not deploy a bot
+                or place an order.
+              </p>
+            </div>
+
+            <dl>
+              <div><dt>Strategy</dt><dd>{{ strategy().label }}</dd></div>
+              <div><dt>Account</dt><dd><code>{{ state.plan.account_id }}</code></dd></div>
+              <div><dt>Validation</dt><dd>Current</dd></div>
+              <div><dt>Program build</dt><dd>Verified</dd></div>
+              <div><dt>Review expires</dt><dd>{{ state.plan.expires_at_ms | date: 'mediumTime' }}</dd></div>
+            </dl>
+
+            <details>
+              <summary>Audit details</summary>
+              <dl>
+                <div><dt>Validation event</dt><dd><code>{{ state.plan.evidence.validation_event_id }}</code></dd></div>
+                <div><dt>Plan receipt</dt><dd><code>{{ state.plan.plan_id }}</code></dd></div>
+              </dl>
+            </details>
+
+            <div class="paper-access__actions">
+              <button class="paper-access__primary" type="button" (click)="confirm(state.plan)">
+                Enable Paper access
+              </button>
+              <button class="paper-access__secondary" type="button" (click)="cancel()">Cancel</button>
+            </div>
+          </div>
+        }
+        @case ('confirming') {
+          <p class="paper-access__progress" role="status">Enabling this exact strategy and account pairing…</p>
+        }
+        @case ('error') {
+          <div class="paper-access__error" role="alert">
+            <strong>{{ state.failure.message }}</strong>
+            @if (state.failure.explanation; as explanation) { <p>{{ explanation }}</p> }
+            @if (state.failure.nextAction; as nextAction) { <p>{{ nextAction }}</p> }
+          </div>
+          <button class="paper-access__secondary" type="button" (click)="prepare()">Try review again</button>
+        }
+      }
+    }
+    </section>
+  }
+}

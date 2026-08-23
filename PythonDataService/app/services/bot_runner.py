@@ -917,9 +917,9 @@ class BotTaskRegistry:
             # been admitted as a Signal-Program-backed trade-mode instance
             # (`program_build.state == "PROVEN"`, the same live-reproof
             # `canary_gate_applies` checks at Start/Resume) -- never off
-            # current `CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS` membership. A
-            # rollback plausibly *means* removing the pairing from the
-            # allowlist, so keying the verdict off present membership would
+            # current canary admission membership. A rollback plausibly
+            # *means* revoking the pairing in the activation ledger, so
+            # keying the verdict off present membership would
             # read "not a canary" at exactly the moment it matters. This is
             # an evidence record, not a gate: it never influences whether
             # Stop proceeds, only what gets recorded once it has.

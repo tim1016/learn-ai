@@ -229,6 +229,10 @@ class AlpacaPaperDeployStrategy(BaseModel):
     explanation: str
     validation_case_symbol: str
     evidence_status: Literal["accepted", "evidence_only", "blocked"]
+    # Account-scoped approval state for sealed Signal Programs. This is
+    # explicit wire data so the UI never has to infer an available action by
+    # parsing backend-authored blocker prose.
+    paper_access_state: Literal["not_required", "disabled", "enabled"]
     selectable: bool
     admissible_modes: tuple[Literal["dry_run", "paper"], ...]
     override_explanation: str | None = None

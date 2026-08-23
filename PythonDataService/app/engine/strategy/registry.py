@@ -55,6 +55,7 @@ from app.schemas.signal_program_seal import (
     SignalBarIntegrityContract,
     SignalSeriesContract,
 )
+from app.schemas.strategy_validation import StrategyCategory
 
 
 class StrategyParamsBase(BaseModel):
@@ -590,6 +591,11 @@ class StrategyRegistration:
     description: str
     param_schema: type[StrategyParamsBase]
     build: Callable[[StrategyParamsBase], Strategy]
+    # Product role, independent from validation progress. Production candidates
+    # follow the external-reference promotion cycle. The operational harness is
+    # deliberately useful in Dry Run/Paper while remaining permanently outside
+    # the future Live-promotion population.
+    strategy_category: StrategyCategory = "production_candidate"
     # VCR-0004 / Phase 2 — the algorithm class the runner constructs. The
     # registry key is the module name (``app.engine.strategy.algorithms.{key}``);
     # ``class_name`` names the class inside that module. Together they retire
@@ -961,9 +967,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             signals=(
                 SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=5, warmup_bars=5),
                 SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=10, warmup_bars=10),
-                SignalSeriesContract(
-                    name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15
-                ),
+                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
             ),
             # SignalIntentKind's complete member set (signal_intent.py) —
             # every decision this program can stage collapses to one of
@@ -1239,9 +1243,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "replay of the committed cross-engine-study cells (Polygon-captured "
                     "one-minute bars) only, with no cross-engine parity claim."
                 ),
-                canonical_implementation=(
-                    "app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm"
-                ),
+                canonical_implementation=("app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm"),
                 validated_against=(
                     "app/engine/tests/test_sma_crossover_parity.py; "
                     "app/engine/strategy/spec/tests/test_spec_sma_parity.py; "
@@ -1717,6 +1719,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",
         class_name="DeploymentValidationConsecutiveGreen",
+        strategy_category="operational_validation_harness",
         signal_program_contract=SignalProgramContract(
             program_version=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -1810,8 +1813,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "with no cross-engine parity claim."
                 ),
                 canonical_implementation=(
-                    "app/engine/strategy/algorithms/deployment_validation.py::"
-                    "DeploymentValidationConsecutiveGreen"
+                    "app/engine/strategy/algorithms/deployment_validation.py::DeploymentValidationConsecutiveGreen"
                 ),
                 validated_against=(
                     "tests/engine/test_deployment_validation_strategy.py; "
@@ -2108,9 +2110,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=20, warmup_bars=20),
                 SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=50, warmup_bars=50),
                 SignalSeriesContract(name="macd", indicator="macd", field="close", period=34, warmup_bars=34),
-                SignalSeriesContract(
-                    name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15
-                ),
+                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
                 # ADX reads high/low/close off the full bar (Wilder's
                 # directional-movement calculation needs the high/low swing,
                 # not just the close) -- "close" would misdescribe what this
@@ -2154,9 +2154,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "SignalIntent-port self-equivalence and predates -- and does not establish -- this "
                     "promotion's qualification."
                 ),
-                canonical_implementation=(
-                    "app/engine/strategy/algorithms/spy_strategy_a.py::SpyStrategyAAlgorithm"
-                ),
+                canonical_implementation=("app/engine/strategy/algorithms/spy_strategy_a.py::SpyStrategyAAlgorithm"),
                 validated_against=(
                     "app/engine/tests/ (gate-wiring unit tests); golden fixture ENG-008 "
                     "(tests/fixtures/test_strategy_parity_fixtures.py); "
@@ -2349,7 +2347,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # so this cannot silently go stale.
             signals=(
                 SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-                SignalSeriesContract(name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28),
+                SignalSeriesContract(
+                    name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28
+                ),
                 SignalSeriesContract(
                     name="supertrend", indicator="supertrend", field="high_low_close", period=10, warmup_bars=10
                 ),
@@ -2600,7 +2600,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # so this cannot silently go stale.
             signals=(
                 SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
-                SignalSeriesContract(name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28),
+                SignalSeriesContract(
+                    name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28
+                ),
             ),
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),

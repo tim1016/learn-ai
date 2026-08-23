@@ -43,6 +43,7 @@ from app.services.strategy_validation_manifest import (
 )
 
 EvidenceStatus = Literal["accepted", "evidence_only", "blocked"]
+PaperAccessState = Literal["not_required", "disabled", "enabled"]
 
 NO_RUNTIME_BLOCKED_EXPLANATION = (
     "This strategy has no registered live-decision runtime. It is validated, "
@@ -50,12 +51,8 @@ NO_RUNTIME_BLOCKED_EXPLANATION = (
     "yet' block, distinct from an unmet validation or a stale evidence proof."
 )
 CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION = (
-    "This strategy is a sealed Signal Program, and Paper launch is admitted "
-    "one (program, account) pairing at a time. This account is not on the "
-    "canary allowlist, so a Paper start would be refused. Dry Run is "
-    "unaffected — it uses its own isolated synthetic authority and is never "
-    "canary-gated. This is a 'not activated for this account yet' block, "
-    "distinct from a missing runtime or a stale evidence proof."
+    "Paper trading is not enabled for this strategy on this account yet. "
+    "Review and enable Paper access below. Dry Run is still available."
 )
 _EVIDENCE_ONLY_OVERRIDE_EXPLANATION = (
     "A human marked this strategy validated, but its behavioral evidence is "
@@ -83,6 +80,7 @@ class CatalogEntry:
     validation_case_symbol: str
     has_runtime: bool
     evidence_status: EvidenceStatus
+    paper_access_state: PaperAccessState
     selectable: bool
     override_explanation: str | None
     blocked_explanation: str | None
@@ -202,7 +200,7 @@ def _disposition(
     event: StrategyValidationFlagEvent,
     *,
     has_runtime: bool,
-    account_id: str,
+    paper_access_state: PaperAccessState,
 ) -> _Disposition:
     """Derive one entry's launch disposition from the validation facet and the runtime fact.
 
@@ -228,11 +226,7 @@ def _disposition(
             override_explanation=None,
             blocked_explanation=NO_RUNTIME_BLOCKED_EXPLANATION,
         )
-    registration = _STRATEGY_REGISTRY.get(entry.strategy_key)
-    is_sealed_program = registration is not None and registration.signal_program_contract is not None
-    if is_sealed_program and not canary_pairing_admitted(
-        program_key=entry.strategy_key, account_id=account_id
-    ):
+    if paper_access_state == "disabled":
         return _Disposition(
             has_runtime=True,
             evidence_status="blocked",
@@ -279,11 +273,19 @@ def compose_strategy_catalog(
         event = entry.current_flag_event
         if entry.validation_state != "validated" or event is None or event.flag != "validated":
             continue
+        registration = _STRATEGY_REGISTRY[entry.strategy_key]
+        paper_access_state: PaperAccessState
+        if registration.signal_program_contract is None:
+            paper_access_state = "not_required"
+        elif canary_pairing_admitted(program_key=entry.strategy_key, account_id=account_id):
+            paper_access_state = "enabled"
+        else:
+            paper_access_state = "disabled"
         disposition = _disposition(
             entry,
             event,
             has_runtime=entry.strategy_key in runtime_keys,
-            account_id=account_id,
+            paper_access_state=paper_access_state,
         )
         snapshot = event.evidence_snapshot
         validation_case_symbol = snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(
@@ -297,6 +299,7 @@ def compose_strategy_catalog(
                 validation_case_symbol=validation_case_symbol,
                 has_runtime=disposition.has_runtime,
                 evidence_status=disposition.evidence_status,
+                paper_access_state=paper_access_state,
                 selectable=disposition.selectable,
                 override_explanation=disposition.override_explanation,
                 blocked_explanation=disposition.blocked_explanation,

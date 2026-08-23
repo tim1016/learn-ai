@@ -1,0 +1,77 @@
+@let dossier = proof();
+
+<section class="proof-pipeline" aria-labelledby="proof-pipeline-title">
+  <header class="proof-pipeline__header">
+    <div>
+      <p class="proof-pipeline__eyebrow">Authority pipeline</p>
+      <h3 id="proof-pipeline-title">Strategy proof</h3>
+      <p>{{ dossier.completed_stages }} of {{ dossier.total_stages }} required stages complete</p>
+    </div>
+    <span class="proof-pipeline__state" [attr.data-state]="dossier.state">
+      {{ dossier.state | receiptLabel }}
+    </span>
+  </header>
+
+  @if (dossier.blocking_summary) {
+    <p class="proof-pipeline__blocker" role="status">
+      <strong>Next:</strong> {{ dossier.blocking_summary }}
+    </p>
+  }
+
+  <ol class="proof-pipeline__stages">
+    @for (stage of dossier.stages; track stage.stage_id; let position = $index) {
+      <li
+        class="proof-stage"
+        [class.proof-stage--active]="stage.stage_id === dossier.blocking_stage_id"
+        [attr.data-state]="stage.state"
+      >
+        <span class="proof-stage__number" aria-hidden="true">{{ position + 1 }}</span>
+        <div class="proof-stage__body">
+          <header>
+            <div>
+              <h4>{{ stage.title }}</h4>
+              <p class="proof-stage__authority">Authority: {{ stage.authority }}</p>
+            </div>
+            <span class="proof-stage__state">{{ stage.state | receiptLabel }}</span>
+          </header>
+          <p>{{ stage.summary }}</p>
+          @if (stage.next_step) {
+            <p class="proof-stage__next"><strong>Next step:</strong> {{ stage.next_step }}</p>
+          }
+          @if (stage.actions.length > 0) {
+            <nav class="proof-stage__actions" aria-label="Stage references">
+              @for (action of stage.actions; track action.href) {
+                <a [href]="action.href" target="_blank" rel="noopener noreferrer">
+                  {{ action.label }}
+                  <i class="pi pi-external-link" aria-hidden="true"></i>
+                </a>
+              }
+            </nav>
+          }
+          @if (stage.evidence.length > 0) {
+            <details class="proof-stage__evidence">
+              <summary>Technical evidence</summary>
+              <dl>
+                @for (item of stage.evidence; track item.label) {
+                  <div>
+                    <dt>{{ item.label }}</dt>
+                    <dd><span>{{ item.state | receiptLabel }}</span></dd>
+                    @if (item.ref) {
+                      <dd><code>{{ item.ref }}</code></dd>
+                    }
+                    @if (item.recorded_sha256) {
+                      <dd><small>Recorded</small><code>{{ item.recorded_sha256 }}</code></dd>
+                    }
+                    @if (item.current_sha256) {
+                      <dd><small>Current</small><code>{{ item.current_sha256 }}</code></dd>
+                    }
+                  </div>
+                }
+              </dl>
+            </details>
+          }
+        </div>
+      </li>
+    }
+  </ol>
+</section>

@@ -85,6 +85,24 @@ def _isolate_strategy_validation_flag_ledger(tmp_path, monkeypatch: pytest.Monke
     monkeypatch.setattr(strategy_validation_manifest, "DEFAULT_FLAG_EVENTS_PATH", isolated_path)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_canary_admission_ledger(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """Keep a developer's machine-local canary approvals out of every test.
+
+    Production derives exact-pair admission from a gitignored local ledger.
+    Patching the service default at call time gives each test an empty ledger
+    while tests for the mechanism can still pass their own explicit path.
+    """
+    import app.services.canary_admission as canary_admission
+
+    isolated_path = tmp_path / "canary_admission_events.json"
+    monkeypatch.setattr(
+        canary_admission,
+        "DEFAULT_CANARY_ADMISSION_LEDGER_PATH",
+        isolated_path,
+    )
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"

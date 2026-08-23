@@ -7,6 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 ValidationState = Literal["validated", "needs_validation"]
 StrategyValidationFlag = Literal["validated", "invalidated"]
 BehavioralEquivalenceVerdict = Literal["accepted_for_deploy", "evidence_only", "rejected"]
+StrategyCategory = Literal["production_candidate", "operational_validation_harness"]
+StrategyProofState = Literal["current", "stale", "missing", "blocked", "rejected", "unreadable"]
+StrategyProofStageState = Literal["complete", "stale", "missing", "blocked", "not_applicable"]
+StrategyProofActionKind = Literal["external_link"]
+StrategyArtifactState = Literal["current", "stale", "missing", "unreadable"]
 
 
 class StrategyValidationDiagnostics(BaseModel):
@@ -16,6 +21,40 @@ class StrategyValidationDiagnostics(BaseModel):
     pnl_max_abs_diff: str
     divergence_counts: dict[str, int] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
+
+
+class StrategyArtifactCheck(BaseModel):
+    label: str
+    ref: str | None = None
+    state: StrategyArtifactState
+    recorded_sha256: str | None = None
+    current_sha256: str | None = None
+
+
+class StrategyProofAction(BaseModel):
+    kind: StrategyProofActionKind = "external_link"
+    label: str
+    href: str
+
+
+class StrategyProofStage(BaseModel):
+    stage_id: str
+    title: str
+    state: StrategyProofStageState
+    authority: str
+    summary: str
+    next_step: str | None = None
+    actions: list[StrategyProofAction] = Field(default_factory=list)
+    evidence: list[StrategyArtifactCheck] = Field(default_factory=list)
+
+
+class StrategyProofDossier(BaseModel):
+    state: StrategyProofState = "missing"
+    completed_stages: int = Field(default=0, ge=0)
+    total_stages: int = Field(default=0, ge=0)
+    blocking_stage_id: str | None = None
+    blocking_summary: str | None = None
+    stages: list[StrategyProofStage] = Field(default_factory=list)
 
 
 class StrategyEvidenceSnapshot(BaseModel):
@@ -84,8 +123,10 @@ class StrategyValidationEntry(BaseModel):
     strategy_key: str
     display_name: str
     description: str
+    strategy_category: StrategyCategory = "production_candidate"
     validation_state: ValidationState
     deployable: bool
+    proof: StrategyProofDossier = Field(default_factory=StrategyProofDossier)
     validator_code_ref: str | None = None
     validator_code_sha256: str | None = None
     settings_file_ref: str | None = None
@@ -105,6 +146,8 @@ class StrategyValidationEntry(BaseModel):
 class StrategyReferenceCode(BaseModel):
     path: str
     sha256: str
+    recorded_sha256: str | None = None
+    state: StrategyArtifactState = "current"
     language: str = "python"
     source: str
 

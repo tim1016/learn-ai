@@ -64,13 +64,17 @@ def strategy_gate_recovery(
     """
     if any(strategy.selectable for strategy in strategies):
         return None
-    if any("dry_run" in strategy.admissible_modes for strategy in strategies):
-        return "Repair the named proof, or re-validate the strategy in Strategy Validation."
-    if strategies:
+    if strategies and not any("dry_run" in strategy.admissible_modes for strategy in strategies):
         return (
             "Choose a runtime-backed strategy, or have an engineer register this "
             "strategy's live-decision runtime."
         )
+    if any(strategy.paper_access_state == "disabled" for strategy in strategies):
+        return "Review and enable Paper access for a strategy below."
+    if any("dry_run" in strategy.admissible_modes for strategy in strategies):
+        return "Repair the named proof, or re-validate the strategy in Strategy Validation."
+    if strategies:
+        raise PaperDeployInvariantError("A non-empty strategy catalog has no classified recovery path.")
     return "Review and validate a strategy in Strategy Validation."
 
 
@@ -169,6 +173,7 @@ def _strategy_views(
             explanation=entry.explanation,
             validation_case_symbol=entry.validation_case_symbol,
             evidence_status=entry.evidence_status,
+            paper_access_state=entry.paper_access_state,
             selectable=entry.selectable,
             admissible_modes=_admissible_modes(selectable=entry.selectable, has_runtime=entry.has_runtime),
             override_explanation=entry.override_explanation,

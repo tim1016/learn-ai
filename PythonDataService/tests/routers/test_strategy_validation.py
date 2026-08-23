@@ -27,45 +27,45 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     strategies = {row["strategy_key"]: row for row in catalog["strategies"]}
     assert "deployment_validation" in strategies
     assert "spy_orb" in strategies
-    # #1672 recalculated deployment_validation's session-boundary literals to be
-    # calendar-relative (see docs/references/deployment-validation-consecutive-green.md).
-    # That intentionally changed the validated source files, so the manifest's
-    # pinned evidence hashes are now stale and the strategy fails closed to
-    # non-deployable until a fresh QuantConnect Cloud backtest + reconciliation
-    # is run and the manifest is updated with new evidence — the manifest is not
-    # silently re-hashed here to avoid fabricating a "passed" receipt for
-    # unrun reconciliation (see .claude/rules/numerical-rigor.md).
+    # deployment_validation proves deployment plumbing through its internal
+    # deterministic replay. Its retired QuantConnect audit copy is not part of
+    # this category's current proof.
     assert strategies["deployment_validation"]["validation_state"] == "validated"
-    assert strategies["deployment_validation"]["deployable"] is False
-    assert (
-        "The referenced LEAN audit copy no longer matches its validation hash."
-        in strategies["deployment_validation"]["diagnostics"]["notes"]
-    )
+    assert strategies["deployment_validation"]["deployable"] is True
+    assert strategies["deployment_validation"]["strategy_category"] == "operational_validation_harness"
+    assert strategies["deployment_validation"]["proof"]["state"] == "current"
+    assert strategies["deployment_validation"]["proof"]["blocking_stage_id"] is None
+    assert strategies["deployment_validation"]["qc_cloud_backtest_id"] is None
     assert strategies["ema_crossover_signal"]["validation_state"] == "validated"
     assert strategies["ema_crossover_signal"]["deployable"] is True
+    assert strategies["ema_crossover_signal"]["strategy_category"] == "production_candidate"
+    assert strategies["ema_crossover_signal"]["proof"]["state"] == "current"
     assert (
         strategies["deployment_validation"]["current_flag_event"]["flagged_by"]
         == "migration:strategy-validation-prd-seed"
     )
-    assert (
-        strategies["deployment_validation"]["behavioral_equivalence"]["verdict"]
-        == "accepted_for_deploy"
-    )
+    assert strategies["deployment_validation"]["behavioral_equivalence"]["verdict"] == "accepted_for_deploy"
     assert strategies["spy_orb"]["validation_state"] == "needs_validation"
     assert strategies["spy_orb"]["deployable"] is False
 
-    # The detail endpoint independently re-verifies the audit copy hash and
-    # fails closed hard (503) rather than degrading, unlike the catalog above.
-    assert deployment_validation_detail_response.status_code == 503, deployment_validation_detail_response.text
-    assert deployment_validation_detail_response.json()["detail"] == "Strategy audit copy SHA mismatch"
+    # The detail remains available even though a legacy QC audit file is stale,
+    # because that artifact is explicitly outside the harness proof track.
+    assert deployment_validation_detail_response.status_code == 200, deployment_validation_detail_response.text
+    deployment_detail = deployment_validation_detail_response.json()
+    assert deployment_detail["strategy_category"] == "operational_validation_harness"
+    assert deployment_detail["proof"]["state"] == "current"
+    assert deployment_detail["proof"]["blocking_summary"] is None
+    reference_run_stage = next(
+        stage for stage in deployment_detail["proof"]["stages"] if stage["stage_id"] == "reference_run"
+    )
+    assert reference_run_stage["state"] == "not_applicable"
+    assert deployment_detail["reference_code"] is None
 
     assert ema_detail_response.status_code == 200, ema_detail_response.text
     ema_detail = ema_detail_response.json()
     assert ema_detail["strategy_key"] == "ema_crossover_signal"
     assert ema_detail["deployable"] is True
-    assert ema_detail["validator_code_ref"].endswith(
-        "lean_sidecar/trusted_samples/ema_crossover_signal.py"
-    )
+    assert ema_detail["validator_code_ref"].endswith("lean_sidecar/trusted_samples/ema_crossover_signal.py")
     assert ema_detail["settings_file_ref"].endswith("spy_ema_crossover.spec.json")
     assert ema_detail["audit_copy_ref"] == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
     assert ema_detail["qc_cloud_backtest_id"] == "d2fe45a7142e88575f6fbd75229f8681"

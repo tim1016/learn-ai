@@ -18,24 +18,50 @@
       ariaLabel="Copy QuantConnect algorithm" />
   </header>
 
+  @if (code.state === 'stale') {
+    <p class="qc-reference__warning" role="status">
+      This is the current candidate algorithm. It differs from the copy used by the recorded
+      reference run, so that run cannot validate these bytes.
+    </p>
+  }
+
   <dl class="qc-reference__provenance" aria-label="QuantConnect audit-copy provenance">
     <div>
       <dt>Audit copy</dt>
       <dd><code>{{ code.path }}</code></dd>
     </div>
     <div>
-      <dt>SHA-256</dt>
+      <dt>Current SHA-256</dt>
       <dd class="copyable">
         <code>{{ code.sha256 }}</code>
         <app-copy-button [text]="code.sha256" ariaLabel="Copy SHA-256 hash" />
       </dd>
     </div>
+    @if (code.recorded_sha256) {
+      <div>
+        <dt>Recorded SHA-256</dt>
+        <dd class="copyable">
+          <code>{{ code.recorded_sha256 }}</code>
+          <app-copy-button [text]="code.recorded_sha256" ariaLabel="Copy recorded SHA-256 hash" />
+        </dd>
+      </div>
+    }
   </dl>
 
   <ol class="qc-reference__steps">
-    <li>Create a Python project in QuantConnect.</li>
-    <li>Replace its starter code with this audit copy and run the backtest.</li>
-    <li>Record the backtest ID here; reconciliation, not the ID alone, is the validation receipt.</li>
+    <li>
+      Create or open a Python project in QuantConnect.
+      <a href="https://www.quantconnect.com/docs/v2/cloud-platform/projects/files" target="_blank" rel="noopener noreferrer">Project files guide</a>
+    </li>
+    <li>
+      Replace its starter code with this exact audit copy and run the backtest.
+      <a href="https://www.quantconnect.com/docs/v2/cloud-platform/backtesting/getting-started" target="_blank" rel="noopener noreferrer">Backtest guide</a>
+    </li>
+    <li>
+      Inspect and download the result, then record its backtest ID here.
+      <a href="https://www.quantconnect.com/docs/v2/cloud-platform/backtesting/results" target="_blank" rel="noopener noreferrer">Results guide</a>
+    </li>
+    <li>Reconcile the result with our Python strategy; the ID alone is not a validation receipt.</li>
   </ol>
 
   <pre class="qc-reference__source"><code>{{ code.source }}</code></pre>

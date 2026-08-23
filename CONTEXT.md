@@ -1229,6 +1229,20 @@ against a broker, so this vocabulary survives a broker change.
   the **QuantConnect reference code** rendered inline. It never renders our
   internal LEAN/engine port source — sovereignty means the reference is shown for
   audit, the port is not.
+- **Production candidate** — a strategy intended to advance through the
+  external-reference validation cycle toward Paper deployment and, under a
+  separate future release decision, possible Live deployment. Its current
+  accepted proof includes the exact reference algorithm, pinned reference run,
+  behavioral reconciliation, and human review.
+- **Operational validation harness** — a strategy-shaped program used to prove
+  the deployment machinery itself through deterministic internal replay. It may
+  run in Dry Run or Paper, never enters the external-reference promotion track,
+  and is permanently ineligible for Live deployment.
+- **Strategy validation proof** — the ordered, inspectable evidence dossier for
+  one strategy: program contract, reference source, reference run when
+  applicable, reconciliation or harness qualification, human review, and a
+  freshness check against the current artifacts. A proof can be current,
+  missing, stale, rejected, blocked, or unreadable.
 - **Authoring-boundary supersession** — this **supersedes** the earlier
   "The Deploy a strategy page owns creating or selecting this package" clause in
   **Validated strategy package** (above). Authoring now splits: the **Strategy
