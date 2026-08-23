@@ -86,6 +86,7 @@ Before pushing or opening a PR, run the full per-stack test suite and **distingu
 - **Establish a baseline before you treat a failure as "not mine."** Stash your changes, check out `origin/<base-branch>`, run the same command, and confirm the failure is pre-existing. Anything not on that pre-existing list is yours to fix or surface.
 - **Pre-existing failures must be surfaced in the PR description**, not silently ignored. They're inherited tech debt, but they shouldn't mask your work's failures or make a reviewer wonder what's new.
 - **Container-state hygiene** when iterating with `podman cp`: copy specific files (`podman cp local/path/file.py container:/app/path/file.py`), never directories with trailing `/` or container destinations that already exist as a directory — `podman cp src/ container:/app/dst` will create `/app/dst/src/` if `/app/dst/` exists, polluting test discovery. After a long iteration session, `rm -rf` any duplicated paths you created (or rebuild the container) before treating a test-suite run as authoritative.
+- **The strategy-validation flag ledger needs no manual isolation step.** `PythonDataService/tests/conftest.py`'s autouse `_isolate_strategy_validation_flag_ledger` fixture points every test's `DEFAULT_FLAG_EVENTS_PATH` at an empty tmp-path location, so a developer's real, gitignored `artifacts/strategy_validation/flag_events.json` never affects test outcomes — don't `mv` it aside before a run.
 
 ## Reconciliation tests
 

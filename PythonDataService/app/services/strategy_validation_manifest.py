@@ -155,7 +155,7 @@ def seed_strategy_validation_manifest(
 def load_strategy_validation_entries(
     registry: list[StrategyRegistrySeed],
     manifest_path: Path = DEFAULT_MANIFEST_PATH,
-    flag_events_path: Path = DEFAULT_FLAG_EVENTS_PATH,
+    flag_events_path: Path | None = None,
     repo_root: Path = _REPO_ROOT,
 ) -> list[StrategyValidationEntry]:
     raw = _load_manifest_raw(manifest_path)
@@ -165,7 +165,7 @@ def load_strategy_validation_entries(
         for item in raw.get("validated_strategies", [])
     ]
     seed_events = _flag_events_from_raw(raw.get("seed_flag_events", raw.get("flag_events", [])))
-    runtime_events = _load_runtime_flag_events(flag_events_path)
+    runtime_events = _load_runtime_flag_events(_resolve_flag_events_path(flag_events_path))
     flag_events = [*seed_events, *runtime_events]
     return seed_strategy_validation_manifest(registry, evidence, flag_events)
 
@@ -176,11 +176,12 @@ def append_strategy_validation_flag_event(
     registry: list[StrategyRegistrySeed],
     *,
     manifest_path: Path = DEFAULT_MANIFEST_PATH,
-    flag_events_path: Path = DEFAULT_FLAG_EVENTS_PATH,
+    flag_events_path: Path | None = None,
     repo_root: Path = _REPO_ROOT,
     flagged_by: str,
     now_ms: int | None = None,
 ) -> StrategyValidationEntry:
+    resolved_flag_events_path = _resolve_flag_events_path(flag_events_path)
     raw = _load_manifest_raw(manifest_path)
     evidence = [
         _evidence_seed_from_raw(item, repo_root=repo_root)
@@ -215,12 +216,12 @@ def append_strategy_validation_flag_event(
         evidence_snapshot_sha256=_snapshot_sha256(snapshot),
     )
 
-    _append_runtime_flag_event(flag_events_path, event)
+    _append_runtime_flag_event(resolved_flag_events_path, event)
 
     entries = load_strategy_validation_entries(
         registry,
         manifest_path=manifest_path,
-        flag_events_path=flag_events_path,
+        flag_events_path=resolved_flag_events_path,
         repo_root=repo_root,
     )
     return _entry_by_strategy(entries, strategy_key)
@@ -231,7 +232,7 @@ def refresh_strategy_validation_manifest_evidence(
     registry: list[StrategyRegistrySeed],
     *,
     manifest_path: Path = DEFAULT_MANIFEST_PATH,
-    flag_events_path: Path = DEFAULT_FLAG_EVENTS_PATH,
+    flag_events_path: Path | None = None,
     repo_root: Path = _REPO_ROOT,
     now_ms: int | None = None,
 ) -> StrategyValidationRefreshResult:
@@ -330,6 +331,21 @@ class StrategyValidationManifestError(RuntimeError):
 
 class StrategyValidationNotFoundError(RuntimeError):
     pass
+
+
+def _resolve_flag_events_path(flag_events_path: Path | None) -> Path:
+    """Resolve an omitted flag-events path against the *current* module
+    default rather than the value bound when this module was imported.
+
+    A plain ``flag_events_path: Path = DEFAULT_FLAG_EVENTS_PATH`` default is
+    captured once, at import time, so a test that later monkeypatches
+    ``DEFAULT_FLAG_EVENTS_PATH`` has no effect on callers that omit the
+    argument (``app/services/broker_v2_panel/panel_data_source.py`` and
+    ``app/services/strategy_validation_admission.py`` both do). Looking the
+    module global up here, at call time, keeps every such caller routed
+    through the same overridable seam (#1739).
+    """
+    return flag_events_path if flag_events_path is not None else DEFAULT_FLAG_EVENTS_PATH
 
 
 def _load_manifest_raw(manifest_path: Path) -> dict[str, Any]:
