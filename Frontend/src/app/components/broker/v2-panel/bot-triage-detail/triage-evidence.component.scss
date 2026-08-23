@@ -1,0 +1,56 @@
+@use './triage-card';
+
+:host {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+// ── Gates ──────────────────────────────────────────────────────────────────
+
+.gates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gate {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+}
+
+.gate__state {
+  flex: 0 0 3.6rem;
+  color: var(--bull);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-caps);
+  line-height: 1.6;
+  text-transform: uppercase;
+}
+
+.gate--blocked .gate__state { color: var(--warn); }
+
+.gate__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.gate__label { color: var(--text-primary); }
+
+.gate__explanation,
+.gate__cure {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.gate__cure strong { color: var(--text-primary); }

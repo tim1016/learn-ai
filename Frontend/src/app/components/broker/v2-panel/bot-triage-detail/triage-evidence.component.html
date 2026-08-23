@@ -1,0 +1,34 @@
+<section class="card" aria-labelledby="triage-gates-title">
+  <!-- The ready/total count lives on the Gates tile above; not repeated here. -->
+  <header class="card__head">
+    <strong id="triage-gates-title">Admission gates</strong>
+  </header>
+  @if (gates().length === 0) {
+    <p class="card__empty">No admission gates are currently evaluated for this bot.</p>
+  } @else {
+    <ul class="gates">
+      @for (gate of gates(); track gate.label + gate.operation) {
+        <li class="gate" [class.gate--blocked]="!gate.ready">
+          <span class="gate__state">{{ gate.ready ? 'Ready' : 'Blocked' }}</span>
+          <span class="gate__body">
+            <span class="gate__label">{{ gate.label }}</span>
+            @if (!gate.ready) {
+              <span class="gate__explanation">{{ gate.explanation }}</span>
+              @if (gate.cure; as cure) {
+                <span class="gate__cure"><strong>Next:</strong> {{ cure }}</span>
+              }
+            }
+          </span>
+        </li>
+      }
+    </ul>
+  }
+</section>
+
+<section class="card card--journal" aria-labelledby="triage-journal-title">
+  <header class="card__head">
+    <strong id="triage-journal-title">Custody journal</strong>
+    <span class="card__count">Newest first</span>
+  </header>
+  <app-journal-tail [evidencePage]="journal()" [loading]="journalLoading()" />
+</section>

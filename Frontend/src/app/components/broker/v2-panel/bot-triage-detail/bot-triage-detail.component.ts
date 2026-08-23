@@ -15,8 +15,9 @@ import { RouterLink } from '@angular/router';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
-import { JournalTailComponent } from '../operator-lens/journal-tail.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { TriageActivityComponent } from './triage-activity.component';
+import { TriageEvidenceComponent } from './triage-evidence.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type {
   BotPanelView,
@@ -55,8 +56,9 @@ const PANEL_POLL_MS = 15_000;
     RouterLink,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
-    JournalTailComponent,
     PanelActionButtonComponent,
+    TriageActivityComponent,
+    TriageEvidenceComponent,
   ],
   templateUrl: './bot-triage-detail.component.html',
   styleUrl: './bot-triage-detail.component.scss',

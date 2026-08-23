@@ -1,0 +1,75 @@
+@use './triage-card';
+
+:host {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+// ── Market pulse ───────────────────────────────────────────────────────────
+
+.pulse__headline {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.pulse__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+
+  dt {
+    color: var(--text-subtle);
+    font-size: var(--fs-xxs);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+  }
+
+  dd {
+    margin: 0.15rem 0 0;
+    font-size: var(--fs-sm);
+
+    &[data-tone='warn'] { color: var(--warn); }
+    &[data-tone='positive'] { color: var(--bull); }
+  }
+}
+
+.pulse__next {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+
+  strong { color: var(--text-primary); }
+}
+
+// ── Decisions ──────────────────────────────────────────────────────────────
+
+.decisions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: flex;
+    gap: var(--space-3);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+  }
+
+  app-timestamp-display {
+    flex: 0 0 auto;
+    color: var(--text-subtle);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+  }
+
+  strong { color: var(--text-primary); }
+}
