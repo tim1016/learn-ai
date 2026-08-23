@@ -72,97 +72,6 @@
   color: var(--info);
 }
 
-// ── Disclosed detail ───────────────────────────────────────────────────────
-
-.posture-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
-
-  &[hidden] { display: none; }
-}
-
-.posture-fact {
-  min-width: 0;
-  padding: var(--space-2) var(--space-3);
-  border-right: 1px solid var(--border);
-
-  &:last-child { border-right: 0; }
-
-  strong,
-  > span:last-child,
-  app-timestamp-display {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  strong {
-    margin-top: var(--space-1);
-    font-size: var(--fs-sm);
-  }
-
-  > span:last-child,
-  app-timestamp-display {
-    margin-top: 0.125rem;
-    color: var(--text-secondary);
-    font-size: var(--fs-xs);
-  }
-}
-
-.posture-fact__label {
-  display: block;
-  color: var(--text-subtle);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
-}
-
-.posture-fact__move {
-  display: inline-block;
-  margin-top: var(--space-1);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent-text, var(--accent));
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semi);
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.channel-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  margin-top: var(--space-1);
-}
-
-.channel-state {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-}
-
-.channel-state__dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: var(--bull);
-}
-
-.channel-state--unhealthy {
-  color: var(--bear);
-
-  .channel-state__dot { background: var(--bear); }
-}
-
 // ── Alerts and non-happy states ────────────────────────────────────────────
 
 .custody-alert,
@@ -220,8 +129,5 @@
 }
 
 @media (max-width: 700px) {
-  .posture-grid { grid-template-columns: 1fr; }
-  .posture-fact { border-right: 0; border-bottom: 1px solid var(--border); }
-  .posture-fact:last-child { border-bottom: 0; }
   .custody-alert { flex-direction: column; gap: var(--space-1); }
 }

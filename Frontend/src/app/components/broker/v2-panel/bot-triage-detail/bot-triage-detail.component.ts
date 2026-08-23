@@ -3,19 +3,24 @@ import {
   Component,
   DestroyRef,
   computed,
+  effect,
   inject,
   input,
   output,
   resource,
-  signal,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { RouterLink } from '@angular/router';
 
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
+import {
+  ReceiptLabelPipe,
+  formatReceiptLabel,
+} from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { actionTone } from '../bot-detail-banner/lifecycle-action';
 import { TriageActivityComponent } from './triage-activity.component';
 import { TriageEvidenceComponent } from './triage-evidence.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
@@ -57,6 +62,7 @@ const PANEL_POLL_MS = 15_000;
     ReceiptLabelPipe,
     TimestampDisplayComponent,
     PanelActionButtonComponent,
+    AssetIdentityComponent,
     TriageActivityComponent,
     TriageEvidenceComponent,
   ],
@@ -69,7 +75,7 @@ export class BotTriageDetailComponent {
   readonly accountId = input.required<string>();
   readonly sid = input<string | null>(null);
   readonly pending = input(false);
-  /** Bump to refetch after an action lands; participates in the resource params. */
+  /** Bump to refetch after an action lands on the selected bot. */
   readonly refreshToken = input(0);
   readonly actionTriggered = output<PanelActionTrigger>();
 
@@ -77,9 +83,18 @@ export class BotTriageDetailComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly document = inject(DOCUMENT);
 
-  private readonly pollTick = signal(0);
-
-  /** `undefined` parks both resources until a bot is selected. */
+  /**
+   * Identity of the selected bot, and nothing else — `undefined` parks both
+   * resources until one is selected.
+   *
+   * Refreshes deliberately do NOT ride in here. Angular treats a params change
+   * as a *new* request: the resource drops its previous value, `view()` goes
+   * null, and the whole pane is replaced by the loading placeholder. That is
+   * correct when the selected bot changes and wrong for a refresh of the bot
+   * already on screen, which would otherwise flicker the pane — and tear down
+   * any open action confirmation — on every poll. Refreshes call `reload()`,
+   * which keeps the current value visible while the request is in flight.
+   */
   private readonly selection = computed(() => {
     const sid = this.sid();
     return sid === null
@@ -87,40 +102,14 @@ export class BotTriageDetailComponent {
       : { broker: this.broker(), accountId: this.accountId(), sid };
   });
 
-  /**
-   * The panel projection is a plain read, designed for a 5s poll cadence.
-   */
-  private readonly panelParams = computed(() => {
-    const selection = this.selection();
-    if (selection === undefined) return undefined;
-    return { ...selection, token: this.refreshToken() + this.pollTick() };
-  });
-
-  /**
-   * Evidence is deliberately NOT on the timer.
-   *
-   * `read_evidence_page` appends one `EvidenceAuditEntry` per call, stamped
-   * with `operator_identity` and `read_at_ms` — the record asserts that an
-   * operator read this bot's raw evidence at that instant. Nothing rotates or
-   * prunes `evidence_audit.jsonl`; `_append_audit_entry` is its only writer.
-   * A background poll would forge ~240 of those assertions an hour per
-   * selected bot and bury the genuine reads, so this reads only on a real
-   * operator action: selecting a bot, retrying, or acting on one.
-   */
-  private readonly journalParams = computed(() => {
-    const selection = this.selection();
-    if (selection === undefined) return undefined;
-    return { ...selection, token: this.refreshToken() };
-  });
-
   protected readonly panel = resource({
-    params: this.panelParams,
+    params: this.selection,
     loader: ({ params }) =>
       this.panelService.getPanel(params.broker, params.accountId, params.sid),
   });
 
   protected readonly journal = resource({
-    params: this.journalParams,
+    params: this.selection,
     loader: ({ params }) =>
       this.panelService.getEvidence(params.broker, params.accountId, params.sid, {
         pageSize: JOURNAL_PAGE_SIZE,
@@ -131,14 +120,31 @@ export class BotTriageDetailComponent {
     // The per-bot panel route streams its panel over SSE. This pane is a
     // summary, so it re-reads on a timer instead of standing up a second
     // subscription — enough that a diagnosis cannot sit stale while the rail
-    // beside it keeps updating. The panel projection alone: see
-    // `journalParams` for why evidence must never be polled.
+    // beside it keeps updating.
+    //
+    // The panel projection ALONE. Evidence is never polled:
+    // `read_evidence_page` appends one `EvidenceAuditEntry` per call, stamped
+    // with `operator_identity` and `read_at_ms` — the record asserts that an
+    // operator read this bot's raw evidence at that instant. Nothing rotates
+    // or prunes `evidence_audit.jsonl`; `_append_audit_entry` is its only
+    // writer. A background poll would forge ~240 of those assertions an hour
+    // per selected bot and bury the genuine reads, so evidence is read only on
+    // a real operator act: selecting a bot, retrying, or acting on one.
     const timer = setInterval(() => {
-      if (this.document.visibilityState === 'visible' && !this.panel.isLoading()) {
-        this.pollTick.update((tick) => tick + 1);
-      }
+      if (this.document.visibilityState === 'visible') this.panel.reload();
     }, PANEL_POLL_MS);
     this.destroyRef.onDestroy(() => clearInterval(timer));
+
+    // An action landed on the selected bot: re-read both projections. This is
+    // a genuine operator act, so the evidence read is legitimately audited.
+    let lastToken = this.refreshToken();
+    effect(() => {
+      const token = this.refreshToken();
+      if (token === lastToken) return;
+      lastToken = token;
+      this.panel.reload();
+      this.journal.reload();
+    });
   }
 
   /** Guards against rendering the previous bot's panel while the next one loads. */
@@ -167,14 +173,16 @@ export class BotTriageDetailComponent {
     return 'muted';
   });
 
-  private readonly gateTotal = computed(() => {
-    const view = this.view();
-    if (view === null) return 0;
-    return view.readiness_ready_count + view.readiness_blocked_count;
-  });
-
-  /** Blocked gates first — the pane exists to answer "why is this bot stuck?". */
-  protected readonly gates = computed<readonly ReadinessCheckView[]>(() =>
+  /**
+   * Per-command availability, unavailable first.
+   *
+   * These are NOT pass/fail admission gates: the backend emits one check per
+   * panel action with `ready = action.enabled`, and the lifecycle commands are
+   * mutually exclusive, so a healthy running bot legitimately reports Resume
+   * and Continue as unavailable. Unavailable-first answers the question the
+   * card exists for — "why is that command greyed out?".
+   */
+  protected readonly commands = computed<readonly ReadinessCheckView[]>(() =>
     [...(this.view()?.readiness_checks ?? [])].sort(
       (left, right) => Number(left.ready) - Number(right.ready),
     ),
@@ -189,11 +197,6 @@ export class BotTriageDetailComponent {
     const pulse = view.market_pulse;
 
     return [
-      {
-        label: 'Gates',
-        value: `${view.readiness_ready_count} / ${this.gateTotal()}`,
-        tone: view.readiness_blocked_count > 0 ? 'negative' : 'positive',
-      },
       { label: 'Exposure', value: exposure, tone: exposure === 'Flat' ? 'muted' : 'neutral' },
       {
         label: 'Realized',
@@ -208,11 +211,20 @@ export class BotTriageDetailComponent {
       },
       {
         label: 'Data feed',
-        value: pulse.feed_state,
+        value: formatReceiptLabel(pulse.feed_state),
         tone: pulse.attention_required ? 'warn' : 'positive',
       },
     ];
   });
+
+  /**
+   * A failed evidence read is not an empty journal. `JournalTailComponent`
+   * renders "No journal entries." for a null page, which would turn an
+   * unavailable custody read into an affirmative empty-audit claim.
+   */
+  protected readonly journalFailed = computed(() => this.journal.error() !== undefined);
+
+  protected readonly actionTone = actionTone;
 
   protected reload(): void {
     this.panel.reload();
@@ -224,7 +236,7 @@ export class BotTriageDetailComponent {
   }
 
   protected pnlTone(value: number | null | undefined): Tone {
-    if (value == null || value === 0) return 'muted';
+    if (value === null || value === undefined || value === 0) return 'muted';
     return value > 0 ? 'positive' : 'negative';
   }
 }

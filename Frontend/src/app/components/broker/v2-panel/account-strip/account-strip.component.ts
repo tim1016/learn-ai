@@ -7,24 +7,12 @@ import { accountOperatorPostureBlocker, movesForBlocker } from '../../../../api/
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtCurrency } from '../../format';
+import { AccountPostureDetailComponent } from './account-posture-detail.component';
+import type {
+  AccountStatusView,
+  ChannelPosture,
+} from './account-posture-detail.component';
 
-interface ChannelPosture {
-  readonly name: string;
-  readonly healthy: boolean;
-}
-
-interface AccountStatusView {
-  readonly headline: string;
-  readonly detail: string | null;
-  /**
-   * The fleet_roster projection's own navigate move, if it declared one —
-   * e.g. `fix_elsewhere`'s "Open Account Operator desk". Only `navigate`
-   * is self-dispatchable here: this strip has no recovery panel of its own
-   * to open a `confirm_in_form` anchor against, and no runbook viewer
-   * exists to route an `open_runbook` move to (2026-08-20 review).
-   */
-  readonly move: OperatorMove | null;
-}
 
 /**
  * Pure account-level posture for the bots fleet container. The single
@@ -44,7 +32,7 @@ interface AccountStatusView {
 @Component({
   selector: 'app-account-strip',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [ReceiptLabelPipe, TimestampDisplayComponent, AccountPostureDetailComponent],
   templateUrl: './account-strip.component.html',
   styleUrl: './account-strip.component.scss',
   host: { class: 'block' },

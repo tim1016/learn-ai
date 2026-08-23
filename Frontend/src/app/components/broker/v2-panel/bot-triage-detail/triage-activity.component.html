@@ -2,7 +2,10 @@
 
 <section class="card" aria-labelledby="triage-pulse-title">
   <header class="card__head">
-    <strong id="triage-pulse-title">{{ panelView.symbol }} · market context</strong>
+    <strong id="triage-pulse-title" class="pulse__title">
+      <app-asset-identity [symbol]="panelView.symbol" size="xs" />
+      <span>· market context</span>
+    </strong>
     <a [routerLink]="botLink()">Open chart</a>
   </header>
   <p class="pulse__headline">{{ panelView.market_pulse.headline }}</p>

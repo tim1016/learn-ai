@@ -1,0 +1,58 @@
+@let deployView = view();
+
+<aside class="deploy-admission" aria-labelledby="deploy-admission-title">
+  <header
+    class="deploy-admission__head"
+    [class.deploy-admission__head--blocked]="!deployView.eligibility.eligible"
+  >
+    <span class="deploy-admission__eyebrow" id="deploy-admission-title">Live admission</span>
+    @if (summary(); as readiness) {
+      <strong>{{ readiness.label }} · {{ readiness.counts }} gates</strong>
+    }
+    <p class="deploy-admission__headline">{{ deployView.eligibility.headline }}</p>
+    <p>{{ deployView.eligibility.explanation }}</p>
+    <small>
+      Account evaluated <app-timestamp-display [value]="deployView.evaluated_at_ms" mode="local" />.
+    </small>
+    @if (!deployView.eligibility.eligible) {
+      <!-- The account desk keeps its own `?lens=` split; only the deploy lens went away. -->
+      <a
+        class="deploy-admission__recovery"
+        [routerLink]="['/brokers', 'alpaca']"
+        [queryParams]="operatorLensQuery"
+      >Open account recovery</a>
+    }
+  </header>
+
+  <div class="deploy-admission__body">
+    @if (submitError(); as error) {
+      <section
+        class="deploy-error"
+        [class.deploy-error--unknown]="error.outcome === 'unknown'"
+        role="alert"
+      >
+        <span>{{ error.title }}</span>
+        <strong>{{ error.message }}</strong>
+        @if (error.explanation) { <p>{{ error.explanation }}</p> }
+        @if (error.nextAction) { <p>Next: {{ error.nextAction }}</p> }
+        @if (error.receiptId) { <code>{{ error.receiptId }}</code> }
+        @if (error.recordedAtMs) {
+          <small>Recorded <app-timestamp-display [value]="error.recordedAtMs" mode="local" /></small>
+        }
+      </section>
+    }
+
+    @if (admissionDecision(); as decision) {
+      <app-deploy-start-admission [decision]="decision" />
+    }
+
+    <!--
+      The design also puts an "On launch" consequence statement here ("binds X,
+      starts a paper runner, writes a launch receipt"). No field on
+      AlpacaPaperDeployView carries that copy — `action_plan_explanation` is the
+      strategy's action plan and already backs the symbol tooltip — so it is
+      left out rather than fabricated client-side.
+    -->
+    <app-deploy-readiness-section [checks]="deployView.readiness_checks" />
+  </div>
+</aside>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -24,7 +24,7 @@ function fakeGate(overrides: Partial<ReadinessCheckView> = {}): ReadinessCheckVi
 
 async function renderDetail(
   panel: BotPanelView | null = fakeBotPanelView(),
-  options: { sid?: string | null; panelError?: Error } = {},
+  options: { sid?: string | null; panelError?: Error; evidenceError?: Error } = {},
 ) {
   const sid = options.sid === undefined ? (panel?.strategy_instance_id ?? null) : options.sid;
 
@@ -32,7 +32,11 @@ async function renderDetail(
     getPanel: vi.fn(() =>
       options.panelError ? Promise.reject(options.panelError) : Promise.resolve(panel),
     ),
-    getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
+    getEvidence: vi.fn(() =>
+      options.evidenceError
+        ? Promise.reject(options.evidenceError)
+        : Promise.resolve({ entries: [], next_cursor: null }),
+    ),
   };
 
   const view = await render(BotTriageDetailComponent, {
@@ -82,16 +86,17 @@ describe('BotTriageDetailComponent', () => {
     expect(screen.getByText('+$402.85')).toBeTruthy();
   });
 
-  it('counts admission gates and puts blocked ones first', async () => {
+  it('puts unavailable commands first, with their reason', async () => {
     await renderDetail(
       fakeBotPanelView({
         readiness_ready_count: 1,
         readiness_blocked_count: 1,
         readiness_checks: [
-          fakeGate({ label: 'Account custody proven', ready: true }),
+          fakeGate({ label: 'Stop', ready: true, operation: 'stop' }),
           fakeGate({
-            label: 'Market data fresh',
+            label: 'Resume',
             ready: false,
+            operation: 'resume',
             explanation: 'Last SPY minute bar is 37s beyond tolerance.',
             cure: 'Fetch the current window from Data Lab, then retry.',
           }),
@@ -99,27 +104,62 @@ describe('BotTriageDetailComponent', () => {
       }),
     );
 
-    expect(await screen.findByText('1 / 2')).toBeTruthy();
-    expect(screen.getByText('Last SPY minute bar is 37s beyond tolerance.')).toBeTruthy();
+    expect(await screen.findByText('Last SPY minute bar is 37s beyond tolerance.')).toBeTruthy();
     expect(screen.getByText('Fetch the current window from Data Lab, then retry.')).toBeTruthy();
 
-    const gates = screen.getAllByRole('listitem').map((item) => item.textContent ?? '');
-    expect(gates[0]).toContain('Market data fresh');
+    // Scoped to the region: `recent_decisions` also renders list items.
+    const card = screen.getByRole('region', { name: 'Command availability' });
+    const rows = within(card)
+      .getAllByRole('listitem')
+      .map((item) => item.textContent ?? '');
+    expect(rows[0]).toContain('Resume');
   });
 
-  /** Blocked gates carry a cure; ready ones stay one-liners so the pane scans. */
-  it('keeps satisfied gates to a single line', async () => {
+  /**
+   * `readiness_checks` is one row per panel action with `ready = action.enabled`
+   * (`panel_projection_service._readiness_checks`), and the lifecycle commands
+   * are mutually exclusive — a healthy running bot always reports several as
+   * unavailable. Presenting that as a failed-gate count painted every normal
+   * bot negative, so no such tile exists.
+   */
+  it('does not report an unavailable command as a failed gate', async () => {
+    await renderDetail(
+      fakeBotPanelView({
+        mission_verdict: {
+          state: 'working',
+          label: 'Working',
+          explanation: 'Running under Account Clerk custody.',
+          next_action: null,
+          evaluated_at_ms: 1_700_000_001_000,
+        },
+        readiness_ready_count: 1,
+        readiness_blocked_count: 2,
+        readiness_checks: [
+          fakeGate({ label: 'Stop', ready: true, operation: 'stop' }),
+          fakeGate({ label: 'Resume', ready: false, operation: 'resume' }),
+          fakeGate({ label: 'Continue', ready: false, operation: 'continue' }),
+        ],
+      }),
+    );
+
+    expect(await screen.findByText('Working')).toBeTruthy();
+    expect(screen.queryByText('1 / 3')).toBeNull();
+    expect(screen.queryByText('Gates')).toBeNull();
+  });
+
+  /** Unavailable rows carry a reason; available ones stay one-liners. */
+  it('keeps available commands to a single line', async () => {
     await renderDetail(
       fakeBotPanelView({
         readiness_ready_count: 1,
         readiness_blocked_count: 0,
         readiness_checks: [
-          fakeGate({ label: 'Account custody proven', ready: true, cure: 'never shown' }),
+          fakeGate({ label: 'Stop', ready: true, operation: 'stop', cure: 'never shown' }),
         ],
       }),
     );
 
-    expect(await screen.findByText('Account custody proven')).toBeTruthy();
+    expect(await screen.findByText('Stop')).toBeTruthy();
     expect(screen.queryByText('The market-data window is current.')).toBeNull();
     expect(screen.queryByText('never shown')).toBeNull();
   });
@@ -201,6 +241,71 @@ describe('BotTriageDetailComponent', () => {
     await vi.waitFor(() =>
       expect(view.mockPanelService.getEvidence.mock.calls.length).toBeGreaterThan(before),
     );
+  });
+
+  /**
+   * A refresh is a `reload()`, not a params change. Angular treats a params
+   * change as a new request and drops the resource's prior value, which blanked
+   * `view()` and replaced the whole pane with the loading placeholder — a
+   * visible flicker every 15s that also tore down any open confirmation.
+   */
+  it('keeps the current panel on screen while a refresh is in flight', async () => {
+    vi.useFakeTimers();
+    try {
+      const panel = fakeBotPanelView();
+      // The second read never settles, so the assertions below observe the
+      // pane *during* the refresh — the only moment the bug was visible.
+      const getPanel = vi
+        .fn()
+        .mockImplementationOnce(() => Promise.resolve(panel))
+        .mockImplementation(() => new Promise<BotPanelView>(() => {}));
+
+      const { fixture } = await render(BotTriageDetailComponent, {
+        providers: [
+          provideRouter([]),
+          {
+            provide: BrokerV2PanelService,
+            useValue: {
+              getPanel,
+              getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
+            },
+          },
+        ],
+        componentInputs: {
+          broker: 'alpaca',
+          accountId: 'PA9',
+          sid: panel.strategy_instance_id,
+        },
+      });
+
+      await vi.waitFor(() => expect(getPanel).toHaveBeenCalledTimes(1));
+      fixture.detectChanges();
+      expect(screen.queryByText('Deployment Validation')).toBeTruthy();
+
+      await vi.advanceTimersByTimeAsync(16_000);
+      fixture.detectChanges();
+
+      expect(getPanel).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText(/^Loading /)).toBeNull();
+      expect(screen.queryByText('Deployment Validation')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * `JournalTailComponent` renders "No journal entries." for a null page, so
+   * passing a failed read through it would convert unavailable custody evidence
+   * into an affirmative empty-audit claim.
+   */
+  it('reports a failed custody read instead of an empty journal', async () => {
+    await renderDetail(fakeBotPanelView(), {
+      evidenceError: new Error('evidence store unavailable'),
+    });
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('could not be read');
+    expect(screen.queryByText('No journal entries.')).toBeNull();
   });
 
   /** A stale panel from the previously selected bot must never render as the new one. */

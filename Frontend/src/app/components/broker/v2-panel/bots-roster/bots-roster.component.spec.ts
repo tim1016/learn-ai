@@ -1,32 +1,9 @@
 import { render, screen, fireEvent } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import { fakeCatalogBot } from '../../../../testing/bot-panel-fixtures';
 import type { BotCatalogView } from '../lib/broker-v2-panel.types';
 import { BotsRosterComponent } from './bots-roster.component';
-
-function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
-  return {
-    strategy_instance_id: 'spy-01',
-    broker: 'alpaca',
-    account_id: 'PA9',
-    symbol: 'SPY',
-    phase: 'ON_DUTY',
-    desired_state: 'RUNNING',
-    running: true,
-    strategy_key: 'deployment_validation',
-    strategy_label: 'Deployment Validation',
-    mode: 'trade',
-    status_label: 'Working',
-    status_explanation: 'Running under Account Clerk custody.',
-    exposure: {},
-    fills_today: 1,
-    realized_pnl_today: 10,
-    open_pnl: null,
-    last_activity_at_ms: 1_700_000_000_000,
-    needs_attention: false,
-    ...overrides,
-  };
-}
 
 async function renderRail(
   bots: BotCatalogView[],
@@ -46,8 +23,8 @@ function searchBox(): HTMLElement {
 describe('BotsRosterComponent', () => {
   it('renders all bot rows', async () => {
     await renderRail([
-      fakeBot({ strategy_instance_id: 'spy-01', symbol: 'SPY' }),
-      fakeBot({ strategy_instance_id: 'qqq-01', symbol: 'QQQ' }),
+      fakeCatalogBot({ strategy_instance_id: 'spy-01', symbol: 'SPY' }),
+      fakeCatalogBot({ strategy_instance_id: 'qqq-01', symbol: 'QQQ' }),
     ]);
 
     expect(await screen.findByText('spy-01')).toBeTruthy();
@@ -56,8 +33,8 @@ describe('BotsRosterComponent', () => {
 
   it('filters by search term', async () => {
     await renderRail([
-      fakeBot({ strategy_instance_id: 'spy-01', symbol: 'SPY' }),
-      fakeBot({ strategy_instance_id: 'qqq-01', symbol: 'QQQ' }),
+      fakeCatalogBot({ strategy_instance_id: 'spy-01', symbol: 'SPY' }),
+      fakeCatalogBot({ strategy_instance_id: 'qqq-01', symbol: 'QQQ' }),
     ]);
 
     fireEvent.input(searchBox(), { target: { value: 'qqq' } });
@@ -68,8 +45,8 @@ describe('BotsRosterComponent', () => {
 
   it('filters by the human strategy label', async () => {
     await renderRail([
-      fakeBot({ strategy_instance_id: 'validation-01', strategy_label: 'Opening Range Breakout' }),
-      fakeBot({ strategy_instance_id: 'other-01', strategy_label: 'Moving Average Crossover' }),
+      fakeCatalogBot({ strategy_instance_id: 'validation-01', strategy_label: 'Opening Range Breakout' }),
+      fakeCatalogBot({ strategy_instance_id: 'other-01', strategy_label: 'Moving Average Crossover' }),
     ]);
 
     fireEvent.input(searchBox(), { target: { value: 'opening range breakout' } });
@@ -80,9 +57,9 @@ describe('BotsRosterComponent', () => {
 
   it('groups bots by attention, running, and stopped with whole-fleet counts', async () => {
     await renderRail([
-      fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
-      fakeBot({ strategy_instance_id: 'running-bot' }),
-      fakeBot({ strategy_instance_id: 'stopped-bot', running: false, phase: 'OFF_DUTY' }),
+      fakeCatalogBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
+      fakeCatalogBot({ strategy_instance_id: 'running-bot' }),
+      fakeCatalogBot({ strategy_instance_id: 'stopped-bot', running: false, phase: 'OFF_DUTY' }),
     ]);
 
     expect(await screen.findByRole('heading', { name: 'Needs attention · 1' })).toBeTruthy();
@@ -93,8 +70,8 @@ describe('BotsRosterComponent', () => {
 
   it('narrows to one group when its chip is pressed, and clears when pressed again', async () => {
     await renderRail([
-      fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
-      fakeBot({ strategy_instance_id: 'running-bot' }),
+      fakeCatalogBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
+      fakeCatalogBot({ strategy_instance_id: 'running-bot' }),
     ]);
 
     const chip = await screen.findByRole('button', { name: 'Needs attention 1' });
@@ -112,7 +89,7 @@ describe('BotsRosterComponent', () => {
 
   /** Retired bots have no chip in the design, but must not vanish from the fleet. */
   it('still groups retired bots, and only then offers their chip', async () => {
-    await renderRail([fakeBot({ strategy_instance_id: 'gone-bot', phase: 'RETIRED', running: false })]);
+    await renderRail([fakeCatalogBot({ strategy_instance_id: 'gone-bot', phase: 'RETIRED', running: false })]);
 
     expect(await screen.findByRole('heading', { name: 'Retired · 1' })).toBeTruthy();
     expect(screen.getByText('gone-bot')).toBeTruthy();
@@ -120,7 +97,7 @@ describe('BotsRosterComponent', () => {
   });
 
   it('omits the retired chip when no bot is retired', async () => {
-    await renderRail([fakeBot()]);
+    await renderRail([fakeCatalogBot({ strategy_instance_id: 'spy-01' })]);
 
     await screen.findByText('spy-01');
     expect(screen.queryByRole('button', { name: /Retired/ })).toBeNull();
@@ -132,14 +109,14 @@ describe('BotsRosterComponent', () => {
   });
 
   it('renders a dedicated empty-filter state', async () => {
-    await renderRail([fakeBot()]);
+    await renderRail([fakeCatalogBot()]);
     fireEvent.input(searchBox(), { target: { value: 'missing' } });
     expect(await screen.findByText(/No bots match this filter/i)).toBeTruthy();
   });
 
   it('carries the backend status label and derived facts on each row', async () => {
     await renderRail([
-      fakeBot({ status_label: 'Working', exposure: { SPY: 12 }, fills_today: 3 }),
+      fakeCatalogBot({ status_label: 'Working', exposure: { SPY: 12 }, fills_today: 3 }),
     ]);
 
     expect(await screen.findByText('Working · +12 SPY · 3 fills')).toBeTruthy();
@@ -147,8 +124,8 @@ describe('BotsRosterComponent', () => {
 
   it('orders attention bots ahead of running bots', async () => {
     await renderRail([
-      fakeBot({ strategy_instance_id: 'normal-bot' }),
-      fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
+      fakeCatalogBot({ strategy_instance_id: 'normal-bot' }),
+      fakeCatalogBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
     ]);
 
     await screen.findByText('urgent-bot');
@@ -159,7 +136,7 @@ describe('BotsRosterComponent', () => {
   it('marks the selected row and emits the sid on click', async () => {
     const botSelected = vi.fn();
     await render(BotsRosterComponent, {
-      componentInputs: { bots: [fakeBot({ strategy_instance_id: 'spy-01' })], selectedSid: 'spy-01' },
+      componentInputs: { bots: [fakeCatalogBot({ strategy_instance_id: 'spy-01' })], selectedSid: 'spy-01' },
       componentOutputs: { botSelected: { emit: botSelected } as never },
     });
 

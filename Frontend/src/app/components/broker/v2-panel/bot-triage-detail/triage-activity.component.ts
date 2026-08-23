@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { BotPanelView } from '../lib/broker-v2-panel.types';
@@ -17,8 +18,9 @@ import type { BotPanelView } from '../lib/broker-v2-panel.types';
 @Component({
   selector: 'app-triage-activity',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [RouterLink, ReceiptLabelPipe, TimestampDisplayComponent, AssetIdentityComponent],
   templateUrl: './triage-activity.component.html',
+  styleUrl: './triage-activity.component.scss',
   host: { class: 'triage-column' },
 })
 export class TriageActivityComponent {

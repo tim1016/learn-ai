@@ -7,7 +7,11 @@ import { MessageService } from 'primeng/api';
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../../testing/operator-blocker-fixtures';
-import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
+import {
+  fakeBotPanelView,
+  fakeCatalogBot,
+  fakePanelAction,
+} from '../../../../testing/bot-panel-fixtures';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView, PanelAction } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
@@ -45,29 +49,6 @@ function fakeClerkStatus(): ClerkStatus {
   };
 }
 
-function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
-  return {
-    strategy_instance_id: 'spy-momentum-01',
-    broker: 'alpaca',
-    account_id: 'PA9',
-    symbol: 'SPY',
-    phase: 'ON_DUTY',
-    desired_state: 'RUNNING',
-    running: true,
-    strategy_key: 'deployment_validation',
-    strategy_label: 'Deployment Validation',
-    mode: 'trade',
-    status_label: 'Working',
-    status_explanation: 'Running under Account Clerk custody.',
-    exposure: {},
-    fills_today: 2,
-    realized_pnl_today: 45.5,
-    open_pnl: null,
-    last_activity_at_ms: 1_700_000_000_000,
-    needs_attention: false,
-    ...overrides,
-  };
-}
 
 async function renderPage(
   bots: BotCatalogView[] = [],
@@ -94,7 +75,9 @@ async function renderPage(
         fakeBotPanelView({ strategy_instance_id: sid, actions: overrides.panelActions ?? [] }),
       ),
     ),
-    getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
+    getEvidence: vi.fn((_b: string, _a: string, _sid: string) =>
+      Promise.resolve({ entries: [], next_cursor: null }),
+    ),
     runBotAction: vi.fn(() =>
       Promise.resolve({
         action_id: 'resume',
@@ -135,14 +118,14 @@ describe('BotsListPageComponent', () => {
   });
 
   it('carries the backend status label on the rail row', async () => {
-    await renderPage([fakeBot({ status_label: 'Working', phase: 'ON_DUTY', running: true })]);
+    await renderPage([fakeCatalogBot({ status_label: 'Working', phase: 'ON_DUTY', running: true })]);
 
     expect(await screen.findByRole('heading', { name: 'Running · 1' })).toBeTruthy();
     expect(screen.getByText(/^Working ·/)).toBeTruthy();
   });
 
   it('names attention state on the rail row rather than relying on colour', async () => {
-    await renderPage([fakeBot({ needs_attention: true })]);
+    await renderPage([fakeCatalogBot({ needs_attention: true })]);
 
     expect(
       await screen.findByRole('button', { name: /spy-momentum-01, needs attention/ }),
@@ -150,7 +133,7 @@ describe('BotsListPageComponent', () => {
   });
 
   it('presents the selected bot\'s panel actions in the detail pane', async () => {
-    await renderPage([fakeBot()], { panelActions: [fakePanelAction('stop')] });
+    await renderPage([fakeCatalogBot()], { panelActions: [fakePanelAction('stop')] });
 
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeTruthy();
   });
@@ -163,8 +146,8 @@ describe('BotsListPageComponent', () => {
 
   it('auto-selects the most urgent bot so the detail pane is never blank', async () => {
     await renderPage([
-      fakeBot({ strategy_instance_id: 'calm-bot' }),
-      fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
+      fakeCatalogBot({ strategy_instance_id: 'calm-bot' }),
+      fakeCatalogBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
     ]);
 
     const selected = await screen.findByRole('button', { name: /urgent-bot/ });
@@ -178,7 +161,7 @@ describe('BotsListPageComponent', () => {
   });
 
   it('renders explicit refresh and snapshot freshness', async () => {
-    await renderPage([fakeBot()]);
+    await renderPage([fakeCatalogBot()]);
 
     expect(await screen.findByRole('button', { name: 'Refresh fleet' })).toBeTruthy();
     expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
@@ -213,7 +196,7 @@ describe('BotsListPageComponent', () => {
     const getCatalog = vi.fn((_broker: string, accountId: string) => {
       if (accountId === 'PA10') return pa10Catalog;
       return Promise.resolve([
-        fakeBot({
+        fakeCatalogBot({
           strategy_instance_id: 'pa9-bot',
           account_id: accountId,
         }),
@@ -229,7 +212,7 @@ describe('BotsListPageComponent', () => {
     expect(screen.queryByText('pa9-bot')).toBeNull();
 
     resolvePa10([
-      fakeBot({ strategy_instance_id: 'pa10-bot', account_id: 'PA10' }),
+      fakeCatalogBot({ strategy_instance_id: 'pa10-bot', account_id: 'PA10' }),
     ]);
     expect(await screen.findByText('pa10-bot')).toBeTruthy();
   });
@@ -240,7 +223,7 @@ describe('BotsListPageComponent', () => {
    * preflight read between the click and the POST.
    */
   it('submits the presented action without an extra panel preflight', async () => {
-    const view = await renderPage([fakeBot()], { panelActions: [fakePanelAction('stop')] });
+    const view = await renderPage([fakeCatalogBot()], { panelActions: [fakePanelAction('stop')] });
 
     const stop = await screen.findByRole('button', { name: 'Stop' });
     const readsBeforeClick = view.mockPanelService.getPanel.mock.calls.length;
@@ -260,8 +243,57 @@ describe('BotsListPageComponent', () => {
     );
   });
 
+  /**
+   * The detail pane's journal read is audit-logged: `read_evidence_page`
+   * appends an `EvidenceAuditEntry` naming the operator and the instant. The
+   * refresh token is page-global, so bumping it after the operator moved on
+   * would assert they read the *newly selected* bot's evidence, which they
+   * never did.
+   */
+  it('does not refresh another bot\'s audited evidence when an action settles', async () => {
+    let settleAction = (): void => undefined;
+    const view = await renderPage(
+      [
+        fakeCatalogBot({ strategy_instance_id: 'bot-a' }),
+        fakeCatalogBot({ strategy_instance_id: 'bot-b' }),
+      ],
+      { panelActions: [fakePanelAction('stop')] },
+    );
+    view.mockPanelService.runBotAction.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settleAction = () => resolve({ message: 'ok' } as never);
+        }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
+
+    // The operator moves on to another bot while that action is still running.
+    fireEvent.click(await screen.findByRole('button', { name: /bot-b/ }));
+    await vi.waitFor(() =>
+      expect(view.mockPanelService.getEvidence).toHaveBeenCalledWith(
+        'alpaca',
+        'PA9',
+        'bot-b',
+        expect.anything(),
+      ),
+    );
+    const readsOfB = view.mockPanelService.getEvidence.mock.calls.filter(
+      (call) => call[2] === 'bot-b',
+    ).length;
+
+    settleAction();
+    await vi.waitFor(() => expect(view.mockMessageService.add).toHaveBeenCalled());
+
+    const readsOfBAfter = view.mockPanelService.getEvidence.mock.calls.filter(
+      (call) => call[2] === 'bot-b',
+    ).length;
+    expect(readsOfBAfter).toBe(readsOfB);
+  });
+
   it('toasts the backend-authored reason and refreshes the fleet on a rejected action', async () => {
-    const view = await renderPage([fakeBot()], {
+    const view = await renderPage([fakeCatalogBot()], {
       panelActions: [fakePanelAction('resume')],
     });
     view.mockPanelService.runBotAction.mockRejectedValueOnce(

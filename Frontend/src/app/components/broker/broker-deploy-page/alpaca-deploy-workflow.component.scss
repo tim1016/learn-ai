@@ -24,6 +24,16 @@
   flex-direction: column;
 }
 
+// The form branch owns the only internal scroll containers, and the receipt
+// replaces it wholesale after a launch. The drawer body is `overflow: hidden`,
+// so without its own scroll owner a tall receipt clips its trailing
+// "Open bot control" link on a short viewport.
+app-deploy-launch-receipt {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .deploy-split {
   display: grid;
   flex: 1;
@@ -39,79 +49,6 @@
   overflow-y: auto;
   padding: var(--space-4);
   border-right: 1px solid var(--border);
-}
-
-// ── Admission column ───────────────────────────────────────────────────────
-
-.deploy-admission {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  background: var(--bg-canvas);
-}
-
-.deploy-admission__head {
-  flex: 0 0 auto;
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--border);
-
-  strong {
-    display: block;
-    margin-top: var(--space-1);
-    font-size: var(--fs-md);
-    color: var(--bull);
-  }
-
-  p {
-    margin: var(--space-1) 0 0;
-    color: var(--text-secondary);
-    font-size: var(--fs-xs);
-    line-height: 1.5;
-  }
-
-  p.deploy-admission__headline {
-    color: var(--text-primary);
-    font-weight: var(--fw-semi);
-  }
-
-  small {
-    display: block;
-    margin-top: var(--space-2);
-    color: var(--text-muted);
-    font-size: var(--fs-xs);
-  }
-}
-
-.deploy-admission__head--blocked strong { color: var(--warn); }
-
-.deploy-admission__eyebrow {
-  display: block;
-  color: var(--text-subtle);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-bold);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
-}
-
-.deploy-admission__recovery {
-  display: inline-block;
-  margin-top: var(--space-2);
-  color: var(--accent-text);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semi);
-  text-decoration: underline;
-
-  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-}
-
-.deploy-admission__body {
-  display: grid;
-  align-content: start;
-  gap: var(--space-3);
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-3);
 }
 
 // ── Launch footer ──────────────────────────────────────────────────────────
@@ -195,24 +132,7 @@
 
 // ── Non-happy states ───────────────────────────────────────────────────────
 
-.deploy-error {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--bear) 42%, var(--border));
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bear) 8%, var(--bg-surface));
-
-  p { margin: 0; color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.5; }
-}
-
-.deploy-error--unknown {
-  border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
-  background: color-mix(in srgb, var(--warn) 8%, var(--bg-surface));
-}
-
-.deploy-unavailable > span,
-.deploy-error > span {
+.deploy-unavailable > span {
   color: var(--text-subtle);
   font-size: var(--fs-xs);
   font-weight: var(--fw-semi);
@@ -284,7 +204,6 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .deploy-admission__body { overflow-y: visible; }
   .deploy-form { overflow-y: auto; }
   .deploy-footer__command { max-width: none; width: 100%; justify-items: stretch; }
   .deploy-footer__command small { text-align: left; }

@@ -156,6 +156,9 @@ class BotCatalogView(BaseModel):
     fills_today: int | None
     realized_pnl_today: float | None
     open_pnl: float | None
+    # The one day-P&L answer for this row, summed by the canonical
+    # ``gallery_hub.day_pnl`` authority rather than re-derived per surface.
+    day_pnl: float | None
     last_activity_at_ms: int | None
     needs_attention: bool
     # The one routine lifecycle command appropriate for this row. It carries

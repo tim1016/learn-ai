@@ -277,7 +277,14 @@ export class BotsListPageComponent {
         return next;
       });
       this.catalog.reload();
-      this.detailRefreshToken.update((token) => token + 1);
+      // Only refresh the detail pane when the acted-on bot is still the one on
+      // screen. The token is page-global, and the detail pane's journal read is
+      // audit-logged: bumping it after the operator has moved on to another bot
+      // would append an `EvidenceAuditEntry` asserting they read *that* bot's
+      // evidence, which they did not.
+      if (this.selectedSid() === sid) {
+        this.detailRefreshToken.update((token) => token + 1);
+      }
       this.measure('alpaca-bots-action-round-trip', startedAt);
     }
   }

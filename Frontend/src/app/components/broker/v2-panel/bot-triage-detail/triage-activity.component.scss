@@ -73,3 +73,9 @@
 
   strong { color: var(--text-primary); }
 }
+
+.pulse__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}

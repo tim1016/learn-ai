@@ -185,7 +185,7 @@ export class BotsRosterComponent {
         valueTone: exposure === 'Flat' ? 'muted' : 'neutral',
       };
     }
-    const total = this.totalPnl(bot);
+    const total = bot.day_pnl;
     if (total === null) {
       return { value: this.lastActivity(bot), valueTone: 'muted' };
     }
@@ -213,13 +213,6 @@ export class BotsRosterComponent {
     if (group === 'attention') return bot.phase === 'OFF_DUTY' ? 'bear' : 'warn';
     if (group === 'retired' || group === 'stopped') return 'muted';
     return bot.mode === 'dry_run' ? 'info' : 'bull';
-  }
-
-  private totalPnl(bot: BotCatalogView): number | null {
-    const realized = bot.realized_pnl_today;
-    const open = bot.open_pnl;
-    if (realized === null && open === null) return null;
-    return (realized ?? 0) + (open ?? 0);
   }
 
   private lastActivity(bot: BotCatalogView): RailValue {

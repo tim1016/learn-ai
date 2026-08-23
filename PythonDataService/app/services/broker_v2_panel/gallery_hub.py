@@ -49,6 +49,7 @@ from app.schemas.broker_v2_gallery import (
     GallerySymbolBars,
 )
 from app.schemas.broker_v2_panel import BotCatalogView, ChartBar, ChartFillMarker, PanelAction
+from app.services.broker_v2_panel.catalog_projection_service import day_pnl
 from app.services.broker_v2_panel.chart_projection_service import (
     aggregator_bars_to_chart_bars,
     live_window,
@@ -80,30 +81,6 @@ def _is_retired(row: BotCatalogView) -> bool:
     (spec §11): a Resume affordance on a retired tile would be a lie.
     """
     return getattr(row, "status_label", "") == "Retired"
-
-
-def _day_pnl(realized: float | None, open_pnl: float | None) -> float | None:
-    """Null-safe ``realized + open`` — the wall's one day-P&L authority.
-
-    Formula: day_pnl = realized_pnl_today + open_pnl, treating one absent
-      component as zero and returning None iff both are absent.
-    Reference: docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md
-      section 3.4; component economics follow docs/references/broker-v2-fifo-pnl.md.
-    Canonical implementation: this file.
-    Validated against:
-      tests/services/test_gallery_hub.py::test_day_pnl_null_safe_projection.
-
-    ``None`` only when both components are unavailable; a lone-present
-    component contributes its own value (mirrors the "show whichever side is
-    present" display intent this replaces the frontend's own summing of).
-    """
-    if realized is None and open_pnl is None:
-        return None
-    # Explicit None-checks, not `x or 0.0` — a legitimate 0.0 P&L is falsy
-    # too and must not be confused with "absent".
-    return (realized if realized is not None else 0.0) + (
-        open_pnl if open_pnl is not None else 0.0
-    )
 
 
 def _session_change_pct(bars: Sequence[ChartBar], *, open_ms: int) -> float | None:
@@ -386,8 +363,9 @@ class GalleryHub:
         yet available) rather than coercing it to a fabricated zero — the
         frontend renders the same dash the roster's ``fmtSignedCurrency``/
         ``fmtInteger`` already use for ``null``. ``day_pnl`` is the one
-        numerical answer derived here rather than left to the frontend to sum
-        (see ``_day_pnl``). ``session_change_pct`` is looked up by symbol in
+        numerical answer taken from its canonical authority
+        (``catalog_projection_service.day_pnl``) rather than left to any
+        surface to sum for itself. ``session_change_pct`` is looked up by symbol in
         ``session_change_pcts`` (see ``_fetch_session_change_pcts``) —
         ``None`` when that symbol has no session-scoped bar yet.
         """
@@ -403,7 +381,7 @@ class GalleryHub:
             needs_attention=getattr(row, "needs_attention", False),
             realized_pnl_today=realized,
             open_pnl=open_pnl,
-            day_pnl=_day_pnl(realized, open_pnl),
+            day_pnl=day_pnl(realized, open_pnl),
             session_change_pct=session_change_pcts.get(row.symbol),
             fills_today=getattr(row, "fills_today", None),
             last_bar_at_ms=self._latest_bar_end_ms.get(row.symbol),

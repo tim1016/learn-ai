@@ -16,7 +16,7 @@
       <div class="verdict__identity">
         <h2 id="triage-verdict-title">{{ panelView.strategy_label }}</h2>
         <code>{{ panelView.strategy_instance_id }}</code>
-        <span class="verdict__symbol">{{ panelView.symbol }}</span>
+        <app-asset-identity class="verdict__symbol" [symbol]="panelView.symbol" size="sm" />
         <span class="verdict__mode">{{ panelView.mode | receiptLabel }}</span>
       </div>
 
@@ -39,11 +39,11 @@
 
     @if (panelView.actions.length > 0) {
       <div class="verdict__actions">
-        @for (action of panelView.actions; track action.action_id; let first = $first) {
+        @for (action of panelView.actions; track action.action_id) {
           <app-panel-action-button
             [action]="action"
             [pending]="pending()"
-            [tone]="first ? 'primary' : 'neutral'"
+            [tone]="actionTone(action)"
             (triggered)="onActionTriggered($event)"
           />
         }
@@ -63,9 +63,11 @@
   <div class="triage-columns">
     <app-triage-activity [view]="panelView" [botLink]="botLink()" />
     <app-triage-evidence
-      [gates]="gates()"
+      [commands]="commands()"
       [journal]="journal.hasValue() ? journal.value() : null"
       [journalLoading]="journal.isLoading()"
+      [journalFailed]="journalFailed()"
+      (journalRetry)="reload()"
     />
   </div>
 } @else {

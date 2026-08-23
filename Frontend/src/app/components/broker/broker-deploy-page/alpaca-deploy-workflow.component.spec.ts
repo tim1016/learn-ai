@@ -801,6 +801,21 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.queryByText('now')).toBeNull();
   });
 
+  /**
+   * `deployView` is parameterized by `accountId` alone. A ticket edit clears the
+   * prior admission decision but never re-evaluates these account gates, so the
+   * admission timestamp must not be presented as a per-edit recheck.
+   */
+  it('does not claim admission is re-checked on every edit', async () => {
+    const { fixture } = await renderWorkflow();
+
+    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
+    fixture.detectChanges();
+
+    expect(screen.queryByText(/on every edit/)).toBeNull();
+    expect(screen.getByText(/Account evaluated/)).toBeTruthy();
+  });
+
   it('normalizes text fields before Signal Form validation and submission gating', async () => {
     const { fixture } = await renderWorkflow();
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;

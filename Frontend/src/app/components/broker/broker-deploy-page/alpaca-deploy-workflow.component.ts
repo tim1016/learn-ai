@@ -18,9 +18,8 @@ import {
   validate,
 } from '@angular/forms/signals';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute } from '@angular/router';
 
-import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import {
   BrokerV2PanelService,
   type DeployBotBody,
@@ -35,10 +34,12 @@ import {
   DeployExecutionSectionComponent,
   type DeploySizingPreset,
 } from './deploy-execution-section.component';
+import {
+  DeployAdmissionColumnComponent,
+  type DeployError,
+} from './deploy-admission-column.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
-import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
-import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
@@ -54,16 +55,6 @@ interface AlpacaDeployTicket {
   parameters: Record<string, unknown>;
 }
 
-interface DeployError {
-  outcome: 'conflict' | 'blocked' | 'unknown';
-  title: string;
-  message: string;
-  explanation: string | null;
-  nextAction: string | null;
-  receiptId: string | null;
-  recordedAtMs: number | null;
-}
-
 interface DeploySubmissionReadiness {
   canSubmit: boolean;
   guidance: string;
@@ -73,23 +64,17 @@ interface DeploySubmissionReadiness {
   selector: 'app-alpaca-deploy-workflow',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink,
-    TimestampDisplayComponent,
+    DeployAdmissionColumnComponent,
     DeployBindingStripComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployParametersSectionComponent,
-    DeployReadinessSectionComponent,
-    DeployStartAdmissionComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
   styleUrl: './alpaca-deploy-workflow.component.scss',
 })
 export class AlpacaDeployWorkflowComponent {
   readonly accountId = input.required<string>();
-
-  /** The account desk's operator lens, which this redesign leaves in place. */
-  protected readonly operatorLensQuery = { lens: 'operator' } as const;
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);

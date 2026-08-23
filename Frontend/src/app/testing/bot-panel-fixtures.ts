@@ -5,7 +5,11 @@
  * overrides only the fields its assertion is about.
  */
 
-import type { BotPanelView, PanelAction } from '../components/broker/v2-panel/lib/broker-v2-panel.types';
+import type {
+  BotCatalogView,
+  BotPanelView,
+  PanelAction,
+} from '../components/broker/v2-panel/lib/broker-v2-panel.types';
 
 const OBSERVED_AT_MS = 1_700_000_001_000;
 
@@ -120,6 +124,39 @@ export function fakePanelAction(
     confirmation: null,
     revision: 1,
     concurrency_token: `${actionId}-token`,
+    ...overrides,
+  };
+}
+
+/**
+ * One roster row. `day_pnl` mirrors the backend authority
+ * (`catalog_projection_service.day_pnl`): null-safe `realized + open`, null
+ * only when both components are absent. Override it directly to exercise a
+ * projection that disagrees with its components.
+ */
+export function fakeCatalogBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
+  const realized = overrides.realized_pnl_today ?? ('realized_pnl_today' in overrides ? null : 45.5);
+  const open = overrides.open_pnl ?? null;
+  return {
+    strategy_instance_id: 'spy-momentum-01',
+    broker: 'alpaca',
+    account_id: 'PA9',
+    symbol: 'SPY',
+    phase: 'ON_DUTY',
+    desired_state: 'RUNNING',
+    running: true,
+    strategy_key: 'deployment_validation',
+    strategy_label: 'Deployment Validation',
+    mode: 'trade',
+    status_label: 'Working',
+    status_explanation: 'Running under Account Clerk custody.',
+    exposure: {},
+    fills_today: 2,
+    realized_pnl_today: realized,
+    open_pnl: open,
+    day_pnl: realized === null && open === null ? null : (realized ?? 0) + (open ?? 0),
+    last_activity_at_ms: 1_700_000_000_000,
+    needs_attention: false,
     ...overrides,
   };
 }

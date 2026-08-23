@@ -57,9 +57,8 @@
 }
 
 .verdict__symbol {
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semi);
+  display: inline-flex;
+  align-items: center;
 }
 
 .verdict__mode {
@@ -165,6 +164,7 @@
   flex-direction: column;
   gap: var(--space-3);
 }
+
 // ── Placeholders ───────────────────────────────────────────────────────────
 
 .triage-placeholder {

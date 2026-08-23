@@ -1,25 +1,30 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 
 import { JournalTailComponent } from '../operator-lens/journal-tail.component';
 import type { EvidencePage, ReadinessCheckView } from '../lib/broker-v2-panel.types';
 
 /**
- * The proof half of the triage pane: the gates that admit the bot, and the
- * custody journal that records what it did.
+ * The proof half of the triage pane: which commands the bot will currently
+ * accept, and the custody journal that records what it did.
  *
- * Gates arrive blocked-first — the pane exists to answer "why is this bot
- * stuck?", so the blocked one carries its explanation and cure while satisfied
- * gates stay single lines.
+ * These are per-command availability rows, not pass/fail admission gates —
+ * the lifecycle commands are mutually exclusive, so a healthy running bot
+ * reports Resume and Continue as unavailable. Unavailable rows arrive first
+ * and carry their reason and cure; available ones stay single lines.
  */
 @Component({
   selector: 'app-triage-evidence',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [JournalTailComponent],
   templateUrl: './triage-evidence.component.html',
+  styleUrl: './triage-evidence.component.scss',
   host: { class: 'triage-column' },
 })
 export class TriageEvidenceComponent {
-  readonly gates = input.required<readonly ReadinessCheckView[]>();
+  readonly commands = input.required<readonly ReadinessCheckView[]>();
   readonly journal = input<EvidencePage | null>(null);
   readonly journalLoading = input(false);
+  /** A failed custody read must not be shown as a genuinely empty journal. */
+  readonly journalFailed = input(false);
+  readonly journalRetry = output();
 }
