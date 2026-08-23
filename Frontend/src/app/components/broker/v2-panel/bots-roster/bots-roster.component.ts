@@ -17,11 +17,11 @@ interface GroupDefinition {
  * shared display component (temporal-rigor.md); only non-temporal values are
  * pre-formatted strings.
  */
-export type RailValue =
+type RailValue =
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'time'; readonly atMs: number };
 
-export interface RailBotRow {
+interface RailBotRow {
   readonly bot: BotCatalogView;
   /** Right-aligned value: P&L, exposure, or last activity depending on group. */
   readonly value: RailValue;
@@ -36,7 +36,7 @@ export interface RailBotRow {
   readonly ariaLabel: string;
 }
 
-export interface RailGroupView {
+interface RailGroupView {
   readonly key: RailGroup;
   readonly label: string;
   readonly rows: readonly RailBotRow[];

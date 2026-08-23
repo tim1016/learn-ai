@@ -200,7 +200,6 @@ export class AlpacaDeployWorkflowComponent {
     const checks = view.readiness_checks;
     const ready = checks.filter((check) => check.ready).length;
     return {
-      eligible: view.eligibility.eligible,
       label: view.eligibility.eligible ? 'Ready' : 'Blocked',
       counts: `${ready} of ${checks.length}`,
     };

@@ -70,17 +70,17 @@
     line-height: 1.5;
   }
 
+  p.deploy-admission__headline {
+    color: var(--text-primary);
+    font-weight: var(--fw-semi);
+  }
+
   small {
     display: block;
     margin-top: var(--space-2);
     color: var(--text-muted);
     font-size: var(--fs-xs);
   }
-}
-
-.deploy-admission__headline {
-  color: var(--text-primary) !important;
-  font-weight: var(--fw-semi);
 }
 
 .deploy-admission__head--blocked strong { color: var(--warn); }

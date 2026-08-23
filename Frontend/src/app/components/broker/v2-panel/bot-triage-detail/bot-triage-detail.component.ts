@@ -1,12 +1,15 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   computed,
   inject,
   input,
   output,
   resource,
+  signal,
 } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
 import { RouterLink } from '@angular/router';
 
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
@@ -30,6 +33,7 @@ interface MetricTile {
 }
 
 const JOURNAL_PAGE_SIZE = 12;
+const PANEL_POLL_MS = 15_000;
 
 /**
  * Merged triage detail for the bot selected in the rail.
@@ -68,30 +72,50 @@ export class BotTriageDetailComponent {
   readonly actionTriggered = output<PanelActionTrigger>();
 
   private readonly panelService = inject(BrokerV2PanelService);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly document = inject(DOCUMENT);
+
+  private readonly pollTick = signal(0);
+
+  /** `undefined` parks both resources until a bot is selected. */
+  private readonly readParams = computed(() => {
+    const sid = this.sid();
+    return sid === null
+      ? undefined
+      : {
+          broker: this.broker(),
+          accountId: this.accountId(),
+          sid,
+          token: this.refreshToken() + this.pollTick(),
+        };
+  });
 
   protected readonly panel = resource({
-    params: () => {
-      const sid = this.sid();
-      return sid === null
-        ? undefined
-        : { broker: this.broker(), accountId: this.accountId(), sid, token: this.refreshToken() };
-    },
+    params: this.readParams,
     loader: ({ params }) =>
       this.panelService.getPanel(params.broker, params.accountId, params.sid),
   });
 
   protected readonly journal = resource({
-    params: () => {
-      const sid = this.sid();
-      return sid === null
-        ? undefined
-        : { broker: this.broker(), accountId: this.accountId(), sid, token: this.refreshToken() };
-    },
+    params: this.readParams,
     loader: ({ params }) =>
       this.panelService.getEvidence(params.broker, params.accountId, params.sid, {
         pageSize: JOURNAL_PAGE_SIZE,
       }),
   });
+
+  constructor() {
+    // The per-bot panel route streams its panel over SSE. This pane is a
+    // summary, so it re-reads on the account cadence instead of standing up a
+    // second subscription — enough that a diagnosis cannot sit stale while the
+    // rail beside it keeps updating.
+    const timer = setInterval(() => {
+      if (this.document.visibilityState === 'visible' && !this.panel.isLoading()) {
+        this.pollTick.update((tick) => tick + 1);
+      }
+    }, PANEL_POLL_MS);
+    this.destroyRef.onDestroy(() => clearInterval(timer));
+  }
 
   /** Guards against rendering the previous bot's panel while the next one loads. */
   protected readonly view = computed<BotPanelView | null>(() => {
@@ -119,7 +143,7 @@ export class BotTriageDetailComponent {
     return 'muted';
   });
 
-  protected readonly gateTotal = computed(() => {
+  private readonly gateTotal = computed(() => {
     const view = this.view();
     if (view === null) return 0;
     return view.readiness_ready_count + view.readiness_blocked_count;
