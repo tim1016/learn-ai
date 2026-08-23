@@ -91,7 +91,7 @@ def test_flag_events_ledger_path_resolves_outside_the_real_artifacts_tree() -> N
         / "flag_events.json"
     )
 
-    assert strategy_validation_manifest.DEFAULT_FLAG_EVENTS_PATH != real_default_path
+    assert real_default_path != strategy_validation_manifest.DEFAULT_FLAG_EVENTS_PATH
 
 
 def test_bare_load_strategy_validation_entries_call_tracks_the_patched_ledger_path(
