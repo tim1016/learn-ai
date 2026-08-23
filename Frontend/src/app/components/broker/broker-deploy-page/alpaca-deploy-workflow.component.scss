@@ -1,26 +1,138 @@
-:host { display: block; min-width: 0; }
+// Deploy workflow, laid out for the right-side drawer it now exclusively hosts:
+// a scrolling form column, an always-visible admission column, and a pinned
+// launch footer.
+
+:host {
+  display: block;
+  min-width: 0;
+  height: 100%;
+}
 
 .alpaca-deploy {
-  display: grid;
-  gap: var(--space-5);
-  min-height: 100%;
-  padding: var(--page-pad-y) var(--page-pad-x) var(--space-10);
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   color: var(--text-primary);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent) 5%, transparent) 1px, transparent 1px),
-    var(--bg-canvas);
-  background-size: 4rem 100%;
+  background: var(--bg-surface);
 }
 
-.deploy-head {
+.deploy-form {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+// The form branch owns the only internal scroll containers, and the receipt
+// replaces it wholesale after a launch. The drawer body is `overflow: hidden`,
+// so without its own scroll owner a tall receipt clips its trailing
+// "Open bot control" link on a short viewport.
+app-deploy-launch-receipt {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.deploy-split {
   display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: end;
-  gap: var(--space-6);
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 20rem;
 }
 
-.deploy-unavailable > span,
-.deploy-error > span {
+.deploy-split__form {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  border-right: 1px solid var(--border);
+}
+
+// ── Launch footer ──────────────────────────────────────────────────────────
+
+.deploy-footer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+}
+
+.deploy-footer__summary {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+
+  div { min-width: 0; }
+
+  dt {
+    color: var(--text-subtle);
+    font-size: var(--fs-xxs);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0.1rem 0 0;
+    overflow: hidden;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.deploy-footer__command {
+  display: grid;
+  flex: 0 0 auto;
+  gap: var(--space-1);
+  justify-items: end;
+  max-width: 22rem;
+
+  button {
+    min-height: 2.75rem;
+    padding: 0.7rem 1.1rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    background: var(--accent);
+    color: var(--text-on-accent);
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    cursor: pointer;
+
+    &:hover:not(:disabled) { background: var(--accent-hover); }
+    &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+
+    &:disabled {
+      border-color: var(--border-strong);
+      background: var(--bg-surface);
+      color: var(--text-muted);
+      cursor: not-allowed;
+    }
+  }
+
+  small {
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    text-align: right;
+  }
+}
+
+// ── Non-happy states ───────────────────────────────────────────────────────
+
+.deploy-unavailable > span {
   color: var(--text-subtle);
   font-size: var(--fs-xs);
   font-weight: var(--fw-semi);
@@ -28,94 +140,71 @@
   text-transform: uppercase;
 }
 
-h1 { margin: var(--space-1) 0; font-size: clamp(2rem, 3vw, 3rem); letter-spacing: -0.04em; line-height: 1; }
-.deploy-head p,
-.deploy-unavailable p,
-.deploy-error p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
-.deploy-head nav { display: flex; gap: var(--space-2); }
-.deploy-head a { padding: 0.65rem 0.85rem; color: var(--accent-text); text-decoration: none; border: 1px solid var(--border); border-radius: var(--radius); }
-.deploy-head a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-.deploy-context {
-  background: color-mix(in srgb, var(--bull) 6%, var(--bg-surface));
-  border-color: color-mix(in srgb, var(--bull) 34%, var(--border));
-  border-left-color: var(--bull);
-}
-
-.deploy-context--blocked {
-  background: color-mix(in srgb, var(--bear) 6%, var(--bg-surface));
-  border-color: color-mix(in srgb, var(--bear) 34%, var(--border));
-  border-left-color: var(--bear);
-}
-
-.lens-toggle {
-  display: inline-flex;
-  justify-self: start;
-  padding: var(--space-1);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.lens-toggle button { min-width: 7rem; padding: 0.55rem 1rem; color: var(--text-subtle); font-weight: var(--fw-semi); background: transparent; border: 0; border-radius: var(--radius-sm); cursor: pointer; }
-.lens-toggle button:hover { color: var(--text-primary); background: var(--bg-hover); }
-.lens-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.lens-toggle__tab--active { color: var(--text-primary) !important; background: var(--accent-soft) !important; box-shadow: inset 0 -2px var(--accent); }
-
-.deploy-form,
-.deploy-layout,
-.deploy-layout__main,
-.deploy-layout__review { display: grid; min-width: 0; }
-.deploy-form { gap: var(--space-5); }
-.deploy-layout { grid-template-columns: minmax(0, 1fr) minmax(16rem, 18rem); align-items: start; gap: var(--space-5); }
-.deploy-layout__main,
-.deploy-layout__review { gap: var(--space-5); }
-.deploy-layout__review { position: sticky; top: var(--space-4); }
-
-.launch-command {
+.deploy-unavailable {
   display: grid;
   gap: var(--space-3);
-  padding: var(--space-4);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-light);
+  margin: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  background: var(--bg-surface);
+
+  h3 { margin: 0; font-size: var(--fs-md); }
+  p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
+
+  button {
+    justify-self: start;
+    min-height: 2.5rem;
+    padding: 0.6rem 1rem;
+    border: 0;
+    border-radius: var(--radius);
+    background: var(--accent);
+    color: var(--text-on-accent);
+    font-weight: var(--fw-semi);
+    cursor: pointer;
+
+    &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+  }
 }
 
-.launch-command dl { display: grid; gap: var(--space-2); margin: 0; }
-.launch-command dl div { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); }
-.launch-command dt { color: var(--text-subtle); font-size: var(--fs-xs); text-transform: uppercase; }
-.launch-command dd { min-width: 0; margin: 0; overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.launch-command button,
-.deploy-unavailable button { min-height: 3rem; padding: 0.75rem 1rem; color: var(--text-on-accent); font-weight: var(--fw-bold); background: var(--accent); border: 0; border-radius: var(--radius); cursor: pointer; }
-.launch-command button:disabled { color: var(--text-muted); cursor: not-allowed; background: var(--bg-elevated); border: 1px solid var(--border); }
-.launch-command button:focus-visible,
-.deploy-unavailable button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
-.launch-command small { color: var(--text-secondary); line-height: 1.45; }
+.deploy-loading {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+  margin: var(--space-4);
+  padding: var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
 
-.deploy-error { display: grid; gap: var(--space-2); padding: var(--space-4); background: color-mix(in srgb, var(--bear) 8%, var(--bg-surface)); border: 1px solid color-mix(in srgb, var(--bear) 42%, var(--border)); border-radius: var(--radius); }
-.deploy-error--unknown { background: color-mix(in srgb, var(--warn) 8%, var(--bg-surface)); border-color: color-mix(in srgb, var(--warn) 42%, var(--border)); }
+  span {
+    height: 4rem;
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    animation: pulse 1.4s ease-in-out infinite alternate;
+  }
 
-.deploy-unavailable { display: grid; gap: var(--space-4); padding: var(--space-6); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
-.deploy-unavailable h2 { margin: 0; }
-.deploy-unavailable button { justify-self: start; }
-
-.deploy-loading { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); padding: var(--space-8); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
-.deploy-loading span { height: 5rem; background: var(--bg-elevated); border-radius: var(--radius); animation: pulse 1.4s ease-in-out infinite alternate; }
-.deploy-loading strong { grid-column: 1 / -1; color: var(--text-secondary); }
+  strong { grid-column: 1 / -1; color: var(--text-secondary); }
+}
 
 @keyframes pulse { to { opacity: 0.45; } }
 
-@media (prefers-reduced-motion: reduce) { .deploy-loading span { animation: none; } }
-
-@media (max-width: 1080px) {
-  .deploy-layout { grid-template-columns: 1fr; }
-  .deploy-layout__review { position: static; }
+@media (prefers-reduced-motion: reduce) {
+  .deploy-loading span { animation: none; }
 }
 
-@media (max-width: 700px) {
-  .alpaca-deploy { padding: var(--space-5) var(--space-3); background-size: 2rem 100%; }
-  .deploy-head { grid-template-columns: 1fr; }
-  .deploy-head nav { align-items: stretch; flex-direction: column; }
-  .lens-toggle { display: grid; grid-template-columns: 1fr 1fr; justify-self: stretch; }
+// The drawer narrows on small viewports: the admission column stops being a
+// column and stacks under the form, but never collapses behind a toggle.
+@media (max-width: 900px) {
+  .deploy-split { grid-template-columns: 1fr; }
+
+  .deploy-split__form {
+    overflow-y: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .deploy-form { overflow-y: auto; }
+  .deploy-footer__command { max-width: none; width: 100%; justify-items: stretch; }
+  .deploy-footer__command small { text-align: left; }
 }

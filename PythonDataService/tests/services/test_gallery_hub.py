@@ -10,7 +10,7 @@ from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
 from app.broker.v2panel.vocabulary import ActionId
 from app.schemas.broker_v2_panel import PanelAction
-from app.services.broker_v2_panel import gallery_hub
+from app.services.broker_v2_panel import catalog_projection_service, gallery_hub
 from app.services.broker_v2_panel.chart_projection_service import markers_in_window
 from app.services.broker_v2_panel.gallery_hub import GalleryHub, shown_symbols
 
@@ -148,7 +148,7 @@ def test_day_pnl_null_safe_projection(
     open_pnl: float | None,
     expected: float | None,
 ) -> None:
-    result = gallery_hub._day_pnl(realized, open_pnl)
+    result = catalog_projection_service.day_pnl(realized, open_pnl)
 
     if expected is None:
         assert result is None

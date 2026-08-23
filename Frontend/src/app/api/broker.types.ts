@@ -8147,6 +8147,8 @@ export interface components {
             account_id: string;
             /** Broker */
             broker: string;
+            /** Day Pnl */
+            day_pnl: number | null;
             /**
              * Desired State
              * @enum {string}

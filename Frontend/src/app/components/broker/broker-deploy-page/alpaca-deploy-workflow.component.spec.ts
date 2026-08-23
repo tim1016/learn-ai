@@ -282,14 +282,12 @@ describe('AlpacaDeployWorkflowComponent', () => {
     })).toBeTruthy();
   });
 
-  it('keeps ready gates collapsed until the operator opens one', async () => {
-    const { fixture } = await renderWorkflow();
-    const router = fixture.debugElement.injector.get(Router);
+  it('shows admission gates without a lens toggle, ready ones collapsed', async () => {
+    await renderWorkflow();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
 
-    expect(screen.getByRole('heading', { name: 'Admission authority' })).toBeTruthy();
-    expect(screen.queryByText('Every deployment gate')).toBeNull();
     const readyHeader = screen.getByRole('button', { name: /Strategy validation/ });
     expect(readyHeader.getAttribute('aria-expanded')).toBe('false');
 
@@ -297,7 +295,15 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect(readyHeader.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('Accepted at the current manifest revision.')).toBeTruthy();
-    await vi.waitFor(() => expect(router.url).toContain('deployLens=operator'));
+  });
+
+  it('never writes a deployLens query param', async () => {
+    const { fixture } = await renderWorkflow();
+    const router = fixture.debugElement.injector.get(Router);
+
+    fireEvent.click(screen.getByRole('button', { name: /Strategy validation/ }));
+
+    expect(router.url).not.toContain('deployLens');
   });
 
   it('opens the failed admission gate and folds the blocker into the account banner', async () => {
@@ -322,9 +328,9 @@ describe('AlpacaDeployWorkflowComponent', () => {
     };
     await renderWorkflow(mockService(RECEIPT, blockedView));
 
-    expect(screen.getByLabelText('Deployment blocked')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Review blocker' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    // The blocked verdict now headlines the always-visible admission column.
+    expect(screen.getByText('Blocked · 1 of 2 gates')).toBeTruthy();
+    expect(screen.getByText('Market Data is unhealthy, Execution is healthy.')).toBeTruthy();
 
     const readyHeader = screen.getByRole('button', { name: /Strategy validation/ });
     const blockedHeader = screen.getByRole('button', { name: /Broker channel/ });
@@ -332,20 +338,6 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(blockedHeader.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByRole('link', { name: 'Open account recovery' }).getAttribute('href'))
       .toBe('/brokers/alpaca?lens=operator');
-    expect(screen.getByRole('link', { name: 'Review bot fleet' }).getAttribute('href'))
-      .toBe('/brokers/alpaca/bots');
-  });
-
-  it('moves lens focus with the tablist keyboard controls', async () => {
-    await renderWorkflow();
-    const traderTab = screen.getByRole('tab', { name: 'Trader' });
-    const operatorTab = screen.getByRole('tab', { name: 'Operator' });
-
-    traderTab.focus();
-    fireEvent.keyDown(traderTab, { key: 'ArrowRight' });
-
-    expect(document.activeElement).toBe(operatorTab);
-    expect(operatorTab.getAttribute('aria-selected')).toBe('true');
   });
 
   it('changes the validated strategy and submits the selected strategy key', async () => {
@@ -545,9 +537,9 @@ describe('AlpacaDeployWorkflowComponent', () => {
       description: BLOCKED_EXPLANATION,
     });
     expect(deployButton.disabled).toBe(true);
-    const launchCommand = deployButton.closest<HTMLElement>('.launch-command');
-    if (launchCommand === null) throw new Error('launch-command container not found');
-    expect(within(launchCommand).getByText('Blocked')).toBeTruthy();
+    const launchFooter = deployButton.closest<HTMLElement>('.deploy-footer');
+    if (launchFooter === null) throw new Error('deploy-footer container not found');
+    expect(within(launchFooter).getByText('Blocked')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('radio', { name: /Dry Run/i }));
 
@@ -700,7 +692,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
     expect(body.execution_mode).toBe('dry_run');
     expect(body.carryover_policy).toBe('FORBID');
-    expect(screen.getByText('Dry Run')).toBeTruthy();
+    expect(screen.getByText(/^Dry Run · /)).toBeTruthy();
   });
 
   it('renders a backend-authored Start refusal without dispatching deployment', async () => {
@@ -807,6 +799,21 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await renderWorkflow();
 
     expect(screen.queryByText('now')).toBeNull();
+  });
+
+  /**
+   * `deployView` is parameterized by `accountId` alone. A ticket edit clears the
+   * prior admission decision but never re-evaluates these account gates, so the
+   * admission timestamp must not be presented as a per-edit recheck.
+   */
+  it('does not claim admission is re-checked on every edit', async () => {
+    const { fixture } = await renderWorkflow();
+
+    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
+    fixture.detectChanges();
+
+    expect(screen.queryByText(/on every edit/)).toBeNull();
+    expect(screen.getByText(/Account evaluated/)).toBeTruthy();
   });
 
   it('normalizes text fields before Signal Form validation and submission gating', async () => {

@@ -45,6 +45,7 @@ export type BotHealthCard = components['schemas']['BotHealthCard'];
 export type ChannelHealthView = components['schemas']['ChannelHealthView'];
 export type ClerkCard = components['schemas']['ClerkCard'];
 export type StationView = components['schemas']['StationView'];
+export type ReadinessCheckView = components['schemas']['ReadinessCheckView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
 export type PrimaryActionByLens = components['schemas']['PrimaryActionByLens'];

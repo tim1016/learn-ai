@@ -1,0 +1,58 @@
+@let snap = account();
+
+<div class="posture-grid">
+  <div class="posture-fact">
+    <span class="posture-fact__label">Broker</span>
+    <strong>{{ snap.account_status | receiptLabel }}</strong>
+  </div>
+
+  <div class="posture-fact">
+    <span class="posture-fact__label">Cash</span>
+    <strong>{{ fmtCurrency(snap.cash) }}</strong>
+  </div>
+
+  <div class="posture-fact">
+    <span class="posture-fact__label">Account status</span>
+    @if (clerkStatus(); as clerk) {
+      @if (accountStatus(); as status) {
+        <strong>{{ status.headline }}</strong>
+        @if (status.detail) {
+          <span>{{ status.detail }}</span>
+        }
+        @if (status.move; as move) {
+          <button type="button" class="posture-fact__move" (click)="moveRequested.emit(move)">
+            {{ move.label }}
+          </button>
+        }
+      }
+      <app-timestamp-display [value]="clerk.observed_at_ms" mode="local" />
+    } @else {
+      <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Loading' }}</strong>
+      <span>Custody not observed</span>
+    }
+  </div>
+
+  <div class="posture-fact posture-fact--channels">
+    <span class="posture-fact__label">Channels</span>
+    @if (channels().length > 0) {
+      <div class="channel-list">
+        @for (channel of channels(); track channel.name) {
+          <span class="channel-state" [class.channel-state--unhealthy]="!channel.healthy">
+            <span class="channel-state__dot" aria-hidden="true"></span>
+            {{ channel.name | receiptLabel }} {{ channel.healthy ? 'healthy' : 'unhealthy' }}
+          </span>
+        }
+      </div>
+    } @else {
+      <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Not installed' }}</strong>
+    }
+  </div>
+
+  <div class="posture-fact">
+    <span class="posture-fact__label">Account observed</span>
+    <strong>
+      {{ refreshing() ? 'Refreshing' : 'Current' }}
+      <app-timestamp-display [value]="snap.observed_at_ms" mode="local" />
+    </strong>
+  </div>
+</div>

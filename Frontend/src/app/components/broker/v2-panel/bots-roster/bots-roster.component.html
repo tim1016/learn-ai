@@ -1,146 +1,83 @@
-<div class="roster-toolbar">
-  <label class="roster-search">
-    <span class="sr-only">Search bots</span>
-    <span class="roster-search__icon" aria-hidden="true">⌕</span>
+<div class="rail-controls">
+  <label class="rail-search">
+    <span class="sr-only">Filter bots</span>
+    <span class="rail-search__icon" aria-hidden="true">⌕</span>
     <input
       type="search"
-      placeholder="Bot, symbol, or strategy"
+      [attr.placeholder]="'Filter ' + bots().length + ' bots'"
       [value]="searchTerm()"
       (input)="onSearch($event)"
-      aria-label="Search bots"
+      aria-label="Filter bots by name, symbol, or strategy"
     />
   </label>
 
-  <div class="roster-filters" role="group" aria-label="Filter bots by state">
-    @for (option of statusOptions; track option.value) {
+  <div class="rail-chips" role="group" aria-label="Filter bots by state">
+    @for (chip of counts(); track chip.key) {
       <button
         type="button"
-        [class.roster-filter--active]="statusFilter() === option.value"
-        [attr.aria-pressed]="statusFilter() === option.value"
-        (click)="selectFilter(option.value)"
+        class="rail-chip"
+        [attr.data-group]="chip.key"
+        [class.rail-chip--on]="groupFilter() === chip.key"
+        [attr.aria-pressed]="groupFilter() === chip.key"
+        (click)="toggleGroup(chip.key)"
       >
-        {{ option.label }}
+        {{ chip.label }} {{ chip.count }}
       </button>
     }
   </div>
-
-  <span class="roster-count" role="status">
-    {{ filtered().length }} of {{ bots().length }} bots
-  </span>
 </div>
 
-<div class="roster-table-wrap" role="region" aria-label="Alpaca bots roster" tabindex="0">
-  @if (filtered().length === 0) {
-    <div class="roster-empty" role="status">
+<div class="rail-list" role="region" aria-label="Alpaca bots roster" tabindex="0">
+  @if (visibleCount() === 0) {
+    <div class="rail-empty" role="status">
       <strong>{{ bots().length === 0 ? 'Fleet is empty' : 'Nothing in this view' }}</strong>
       <span>{{ emptyMessage() }}</span>
     </div>
   } @else {
-    <table class="roster-table">
-      <colgroup>
-        <col class="col-bot" />
-        <col class="col-state" />
-        <col class="col-exposure" />
-        <col class="col-today" />
-        <col class="col-activity" />
-        <col class="col-action" />
-      </colgroup>
-      <thead>
-        <tr>
-          <th scope="col">Bot</th>
-          <th scope="col">State</th>
-          <th scope="col">Exposure</th>
-          <th scope="col">Today</th>
-          <th scope="col">Last activity</th>
-          <th scope="col">Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (bot of filtered(); track bot.strategy_instance_id) {
-          @let exposure = exposureText(bot);
-          <tr [class.roster-row--attention]="bot.needs_attention">
-            <td data-label="Bot">
-              <a class="bot-identity" [routerLink]="botLink(bot)">
-                <app-asset-identity [symbol]="bot.symbol" size="sm" />
-                <span class="bot-identity__sid">{{ bot.strategy_instance_id }}</span>
-                <span>{{ bot.strategy_label }} · {{ bot.mode | receiptLabel }}</span>
-              </a>
-            </td>
-            <td data-label="State">
-              <app-bot-status-chip
-                [statusLabel]="bot.status_label"
-                [needsAttention]="bot.needs_attention"
-              />
-              <span class="state-explanation">{{ bot.status_explanation }}</span>
-            </td>
-            <td data-label="Exposure">
-              <strong class="exposure" [class.exposure--flat]="exposure === 'Flat'">
-                {{ exposure }}
-              </strong>
-              <span>Clerk attributed</span>
-            </td>
-            <td data-label="Today">
-              @let realizedTone = pnlTone(bot.realized_pnl_today);
-              @let openTone = pnlTone(bot.open_pnl);
-              <div class="today-metrics">
-                <span>
-                  <small>Realized</small>
-                  <strong
-                    [class.pnl--positive]="realizedTone === 'positive'"
-                    [class.pnl--negative]="realizedTone === 'negative'"
-                    [class.pnl--neutral]="realizedTone === 'neutral'"
-                  >
-                    {{ fmtSignedCurrency(bot.realized_pnl_today) }}
-                  </strong>
+    @for (group of groups(); track group.key) {
+      <h2 class="rail-group" [attr.data-group]="group.key">
+        {{ group.label }} · {{ group.rows.length }}
+      </h2>
+      <ul class="rail-group__rows">
+        @for (row of group.rows; track row.bot.strategy_instance_id) {
+          <li>
+            <button
+              type="button"
+              class="rail-row"
+              [class.rail-row--selected]="selectedSid() === row.bot.strategy_instance_id"
+              [attr.aria-label]="row.ariaLabel"
+              [attr.aria-current]="selectedSid() === row.bot.strategy_instance_id ? 'true' : null"
+              (click)="select(row.bot)"
+            >
+              <span class="rail-row__dot" [attr.data-tone]="row.dotTone" aria-hidden="true"></span>
+              <span class="rail-row__body">
+                <span class="rail-row__head">
+                  <span class="rail-row__sid">{{ row.bot.strategy_instance_id }}</span>
+                  <span class="rail-row__value" [attr.data-tone]="row.valueTone">
+                    @if (row.value.kind === 'time') {
+                      <app-timestamp-display [value]="row.value.atMs" mode="local" />
+                    } @else {
+                      {{ row.value.text }}
+                    }
+                  </span>
                 </span>
-                <span>
-                  <small>Open</small>
-                  <strong
-                    [class.pnl--positive]="openTone === 'positive'"
-                    [class.pnl--negative]="openTone === 'negative'"
-                    [class.pnl--neutral]="openTone === 'neutral'"
-                  >
-                    {{ fmtSignedCurrency(bot.open_pnl) }}
-                  </strong>
-                </span>
-                <span><small>Fills</small><strong>{{ fmtInteger(bot.fills_today) }}</strong></span>
-              </div>
-            </td>
-            <td data-label="Last activity">
-              @if (bot.last_activity_at_ms) {
-                <app-timestamp-display [value]="bot.last_activity_at_ms" mode="local" />
-              } @else {
-                <strong>Not yet active</strong>
-              }
-            </td>
-            <td data-label="Action" class="roster-action">
-              @if (bot.row_action; as action) {
-                <button
-                  type="button"
-                  [disabled]="isPending(bot) || !action.enabled"
-                  [attr.aria-busy]="isPending(bot)"
-                  [attr.aria-label]="action.label + ' ' + bot.strategy_instance_id"
-                  [attr.title]="action.explanation"
-                  (click)="onAction(bot)"
-                >
-                  @if (isPending(bot)) {
-                    {{ action.action_id === 'resume' ? 'Resuming…' : 'Stopping…' }}
-                  } @else {
-                    {{ action.label }}
-                  }
-                </button>
-              } @else {
-                <a [routerLink]="botLink(bot)">Review</a>
-              }
-            </td>
-          </tr>
+                <span class="rail-row__detail">{{ row.detail }}</span>
+              </span>
+            </button>
+          </li>
         }
-      </tbody>
-    </table>
+      </ul>
+    }
   }
 </div>
 
-<div class="roster-footer" role="note">
-  <span>Attention-first ordering</span>
+<div class="rail-footer" role="note">
+  <span>
+    Attention-first ordering · {{ visibleCount() }} of {{ bots().length }} shown
+    @if (updatedAtMs(); as updatedAt) {
+      · Updated <app-timestamp-display [value]="updatedAt" mode="local" />
+    }
+  </span>
+  <!-- The rail shows P&L, so the disclaimer that qualifies it travels with it. -->
   <span>Fees not reported — P&amp;L excludes transaction costs.</span>
 </div>

@@ -1,0 +1,64 @@
+@let panelView = view();
+
+<section class="card" aria-labelledby="triage-pulse-title">
+  <header class="card__head">
+    <strong id="triage-pulse-title" class="pulse__title">
+      <app-asset-identity [symbol]="panelView.symbol" size="xs" />
+      <span>· market context</span>
+    </strong>
+    <a [routerLink]="botLink()">Open chart</a>
+  </header>
+  <p class="pulse__headline">{{ panelView.market_pulse.headline }}</p>
+  <dl class="pulse__facts">
+    <div>
+      <dt>Feed</dt>
+      <dd [attr.data-tone]="panelView.market_pulse.attention_required ? 'warn' : 'positive'">
+        {{ panelView.market_pulse.feed_state | receiptLabel }}
+      </dd>
+    </div>
+    <div>
+      <dt>Market</dt>
+      <dd>{{ panelView.market_pulse.market_state | receiptLabel }}</dd>
+    </div>
+    <div>
+      <dt>Session</dt>
+      <dd>{{ panelView.market_pulse.session | receiptLabel }}</dd>
+    </div>
+    <div>
+      <dt>Last bar</dt>
+      <dd>
+        @if (panelView.market_pulse.latest_bar_at_ms; as barAtMs) {
+          <app-timestamp-display [value]="barAtMs" mode="local" />
+        } @else {
+          None today
+        }
+      </dd>
+    </div>
+  </dl>
+  @if (panelView.market_pulse.next_step; as nextStep) {
+    <p class="pulse__next"><strong>Next:</strong> {{ nextStep }}</p>
+  }
+</section>
+
+<section class="card" aria-labelledby="triage-decisions-title">
+  <header class="card__head">
+    <strong id="triage-decisions-title">
+      Recent decisions · {{ panelView.fills_today ?? 0 }} fills today
+    </strong>
+  </header>
+  @if (panelView.recent_decisions.length === 0) {
+    <p class="card__empty">No decisions recorded for this run yet.</p>
+  } @else {
+    <ul class="decisions">
+      @for (decision of panelView.recent_decisions; track decision.seq) {
+        <li>
+          <app-timestamp-display [value]="decision.recorded_at_ms" mode="local" />
+          <span>
+            <strong>{{ decision.outcome | receiptLabel }}</strong>
+            · {{ decision.reason_code | receiptLabel }}
+          </span>
+        </li>
+      }
+    </ul>
+  }
+</section>

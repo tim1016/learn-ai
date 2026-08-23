@@ -14,76 +14,52 @@
       <span>The roster can still refresh, but account-sensitive actions remain blocked until Alpaca confirms this account.</span>
     </div>
   } @else if (account(); as snap) {
-    <div class="account-posture__identity">
-      <div>
-        <span class="account-posture__eyebrow">Account custody</span>
-        <strong class="account-posture__account">{{ snap.account_id }}</strong>
-      </div>
+    <div class="posture-summary">
+      <strong class="posture-summary__account">{{ snap.account_id }}</strong>
       <span class="posture-badge posture-badge--paper">{{ snap.account_mode | receiptLabel }}</span>
-    </div>
 
-    <div class="posture-grid">
-      <div class="posture-fact">
-        <span class="posture-fact__label">Broker</span>
-        <strong>{{ snap.account_status | receiptLabel }}</strong>
-      </div>
-
-      <div class="posture-fact">
-        <span class="posture-fact__label">Reconciliation</span>
+      <span class="posture-summary__facts">
+        <span>Equity <strong>{{ fmtCurrency(snap.equity) }}</strong></span>
+        <span aria-hidden="true">·</span>
+        <span>BP <strong>{{ fmtCurrency(snap.buying_power) }}</strong></span>
+        <span aria-hidden="true">·</span>
         @if (reconciliation(); as reconciliationState) {
-          <strong>{{ reconciliationState.verdict | receiptLabel }}</strong>
-          <app-timestamp-display [value]="reconciliationState.recorded_at_ms" mode="local" />
+          <span>
+            {{ reconciliationState.verdict | receiptLabel }}
+            <app-timestamp-display [value]="reconciliationState.recorded_at_ms" mode="local" />
+          </span>
         } @else {
-          <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Not observed' }}</strong>
-          <span>No current receipt</span>
+          <span>{{ clerkUnavailable() ? 'Reconciliation unavailable' : 'Not reconciled' }}</span>
         }
-      </div>
-
-      <div class="posture-fact">
-        <span class="posture-fact__label">Account status</span>
-        @if (clerkStatus(); as clerk) {
-          @if (accountStatus(); as status) {
-            <strong>{{ status.headline }}</strong>
-            @if (status.detail) {
-              <span>{{ status.detail }}</span>
-            }
-            @if (status.move; as move) {
-              <button type="button" class="posture-fact__move" (click)="requestMove(move)">{{ move.label }}</button>
-            }
-          }
-          <app-timestamp-display [value]="clerk.observed_at_ms" mode="local" />
-        } @else {
-          <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Loading' }}</strong>
-          <span>Custody not observed</span>
-        }
-      </div>
-
-      <div class="posture-fact posture-fact--channels">
-        <span class="posture-fact__label">Channels</span>
-        @if (channels().length > 0) {
-          <div class="channel-list">
-            @for (channel of channels(); track channel.name) {
-              <span class="channel-state" [class.channel-state--unhealthy]="!channel.healthy">
-                <span class="channel-state__dot" aria-hidden="true"></span>
-                {{ channel.name | receiptLabel }} {{ channel.healthy ? 'healthy' : 'unhealthy' }}
-              </span>
-            }
-          </div>
-        } @else {
-          <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Not installed' }}</strong>
-        }
-      </div>
-    </div>
-
-    <div class="financial-line" aria-label="Account balances">
-      <span><small>Equity</small><strong>{{ fmtCurrency(snap.equity) }}</strong></span>
-      <span><small>Cash</small><strong>{{ fmtCurrency(snap.cash) }}</strong></span>
-      <span><small>Buying power</small><strong>{{ fmtCurrency(snap.buying_power) }}</strong></span>
-      <span class="financial-line__freshness">
-        {{ refreshing() ? 'Refreshing · account observed' : 'Account observed' }}
-        <app-timestamp-display [value]="snap.observed_at_ms" mode="local" />
       </span>
+
+      <button
+        type="button"
+        class="posture-summary__disclosure"
+        [attr.aria-expanded]="expanded()"
+        aria-controls="account-posture-details"
+        (click)="toggleExpanded()"
+      >
+        {{ expanded() ? 'Hide account detail' : 'Account detail' }}
+      </button>
     </div>
+
+    <!--
+      Facts the compact triage header has no room for stay one click away rather
+      than disappearing: the fleet_roster operator posture carries the only
+      account-recovery move this surface can dispatch.
+    -->
+    <app-account-posture-detail
+      id="account-posture-details"
+      [hidden]="!expanded()"
+      [account]="snap"
+      [clerkStatus]="clerkStatus()"
+      [accountStatus]="accountStatus()"
+      [channels]="channels()"
+      [clerkUnavailable]="clerkUnavailable()"
+      [refreshing]="refreshing()"
+      (moveRequested)="requestMove($event)"
+    />
 
     @if (accountUnavailable()) {
       <div class="posture-refresh-warning" role="status">
@@ -96,6 +72,7 @@
       </div>
     }
 
+    <!-- Custody alerts are never behind the disclosure: they gate order-producing activity. -->
     @if (freezeActive()) {
       <div class="custody-alert" role="alert">
         <strong>Account frozen</strong>

@@ -14,36 +14,37 @@
   overflow: hidden;
 }
 
-.bots-page__header { flex: 0 0 auto; padding-bottom: var(--space-3); }
+// ── Header ─────────────────────────────────────────────────────────────────
 
-.bots-page__title-row {
+.bots-page__header {
   display: flex;
-  align-items: flex-end;
+  flex: 0 0 auto;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.bots-page__identity {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
 
   h1 {
-    margin: 0.1rem 0 0;
-    font-size: var(--fs-h1);
+    margin: 0;
+    font-size: var(--fs-lg);
     font-weight: var(--fw-semi);
-    letter-spacing: var(--ls-tight);
   }
-
-  p { margin: var(--space-1) 0 0; color: var(--text-secondary); font-size: var(--fs-sm); }
 }
 
-.bots-page__eyebrow,
-.roster-heading__eyebrow {
-  display: block;
-  color: var(--accent-text);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-bold);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
+.bots-page__commands {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-2);
 }
-
-.bots-page__commands { display: flex; gap: var(--space-2); }
 
 .command-button,
 .fleet-unavailable button {
@@ -75,9 +76,11 @@
   &:hover:not(:disabled) { background: var(--accent-hover); color: var(--text-on-accent); }
 }
 
+// ── Notices ────────────────────────────────────────────────────────────────
+
 .fleet-notice {
   flex: 0 0 auto;
-  margin: 0 var(--space-4) var(--space-2);
+  margin: var(--space-2) var(--space-4) 0;
   padding: var(--space-2) var(--space-3);
   border: 1px solid rgba(38, 166, 154, 0.38);
   border-radius: var(--radius);
@@ -89,44 +92,37 @@
 .fleet-notice--danger { border-color: rgba(239, 83, 80, 0.42); background: var(--bear-soft); }
 .fleet-notice--stale { border-color: rgba(255, 152, 0, 0.42); background: var(--warn-soft); }
 
-.bots-page__roster {
-  display: flex;
+// ── Triage board ───────────────────────────────────────────────────────────
+
+.bots-page__board {
+  display: grid;
   flex: 1;
   min-height: 0;
-  flex-direction: column;
-  margin: 0 var(--space-4) var(--space-4);
-  overflow: hidden;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
-  box-shadow: var(--shadow-card);
+  grid-template-columns: 320px minmax(0, 1fr);
 }
 
-.roster-heading {
+.bots-page__rail {
   display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border);
-
-  strong { display: block; margin-top: 0.1rem; font-size: var(--fs-md); }
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.roster-heading__freshness {
-  color: var(--text-subtle);
-  font-size: var(--fs-xs);
+.bots-page__detail {
+  min-width: 0;
+  min-height: 0;
 }
 
-.roster-skeleton {
+.rail-skeleton {
   display: grid;
+  align-content: start;
   gap: 1px;
+  padding-top: 1px;
   background: var(--border);
 
   span {
-    height: 4.5rem;
-    background: linear-gradient(90deg, var(--bg-surface), var(--bg-elevated), var(--bg-surface));
+    height: 3.25rem;
+    background: linear-gradient(90deg, var(--bg-canvas), var(--bg-elevated), var(--bg-canvas));
     background-size: 200% 100%;
     animation: fleet-pulse 1.4s ease-in-out infinite;
   }
@@ -139,11 +135,12 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  padding: var(--space-8);
+  padding: var(--space-6) var(--space-3);
   color: var(--text-secondary);
+  font-size: var(--fs-xs);
   text-align: center;
 
-  strong { color: var(--text-primary); font-size: var(--fs-lg); }
+  strong { color: var(--text-primary); font-size: var(--fs-md); }
   button { margin-top: var(--space-2); }
 }
 
@@ -152,17 +149,28 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .roster-skeleton span { animation: none; }
+  .rail-skeleton span { animation: none; }
 }
 
-@media (max-width: 700px) {
+// Below the split threshold the board stacks: rail first, then detail. The
+// rail keeps a bounded height so the detail pane is never pushed off-screen.
+@media (max-width: 900px) {
   :host { overflow: auto; }
   .bots-page { height: auto; min-height: 100%; overflow: visible; }
-  .bots-page__title-row { align-items: stretch; flex-direction: column; padding: var(--space-3); }
-  .bots-page__commands { display: grid; grid-template-columns: 1fr 1fr; }
-  .bots-page__roster { min-height: 35rem; margin-inline: var(--space-3); }
-  .roster-heading { align-items: flex-start; flex-direction: column; gap: var(--space-1); }
-  .fleet-notice { margin-inline: var(--space-3); }
+
+  .bots-page__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bots-page__commands { display: grid; grid-template-columns: repeat(3, 1fr); }
+
+  .bots-page__board { grid-template-columns: 1fr; }
+
+  .bots-page__rail {
+    max-height: 22rem;
+    border-bottom: 1px solid var(--border);
+  }
 }
 
 @media (max-width: 420px) {

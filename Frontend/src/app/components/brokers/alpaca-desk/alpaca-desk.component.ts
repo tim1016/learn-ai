@@ -177,7 +177,7 @@ export class AlpacaDeskComponent {
     this.deployOpen.set(true);
     void this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { deploy: '', deployLens: 'trader' },
+      queryParams: { deploy: '' },
       queryParamsHandling: 'merge',
     });
   }
@@ -186,6 +186,7 @@ export class AlpacaDeskComponent {
     this.deployOpen.set(false);
     void this.router.navigate([], {
       relativeTo: this.route,
+      // `deployLens` is still nulled so an old bookmarked URL cleans itself up.
       queryParams: { deploy: null, deployLens: null },
       queryParamsHandling: 'merge',
     });

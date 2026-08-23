@@ -1,0 +1,42 @@
+<section class="card" aria-labelledby="triage-commands-title">
+  <header class="card__head">
+    <strong id="triage-commands-title">Command availability</strong>
+  </header>
+  @if (commands().length === 0) {
+    <p class="card__empty">No lifecycle commands are offered for this bot right now.</p>
+  } @else {
+    <ul class="gates">
+      @for (command of commands(); track command.operation) {
+        <li class="gate" [class.gate--blocked]="!command.ready">
+          <span class="gate__state">{{ command.ready ? 'Available' : 'Unavailable' }}</span>
+          <span class="gate__body">
+            <span class="gate__label">{{ command.label }}</span>
+            @if (!command.ready) {
+              <span class="gate__explanation">{{ command.explanation }}</span>
+              @if (command.cure; as cure) {
+                <span class="gate__cure"><strong>Next:</strong> {{ cure }}</span>
+              }
+            }
+          </span>
+        </li>
+      }
+    </ul>
+  }
+</section>
+
+<section class="card card--journal" aria-labelledby="triage-journal-title">
+  <header class="card__head">
+    <strong id="triage-journal-title">Custody journal</strong>
+    @if (!journalFailed()) {
+      <span class="card__count">Newest first</span>
+    }
+  </header>
+  @if (journalFailed()) {
+    <div class="card__error" role="alert">
+      <span>The custody journal could not be read, so this bot's entries are unknown.</span>
+      <button type="button" (click)="journalRetry.emit()">Try again</button>
+    </div>
+  } @else {
+    <app-journal-tail [evidencePage]="journal()" [loading]="journalLoading()" />
+  }
+</section>

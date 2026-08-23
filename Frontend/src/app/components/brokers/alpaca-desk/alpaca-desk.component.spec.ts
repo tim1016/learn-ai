@@ -190,7 +190,7 @@ describe('AlpacaDeskComponent', () => {
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
     await vi.waitFor(() => expect(router.url).toContain('deploy='));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close deploy strategy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close deploy a bot' }));
 
     expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
     expect(screen.getByRole('heading', { name: 'Alpaca' })).toBeTruthy();

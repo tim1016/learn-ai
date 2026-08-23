@@ -6027,6 +6027,17 @@
             "title": "Broker",
             "type": "string"
           },
+          "day_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Pnl"
+          },
           "desired_state": {
             "enum": [
               "RUNNING",
@@ -6165,6 +6176,7 @@
           "fills_today",
           "realized_pnl_today",
           "open_pnl",
+          "day_pnl",
           "last_activity_at_ms",
           "needs_attention"
         ],

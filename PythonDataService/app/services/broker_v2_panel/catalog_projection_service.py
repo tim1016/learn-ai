@@ -120,6 +120,30 @@ def status_explanation_for(status: BotStatusView, rollup: CatalogEconomicRollup)
     return "Off duty and flat."
 
 
+def day_pnl(realized: float | None, open_pnl: float | None) -> float | None:
+    """Null-safe ``realized + open`` — the one day-P&L authority.
+
+    Formula: day_pnl = realized_pnl_today + open_pnl, treating one absent
+      component as zero and returning None iff both are absent.
+    Reference: docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md
+      section 3.4; component economics follow docs/references/broker-v2-fifo-pnl.md.
+    Canonical implementation: this file.
+    Validated against:
+      tests/services/test_gallery_hub.py::test_day_pnl_null_safe_projection.
+
+    ``None`` only when both components are unavailable; a lone-present
+    component contributes its own value (mirrors the "show whichever side is
+    present" display intent this replaces the frontend's own summing of).
+    """
+    if realized is None and open_pnl is None:
+        return None
+    # Explicit None-checks, not `x or 0.0` — a legitimate 0.0 P&L is falsy
+    # too and must not be confused with "absent".
+    return (realized if realized is not None else 0.0) + (
+        open_pnl if open_pnl is not None else 0.0
+    )
+
+
 def compose_catalog_view(
     status: BotStatusView,
     rollup: CatalogEconomicRollup,
@@ -148,6 +172,7 @@ def compose_catalog_view(
         fills_today=rollup.fills_today,
         realized_pnl_today=rollup.realized_pnl_today,
         open_pnl=rollup.open_pnl,
+        day_pnl=day_pnl(rollup.realized_pnl_today, rollup.open_pnl),
         last_activity_at_ms=rollup.last_activity_at_ms,
         needs_attention=rollup.needs_attention or _lifecycle_needs_attention(status),
     )

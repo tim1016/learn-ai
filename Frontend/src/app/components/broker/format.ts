@@ -91,6 +91,20 @@ export function fmtSignedQuantity(value: number | null | undefined): string {
   }).format(value);
 }
 
+/**
+ * Render a Clerk-attributed exposure map as one line ("+12 SPY, -8 QQQ").
+ *
+ * An empty map is genuinely flat — every surface that shows exposure needs the
+ * same wording for it, so this stays the single formatter.
+ */
+export function fmtExposure(exposure: Readonly<Record<string, number>>): string {
+  const entries = Object.entries(exposure);
+  if (entries.length === 0) return 'Flat';
+  return entries
+    .map(([symbol, quantity]) => `${fmtSignedQuantity(quantity)} ${symbol}`)
+    .join(', ');
+}
+
 export function fmtNumber(
   value: number | null | undefined,
   fractionDigits = 2,

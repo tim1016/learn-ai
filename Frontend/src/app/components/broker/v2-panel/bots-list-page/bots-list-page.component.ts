@@ -16,13 +16,12 @@ import { MessageService } from 'primeng/api';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
-import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
-import { BotsRosterComponent, type RowActionEvent } from '../bots-roster/bots-roster.component';
+import { BotTriageDetailComponent } from '../bot-triage-detail/bot-triage-detail.component';
+import { BotsRosterComponent } from '../bots-roster/bots-roster.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import type { BotCatalogView } from '../lib/broker-v2-panel.types';
+import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.types';
 import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-outcome';
 
 const CATALOG_POLL_MS = 5_000;
@@ -40,10 +39,9 @@ interface ScopedSnapshot<T> {
   imports: [
     AccountStripComponent,
     AlpacaDeployDrawerComponent,
+    BotTriageDetailComponent,
     BotsRosterComponent,
     RouterLink,
-    ReceiptLabelPipe,
-    TimestampDisplayComponent,
   ],
   templateUrl: './bots-list-page.component.html',
   styleUrl: './bots-list-page.component.scss',
@@ -69,6 +67,9 @@ export class BotsListPageComponent {
   );
   protected readonly pendingBotIds = signal<ReadonlySet<string>>(new Set());
   protected readonly deployOpen = signal(false);
+  private readonly requestedSid = signal<string | null>(null);
+  /** Bumped after an action lands so the detail pane refetches its panel. */
+  protected readonly detailRefreshToken = signal(0);
 
   protected readonly catalog = resource({
     params: () => ({ broker: this.broker(), accountId: this.accountId() }),
@@ -142,6 +143,28 @@ export class BotsListPageComponent {
     const snapshot = this.catalogSnapshot();
     return snapshot?.scope === this.fleetScope() ? snapshot.updatedAtMs : null;
   });
+  /**
+   * The bot the detail pane shows. Derived rather than stored so an operator's
+   * choice survives a poll, but a bot that leaves the fleet (or an account
+   * switch) falls back to the most urgent row instead of stranding the pane on
+   * a bot that no longer exists.
+   */
+  protected readonly selectedSid = computed<string | null>(() => {
+    const bots = this.bots();
+    if (bots.length === 0) return null;
+    const requested = this.requestedSid();
+    if (requested !== null && bots.some((bot) => bot.strategy_instance_id === requested)) {
+      return requested;
+    }
+    const attention = bots.find((bot) => bot.needs_attention);
+    return (attention ?? bots[0]).strategy_instance_id;
+  });
+
+  protected readonly selectionPending = computed(() => {
+    const sid = this.selectedSid();
+    return sid !== null && this.pendingBotIds().has(sid);
+  });
+
   protected readonly initialLoading = computed(
     () => this.catalog.isLoading() && this.bots().length === 0,
   );
@@ -203,20 +226,31 @@ export class BotsListPageComponent {
     this.deployOpen.set(false);
   }
 
-  protected async onRowAction(event: RowActionEvent): Promise<void> {
-    const sid = event.bot.strategy_instance_id;
-    if (this.pendingBotIds().has(sid)) return;
+  protected selectBot(sid: string): void {
+    this.requestedSid.set(sid);
+    this.actionNotice.set(null);
+  }
+
+  /**
+   * The single action-execution owner for this route. The detail pane presents
+   * backend-declared actions (with their confirmations and blockers) and
+   * delegates here, so every action on this screen shares one policy, one
+   * pending set, and one toast path.
+   */
+  protected async onPanelAction(trigger: PanelActionTrigger): Promise<void> {
+    const sid = this.selectedSid();
+    if (sid === null || this.pendingBotIds().has(sid)) return;
+
+    const action = trigger.action;
     const startedAt = this.performanceNow();
     this.actionNotice.set(null);
     this.pendingBotIds.update((current) => new Set([...current, sid]));
 
     try {
-      const action = event.bot.row_action;
-      if (action?.action_id !== event.action || !action.enabled) {
-        const message = `${event.action === 'resume' ? 'Resume' : 'Stop'} is no longer available for ${sid}. Refreshing its current state.`;
+      if (!action.enabled) {
+        const message = `${action.label} is no longer available for ${sid}. Refreshing its current state.`;
         this.actionNotice.set({ tone: 'danger', message });
         this.messageService.add(actionOutcomeToast('conflict', message));
-        this.catalog.reload();
         return;
       }
 
@@ -225,21 +259,32 @@ export class BotsListPageComponent {
         this.accountId(),
         sid,
         action,
+        trigger.reason,
       );
       this.actionNotice.set({ tone: 'success', message: result.message });
       this.messageService.add(actionOutcomeToast('success', result.message));
-      this.catalog.reload();
     } catch (error) {
-      const rejection = deriveActionRejection(error, `Could not ${event.action} ${sid}.`);
+      const rejection = deriveActionRejection(
+        error,
+        `Could not ${action.label.toLowerCase()} ${sid}.`,
+      );
       this.actionNotice.set({ tone: 'danger', message: rejection.message });
       this.messageService.add(actionOutcomeToast(rejection.outcome, rejection.message, rejection.why));
-      this.catalog.reload();
     } finally {
       this.pendingBotIds.update((current) => {
         const next = new Set(current);
         next.delete(sid);
         return next;
       });
+      this.catalog.reload();
+      // Only refresh the detail pane when the acted-on bot is still the one on
+      // screen. The token is page-global, and the detail pane's journal read is
+      // audit-logged: bumping it after the operator has moved on to another bot
+      // would append an `EvidenceAuditEntry` asserting they read *that* bot's
+      // evidence, which they did not.
+      if (this.selectedSid() === sid) {
+        this.detailRefreshToken.update((token) => token + 1);
+      }
       this.measure('alpaca-bots-action-round-trip', startedAt);
     }
   }

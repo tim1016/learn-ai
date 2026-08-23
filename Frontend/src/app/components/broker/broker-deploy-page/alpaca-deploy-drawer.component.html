@@ -6,15 +6,17 @@
   [dismissible]="true"
   [showCloseIcon]="false"
   styleClass="alpaca-deploy-drawer"
-  [style]="{ width: 'min(1080px, 96vw)' }"
+  [style]="{ width: 'min(880px, 96vw)' }"
 >
   <ng-template #header>
+    <!-- The workflow no longer carries its own <h1>: this is the single title. -->
     <div class="deploy-drawer-header">
       <div>
-        <span>Alpaca paper</span>
-        <h2>Deploy strategy</h2>
+        <span>Deploy · {{ resolvedAccountId() || 'Alpaca' }} · paper</span>
+        <h2>Deploy a bot</h2>
+        <p>Bind a validated strategy to this account and put it on duty.</p>
       </div>
-      <button type="button" aria-label="Close deploy strategy" (click)="close()">
+      <button type="button" aria-label="Close deploy a bot" (click)="close()">
         <i class="pi pi-times" aria-hidden="true"></i>
       </button>
     </div>

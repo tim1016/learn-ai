@@ -1,0 +1,49 @@
+// Card primitive shared by the two halves of the triage pane.
+// Lives in a partial rather than being duplicated, or hoisted into the parent
+// where emulated encapsulation would keep it from reaching either child.
+
+.card {
+  min-height: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.card--journal {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+
+  app-journal-tail {
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+.card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+
+  strong { font-size: var(--fs-base); }
+  a { color: var(--accent-text); font-size: var(--fs-xs); }
+}
+
+.card__count {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+
+  &[data-tone='negative'] { color: var(--bear); font-weight: var(--fw-semi); }
+  &[data-tone='positive'] { color: var(--bull); font-weight: var(--fw-semi); }
+}
+
+.card__empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}

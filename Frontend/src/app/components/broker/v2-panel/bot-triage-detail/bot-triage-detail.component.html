@@ -1,0 +1,78 @@
+@if (sid() === null) {
+  <div class="triage-placeholder" role="status">
+    <strong>No bot selected</strong>
+    <span>Choose a bot from the rail to see its trade facts and its admission diagnosis together.</span>
+  </div>
+} @else if (panelUnavailable()) {
+  <div class="triage-placeholder triage-placeholder--error" role="alert">
+    <strong>Bot detail unavailable</strong>
+    <span>The panel for {{ sid() }} could not be loaded. The rail still reflects the last fleet snapshot.</span>
+    <button type="button" (click)="reload()">Try again</button>
+  </div>
+} @else if (view(); as panelView) {
+  <!-- Verdict: the trade fact and the failure diagnosis in one block. -->
+  <section class="verdict" [attr.data-tone]="verdictTone()" aria-labelledby="triage-verdict-title">
+    <div class="verdict__body">
+      <div class="verdict__identity">
+        <h2 id="triage-verdict-title">{{ panelView.strategy_label }}</h2>
+        <code>{{ panelView.strategy_instance_id }}</code>
+        <app-asset-identity class="verdict__symbol" [symbol]="panelView.symbol" size="sm" />
+        <span class="verdict__mode">{{ panelView.mode | receiptLabel }}</span>
+      </div>
+
+      <p class="verdict__explanation">
+        <strong>{{ panelView.mission_verdict.label }}</strong>
+        <span>{{ panelView.mission_verdict.explanation }}</span>
+      </p>
+
+      @if (panelView.mission_verdict.next_action; as nextAction) {
+        <p class="verdict__next"><strong>Next:</strong> {{ nextAction }}</p>
+      }
+
+      <p class="verdict__provenance">
+        Revision {{ panelView.revision }} · observed
+        <app-timestamp-display [value]="panelView.updated_at_ms" mode="local" />
+        ·
+        <a [routerLink]="botLink()">Open full panel</a>
+      </p>
+    </div>
+
+    @if (panelView.actions.length > 0) {
+      <div class="verdict__actions">
+        @for (action of panelView.actions; track action.action_id) {
+          <app-panel-action-button
+            [action]="action"
+            [pending]="pending()"
+            [tone]="actionTone(action)"
+            (triggered)="onActionTriggered($event)"
+          />
+        }
+      </div>
+    }
+  </section>
+
+  <section class="metrics" aria-label="Bot metrics">
+    @for (metric of metrics(); track metric.label) {
+      <div class="metric" [attr.data-tone]="metric.tone">
+        <span class="metric__label">{{ metric.label }}</span>
+        <strong class="metric__value">{{ metric.value }}</strong>
+      </div>
+    }
+  </section>
+
+  <div class="triage-columns">
+    <app-triage-activity [view]="panelView" [botLink]="botLink()" />
+    <app-triage-evidence
+      [commands]="commands()"
+      [journal]="journal.hasValue() ? journal.value() : null"
+      [journalLoading]="journal.isLoading()"
+      [journalFailed]="journalFailed()"
+      (journalRetry)="reload()"
+    />
+  </div>
+} @else {
+  <div class="triage-placeholder" role="status" aria-live="polite">
+    <strong>Loading {{ sid() }}…</strong>
+    <span>Reading the current panel and custody journal.</span>
+  </div>
+}

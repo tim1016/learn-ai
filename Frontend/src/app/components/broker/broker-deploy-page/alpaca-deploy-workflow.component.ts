@@ -6,11 +6,9 @@ import {
   effect,
   inject,
   input,
-  linkedSignal,
   resource,
   signal,
 } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
 import {
   form,
   max,
@@ -19,12 +17,9 @@ import {
   required,
   validate,
 } from '@angular/forms/signals';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { ButtonModule } from 'primeng/button';
-import { TagModule } from 'primeng/tag';
-import { TooltipModule } from 'primeng/tooltip';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ActivatedRoute } from '@angular/router';
 
-import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import {
   BrokerV2PanelService,
   type DeployBotBody,
@@ -39,14 +34,15 @@ import {
   DeployExecutionSectionComponent,
   type DeploySizingPreset,
 } from './deploy-execution-section.component';
+import {
+  DeployAdmissionColumnComponent,
+  type DeployError,
+} from './deploy-admission-column.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
-import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
-import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
-const DEPLOY_LENS_QUERY_PARAM = 'deployLens';
 
 interface AlpacaDeployTicket {
   instanceId: string;
@@ -59,59 +55,34 @@ interface AlpacaDeployTicket {
   parameters: Record<string, unknown>;
 }
 
-interface DeployError {
-  outcome: 'conflict' | 'blocked' | 'unknown';
-  title: string;
-  message: string;
-  explanation: string | null;
-  nextAction: string | null;
-  receiptId: string | null;
-  recordedAtMs: number | null;
-}
-
 interface DeploySubmissionReadiness {
   canSubmit: boolean;
   guidance: string;
 }
 
-type DeployLens = 'trader' | 'operator';
-
 @Component({
   selector: 'app-alpaca-deploy-workflow',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink,
-    ButtonModule,
-    TagModule,
-    TooltipModule,
-    TimestampDisplayComponent,
+    DeployAdmissionColumnComponent,
     DeployBindingStripComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployParametersSectionComponent,
-    DeployReadinessSectionComponent,
-    DeployStartAdmissionComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
   styleUrl: './alpaca-deploy-workflow.component.scss',
 })
 export class AlpacaDeployWorkflowComponent {
   readonly accountId = input.required<string>();
-  protected readonly operatorLensQuery = { lens: 'operator' } as const;
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
-  private readonly router = inject(Router);
 
+  /** Still read for the `?strategy=` deep link; the lens param is gone. */
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
-
-  protected readonly activeLens = linkedSignal<DeployLens>(() =>
-    (this.queryParams().get(DEPLOY_LENS_QUERY_PARAM) ?? this.queryParams().get('lens')) === 'operator'
-      ? 'operator'
-      : 'trader',
-  );
 
   protected readonly submitting = signal(false);
   protected readonly submitError = signal<DeployError | null>(null);
@@ -203,6 +174,22 @@ export class AlpacaDeployWorkflowComponent {
     return strategy.blocked_explanation ?? null;
   });
 
+  /**
+   * The admission column's own headline. It replaces the separate eligibility
+   * banner the lens split needed: with the gates always on screen there is one
+   * place that says whether launch is admitted and how many gates back that up.
+   */
+  protected readonly readinessSummary = computed(() => {
+    const view = this.currentView();
+    if (view === null) return null;
+    const checks = view.readiness_checks;
+    const ready = checks.filter((check) => check.ready).length;
+    return {
+      label: view.eligibility.eligible ? 'Ready' : 'Blocked',
+      counts: `${ready} of ${checks.length}`,
+    };
+  });
+
   protected readonly selectedExecutionMode = computed(() => {
     const view = this.currentView();
     return view?.execution_modes.find(
@@ -291,31 +278,6 @@ export class AlpacaDeployWorkflowComponent {
         return { ...current, strategyKey, symbol };
       });
     });
-  }
-
-  protected selectLens(lens: DeployLens): void {
-    this.activeLens.set(lens);
-    void this.router.navigate([], {
-      relativeTo: this.route,
-      queryParams: { [DEPLOY_LENS_QUERY_PARAM]: lens },
-      queryParamsHandling: 'merge',
-      replaceUrl: true,
-    });
-  }
-
-  protected onLensKeydown(event: KeyboardEvent): void {
-    const nextLens =
-      event.key === 'ArrowRight' || event.key === 'End'
-        ? 'operator'
-        : event.key === 'ArrowLeft' || event.key === 'Home'
-          ? 'trader'
-          : null;
-    if (nextLens === null) return;
-    event.preventDefault();
-    this.selectLens(nextLens);
-    if (!(event.currentTarget instanceof HTMLElement)) return;
-    const target = event.currentTarget.parentElement?.querySelector(`[data-lens="${nextLens}"]`);
-    if (target instanceof HTMLElement) target.focus();
   }
 
   protected setInstanceId(value: string): void {
