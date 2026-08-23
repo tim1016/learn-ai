@@ -18,15 +18,19 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
+from app.broker.alpaca.paths import SOURCE_BAR_LEDGER_FILENAME, resolve_contained_path, safe_path_component
 from app.marketdata.feed import MarketDataBar
 
-SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
-"""Indexed durable authority store for retained source observations."""
-
 _LEGACY_SOURCE_BAR_LEDGER_FILENAME = "source_bars.jsonl"
-_MAX_ROWS_PER_STREAM = 200_000
-"""Fail closed before an evidence stream can grow without an explicit rollover."""
+SOURCE_BAR_STREAM_CAPACITY = 200_000
+"""Retained one-minute bars per provider/symbol stream before ``append`` fails closed.
+
+There is no pruning: reaching this capacity raises ``SourceBarRetentionLimitError``
+and requires a reviewed rollover (#1740). The registry-parametrized floor test
+(``tests/services/test_signal_program_retention_floor.py``) pins that this exceeds
+every sealed program's declared warmup plus one open decision cycle.
+"""
+_MAX_ROWS_PER_STREAM = SOURCE_BAR_STREAM_CAPACITY
 
 
 class RetainedSourceBar(BaseModel):
@@ -118,8 +122,14 @@ class SourceBarLedger:
         return self._path
 
     def close(self) -> None:
-        """Close this handle after its caller has stopped using the authority."""
+        """Close this handle after its caller has stopped using the authority.
+
+        Checkpoints and truncates the WAL first, explicitly: SQLite only does
+        so on its own when this is the last open connection, and a verifier or
+        backup reader may still be attached at shutdown (#1740).
+        """
         with self._lock:
+            self.checkpoint_wal()
             self._conn.close()
 
     def append(self, bar: MarketDataBar) -> RetainedSourceBar:
@@ -438,6 +448,7 @@ def _read_legacy_rows(path: Path) -> Iterable[RetainedSourceBar]:
 
 __all__ = [
     "SOURCE_BAR_LEDGER_FILENAME",
+    "SOURCE_BAR_STREAM_CAPACITY",
     "RetainedSourceBar",
     "SourceBarConflictError",
     "SourceBarLedger",

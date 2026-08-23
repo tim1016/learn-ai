@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import threading
 from decimal import Decimal
 from pathlib import Path
@@ -262,3 +263,30 @@ def test_synthetic_port_serializes_concurrent_order_id_and_sequence_writes(tmp_p
 
     rows = [json.loads(line) for line in order_path.read_text(encoding="utf-8").splitlines()]
     assert [row["seq"] for row in rows] == [1, 2, 3]
+
+
+def test_close_checkpoints_and_truncates_the_wal(tmp_path: Path) -> None:
+    """Controlled shutdown leaves no un-checkpointed WAL behind (#1740).
+
+    A second connection is held open across ``close`` on purpose: SQLite only
+    checkpoints-and-removes the WAL by itself when the LAST connection
+    closes, so this proves the ledger's own explicit TRUNCATE checkpoint in
+    ``close`` -- the one its ``checkpoint_wal`` docstring promises for
+    shutdown -- rather than SQLite's last-connection behaviour.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="PA-WAL")
+    for index in range(3):
+        ledger.append_history(_bar(start_ms=1_800_000_000_000 + index * 60_000))
+    wal_path = ledger.path.with_name(f"{ledger.path.name}-wal")
+    assert wal_path.exists() and wal_path.stat().st_size > 0, "setup: writes must land in the WAL first"
+    bystander = sqlite3.connect(ledger.path)
+    try:
+        # A statement is what actually opens the file; an unused connection
+        # would leave the ledger's handle as the last one after all.
+        assert bystander.execute("SELECT COUNT(*) FROM source_bars").fetchone()[0] == 3
+        ledger.close()
+        assert wal_path.exists() and wal_path.stat().st_size == 0, (
+            "close() must checkpoint and truncate the WAL itself while another connection is open"
+        )
+    finally:
+        bystander.close()

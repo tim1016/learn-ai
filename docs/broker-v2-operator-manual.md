@@ -205,6 +205,59 @@ rows — is exempt from sequence-tail pruning. The bounded list the panel shows
 is a display window, not the retention boundary: an older decision scrolled
 out of that tail is still on file.
 
+## Storage, backup, and retention
+
+Every account authority — a real Alpaca paper account or a Dry Run's
+synthetic `sim:<strategy_instance_id>` account — owns one directory under
+the artifacts root: `accounts/alpaca/<account_id>/`. Two SQLite files in it
+are the canonical recovery evidence named by the sealed-program PRD:
+`clerk.db`, the account-scoped Clerk (dispositions, custody, effects, decision
+receipts), and `source_bars.sqlite3`, the retained source-bar ledger (every
+exact closed bar the bot evaluated, before any session filtering). Both run
+in WAL mode with `synchronous=FULL`; the ledger auto-checkpoints every 1,000
+pages and runs an explicit truncating checkpoint when its handle is closed,
+even if a verifier or backup reader is still attached. Provider
+re-fetch is never accepted as recovery evidence; only these two files are.
+
+**Backup and restore.** `python -m scripts.manage_alpaca_sqlite_clerk
+--artifacts-root <root> --account-id <id> backup` publishes a verified bundle
+under `accounts/alpaca/<id>/verified-backups/`, cut online through SQLite's
+backup API (WAL-safe, no stop required) and verified before it is published:
+the Clerk database first, then the source-bar ledger, so a bundle can carry
+bars that have no disposition yet — the crash window replay already handles —
+but never a disposition whose bar is missing. The bundle manifest (schema
+version 2) records both files' SHA-256 and the ledger's retained-row count.
+`verify` checks the stopped authority database against its finalized mirror
+head; a bundle itself is verified as the first step of `restore`. `restore
+--bundle <path> --process-stop-evidence <file>` is refused unless the process
+is stopped (a fresh process-stop proof and no live execution lease), the bundle
+belongs to this account, generation, and database identity, and both
+snapshots pass integrity and hash checks; it then replaces both files
+atomically and preserves the previous ones under `recovery-preserved/`. There
+is no restore into a running instance, by construction. Bundles published
+before schema version 2 contain only `clerk.db`; they still restore, and
+restoring one leaves the live ledger untouched.
+
+**Dry Run accounts are disposable.** A `sim:` directory is a clean-slate
+simulation (ADR 0035): it is not part of any backup or restore procedure and
+may be deleted when its instance is retired. Back up real paper accounts
+only.
+
+**Retention is a floor, not a window.** Nothing prunes the source-bar
+ledger: a provider/symbol stream fails closed at 200,000 retained minute
+bars (`SOURCE_BAR_RETENTION_LIMIT`, roughly two years of regular sessions)
+and needs a reviewed rollover, never a silent deletion. Decision receipts
+keep the most recent 1,000 ordinary rows per strategy instance — every
+decision clock writes one, `no_action` included — while causally relevant
+rows (effects, refusals, crash candidates, corrections, seals) are exempt
+from pruning entirely. A registry-parameterized test pins that both budgets
+exceed every sealed program's declared warmup plus one full open session at
+its qualified decision clock; the tightest margin today is Deployment
+Validation, whose one-minute clock and one-day warmup consume 780 of the
+1,000 ordinary receipts. A new program with a one-minute clock and a warmup
+of two days or more would fail that test and needs the receipt budget raised
+first.
+
 ## SQLite manual paper tickets
 
 The Alpaca Account Desk is the only manual-order entry point when its selected
