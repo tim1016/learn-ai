@@ -216,8 +216,12 @@ receipts), and `source_bars.sqlite3`, the retained source-bar ledger (every
 exact closed bar the bot evaluated, before any session filtering). Both run
 in WAL mode with `synchronous=FULL`; the ledger auto-checkpoints every 1,000
 pages and runs an explicit truncating checkpoint when its handle is closed,
-even if a verifier or backup reader is still attached. Provider
-re-fetch is never accepted as recovery evidence; only these two files are.
+even if a verifier or backup reader is still attached. If that reader still
+pins the log after the five-second busy timeout, the close fails with
+`SOURCE_BAR_CHECKPOINT_BUSY` and leaves the handle open rather than
+reporting a folded WAL it did not fold; release the reader and close again.
+Provider re-fetch is never accepted as recovery evidence; only these two
+files are.
 
 **Backup and restore.** `python -m scripts.manage_alpaca_sqlite_clerk
 --artifacts-root <root> --account-id <id> backup` publishes a verified bundle
@@ -233,10 +237,13 @@ head; a bundle itself is verified as the first step of `restore`. `restore
 database is too damaged to read its lease, unless `--process-stop-evidence
 <file>` carries a fresh process-stop proof), unless the bundle belongs to this
 account, generation, and database identity, and unless both snapshots pass
-integrity and hash checks. It then moves the previous files under
-`recovery-preserved/` and swaps the snapshots in, ledger first. Each swap is
-atomic; the pair is not: an in-process failure rolls the previous files back
-from `recovery-preserved/`, while a hard crash between the two swaps leaves
+integrity and hash checks — for the ledger, that includes every retained row
+carrying this account's id, so a structurally sound ledger cut for another
+account is refused even with a matching manifest. It then moves the previous
+files under `recovery-preserved/` and swaps the snapshots in, ledger first.
+Each swap is atomic; the pair is not: an in-process failure takes any
+already-swapped snapshot back out and returns the previous files from
+`recovery-preserved/`, while a hard crash between the two swaps leaves
 the bars restored and the authority still missing — startup then fails
 closed and the operator re-runs `restore`. That ordering is deliberate: the
 opposite crash state (authority present, bars gone) would let crash replay
@@ -257,9 +264,11 @@ and needs a reviewed rollover, never a silent deletion. Decision receipts
 keep the most recent 1,000 ordinary rows per strategy instance — every
 decision clock writes one, `no_action` included — while rows in a
 `protected_*` retention class (effects, refusals, crash evidence, competing
-exits) are exempt from pruning entirely. A registry-parameterized test pins that both budgets
-exceed every sealed program's declared warmup plus one full open session at
-its qualified decision clock; the tightest margin today is Deployment
+exits) are exempt from pruning entirely. Crash replay reads that whole
+1,000-row window, not the 500-row cap that bounds the panel's receipt reads.
+A registry-parameterized test pins that both budgets exceed every sealed
+program's declared warmup plus one full open session at its qualified
+decision clock; the tightest margin today is Deployment
 Validation, whose one-minute clock and one-day warmup consume 780 of the
 1,000 ordinary receipts. A new program with a one-minute clock and a warmup
 of two days or more would fail that test and needs the receipt budget raised

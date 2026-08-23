@@ -23,10 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from app.broker.alpaca.clerk.sqlite.decision_receipts import (
-    MAX_DECISION_RECEIPT_READ,
-    SqliteDecisionReceipts,
-)
+from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationStage, Settlement
@@ -182,16 +179,17 @@ def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> dict[str, st
     ``bot_trade_strategy.py``), so this is exactly the lookup
     :func:`replay_warmup_bars` needs to reapply each bucket's own known
     disposition and recognize the one bucket that has none.
-    ``MAX_DECISION_RECEIPT_READ`` bounds the read the same way every other
-    decision-receipt read in this codebase is bounded; it comfortably
-    covers even the longest lookback :func:`_warmup_lookback_days_for`
-    resolves today (9 trading days is at most a few hundred 15-minute
-    buckets for a registered signal program) with wide margin. An empty
-    result means this instance has never captured a decision -- there is
-    no crash to recover from.
+    The read is the full retention window, not the presentation cap: a
+    one-minute program (``deployment_validation``) writes more receipts
+    over its warmup than ``MAX_DECISION_RECEIPT_READ`` returns, and any
+    bucket the read cannot see would be replayed as uncaptured (#1740).
+    ``tests/services/test_signal_program_retention_floor.py`` pins that the
+    window covers every sealed program's warmup plus one open session. An
+    empty result means this instance has never captured a decision --
+    there is no crash to recover from.
     """
     return {
         receipt.intent_id: receipt.outcome
-        for receipt in receipts.tail(MAX_DECISION_RECEIPT_READ)
+        for receipt in receipts.retained_window()
         if receipt.intent_id is not None
     }

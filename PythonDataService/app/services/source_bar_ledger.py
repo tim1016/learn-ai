@@ -94,11 +94,24 @@ class SourceBarRetentionLimitError(RuntimeError):
 
 
 class SourceBarLedgerCorruptError(RuntimeError):
-    """A ledger file failed SQLite integrity or is not a source-bar ledger at all."""
+    """A ledger file failed SQLite integrity, is not a source-bar ledger, or holds another account's evidence."""
 
 
-def verify_ledger_file(path: Path) -> int:
+class SourceBarCheckpointBusyError(RuntimeError):
+    """A truncating WAL checkpoint could not complete because a reader still held the log."""
+
+
+_BUSY_TIMEOUT_MS = 5_000
+"""How long a write or truncating checkpoint waits on another connection before failing."""
+
+
+def verify_ledger_file(path: Path, *, account_id: str) -> int:
     """Integrity-check one ledger file read-only and return its retained-bar count.
+
+    Every retained row must belong to ``account_id``: a structurally valid
+    ledger cut for another account would otherwise restore cleanly and then
+    mix that account's ``bar_ref`` evidence with this one's new appends. An
+    empty ledger carries no evidence and so cannot be foreign.
 
     The schema knowledge (which table holds the bars) stays here, next to the
     ``CREATE TABLE`` that defines it; the Clerk recovery tooling calls this
@@ -112,11 +125,24 @@ def verify_ledger_file(path: Path) -> int:
         if integrity is None or integrity[0] != "ok":
             raise SourceBarLedgerCorruptError(f"{path.name} failed integrity_check")
         row = conn.execute("SELECT COUNT(*) FROM source_bars").fetchone()
+        foreign = _foreign_account_row(conn, account_id)
     except sqlite3.DatabaseError as exc:
         raise SourceBarLedgerCorruptError(f"{path.name} is not a readable source-bar ledger: {exc}") from exc
     finally:
         conn.close()
+    if foreign is not None:
+        raise SourceBarLedgerCorruptError(
+            f"{path.name} retains evidence for account {foreign!r}, not {account_id!r}"
+        )
     return int(row[0])
+
+
+def _foreign_account_row(conn: sqlite3.Connection, account_id: str) -> str | None:
+    """The first retained ``account_id`` that is not the expected one, if any."""
+    row = conn.execute(
+        "SELECT account_id FROM source_bars WHERE account_id != ? LIMIT 1", (account_id,)
+    ).fetchone()
+    return None if row is None else str(row[0])
 
 
 class SourceBarLedger:
@@ -143,6 +169,7 @@ class SourceBarLedger:
         self._conn.row_factory = sqlite3.Row
         self._configure()
         self._create_schema()
+        self._refuse_foreign_account_rows()
         self._migrate_legacy_jsonl_if_needed()
 
     @property
@@ -154,7 +181,11 @@ class SourceBarLedger:
 
         Checkpoints and truncates the WAL first, explicitly: SQLite only does
         so on its own when this is the last open connection, and a verifier or
-        backup reader may still be attached at shutdown (#1740).
+        backup reader may still be attached at shutdown (#1740). If that
+        reader still holds the log after the busy timeout the checkpoint
+        raises ``SourceBarCheckpointBusyError`` and this handle stays open, so
+        the controlled close fails loudly instead of leaving a WAL behind; the
+        caller retries once the reader is gone.
         """
         with self._lock:
             self.checkpoint_wal()
@@ -235,9 +266,20 @@ class SourceBarLedger:
         return None if row is None else _retained_row(row)
 
     def checkpoint_wal(self) -> None:
-        """Checkpoint durable evidence after controlled shutdown or backup."""
+        """Checkpoint and truncate durable evidence after controlled shutdown or backup.
+
+        ``wal_checkpoint(TRUNCATE)`` reports a blocked checkpoint as a
+        ``busy`` column, never as an exception; a caller that ignored it
+        would believe the WAL was folded when a concurrent reader kept it.
+        """
         with self._lock:
-            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            row = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        assert row is not None
+        if int(row["busy"]) != 0:
+            raise SourceBarCheckpointBusyError(
+                "SOURCE_BAR_CHECKPOINT_BUSY: "
+                f"{self._path.name} still has a reader on its WAL after {_BUSY_TIMEOUT_MS}ms"
+            )
 
     def _append(self, bar: MarketDataBar, *, delivery: Literal["history", "live"]) -> RetainedSourceBar:
         candidate = RetainedSourceBar.from_market_bar(seq=1, account_id=self.account_id, bar=bar)
@@ -338,7 +380,7 @@ class SourceBarLedger:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
         # SQLite checkpoints automatically at this bound; explicit shutdown
         # checkpoints use ``checkpoint_wal`` for a compact backup artifact.
         self._conn.execute("PRAGMA wal_autocheckpoint=1000")
@@ -379,6 +421,21 @@ class SourceBarLedger:
             );
             """
         )
+
+    def _refuse_foreign_account_rows(self) -> None:
+        """Fail closed when an existing file retains another account's evidence.
+
+        The file path is account-scoped, but a restore or an operator copy can
+        put any ledger there; the same rule ``verify_ledger_file`` applies to
+        a backup snapshot applies to the live file on open.
+        """
+        foreign = _foreign_account_row(self._conn, self.account_id)
+        if foreign is not None:
+            self._conn.close()
+            raise SourceBarLedgerCorruptError(
+                "SOURCE_BAR_ACCOUNT_MISMATCH: "
+                f"{self._path.name} retains evidence for account {foreign!r}, not {self.account_id!r}"
+            )
 
     def _migrate_legacy_jsonl_if_needed(self) -> None:
         """Import an old evidence WAL once without deleting the recoverable source."""

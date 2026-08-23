@@ -817,6 +817,9 @@ def test_backup_bundle_carries_the_source_bar_ledger_and_restore_brings_it_back(
     assert (preserved / "clerk.db").is_file()
     assert (preserved / SOURCE_BAR_LEDGER_FILENAME).is_file()
     assert ledger_path.is_file()
+    assert not [path.name for path in ledger_path.parent.iterdir() if ".restore-" in path.name], (
+        "verifying the staged copies must not leave their WAL/shm sidecars behind"
+    )
 
 
 def test_backup_without_a_source_bar_ledger_records_the_absence_and_restore_creates_none(
@@ -884,6 +887,69 @@ def test_restore_refuses_a_tampered_source_bar_snapshot(
     with pytest.raises(RecoveryRefused, match=match):
         _stopped_restore(tmp_path, backup.bundle_path)
 
+    assert _ledger_closes(tmp_path) == ["100"]
+
+
+def test_restore_that_fails_between_the_two_swaps_takes_the_published_ledger_back_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ledger and the Clerk database are swapped in by two renames that
+    are each atomic but not jointly. If the second one fails, the first must
+    be undone before the preserved originals return -- otherwise the
+    bundle's ledger stays live beside the pre-restore authority and the
+    "failed" restore has silently mixed two evidence cuts (#1740 review)."""
+    repo = _initialized(tmp_path)
+    repo.close()
+    _ledger_with_bars(tmp_path, closes=["100", "101"])
+    backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
+    ledger.append(_market_bar("SPY", NOW_MS + 3 * 60_000, "102"))
+    ledger.close()
+    _accounts_root, account_dir = recovery_module.writes.account_paths(tmp_path, ACCOUNT_ID)
+    db_before = (account_dir / "clerk.db").read_bytes()
+
+    real_replace = recovery_module.os.replace
+
+    def replace_but_fail_the_database(src: Path, dst: Path) -> None:
+        if Path(dst).name == "clerk.db" and ".restore-" in Path(src).name:
+            raise OSError("simulated rename failure after the ledger was published")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(recovery_module.os, "replace", replace_but_fail_the_database)
+    with pytest.raises(OSError, match="simulated rename failure"):
+        _stopped_restore(tmp_path, backup.bundle_path)
+    monkeypatch.undo()
+
+    assert _ledger_closes(tmp_path) == ["100", "101", "102"], "the pre-restore ledger must be back"
+    assert (account_dir / "clerk.db").read_bytes() == db_before
+    assert not [path for path in account_dir.iterdir() if ".restore-" in path.name]
+    preserved_dirs = list((account_dir / recovery_module.PRESERVED_DIRECTORY).iterdir())
+    assert preserved_dirs and not any(
+        (directory / SOURCE_BAR_LEDGER_FILENAME).exists() for directory in preserved_dirs
+    ), "nothing may stay behind in recovery-preserved once it has been moved back"
+
+
+def test_backup_verification_refuses_a_valid_ledger_cut_for_another_account(tmp_path: Path) -> None:
+    """Integrity and row count say nothing about whose evidence a ledger
+    holds. A structurally sound ledger from another account, with the
+    manifest rewritten to match, must still be refused (#1740 review)."""
+    repo = _initialized(tmp_path)
+    repo.close()
+    _ledger_with_bars(tmp_path, closes=["100"])
+    backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
+    assert backup.source_bars is not None
+    foreign = SourceBarLedger(artifacts_root=tmp_path / "elsewhere", account_id="PA-OTHER")
+    foreign.append_history(_market_bar("SPY", NOW_MS + 60_000, "100"))
+    foreign.close()
+    backup.source_bars.path.write_bytes(foreign.path.read_bytes())
+    manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    manifest["source_bars"]["sha256"] = recovery_module.sha256_file(backup.source_bars.path)
+    backup.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RecoveryRefused, match="'PA-OTHER', not") as refusal:
+        _stopped_restore(tmp_path, backup.bundle_path)
+
+    assert refusal.value.reason is RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT
     assert _ledger_closes(tmp_path) == ["100"]
 
 

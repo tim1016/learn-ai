@@ -118,8 +118,13 @@ class SourceBarSnapshot:
         return {"filename": self.path.name, "sha256": self.sha256, "retained_rows": self.retained_rows}
 
     @classmethod
-    def from_manifest(cls, bundle: Path, entry: object) -> SourceBarSnapshot:
-        """Check one manifest ``source_bars`` entry against the bundle's file."""
+    def from_manifest(cls, bundle: Path, entry: object, *, account_id: str) -> SourceBarSnapshot:
+        """Check one manifest ``source_bars`` entry against the bundle's file.
+
+        The file must also be *this* account's evidence: a structurally sound
+        ledger cut for another account, with a manifest rewritten to match
+        it, would otherwise pass the hash and row-count checks.
+        """
         if (
             not isinstance(entry, dict)
             or set(entry) != {"filename", "sha256", "retained_rows"}
@@ -137,7 +142,7 @@ class SourceBarSnapshot:
                 "backup source-bar snapshot SHA-256 does not match its manifest",
                 reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
             )
-        if _verified_ledger_rows(snapshot) != entry["retained_rows"]:
+        if _verified_ledger_rows(snapshot, account_id=account_id) != entry["retained_rows"]:
             raise RecoveryRefused(
                 "backup source-bar snapshot row count does not match its manifest",
                 reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
@@ -407,7 +412,11 @@ def verify_backup_bundle(
         snapshot_path=snapshot,
         snapshot_sha256=manifest["snapshot_sha256"],
         verification=verification,
-        source_bars=None if entry is None else SourceBarSnapshot.from_manifest(bundle, entry),
+        source_bars=(
+            None
+            if entry is None
+            else SourceBarSnapshot.from_manifest(bundle, entry, account_id=account_id)
+        ),
     )
 
 
@@ -540,7 +549,7 @@ def _restore_verified_backup_fenced(
         ledger_candidate = account_dir / f".{SOURCE_BAR_LEDGER_FILENAME}.restore-{restore_token}"
         shutil.copyfile(publication.source_bars.path, ledger_candidate)
         _fsync_file(ledger_candidate)
-        _verified_ledger_rows(ledger_candidate)
+        _verified_ledger_rows(ledger_candidate, account_id=account_id)
         staged.append(
             (
                 ledger_candidate,
@@ -563,15 +572,29 @@ def _restore_verified_backup_fenced(
         label="pre-restore",
         names=[name for _candidate, live in staged for name in _sqlite_family(live.name)],
     )
+    published: list[Path] = []
     try:
         for candidate, live in staged:
             os.replace(candidate, live)
+            published.append(live)
         fsync_directory(account_dir)
     except Exception:
-        for candidate, _live in staged:
-            candidate.unlink(missing_ok=True)
+        # A file already swapped in is the bundle's copy, which the bundle
+        # still holds; it must come back out before the preserved originals
+        # return, or a half-applied restore would leave the bundle's ledger
+        # beside the pre-restore authority -- two evidence cuts, reported as
+        # a failure.
+        for live in published:
+            live.unlink(missing_ok=True)
         _restore_preserved_database(account_dir=account_dir, preserved=preserved)
         raise
+    finally:
+        # Verifying a staged copy opens it, and opening a WAL-mode database
+        # creates empty ``-wal``/``-shm`` sidecars that the rename of the
+        # main file leaves behind; on failure the copies themselves go too.
+        for candidate, _live in staged:
+            for name in _sqlite_family(candidate.name):
+                candidate.with_name(name).unlink(missing_ok=True)
     receipt = RecoveryReceipt(
         operation="RESTORE_VERIFIED_BACKUP",
         account_id=account_id,
@@ -877,14 +900,16 @@ def _snapshot_source_bar_ledger(
     snapshot = candidate / SOURCE_BAR_LEDGER_FILENAME
     _online_backup(ledger_path, snapshot, progress=progress)
     return SourceBarSnapshot(
-        path=snapshot, sha256=sha256_file(snapshot), retained_rows=_verified_ledger_rows(snapshot)
+        path=snapshot,
+        sha256=sha256_file(snapshot),
+        retained_rows=_verified_ledger_rows(snapshot, account_id=account_id),
     )
 
 
-def _verified_ledger_rows(path: Path) -> int:
-    """The ledger module's own integrity check, translated into a recovery refusal."""
+def _verified_ledger_rows(path: Path, *, account_id: str) -> int:
+    """The ledger module's own integrity and account check, translated into a recovery refusal."""
     try:
-        return verify_ledger_file(path)
+        return verify_ledger_file(path, account_id=account_id)
     except SourceBarLedgerCorruptError as exc:
         raise RecoveryRefused(
             str(exc), reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT

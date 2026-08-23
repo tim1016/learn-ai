@@ -17,9 +17,12 @@ from app.marketdata.feed import MarketDataBar
 from app.services import source_bar_ledger
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
 from app.services.source_bar_ledger import (
+    SourceBarCheckpointBusyError,
     SourceBarConflictError,
     SourceBarLedger,
+    SourceBarLedgerCorruptError,
     SourceBarRetentionLimitError,
+    verify_ledger_file,
 )
 
 
@@ -290,3 +293,58 @@ def test_close_checkpoints_and_truncates_the_wal(tmp_path: Path) -> None:
         )
     finally:
         bystander.close()
+
+
+def test_close_fails_loudly_when_a_reader_still_holds_the_wal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``wal_checkpoint(TRUNCATE)`` reports a blocked checkpoint as a ``busy``
+    column, not an exception. A close that ignored it would return normally
+    with the WAL it promised to fold still on disk (#1740 review)."""
+    monkeypatch.setattr(source_bar_ledger, "_BUSY_TIMEOUT_MS", 50)
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="PA-WAL")
+    for index in range(3):
+        ledger.append_history(_bar(start_ms=1_800_000_000_000 + index * 60_000))
+    wal_path = ledger.path.with_name(f"{ledger.path.name}-wal")
+    reader = sqlite3.connect(ledger.path, isolation_level=None)
+    try:
+        # An open read transaction pins the WAL snapshot it started on.
+        reader.execute("BEGIN")
+        assert reader.execute("SELECT COUNT(*) FROM source_bars").fetchone()[0] == 3
+
+        with pytest.raises(SourceBarCheckpointBusyError, match="SOURCE_BAR_CHECKPOINT_BUSY"):
+            ledger.close()
+
+        assert wal_path.stat().st_size > 0, "the WAL must not be reported folded while a reader pins it"
+        reader.execute("COMMIT")
+        ledger.close()
+        assert wal_path.stat().st_size == 0
+    finally:
+        reader.close()
+
+
+def test_ledger_refuses_another_accounts_evidence_on_open_and_in_verification(tmp_path: Path) -> None:
+    """A ledger is only structurally a ledger; its rows carry the account they
+    belong to. A file cut for another account must be refused both by
+    ``verify_ledger_file`` (backup/restore) and by ``SourceBarLedger`` opening
+    it in place (an operator copy), or foreign ``bar_ref`` evidence would mix
+    with this account's new appends (#1740 review)."""
+    foreign = SourceBarLedger(artifacts_root=tmp_path, account_id="PA-OTHER")
+    foreign.append_history(_bar())
+    foreign.close()
+
+    assert verify_ledger_file(foreign.path, account_id="PA-OTHER") == 1
+    with pytest.raises(SourceBarLedgerCorruptError, match="'PA-OTHER', not 'PA-MINE'"):
+        verify_ledger_file(foreign.path, account_id="PA-MINE")
+
+    mine_dir = tmp_path / "accounts" / "alpaca" / "PA-MINE"
+    mine_dir.mkdir(parents=True)
+    (mine_dir / foreign.path.name).write_bytes(foreign.path.read_bytes())
+    with pytest.raises(SourceBarLedgerCorruptError, match="SOURCE_BAR_ACCOUNT_MISMATCH"):
+        SourceBarLedger(artifacts_root=tmp_path, account_id="PA-MINE")
+
+    empty = SourceBarLedger(artifacts_root=tmp_path, account_id="PA-EMPTY")
+    empty.close()
+    assert verify_ledger_file(empty.path, account_id="PA-MINE") == 0, (
+        "an empty ledger carries no evidence and cannot be foreign"
+    )

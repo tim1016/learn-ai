@@ -561,6 +561,22 @@ class SqliteDecisionReceipts:
             limit=_read_limit(n),
         )
 
+    def retained_window(self) -> list[DecisionReceiptResource]:
+        """Return every ordinary receipt still retained, in ascending sequence order.
+
+        ``MAX_DECISION_RECEIPT_READ`` bounds presentation reads; it is not
+        the retention window. Pruning keeps the newest
+        ``MAX_DECISION_RECEIPTS_PER_STRATEGY`` sequences (plus ``protected_*``
+        rows beyond them), and FR-016 crash replay must see that whole window
+        or a decision older than the presentation cap looks uncaptured
+        (#1740). Older ``protected_*`` rows are not needed there: they are
+        never a replayed bucket's own disposition.
+        """
+        return self._repository.decision_receipt_tail(
+            strategy_instance_id=self._strategy_instance_id,
+            limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
+        )
+
     def by_transaction(
         self,
         transaction_ref: str,
