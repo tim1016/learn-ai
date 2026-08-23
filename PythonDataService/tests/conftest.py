@@ -62,31 +62,27 @@ def _isolate_strategy_validation_flag_ledger(tmp_path, monkeypatch: pytest.Monke
     own ``tmp_path`` and passes ``flag_events_path`` explicitly (several
     already do, e.g. ``tests/broker/v2panel/conftest.py``).
 
-    Two seams carry this default and both must be patched, because they
-    don't share one resolution path:
-    - the module-level constant, re-read at call time (not bound at
-      import time — see
-      ``strategy_validation_manifest._resolve_flag_events_path``) by
-      every caller that omits ``flag_events_path``, including
-      ``app/services/broker_v2_panel/panel_data_source.py`` and
-      ``app/services/strategy_validation_admission.py``;
-    - the FastAPI dependency in ``app/routers/strategy_validation.py``,
-      which captured its own module-level binding at router-import time
-      and is overridden the same way individual tests already override it
-      (``tests/routers/test_strategy_validation.py``).
+    Patching this one module attribute is enough for every reader:
+    ``strategy_validation_manifest._resolve_flag_events_path`` re-reads it
+    at call time (not at import time) for every caller that omits
+    ``flag_events_path``, including
+    ``app/services/broker_v2_panel/panel_data_source.py`` and
+    ``app/services/strategy_validation_admission.py``, and the FastAPI
+    dependency in ``app/routers/strategy_validation.py`` reads the same
+    module attribute dynamically rather than a name frozen at router-import
+    time. A test that needs a *different* ledger through the HTTP layer
+    can still use ``app.dependency_overrides`` per-test, as
+    ``tests/routers/test_strategy_validation.py`` already does — that
+    always takes priority over this fixture's default.
 
     Production behavior is untouched: DEFAULT_FLAG_EVENTS_PATH and the
     router's default dependency still resolve to the real ledger outside
     pytest.
     """
     import app.services.strategy_validation_manifest as strategy_validation_manifest
-    from app.routers.strategy_validation import get_strategy_validation_flag_events_path
 
     isolated_path = tmp_path / "strategy_validation_flag_events.json"
     monkeypatch.setattr(strategy_validation_manifest, "DEFAULT_FLAG_EVENTS_PATH", isolated_path)
-    app.dependency_overrides[get_strategy_validation_flag_events_path] = lambda: isolated_path
-    yield
-    app.dependency_overrides.pop(get_strategy_validation_flag_events_path, None)
 
 
 @pytest.fixture
