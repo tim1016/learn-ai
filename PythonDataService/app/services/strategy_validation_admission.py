@@ -76,7 +76,21 @@ def current_strategy_validation_fact(
 
     evidence_status = _evidence_status(event)
     refs = _evidence_refs(event)
-    if not _event_matches_current_artifacts(entry, event):
+    # The durable evidence-only override accepts the *absence* of reference
+    # artifacts (a candidate with no registered proof has nothing to be
+    # current against) but never the *drift* of recorded ones — a recorded
+    # artifact whose bytes changed still refuses (operator decision
+    # 2026-08-24, restoring the override contract #1746 had made
+    # unsatisfiable for proof-less candidates).
+    override_accepts_absence = (
+        evidence_status == "evidence_only" and binding.evidence_override is not None
+    )
+    matches = (
+        _event_matches_recorded_artifacts(entry, event)
+        if override_accepts_absence
+        else _event_matches_current_artifacts(entry, event)
+    )
+    if not matches:
         return _unverified(
             binding.strategy_key,
             observed_at_ms,
@@ -125,6 +139,32 @@ def _event_matches_current_artifacts(
         validator_check=strategy_validator_code_is_current,
         audit_check=strategy_audit_copy_is_current,
     )
+
+
+def _event_matches_recorded_artifacts(
+    entry: StrategyValidationEntry,
+    event: StrategyValidationFlagEvent,
+) -> bool:
+    """Like ``_event_matches_current_artifacts`` but an unrecorded artifact is vacuously current."""
+    policy = strategy_validation_policy(entry.strategy_category)
+    return policy.snapshot_matches_entry(entry, event.evidence_snapshot) and policy.artifacts_are_current(
+        entry,
+        settings_check=_recorded_or(strategy_settings_file_is_current, "settings_file_ref"),
+        validator_check=_recorded_or(strategy_validator_code_is_current, "validator_code_ref"),
+        audit_check=_recorded_or(strategy_audit_copy_is_current, "audit_copy_ref"),
+    )
+
+
+def _recorded_or(
+    check: Callable[[StrategyValidationEntry], bool],
+    ref_field: str,
+) -> Callable[[StrategyValidationEntry], bool]:
+    def _check(entry: StrategyValidationEntry) -> bool:
+        if getattr(entry, ref_field) is None:
+            return True
+        return check(entry)
+
+    return _check
 
 
 def _evidence_status(event: StrategyValidationFlagEvent) -> str:

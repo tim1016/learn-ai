@@ -186,6 +186,45 @@ def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(
     assert row.override_explanation is not None
 
 
+def test_strategy_views_evidence_only_row_offers_the_paper_access_review(
+    tmp_path: Path,
+) -> None:
+    """Operator decision 2026-08-24 (restoring what #1746 narrowed): an
+    evidence-only row whose pairing is not yet active is offered the Paper
+    access review — the review itself records the durable override — instead
+    of being demoted to a proof-blocked row."""
+    seeds = strategy_registry_seeds()
+    flag_events_path = tmp_path / "strategy-validation" / "flag-events.json"
+    append_strategy_validation_flag_event(
+        "sma_crossover",
+        StrategyValidationFlagRequest(
+            flag="validated",
+            reason="Test-only human validation without accepted equivalence evidence.",
+        ),
+        seeds,
+        flag_events_path=flag_events_path,
+        flagged_by="test:mode-tiered-admission",
+        now_ms=1_700_000_000_000,
+    )
+    (entry,) = [
+        entry
+        for entry in load_strategy_validation_entries(seeds, flag_events_path=flag_events_path)
+        if entry.strategy_key == "sma_crossover"
+    ]
+
+    rows = _strategy_views([entry], account_id=ACCT)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.evidence_status == "evidence_only"
+    assert row.paper_access_state == "available"
+    assert row.selectable is False
+    assert row.admissible_modes == ("dry_run",)
+    assert row.override_explanation is not None
+    assert row.blocked_explanation is not None
+    assert "Review and enable Paper access" in row.blocked_explanation
+
+
 def test_deploy_demotes_accepted_event_with_gating_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
     admit_canary_pairing(monkeypatch, "ema_crossover_signal", ACCT)
     entry = _accepted_deploy_entry()

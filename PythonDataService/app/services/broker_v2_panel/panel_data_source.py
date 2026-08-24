@@ -575,9 +575,13 @@ def _require_paper_deploy_request(
 ) -> None:
     """Paper asks for the human-validated flag and full Clerk custody proof.
 
-    The evidence-only override contract no longer gates Paper (#1702): it is
-    re-pointed at Live, so any override submitted here is rejected outright
-    rather than required or silently accepted.
+    An evidence-only proof additionally requires the durable human override
+    (acknowledgement + reason) on the request itself: the override rides the
+    binding into Start admission, which is what turns an ``evidence_only``
+    validation fact into ``VERIFIED`` (operator decision 2026-08-24,
+    restoring the contract #1702/#1746 had re-pointed at Live). An override
+    submitted for a fully accepted proof is still rejected outright — it
+    would record a risk acceptance that no gate asked for.
     """
     if "paper" not in strategy.admissible_modes:
         next_action = strategy_gate_recovery((strategy,))
@@ -595,12 +599,22 @@ def _require_paper_deploy_request(
             next_action=view.eligibility.next_action,
             http_status=409,
         )
-    if request.evidence_override is not None:
+    if strategy.evidence_status == "evidence_only" and request.evidence_override is None:
+        raise PanelRunnerError(
+            "This evidence-only strategy requires the durable evidence override for Paper deployment.",
+            detail=(
+                "Its behavioral evidence has not been reconciled to the reference implementation. "
+                "Record the paper-mode evidence override (acknowledgement + reason) to accept that risk."
+            ),
+            next_action="Record the evidence override and resubmit the deployment.",
+            http_status=409,
+        )
+    if strategy.evidence_status != "evidence_only" and request.evidence_override is not None:
         raise PanelRunnerError(
             "An evidence override is not valid for Paper deployment.",
             detail=(
-                "The evidence-only override contract now applies only to Live. Paper is admitted on the "
-                "human-validated flag and full Clerk custody proof alone, regardless of behavioral verdict."
+                "This strategy's validation proof is fully accepted; the evidence-only override "
+                "applies only to strategies whose behavioral evidence is not accepted."
             ),
             next_action="Remove the override and submit the strategy normally.",
             http_status=409,
