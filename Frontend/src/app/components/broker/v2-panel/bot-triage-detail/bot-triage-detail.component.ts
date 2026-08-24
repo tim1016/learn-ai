@@ -8,6 +8,7 @@ import {
   input,
   output,
   resource,
+  signal,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { RouterLink } from '@angular/router';
@@ -20,17 +21,26 @@ import {
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
-import { actionTone } from '../bot-detail-banner/lifecycle-action';
+import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';
+import { MissionVerdictStatusComponent } from '../bot-detail-banner/mission-verdict-status.component';
+import { actionTone, primaryActionForLens } from '../bot-detail-banner/lifecycle-action';
 import { TriageActivityComponent } from './triage-activity.component';
 import { TriageEvidenceComponent } from './triage-evidence.component';
+import { TriageTapeComponent } from './triage-tape.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type {
   BotPanelView,
+  ChartBar,
+  ChartLiveResolution,
+  ChartOverlayNoticeView,
+  ChartSource,
+  PanelAction,
   PanelActionTrigger,
   ReadinessCheckView,
 } from '../lib/broker-v2-panel.types';
 
 type Tone = 'positive' | 'negative' | 'warn' | 'neutral' | 'muted';
+type TriageLens = 'trader' | 'operator';
 
 interface MetricTile {
   readonly label: string;
@@ -40,15 +50,40 @@ interface MetricTile {
 
 const JOURNAL_PAGE_SIZE = 12;
 const PANEL_POLL_MS = 15_000;
+/**
+ * How long a bot must stay selected before its tape is fetched. Arrowing down
+ * a 25-row rail would otherwise open (and immediately abandon) one chart
+ * request per keystroke.
+ */
+const TAPE_DEBOUNCE_MS = 350;
+
+/**
+ * The response's single data source, or `mixed` when its bars disagree — the
+ * same reduction `DualPaneChartComponent` uses. `null` for an empty response.
+ */
+function dominantSource(bars: readonly ChartBar[]): ChartSource | null {
+  if (bars.length === 0) return null;
+  const sources = new Set(bars.map((bar) => bar.source));
+  return sources.size === 1 ? bars[0].source : 'mixed';
+}
 
 /**
  * Merged triage detail for the bot selected in the rail.
  *
- * This is the trade fact and the failure diagnosis in one pane — the design's
- * "one lens" claim for this screen. It is deliberately a *summary*: the
- * per-bot panel route (`/bots/:sid`) keeps the full lens split, the live
- * chart, and run history, and this pane links to it rather than duplicating
- * the chart's streaming plumbing.
+ * Two lenses, mirroring the per-bot panel route so the same word means the
+ * same thing on both screens (`BotPanelShellComponent`):
+ *
+ * - **Trader** (default) — the price tape, where the bot stands, and what it
+ *   decided. One backend-selected primary action, at most one enabled
+ *   secondary, everything else folded into the overflow.
+ * - **Operator** — per-command availability and the custody journal, i.e. the
+ *   evidence an operator needs when a command is greyed out.
+ *
+ * The tape is a compact canvas over the gallery's pure candle renderer, fed by
+ * a *debounced, polled* `chart/live` read. It deliberately does not stand up
+ * the per-bot route's SSE stream: this pane is re-pointed at a different bot
+ * every time the operator moves in the rail, and a stream per selection is the
+ * cost that kept a chart off this pane in the first place.
  *
  * Actions render through `PanelActionButtonComponent` so backend-declared
  * confirmations and blockers keep gating them; execution is delegated upward
@@ -62,9 +97,12 @@ const PANEL_POLL_MS = 15_000;
     ReceiptLabelPipe,
     TimestampDisplayComponent,
     PanelActionButtonComponent,
+    BotBannerOverflowComponent,
+    MissionVerdictStatusComponent,
     AssetIdentityComponent,
     TriageActivityComponent,
     TriageEvidenceComponent,
+    TriageTapeComponent,
   ],
   templateUrl: './bot-triage-detail.component.html',
   styleUrl: './bot-triage-detail.component.scss',
@@ -82,6 +120,11 @@ export class BotTriageDetailComponent {
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly document = inject(DOCUMENT);
+
+  protected readonly lens = signal<TriageLens>('trader');
+  protected readonly tapeResolution = signal<ChartLiveResolution>('1m');
+  /** Trails `sid()` by `TAPE_DEBOUNCE_MS`; only the tape reads it. */
+  private readonly settledSid = signal<string | null>(null);
 
   /**
    * Identity of the selected bot, and nothing else — `undefined` parks both
@@ -108,12 +151,52 @@ export class BotTriageDetailComponent {
       this.panelService.getPanel(params.broker, params.accountId, params.sid),
   });
 
+  /**
+   * The evidence read, parked off the Operator lens. `read_evidence_page`
+   * appends one `EvidenceAuditEntry` per call into a log nothing prunes — the
+   * record asserts an operator read this bot's raw evidence at that instant.
+   * The Trader lens (the default) hides the custody journal, so reading it
+   * there would stamp an assertion the operator never saw and leave a later
+   * Operator switch showing a page fetched — and audited — at the wrong time.
+   * It therefore fetches only when the Operator lens is actually up.
+   */
+  private readonly journalSelection = computed(() =>
+    this.lens() === 'operator' ? this.selection() : undefined,
+  );
+
   protected readonly journal = resource({
-    params: this.selection,
+    params: this.journalSelection,
     loader: ({ params }) =>
       this.panelService.getEvidence(params.broker, params.accountId, params.sid, {
         pageSize: JOURNAL_PAGE_SIZE,
       }),
+  });
+
+  /**
+   * The tape's read. Parked unless the Trader lens is showing and the
+   * selection has settled, so switching to Operator — or scrubbing the rail —
+   * costs no chart requests.
+   */
+  private readonly tapeSelection = computed(() => {
+    const sid = this.settledSid();
+    if (sid === null || this.lens() !== 'trader') return undefined;
+    return {
+      broker: this.broker(),
+      accountId: this.accountId(),
+      sid,
+      resolution: this.tapeResolution(),
+    };
+  });
+
+  protected readonly tape = resource({
+    params: this.tapeSelection,
+    loader: ({ params }) =>
+      this.panelService.getLiveChart(
+        params.broker,
+        params.accountId,
+        params.sid,
+        params.resolution,
+      ),
   });
 
   constructor() {
@@ -122,18 +205,32 @@ export class BotTriageDetailComponent {
     // subscription — enough that a diagnosis cannot sit stale while the rail
     // beside it keeps updating.
     //
-    // The panel projection ALONE. Evidence is never polled:
+    // The panel projection and the tape ONLY. Evidence is never polled:
     // `read_evidence_page` appends one `EvidenceAuditEntry` per call, stamped
     // with `operator_identity` and `read_at_ms` — the record asserts that an
     // operator read this bot's raw evidence at that instant. Nothing rotates
     // or prunes `evidence_audit.jsonl`; `_append_audit_entry` is its only
     // writer. A background poll would forge ~240 of those assertions an hour
     // per selected bot and bury the genuine reads, so evidence is read only on
-    // a real operator act: selecting a bot, retrying, or acting on one.
+    // a real operator act: opening the Operator lens on a bot (`journalSelection`),
+    // retrying, or acting on one.
     const timer = setInterval(() => {
-      if (this.document.visibilityState === 'visible') this.panel.reload();
+      if (this.document.visibilityState !== 'visible') return;
+      this.panel.reload();
+      if (this.lens() === 'trader' && this.settledSid() !== null) this.tape.reload();
     }, PANEL_POLL_MS);
     this.destroyRef.onDestroy(() => clearInterval(timer));
+
+    // Settle the selection before the tape follows it.
+    effect((onCleanup) => {
+      const sid = this.sid();
+      if (sid === null) {
+        this.settledSid.set(null);
+        return;
+      }
+      const handle = setTimeout(() => this.settledSid.set(sid), TAPE_DEBOUNCE_MS);
+      onCleanup(() => clearTimeout(handle));
+    });
 
     // An action landed on the selected bot: re-read both projections. This is
     // a genuine operator act, so the evidence read is legitimately audited.
@@ -173,6 +270,71 @@ export class BotTriageDetailComponent {
     return 'muted';
   });
 
+  // ── Actions ────────────────────────────────────────────────────────────────
+
+  /**
+   * WHICH action leads is backend-owned (`primary_action_by_lens`, issue
+   * #1665) — the same selection the Trader banner on the per-bot route uses,
+   * so the two screens never disagree about a bot's headline command.
+   */
+  protected readonly primaryAction = computed<PanelAction | null>(() => {
+    const view = this.view();
+    return view === null ? null : primaryActionForLens(view, 'trader');
+  });
+
+  /**
+   * At most one runnable command beside the primary, in the order the backend
+   * presented them. This is a *cut*, not a ranking: the pane shows the lead
+   * command and the next thing that can actually be run, and folds the rest
+   * away rather than stacking seven buttons — six of them greyed — beside a
+   * bot that is simply idle.
+   */
+  protected readonly secondaryAction = computed<PanelAction | null>(() => {
+    const primary = this.primaryAction();
+    return (
+      this.view()?.actions.find(
+        (action) => action.enabled && action.action_id !== primary?.action_id,
+      ) ?? null
+    );
+  });
+
+  protected readonly overflowActions = computed<readonly PanelAction[]>(() => {
+    const shown = new Set(
+      [this.primaryAction(), this.secondaryAction()]
+        .filter((action): action is PanelAction => action !== null)
+        .map((action) => action.action_id),
+    );
+    return (this.view()?.actions ?? []).filter((action) => !shown.has(action.action_id));
+  });
+
+  protected readonly overflowCount = computed(() => this.overflowActions().length);
+
+  // ── Tape ───────────────────────────────────────────────────────────────────
+
+  /** Guards against painting the previous bot's candles under the current bot's name. */
+  private readonly tapeIsCurrent = computed(() => this.settledSid() === this.sid());
+  protected readonly tapeBars = computed(() =>
+    this.tapeIsCurrent() && this.tape.hasValue() ? this.tape.value().bars : [],
+  );
+  protected readonly tapeMarkers = computed(() =>
+    this.tapeIsCurrent() && this.tape.hasValue() ? this.tape.value().fill_markers : [],
+  );
+  protected readonly tapeLoading = computed(
+    () => this.tape.isLoading() || !this.tapeIsCurrent(),
+  );
+  protected readonly tapeFailed = computed(
+    () => this.tape.error() !== undefined && this.tapeIsCurrent(),
+  );
+  /** The tape's data source, so Polygon fallback is styled honestly (ADR 0032 §2). */
+  protected readonly tapeSource = computed<ChartSource | null>(() =>
+    this.tapeIsCurrent() && this.tape.hasValue() ? dominantSource(this.tape.value().bars) : null,
+  );
+  protected readonly tapeNotices = computed<readonly ChartOverlayNoticeView[]>(() =>
+    this.tapeIsCurrent() && this.tape.hasValue() ? this.tape.value().overlay_notices : [],
+  );
+
+  // ── Lens-independent facts ────────────────────────────────────────────────
+
   /**
    * Per-command availability, unavailable first.
    *
@@ -197,13 +359,13 @@ export class BotTriageDetailComponent {
     const pulse = view.market_pulse;
 
     return [
-      { label: 'Exposure', value: exposure, tone: exposure === 'Flat' ? 'muted' : 'neutral' },
+      { label: 'Position', value: exposure, tone: exposure === 'Flat' ? 'muted' : 'neutral' },
       {
-        label: 'Realized',
+        label: 'Realized today',
         value: fmtSignedCurrency(realized),
         tone: this.pnlTone(realized),
       },
-      { label: 'Fills today', value: fmtInteger(view.fills_today), tone: 'neutral' },
+      { label: 'Filled today', value: fmtInteger(view.fills_today), tone: 'neutral' },
       {
         label: 'Runner',
         value: view.health.phase_label,
@@ -225,6 +387,36 @@ export class BotTriageDetailComponent {
   protected readonly journalFailed = computed(() => this.journal.error() !== undefined);
 
   protected readonly actionTone = actionTone;
+
+  protected selectLens(lens: TriageLens): void {
+    this.lens.set(lens);
+  }
+
+  /**
+   * Roving-tabindex keyboard nav for the lens tablist (WAI-ARIA tabs pattern),
+   * mirroring `DualPaneChartComponent`'s source switcher: only the active tab
+   * is tabbable, and Arrow/Home/End move both the selection and focus so a
+   * keyboard-only operator can reach the other lens.
+   */
+  protected onLensKeydown(event: KeyboardEvent): void {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const lens: TriageLens =
+      event.key === 'ArrowLeft' || event.key === 'Home' ? 'trader' : 'operator';
+    this.lens.set(lens);
+    const target = (event.currentTarget as HTMLElement | null)?.parentElement?.querySelector(
+      `[data-lens="${lens}"]`,
+    );
+    if (target instanceof HTMLElement) target.focus();
+  }
+
+  protected onTapeResolutionChange(resolution: ChartLiveResolution): void {
+    this.tapeResolution.set(resolution);
+  }
+
+  protected reloadTape(): void {
+    this.tape.reload();
+  }
 
   protected reload(): void {
     this.panel.reload();

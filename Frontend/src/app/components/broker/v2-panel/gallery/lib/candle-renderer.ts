@@ -70,6 +70,13 @@ export interface CandleRendererConfig {
   readonly markerSellColor: string;
   readonly markerSize: number;
   readonly markerGap: number;
+  /**
+   * Whether to paint the floating last-price tag. The gallery tile leaves it on
+   * (a sparkline's one glance value); the triage tape turns it off so the canvas
+   * derives no price or session direction of its own — those are server-computed
+   * (single numerical authority, CLAUDE.md #5).
+   */
+  readonly showLastPriceTag: boolean;
 }
 
 const FONT_MONO =
@@ -114,6 +121,7 @@ export const CFG: CandleRendererConfig = Object.freeze({
   markerSellColor: '#ff9800', // --warn
   markerSize: 5,
   markerGap: 3,
+  showLastPriceTag: true,
 });
 
 /**
@@ -420,8 +428,8 @@ function drawLastPriceTag(
 
 /**
  * Full repaint: grid + inside price labels, ghost volume band, candles,
- * fill markers, sparse time labels, crosshair, then the floating
- * last-price tag on top.
+ * fill markers, sparse time labels, crosshair, then — when
+ * `cfg.showLastPriceTag` — the floating last-price tag on top.
  */
 export function draw(
   ctx: CanvasRenderingContext2D,
@@ -441,5 +449,5 @@ export function draw(
   if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < bars.length) {
     drawCrosshair(ctx, scale, barWidth, hoverIndex, cfg);
   }
-  drawLastPriceTag(ctx, bars, scale, cfg);
+  if (cfg.showLastPriceTag) drawLastPriceTag(ctx, bars, scale, cfg);
 }
