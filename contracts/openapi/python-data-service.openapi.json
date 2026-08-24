@@ -10134,6 +10134,7 @@
             "type": "string"
           },
           "qualified_at_ms": {
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Qualified At Ms",
             "type": "integer"
@@ -10187,6 +10188,7 @@
             "type": "string"
           },
           "created_at_ms": {
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Created At Ms",
             "type": "integer"
@@ -10207,6 +10209,7 @@
             "title": "Expected Ledger Head Hash"
           },
           "expires_at_ms": {
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Expires At Ms",
             "type": "integer"
@@ -10329,6 +10332,7 @@
             "type": "string"
           },
           "recorded_at_ms": {
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
@@ -10366,6 +10370,7 @@
             "type": "boolean"
           },
           "evaluated_at_ms": {
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Evaluated At Ms",
             "type": "integer"
