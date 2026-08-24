@@ -172,10 +172,97 @@ checkpoint; the human-flag toggle defaulting to Reject.
    this study — and any future incident forensics — possible. Simplicity
    should come from fewer *surfaces*, not fewer receipts.
 
-## 6. Fleet state at study end (~13:15 ET)
+## 6. Fleet state at first-round end (~13:15 ET)
 
 Eight bots ON_DUTY / running under SQLite Clerk custody, one Alpaca paper
 account: the five ceremony bots (resumed post-fix), `validation-spy-0824`,
 `validation-qqq-0824` (deployment_validation), `validation-ema-spy-0824`
-(ema_crossover_signal). Zero fills at study end; session results land in the
+(ema_crossover_signal). Zero fills at that point; session results land in the
 companion audit's §6 at close.
+
+## 7. Afternoon probe round (operator: "keep tinkering, find bugs")
+
+Second round, ~13:15–13:45 ET: two more deployment_validation launches
+(TSLA, AAPL — fleet now 10), a five-suite probe pass (deploy boundary,
+idempotency/races, lifecycle edges, pairing ceremony, read consistency;
+raw log `probes_study.jsonl`), and read-scalability measurements.
+
+### Proven working (first live evidence today)
+
+- **Full trade cycle, three symbols**: deployment_validation entered on two
+  consecutive green minute bars and exited exactly 3 decision clocks later,
+  returning to flat with receipts — QQQ +$0.03, AAPL +$0.11, TSLA −$0.27.
+  Entry/exit decision receipts, fill rows, and exposure all agree.
+- **Boundary behavior that held up**: duplicate instance deploy → 409 with
+  the bot untouched; concurrent duplicate deploy race → exactly one 201;
+  quantity 0/101/safe-canary-2 → 422s; extra request field → 422; unknown
+  strategy key → 422; tampered pairing confirmation token → refused;
+  duplicate pairing plan → refused with "already active"; stop of a stopped
+  bot → honest 404 ("Only a running bot can be stopped").
+- **Corpus gate tells the truth**: NVDA and IWM deploys refuse with
+  `PROGRAM_BUILD_UNPROVEN` — "resolved parameters the golden qualification
+  corpus does not cover" — because the deployment_validation corpus
+  qualifies exactly {SPY, QQQ, TSLA, AAPL}. Unknown symbols (`ZZZZTEST`)
+  land in the same gate. Correct fail-closed design; symbol coverage is a
+  seal property, which is worth knowing before planning a fleet.
+
+### New findings (F10–F16)
+
+- **F10 — dry-run deploys are broken on this topology and leak state.**
+  `execution_mode="dry_run"` 500s: the synthetic clerk authority is created
+  under `/app/artifacts/accounts/alpaca/sim:<sid>` — a virtiofs bind mount —
+  and the SQLite-WAL locality guard then correctly refuses it. Three defects
+  in one: (a) sim authorities belong on the same named volume as real ones
+  (`ALPACA_CLERK_DIR`), not the bind-mounted artifacts tree; (b) the failure
+  surfaces as a raw `{"success": false, "error": <infra internals>}` 500
+  instead of the typed deploy-refusal envelope; (c) each attempt leaves an
+  orphan `sim:<sid>/` directory (with a partially provisioned
+  `source_bars.sqlite3`) — refused deploys must not leak state. Also, deploy
+  refusal copy elsewhere advertises "Dry Run is still available", which is
+  false on this stack. Probe orphans were quarantined to
+  `artifacts/accounts/alpaca/_probe_orphans_2026-08-24/` (moved aside, not
+  deleted).
+- **F11 — burst deploys trip a channel-health flap that masks the real
+  refusal.** Four deploys fired in ~1 s: two succeeded, and the refusals
+  rotated between "Market Data is unhealthy" (shared-feed bar age crossing
+  its threshold during subscription churn) and the true corpus refusal —
+  three different refusal faces for the same request within six minutes.
+  Admission couples to an instantaneous feed-age sample with no
+  retry/settling semantics, so launch throughput is hostage to a transient
+  hiccup that running bots simply ride through.
+- **F12 — the LIVE chart pane lags its own bot.** After the service restart
+  and after fresh deploys, the per-bot LIVE pane served bars ending 7–12
+  minutes before `as_of_ms` while the bot's decision stream consumed current
+  IBKR bars; panes healed lazily minutes later. Two surfaces disagree about
+  "the live bars" with no staleness marker on the stale one
+  (`overlay_notices` stayed empty).
+- **F13 — panel reads serialize globally.** One panel GET: 56 ms. Ten
+  concurrent panel GETs: 2.6 s wall, and every request takes ~2.6 s — the
+  projection path is effectively a global queue. A dashboard polling 80 bots
+  would spend ~21 s per sweep. Catalog: 184 ms for the account.
+- **F14 — the gallery bootstrap is heavy and unbounded by liveness.**
+  `gallery/snapshot`: 5.6 s, 751 KB, 25 tiles — every historical stopped bot
+  ships with the running ten. (Correction to §5.7: a push channel does
+  exist — the gallery has an SSE stream; it is the *per-bot* panel that is
+  poll-only.)
+- **F15 — action idempotency is scoped behind presentation.** Replaying the
+  idempotency key of an already-succeeded Resume against the now-running bot
+  returns 404 ("action not available") — the presentation check runs before
+  the idempotency lookup, so replay dedupe only works while the action is
+  still presented. Harmless today; surprising for any at-least-once command
+  queue built on top.
+- **F16 — `retire` joins `pause`/`continue` as unreachable vocabulary** —
+  never presented by the SQLite panel source in any state observed today
+  (running, stopped, flat, exposed).
+
+### Additions to the recommendations
+
+- (extends §5.1) The one-lifecycle-surface cleanup should also decide
+  `retire`'s fate (F16) and fix or fence dry-run (F10) — today the mode is
+  advertised in refusal copy but cannot work on the reference topology.
+- (extends §5.5) Admission's channel-health input needs settling semantics
+  (e.g. two consecutive unhealthy samples, or "unhealthy for > N s") so a
+  single late bar doesn't refuse a burst of launches (F11).
+- (new) **Fleet reads need a fan-out budget**: break the global panel
+  serialization (F13), bound the gallery snapshot to live-or-recent bots
+  (F14), and stamp staleness on any pane serving old bars (F12).

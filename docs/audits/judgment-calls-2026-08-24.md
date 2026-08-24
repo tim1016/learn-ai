@@ -65,3 +65,32 @@ divergences non-blocking) are in
    one-shot per PR at first push; today's work is direct-to-master by
    operator instruction with no PR yet. If these commits are later bundled
    into a PR, thermo runs once before that push per the standing rule.
+
+Afternoon probe round (operator: "keep tinkering, find bugs; launch more
+deployment-validation bots"):
+
+10. **Did not force-qualify NVDA/IWM.** Their refusals are the golden
+    qualification corpus working as designed (seal covers SPY/QQQ/TSLA/AAPL).
+    Extending the corpus is a qualification job plus a new seal — a
+    deliberate promotion task, not an afternoon workaround. The fleet covers
+    all four qualified symbols instead.
+11. **Probes ran against the production paper account.** All probes are
+    refusal-expected or read-only except two throwaway bots (a race winner,
+    stopped immediately; a dry-run attempt that never registered). Judged
+    safe: a 409/422 deploys nothing, and the paper account is the ceremony
+    surface the operator is exercising anyway.
+12. **Dry-run orphan directories moved aside, not deleted.** The failed
+    dry-run probes left `sim:<sid>/` authority dirs; they were quarantined to
+    `_probe_orphans_2026-08-24/` following the platform's move-aside-never-
+    delete custody philosophy, even for synthetic probe garbage.
+13. **F10–F16 documented, not fixed, today.** Unlike the Resume token bug
+    (which stranded the operator's explicit request), the afternoon findings
+    are topology decisions (dry-run authority placement), design questions
+    (idempotency scope, retire), or performance work (read fan-out) — each
+    needs a deliberate owner decision, not a mid-session patch.
+14. **Scheduled a supervised crash-recovery test for ~14:40 ET.** Restarting
+    the data plane with 10 running bots exercises the resume-after-crash
+    path (duty outcome honesty, crash-candidate recreation, carryover
+    refusals) with worst-case exposure of a few 1-share paper positions, and
+    leaves the 15:45 strategy flatten barrier plus an hour of session as the
+    recovery margin.
