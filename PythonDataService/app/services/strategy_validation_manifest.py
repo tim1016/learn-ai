@@ -657,9 +657,17 @@ def _behavioral_equivalence_for_flag(
             detail="Human validation accepted the current engine evidence for deployment.",
             tolerance="manifest_reconciliation_passed",
             tolerance_reason=(
-                "Registered reconciliation status and diagnostics verdict are passed; "
-                "the manifest LEAN validator hash and deploy binding hash also match "
-                "the current source."
+                (
+                    "Registered reconciliation status and diagnostics verdict are passed; "
+                    "the manifest LEAN validator hash and deploy binding hash also match "
+                    "the current source."
+                )
+                if requires_qc_reference
+                else (
+                    "Registered reconciliation status and diagnostics verdict are passed; "
+                    "the deploy binding hash matches the current source. This operational "
+                    "harness does not require an external validator or audit copy."
+                )
             ),
             gating_divergence_counts=_gating_divergence_counts(proof),
         )

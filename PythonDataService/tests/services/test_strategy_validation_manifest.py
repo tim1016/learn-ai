@@ -200,6 +200,8 @@ def test_seed_manifest_marks_deployment_validation_deployable() -> None:
 
 
 def test_operational_harness_deployability_does_not_require_quantconnect_run() -> None:
+    import app.services.strategy_validation_manifest as strategy_manifest
+
     settings_sha = hashlib.sha256(
         (Path(__file__).parents[3] / SETTINGS_FILE_REF).read_bytes()
     ).hexdigest()
@@ -253,6 +255,11 @@ def test_operational_harness_deployability_does_not_require_quantconnect_run() -
     )
     accepted = _accepted_flag_event().model_copy(
         update={
+            "behavioral_equivalence": strategy_manifest._behavioral_equivalence_for_flag(
+                "validated",
+                evidence[0],
+                requires_qc_reference=False,
+            ),
             "evidence_snapshot": accepted_snapshot,
         }
     )
@@ -261,6 +268,11 @@ def test_operational_harness_deployability_does_not_require_quantconnect_run() -
 
     assert entry.strategy_category == "operational_validation_harness"
     assert entry.deployable is True
+    assert entry.behavioral_equivalence is not None
+    assert "does not require an external validator or audit copy" in (
+        entry.behavioral_equivalence.tolerance_reason
+    )
+    assert "LEAN validator" not in entry.behavioral_equivalence.tolerance_reason
     assert entry.proof.state == "current"
     assert all(evidence.label != "Reference audit copy" for stage in entry.proof.stages for evidence in stage.evidence)
     reference_stage = next(stage for stage in entry.proof.stages if stage.stage_id == "reference_run")

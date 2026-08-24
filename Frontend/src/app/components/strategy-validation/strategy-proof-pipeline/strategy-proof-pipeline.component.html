@@ -1,47 +1,102 @@
 @let dossier = proof();
 
-<section class="proof-pipeline" aria-labelledby="proof-pipeline-title">
-  <header class="proof-pipeline__header">
+<section
+  class="grid min-w-0 gap-4 rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)]"
+  aria-labelledby="proof-pipeline-title"
+>
+  <header
+    class="flex flex-col items-start justify-between gap-3 min-[701px]:flex-row"
+  >
     <div>
-      <p class="proof-pipeline__eyebrow">Authority pipeline</p>
-      <h3 id="proof-pipeline-title">Strategy proof</h3>
-      <p>{{ dossier.completed_stages ?? 0 }} of {{ dossier.total_stages ?? 0 }} required stages complete</p>
+      <p
+        class="m-0 text-[length:var(--fs-xs)] font-bold uppercase text-[var(--text-subtle)]"
+      >
+        Authority pipeline
+      </p>
+      <h3 id="proof-pipeline-title" class="m-0">Strategy proof</h3>
+      <p class="m-0">
+        {{ dossier.completed_stages ?? 0 }} of
+        {{ dossier.total_stages ?? 0 }} required stages complete
+      </p>
     </div>
-    <span class="proof-pipeline__state" [attr.data-state]="dossier.state">
+    <span
+      class="shrink-0 rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-[length:var(--fs-xs)] font-bold text-[var(--text-secondary)]"
+      [class.border-emerald-500]="dossier.state === 'current'"
+      [class.text-emerald-600]="dossier.state === 'current'"
+      [class.border-amber-500]="dossier.state === 'stale'"
+      [class.text-amber-600]="dossier.state === 'stale'"
+    >
       {{ dossier.state | receiptLabel }}
     </span>
   </header>
 
   @if (dossier.blocking_summary) {
-    <p class="proof-pipeline__blocker" role="status">
+    <p
+      class="m-0 rounded-[var(--radius-sm)] border-l-[3px] border-l-amber-500 bg-amber-500/10 p-3 text-[var(--text-primary)]"
+      role="status"
+    >
       <strong>Next:</strong> {{ dossier.blocking_summary }}
     </p>
   }
 
-  <ol class="proof-pipeline__stages">
-    @for (stage of dossier.stages ?? []; track stage.stage_id; let position = $index) {
+  <ol class="m-0 grid list-none gap-3 p-0">
+    @for (
+      stage of dossier.stages ?? [];
+      track stage.stage_id;
+      let position = $index
+    ) {
       <li
-        class="proof-stage"
-        [class.proof-stage--active]="stage.stage_id === dossier.blocking_stage_id"
-        [attr.data-state]="stage.state"
+        class="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] gap-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-elevated)] p-3"
+        [class.border-amber-500]="stage.stage_id === dossier.blocking_stage_id"
+        [class.opacity-70]="stage.state === 'not_applicable'"
       >
-        <span class="proof-stage__number" aria-hidden="true">{{ position + 1 }}</span>
-        <div class="proof-stage__body">
-          <header>
+        <span
+          class="grid size-8 place-items-center rounded-full bg-[var(--bg-surface)] font-bold text-[var(--text-secondary)]"
+          aria-hidden="true"
+        >
+          {{ position + 1 }}
+        </span>
+        <div class="grid min-w-0 gap-2">
+          <header
+            class="flex flex-col items-start justify-between gap-3 min-[701px]:flex-row"
+          >
             <div>
-              <h4>{{ stage.title }}</h4>
-              <p class="proof-stage__authority">Authority: {{ stage.authority }}</p>
+              <h4 class="m-0">{{ stage.title }}</h4>
+              <p
+                class="m-0 text-[length:var(--fs-xs)] font-bold uppercase text-[var(--text-subtle)]"
+              >
+                Authority: {{ stage.authority }}
+              </p>
             </div>
-            <span class="proof-stage__state">{{ stage.state | receiptLabel }}</span>
+            <span
+              class="shrink-0 rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-[length:var(--fs-xs)] font-bold text-[var(--text-secondary)]"
+              [class.border-emerald-500]="stage.state === 'complete'"
+              [class.text-emerald-600]="stage.state === 'complete'"
+              [class.border-amber-500]="
+                stage.state === 'stale' || stage.state === 'blocked'
+              "
+              [class.text-amber-600]="
+                stage.state === 'stale' || stage.state === 'blocked'
+              "
+            >
+              {{ stage.state | receiptLabel }}
+            </span>
           </header>
-          <p>{{ stage.summary }}</p>
+          <p class="m-0">{{ stage.summary }}</p>
           @if (stage.next_step) {
-            <p class="proof-stage__next"><strong>Next step:</strong> {{ stage.next_step }}</p>
+            <p class="m-0 text-[var(--text-primary)]">
+              <strong>Next step:</strong> {{ stage.next_step }}
+            </p>
           }
           @if ((stage.actions ?? []).length > 0) {
-            <nav class="proof-stage__actions" aria-label="Stage references">
+            <nav class="flex flex-wrap gap-2" aria-label="Stage references">
               @for (action of stage.actions ?? []; track action.href) {
-                <a [href]="action.href" target="_blank" rel="noopener noreferrer">
+                <a
+                  class="inline-flex items-center gap-2 font-semibold text-[var(--accent)] no-underline hover:underline"
+                  [href]="action.href"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   {{ action.label }}
                   <i class="pi pi-external-link" aria-hidden="true"></i>
                 </a>
@@ -49,21 +104,50 @@
             </nav>
           }
           @if ((stage.evidence ?? []).length > 0) {
-            <details class="proof-stage__evidence">
-              <summary>Technical evidence</summary>
-              <dl>
+            <details>
+              <summary
+                class="cursor-pointer font-semibold text-[var(--text-secondary)]"
+              >
+                Technical evidence
+              </summary>
+              <dl class="mt-3 mb-0 grid gap-1">
                 @for (item of stage.evidence ?? []; track item.label) {
-                  <div>
-                    <dt>{{ item.label }}</dt>
-                    <dd><span>{{ item.state | receiptLabel }}</span></dd>
+                  <div
+                    class="grid min-w-0 gap-1 border-t border-[var(--border)] pt-2"
+                  >
+                    <dt class="m-0">{{ item.label }}</dt>
+                    <dd class="m-0">
+                      <span>{{ item.state | receiptLabel }}</span>
+                    </dd>
                     @if (item.ref) {
-                      <dd><code>{{ item.ref }}</code></dd>
+                      <dd class="m-0">
+                        <code
+                          class="block [overflow-wrap:anywhere] text-[var(--text-secondary)]"
+                          >{{ item.ref }}</code
+                        >
+                      </dd>
                     }
                     @if (item.recorded_sha256) {
-                      <dd><small>Recorded</small><code>{{ item.recorded_sha256 }}</code></dd>
+                      <dd class="m-0">
+                        <small class="block font-bold text-[var(--text-subtle)]"
+                          >Recorded</small
+                        >
+                        <code
+                          class="block [overflow-wrap:anywhere] text-[var(--text-secondary)]"
+                          >{{ item.recorded_sha256 }}</code
+                        >
+                      </dd>
                     }
                     @if (item.current_sha256) {
-                      <dd><small>Current</small><code>{{ item.current_sha256 }}</code></dd>
+                      <dd class="m-0">
+                        <small class="block font-bold text-[var(--text-subtle)]"
+                          >Current</small
+                        >
+                        <code
+                          class="block [overflow-wrap:anywhere] text-[var(--text-secondary)]"
+                          >{{ item.current_sha256 }}</code
+                        >
+                      </dd>
                     }
                   </div>
                 }

@@ -32,8 +32,9 @@ exists — this module invents no new proof of its own:
 SAFETY (issue #1729): ``CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS`` ships EMPTY.
 Operational activation is a two-step, content-addressed human decision stored
 in the append-only local ledger below. It is admitted only while that ledger's
-hash chain is intact, and can be revoked without editing source. Do not add a
-source entry, a default, a dev-convenience shortcut, or an env-var fallback.
+hash chain and external head checkpoint are intact, and can be revoked without
+editing source. Do not add a source entry, a default, a dev-convenience
+shortcut, or an env-var fallback.
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.canary_admission import (
     CanaryActivationEvidence,
     CanaryActivationPlan,
+    CanaryAdmissionCheckpoint,
     CanaryAdmissionEvent,
     CanaryAdmissionLedger,
     CanaryRollbackDecision,
@@ -407,13 +409,19 @@ def _ledger_identity(path: Path) -> str:
 
 
 def _read_ledger(path: Path) -> CanaryAdmissionLedger:
+    checkpoint_path = _checkpoint_path(path)
     if path.is_symlink():
         raise CanaryAdmissionLedgerError("canary admission ledger cannot be a symbolic link")
     if not path.exists():
+        if checkpoint_path.exists() or checkpoint_path.is_symlink():
+            raise CanaryAdmissionLedgerError(
+                "canary admission ledger is missing while its checkpoint exists"
+            )
         return CanaryAdmissionLedger()
     try:
         ledger = CanaryAdmissionLedger.model_validate_json(path.read_text(encoding="utf-8"))
         _validate_ledger_history(ledger)
+        _validate_ledger_checkpoint(checkpoint_path, ledger)
         return ledger
     except CanaryAdmissionLedgerError:
         raise
@@ -462,6 +470,37 @@ def _ledger_head_hash(ledger: CanaryAdmissionLedger) -> str | None:
     return None if not ledger.events else ledger.events[-1].event_hash
 
 
+def _checkpoint_path(ledger_path: Path) -> Path:
+    return ledger_path.with_name(f"{ledger_path.name}.checkpoint")
+
+
+def _validate_ledger_checkpoint(
+    checkpoint_path: Path,
+    ledger: CanaryAdmissionLedger,
+) -> None:
+    if checkpoint_path.is_symlink():
+        raise CanaryAdmissionLedgerError(
+            "canary admission checkpoint cannot be a symbolic link"
+        )
+    if not checkpoint_path.exists():
+        raise CanaryAdmissionLedgerError("canary admission checkpoint is missing")
+    try:
+        checkpoint = CanaryAdmissionCheckpoint.model_validate_json(
+            checkpoint_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, ValidationError, ValueError) as exc:
+        raise CanaryAdmissionLedgerError(
+            f"canary admission checkpoint is invalid: {type(exc).__name__}"
+        ) from exc
+    if (
+        checkpoint.event_count != len(ledger.events)
+        or checkpoint.ledger_head_hash != _ledger_head_hash(ledger)
+    ):
+        raise CanaryAdmissionLedgerError(
+            "canary admission ledger does not match its monotonic checkpoint"
+        )
+
+
 def _write_ledger(path: Path, ledger: CanaryAdmissionLedger) -> None:
     encoded = (
         json.dumps(
@@ -473,6 +512,20 @@ def _write_ledger(path: Path, ledger: CanaryAdmissionLedger) -> None:
         + "\n"
     ).encode("utf-8")
     atomic_write_bytes(path, encoded)
+    checkpoint = CanaryAdmissionCheckpoint(
+        event_count=len(ledger.events),
+        ledger_head_hash=_ledger_head_hash(ledger),
+    )
+    checkpoint_bytes = (
+        json.dumps(
+            checkpoint.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    atomic_write_bytes(_checkpoint_path(path), checkpoint_bytes)
 
 
 def _required_operator_value(name: str, value: str) -> str:

@@ -1,85 +1,234 @@
-@if (strategy().paper_access_state === 'available' || strategy().paper_access_state === 'enabled') {
+@if (
+  strategy().paper_access_state === "available" ||
+  strategy().paper_access_state === "enabled"
+) {
   @if (flow(); as state) {
-    <section class="paper-access" aria-labelledby="paper-access-title">
-    <header class="paper-access__header">
-      <div>
-        <span class="paper-access__eyebrow">Account permission</span>
-        <h2 id="paper-access-title">Paper access</h2>
-      </div>
-      @if (strategy().paper_access_state === 'enabled' || state.kind === 'complete') {
-        <span class="paper-access__state paper-access__state--enabled">Enabled</span>
-      } @else {
-        <span class="paper-access__state">Off</span>
-      }
-    </header>
+    <section
+      class="grid min-w-0 gap-3 rounded-[var(--radius-md)] border border-[var(--border-light)] border-l-[3px] border-l-[var(--accent)] bg-[var(--bg-surface)] p-4"
+      aria-labelledby="paper-access-title"
+    >
+      <header class="flex items-start justify-between gap-3">
+        <div>
+          <span
+            class="text-[length:var(--fs-xxs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]"
+          >
+            Account permission
+          </span>
+          <h2
+            id="paper-access-title"
+            class="mt-0.5 mb-0 text-[length:var(--fs-lg)]"
+          >
+            Paper access
+          </h2>
+        </div>
+        @if (
+          strategy().paper_access_state === "enabled" ||
+          state.kind === "complete"
+        ) {
+          <span
+            class="rounded-full border border-emerald-500 bg-emerald-500/10 px-2 py-0.5 text-[length:var(--fs-xs)] font-semibold text-emerald-600"
+          >
+            Enabled
+          </span>
+        } @else {
+          <span
+            class="rounded-full border border-[var(--border-strong)] px-2 py-0.5 text-[length:var(--fs-xs)] font-semibold text-[var(--text-secondary)]"
+          >
+            Off
+          </span>
+        }
+      </header>
 
-    @if (strategy().paper_access_state === 'enabled' || state.kind === 'complete') {
-      <div class="paper-access__enabled" role="status">
-        <strong>Paper access enabled</strong>
-        <p>This strategy may use Paper on this account. Deploying a bot remains a separate action.</p>
-      </div>
-    } @else {
-      @switch (state.kind) {
-        @case ('idle') {
-          <p>
-            Paper trading is off for <strong>{{ strategy().label }}</strong> on this account.
-            Dry Run stays available.
+      @if (
+        strategy().paper_access_state === "enabled" || state.kind === "complete"
+      ) {
+        <div class="grid gap-1" role="status">
+          <strong class="text-emerald-600">Paper access enabled</strong>
+          <p class="m-0 leading-normal text-[var(--text-secondary)]">
+            This strategy may use Paper on this account. Deploying a bot remains
+            a separate action.
           </p>
-          <button class="paper-access__primary" type="button" (click)="prepare()">
-            Review &amp; enable Paper
-          </button>
-        }
-        @case ('preparing') {
-          <p class="paper-access__progress" role="status">Checking the current validation and program build…</p>
-        }
-        @case ('review') {
-          <div class="paper-access__review" role="region" aria-label="Review Paper access">
-            <div>
-              <span class="paper-access__eyebrow">Final confirmation</span>
-              <h3>Confirm Paper access</h3>
-              <p>
-                This enables eligibility for one exact strategy and account. It does not deploy a bot
-                or place an order.
-              </p>
-            </div>
+        </div>
+      } @else {
+        @switch (state.kind) {
+          @case ("idle") {
+            <p class="m-0 leading-normal text-[var(--text-secondary)]">
+              Paper trading is off for
+              <strong>{{ strategy().label }}</strong> on this account. Dry Run
+              stays available.
+            </p>
+            <p-button
+              label="Review &amp; enable Paper"
+              class="justify-self-start"
+              (onClick)="prepare()"
+            />
+          }
+          @case ("preparing") {
+            <p class="m-0 italic text-[var(--text-secondary)]" role="status">
+              Checking the current validation and program build…
+            </p>
+          }
+          @case ("review") {
+            <div
+              class="grid gap-3 border-t border-[var(--border-light)] pt-2"
+              role="region"
+              aria-label="Review Paper access"
+            >
+              <div>
+                <span
+                  class="text-[length:var(--fs-xxs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]"
+                >
+                  Final confirmation
+                </span>
+                <h3 class="mt-0.5 mb-1 text-[length:var(--fs-md)]">
+                  Confirm Paper access
+                </h3>
+                <p class="m-0 leading-normal text-[var(--text-secondary)]">
+                  This enables eligibility for one exact strategy and account.
+                  It does not deploy a bot or place an order.
+                </p>
+              </div>
 
-            <dl>
-              <div><dt>Strategy</dt><dd>{{ strategy().label }}</dd></div>
-              <div><dt>Account</dt><dd><code>{{ state.plan.account_id }}</code></dd></div>
-              <div><dt>Validation</dt><dd>Current</dd></div>
-              <div><dt>Program build</dt><dd>Verified</dd></div>
-              <div><dt>Review expires</dt><dd>{{ state.plan.expires_at_ms | timestampDisplay: 'local' : 'time' }}</dd></div>
-            </dl>
-
-            <details>
-              <summary>Audit details</summary>
-              <dl>
-                <div><dt>Validation event</dt><dd><code>{{ state.plan.evidence.validation_event_id }}</code></dd></div>
-                <div><dt>Plan receipt</dt><dd><code>{{ state.plan.plan_id }}</code></dd></div>
+              <dl
+                class="m-0 grid grid-cols-2 gap-x-4 gap-y-2 max-[520px]:grid-cols-1"
+              >
+                <div class="min-w-0">
+                  <dt
+                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
+                  >
+                    Strategy
+                  </dt>
+                  <dd class="mt-0.5 mb-0 text-[length:var(--fs-sm)]">
+                    {{ strategy().label }}
+                  </dd>
+                </div>
+                <div class="min-w-0">
+                  <dt
+                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
+                  >
+                    Account
+                  </dt>
+                  <dd
+                    class="mt-0.5 mb-0 [overflow-wrap:anywhere] text-[length:var(--fs-sm)]"
+                  >
+                    <code>{{ state.plan.account_id }}</code>
+                  </dd>
+                </div>
+                <div class="min-w-0">
+                  <dt
+                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
+                  >
+                    Validation
+                  </dt>
+                  <dd class="mt-0.5 mb-0 text-[length:var(--fs-sm)]">
+                    Current
+                  </dd>
+                </div>
+                <div class="min-w-0">
+                  <dt
+                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
+                  >
+                    Program build
+                  </dt>
+                  <dd class="mt-0.5 mb-0 text-[length:var(--fs-sm)]">
+                    Verified
+                  </dd>
+                </div>
+                <div class="min-w-0">
+                  <dt
+                    class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
+                  >
+                    Review expires
+                  </dt>
+                  <dd class="mt-0.5 mb-0 text-[length:var(--fs-sm)]">
+                    {{
+                      state.plan.expires_at_ms
+                        | timestampDisplay: "local" : "time"
+                    }}
+                  </dd>
+                </div>
               </dl>
-            </details>
 
-            <div class="paper-access__actions">
-              <button class="paper-access__primary" type="button" (click)="confirm(state.plan)">
-                Enable Paper access
-              </button>
-              <button class="paper-access__secondary" type="button" (click)="cancel()">Cancel</button>
+              <details class="border-y border-[var(--border-light)] py-2">
+                <summary
+                  class="cursor-pointer text-[length:var(--fs-sm)] text-[var(--text-secondary)]"
+                >
+                  Audit details
+                </summary>
+                <dl class="mt-2 grid gap-2">
+                  <div class="min-w-0">
+                    <dt
+                      class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
+                    >
+                      Validation event
+                    </dt>
+                    <dd
+                      class="mt-0.5 mb-0 [overflow-wrap:anywhere] text-[length:var(--fs-sm)]"
+                    >
+                      <code>{{ state.plan.evidence.validation_event_id }}</code>
+                    </dd>
+                  </div>
+                  <div class="min-w-0">
+                    <dt
+                      class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
+                    >
+                      Plan receipt
+                    </dt>
+                    <dd
+                      class="mt-0.5 mb-0 [overflow-wrap:anywhere] text-[length:var(--fs-sm)]"
+                    >
+                      <code>{{ state.plan.plan_id }}</code>
+                    </dd>
+                  </div>
+                </dl>
+              </details>
+
+              <div class="flex flex-wrap gap-2 max-[520px]:grid">
+                <p-button
+                  label="Enable Paper access"
+                  (onClick)="confirm(state.plan)"
+                />
+                <p-button
+                  label="Cancel"
+                  severity="secondary"
+                  [outlined]="true"
+                  (onClick)="cancel()"
+                />
+              </div>
             </div>
-          </div>
-        }
-        @case ('confirming') {
-          <p class="paper-access__progress" role="status">Enabling this exact strategy and account pairing…</p>
-        }
-        @case ('error') {
-          <div class="paper-access__error" role="alert">
-            <strong>{{ state.failure.message }}</strong>
-            @if (state.failure.explanation; as explanation) { <p>{{ explanation }}</p> }
-            @if (state.failure.nextAction; as nextAction) { <p>{{ nextAction }}</p> }
-          </div>
-          <button class="paper-access__secondary" type="button" (click)="prepare()">Try review again</button>
+          }
+          @case ("confirming") {
+            <p class="m-0 italic text-[var(--text-secondary)]" role="status">
+              Enabling this exact strategy and account pairing…
+            </p>
+          }
+          @case ("error") {
+            <div
+              class="grid gap-1 rounded-[var(--radius)] border border-red-500 bg-red-500/10 p-3"
+              role="alert"
+            >
+              <strong class="text-red-600">{{ state.failure.message }}</strong>
+              @if (state.failure.explanation; as explanation) {
+                <p class="m-0 leading-normal text-[var(--text-secondary)]">
+                  {{ explanation }}
+                </p>
+              }
+              @if (state.failure.nextAction; as nextAction) {
+                <p class="m-0 leading-normal text-[var(--text-secondary)]">
+                  {{ nextAction }}
+                </p>
+              }
+            </div>
+            <p-button
+              label="Try review again"
+              severity="secondary"
+              [outlined]="true"
+              class="justify-self-start"
+              (onClick)="prepare()"
+            />
+          }
         }
       }
-    }
     </section>
   }
 }

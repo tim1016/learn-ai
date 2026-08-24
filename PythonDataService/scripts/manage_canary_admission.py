@@ -12,13 +12,17 @@ Usage::
       --output /tmp/ema-canary-plan.json
 
     python -m scripts.manage_canary_admission apply \
-      --plan /tmp/ema-canary-plan.json \
-      --confirmation-token TOKEN_FROM_REVIEWED_PLAN
+      --plan /tmp/ema-canary-plan.json
+
+The apply command reads the confirmation token from a hidden prompt when run
+interactively, or from standard input for automation. It never accepts the
+token in process arguments.
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import sys
 from pathlib import Path
@@ -62,7 +66,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Confirm a reviewed, unexpired plan and append its activation.",
     )
     apply.add_argument("--plan", type=Path, required=True)
-    apply.add_argument("--confirmation-token", required=True)
 
     revoke = subparsers.add_parser(
         "revoke",
@@ -92,11 +95,16 @@ def main(argv: list[str] | None = None) -> int:
                 confirmation_ttl_ms=args.confirmation_ttl_ms,
             )
             _write_model(args.output, result)
-            payload = result.model_dump(mode="json")
+            payload = {
+                "program_key": result.program_key,
+                "account_id": result.account_id,
+                "expires_at_ms": result.expires_at_ms,
+                "plan_path": str(args.output),
+            }
         elif args.operation == "apply":
             result = apply_canary_activation(
                 plan=_read_plan(args.plan),
-                confirmation_token=args.confirmation_token,
+                confirmation_token=_read_confirmation_token(),
             )
             payload = result.model_dump(mode="json")
         elif args.operation == "revoke":
@@ -135,6 +143,16 @@ def _read_plan(path: Path) -> CanaryActivationPlan:
     return CanaryActivationPlan.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def _read_confirmation_token() -> str:
+    if sys.stdin.isatty():
+        token = getpass.getpass("Confirmation token: ")
+    else:
+        token = sys.stdin.readline().rstrip("\r\n")
+    if not token:
+        raise CanaryActivationRefused("confirmation token was not provided")
+    return token
+
+
 def _write_model(path: Path, model: CanaryActivationPlan) -> None:
     encoded = (
         json.dumps(
@@ -145,7 +163,7 @@ def _write_model(path: Path, model: CanaryActivationPlan) -> None:
         )
         + "\n"
     ).encode("utf-8")
-    atomic_write_bytes(path, encoded)
+    atomic_write_bytes(path, encoded, mode=0o600)
 
 
 if __name__ == "__main__":

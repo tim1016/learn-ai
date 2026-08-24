@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.schemas.signal_program_seal import semantic_payload_hash
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_INT64_MAX = 9_223_372_036_854_775_807
 
 
 class CanaryActivationEvidence(BaseModel):
@@ -28,7 +29,7 @@ class CanaryActivationEvidence(BaseModel):
     running_artifact_digest: str = Field(pattern=_SHA256_PATTERN)
     qualification_receipt_hash: str = Field(pattern=_SHA256_PATTERN)
     qualification_suite: str = Field(min_length=1)
-    qualified_at_ms: int = Field(ge=0)
+    qualified_at_ms: int = Field(ge=0, le=_INT64_MAX)
 
 
 class CanaryActivationPlan(BaseModel):
@@ -43,8 +44,8 @@ class CanaryActivationPlan(BaseModel):
     account_id: str = Field(min_length=1)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-    created_at_ms: int = Field(ge=0)
-    expires_at_ms: int = Field(ge=0)
+    created_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    expires_at_ms: int = Field(ge=0, le=_INT64_MAX)
     ledger_path: str = Field(min_length=1)
     expected_ledger_head_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     evidence: CanaryActivationEvidence
@@ -90,7 +91,7 @@ class CanaryAdmissionEvent(BaseModel):
     account_id: str = Field(min_length=1)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=_INT64_MAX)
     evidence: CanaryActivationEvidence | None = None
     previous_event_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     event_hash: str = Field(pattern=_SHA256_PATTERN)
@@ -116,6 +117,22 @@ class CanaryAdmissionLedger(BaseModel):
     events: tuple[CanaryAdmissionEvent, ...] = ()
 
 
+class CanaryAdmissionCheckpoint(BaseModel):
+    """Head anchored outside the ledger so valid-prefix rollback fails closed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    event_count: int = Field(ge=0)
+    ledger_head_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_head_presence(self) -> CanaryAdmissionCheckpoint:
+        if (self.event_count == 0) != (self.ledger_head_hash is None):
+            raise ValueError("checkpoint count and ledger head must describe the same history")
+        return self
+
+
 class CanaryRollbackDecision(BaseModel):
     """Whether stopping one canary run is admitted at a Clerk-proved boundary.
 
@@ -138,7 +155,7 @@ class CanaryRollbackDecision(BaseModel):
         "STOP_REQUIRES_FLATTEN",
         "STOPPED_CUSTODY_UNPROVABLE",
     ]
-    evaluated_at_ms: int = Field(ge=0)
+    evaluated_at_ms: int = Field(ge=0, le=_INT64_MAX)
 
 
 __all__ = [
@@ -146,6 +163,7 @@ __all__ = [
     "CanaryActivationEvidence",
     "CanaryActivationPlan",
     "CanaryActivationRequest",
+    "CanaryAdmissionCheckpoint",
     "CanaryAdmissionEvent",
     "CanaryAdmissionLedger",
     "CanaryRollbackDecision",

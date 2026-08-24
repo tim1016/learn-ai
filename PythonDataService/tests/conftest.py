@@ -1,6 +1,7 @@
 """Shared test fixtures and helpers"""
 
 import os
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -50,7 +51,10 @@ def _clerk_market_liveness_defaults_tradable(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_strategy_validation_flag_ledger(tmp_path, monkeypatch: pytest.MonkeyPatch):
+def _isolate_strategy_validation_flag_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#1739: the strategy-validation flag ledger
     (``artifacts/strategy_validation/flag_events.json``) is gitignored and
     machine-local. A developer who has ever used the flag UI has real
@@ -86,7 +90,10 @@ def _isolate_strategy_validation_flag_ledger(tmp_path, monkeypatch: pytest.Monke
 
 
 @pytest.fixture(autouse=True)
-def _isolate_canary_admission_ledger(tmp_path, monkeypatch: pytest.MonkeyPatch):
+def _isolate_canary_admission_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Keep a developer's machine-local canary approvals out of every test.
 
     Production derives exact-pair admission from a gitignored local ledger.

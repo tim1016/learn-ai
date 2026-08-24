@@ -157,6 +157,12 @@ append-only local ledger at
 `PythonDataService/artifacts/canary_admission/events.json`. Nothing in CI,
 migration, or startup writes it.
 
+A sibling `events.json.checkpoint` anchors the latest event count and hash
+outside the ledger. A missing or mismatched checkpoint makes admission fail
+closed, including when the ledger is replaced with an earlier, internally
+valid prefix. Treat the ledger and its checkpoint as one operational record;
+never edit or restore either file by hand.
+
 The Alpaca **Deploy** drawer is the primary approval workflow. Choose a
 strategy, find **Paper access**, then select **Review & enable Paper**. The
 first step only prepares a short-lived review bound to the current validation
@@ -182,15 +188,19 @@ does not change admission:
   --output /tmp/ema-canary-plan.json
 ```
 
-Read the plan and confirm its program, account, actor, reason, validation
-event, artifact digest, qualification receipt, and expiry. Then, before its
-two-minute default expiry, pass the plan's exact `confirmation_token` back:
+The plan is written with owner-only (`0600`) permissions because it contains
+the confirmation token. Read it and confirm its program, account, actor,
+reason, validation event, artifact digest, qualification receipt, and expiry.
+Then, before its two-minute default expiry, apply the reviewed plan:
 
 ```text
 .venv/bin/python -m scripts.manage_canary_admission apply \
-  --plan /tmp/ema-canary-plan.json \
-  --confirmation-token TOKEN_FROM_THE_REVIEWED_PLAN
+  --plan /tmp/ema-canary-plan.json
 ```
+
+At an interactive terminal, paste the plan's exact `confirmation_token` into
+the hidden prompt. For automation, provide the token on standard input from a
+protected secret source. Never put it in a command argument or shell history.
 
 `apply` re-proves the evidence and refuses if it changed, the plan expired,
 or the ledger moved since planning. It appends an activation event only; it

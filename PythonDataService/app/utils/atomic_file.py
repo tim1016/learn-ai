@@ -13,8 +13,15 @@ _PRIVATE_CANDIDATE_MODE = 0o600
 _MAX_CANDIDATE_ATTEMPTS = 100
 
 
-def atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Publish bytes through a unique, fsynced sibling and atomic replace."""
+def atomic_write_bytes(path: Path, data: bytes, *, mode: int | None = None) -> None:
+    """Publish bytes through a unique, fsynced sibling and atomic replace.
+
+    ``mode`` overrides both the destination's existing permissions and the
+    process umask. Use it for artifacts that contain operator secrets.
+    """
+
+    if mode is not None and not 0 <= mode <= 0o777:
+        raise ValueError("atomic publication mode must contain permission bits only")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, candidate, new_file_mode = _create_candidate(path)
@@ -23,7 +30,7 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
             os.fchmod(handle.fileno(), _PRIVATE_CANDIDATE_MODE)
             handle.write(data)
             handle.flush()
-            os.fchmod(handle.fileno(), _publication_mode(path, new_file_mode))
+            os.fchmod(handle.fileno(), _publication_mode(path, new_file_mode, mode))
             os.fsync(handle.fileno())
         os.replace(candidate, path)
         fsync_parent_dir(path)
@@ -49,9 +56,11 @@ def _create_candidate(path: Path) -> tuple[int, Path, int]:
     raise FileExistsError(f"Could not allocate a unique atomic-write candidate for {path}")
 
 
-def _publication_mode(path: Path, new_file_mode: int) -> int:
+def _publication_mode(path: Path, new_file_mode: int, requested_mode: int | None) -> int:
     """Preserve an existing destination mode or use ordinary creation mode."""
 
+    if requested_mode is not None:
+        return requested_mode
     try:
         return stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:

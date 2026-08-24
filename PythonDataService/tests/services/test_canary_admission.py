@@ -303,6 +303,38 @@ def test_revoke_canary_pairing_is_append_only_and_blocks_future_admission(tmp_pa
     assert [event["action"] for event in raw["events"]] == ["activated", "revoked"]
 
 
+def test_valid_prefix_rollback_fails_closed_against_monotonic_checkpoint(
+    tmp_path: Path,
+) -> None:
+    ledger_path = tmp_path / "canary-admission.json"
+    plan = _ema_plan(ledger_path)
+    apply_canary_activation(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        ledger_path=ledger_path,
+        clock=lambda: _NOW + 1,
+    )
+    activation_only_ledger = ledger_path.read_bytes()
+    revoke_canary_pairing(
+        program_key="ema_crossover_signal",
+        account_id="paper-account",
+        actor="local:test-operator",
+        reason="End the canary before any subsequent Start or Resume.",
+        ledger_path=ledger_path,
+        clock=lambda: _NOW + 2,
+    )
+
+    ledger_path.write_bytes(activation_only_ledger)
+
+    with pytest.raises(CanaryAdmissionLedgerError, match="monotonic checkpoint"):
+        active_canary_pairings(ledger_path=ledger_path)
+    assert canary_pairing_admitted(
+        program_key="ema_crossover_signal",
+        account_id="paper-account",
+        ledger_path=ledger_path,
+    ) is False
+
+
 def test_canary_pairing_admission_fails_closed_on_a_tampered_ledger(tmp_path: Path) -> None:
     ledger_path = tmp_path / "canary-admission.json"
     plan = _ema_plan(ledger_path)
