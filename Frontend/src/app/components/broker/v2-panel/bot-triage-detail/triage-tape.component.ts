@@ -14,6 +14,7 @@ import {
 } from '@angular/core';
 
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import {
   CFG,
@@ -25,10 +26,24 @@ import type {
   ChartBar,
   ChartFillMarker,
   ChartLiveResolution,
+  ChartOverlayNoticeView,
+  ChartSource,
 } from '../lib/broker-v2-panel.types';
 
 /** Coarsest first: the triage pane defaults to `1m` and only drops to `5s` on request. */
 const RESOLUTIONS: readonly ChartLiveResolution[] = ['1m', '5s'];
+
+/**
+ * Distinct candle palette for Polygon fallback bars, matching
+ * `DualPaneChartComponent`'s `sourceColors`. A Polygon bar is display fallback
+ * and must never look identical to a live IBKR bar (ADR 0032 §2).
+ */
+const POLYGON_COLORS = {
+  upColor: '#5eead4',
+  downColor: '#fb7185',
+  volUpColor: 'rgba(94, 234, 212, 0.15)',
+  volDownColor: 'rgba(251, 113, 133, 0.15)',
+} as const;
 
 /**
  * The triage pane's price tape.
@@ -45,13 +60,15 @@ const RESOLUTIONS: readonly ChartLiveResolution[] = ['1m', '5s'];
  * down the rail.
  *
  * It derives NO numbers from the bars — no last price, no session change. Those
- * are server-computed elsewhere (single numerical authority, CLAUDE.md #5);
- * this draws the candles it is handed and nothing else.
+ * are server-computed elsewhere (single numerical authority, CLAUDE.md #5); it
+ * draws the candles it is handed, and honestly labels their `source`: Polygon
+ * fallback bars get a distinct palette and the server's overlay notices rather
+ * than passing for live IBKR data (ADR 0032 §2).
  */
 @Component({
   selector: 'app-triage-tape',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AssetIdentityComponent, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, TimestampDisplayComponent, ReceiptLabelPipe],
   templateUrl: './triage-tape.component.html',
   styleUrl: './triage-tape.component.scss',
 })
@@ -64,6 +81,13 @@ export class TriageTapeComponent {
   readonly resolution = input.required<ChartLiveResolution>();
   /** Server-computed last-bar time from the panel projection, never derived from `bars`. */
   readonly lastBarAtMs = input<number | null>(null);
+  /**
+   * The bars' data source. Anything other than `ibkr` is display fallback and
+   * must be surfaced, not painted as live (ADR 0032 §2).
+   */
+  readonly source = input<ChartSource | null>(null);
+  /** Server-authored fallback notices (e.g. "Live feed unavailable — showing Polygon (delayed)."). */
+  readonly notices = input<readonly ChartOverlayNoticeView[]>([]);
 
   readonly resolutionChange = output<ChartLiveResolution>();
   readonly retry = output();
@@ -86,7 +110,19 @@ export class TriageTapeComponent {
   private readonly rendererCfg = computed<CandleRendererConfig>(() => ({
     ...CFG,
     ...this.canvasSize(),
+    // The tape derives no last price or session direction of its own; those are
+    // server-computed (single numerical authority, CLAUDE.md #5).
+    showLastPriceTag: false,
+    // Polygon fallback bars carry a distinct palette so they can never be read
+    // as live IBKR data (ADR 0032 §2).
+    ...(this.source() === 'polygon' ? POLYGON_COLORS : {}),
   }));
+
+  /** True while the tape is showing degraded (Polygon/mixed) bars rather than live IBKR data. */
+  protected readonly isFallback = computed(() => {
+    const source = this.source();
+    return source !== null && source !== 'ibkr';
+  });
 
   /**
    * A signal rather than a plain field, for the reason `BotTileComponent`

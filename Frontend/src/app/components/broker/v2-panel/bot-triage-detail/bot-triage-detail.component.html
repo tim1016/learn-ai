@@ -13,6 +13,7 @@
   <div class="triage-lensbar">
     <div class="triage-lens" role="tablist" aria-label="Detail lens">
       <button
+        id="triage-lens-tab-trader"
         type="button"
         role="tab"
         data-lens="trader"
@@ -20,9 +21,12 @@
         [class.triage-lens__tab--active]="lens() === 'trader'"
         [attr.aria-selected]="lens() === 'trader'"
         [attr.tabindex]="lens() === 'trader' ? 0 : -1"
+        aria-controls="triage-lens-panel"
         (click)="selectLens('trader')"
+        (keydown)="onLensKeydown($event)"
       >Trader</button>
       <button
+        id="triage-lens-tab-operator"
         type="button"
         role="tab"
         data-lens="operator"
@@ -30,7 +34,9 @@
         [class.triage-lens__tab--active]="lens() === 'operator'"
         [attr.aria-selected]="lens() === 'operator'"
         [attr.tabindex]="lens() === 'operator' ? 0 : -1"
+        aria-controls="triage-lens-panel"
         (click)="selectLens('operator')"
+        (keydown)="onLensKeydown($event)"
       >Operator</button>
     </div>
 
@@ -96,6 +102,12 @@
     }
   </section>
 
+  <div
+    id="triage-lens-panel"
+    class="triage-lens-panel"
+    role="tabpanel"
+    [attr.aria-labelledby]="lens() === 'trader' ? 'triage-lens-tab-trader' : 'triage-lens-tab-operator'"
+  >
   @if (lens() === 'trader') {
     <div class="triage-trader">
       <app-triage-tape
@@ -106,6 +118,8 @@
         [loading]="tapeLoading()"
         [failed]="tapeFailed()"
         [resolution]="tapeResolution()"
+        [source]="tapeSource()"
+        [notices]="tapeNotices()"
         [lastBarAtMs]="panelView.market_pulse.latest_bar_at_ms ?? null"
         (resolutionChange)="onTapeResolutionChange($event)"
         (retry)="reloadTape()"
@@ -147,6 +161,7 @@
       (journalRetry)="reload()"
     />
   }
+  </div>
 } @else {
   <div class="triage-placeholder" role="status" aria-live="polite">
     <strong>Loading {{ sid() }}…</strong>

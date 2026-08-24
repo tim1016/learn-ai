@@ -30,7 +30,10 @@ import { TriageTapeComponent } from './triage-tape.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type {
   BotPanelView,
+  ChartBar,
   ChartLiveResolution,
+  ChartOverlayNoticeView,
+  ChartSource,
   PanelAction,
   PanelActionTrigger,
   ReadinessCheckView,
@@ -53,6 +56,16 @@ const PANEL_POLL_MS = 15_000;
  * request per keystroke.
  */
 const TAPE_DEBOUNCE_MS = 350;
+
+/**
+ * The response's single data source, or `mixed` when its bars disagree — the
+ * same reduction `DualPaneChartComponent` uses. `null` for an empty response.
+ */
+function dominantSource(bars: readonly ChartBar[]): ChartSource | null {
+  if (bars.length === 0) return null;
+  const sources = new Set(bars.map((bar) => bar.source));
+  return sources.size === 1 ? bars[0].source : 'mixed';
+}
 
 /**
  * Merged triage detail for the bot selected in the rail.
@@ -138,8 +151,21 @@ export class BotTriageDetailComponent {
       this.panelService.getPanel(params.broker, params.accountId, params.sid),
   });
 
+  /**
+   * The evidence read, parked off the Operator lens. `read_evidence_page`
+   * appends one `EvidenceAuditEntry` per call into a log nothing prunes — the
+   * record asserts an operator read this bot's raw evidence at that instant.
+   * The Trader lens (the default) hides the custody journal, so reading it
+   * there would stamp an assertion the operator never saw and leave a later
+   * Operator switch showing a page fetched — and audited — at the wrong time.
+   * It therefore fetches only when the Operator lens is actually up.
+   */
+  private readonly journalSelection = computed(() =>
+    this.lens() === 'operator' ? this.selection() : undefined,
+  );
+
   protected readonly journal = resource({
-    params: this.selection,
+    params: this.journalSelection,
     loader: ({ params }) =>
       this.panelService.getEvidence(params.broker, params.accountId, params.sid, {
         pageSize: JOURNAL_PAGE_SIZE,
@@ -186,7 +212,8 @@ export class BotTriageDetailComponent {
     // or prunes `evidence_audit.jsonl`; `_append_audit_entry` is its only
     // writer. A background poll would forge ~240 of those assertions an hour
     // per selected bot and bury the genuine reads, so evidence is read only on
-    // a real operator act: selecting a bot, retrying, or acting on one.
+    // a real operator act: opening the Operator lens on a bot (`journalSelection`),
+    // retrying, or acting on one.
     const timer = setInterval(() => {
       if (this.document.visibilityState !== 'visible') return;
       this.panel.reload();
@@ -298,6 +325,13 @@ export class BotTriageDetailComponent {
   protected readonly tapeFailed = computed(
     () => this.tape.error() !== undefined && this.tapeIsCurrent(),
   );
+  /** The tape's data source, so Polygon fallback is styled honestly (ADR 0032 §2). */
+  protected readonly tapeSource = computed<ChartSource | null>(() =>
+    this.tapeIsCurrent() && this.tape.hasValue() ? dominantSource(this.tape.value().bars) : null,
+  );
+  protected readonly tapeNotices = computed<readonly ChartOverlayNoticeView[]>(() =>
+    this.tapeIsCurrent() && this.tape.hasValue() ? this.tape.value().overlay_notices : [],
+  );
 
   // ── Lens-independent facts ────────────────────────────────────────────────
 
@@ -356,6 +390,24 @@ export class BotTriageDetailComponent {
 
   protected selectLens(lens: TriageLens): void {
     this.lens.set(lens);
+  }
+
+  /**
+   * Roving-tabindex keyboard nav for the lens tablist (WAI-ARIA tabs pattern),
+   * mirroring `DualPaneChartComponent`'s source switcher: only the active tab
+   * is tabbable, and Arrow/Home/End move both the selection and focus so a
+   * keyboard-only operator can reach the other lens.
+   */
+  protected onLensKeydown(event: KeyboardEvent): void {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const lens: TriageLens =
+      event.key === 'ArrowLeft' || event.key === 'Home' ? 'trader' : 'operator';
+    this.lens.set(lens);
+    const target = (event.currentTarget as HTMLElement | null)?.parentElement?.querySelector(
+      `[data-lens="${lens}"]`,
+    );
+    if (target instanceof HTMLElement) target.focus();
   }
 
   protected onTapeResolutionChange(resolution: ChartLiveResolution): void {

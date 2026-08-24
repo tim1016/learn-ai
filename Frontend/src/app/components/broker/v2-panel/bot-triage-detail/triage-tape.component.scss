@@ -43,6 +43,33 @@
   color: var(--text-muted);
 }
 
+.tape__source {
+  padding: 2px 8px;
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-pill);
+}
+
+.tape__notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tape__notice {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--radius);
+}
+
 .tape__intervals {
   display: flex;
   gap: 2px;

@@ -192,6 +192,17 @@
   }
 }
 
+// ── Lens panel ─────────────────────────────────────────────────────────────
+
+// Wraps whichever lens is active. A flex column with the same gap the host used
+// when the branches were its direct children, so the Operator lens keeps its
+// space between the metric tiles and the evidence section.
+.triage-lens-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 // ── Trader lens ────────────────────────────────────────────────────────────
 
 .triage-trader {

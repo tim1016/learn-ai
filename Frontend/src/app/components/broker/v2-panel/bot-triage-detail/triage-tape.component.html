@@ -4,6 +4,9 @@
     <app-asset-identity [symbol]="symbol()" size="sm" />
 
     <div class="tape__tools">
+      @if (isFallback()) {
+        <span class="tape__source" [attr.data-source]="source()">{{ source() | receiptLabel }}</span>
+      }
       @if (!empty()) {
         <span class="tape__stamp">
           {{ bars().length }} candle{{ bars().length === 1 ? '' : 's' }}
@@ -25,6 +28,14 @@
       </div>
     </div>
   </header>
+
+  @if (notices().length > 0) {
+    <div class="tape__notices">
+      @for (notice of notices(); track notice.code) {
+        <p class="tape__notice" role="status" aria-live="polite">{{ notice.message }}</p>
+      }
+    </div>
+  }
 
   <div #chartStage class="tape__stage">
     <canvas #chartCanvas aria-hidden="true"></canvas>
