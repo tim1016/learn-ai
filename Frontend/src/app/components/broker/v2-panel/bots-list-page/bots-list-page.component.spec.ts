@@ -269,8 +269,11 @@ describe('BotsListPageComponent', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
     await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
 
-    // The operator moves on to another bot while that action is still running.
+    // The operator moves on to another bot while that action is still running,
+    // and opens its Operator lens — the only lens that reads the audit-logged
+    // custody journal — so bot-b has a genuine baseline read.
     fireEvent.click(await screen.findByRole('button', { name: /bot-b/ }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Operator' }));
     await vi.waitFor(() =>
       expect(view.mockPanelService.getEvidence).toHaveBeenCalledWith(
         'alpaca',

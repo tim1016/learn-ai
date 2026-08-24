@@ -1,5 +1,7 @@
 // Merged triage detail — trade fact and failure diagnosis in one pane.
 
+@use './triage-card';
+
 :host {
   min-width: 0;
   gap: var(--space-3);
@@ -89,7 +91,7 @@
   strong { color: var(--text-primary); }
 }
 
-.verdict__provenance {
+.triage-lensbar__provenance {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
@@ -103,7 +105,8 @@
 .verdict__actions {
   display: flex;
   flex: 0 0 auto;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: var(--space-2);
 }
 
@@ -147,6 +150,118 @@
 .metric[data-tone='positive'] .metric__value { color: var(--bull); }
 .metric[data-tone='warn'] .metric__value { color: var(--warn); }
 .metric[data-tone='muted'] .metric__value { color: var(--text-subtle); }
+
+
+// ── Lens bar ───────────────────────────────────────────────────────────────
+
+.triage-lensbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.triage-lens {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.triage-lens__tab {
+  padding: 0.2rem 0.75rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-subtle);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+
+  &:hover { color: var(--text-primary); }
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  &--active {
+    background: var(--border-strong);
+    color: var(--text-primary);
+  }
+}
+
+// ── Lens panel ─────────────────────────────────────────────────────────────
+
+// Wraps whichever lens is active. A flex column with the same gap the host used
+// when the branches were its direct children, so the Operator lens keeps its
+// space between the metric tiles and the evidence section.
+.triage-lens-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+// ── Trader lens ────────────────────────────────────────────────────────────
+
+.triage-trader {
+  display: grid;
+  flex: 0 0 auto;
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 20rem;
+  gap: var(--space-3);
+}
+
+/**
+ * The tape is sized, not stretched. The pane itself scrolls, so a `1fr` row
+ * would let the rail's cards (a journal-length decision list) drag the canvas
+ * to two thousand pixels tall and push the candles off screen.
+ */
+.triage-trader__tape { min-width: 0; height: clamp(20rem, 46vh, 34rem); }
+
+.triage-trader__rail {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.standing {
+  margin: var(--space-2) 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.standing__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+
+  &:last-child { border-bottom: 0; }
+
+  dt {
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+  }
+
+  dd {
+    margin: 0;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  dd[data-tone='negative'] { color: var(--bear); }
+  dd[data-tone='positive'] { color: var(--bull); }
+  dd[data-tone='warn'] { color: var(--warn); }
+  dd[data-tone='muted'] { color: var(--text-subtle); }
+}
 
 // ── Columns ────────────────────────────────────────────────────────────────
 
@@ -201,6 +316,7 @@
 
 @media (max-width: 1100px) {
   .triage-columns { grid-template-columns: 1fr; }
+  .triage-trader { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 700px) {

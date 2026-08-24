@@ -3,7 +3,11 @@ import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
-import type { BotPanelView, ReadinessCheckView } from '../lib/broker-v2-panel.types';
+import type {
+  BotPanelView,
+  ChartLiveResponse,
+  ReadinessCheckView,
+} from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotTriageDetailComponent } from './bot-triage-detail.component';
 
@@ -22,9 +26,41 @@ function fakeGate(overrides: Partial<ReadinessCheckView> = {}): ReadinessCheckVi
   };
 }
 
+/**
+ * A complete `ChartLiveResponse` — typed against the generated contract so a
+ * renamed or newly-required field fails the build instead of passing silently.
+ */
+function fakeLiveChart(overrides: Partial<ChartLiveResponse> = {}): ChartLiveResponse {
+  return {
+    as_of_ms: 1_700_000_000_000,
+    bars: [],
+    fill_markers: [],
+    overlay_notices: [],
+    resolution: '1m',
+    strategy_instance_id: 'spy-momentum-01',
+    symbol: 'SPY',
+    trading_date_open_ms: 1_700_000_000_000,
+    trading_date_close_ms: 1_700_023_400_000,
+    ...overrides,
+  };
+}
+
+/**
+ * Command availability and the custody journal live on the Operator lens now;
+ * the pane opens on Trader. Tests about that evidence must switch first.
+ */
+async function showOperator(): Promise<void> {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Operator' }));
+}
+
 async function renderDetail(
   panel: BotPanelView | null = fakeBotPanelView(),
-  options: { sid?: string | null; panelError?: Error; evidenceError?: Error } = {},
+  options: {
+    sid?: string | null;
+    panelError?: Error;
+    evidenceError?: Error;
+    liveChart?: ChartLiveResponse;
+  } = {},
 ) {
   const sid = options.sid === undefined ? (panel?.strategy_instance_id ?? null) : options.sid;
 
@@ -37,6 +73,7 @@ async function renderDetail(
         ? Promise.reject(options.evidenceError)
         : Promise.resolve({ entries: [], next_cursor: null }),
     ),
+    getLiveChart: vi.fn(() => Promise.resolve(options.liveChart ?? fakeLiveChart())),
   };
 
   const view = await render(BotTriageDetailComponent, {
@@ -104,6 +141,8 @@ describe('BotTriageDetailComponent', () => {
       }),
     );
 
+    await showOperator();
+
     expect(await screen.findByText('Last SPY minute bar is 37s beyond tolerance.')).toBeTruthy();
     expect(screen.getByText('Fetch the current window from Data Lab, then retry.')).toBeTruthy();
 
@@ -159,7 +198,10 @@ describe('BotTriageDetailComponent', () => {
       }),
     );
 
-    expect(await screen.findByText('Stop')).toBeTruthy();
+    await showOperator();
+
+    const card = screen.getByRole('region', { name: 'Command availability' });
+    expect(within(card).getByText('Stop')).toBeTruthy();
     expect(screen.queryByText('The market-data window is current.')).toBeNull();
     expect(screen.queryByText('never shown')).toBeNull();
   });
@@ -176,6 +218,7 @@ describe('BotTriageDetailComponent', () => {
               Promise.resolve(fakeBotPanelView({ actions: [fakePanelAction('stop')] })),
             ),
             getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
+            getLiveChart: vi.fn(() => Promise.resolve(fakeLiveChart())),
           },
         },
       ],
@@ -207,7 +250,8 @@ describe('BotTriageDetailComponent', () => {
   /**
    * `read_evidence_page` appends an `EvidenceAuditEntry` per call, asserting an
    * operator read at that instant, into a log nothing prunes. Polling it would
-   * forge those assertions, so the timer must move the panel only.
+   * forge those assertions, so the timer must move the panel only — and the
+   * Trader default keeps the audit read parked entirely.
    */
   it('polls the panel but never the audit-logged evidence read', async () => {
     vi.useFakeTimers();
@@ -216,22 +260,39 @@ describe('BotTriageDetailComponent', () => {
       await vi.waitFor(() => expect(mockPanelService.getPanel).toHaveBeenCalled());
 
       const panelReads = mockPanelService.getPanel.mock.calls.length;
-      const evidenceReads = mockPanelService.getEvidence.mock.calls.length;
-      expect(evidenceReads).toBeGreaterThan(0);
+      // Trader is the default lens; the audit-logged evidence read is parked off it.
+      expect(mockPanelService.getEvidence).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(46_000);
       fixture.detectChanges();
       await fixture.whenStable();
 
       expect(mockPanelService.getPanel.mock.calls.length).toBeGreaterThan(panelReads);
-      expect(mockPanelService.getEvidence.mock.calls.length).toBe(evidenceReads);
+      expect(mockPanelService.getEvidence).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
+  /**
+   * The Trader default hides the custody journal, so reading it there would
+   * stamp an audit assertion the operator never saw. The read is parked until
+   * the Operator lens is opened — the first genuine act.
+   */
+  it('reads the audit-logged evidence only once the Operator lens is opened', async () => {
+    const { mockPanelService } = await renderDetail();
+    await screen.findByRole('tab', { name: 'Trader' });
+
+    expect(mockPanelService.getEvidence).not.toHaveBeenCalled();
+
+    await showOperator();
+
+    await vi.waitFor(() => expect(mockPanelService.getEvidence).toHaveBeenCalled());
+  });
+
   it('re-reads evidence when the operator acts, since that read is genuine', async () => {
     const view = await renderDetail();
+    await showOperator();
     await vi.waitFor(() => expect(view.mockPanelService.getEvidence).toHaveBeenCalled());
     const before = view.mockPanelService.getEvidence.mock.calls.length;
 
@@ -268,6 +329,7 @@ describe('BotTriageDetailComponent', () => {
             useValue: {
               getPanel,
               getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
+              getLiveChart: vi.fn(() => Promise.resolve(fakeLiveChart())),
             },
           },
         ],
@@ -303,6 +365,8 @@ describe('BotTriageDetailComponent', () => {
       evidenceError: new Error('evidence store unavailable'),
     });
 
+    await showOperator();
+
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('could not be read');
     expect(screen.queryByText('No journal entries.')).toBeNull();
@@ -317,5 +381,141 @@ describe('BotTriageDetailComponent', () => {
     view.fixture.detectChanges();
 
     expect(screen.queryByText('Deployment Validation')).toBeNull();
+  });
+  it('opens on the trader lens, with command availability one click away', async () => {
+    await renderDetail();
+
+    expect(await screen.findByRole('tab', { name: 'Trader' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.queryByRole('region', { name: 'Command availability' })).toBeNull();
+
+    await showOperator();
+
+    expect(screen.getByRole('region', { name: 'Command availability' })).toBeTruthy();
+  });
+
+  /**
+   * The rail is a keyboard list an operator arrows through. Fetching a tape per
+   * keystroke would open — and immediately abandon — one chart request per row,
+   * which is the cost that kept a chart off this pane before.
+   */
+  it('waits for the selection to settle before reading a tape', async () => {
+    vi.useFakeTimers();
+    try {
+      const { mockPanelService, fixture } = await renderDetail();
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mockPanelService.getLiveChart).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(400);
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(mockPanelService.getLiveChart).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads no tape at all while the operator lens is showing', async () => {
+    vi.useFakeTimers();
+    try {
+      const { mockPanelService, fixture } = await renderDetail();
+      await showOperator();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(mockPanelService.getLiveChart).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * Seven stacked buttons — six of them greyed — is what this pane looked like
+   * for a bot that was simply idle. The lead command and the next runnable one
+   * stay in the open; the rest fold away.
+   */
+  it('leads with one command and folds the rest into the overflow', async () => {
+    await renderDetail(
+      fakeBotPanelView({
+        primary_action_by_lens: { trader: 'resume', operator: null },
+        actions: [
+          fakePanelAction('resume', { enabled: false }),
+          fakePanelAction('reconcile_now', { label: 'Reconcile now' }),
+          fakePanelAction('prepare_safe_flatten', {
+            label: 'Prepare safe flatten',
+            enabled: false,
+          }),
+          fakePanelAction('stop_bot_decisions', {
+            label: 'Stop bot decisions',
+            enabled: false,
+          }),
+        ],
+      }),
+    );
+
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'More commands (2)' })).toBeTruthy();
+  });
+
+  /**
+   * Only the active tab is tabbable, so a keyboard-only operator reaches the
+   * other lens through the WAI-ARIA arrow-key pattern, not the Tab key.
+   */
+  it('switches lens with the arrow keys, not only the pointer', async () => {
+    await renderDetail();
+
+    const trader = await screen.findByRole('tab', { name: 'Trader' });
+    const operator = screen.getByRole('tab', { name: 'Operator' });
+    expect(trader).toHaveProperty('ariaSelected', 'true');
+
+    fireEvent.keyDown(trader, { key: 'ArrowRight' });
+
+    expect(operator).toHaveProperty('ariaSelected', 'true');
+    expect(screen.getByRole('region', { name: 'Command availability' })).toBeTruthy();
+
+    fireEvent.keyDown(operator, { key: 'ArrowLeft' });
+
+    expect(trader).toHaveProperty('ariaSelected', 'true');
+    expect(screen.queryByRole('region', { name: 'Command availability' })).toBeNull();
+  });
+
+  /**
+   * A Polygon bar is display fallback, not live data (ADR 0032 §2). The tape
+   * must surface the server's honest notice rather than pass it off as live.
+   */
+  it('surfaces the Polygon fallback notice on the tape', async () => {
+    vi.useFakeTimers();
+    try {
+      const { fixture } = await renderDetail(fakeBotPanelView(), {
+        liveChart: fakeLiveChart({
+          overlay_notices: [
+            {
+              code: 'live_feed_unavailable',
+              message: 'Live feed unavailable — showing Polygon (delayed).',
+              source: 'polygon',
+            },
+          ],
+        }),
+      });
+
+      // Let the debounced tape selection settle, then flush the resolved read.
+      await vi.advanceTimersByTimeAsync(400);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(
+        screen.getByText('Live feed unavailable — showing Polygon (delayed).'),
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

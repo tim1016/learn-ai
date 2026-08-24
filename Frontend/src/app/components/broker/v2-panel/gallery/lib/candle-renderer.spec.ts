@@ -220,6 +220,23 @@ describe('draw', () => {
     expect(() => draw(ctx, bars, markers, scale, 4, CFG)).not.toThrow();
   });
 
+  it('paints the last-price tag by default but omits it when showLastPriceTag is false', () => {
+    // ctx.fill() fires exactly once per draw for the tag (no markers here), so
+    // its call count is a direct proxy for "was the tag painted".
+    const bars = Array.from({ length: 3 }, (_, i) =>
+      bar({ start_ms: 1_700_000_000_000 + i * 60_000, end_ms: 1_700_000_000_000 + (i + 1) * 60_000 }),
+    );
+    const scale = computeScale(bars, CFG);
+
+    const withTag = createStubCtx();
+    draw(withTag, bars, [], scale, null, CFG);
+    expect(withTag.fill).toHaveBeenCalledTimes(1);
+
+    const withoutTag = createStubCtx();
+    draw(withoutTag, bars, [], scale, null, { ...CFG, showLastPriceTag: false });
+    expect(withoutTag.fill).not.toHaveBeenCalled();
+  });
+
   it('skips a marker outside every buffered bar window instead of clamping it onto an edge bar', () => {
     // ctx.fill() is called exactly once per draw for the last-price tag,
     // plus once more per drawn marker triangle (the only other `fill()`
