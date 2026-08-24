@@ -1,0 +1,58 @@
+<section class="tape" [attr.aria-label]="'Price tape for ' + symbol()">
+  <header class="tape__head">
+    <span class="tape__kicker">Price today</span>
+    <app-asset-identity [symbol]="symbol()" size="sm" />
+
+    <div class="tape__tools">
+      @if (!empty()) {
+        <span class="tape__stamp">
+          {{ bars().length }} candle{{ bars().length === 1 ? '' : 's' }}
+          @if (lastBarAtMs(); as barAtMs) {
+            · last bar <app-timestamp-display [value]="barAtMs" mode="local" />
+          }
+        </span>
+      }
+      <div class="tape__intervals" role="group" aria-label="Tape interval">
+        @for (option of resolutions; track option) {
+          <button
+            type="button"
+            class="tape__interval"
+            [class.tape__interval--active]="resolution() === option"
+            [attr.aria-pressed]="resolution() === option"
+            (click)="selectResolution(option)"
+          >{{ option }}</button>
+        }
+      </div>
+    </div>
+  </header>
+
+  <div #chartStage class="tape__stage">
+    <canvas #chartCanvas aria-hidden="true"></canvas>
+
+    @if (failed()) {
+      <div class="tape__state" role="alert">
+        <strong>The tape could not be loaded</strong>
+        <span>This bot's other facts are unaffected.</span>
+        <button type="button" (click)="retry.emit()">Try again</button>
+      </div>
+    } @else if (loading() && empty()) {
+      <div class="tape__state" role="status" aria-live="polite">
+        <span class="tape__pulse" aria-hidden="true"></span>
+        Loading {{ resolution() }} candles…
+      </div>
+    } @else if (empty()) {
+      <div class="tape__state" role="status">
+        <strong>No candles today</strong>
+        <span>The tape draws once the market publishes this session's first bar.</span>
+      </div>
+    }
+  </div>
+
+  <footer class="tape__legend">
+    <span><i class="tape__swatch tape__swatch--up"></i> Up</span>
+    <span><i class="tape__swatch tape__swatch--down"></i> Down</span>
+    <span><i class="tape__arrow tape__arrow--buy">↑</i> Buy fill</span>
+    <span><i class="tape__arrow tape__arrow--sell">↓</i> Sell fill</span>
+    <span class="tape__note">Fills plot only on the candle that contains them.</span>
+  </footer>
+</section>
