@@ -259,16 +259,55 @@ def test_apply_canary_activation_rechecks_a_stale_ledger_head(tmp_path: Path) ->
         )
 
 
-def test_plan_canary_activation_refuses_evidence_only_strategy(tmp_path: Path) -> None:
-    with pytest.raises(CanaryActivationRefused, match="accepted validation proof"):
+def test_plan_canary_activation_refuses_a_strategy_with_no_current_event(tmp_path: Path) -> None:
+    with pytest.raises(CanaryActivationRefused, match="current validated proof"):
         plan_canary_activation(
             program_key="rsi_mean_reversion",
             account_id="paper-account",
             actor="local:test-operator",
-            reason="This evidence-only strategy must remain blocked.",
+            reason="No validated flag event exists, so this must refuse.",
             ledger_path=tmp_path / "canary-admission.json",
             clock=lambda: _NOW,
         )
+
+
+def test_plan_canary_activation_admits_a_current_evidence_only_proof(tmp_path: Path) -> None:
+    """Operator decision 2026-08-24 (restoring the contract narrowed by
+    #1746): the two-step pairing review is itself the durable human override
+    for an evidence-only proof, so a current human-validated flag event with
+    verdict ``evidence_only`` plans and confirms — while a missing, stale, or
+    rejected event still refuses (previous test)."""
+    entry = append_strategy_validation_flag_event(
+        "rsi_mean_reversion",
+        StrategyValidationFlagRequest(
+            flag="validated",
+            reason="Operator accepts evidence-only risk for the paper canary.",
+        ),
+        strategy_registry_seeds(),
+        flagged_by="local:test-operator",
+        now_ms=_NOW - 1,
+    )
+    assert entry.current_flag_event is not None
+    assert entry.current_flag_event.behavioral_equivalence.verdict == "evidence_only"
+
+    ledger_path = tmp_path / "canary-admission.json"
+    plan = plan_canary_activation(
+        program_key="rsi_mean_reversion",
+        account_id="paper-account",
+        actor="local:test-operator",
+        reason="Reviewed evidence-only RSI paper canary.",
+        ledger_path=ledger_path,
+        clock=lambda: _NOW,
+    )
+    assert plan.evidence.validation_event_id == entry.current_flag_event.event_id
+
+    apply_canary_activation(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        ledger_path=ledger_path,
+        clock=lambda: _NOW + 1,
+    )
+    assert ("rsi_mean_reversion", "paper-account") in active_canary_pairings(ledger_path=ledger_path)
 
 
 def test_revoke_canary_pairing_is_append_only_and_blocks_future_admission(tmp_path: Path) -> None:

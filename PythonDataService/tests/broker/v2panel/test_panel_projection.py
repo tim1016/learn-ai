@@ -1931,6 +1931,43 @@ def test_resume_token_ignores_reconciliation_observation_timestamp() -> None:
     assert _action(first, "resume").concurrency_token == _action(second, "resume").concurrency_token
 
 
+def test_resume_token_ignores_market_liveness_observation_timestamps() -> None:
+    # run_admission.py stamps ``market-liveness-clock:<source>:<observed_at_ms>``
+    # (and ``market-liveness-symbol:...``) with a fresh instant on every
+    # evaluation. Left in the token, an unchanged off-duty Resume 409s on
+    # every execution — the same churn class as val-nvda-0804-05
+    # (reproduced fleet-wide on 2026-08-24: 0/20 Resume attempts succeeded).
+    common = (
+        "bot-process-registry:registry-1",
+        "market-data-feed:alpaca:1700000000000",
+        "alpaca-clerk-journal:PA3KWXU1C4C3:418",
+    )
+    first = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(
+            *common,
+            "market-liveness-clock:alpaca.clock:1787590928300",
+            "market-liveness-symbol:alpaca.asset:1787590928311",
+        ),
+    )
+    second = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(
+            *common,
+            "market-liveness-clock:alpaca.clock:1787590953970",
+            "market-liveness-symbol:alpaca.asset:1787590953981",
+        ),
+    )
+
+    assert _action(first, "resume").concurrency_token == _action(second, "resume").concurrency_token
+
+
 def test_resume_token_changes_when_clerk_journal_advances() -> None:
     # Stripping observation timestamps must NOT blind the token to a real
     # custody change. The Clerk appends a journal line only when something

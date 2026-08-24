@@ -39,7 +39,9 @@ async def test_prepare_is_read_only_and_confirm_enables_only_the_reviewed_pairin
             for strategy in before.json()["strategies"]
         }
         assert before_states[strategy_key] == "available"
-        assert all(state == "blocked" for key, state in before_states.items() if key != strategy_key)
+        # Evidence-only rows are also offered the review (operator decision
+        # 2026-08-24) — the pairing review records their durable override.
+        assert all(state == "available" for key, state in before_states.items() if key != strategy_key)
 
         confirmed = await client.post(
             f"{base}/confirm",
@@ -58,7 +60,7 @@ async def test_prepare_is_read_only_and_confirm_enables_only_the_reviewed_pairin
         for strategy in after.json()["strategies"]
     }
     assert states[strategy_key] == "enabled"
-    assert all(state == "blocked" for key, state in states.items() if key != strategy_key)
+    assert all(state == "available" for key, state in states.items() if key != strategy_key)
 
 
 @pytest.mark.asyncio

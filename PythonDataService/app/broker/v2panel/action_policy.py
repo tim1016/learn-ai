@@ -109,7 +109,7 @@ def _stable_admission_evidence_refs(evidence_refs: tuple[str, ...]) -> tuple[str
     A fresh observation instant is not, by itself, a changed safety decision, so
     its timestamp must not make an already presented Resume action stale.
 
-    Two refs carry only an observation instant that advances every evaluation:
+    Four refs carry only an observation instant that advances every evaluation:
 
     - ``market-data-feed:<feed_id>:<observed_at_ms>`` — a health probe; keep the
       feed identity, drop the probe time.
@@ -118,15 +118,23 @@ def _stable_admission_evidence_refs(evidence_refs: tuple[str, ...]) -> tuple[str
       action POST run their own fresh reconciliation with a fresh clock, so
       leaving this instant in the token made an unchanged off-duty Resume 409
       on essentially every click (val-nvda-0804-05, 2026-08-04).
+    - ``market-liveness-clock:<source>:<observed_at_ms>`` and
+      ``market-liveness-symbol:<source>:<observed_at_ms>`` — liveness probes
+      stamped by ``run_admission.py`` with a fresh instant per evaluation;
+      keep the source identity, drop the probe time. Left in, they reproduced
+      the same always-stale Resume fleet-wide (0/20 executions, 2026-08-24).
 
     A genuine custody change is still captured by
     ``alpaca-clerk-journal:<account>:<journal_sequence>`` (the Clerk appends a
     line only on change) and by the decision's ``allowed`` / ``reason_code``
-    fields, so normalising these two instants out cannot hide a real change.
+    fields — a liveness *state* change flips those — so normalising these
+    instants out cannot hide a real change.
     """
     stable: list[str] = []
     for ref in evidence_refs:
-        if ref.startswith("market-data-feed:"):
+        if ref.startswith(
+            ("market-data-feed:", "market-liveness-clock:", "market-liveness-symbol:")
+        ):
             stable.append(":".join(ref.split(":")[:2]))
         elif ref.startswith("alpaca-reconciliation:"):
             stable.append("alpaca-reconciliation")

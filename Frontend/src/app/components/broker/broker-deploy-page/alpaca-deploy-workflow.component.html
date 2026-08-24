@@ -33,6 +33,18 @@
                 [strategy]="strategy"
                 (accessChanged)="paperAccessChanged()"
               />
+
+              @if (ticket().executionMode === 'paper') {
+                <app-deploy-evidence-override
+                  [strategy]="strategy"
+                  [acknowledged]="ticket().overrideAcknowledged"
+                  [reason]="ticket().overrideReason"
+                  [reasonError]="overrideReasonError()"
+                  (acknowledgedChange)="setOverrideAcknowledged($event)"
+                  (reasonChange)="setOverrideReason($event)"
+                  (reasonBlur)="touchOverrideReason()"
+                />
+              }
             }
 
             <app-deploy-execution-section

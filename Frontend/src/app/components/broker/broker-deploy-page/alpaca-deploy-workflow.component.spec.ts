@@ -421,10 +421,11 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(deployButton.disabled).toBe(false);
   });
 
-  it('deploys an evidence-only strategy to Paper with no override required, verdict shown informationally', async () => {
-    // #1702: Paper gates on the human-validated flag alone. The behavioral
-    // verdict still renders (informational), but nothing blocks submission
-    // and no evidence_override is sent.
+  it('requires the durable override to deploy an evidence-only strategy to Paper, then sends it', async () => {
+    // Operator decision 2026-08-24 (restoring what #1702 re-pointed at
+    // Live): an evidence-only Paper deploy is blocked until the operator
+    // acknowledges the risk and records a substantive reason; the override
+    // then rides the deploy request.
     const service = mockService();
     await renderWorkflow(service);
 
@@ -435,9 +436,19 @@ describe('AlpacaDeployWorkflowComponent', () => {
       target: { value: 'sma_crossover' },
     });
 
-    expect(screen.queryByRole('heading', { name: 'Dangerous human override' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Dangerous human override' })).toBeTruthy();
     expect(screen.getAllByText('Evidence only').length).toBeGreaterThanOrEqual(1);
     const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement;
+    expect(deployButton.disabled).toBe(true);
+
+    fireEvent.click(
+      screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'),
+    );
+    expect(deployButton.disabled).toBe(true);
+
+    fireEvent.input(screen.getByLabelText('Operator reason'), {
+      target: { value: 'Paper ceremony run; evidence-only risk accepted.' },
+    });
     expect(deployButton.disabled).toBe(false);
 
     fireEvent.click(deployButton);
@@ -445,7 +456,10 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
     const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
     expect(body.strategy_key).toBe('sma_crossover');
-    expect(body).not.toHaveProperty('evidence_override');
+    expect(body.evidence_override).toEqual({
+      acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
+      reason: 'Paper ceremony run; evidence-only risk accepted.',
+    });
   });
 
   it('names the invalid bot name instead of asking for already-complete trading inputs', async () => {
@@ -473,6 +487,14 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'rsi-mean-reversion' },
+    });
+    // sma_crossover is evidence-only, so the durable override is the one
+    // remaining gate after the name is fixed (operator decision 2026-08-24).
+    fireEvent.click(
+      screen.getByLabelText('I accept the evidence-only deployment risk for this strategy.'),
+    );
+    fireEvent.input(screen.getByLabelText('Operator reason'), {
+      target: { value: 'Ceremony run; evidence-only risk accepted.' },
     });
 
     expect(deployButton.hasAttribute('disabled')).toBe(false);

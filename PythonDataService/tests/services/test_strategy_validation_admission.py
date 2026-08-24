@@ -130,6 +130,58 @@ def test_current_validation_fact_requires_override_for_current_evidence_only_pro
     assert with_override.evidence_status == "evidence_only"
 
 
+def _proofless_evidence_only_entry() -> StrategyValidationEntry:
+    """A production candidate flagged by a human with no registered proof artifacts at all."""
+    base = _entry(verdict="evidence_only")
+    assert base.current_flag_event is not None
+    event = base.current_flag_event.model_copy(update={"evidence_snapshot": StrategyEvidenceSnapshot()})
+    return base.model_copy(
+        update={
+            "validator_code_ref": None,
+            "validator_code_sha256": None,
+            "settings_file_ref": None,
+            "settings_file_sha256": None,
+            "qc_cloud_backtest_id": None,
+            "audit_copy_ref": None,
+            "audit_copy_sha256": None,
+            "reconciliation_ref": None,
+            "validation_case_symbol": None,
+            "reconciliation_status": None,
+            "diagnostics": None,
+            "current_flag_event": event,
+        }
+    )
+
+
+def test_override_accepts_absent_artifacts_but_never_drifted_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operator decision 2026-08-24: the durable evidence-only override accepts
+    the *absence* of registered reference artifacts (there is nothing to be
+    current against), but a *recorded* artifact whose bytes drifted still
+    refuses — the override is a risk acceptance, not a freshness bypass."""
+    # The real checks return False for a None ref; mirror that here so the
+    # absent-artifact branch is proven to consult the ref, not the check.
+    monkeypatch.setattr(validation_admission, "strategy_settings_file_is_current", lambda _e: False)
+    monkeypatch.setattr(validation_admission, "strategy_validator_code_is_current", lambda _e: False)
+    monkeypatch.setattr(validation_admission, "strategy_audit_copy_is_current", lambda _e: False)
+
+    absent = validation_admission.current_strategy_validation_fact(
+        SimpleNamespace(strategy_key="ema_crossover_signal", evidence_override=object()),
+        _NOW,
+        entries_loader=lambda: [_proofless_evidence_only_entry()],
+    )
+    drifted = validation_admission.current_strategy_validation_fact(
+        SimpleNamespace(strategy_key="ema_crossover_signal", evidence_override=object()),
+        _NOW,
+        entries_loader=lambda: [_entry(verdict="evidence_only")],
+    )
+
+    assert absent.state == "VERIFIED"
+    assert absent.evidence_status == "evidence_only"
+    assert drifted.state == "UNVERIFIED"
+
+
 def test_current_validation_fact_fails_closed_when_the_event_receipt_is_unreadable() -> None:
     def unreadable_entries() -> list[StrategyValidationEntry]:
         raise StrategyValidationManifestError("snapshot SHA mismatch")
