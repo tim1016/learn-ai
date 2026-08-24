@@ -457,6 +457,29 @@ async def test_evidence_override_acknowledgement_and_reason_are_closed(deploy_ap
 
 
 @pytest.mark.asyncio
+async def test_deploy_refuses_instance_id_that_overflows_the_order_ref_cap(deploy_app) -> None:
+    # Every order carries ``learn-ai/{sid}/v1:{intent_id}`` (35 fixed chars)
+    # under the order_ref cap (60), so len(sid) > 25 must be a 422 at the
+    # deploy boundary. Before this guard, such a bot deployed and ran fine,
+    # then CRASHED with OrderRefTooLongError on its first order submission
+    # (ceremony-spy-strategy-c-0824, 2026-08-24).
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        too_long = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={**_BODY, "strategy_instance_id": "x" * 26},
+        )
+
+    assert too_long.status_code == 422
+    assert "order_ref cap" in too_long.text
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
 async def test_accepted_strategy_rejects_unnecessary_evidence_override(
     deploy_app,
     monkeypatch: pytest.MonkeyPatch,
