@@ -255,6 +255,64 @@ raw log `probes_study.jsonl`), and read-scalability measurements.
   never presented by the SQLite panel source in any state observed today
   (running, stopped, flat, exposed).
 
+## 8. Organic crash + supervised SIGKILL round (~14:25–15:20 ET)
+
+### The organic catch: F9→fixed — long bot names crash on their first trade
+
+At 14:26 ET `ceremony-spy-strategy-c-0824` got its first signal of the day and
+**CRASHED** with `OrderRefTooLongError`: every order carries
+`learn-ai/{sid}/v1:{intent_id}` (35 fixed chars) under the 60-char order_ref
+cap, so any name over 25 chars deploys fine, runs fine, and dies the moment it
+tries to trade. Four of the five ceremony bots were such time bombs — part of
+their all-day silence. `order_identity.validate_broker_owned_instance_id`
+existed for exactly this and had **zero callers**. Fixed on master
+(`ff5ed49f`): the Alpaca deploy request now refuses over-cap names with a 422
+naming the cap (live-verified both directions; read models keep the loose
+validator so existing long-named bots stay readable). The three remaining
+long-named ceremony bots were stopped; Strategy C got a cap-compliant
+replacement (`cer-c-0824`). Positive note: the crash reporting was exemplary —
+`duty_outcome=CRASHED` with exception type, message, file and line.
+
+### The SIGKILL test: honesty perfect, recovery split exactly by exposure
+
+With 7 bots running (3 mid-hold), the data plane was killed with SIGKILL and
+restarted: back to healthy in 35.6 s, and **all bots immediately reported
+not-running** — zero dishonest roster rows. Resume then split precisely on
+custody state: the three flat bots resumed; the three bots holding one share
+each (SPY, QQQ, AAPL) were refused with `RESUME_CARRYOVER_UNSUPPORTED` —
+honest and correct, since deployment_validation's seal declares
+`countdown_state_persistable=False`.
+
+### F17 — `prepare_safe_flatten` presents as enabled but cannot execute
+
+After `reconcile_now` refreshed evidence, the action showed
+`enabled: true` — and executing it returned 409 "This recovery capability is
+a view action, not a broker mutation." An enabled-looking action that can
+never execute through the actions endpoint is a contract smell (the
+`mutation: false` fact exists server-side but is not reflected in the
+presented enablement).
+
+### F18 — crash-held exposure has NO path to flat (the day's biggest finding)
+
+Every pointer in the recovery chain leads to a door that does not exist:
+
+1. Resume refuses (`RESUME_CARRYOVER_UNSUPPORTED`) and points to a
+   "Clerk-proven flatten".
+2. Deploy-time carryover is globally disabled; its copy also points to a
+   "Clerk-proven flatten before Resume".
+3. `prepare_safe_flatten` builds a versioned `SafeFlattenPlan` — and **no
+   executor for that plan exists anywhere in the codebase**.
+4. `flatten_stop` has a working performer but is never presented under SQLite
+   custody (same dead-vocabulary class as pause/continue/retire).
+5. Manual order tickets are gated off: `MANUAL_TRADING_NOT_QUALIFIED`.
+
+Net: the three 1-share paper positions are stranded — attributed, honest,
+visible, and unreachable. They were deliberately left held as concrete
+evidence (see judgment call 16). The missing piece is the execute-side of the
+safe-flatten plan (or presenting `flatten_stop`); until one exists, **any
+crash while holding exposure requires out-of-band broker intervention**,
+which at fleet scale is untenable.
+
 ### Additions to the recommendations
 
 - (extends §5.1) The one-lifecycle-surface cleanup should also decide
@@ -266,3 +324,10 @@ raw log `probes_study.jsonl`), and read-scalability measurements.
 - (new) **Fleet reads need a fan-out budget**: break the global panel
   serialization (F13), bound the gallery snapshot to live-or-recent bots
   (F14), and stamp staleness on any pane serving old bars (F12).
+- (new, highest priority from §8) **Ship the flatten executor.** F18 makes
+  crash-with-exposure an out-of-band incident. Either implement the
+  execute-side of the `SafeFlattenPlan` the clerk already builds, or present
+  the existing `flatten_stop` performer under SQLite custody — with a test
+  that walks crash → refuse-resume → flatten → resume to flat.
+- (new) Presented actions should carry their `mutation`/executability fact so
+  a view action never renders as an executable enabled button (F17).

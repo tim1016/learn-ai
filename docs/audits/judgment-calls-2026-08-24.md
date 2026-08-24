@@ -94,3 +94,25 @@ deployment-validation bots"):
     refusals) with worst-case exposure of a few 1-share paper positions, and
     leaves the 15:45 strategy flatten barrier plus an hour of session as the
     recovery margin.
+15. **Fixed the order_ref-cap bug at the deploy boundary immediately, on
+    master.** Same bar as the Resume token fix: an organic crash
+    (`OrderRefTooLongError`) with a dormant, purpose-built guard already in
+    the codebase and zero callers — wiring it in is the module's own
+    documented intent, shipped with a pre-failing regression test
+    (`ff5ed49f`). The three surviving long-named ceremony bots were stopped
+    (they could never trade); only crashed Strategy C got a replacement
+    (`cer-c-0824`) this late in the session — B/RSI/SMA replacements would
+    have had ≤40 minutes of 15-minute-bar session left, so their redeploy
+    is left for the next session.
+16. **Left the three crash-held 1-share positions stranded-but-honest.**
+    Every recovery pointer (resume refusal, carryover copy,
+    prepare_safe_flatten, manual tickets) leads to a flatten that does not
+    exist on this stack (study F18). The two possible unblocks — presenting
+    `flatten_stop` under SQLite custody, or building the SafeFlattenPlan
+    executor — are custody-policy changes an owner should review, not an
+    end-of-session patch; and closing the positions directly at Alpaca would
+    manufacture foreign SELLs the clerk would rightly flag. Three 1-share
+    paper positions are the cheapest possible standing evidence of the gap.
+17. **SIGKILL, not graceful restart, for the crash test** — a crash test
+    that lets shutdown hooks run isn't testing a crash. The same restart
+    doubled as the loader for the boundary fix.
