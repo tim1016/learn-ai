@@ -22,6 +22,25 @@ function fakeGate(overrides: Partial<ReadinessCheckView> = {}): ReadinessCheckVi
   };
 }
 
+/** Enough of a `ChartLiveResponse` for the tape to render its empty state. */
+function fakeLiveChart() {
+  return {
+    resolution: '1m',
+    bars: [],
+    fill_markers: [],
+    overlay_notices: [],
+    trading_date_open_ms: null,
+  };
+}
+
+/**
+ * Command availability and the custody journal live on the Operator lens now;
+ * the pane opens on Trader. Tests about that evidence must switch first.
+ */
+async function showOperator(): Promise<void> {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Operator' }));
+}
+
 async function renderDetail(
   panel: BotPanelView | null = fakeBotPanelView(),
   options: { sid?: string | null; panelError?: Error; evidenceError?: Error } = {},
@@ -37,6 +56,7 @@ async function renderDetail(
         ? Promise.reject(options.evidenceError)
         : Promise.resolve({ entries: [], next_cursor: null }),
     ),
+    getLiveChart: vi.fn(() => Promise.resolve(fakeLiveChart())),
   };
 
   const view = await render(BotTriageDetailComponent, {
@@ -104,6 +124,8 @@ describe('BotTriageDetailComponent', () => {
       }),
     );
 
+    await showOperator();
+
     expect(await screen.findByText('Last SPY minute bar is 37s beyond tolerance.')).toBeTruthy();
     expect(screen.getByText('Fetch the current window from Data Lab, then retry.')).toBeTruthy();
 
@@ -159,7 +181,10 @@ describe('BotTriageDetailComponent', () => {
       }),
     );
 
-    expect(await screen.findByText('Stop')).toBeTruthy();
+    await showOperator();
+
+    const card = screen.getByRole('region', { name: 'Command availability' });
+    expect(within(card).getByText('Stop')).toBeTruthy();
     expect(screen.queryByText('The market-data window is current.')).toBeNull();
     expect(screen.queryByText('never shown')).toBeNull();
   });
@@ -176,6 +201,7 @@ describe('BotTriageDetailComponent', () => {
               Promise.resolve(fakeBotPanelView({ actions: [fakePanelAction('stop')] })),
             ),
             getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
+            getLiveChart: vi.fn(() => Promise.resolve(fakeLiveChart())),
           },
         },
       ],
@@ -268,6 +294,7 @@ describe('BotTriageDetailComponent', () => {
             useValue: {
               getPanel,
               getEvidence: vi.fn(() => Promise.resolve({ entries: [], next_cursor: null })),
+              getLiveChart: vi.fn(() => Promise.resolve(fakeLiveChart())),
             },
           },
         ],
@@ -303,6 +330,8 @@ describe('BotTriageDetailComponent', () => {
       evidenceError: new Error('evidence store unavailable'),
     });
 
+    await showOperator();
+
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('could not be read');
     expect(screen.queryByText('No journal entries.')).toBeNull();
@@ -317,5 +346,86 @@ describe('BotTriageDetailComponent', () => {
     view.fixture.detectChanges();
 
     expect(screen.queryByText('Deployment Validation')).toBeNull();
+  });
+  it('opens on the trader lens, with command availability one click away', async () => {
+    await renderDetail();
+
+    expect(await screen.findByRole('tab', { name: 'Trader' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.queryByRole('region', { name: 'Command availability' })).toBeNull();
+
+    await showOperator();
+
+    expect(screen.getByRole('region', { name: 'Command availability' })).toBeTruthy();
+  });
+
+  /**
+   * The rail is a keyboard list an operator arrows through. Fetching a tape per
+   * keystroke would open — and immediately abandon — one chart request per row,
+   * which is the cost that kept a chart off this pane before.
+   */
+  it('waits for the selection to settle before reading a tape', async () => {
+    vi.useFakeTimers();
+    try {
+      const { mockPanelService, fixture } = await renderDetail();
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mockPanelService.getLiveChart).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(400);
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(mockPanelService.getLiveChart).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads no tape at all while the operator lens is showing', async () => {
+    vi.useFakeTimers();
+    try {
+      const { mockPanelService, fixture } = await renderDetail();
+      await showOperator();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(mockPanelService.getLiveChart).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * Seven stacked buttons — six of them greyed — is what this pane looked like
+   * for a bot that was simply idle. The lead command and the next runnable one
+   * stay in the open; the rest fold away.
+   */
+  it('leads with one command and folds the rest into the overflow', async () => {
+    await renderDetail(
+      fakeBotPanelView({
+        primary_action_by_lens: { trader: 'resume', operator: null },
+        actions: [
+          fakePanelAction('resume', { enabled: false }),
+          fakePanelAction('reconcile_now', { label: 'Reconcile now' }),
+          fakePanelAction('prepare_safe_flatten', {
+            label: 'Prepare safe flatten',
+            enabled: false,
+          }),
+          fakePanelAction('stop_bot_decisions', {
+            label: 'Stop bot decisions',
+            enabled: false,
+          }),
+        ],
+      }),
+    );
+
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'More commands (2)' })).toBeTruthy();
   });
 });

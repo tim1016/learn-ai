@@ -10,6 +10,38 @@
     <button type="button" (click)="reload()">Try again</button>
   </div>
 } @else if (view(); as panelView) {
+  <div class="triage-lensbar">
+    <div class="triage-lens" role="tablist" aria-label="Detail lens">
+      <button
+        type="button"
+        role="tab"
+        data-lens="trader"
+        class="triage-lens__tab"
+        [class.triage-lens__tab--active]="lens() === 'trader'"
+        [attr.aria-selected]="lens() === 'trader'"
+        [attr.tabindex]="lens() === 'trader' ? 0 : -1"
+        (click)="selectLens('trader')"
+      >Trader</button>
+      <button
+        type="button"
+        role="tab"
+        data-lens="operator"
+        class="triage-lens__tab"
+        [class.triage-lens__tab--active]="lens() === 'operator'"
+        [attr.aria-selected]="lens() === 'operator'"
+        [attr.tabindex]="lens() === 'operator' ? 0 : -1"
+        (click)="selectLens('operator')"
+      >Operator</button>
+    </div>
+
+    <p class="triage-lensbar__provenance">
+      Revision {{ panelView.revision }} · observed
+      <app-timestamp-display [value]="panelView.updated_at_ms" mode="local" />
+      ·
+      <a [routerLink]="botLink()">Open full page</a>
+    </p>
+  </div>
+
   <!-- Verdict: the trade fact and the failure diagnosis in one block. -->
   <section class="verdict" [attr.data-tone]="verdictTone()" aria-labelledby="triage-verdict-title">
     <div class="verdict__body">
@@ -18,28 +50,19 @@
         <code>{{ panelView.strategy_instance_id }}</code>
         <app-asset-identity class="verdict__symbol" [symbol]="panelView.symbol" size="sm" />
         <span class="verdict__mode">{{ panelView.mode | receiptLabel }}</span>
+        <app-mission-verdict-status [verdict]="panelView.mission_verdict" />
       </div>
 
-      <p class="verdict__explanation">
-        <strong>{{ panelView.mission_verdict.label }}</strong>
-        <span>{{ panelView.mission_verdict.explanation }}</span>
-      </p>
+      <p class="verdict__explanation">{{ panelView.mission_verdict.explanation }}</p>
 
       @if (panelView.mission_verdict.next_action; as nextAction) {
         <p class="verdict__next"><strong>Next:</strong> {{ nextAction }}</p>
       }
-
-      <p class="verdict__provenance">
-        Revision {{ panelView.revision }} · observed
-        <app-timestamp-display [value]="panelView.updated_at_ms" mode="local" />
-        ·
-        <a [routerLink]="botLink()">Open full panel</a>
-      </p>
     </div>
 
     @if (panelView.actions.length > 0) {
       <div class="verdict__actions">
-        @for (action of panelView.actions; track action.action_id) {
+        @if (primaryAction(); as action) {
           <app-panel-action-button
             [action]="action"
             [pending]="pending()"
@@ -47,21 +70,75 @@
             (triggered)="onActionTriggered($event)"
           />
         }
+        @if (secondaryAction(); as action) {
+          <app-panel-action-button
+            [action]="action"
+            [pending]="pending()"
+            [tone]="actionTone(action)"
+            (triggered)="onActionTriggered($event)"
+          />
+        }
+        @if (overflowCount() > 0) {
+          <app-bot-banner-overflow
+            [label]="'More commands (' + overflowCount() + ')'"
+          >
+            @for (action of overflowActions(); track action.action_id) {
+              <app-panel-action-button
+                [action]="action"
+                [pending]="pending()"
+                [tone]="actionTone(action)"
+                (triggered)="onActionTriggered($event)"
+              />
+            }
+          </app-bot-banner-overflow>
+        }
       </div>
     }
   </section>
 
-  <section class="metrics" aria-label="Bot metrics">
-    @for (metric of metrics(); track metric.label) {
-      <div class="metric" [attr.data-tone]="metric.tone">
-        <span class="metric__label">{{ metric.label }}</span>
-        <strong class="metric__value">{{ metric.value }}</strong>
-      </div>
-    }
-  </section>
+  @if (lens() === 'trader') {
+    <div class="triage-trader">
+      <app-triage-tape
+        class="triage-trader__tape"
+        [symbol]="panelView.symbol"
+        [bars]="tapeBars()"
+        [markers]="tapeMarkers()"
+        [loading]="tapeLoading()"
+        [failed]="tapeFailed()"
+        [resolution]="tapeResolution()"
+        [lastBarAtMs]="panelView.market_pulse.latest_bar_at_ms ?? null"
+        (resolutionChange)="onTapeResolutionChange($event)"
+        (retry)="reloadTape()"
+      />
 
-  <div class="triage-columns">
-    <app-triage-activity [view]="panelView" [botLink]="botLink()" />
+      <aside class="triage-trader__rail" aria-label="Where this bot stands">
+        <section class="card">
+          <header class="card__head">
+            <strong>Where this bot stands</strong>
+          </header>
+          <dl class="standing">
+            @for (metric of metrics(); track metric.label) {
+              <div class="standing__row">
+                <dt>{{ metric.label }}</dt>
+                <dd [attr.data-tone]="metric.tone">{{ metric.value }}</dd>
+              </div>
+            }
+          </dl>
+        </section>
+
+        <app-triage-activity [view]="panelView" [botLink]="botLink()" />
+      </aside>
+    </div>
+  } @else {
+    <section class="metrics" aria-label="Bot metrics">
+      @for (metric of metrics(); track metric.label) {
+        <div class="metric" [attr.data-tone]="metric.tone">
+          <span class="metric__label">{{ metric.label }}</span>
+          <strong class="metric__value">{{ metric.value }}</strong>
+        </div>
+      }
+    </section>
+
     <app-triage-evidence
       [commands]="commands()"
       [journal]="journal.hasValue() ? journal.value() : null"
@@ -69,7 +146,7 @@
       [journalFailed]="journalFailed()"
       (journalRetry)="reload()"
     />
-  </div>
+  }
 } @else {
   <div class="triage-placeholder" role="status" aria-live="polite">
     <strong>Loading {{ sid() }}…</strong>
