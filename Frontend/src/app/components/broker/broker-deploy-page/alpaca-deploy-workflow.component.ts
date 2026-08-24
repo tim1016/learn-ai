@@ -41,6 +41,7 @@ import {
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
+import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
@@ -54,7 +55,11 @@ interface AlpacaDeployTicket {
   executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper'>;
   allowCarryover: boolean;
   parameters: Record<string, unknown>;
+  overrideAcknowledged: boolean;
+  overrideReason: string;
 }
+
+const OVERRIDE_REASON_MIN_LENGTH = 10;
 
 interface DeploySubmissionReadiness {
   canSubmit: boolean;
@@ -67,6 +72,7 @@ interface DeploySubmissionReadiness {
   imports: [
     DeployAdmissionColumnComponent,
     DeployBindingStripComponent,
+    DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployPaperAccessComponent,
@@ -110,7 +116,11 @@ export class AlpacaDeployWorkflowComponent {
     executionMode: 'paper',
     allowCarryover: false,
     parameters: {},
+    overrideAcknowledged: false,
+    overrideReason: '',
   });
+
+  private readonly overrideReasonTouched = signal(false);
 
   protected readonly ticketForm = form(this.ticket, (ticket) => {
     required(ticket.instanceId, { message: 'Enter a deployment name.' });
@@ -140,11 +150,26 @@ export class AlpacaDeployWorkflowComponent {
     () => this.selectedStrategy()?.params_schema ?? {},
   );
 
-  // Informational only (#1702): the behavioral verdict renders in every
-  // mode, but no longer gates Paper — a human-validated flag plus full
-  // Clerk custody proof is enough. The backend's `admissible_modes` is the
-  // sole authority on whether a mode is reachable; the frontend never
-  // re-derives that from `evidence_status`.
+  // A Paper deploy of an evidence-only strategy carries the durable human
+  // override (acknowledgement + reason) on the request itself — restored by
+  // operator decision 2026-08-24 after #1702/#1746 re-pointed it at Live.
+  // The backend refuses an evidence-only Paper deploy without it, and
+  // rejects one submitted for a fully accepted strategy.
+  protected readonly overrideRequired = computed(() =>
+    this.selectedStrategy()?.evidence_status === 'evidence_only'
+      && this.ticket().executionMode === 'paper',
+  );
+
+  protected readonly overrideReasonError = computed(() => {
+    if (!this.overrideRequired() || !this.overrideReasonTouched()) return null;
+    return this.ticket().overrideReason.trim().length >= OVERRIDE_REASON_MIN_LENGTH
+      ? null
+      : 'Give at least 10 characters explaining why this risk is accepted.';
+  });
+
+  // The behavioral verdict renders in every mode. The backend's
+  // `admissible_modes` is the sole authority on whether a mode is reachable;
+  // the frontend never re-derives that from `evidence_status`.
   protected readonly evidenceSummaryLabel = computed(() => {
     switch (this.selectedStrategy()?.evidence_status) {
       case 'evidence_only':
@@ -257,6 +282,20 @@ export class AlpacaDeployWorkflowComponent {
     if (this.invalidParameterFields().size > 0) {
       return { canSubmit: false, guidance: 'Fix the highlighted strategy parameter before deployment.' };
     }
+    if (this.overrideRequired()) {
+      if (!this.ticket().overrideAcknowledged) {
+        return {
+          canSubmit: false,
+          guidance: 'Acknowledge the evidence-only deployment risk before launch.',
+        };
+      }
+      if (this.ticket().overrideReason.trim().length < OVERRIDE_REASON_MIN_LENGTH) {
+        return {
+          canSubmit: false,
+          guidance: 'Record the operator reason for the evidence-only override.',
+        };
+      }
+    }
     if (!this.ticketForm().valid()) {
       return { canSubmit: false, guidance: 'Complete the highlighted deployment fields.' };
     }
@@ -303,8 +342,25 @@ export class AlpacaDeployWorkflowComponent {
         strategyKey: strategy.strategy_key,
         symbol,
         parameters: {},
+        overrideAcknowledged: false,
+        overrideReason: '',
       };
     });
+    this.overrideReasonTouched.set(false);
+  }
+
+  protected setOverrideAcknowledged(checked: boolean): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({ ...current, overrideAcknowledged: checked }));
+  }
+
+  protected setOverrideReason(value: string): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({ ...current, overrideReason: value }));
+  }
+
+  protected touchOverrideReason(): void {
+    this.overrideReasonTouched.set(true);
   }
 
   protected setParameter(change: { field: string; value: string | number }): void {
@@ -440,10 +496,16 @@ export class AlpacaDeployWorkflowComponent {
       // noted in strategy-lab-runner.service.ts's own `params` construction.
       parameters: ticket.parameters as unknown as DeployBotBody['parameters'],
     };
-    // #1702: the evidence-only override contract no longer gates Paper — it
-    // is re-pointed at Live, which this ticket cannot reach (`executionMode`
-    // is closed to 'dry_run' | 'paper'). Never attach `evidence_override`:
-    // the backend now rejects one submitted with a Paper request outright.
+    // The durable evidence-only override rides the Paper request (operator
+    // decision 2026-08-24, restoring what #1702 re-pointed at Live). Only an
+    // evidence-only strategy carries it — the backend rejects an override on
+    // an accepted strategy as superfluous.
+    if (strategy.evidence_status === 'evidence_only' && ticket.executionMode === 'paper') {
+      body.evidence_override = {
+        acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
+        reason: ticket.overrideReason.trim(),
+      };
+    }
     return body;
   }
 
@@ -458,7 +520,9 @@ export class AlpacaDeployWorkflowComponent {
       && current.sizing?.quantity === submitted.sizing?.quantity
       && current.execution_mode === submitted.execution_mode
       && current.carryover_policy === submitted.carryover_policy
-      && JSON.stringify(current.parameters) === JSON.stringify(submitted.parameters);
+      && JSON.stringify(current.parameters) === JSON.stringify(submitted.parameters)
+      && JSON.stringify(current.evidence_override ?? null)
+        === JSON.stringify(submitted.evidence_override ?? null);
   }
 
   protected instanceIdError(): string | null {

@@ -339,14 +339,14 @@ async def test_deploy_requires_current_accepted_validation_provenance(
 
 
 @pytest.mark.asyncio
-async def test_evidence_only_strategy_deploys_to_paper_with_no_override_required(
+async def test_evidence_only_strategy_requires_the_durable_override_for_paper(
     deploy_app,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1702: Paper gates on the human-validated flag alone; the override
-    contract that used to require an acknowledgement here is re-pointed at
-    Live, so an evidence-only strategy deploys to Paper with no
-    ``evidence_override`` in the request at all."""
+    """Operator decision 2026-08-24 (restoring the contract #1702 re-pointed
+    at Live): an evidence-only strategy submitted for Paper without the
+    durable override is a typed conflict — the override is what makes the
+    Start-admission validation fact verifiable, so it cannot be omitted."""
     fast_app, registry = deploy_app
     # sma_crossover is a sealed Signal Program (#1730); this test is about
     # evidence-only Paper admission, not the canary allowlist, so explicitly
@@ -369,27 +369,26 @@ async def test_evidence_only_strategy_deploys_to_paper_with_no_override_required
             },
         )
 
-    assert response.status_code == 201
-    assert response.json()["evidence_override"] is None
-    assert response.json()["bot"]["strategy_key"] == "sma_crossover"
-    assert registry.deploy_calls[0]["evidence_override"] is None
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"] == (
+        "This evidence-only strategy requires the durable evidence override for Paper deployment."
+    )
+    assert registry.deploy_calls == []
 
 
 @pytest.mark.asyncio
-async def test_evidence_override_submitted_with_paper_is_rejected(
+async def test_evidence_only_strategy_deploys_to_paper_with_the_durable_override(
     deploy_app,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1702: the evidence-only override contract is Live-only now. A Paper
-    request that still carries one is a typed conflict, not a silent drop —
-    the same "surface invalid input" pattern the accepted-strategy override
-    rejection below already used."""
+    """Operator decision 2026-08-24: with the acknowledgement + reason
+    recorded on the request, an evidence-only strategy deploys to Paper and
+    the override rides the binding into the runner, where Start admission
+    consumes it to verify the ``evidence_only`` validation fact."""
     fast_app, registry = deploy_app
     # sma_crossover is a sealed Signal Program (#1730); this test is about
-    # the evidence-override-on-Paper conflict, not the canary allowlist, so
-    # explicitly enable the one pairing it deploys under -- otherwise the
-    # request would 409 on "not currently selectable" before ever reaching
-    # the override check this test exists to pin.
+    # evidence-only Paper admission, not the canary allowlist, so explicitly
+    # enable the one pairing it deploys under.
     monkeypatch.setattr(
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         frozenset({("sma_crossover", ACCT)}),
@@ -413,9 +412,12 @@ async def test_evidence_override_submitted_with_paper_is_rejected(
             },
         )
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["message"] == "An evidence override is not valid for Paper deployment."
-    assert registry.deploy_calls == []
+    assert response.status_code == 201
+    assert response.json()["bot"]["strategy_key"] == "sma_crossover"
+    recorded = registry.deploy_calls[0]["evidence_override"]
+    assert recorded is not None
+    assert recorded.acknowledgement == "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK"
+    assert recorded.reason == "Paper canary approved by the strategy owner."
 
 
 @pytest.mark.asyncio
@@ -451,6 +453,29 @@ async def test_evidence_override_acknowledgement_and_reason_are_closed(deploy_ap
 
     assert wrong_ack.status_code == 422
     assert short_reason.status_code == 422
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
+async def test_deploy_refuses_instance_id_that_overflows_the_order_ref_cap(deploy_app) -> None:
+    # Every order carries ``learn-ai/{sid}/v1:{intent_id}`` (35 fixed chars)
+    # under the order_ref cap (60), so len(sid) > 25 must be a 422 at the
+    # deploy boundary. Before this guard, such a bot deployed and ran fine,
+    # then CRASHED with OrderRefTooLongError on its first order submission
+    # (ceremony-spy-strategy-c-0824, 2026-08-24).
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        too_long = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={**_BODY, "strategy_instance_id": "x" * 26},
+        )
+
+    assert too_long.status_code == 422
+    assert "order_ref cap" in too_long.text
     assert registry.deploy_calls == []
 
 

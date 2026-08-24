@@ -304,7 +304,12 @@ def append_strategy_validation_flag_event(
     snapshot = _snapshot_for_proof(proof)
     policy = strategy_validation_policy(strategy.strategy_category)
     snapshot = policy.normalize_snapshot(snapshot)
-    if policy.requires_external_reference and request.qc_cloud_backtest_id is not None:
+    # A QC backtest ID binds into the snapshot only when a registered proof
+    # exists to bind it to. Recording one on a proof-less candidate makes the
+    # event permanently mismatch ``snapshot_for_entry`` (the manifest side is
+    # None), which is unrepairable through the UI — the ID alone proves
+    # nothing without the registered audit copy anyway.
+    if policy.requires_external_reference and proof is not None and request.qc_cloud_backtest_id is not None:
         snapshot = snapshot.model_copy(update={"qc_cloud_backtest_id": request.qc_cloud_backtest_id})
     event = StrategyValidationFlagEvent(
         event_id=uuid.uuid4().hex,

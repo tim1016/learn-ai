@@ -95,6 +95,12 @@ class _ValidationBinding:
     evidence_override: object | None = None
 
 
+# Marker object identifying the pairing review itself as the durable human
+# override consumed by ``current_strategy_validation_fact`` — its identity is
+# recorded durably by the admission event's actor + reason, not by this value.
+_PAIRING_REVIEW_EVIDENCE_OVERRIDE: object = "paper_access_pairing_review"
+
+
 # The only two Stop outcomes `bot_carryover.prove_stop_outcome` can produce
 # that represent a Clerk-proved safe position: no exposure at all, or an
 # exposure explicitly approved for carryover. The other two outcomes
@@ -316,18 +322,30 @@ def _prove_activation_evidence(
             "canary activation requires a registered, qualified Signal Program"
         )
 
+    # The two-step pairing review (actor + reason, content-addressed plan
+    # confirmed against a live ledger head) is itself the durable human
+    # override for evidence-only proofs, so the binding carries an override
+    # marker: a current ``evidence_only`` event verifies here exactly as it
+    # does at Start once the deploy request records its own override
+    # (operator decision 2026-08-24, restoring the Paper contract narrowed
+    # by #1746). ``accepted`` proofs are unaffected, and anything stale,
+    # rejected, or absent still refuses below.
     validation = current_strategy_validation_fact(
-        _ValidationBinding(strategy_key=program_key),
+        _ValidationBinding(
+            strategy_key=program_key,
+            evidence_override=_PAIRING_REVIEW_EVIDENCE_OVERRIDE,
+        ),
         observed_at_ms,
     )
     if (
         validation.state != "VERIFIED"
-        or validation.evidence_status != "accepted"
+        or validation.evidence_status not in ("accepted", "evidence_only")
         or validation.event_id is None
         or validation.evidence_snapshot_sha256 is None
     ):
         raise CanaryActivationRefused(
-            "canary activation requires a current accepted validation proof"
+            "canary activation requires a current validated proof "
+            "(accepted, or evidence-only taken through this pairing review)"
         )
 
     contract = registration.signal_program_contract

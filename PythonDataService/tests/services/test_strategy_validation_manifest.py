@@ -822,3 +822,39 @@ def test_ema_reference_code_uses_service_fallback_when_repo_reference_absent(tmp
     assert code is not None
     assert code.path == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
     assert "class SpyEmaCrossoverAlgorithm" in code.source
+
+
+def test_append_flag_event_drops_qc_id_when_no_proof_is_registered(tmp_path) -> None:
+    """Operator decision 2026-08-24: a QC backtest ID typed for a proof-less
+    production candidate is not bound into the event snapshot. Recording it
+    made the event permanently mismatch ``snapshot_for_entry`` (the manifest
+    side is None) — a staleness that no UI action could repair."""
+    manifest_path = tmp_path / "strategy_validation_manifest.json"
+    manifest_path.write_text(json.dumps({"schema_version": "1.0", "validated_strategies": []}))
+    registry = [
+        StrategyRegistrySeed(
+            strategy_key="rsi_mean_reversion",
+            display_name="RSI Mean Reversion",
+            description="Proof-less production candidate.",
+        )
+    ]
+
+    entry = append_strategy_validation_flag_event(
+        "rsi_mean_reversion",
+        StrategyValidationFlagRequest(
+            flag="validated",
+            reason="Operator accepts evidence-only risk for the paper ceremony.",
+            qc_cloud_backtest_id="ui-required-placeholder",
+        ),
+        registry,
+        manifest_path=manifest_path,
+        flag_events_path=tmp_path / "flag_events.json",
+        flagged_by=TEST_FLAG_ACTOR,
+        now_ms=1_700_000_000_000,
+    )
+
+    event = entry.current_flag_event
+    assert event is not None
+    assert event.evidence_snapshot.qc_cloud_backtest_id is None
+    policy = strategy_validation_policy(entry.strategy_category)
+    assert policy.snapshot_matches_entry(entry, event.evidence_snapshot)

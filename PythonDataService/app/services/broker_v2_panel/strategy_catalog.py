@@ -64,9 +64,6 @@ _EVIDENCE_ONLY_OVERRIDE_EXPLANATION = (
     "evidence-only and is not accepted as behavioral-equivalence proof. Continuing "
     "can produce decisions that have not been reconciled to the reference implementation."
 )
-_PAPER_ACCESS_PROOF_BLOCKED_EXPLANATION = (
-    "Paper access cannot be reviewed until this strategy has a current accepted validation proof."
-)
 
 
 @dataclass(frozen=True)
@@ -192,10 +189,13 @@ def _disposition(
 
     Precedence, most restrictive first: no runtime blocks regardless of
     behavioral verdict (#1703); a sealed Signal Program whose
-    ``(program, account)`` pairing is not canary-allowlisted cannot reach
-    Paper at all (#1730); evidence-only is Paper-selectable on the
-    human-validated flag alone (#1706); otherwise the accepted proof must
-    still re-verify (#1698), or the row demotes to blocked.
+    ``(program, account)`` pairing is not canary-allowlisted must first pass
+    the pairing review — offered for evidence-only proofs too, where the
+    review records the durable override (#1730, narrowed by #1746, restored
+    by operator decision 2026-08-24); evidence-only is Paper-selectable on
+    the human-validated flag alone once the pairing is active (#1706);
+    otherwise the accepted proof must still re-verify (#1698), or the row
+    demotes to blocked.
 
     The canary branch keeps ``has_runtime=True`` on purpose: the gate is
     scoped to ``mode == "trade"``, so Dry Run stays available and
@@ -217,11 +217,11 @@ def _disposition(
         if paper_access_state == "available":
             return _Disposition(
                 has_runtime=True,
-                evidence_status="blocked",
-                paper_access_state="blocked",
+                evidence_status="evidence_only",
+                paper_access_state="available",
                 selectable=False,
-                override_explanation=None,
-                blocked_explanation=_PAPER_ACCESS_PROOF_BLOCKED_EXPLANATION,
+                override_explanation=_EVIDENCE_ONLY_OVERRIDE_EXPLANATION,
+                blocked_explanation=CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION,
             )
         return _Disposition(
             has_runtime=True,

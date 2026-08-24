@@ -164,7 +164,16 @@ class AlpacaPaperDeployRequest(BaseModel):
     @field_validator("strategy_instance_id")
     @classmethod
     def _validate_strategy_instance_id(cls, value: str) -> str:
-        return _validated_strategy_instance_id(value)
+        # Path safety first (shared, <=128), then the tighter broker-ownership
+        # cap: every order this bot ever submits carries
+        # ``learn-ai/{sid}/v1:{intent_id}`` (35 fixed chars) under the
+        # ``order_ref`` cap, so a name that cannot fit must be refused HERE —
+        # at first order it is an OrderRefTooLongError crash instead
+        # (ceremony-spy-strategy-c-0824, 2026-08-24). Read models keep the
+        # loose validator: existing long-named bots must stay readable.
+        from app.engine.live.order_identity import validate_broker_owned_instance_id
+
+        return validate_broker_owned_instance_id(_validated_strategy_instance_id(value))
 
     @field_validator("strategy_key")
     @classmethod
