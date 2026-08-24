@@ -9,6 +9,7 @@ from app.schemas.strategy_validation import (
     StrategyProofState,
     StrategyValidationEntry,
 )
+from app.services.strategy_validation_policy import strategy_validation_policy
 
 _QC_FILES_DOC = "https://www.quantconnect.com/docs/v2/cloud-platform/projects/files"
 _QC_BACKTEST_DOC = "https://www.quantconnect.com/docs/v2/cloud-platform/backtesting/getting-started"
@@ -278,7 +279,11 @@ def _current_proof_stage(
     elif proof_state == "stale":
         state = "stale"
         stale_labels = ", ".join(check.label for check in artifact_checks if check.state == "stale")
-        summary = f"The accepted proof no longer matches: {stale_labels}."
+        summary = (
+            f"The accepted proof no longer matches: {stale_labels}."
+            if stale_labels
+            else "The accepted snapshot no longer matches the current manifest evidence."
+        )
         next_step = "Prepare fresh evidence for the changed artifacts, then record a new human review."
     elif proof_state == "unreadable":
         state = "blocked"
@@ -311,8 +316,6 @@ def _proof_state(
     entry: StrategyValidationEntry,
     artifact_checks: list[StrategyArtifactCheck],
 ) -> StrategyProofState:
-    if entry.deployable:
-        return "current"
     event = entry.current_flag_event
     if event is not None and event.flag == "invalidated":
         return "rejected"
@@ -320,6 +323,12 @@ def _proof_state(
         return "unreadable"
     if any(check.state == "stale" for check in artifact_checks):
         return "stale"
+    if event is not None:
+        policy = strategy_validation_policy(entry.strategy_category)
+        if not policy.snapshot_matches_entry(entry, event.evidence_snapshot):
+            return "stale"
+    if entry.deployable:
+        return "current"
     if entry.diagnostics is not None or event is not None:
         return "blocked"
     return "missing"

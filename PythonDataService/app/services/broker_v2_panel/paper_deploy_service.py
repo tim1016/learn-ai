@@ -69,7 +69,7 @@ def strategy_gate_recovery(
             "Choose a runtime-backed strategy, or have an engineer register this "
             "strategy's live-decision runtime."
         )
-    if any(strategy.paper_access_state == "disabled" for strategy in strategies):
+    if any(strategy.paper_access_state == "available" for strategy in strategies):
         return "Review and enable Paper access for a strategy below."
     if any("dry_run" in strategy.admissible_modes for strategy in strategies):
         return "Repair the named proof, or re-validate the strategy in Strategy Validation."

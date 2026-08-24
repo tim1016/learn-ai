@@ -7454,7 +7454,7 @@ export interface components {
              * Paper Access State
              * @enum {string}
              */
-            paper_access_state: "not_required" | "disabled" | "enabled";
+            paper_access_state: "not_required" | "blocked" | "available" | "enabled";
             params_schema?: components["schemas"]["StrategyParamsSchema"];
             /** Selectable */
             selectable: boolean;

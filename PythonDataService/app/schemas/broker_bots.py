@@ -232,7 +232,7 @@ class AlpacaPaperDeployStrategy(BaseModel):
     # Account-scoped approval state for sealed Signal Programs. This is
     # explicit wire data so the UI never has to infer an available action by
     # parsing backend-authored blocker prose.
-    paper_access_state: Literal["not_required", "disabled", "enabled"]
+    paper_access_state: Literal["not_required", "blocked", "available", "enabled"]
     selectable: bool
     admissible_modes: tuple[Literal["dry_run", "paper"], ...]
     override_explanation: str | None = None
@@ -255,10 +255,12 @@ class AlpacaPaperDeployStrategy(BaseModel):
             if self.override_explanation is not None:
                 raise ValueError("A blocked strategy row cannot carry an override_explanation.")
             return self
-        if not self.selectable:
+        if not self.selectable and self.paper_access_state != "available":
             raise ValueError(f"A {self.evidence_status} strategy row must be selectable.")
-        if self.blocked_explanation is not None:
+        if self.selectable and self.blocked_explanation is not None:
             raise ValueError(f"A {self.evidence_status} strategy row cannot carry a blocked_explanation.")
+        if self.paper_access_state == "available" and self.blocked_explanation is None:
+            raise ValueError("An available Paper-access row must explain that approval is still required.")
         if self.evidence_status == "evidence_only" and self.override_explanation is None:
             raise ValueError("An evidence_only strategy row must carry an override_explanation.")
         if self.evidence_status == "accepted" and self.override_explanation is not None:

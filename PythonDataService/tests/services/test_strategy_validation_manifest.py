@@ -9,6 +9,7 @@ import pytest
 from app.schemas.strategy_validation import (
     StrategyBehavioralEquivalence,
     StrategyEvidenceSnapshot,
+    StrategyValidationDiagnostics,
     StrategyValidationEntry,
     StrategyValidationFlagEvent,
     StrategyValidationFlagRequest,
@@ -23,6 +24,7 @@ from app.services.strategy_validation_manifest import (
     reference_code_for_entry,
     seed_strategy_validation_manifest,
 )
+from app.services.strategy_validation_policy import strategy_validation_policy
 
 TEST_FLAG_ACTOR = "local:test-operator"
 VALIDATOR_CODE_REF = "PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py"
@@ -198,6 +200,9 @@ def test_seed_manifest_marks_deployment_validation_deployable() -> None:
 
 
 def test_operational_harness_deployability_does_not_require_quantconnect_run() -> None:
+    settings_sha = hashlib.sha256(
+        (Path(__file__).parents[3] / SETTINGS_FILE_REF).read_bytes()
+    ).hexdigest()
     registry = [
         StrategyRegistrySeed(
             strategy_key="deployment_validation",
@@ -214,7 +219,7 @@ def test_operational_harness_deployability_does_not_require_quantconnect_run() -
             validator_code_ref=VALIDATOR_CODE_REF,
             validator_code_sha256=VALIDATOR_CODE_SHA256,
             settings_file_ref=SETTINGS_FILE_REF,
-            settings_file_sha256="spec-sha",
+            settings_file_sha256=settings_sha,
             qc_cloud_backtest_id=None,
             audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
             audit_copy_sha256="audit-sha",
@@ -228,11 +233,27 @@ def test_operational_harness_deployability_does_not_require_quantconnect_run() -
             audit_copy_verified=False,
         ),
     ]
+    accepted_snapshot = strategy_validation_policy(
+        "operational_validation_harness"
+    ).normalize_snapshot(
+        _accepted_flag_event().evidence_snapshot.model_copy(
+            update={
+                "settings_file_sha256": settings_sha,
+                "reconciliation_ref": "tests/fixtures/golden/deployment-validation/trace-corpus.json",
+                "diagnostics": StrategyValidationDiagnostics(
+                    verdict="passed",
+                    trades_matched=56,
+                    trades_validated=56,
+                    pnl_max_abs_diff="0.00",
+                    divergence_counts={},
+                    notes=[],
+                ),
+            }
+        )
+    )
     accepted = _accepted_flag_event().model_copy(
         update={
-            "evidence_snapshot": _accepted_flag_event().evidence_snapshot.model_copy(
-                update={"qc_cloud_backtest_id": None}
-            )
+            "evidence_snapshot": accepted_snapshot,
         }
     )
 

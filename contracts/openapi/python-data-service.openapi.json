@@ -4719,7 +4719,8 @@
           "paper_access_state": {
             "enum": [
               "not_required",
-              "disabled",
+              "blocked",
+              "available",
               "enabled"
             ],
             "title": "Paper Access State",

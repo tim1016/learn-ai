@@ -7,7 +7,6 @@ from typing import Protocol
 
 from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.schemas.strategy_validation import (
-    StrategyEvidenceSnapshot,
     StrategyValidationEntry,
     StrategyValidationFlagEvent,
 )
@@ -19,6 +18,7 @@ from app.services.strategy_validation_manifest import (
     strategy_settings_file_is_current,
     strategy_validator_code_is_current,
 )
+from app.services.strategy_validation_policy import strategy_validation_policy
 
 
 class ValidationAdmissionBinding(Protocol):
@@ -118,24 +118,12 @@ def _event_matches_current_artifacts(
     event: StrategyValidationFlagEvent,
 ) -> bool:
     """Require both immutable proof identity and freshly hashed artifact bytes."""
-    snapshot = StrategyEvidenceSnapshot(
-        validator_code_ref=entry.validator_code_ref,
-        validator_code_sha256=entry.validator_code_sha256,
-        settings_file_ref=entry.settings_file_ref,
-        settings_file_sha256=entry.settings_file_sha256,
-        qc_cloud_backtest_id=entry.qc_cloud_backtest_id,
-        audit_copy_ref=entry.audit_copy_ref,
-        audit_copy_sha256=entry.audit_copy_sha256,
-        reconciliation_ref=entry.reconciliation_ref,
-        validation_case_symbol=entry.validation_case_symbol,
-        reconciliation_status=entry.reconciliation_status,
-        diagnostics=entry.diagnostics,
-    )
-    return (
-        event.evidence_snapshot == snapshot
-        and strategy_settings_file_is_current(entry)
-        and strategy_validator_code_is_current(entry)
-        and strategy_audit_copy_is_current(entry)
+    policy = strategy_validation_policy(entry.strategy_category)
+    return policy.snapshot_matches_entry(entry, event.evidence_snapshot) and policy.artifacts_are_current(
+        entry,
+        settings_check=strategy_settings_file_is_current,
+        validator_check=strategy_validator_code_is_current,
+        audit_check=strategy_audit_copy_is_current,
     )
 
 

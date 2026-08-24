@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import app.services.strategy_validation_admission as validation_admission
 from app.schemas.canary_admission import CanaryActivationPlan, CanaryRollbackDecision
+from app.schemas.strategy_validation import StrategyValidationFlagRequest
+from app.services.broker_v2_panel.strategy_catalog import compose_strategy_catalog
 from app.services.canary_admission import (
     CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS,
     CanaryActivationRefused,
@@ -25,6 +29,10 @@ from app.services.canary_admission import (
     evaluate_canary_rollback,
     plan_canary_activation,
     revoke_canary_pairing,
+)
+from app.services.strategy_validation_manifest import (
+    append_strategy_validation_flag_event,
+    strategy_registry_seeds,
 )
 
 _NOW = 1_700_000_010_000
@@ -124,6 +132,62 @@ def test_apply_canary_activation_admits_only_the_exact_pair(tmp_path: Path) -> N
         account_id="paper-account",
         ledger_path=ledger_path,
     ) is False
+
+
+def test_operational_harness_acceptance_reaches_paper_catalog_and_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One category policy governs Accept through Paper and Start admission."""
+    account_id = "harness-paper-account"
+    ledger_path = tmp_path / "canary-admission.json"
+    entry = append_strategy_validation_flag_event(
+        "deployment_validation",
+        StrategyValidationFlagRequest(
+            flag="validated",
+            reason="Accept the deterministic deployment harness qualification.",
+        ),
+        strategy_registry_seeds(),
+        flag_events_path=tmp_path / "flag-events.json",
+        flagged_by="local:test-operator",
+        now_ms=1_900_000_000_000,
+    )
+    assert entry.current_flag_event is not None
+    assert entry.current_flag_event.evidence_snapshot.qc_cloud_backtest_id is None
+    assert entry.current_flag_event.evidence_snapshot.validator_code_ref is None
+    assert entry.current_flag_event.evidence_snapshot.audit_copy_ref is None
+
+    fact = validation_admission.current_strategy_validation_fact(
+        SimpleNamespace(strategy_key=entry.strategy_key, evidence_override=None),
+        _NOW,
+        entries_loader=lambda: [entry],
+    )
+    assert fact.state == "VERIFIED"
+
+    monkeypatch.setattr(validation_admission, "_load_current_entries", lambda: [entry])
+    monkeypatch.setattr(
+        "app.services.canary_admission.DEFAULT_CANARY_ADMISSION_LEDGER_PATH",
+        ledger_path,
+    )
+    plan = plan_canary_activation(
+        program_key=entry.strategy_key,
+        account_id=account_id,
+        actor="local:test-operator",
+        reason="Review the deployment harness Paper pairing.",
+        ledger_path=ledger_path,
+        clock=lambda: _NOW,
+    )
+    apply_canary_activation(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        ledger_path=ledger_path,
+        clock=lambda: _NOW + 1,
+    )
+
+    [row] = compose_strategy_catalog([entry], account_id=account_id)
+    assert row.paper_access_state == "enabled"
+    assert row.evidence_status == "accepted"
+    assert row.selectable is True
 
 
 def test_apply_canary_activation_rejects_wrong_confirmation_token(tmp_path: Path) -> None:

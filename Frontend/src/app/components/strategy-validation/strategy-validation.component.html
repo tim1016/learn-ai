@@ -41,7 +41,7 @@
                 }
               </span>
             </span>
-            <span class="sv-badge" [class.validated]="strategy.proof.state === 'current'" [class.needs-validation]="strategy.proof.state !== 'current'">
+            <span class="sv-badge" [class.validated]="strategy.proof?.state === 'current'" [class.needs-validation]="strategy.proof?.state !== 'current'">
               {{ stateLabel(strategy) }}
             </span>
           </button>
@@ -62,7 +62,7 @@
               <h2>{{ selected.display_name }}</h2>
               <p>{{ selected.description }}</p>
             </div>
-            <span class="sv-badge" [class.validated]="selected.proof.state === 'current'" [class.needs-validation]="selected.proof.state !== 'current'">
+            <span class="sv-badge" [class.validated]="selected.proof?.state === 'current'" [class.needs-validation]="selected.proof?.state !== 'current'">
               {{ stateLabel(selected) }}
             </span>
           </header>
@@ -80,7 +80,9 @@
             </section>
           }
 
-          <app-strategy-proof-pipeline [proof]="selected.proof" />
+          @if (selected.proof; as proof) {
+            <app-strategy-proof-pipeline [proof]="proof" />
+          }
 
           <section class="sv-deploy-panel" [class.ready]="isAcceptedForDeploy(selected)" aria-label="Deploy decision">
             <div>
@@ -90,7 +92,7 @@
                 <p>{{ selected.behavioral_equivalence?.detail }}</p>
               } @else {
                 <h3>{{ isOperationalHarness(selected) ? 'Do not start Paper yet' : 'Do not deploy yet' }}</h3>
-                <p>{{ selected.proof.blocking_summary ?? 'Validation evidence is incomplete.' }}</p>
+                <p>{{ selected.proof?.blocking_summary ?? 'Validation evidence is incomplete.' }}</p>
               }
             </div>
             <div class="sv-panel-actions">

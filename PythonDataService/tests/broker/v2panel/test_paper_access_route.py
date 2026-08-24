@@ -34,10 +34,12 @@ async def test_prepare_is_read_only_and_confirm_enables_only_the_reviewed_pairin
         assert plan["program_key"] == strategy_key
         assert plan["account_id"] == ACCT
         assert active_canary_pairings() == frozenset()
-        assert all(
-            strategy["paper_access_state"] == "disabled"
+        before_states = {
+            strategy["strategy_key"]: strategy["paper_access_state"]
             for strategy in before.json()["strategies"]
-        )
+        }
+        assert before_states[strategy_key] == "available"
+        assert all(state == "blocked" for key, state in before_states.items() if key != strategy_key)
 
         confirmed = await client.post(
             f"{base}/confirm",
@@ -56,11 +58,7 @@ async def test_prepare_is_read_only_and_confirm_enables_only_the_reviewed_pairin
         for strategy in after.json()["strategies"]
     }
     assert states[strategy_key] == "enabled"
-    assert all(
-        state == "disabled"
-        for key, state in states.items()
-        if key != strategy_key
-    )
+    assert all(state == "blocked" for key, state in states.items() if key != strategy_key)
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,3 @@
-import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
@@ -11,6 +10,7 @@ import {
   signal,
 } from '@angular/core';
 
+import { TimestampDisplayPipe } from '../../../shared/timestamp';
 import {
   BrokerV2PanelService,
   type DeployBotStrategy,
@@ -37,7 +37,7 @@ type PaperAccessFlow =
 @Component({
   selector: 'app-deploy-paper-access',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe],
+  imports: [TimestampDisplayPipe],
   templateUrl: './deploy-paper-access.component.html',
   styleUrl: './deploy-paper-access.component.scss',
 })
@@ -65,7 +65,7 @@ export class DeployPaperAccessComponent {
 
   protected async prepare(): Promise<void> {
     const strategy = this.strategy();
-    if (strategy.paper_access_state !== 'disabled') return;
+    if (strategy.paper_access_state !== 'available') return;
     const identity = this.identity();
     this.flow.set({ kind: 'preparing' });
     try {

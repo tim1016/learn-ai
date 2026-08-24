@@ -1,4 +1,4 @@
-@if (strategy().paper_access_state === 'disabled' || strategy().paper_access_state === 'enabled') {
+@if (strategy().paper_access_state === 'available' || strategy().paper_access_state === 'enabled') {
   @if (flow(); as state) {
     <section class="paper-access" aria-labelledby="paper-access-title">
     <header class="paper-access__header">
@@ -48,7 +48,7 @@
               <div><dt>Account</dt><dd><code>{{ state.plan.account_id }}</code></dd></div>
               <div><dt>Validation</dt><dd>Current</dd></div>
               <div><dt>Program build</dt><dd>Verified</dd></div>
-              <div><dt>Review expires</dt><dd>{{ state.plan.expires_at_ms | date: 'mediumTime' }}</dd></div>
+              <div><dt>Review expires</dt><dd>{{ state.plan.expires_at_ms | timestampDisplay: 'local' : 'time' }}</dd></div>
             </dl>
 
             <details>

@@ -92,7 +92,7 @@ export class StrategyValidationComponent {
   }
 
   protected stateLabel(strategy: StrategyValidationSummary | StrategyValidationDetail): string {
-    switch (strategy.proof.state) {
+    switch (strategy.proof?.state) {
       case 'current':
         return 'Proof current';
       case 'stale':

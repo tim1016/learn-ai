@@ -2,6 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import { formatTimestampDisplay } from '../../../shared/timestamp';
 import {
   BrokerV2PanelService,
   type DeployBotStrategy,
@@ -9,13 +10,13 @@ import {
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 
-const DISABLED_STRATEGY: DeployBotStrategy = {
+const AVAILABLE_STRATEGY: DeployBotStrategy = {
   strategy_key: 'ema_crossover_signal',
   label: 'EMA Crossover Signal',
   explanation: 'Validated EMA crossover strategy.',
   validation_case_symbol: 'SPY',
   evidence_status: 'blocked',
-  paper_access_state: 'disabled',
+  paper_access_state: 'available',
   selectable: false,
   admissible_modes: ['dry_run'],
   override_explanation: null,
@@ -58,7 +59,7 @@ describe('DeployPaperAccessComponent', () => {
   it('prepares a review and requires a separate explicit confirmation', async () => {
     const service = panelServiceMock();
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: DISABLED_STRATEGY },
+      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 
@@ -78,6 +79,10 @@ describe('DeployPaperAccessComponent', () => {
     expect(within(review).getByRole('heading', { name: 'Confirm Paper access' })).toBeTruthy();
     expect(within(review).getByText(/does not deploy a bot or place an order/i)).toBeTruthy();
     expect(within(review).getByText('paper-account-1')).toBeTruthy();
+    expect(within(review).getByText(formatTimestampDisplay(PLAN.expires_at_ms, {
+      mode: 'local',
+      granularity: 'time',
+    }))).toBeTruthy();
     expect(service.confirmPaperAccess).not.toHaveBeenCalled();
 
     fireEvent.click(within(review).getByRole('button', { name: 'Enable Paper access' }));
@@ -99,7 +104,21 @@ describe('DeployPaperAccessComponent', () => {
     await render(DeployPaperAccessComponent, {
       inputs: {
         accountId: 'paper-account-1',
-        strategy: { ...DISABLED_STRATEGY, paper_access_state: 'not_required' },
+        strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'not_required' },
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    expect(screen.queryByRole('heading', { name: 'Paper access' })).toBeNull();
+    expect(service.preparePaperAccess).not.toHaveBeenCalled();
+  });
+
+  it('does not offer approval when backend prerequisites are blocked', async () => {
+    const service = panelServiceMock();
+    await render(DeployPaperAccessComponent, {
+      inputs: {
+        accountId: 'paper-account-1',
+        strategy: { ...AVAILABLE_STRATEGY, paper_access_state: 'blocked' },
       },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
@@ -123,7 +142,7 @@ describe('DeployPaperAccessComponent', () => {
       }),
     );
     const { fixture } = await render(DeployPaperAccessComponent, {
-      inputs: { accountId: 'paper-account-1', strategy: DISABLED_STRATEGY },
+      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY },
       providers: [{ provide: BrokerV2PanelService, useValue: service }],
     });
 

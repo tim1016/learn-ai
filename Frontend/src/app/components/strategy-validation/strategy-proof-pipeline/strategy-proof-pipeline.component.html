@@ -5,7 +5,7 @@
     <div>
       <p class="proof-pipeline__eyebrow">Authority pipeline</p>
       <h3 id="proof-pipeline-title">Strategy proof</h3>
-      <p>{{ dossier.completed_stages }} of {{ dossier.total_stages }} required stages complete</p>
+      <p>{{ dossier.completed_stages ?? 0 }} of {{ dossier.total_stages ?? 0 }} required stages complete</p>
     </div>
     <span class="proof-pipeline__state" [attr.data-state]="dossier.state">
       {{ dossier.state | receiptLabel }}
@@ -19,7 +19,7 @@
   }
 
   <ol class="proof-pipeline__stages">
-    @for (stage of dossier.stages; track stage.stage_id; let position = $index) {
+    @for (stage of dossier.stages ?? []; track stage.stage_id; let position = $index) {
       <li
         class="proof-stage"
         [class.proof-stage--active]="stage.stage_id === dossier.blocking_stage_id"
@@ -38,9 +38,9 @@
           @if (stage.next_step) {
             <p class="proof-stage__next"><strong>Next step:</strong> {{ stage.next_step }}</p>
           }
-          @if (stage.actions.length > 0) {
+          @if ((stage.actions ?? []).length > 0) {
             <nav class="proof-stage__actions" aria-label="Stage references">
-              @for (action of stage.actions; track action.href) {
+              @for (action of stage.actions ?? []; track action.href) {
                 <a [href]="action.href" target="_blank" rel="noopener noreferrer">
                   {{ action.label }}
                   <i class="pi pi-external-link" aria-hidden="true"></i>
@@ -48,11 +48,11 @@
               }
             </nav>
           }
-          @if (stage.evidence.length > 0) {
+          @if ((stage.evidence ?? []).length > 0) {
             <details class="proof-stage__evidence">
               <summary>Technical evidence</summary>
               <dl>
-                @for (item of stage.evidence; track item.label) {
+                @for (item of stage.evidence ?? []; track item.label) {
                   <div>
                     <dt>{{ item.label }}</dt>
                     <dd><span>{{ item.state | receiptLabel }}</span></dd>

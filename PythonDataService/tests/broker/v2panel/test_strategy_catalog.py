@@ -49,7 +49,7 @@ def test_validated_strategy_without_runtime_is_visible_but_not_selectable(
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
     assert row.evidence_status == "blocked"
-    assert row.paper_access_state == "disabled"
+    assert row.paper_access_state == "blocked"
     assert row.selectable is False
     assert row.admissible_modes == ()
     assert row.blocked_explanation is not None
@@ -67,7 +67,7 @@ def test_catalog_reads_a_confirmed_durable_pairing(
     )
     entry = _accepted_deploy_entry()
     blocked = _strategy_views([entry], account_id=ACCT)[0]
-    assert blocked.paper_access_state == "disabled"
+    assert blocked.paper_access_state == "available"
     assert blocked.selectable is False
 
     plan = plan_canary_activation(
@@ -101,7 +101,7 @@ def test_non_sealed_strategy_does_not_offer_a_paper_access_workflow(
 
     row = _strategy_views([entry], account_id=ACCT)[0]
 
-    assert row.paper_access_state == "not_required"
+    assert row.paper_access_state == "blocked"
 
 
 def test_no_runtime_block_reads_differently_from_a_stale_proof_block(

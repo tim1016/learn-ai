@@ -30,6 +30,7 @@ from app.schemas.strategy_validation import (
     StrategyValidationRefreshResult,
 )
 from app.services.strategy_proof_dossier import build_strategy_proof_dossier
+from app.services.strategy_validation_policy import strategy_validation_policy
 
 logger = logging.getLogger(__name__)
 
@@ -131,20 +132,20 @@ def seed_strategy_validation_manifest(
             if current_event is not None and current_event.evidence_snapshot.qc_cloud_backtest_id
             else proof.qc_cloud_backtest_id
         )
-        requires_qc_reference = strategy.strategy_category == "production_candidate"
-        if not requires_qc_reference:
+        policy = strategy_validation_policy(strategy.strategy_category)
+        if not policy.requires_external_reference:
             qc_cloud_backtest_id = None
         evidence_deployable = _evidence_is_deployable(
             proof,
-            requires_qc_reference=requires_qc_reference,
-        ) and (not requires_qc_reference or bool(qc_cloud_backtest_id))
+            requires_qc_reference=policy.requires_external_reference,
+        ) and (not policy.requires_external_reference or bool(qc_cloud_backtest_id))
         deployable = _event_accepts_deploy(current_event) and evidence_deployable
         notes = list(proof.notes)
         if not evidence_deployable:
             notes.extend(
                 _validation_failure_notes(
                     proof,
-                    requires_qc_reference=requires_qc_reference,
+                    requires_qc_reference=policy.requires_external_reference,
                 )
             )
         entry = StrategyValidationEntry(
@@ -195,7 +196,8 @@ def _proof_dossier(
         ),
     ]
     audit_check = None
-    if strategy.strategy_category == "production_candidate":
+    policy = strategy_validation_policy(strategy.strategy_category)
+    if policy.requires_external_reference:
         artifact_checks.insert(
             0,
             _artifact_check(
@@ -300,17 +302,9 @@ def append_strategy_validation_flag_event(
         _validate_divergence_categories(proof.divergence_counts)
     current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     snapshot = _snapshot_for_proof(proof)
-    if strategy.strategy_category == "operational_validation_harness":
-        snapshot = snapshot.model_copy(
-            update={
-                "qc_cloud_backtest_id": None,
-                "validator_code_ref": None,
-                "validator_code_sha256": None,
-                "audit_copy_ref": None,
-                "audit_copy_sha256": None,
-            }
-        )
-    elif request.qc_cloud_backtest_id is not None:
+    policy = strategy_validation_policy(strategy.strategy_category)
+    snapshot = policy.normalize_snapshot(snapshot)
+    if policy.requires_external_reference and request.qc_cloud_backtest_id is not None:
         snapshot = snapshot.model_copy(update={"qc_cloud_backtest_id": request.qc_cloud_backtest_id})
     event = StrategyValidationFlagEvent(
         event_id=uuid.uuid4().hex,
@@ -323,7 +317,7 @@ def append_strategy_validation_flag_event(
             request.flag,
             proof,
             qc_cloud_backtest_id=snapshot.qc_cloud_backtest_id,
-            requires_qc_reference=strategy.strategy_category == "production_candidate",
+            requires_qc_reference=policy.requires_external_reference,
         ),
         evidence_snapshot=snapshot,
         evidence_snapshot_sha256=_snapshot_sha256(snapshot),
