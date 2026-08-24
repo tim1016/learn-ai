@@ -126,6 +126,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0041 | The operator manual's Button Reference (and Glossary tables) are generated from `OPERATOR_COPY`, not hand-written; "When available" prose is dropped in favour of the panel's runtime gate reasons; CI regenerate-and-diff, as for the OpenAPI/GraphQL snapshots |
 | 0042 | Sealed signal decisions meet account-scoped custody at one semantic seam |
 | 0043 | Signal Program build proof, two-level seal identity, and append-or-clone legacy migration |
+| 0044 | Two strategy-validation categories with a permanent Live ceiling for operational harnesses |
 
 ---
 

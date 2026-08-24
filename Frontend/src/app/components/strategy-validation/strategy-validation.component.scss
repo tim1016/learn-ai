@@ -11,6 +11,7 @@
 .sv-deploy-panel,
 .sv-actions,
 .sv-current-flag,
+.sv-harness-notice,
 .sv-message,
 .sv-error,
 .sv-empty {
@@ -46,6 +47,39 @@
   font-weight: var(--fw-bold);
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.sv-row-category {
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sv-harness-notice {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-4);
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border-light));
+  background: var(--info-soft);
+}
+
+.sv-harness-notice > i {
+  margin-top: var(--space-1);
+  color: var(--info);
+  font-size: var(--fs-xl);
+}
+
+.sv-harness-notice div {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.sv-harness-notice h3,
+.sv-harness-notice p {
+  margin: 0;
 }
 
 .sv-header h1,

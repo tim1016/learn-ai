@@ -192,7 +192,10 @@ def evaluate_run_admission(
                 "The guarded Alpaca Paper path admits only pairings an operator has "
                 "explicitly enabled after reviewing the full composed proof."
             ),
-            next_step="Add this exact (program, account) pairing to the canary allowlist after review.",
+            next_step=(
+                "Review and confirm this exact pairing with the broker-free canary "
+                "activation command; activation never starts the bot by itself."
+            ),
         )
     if bot.program_build.state == "UNPROVEN":
         return decide(

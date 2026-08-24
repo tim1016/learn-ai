@@ -4,12 +4,77 @@ import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  StrategyProofDossier,
+  StrategyProofStage,
   StrategyValidationCatalog,
   StrategyValidationDetail,
   StrategyValidationFlagEvent,
 } from '../../services/strategy-validation.types';
 import { StrategyValidationService } from '../../services/strategy-validation.service';
 import { StrategyValidationComponent } from './strategy-validation.component';
+
+function proofStage(
+  stageId: string,
+  title: string,
+  state: StrategyProofStage['state'],
+): StrategyProofStage {
+  return {
+    stage_id: stageId,
+    title,
+    state,
+    authority: 'Test authority',
+    summary: `${title} summary.`,
+    next_step: state === 'complete' || state === 'not_applicable' ? null : `Complete ${title}.`,
+    actions: [],
+    evidence: [],
+  };
+}
+
+const CURRENT_HARNESS_PROOF: StrategyProofDossier = {
+  state: 'current',
+  completed_stages: 3,
+  total_stages: 3,
+  blocking_stage_id: null,
+  blocking_summary: null,
+  stages: [
+    proofStage('program_contract', 'Signal Program contract', 'complete'),
+    proofStage('reference_run', 'QuantConnect reference run', 'not_applicable'),
+    proofStage('current_proof', 'Current validation proof', 'complete'),
+  ],
+};
+
+const MISSING_PROOF: StrategyProofDossier = {
+  state: 'missing',
+  completed_stages: 0,
+  total_stages: 2,
+  blocking_stage_id: 'program_contract',
+  blocking_summary: 'Promote and qualify the Signal Program.',
+  stages: [
+    proofStage('program_contract', 'Signal Program contract', 'missing'),
+    proofStage('current_proof', 'Current validation proof', 'missing'),
+  ],
+};
+
+const EMA_PROOF: StrategyProofDossier = {
+  state: 'missing',
+  completed_stages: 1,
+  total_stages: 2,
+  blocking_stage_id: 'reference_run',
+  blocking_summary: 'Run the QuantConnect reference backtest.',
+  stages: [
+    proofStage('reference_source', 'QuantConnect reference algorithm', 'complete'),
+    {
+      ...proofStage('reference_run', 'QuantConnect reference run', 'missing'),
+      actions: [
+        {
+          kind: 'external_link',
+          label: 'How to run a backtest and find its ID',
+          href: 'https://www.quantconnect.com/docs/v2/cloud-platform/backtesting/getting-started',
+        },
+      ],
+    },
+  ],
+};
 
 const ACCEPTED_FLAG_EVENT: StrategyValidationFlagEvent = {
   event_id: 'seed-deployment-validation-accepted-for-deploy',
@@ -43,8 +108,10 @@ const DEPLOYMENT_DETAIL: StrategyValidationDetail = {
   strategy_key: 'deployment_validation',
   display_name: 'Deployment Validation',
   description: 'Two-green-minute deployment validation primitive.',
+  strategy_category: 'operational_validation_harness',
   validation_state: 'validated',
   deployable: true,
+  proof: CURRENT_HARNESS_PROOF,
   validator_code_ref: 'PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py',
   validator_code_sha256: 'validator-sha',
   settings_file_ref: 'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json',
@@ -69,6 +136,8 @@ const DEPLOYMENT_DETAIL: StrategyValidationDetail = {
   reference_code: {
     path: 'references/qc-shadow/DeploymentValidationAlgorithm.py',
     sha256: 'audit-sha',
+    recorded_sha256: 'audit-sha',
+    state: 'current',
     language: 'python',
     source: 'class DeploymentValidationAlgorithm(QCAlgorithm):\n    pass\n',
   },
@@ -78,8 +147,10 @@ const ORB_DETAIL: StrategyValidationDetail = {
   strategy_key: 'spy_orb',
   display_name: 'Opening Range Breakout',
   description: 'Opening range breakout strategy.',
+  strategy_category: 'production_candidate',
   validation_state: 'needs_validation',
   deployable: false,
+  proof: MISSING_PROOF,
   settings_file_ref: null,
   settings_file_sha256: null,
   qc_cloud_backtest_id: null,
@@ -99,8 +170,10 @@ const EMA_DETAIL: StrategyValidationDetail = {
   strategy_key: 'ema_crossover_signal',
   display_name: 'EMA Crossover Signal',
   description: 'Canonical SPY EMA crossover signal.',
+  strategy_category: 'production_candidate',
   validation_state: 'needs_validation',
   deployable: false,
+  proof: EMA_PROOF,
   settings_file_ref: null,
   settings_file_sha256: null,
   qc_cloud_backtest_id: null,
@@ -116,6 +189,8 @@ const EMA_DETAIL: StrategyValidationDetail = {
   reference_code: {
     path: 'references/qc-shadow/SpyEmaCrossoverAlgorithm.py',
     sha256: 'audit-sha',
+    recorded_sha256: 'audit-sha',
+    state: 'current',
     language: 'python',
     source: 'class SpyEmaCrossoverAlgorithm(QCAlgorithm):\n    pass\n',
   },
@@ -175,11 +250,11 @@ describe('StrategyValidationComponent', () => {
     expect(await screen.findByRole('heading', { name: 'Strategy Validation' })).toBeTruthy();
     expect(await screen.findByRole('button', { name: /Deployment Validation/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Opening Range Breakout/ })).toBeTruthy();
-    expect(screen.getAllByText('Validated').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Needs validation').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Proof current').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Proof missing').length).toBeGreaterThan(0);
   });
 
-  it('opens detail with QC evidence and reference code without rendering internal port source', async () => {
+  it('renders the deployment test program as a non-Live operational harness', async () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
@@ -187,7 +262,11 @@ describe('StrategyValidationComponent', () => {
       ],
     });
 
-    expect(await screen.findByText('d2fe45a7142e88575f6fbd75229f8681')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Operational validation harness' })).toBeTruthy();
+    expect(screen.getByText(/permanently ineligible for Live/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Strategy proof' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Current validation proof' })).toBeTruthy();
+    expect(screen.getAllByText('Not Applicable').length).toBeGreaterThan(0);
     expect(screen.getByText('SPY')).toBeTruthy();
     expect(screen.getByText('56 trades matched')).toBeTruthy();
     expect(screen.getByText('56 trades validated')).toBeTruthy();
@@ -196,7 +275,7 @@ describe('StrategyValidationComponent', () => {
     expect(screen.getAllByText('Accepted For Deploy').length).toBeGreaterThan(0);
     expect(screen.getByText('migration:strategy-validation-prd-seed')).toBeTruthy();
     expect(screen.getByText('snapshot-sha')).toBeTruthy();
-    expect(screen.getByText(/class DeploymentValidationAlgorithm/)).toBeTruthy();
+    expect(screen.queryByText(/class DeploymentValidationAlgorithm/)).toBeNull();
     expect(screen.queryByText(/DeploymentValidationConsecutiveGreen/)).toBeNull();
   });
 
@@ -257,7 +336,7 @@ describe('StrategyValidationComponent', () => {
 
     const link = await screen.findByRole('link', { name: /Diagnose in Strategy Lab/ });
 
-    expect(screen.getByText('Not recorded')).toBeTruthy();
+    expect(screen.getByText('Harness settings')).toBeTruthy();
     expect(link.getAttribute('href')).toContain('engine=python');
     expect(link.getAttribute('href')).not.toContain('engine=both');
   });
@@ -275,7 +354,7 @@ describe('StrategyValidationComponent', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Opening Range Breakout' })).toBeTruthy();
     });
-    expect(screen.getAllByText('Needs validation').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Proof missing').length).toBeGreaterThan(0);
     expect(screen.getByText('Validation evidence has not been registered yet.')).toBeTruthy();
   });
 
@@ -289,7 +368,9 @@ describe('StrategyValidationComponent', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /EMA Crossover Signal/ }));
 
-    expect(await screen.findByRole('heading', { name: 'QuantConnect reference algorithm' })).toBeTruthy();
+    expect(
+      await screen.findByRole('heading', { name: 'QuantConnect reference algorithm', level: 3 }),
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy QuantConnect algorithm' })).toBeTruthy();
     expect(screen.getByText('references/qc-shadow/SpyEmaCrossoverAlgorithm.py')).toBeTruthy();
   });
@@ -332,7 +413,9 @@ describe('StrategyValidationComponent', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'EMA Crossover Signal' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'QuantConnect reference algorithm' })).toBeTruthy();
+    expect(
+      screen.getByRole('heading', { name: 'QuantConnect reference algorithm', level: 3 }),
+    ).toBeTruthy();
   });
 
   it('refreshes validation evidence for the selected strategy', async () => {
@@ -344,12 +427,12 @@ describe('StrategyValidationComponent', () => {
       ],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Refresh evidence' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Recheck stored proof' }));
 
     await waitFor(() => {
       expect(service.refreshValidationEvidence).toHaveBeenCalledWith('deployment_validation');
     });
-    expect(await screen.findByText(/Validation evidence refreshed/)).toBeTruthy();
+    expect(await screen.findByText(/Stored proof rechecked/)).toBeTruthy();
   });
 
   it('requires a reason and then saves the selected validation flag', async () => {
@@ -372,6 +455,29 @@ describe('StrategyValidationComponent', () => {
       expect(service.flagValidation).toHaveBeenCalledWith('deployment_validation', {
         flag: 'invalidated',
         reason: 'Reject this evidence.',
+      });
+    });
+  });
+
+  it('records an operational harness review without requiring a QuantConnect run', async () => {
+    const service = new FakeStrategyValidationService();
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useValue: service },
+      ],
+    });
+
+    expect(screen.queryByLabelText('QC Cloud backtest ID')).toBeNull();
+    fireEvent.input(await screen.findByLabelText('Reason'), {
+      target: { value: 'Internal harness qualification reviewed.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save flag' }));
+
+    await waitFor(() => {
+      expect(service.flagValidation).toHaveBeenCalledWith('deployment_validation', {
+        flag: 'validated',
+        reason: 'Internal harness qualification reviewed.',
       });
     });
   });

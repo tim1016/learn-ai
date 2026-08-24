@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +28,7 @@ from app.schemas.run_admission import (
     StrategyValidationAdmissionFact,
     TerminalEvidenceAdmissionFact,
 )
+from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import evaluate_run_admission
 
@@ -908,6 +910,35 @@ def test_canary_admission_admits_the_exact_allowlisted_pairing_with_every_proof(
     monkeypatch.setattr(
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+
+    decision = evaluate_run_admission(_canary_bot(), _canary_clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is True
+    assert decision.reason_code == "START_ADMITTED"
+
+
+def test_canary_admission_reads_a_confirmed_durable_pairing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real run gate consumes the verified ledger, not only the test seam."""
+    ledger_path = tmp_path / "canary-admission.json"
+    monkeypatch.setattr(
+        "app.services.canary_admission.DEFAULT_CANARY_ADMISSION_LEDGER_PATH",
+        ledger_path,
+    )
+    plan = plan_canary_activation(
+        program_key="ema_crossover_signal",
+        account_id="paper-account",
+        actor="local:test-operator",
+        reason="Reviewed EMA paper canary.",
+        clock=lambda: _NOW - 2_000,
+    )
+    apply_canary_activation(
+        plan=plan,
+        confirmation_token=plan.confirmation_token,
+        clock=lambda: _NOW - 1_500,
     )
 
     decision = evaluate_run_admission(_canary_bot(), _canary_clerk(), evaluated_at_ms=_NOW)

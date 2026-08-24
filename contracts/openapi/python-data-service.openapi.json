@@ -4716,6 +4716,16 @@
             ],
             "title": "Override Explanation"
           },
+          "paper_access_state": {
+            "enum": [
+              "not_required",
+              "blocked",
+              "available",
+              "enabled"
+            ],
+            "title": "Paper Access State",
+            "type": "string"
+          },
           "params_schema": {
             "$ref": "#/components/schemas/StrategyParamsSchema"
           },
@@ -4738,6 +4748,7 @@
           "explanation",
           "validation_case_symbol",
           "evidence_status",
+          "paper_access_state",
           "selectable",
           "admissible_modes"
         ],
@@ -10078,6 +10089,278 @@
         "title": "CalculateIndicatorsResponse",
         "type": "object"
       },
+      "CanaryActivationConfirmation": {
+        "additionalProperties": false,
+        "description": "The exact reviewed plan and its content-addressed confirmation.",
+        "properties": {
+          "confirmation_token": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/CanaryActivationPlan"
+          }
+        },
+        "required": [
+          "plan",
+          "confirmation_token"
+        ],
+        "title": "CanaryActivationConfirmation",
+        "type": "object"
+      },
+      "CanaryActivationEvidence": {
+        "additionalProperties": false,
+        "description": "Fresh proof that one program is eligible for canary activation.",
+        "properties": {
+          "golden_trace_root": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Golden Trace Root",
+            "type": "string"
+          },
+          "program_version": {
+            "minLength": 1,
+            "title": "Program Version",
+            "type": "string"
+          },
+          "qualification_receipt_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Qualification Receipt Hash",
+            "type": "string"
+          },
+          "qualification_suite": {
+            "minLength": 1,
+            "title": "Qualification Suite",
+            "type": "string"
+          },
+          "qualified_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Qualified At Ms",
+            "type": "integer"
+          },
+          "running_artifact_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Running Artifact Digest",
+            "type": "string"
+          },
+          "validation_event_id": {
+            "minLength": 1,
+            "title": "Validation Event Id",
+            "type": "string"
+          },
+          "validation_snapshot_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Validation Snapshot Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_event_id",
+          "validation_snapshot_sha256",
+          "program_version",
+          "golden_trace_root",
+          "running_artifact_digest",
+          "qualification_receipt_hash",
+          "qualification_suite",
+          "qualified_at_ms"
+        ],
+        "title": "CanaryActivationEvidence",
+        "type": "object"
+      },
+      "CanaryActivationPlan": {
+        "additionalProperties": false,
+        "description": "Short-lived, content-addressed intent awaiting explicit confirmation.",
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "actor": {
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "confirmation_token": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/CanaryActivationEvidence"
+          },
+          "expected_ledger_head_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Ledger Head Hash"
+          },
+          "expires_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "ledger_path": {
+            "minLength": 1,
+            "title": "Ledger Path",
+            "type": "string"
+          },
+          "plan_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "program_key": {
+            "minLength": 1,
+            "title": "Program Key",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "plan_id",
+          "confirmation_token",
+          "program_key",
+          "account_id",
+          "actor",
+          "reason",
+          "created_at_ms",
+          "expires_at_ms",
+          "ledger_path",
+          "evidence"
+        ],
+        "title": "CanaryActivationPlan",
+        "type": "object"
+      },
+      "CanaryActivationRequest": {
+        "additionalProperties": false,
+        "description": "Operator reason for preparing one exact Paper-access pairing.",
+        "properties": {
+          "reason": {
+            "maxLength": 500,
+            "minLength": 10,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "CanaryActivationRequest",
+        "type": "object"
+      },
+      "CanaryAdmissionEvent": {
+        "additionalProperties": false,
+        "description": "One append-only activation or revocation decision.",
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "activated",
+              "revoked"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "actor": {
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "event_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Event Hash",
+            "type": "string"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanaryActivationEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "previous_event_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Event Hash"
+          },
+          "program_key": {
+            "minLength": 1,
+            "title": "Program Key",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          },
+          "sequence": {
+            "minimum": 1.0,
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "action",
+          "program_key",
+          "account_id",
+          "actor",
+          "reason",
+          "recorded_at_ms",
+          "event_hash"
+        ],
+        "title": "CanaryAdmissionEvent",
+        "type": "object"
+      },
       "CanaryRollbackDecision": {
         "additionalProperties": false,
         "description": "Whether stopping one canary run is admitted at a Clerk-proved boundary.\n\nA rollback is refused outright, not merely recorded, when the Clerk\ncannot prove the resulting position is flat or an explicitly approved\ncarried exposure. This differs from an ordinary Stop, which always\npersists an honest checkpoint even when custody is unprovable.",
@@ -10087,6 +10370,7 @@
             "type": "boolean"
           },
           "evaluated_at_ms": {
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Evaluated At Ms",
             "type": "integer"
@@ -37780,6 +38064,63 @@
         "title": "StrategyAnalyzeResponse",
         "type": "object"
       },
+      "StrategyArtifactCheck": {
+        "properties": {
+          "current_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Sha256"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "recorded_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Sha256"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "state": {
+            "enum": [
+              "current",
+              "stale",
+              "missing",
+              "unreadable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "state"
+        ],
+        "title": "StrategyArtifactCheck",
+        "type": "object"
+      },
       "StrategyBarCadenceInfo": {
         "properties": {
           "multiplier": {
@@ -38328,6 +38669,154 @@
         "title": "StrategyParamsSchema",
         "type": "object"
       },
+      "StrategyProofAction": {
+        "properties": {
+          "href": {
+            "title": "Href",
+            "type": "string"
+          },
+          "kind": {
+            "const": "external_link",
+            "default": "external_link",
+            "title": "Kind"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "href"
+        ],
+        "title": "StrategyProofAction",
+        "type": "object"
+      },
+      "StrategyProofDossier": {
+        "properties": {
+          "blocking_stage_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocking Stage Id"
+          },
+          "blocking_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocking Summary"
+          },
+          "completed_stages": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Completed Stages",
+            "type": "integer"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyProofStage"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "state": {
+            "default": "missing",
+            "enum": [
+              "current",
+              "stale",
+              "missing",
+              "blocked",
+              "rejected",
+              "unreadable"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total_stages": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Total Stages",
+            "type": "integer"
+          }
+        },
+        "title": "StrategyProofDossier",
+        "type": "object"
+      },
+      "StrategyProofStage": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyProofAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "authority": {
+            "title": "Authority",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyArtifactCheck"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "stage_id": {
+            "title": "Stage Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "complete",
+              "stale",
+              "missing",
+              "blocked",
+              "not_applicable"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "title",
+          "state",
+          "authority",
+          "summary"
+        ],
+        "title": "StrategyProofStage",
+        "type": "object"
+      },
       "StrategyReferenceCode": {
         "properties": {
           "language": {
@@ -38339,12 +38828,34 @@
             "title": "Path",
             "type": "string"
           },
+          "recorded_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Sha256"
+          },
           "sha256": {
             "title": "Sha256",
             "type": "string"
           },
           "source": {
             "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "default": "current",
+            "enum": [
+              "current",
+              "stale",
+              "missing",
+              "unreadable"
+            ],
+            "title": "State",
             "type": "string"
           }
         },
@@ -38827,6 +39338,9 @@
             "title": "Flag Events",
             "type": "array"
           },
+          "proof": {
+            "$ref": "#/components/schemas/StrategyProofDossier"
+          },
           "qc_cloud_backtest_id": {
             "anyOf": [
               {
@@ -38891,6 +39405,15 @@
               }
             ],
             "title": "Settings File Sha256"
+          },
+          "strategy_category": {
+            "default": "production_candidate",
+            "enum": [
+              "production_candidate",
+              "operational_validation_harness"
+            ],
+            "title": "Strategy Category",
+            "type": "string"
           },
           "strategy_key": {
             "title": "Strategy Key",
@@ -39065,6 +39588,9 @@
             "title": "Flag Events",
             "type": "array"
           },
+          "proof": {
+            "$ref": "#/components/schemas/StrategyProofDossier"
+          },
           "qc_cloud_backtest_id": {
             "anyOf": [
               {
@@ -39119,6 +39645,15 @@
               }
             ],
             "title": "Settings File Sha256"
+          },
+          "strategy_category": {
+            "default": "production_candidate",
+            "enum": [
+              "production_candidate",
+              "operational_validation_harness"
+            ],
+            "title": "Strategy Category",
+            "type": "string"
           },
           "strategy_key": {
             "title": "Strategy Key",
@@ -50342,6 +50877,178 @@
         "summary": "Poll-driven SSE stream of aggregated bot gallery updates",
         "tags": [
           "broker-v2-gallery"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm": {
+      "post": {
+        "operationId": "confirm_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "program_key",
+            "required": true,
+            "schema": {
+              "title": "Program Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanaryActivationConfirmation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryAdmissionEvent"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm the exact reviewed strategy/account Paper pairing",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/plan": {
+      "post": {
+        "operationId": "prepare_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_plan_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "program_key",
+            "required": true,
+            "schema": {
+              "title": "Program Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanaryActivationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryActivationPlan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare a proof-bound review for one strategy/account Paper pairing",
+        "tags": [
+          "broker-v2-panel"
         ]
       }
     },

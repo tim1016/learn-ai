@@ -27,22 +27,28 @@ not touched here.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagEvent
+from app.services import canary_admission
 from app.services.bot_trade_strategy import (
     alpaca_paper_strategy_default_symbol,
     supported_alpaca_paper_strategy_keys,
 )
-from app.services.canary_admission import canary_pairing_admitted
 from app.services.strategy_validation_manifest import (
     strategy_audit_copy_is_current,
     strategy_settings_file_is_current,
+    strategy_validator_code_is_current,
 )
+from app.services.strategy_validation_policy import strategy_validation_policy
 
 EvidenceStatus = Literal["accepted", "evidence_only", "blocked"]
+PaperAccessState = Literal["not_required", "blocked", "available", "enabled"]
+
+logger = logging.getLogger(__name__)
 
 NO_RUNTIME_BLOCKED_EXPLANATION = (
     "This strategy has no registered live-decision runtime. It is validated, "
@@ -50,17 +56,16 @@ NO_RUNTIME_BLOCKED_EXPLANATION = (
     "yet' block, distinct from an unmet validation or a stale evidence proof."
 )
 CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION = (
-    "This strategy is a sealed Signal Program, and Paper launch is admitted "
-    "one (program, account) pairing at a time. This account is not on the "
-    "canary allowlist, so a Paper start would be refused. Dry Run is "
-    "unaffected — it uses its own isolated synthetic authority and is never "
-    "canary-gated. This is a 'not activated for this account yet' block, "
-    "distinct from a missing runtime or a stale evidence proof."
+    "Paper trading is not enabled for this strategy on this account yet. "
+    "Review and enable Paper access below. Dry Run is still available."
 )
 _EVIDENCE_ONLY_OVERRIDE_EXPLANATION = (
     "A human marked this strategy validated, but its behavioral evidence is "
     "evidence-only and is not accepted as behavioral-equivalence proof. Continuing "
     "can produce decisions that have not been reconciled to the reference implementation."
+)
+_PAPER_ACCESS_PROOF_BLOCKED_EXPLANATION = (
+    "Paper access cannot be reviewed until this strategy has a current accepted validation proof."
 )
 
 
@@ -83,6 +88,7 @@ class CatalogEntry:
     validation_case_symbol: str
     has_runtime: bool
     evidence_status: EvidenceStatus
+    paper_access_state: PaperAccessState
     selectable: bool
     override_explanation: str | None
     blocked_explanation: str | None
@@ -94,72 +100,49 @@ def _is_catalog_visible(strategy_key: str) -> bool:
     return registration is not None and registration.catalog_visible
 
 
-def _entry_matches_accepted_snapshot(entry: StrategyValidationEntry) -> bool:
-    """Require the catalog to use exactly the human-accepted proof."""
-    event = entry.current_flag_event
-    if event is None:
-        return False
-    snapshot = event.evidence_snapshot
-    return (
-        entry.validator_code_ref == snapshot.validator_code_ref
-        and entry.validator_code_sha256 == snapshot.validator_code_sha256
-        and entry.settings_file_ref == snapshot.settings_file_ref
-        and entry.settings_file_sha256 == snapshot.settings_file_sha256
-        and entry.qc_cloud_backtest_id == snapshot.qc_cloud_backtest_id
-        and entry.audit_copy_ref == snapshot.audit_copy_ref
-        and entry.audit_copy_sha256 == snapshot.audit_copy_sha256
-        and entry.reconciliation_ref == snapshot.reconciliation_ref
-        and entry.validation_case_symbol == snapshot.validation_case_symbol
-        and entry.reconciliation_status == snapshot.reconciliation_status
-        and entry.diagnostics == snapshot.diagnostics
-    )
-
-
 def _accepted_proof_blocked_reason(
     entry: StrategyValidationEntry,
     event: StrategyValidationFlagEvent,
 ) -> str | None:
     """Name the first reason the proof recorded at acceptance no longer verifies, or None if it still holds."""
     snapshot = event.evidence_snapshot
+    policy = strategy_validation_policy(entry.strategy_category)
     diagnostics = snapshot.diagnostics
     divergent_gating = sorted(
         category for category, count in event.behavioral_equivalence.gating_divergence_counts.items() if count
     )
     divergent_diagnostics = sorted(
-        category for category, count in (diagnostics.divergence_counts if diagnostics is not None else {}).items() if count
+        category
+        for category, count in (diagnostics.divergence_counts if diagnostics is not None else {}).items()
+        if count
     )
-    missing_snapshot_fields = [
-        field_name
-        for field_name, value in (
-            ("validation_case_symbol", snapshot.validation_case_symbol),
-            ("qc_cloud_backtest_id", snapshot.qc_cloud_backtest_id),
-            ("settings_file_ref", snapshot.settings_file_ref),
-            ("settings_file_sha256", snapshot.settings_file_sha256),
-            ("audit_copy_ref", snapshot.audit_copy_ref),
-            ("audit_copy_sha256", snapshot.audit_copy_sha256),
-            ("reconciliation_ref", snapshot.reconciliation_ref),
-        )
-        if not value
-    ]
+    missing_snapshot_fields = policy.missing_required_fields(snapshot)
+    stale_artifact = policy.first_stale_artifact(
+        entry,
+        settings_check=strategy_settings_file_is_current,
+        validator_check=strategy_validator_code_is_current,
+        audit_check=strategy_audit_copy_is_current,
+    )
+    stale_artifact_reason = (
+        f"The {stale_artifact[0]} at '{stale_artifact[1]}' no longer matches its recorded hash."
+        if stale_artifact is not None
+        else "All artifacts required by this strategy category match their recorded hashes."
+    )
     checks: tuple[tuple[bool, str], ...] = (
         (
             event.behavioral_equivalence.verdict == "accepted_for_deploy",
             "The recorded behavioral-equivalence verdict is no longer accepted for deploy.",
         ),
         (
-            strategy_settings_file_is_current(entry),
-            f"The settings/deploy binding file at '{entry.settings_file_ref}' no longer matches its recorded hash.",
-        ),
-        (
-            strategy_audit_copy_is_current(entry),
-            f"The audit copy at '{entry.audit_copy_ref}' no longer matches its recorded hash.",
+            stale_artifact is None,
+            stale_artifact_reason,
         ),
         (
             not divergent_gating,
             f"The accepted validation event now records a gating divergence in: {', '.join(divergent_gating)}.",
         ),
         (
-            _entry_matches_accepted_snapshot(entry),
+            policy.snapshot_matches_entry(entry, snapshot),
             "The current manifest entry no longer matches the proof snapshot recorded at acceptance; "
             "the manifest was edited after acceptance.",
         ),
@@ -192,6 +175,7 @@ class _Disposition:
 
     has_runtime: bool
     evidence_status: EvidenceStatus
+    paper_access_state: PaperAccessState
     selectable: bool
     override_explanation: str | None
     blocked_explanation: str | None
@@ -202,7 +186,7 @@ def _disposition(
     event: StrategyValidationFlagEvent,
     *,
     has_runtime: bool,
-    account_id: str,
+    paper_access_state: PaperAccessState,
 ) -> _Disposition:
     """Derive one entry's launch disposition from the validation facet and the runtime fact.
 
@@ -224,39 +208,66 @@ def _disposition(
         return _Disposition(
             has_runtime=False,
             evidence_status="blocked",
+            paper_access_state="blocked",
             selectable=False,
             override_explanation=None,
             blocked_explanation=NO_RUNTIME_BLOCKED_EXPLANATION,
         )
-    registration = _STRATEGY_REGISTRY.get(entry.strategy_key)
-    is_sealed_program = registration is not None and registration.signal_program_contract is not None
-    if is_sealed_program and not canary_pairing_admitted(
-        program_key=entry.strategy_key, account_id=account_id
-    ):
-        return _Disposition(
-            has_runtime=True,
-            evidence_status="blocked",
-            selectable=False,
-            override_explanation=None,
-            blocked_explanation=CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION,
-        )
     if event.behavioral_equivalence.verdict == "evidence_only":
+        if paper_access_state == "available":
+            return _Disposition(
+                has_runtime=True,
+                evidence_status="blocked",
+                paper_access_state="blocked",
+                selectable=False,
+                override_explanation=None,
+                blocked_explanation=_PAPER_ACCESS_PROOF_BLOCKED_EXPLANATION,
+            )
         return _Disposition(
             has_runtime=True,
             evidence_status="evidence_only",
+            paper_access_state=paper_access_state,
             selectable=True,
             override_explanation=_EVIDENCE_ONLY_OVERRIDE_EXPLANATION,
             blocked_explanation=None,
         )
     blocked_reason = _accepted_proof_blocked_reason(entry, event)
-    selectable = blocked_reason is None
+    if blocked_reason is not None:
+        return _Disposition(
+            has_runtime=True,
+            evidence_status="blocked",
+            paper_access_state="blocked",
+            selectable=False,
+            override_explanation=None,
+            blocked_explanation=blocked_reason,
+        )
+    if paper_access_state == "available":
+        return _Disposition(
+            has_runtime=True,
+            evidence_status="accepted",
+            paper_access_state="available",
+            selectable=False,
+            override_explanation=None,
+            blocked_explanation=CANARY_NOT_ALLOWLISTED_BLOCKED_EXPLANATION,
+        )
     return _Disposition(
         has_runtime=True,
-        evidence_status=("accepted" if selectable else "blocked"),
-        selectable=selectable,
+        evidence_status="accepted",
+        paper_access_state=paper_access_state,
+        selectable=True,
         override_explanation=None,
-        blocked_explanation=blocked_reason,
+        blocked_explanation=None,
     )
+
+
+def _active_canary_pairings_snapshot() -> frozenset[tuple[str, str]]:
+    """Resolve one immutable pairing view for the complete catalog response."""
+    source_pairings = canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS
+    try:
+        return source_pairings | canary_admission.active_canary_pairings()
+    except canary_admission.CanaryAdmissionLedgerError as exc:
+        logger.error("Canary admission catalog snapshot failed closed: %s", exc)
+        return source_pairings
 
 
 def compose_strategy_catalog(
@@ -272,6 +283,7 @@ def compose_strategy_catalog(
     at all produces no row, unchanged from before this slice.
     """
     runtime_keys = supported_alpaca_paper_strategy_keys()
+    active_pairings = _active_canary_pairings_snapshot()
     catalog: list[CatalogEntry] = []
     for entry in entries:
         if not _is_catalog_visible(entry.strategy_key):
@@ -279,11 +291,19 @@ def compose_strategy_catalog(
         event = entry.current_flag_event
         if entry.validation_state != "validated" or event is None or event.flag != "validated":
             continue
+        registration = _STRATEGY_REGISTRY[entry.strategy_key]
+        paper_access_state: PaperAccessState
+        if registration.signal_program_contract is None:
+            paper_access_state = "not_required"
+        elif (entry.strategy_key, account_id) in active_pairings:
+            paper_access_state = "enabled"
+        else:
+            paper_access_state = "available"
         disposition = _disposition(
             entry,
             event,
             has_runtime=entry.strategy_key in runtime_keys,
-            account_id=account_id,
+            paper_access_state=paper_access_state,
         )
         snapshot = event.evidence_snapshot
         validation_case_symbol = snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(
@@ -297,6 +317,7 @@ def compose_strategy_catalog(
                 validation_case_symbol=validation_case_symbol,
                 has_runtime=disposition.has_runtime,
                 evidence_status=disposition.evidence_status,
+                paper_access_state=disposition.paper_access_state,
                 selectable=disposition.selectable,
                 override_explanation=disposition.override_explanation,
                 blocked_explanation=disposition.blocked_explanation,

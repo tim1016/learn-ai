@@ -60,14 +60,14 @@ def _synthetic_validated_entry(strategy_key: str) -> StrategyValidationEntry:
 def _synthetic_blocked_entry(strategy_key: str) -> StrategyValidationEntry:
     """Force one real validated entry into a deterministic blocked state.
 
-    Corrupts the audit-copy hash of a currently-real, currently-accepted
+    Corrupts the settings-file hash of a currently-real, currently-accepted
     entry so the row demotes to ``blocked`` regardless of whether that
     strategy's real committed proof happens to be stale right now —
     repairing the real proof must never make this fixture (or the tests
     that use it) flaky.
     """
     (entry,) = _entries_for(strategy_key)
-    return entry.model_copy(update={"audit_copy_sha256": "0" * 64})
+    return entry.model_copy(update={"settings_file_sha256": "0" * 64})
 
 
 def test_deploy_demotes_manifest_proof_that_differs_from_accepted_snapshot(
@@ -114,37 +114,40 @@ def test_deploy_reverifies_the_accepted_audit_copy_hash(monkeypatch: pytest.Monk
 
 
 def test_strategy_views_admissible_modes_track_selectable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#1702/#1730: every runtime-backed row admits dry_run; paper tracks
-    selectable exactly — accepted and evidence-only rows admit both modes,
-    a blocked row (whether a stale proof or a #1730 canary-not-allowlisted
-    sealed program) admits dry_run only, never both and never neither."""
+    """Every runtime-backed row admits Dry Run; Paper requires selection.
+
+    A stale proof is blocked. A current accepted proof awaiting account
+    approval remains accepted and advertises the approval action, but is not
+    Paper-selectable until that separate action completes.
+    """
     admit_canary_pairing(monkeypatch, "ema_crossover_signal", ACCT)
     accepted = _accepted_deploy_entry()
     stale_proof_blocked = _synthetic_blocked_entry("deployment_validation")
     # rsi_mean_reversion is also a sealed Signal Program and is deliberately
-    # left off the allowlist above, so it demonstrates the canary-blocked
+    # left off the allowlist above, so it demonstrates the awaiting-approval
     # case distinctly from the stale-proof-blocked case. Its validated state
     # is synthesized rather than read from the manifest: only two strategies
     # are validated in the committed seed, so reading a real entry here would
     # pass only on a machine whose runtime flag-events file happens to have
     # flagged it.
-    canary_blocked = _synthetic_validated_entry("rsi_mean_reversion")
+    awaiting_approval = _synthetic_validated_entry("rsi_mean_reversion")
 
-    rows = _strategy_views([accepted, stale_proof_blocked, canary_blocked], account_id=ACCT)
+    rows = _strategy_views([accepted, stale_proof_blocked, awaiting_approval], account_id=ACCT)
 
     rows_by_key = {row.strategy_key: row for row in rows}
     accepted_row = rows_by_key[accepted.strategy_key]
     blocked_row = rows_by_key["deployment_validation"]
-    canary_blocked_row = rows_by_key["rsi_mean_reversion"]
+    awaiting_approval_row = rows_by_key["rsi_mean_reversion"]
     assert accepted_row.evidence_status == "accepted"
     assert accepted_row.selectable is True
     assert accepted_row.admissible_modes == ("dry_run", "paper")
     assert blocked_row.evidence_status == "blocked"
     assert blocked_row.selectable is False
     assert blocked_row.admissible_modes == ("dry_run",)
-    assert canary_blocked_row.evidence_status == "blocked"
-    assert canary_blocked_row.selectable is False
-    assert canary_blocked_row.admissible_modes == ("dry_run",)
+    assert awaiting_approval_row.evidence_status == "accepted"
+    assert awaiting_approval_row.paper_access_state == "available"
+    assert awaiting_approval_row.selectable is False
+    assert awaiting_approval_row.admissible_modes == ("dry_run",)
 
 
 def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(

@@ -9,6 +9,7 @@ import pytest
 from app.schemas.strategy_validation import (
     StrategyBehavioralEquivalence,
     StrategyEvidenceSnapshot,
+    StrategyValidationDiagnostics,
     StrategyValidationEntry,
     StrategyValidationFlagEvent,
     StrategyValidationFlagRequest,
@@ -23,6 +24,7 @@ from app.services.strategy_validation_manifest import (
     reference_code_for_entry,
     seed_strategy_validation_manifest,
 )
+from app.services.strategy_validation_policy import strategy_validation_policy
 
 TEST_FLAG_ACTOR = "local:test-operator"
 VALIDATOR_CODE_REF = "PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py"
@@ -195,6 +197,86 @@ def test_seed_manifest_marks_deployment_validation_deployable() -> None:
     assert unvalidated.deployable is False
     assert unvalidated.qc_cloud_backtest_id is None
     assert unvalidated.diagnostics is None
+
+
+def test_operational_harness_deployability_does_not_require_quantconnect_run() -> None:
+    import app.services.strategy_validation_manifest as strategy_manifest
+
+    settings_sha = hashlib.sha256(
+        (Path(__file__).parents[3] / SETTINGS_FILE_REF).read_bytes()
+    ).hexdigest()
+    registry = [
+        StrategyRegistrySeed(
+            strategy_key="deployment_validation",
+            display_name="Deployment Validation",
+            description="Two-green-minute deployment validation primitive.",
+            strategy_category="operational_validation_harness",
+            has_signal_program=True,
+            reference_summary="Internal deterministic replay corpus.",
+        ),
+    ]
+    evidence = [
+        StrategyEvidenceSeed(
+            strategy_key="deployment_validation",
+            validator_code_ref=VALIDATOR_CODE_REF,
+            validator_code_sha256=VALIDATOR_CODE_SHA256,
+            settings_file_ref=SETTINGS_FILE_REF,
+            settings_file_sha256=settings_sha,
+            qc_cloud_backtest_id=None,
+            audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
+            audit_copy_sha256="audit-sha",
+            reconciliation_ref="tests/fixtures/golden/deployment-validation/trace-corpus.json",
+            validation_case_symbol="SPY",
+            trades_matched=56,
+            trades_validated=56,
+            pnl_max_abs_diff="0.00",
+            divergence_counts={},
+            validator_code_verified=False,
+            audit_copy_verified=False,
+        ),
+    ]
+    accepted_snapshot = strategy_validation_policy(
+        "operational_validation_harness"
+    ).normalize_snapshot(
+        _accepted_flag_event().evidence_snapshot.model_copy(
+            update={
+                "settings_file_sha256": settings_sha,
+                "reconciliation_ref": "tests/fixtures/golden/deployment-validation/trace-corpus.json",
+                "diagnostics": StrategyValidationDiagnostics(
+                    verdict="passed",
+                    trades_matched=56,
+                    trades_validated=56,
+                    pnl_max_abs_diff="0.00",
+                    divergence_counts={},
+                    notes=[],
+                ),
+            }
+        )
+    )
+    accepted = _accepted_flag_event().model_copy(
+        update={
+            "behavioral_equivalence": strategy_manifest._behavioral_equivalence_for_flag(
+                "validated",
+                evidence[0],
+                requires_qc_reference=False,
+            ),
+            "evidence_snapshot": accepted_snapshot,
+        }
+    )
+
+    [entry] = seed_strategy_validation_manifest(registry, evidence, [accepted])
+
+    assert entry.strategy_category == "operational_validation_harness"
+    assert entry.deployable is True
+    assert entry.behavioral_equivalence is not None
+    assert "does not require an external validator or audit copy" in (
+        entry.behavioral_equivalence.tolerance_reason
+    )
+    assert "LEAN validator" not in entry.behavioral_equivalence.tolerance_reason
+    assert entry.proof.state == "current"
+    assert all(evidence.label != "Reference audit copy" for stage in entry.proof.stages for evidence in stage.evidence)
+    reference_stage = next(stage for stage in entry.proof.stages if stage.stage_id == "reference_run")
+    assert reference_stage.state == "not_applicable"
 
 
 def test_seed_manifest_fails_closed_without_validator_binding() -> None:
@@ -432,7 +514,7 @@ def test_load_manifest_fails_closed_when_settings_hash_mismatches(tmp_path) -> N
     assert entry.validation_state == "needs_validation"
     assert entry.deployable is False
     assert entry.diagnostics is not None
-    assert "Validator/deploy binding hash no longer matches" in " ".join(entry.diagnostics.notes)
+    assert "validated settings hash no longer matches" in " ".join(entry.diagnostics.notes)
 
 
 def test_load_manifest_fails_closed_when_audit_copy_hash_mismatches(tmp_path) -> None:
@@ -497,6 +579,12 @@ def test_load_manifest_fails_closed_when_audit_copy_hash_mismatches(tmp_path) ->
     assert entry.deployable is False
     assert entry.diagnostics is not None
     assert "audit copy no longer matches" in " ".join(entry.diagnostics.notes)
+    code = reference_code_for_entry(entry, repo_root=repo_root)
+    assert code is not None
+    assert code.state == "stale"
+    assert code.recorded_sha256 == "0" * 64
+    assert code.sha256 == hashlib.sha256(b"modified audit copy").hexdigest()
+    assert code.source == "modified audit copy"
 
 
 def test_load_manifest_fails_closed_when_event_snapshot_hash_mismatches(tmp_path) -> None:
@@ -542,12 +630,16 @@ def test_load_manifest_keeps_legacy_snapshot_hashes_verifiable(tmp_path) -> None
             ensure_ascii=False,
         ).encode("utf-8")
     ).hexdigest()
-    event = _accepted_flag_event().model_copy(
-        update={
-            "evidence_snapshot": snapshot,
-            "evidence_snapshot_sha256": legacy_hash,
-        }
-    ).model_dump()
+    event = (
+        _accepted_flag_event()
+        .model_copy(
+            update={
+                "evidence_snapshot": snapshot,
+                "evidence_snapshot_sha256": legacy_hash,
+            }
+        )
+        .model_dump()
+    )
 
     manifest_path.write_text(
         json.dumps(

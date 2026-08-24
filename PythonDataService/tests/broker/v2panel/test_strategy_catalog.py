@@ -19,12 +19,16 @@ validation entry rather than a generated-input property test.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
+
 import pytest
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.broker_v2_panel import strategy_catalog
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
+from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.strategy_validation_manifest import (
     load_strategy_validation_entries,
     strategy_registry_seeds,
@@ -45,10 +49,59 @@ def test_validated_strategy_without_runtime_is_visible_but_not_selectable(
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
     assert row.evidence_status == "blocked"
+    assert row.paper_access_state == "blocked"
     assert row.selectable is False
     assert row.admissible_modes == ()
     assert row.blocked_explanation is not None
     assert "runtime" in row.blocked_explanation.lower()
+
+
+def test_catalog_reads_a_confirmed_durable_pairing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger_path = tmp_path / "canary-admission.json"
+    monkeypatch.setattr(
+        "app.services.canary_admission.DEFAULT_CANARY_ADMISSION_LEDGER_PATH",
+        ledger_path,
+    )
+    entry = _accepted_deploy_entry()
+    blocked = _strategy_views([entry], account_id=ACCT)[0]
+    assert blocked.paper_access_state == "available"
+    assert blocked.selectable is False
+
+    plan = plan_canary_activation(
+        program_key="ema_crossover_signal",
+        account_id=ACCT,
+        actor="local:test-operator",
+        reason="Reviewed EMA paper canary.",
+    )
+    apply_canary_activation(plan=plan, confirmation_token=plan.confirmation_token)
+
+    admitted = _strategy_views([entry], account_id=ACCT)[0]
+    assert admitted.paper_access_state == "enabled"
+    assert admitted.selectable is True
+    assert "paper" in admitted.admissible_modes
+
+
+def test_non_sealed_strategy_does_not_offer_a_paper_access_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = _accepted_deploy_entry()
+    registration = _STRATEGY_REGISTRY[entry.strategy_key]
+    monkeypatch.setitem(
+        _STRATEGY_REGISTRY,
+        entry.strategy_key,
+        replace(
+            registration,
+            signal_program_contract=None,
+            signal_program_factory=None,
+        ),
+    )
+
+    row = _strategy_views([entry], account_id=ACCT)[0]
+
+    assert row.paper_access_state == "blocked"
 
 
 def test_no_runtime_block_reads_differently_from_a_stale_proof_block(

@@ -151,13 +151,75 @@ memory.
 
 **Admission requires an exact pairing.** The canary allowlist admits one
 exact `(program, account)` tuple — never a program on any account, never an
-account running any program. It **ships empty**. A pairing appears on it only
-because a person put it there after reviewing the full composed proof, and a
-test fails if the shipped list is ever non-empty. Enabling a canary is an
-operational act, not a deployment step; nothing in CI, migration, or startup
-can perform it, and no bot is started automatically as a result. A run whose
-pairing is absent refuses with `CANARY_PAIRING_NOT_ALLOWLISTED` before any
-bar is evaluated.
+account running any program. The source list **ships empty**, and a test fails
+if it is ever non-empty. Operational admission instead lives in a gitignored,
+append-only local ledger at
+`PythonDataService/artifacts/canary_admission/events.json`. Nothing in CI,
+migration, or startup writes it.
+
+A sibling `events.json.checkpoint` anchors the latest event count and hash
+outside the ledger. A missing or mismatched checkpoint makes admission fail
+closed, including when the ledger is replaced with an earlier, internally
+valid prefix. Treat the ledger and its checkpoint as one operational record;
+never edit or restore either file by hand.
+
+The Alpaca **Deploy** drawer is the primary approval workflow. Choose a
+strategy, find **Paper access**, then select **Review & enable Paper**. The
+first step only prepares a short-lived review bound to the current validation
+proof, program build, strategy, and account. Check the displayed pairing and
+select **Enable Paper access** to confirm it. This approval does not deploy a
+bot or place an order; deployment remains a separate action. The same card is
+available for every sealed Signal Program and shows **Enabled** only for the
+currently selected account's exact pairing.
+
+The command-line ceremony below remains available for operator recovery and
+audit work outside the UI.
+
+Use the broker-free command from `PythonDataService/` to prepare a short-lived
+review plan. Planning re-hashes the current accepted validation snapshot, the
+registered Signal Program bytes, and their golden qualification receipt; it
+does not change admission:
+
+```text
+.venv/bin/python -m scripts.manage_canary_admission plan \
+  --program ema_crossover_signal \
+  --account-id YOUR_PAPER_ACCOUNT_ID \
+  --reason "Reviewed EMA Crossover Signal paper canary" \
+  --output /tmp/ema-canary-plan.json
+```
+
+The plan is written with owner-only (`0600`) permissions because it contains
+the confirmation token. Read it and confirm its program, account, actor,
+reason, validation event, artifact digest, qualification receipt, and expiry.
+Then, before its two-minute default expiry, apply the reviewed plan:
+
+```text
+.venv/bin/python -m scripts.manage_canary_admission apply \
+  --plan /tmp/ema-canary-plan.json
+```
+
+At an interactive terminal, paste the plan's exact `confirmation_token` into
+the hidden prompt. For automation, provide the token on standard input from a
+protected secret source. Never put it in a command argument or shell history.
+
+`apply` re-proves the evidence and refuses if it changed, the plan expired,
+or the ledger moved since planning. It appends an activation event only; it
+does not start or resume a bot, contact Alpaca, or submit an order. Use
+`status` to verify the active exact pairs. A run whose pairing is absent
+refuses with `CANARY_PAIRING_NOT_ALLOWLISTED` before any bar is evaluated.
+
+Revocation is also append-only:
+
+```text
+.venv/bin/python -m scripts.manage_canary_admission revoke \
+  --program ema_crossover_signal \
+  --account-id YOUR_PAPER_ACCOUNT_ID \
+  --reason "EMA paper canary review complete"
+```
+
+Revocation blocks future Start and Resume admissions but does not terminate an
+already-running bot. For rollback, Stop the bot first, wait for its
+Clerk-proved safe-boundary verdict, and then revoke the pairing.
 
 That gate is the *last* of seven proofs, not the only one. The seal and build
 proof, the strategy validation disposition, the sealed provider identity, the

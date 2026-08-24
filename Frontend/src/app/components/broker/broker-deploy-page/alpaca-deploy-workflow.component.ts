@@ -40,6 +40,7 @@ import {
 } from './deploy-admission-column.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
+import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
@@ -68,6 +69,7 @@ interface DeploySubmissionReadiness {
     DeployBindingStripComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
+    DeployPaperAccessComponent,
     DeployParametersSectionComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
@@ -374,6 +376,11 @@ export class AlpacaDeployWorkflowComponent {
   protected reload(): void {
     this.submitError.set(null);
     this.admissionDecision.set(null);
+    this.deployView.reload();
+  }
+
+  protected paperAccessChanged(): void {
+    this.clearAdmission();
     this.deployView.reload();
   }
 

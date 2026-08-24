@@ -87,6 +87,74 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(confirmed).resolves.toMatchObject({ receipt_id: 'coverage-resolution:2' });
   });
 
+  it('prepares and confirms one exact strategy/account Paper-access pairing', async () => {
+    const prepared = service.preparePaperAccess(
+      'alpaca paper',
+      'account/1',
+      'ema/crossover',
+      'Review this exact strategy and account.',
+    );
+    const prepareRequest = http.expectOne(
+      '/api/brokers/alpaca%20paper/accounts/account%2F1/strategies/ema%2Fcrossover/paper-access/plan',
+    );
+    expect(prepareRequest.request.body).toEqual({
+      reason: 'Review this exact strategy and account.',
+    });
+    prepareRequest.flush({
+      schema_version: 1,
+      plan_id: 'a'.repeat(64),
+      confirmation_token: 'a'.repeat(64),
+      program_key: 'ema/crossover',
+      account_id: 'account/1',
+      actor: 'operator',
+      reason: 'Review this exact strategy and account.',
+      created_at_ms: 1,
+      expires_at_ms: 2,
+      ledger_path: '/tmp/test-ledger.json',
+      expected_ledger_head_hash: null,
+      evidence: {
+        validation_event_id: 'validation-1',
+        validation_snapshot_sha256: 'b'.repeat(64),
+        program_version: '1',
+        golden_trace_root: 'c'.repeat(64),
+        running_artifact_digest: 'd'.repeat(64),
+        qualification_receipt_hash: 'e'.repeat(64),
+        qualification_suite: 'sealed-program',
+        qualified_at_ms: 1,
+      },
+    });
+    const plan = await prepared;
+
+    const confirmed = service.confirmPaperAccess(
+      'alpaca paper',
+      'account/1',
+      'ema/crossover',
+      plan,
+    );
+    const confirmRequest = http.expectOne(
+      '/api/brokers/alpaca%20paper/accounts/account%2F1/strategies/ema%2Fcrossover/paper-access/confirm',
+    );
+    expect(confirmRequest.request.body).toEqual({
+      plan,
+      confirmation_token: 'a'.repeat(64),
+    });
+    confirmRequest.flush({
+      schema_version: 1,
+      sequence: 1,
+      action: 'activated',
+      program_key: 'ema/crossover',
+      account_id: 'account/1',
+      actor: 'operator',
+      reason: plan.reason,
+      recorded_at_ms: 2,
+      evidence: plan.evidence,
+      previous_event_hash: null,
+      event_hash: 'f'.repeat(64),
+    });
+
+    await expect(confirmed).resolves.toMatchObject({ action: 'activated' });
+  });
+
 });
 
 describe('BrokerV2PanelService resilient action retry (defect #10)', () => {

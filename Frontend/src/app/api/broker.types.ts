@@ -1851,6 +1851,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm the exact reviewed strategy/account Paper pairing */
+        post: operations["confirm_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare a proof-bound review for one strategy/account Paper pairing */
+        post: operations["prepare_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/activities": {
         parameters: {
             query?: never;
@@ -7416,6 +7450,11 @@ export interface components {
             label: string;
             /** Override Explanation */
             override_explanation?: string | null;
+            /**
+             * Paper Access State
+             * @enum {string}
+             */
+            paper_access_state: "not_required" | "blocked" | "available" | "enabled";
             params_schema?: components["schemas"]["StrategyParamsSchema"];
             /** Selectable */
             selectable: boolean;
@@ -9581,6 +9620,112 @@ export interface components {
             success: boolean;
             /** Ticker */
             ticker: string;
+        };
+        /**
+         * CanaryActivationConfirmation
+         * @description The exact reviewed plan and its content-addressed confirmation.
+         */
+        CanaryActivationConfirmation: {
+            /** Confirmation Token */
+            confirmation_token: string;
+            plan: components["schemas"]["CanaryActivationPlan"];
+        };
+        /**
+         * CanaryActivationEvidence
+         * @description Fresh proof that one program is eligible for canary activation.
+         */
+        CanaryActivationEvidence: {
+            /** Golden Trace Root */
+            golden_trace_root: string;
+            /** Program Version */
+            program_version: string;
+            /** Qualification Receipt Hash */
+            qualification_receipt_hash: string;
+            /** Qualification Suite */
+            qualification_suite: string;
+            /** Qualified At Ms */
+            qualified_at_ms: number;
+            /** Running Artifact Digest */
+            running_artifact_digest: string;
+            /** Validation Event Id */
+            validation_event_id: string;
+            /** Validation Snapshot Sha256 */
+            validation_snapshot_sha256: string;
+        };
+        /**
+         * CanaryActivationPlan
+         * @description Short-lived, content-addressed intent awaiting explicit confirmation.
+         */
+        CanaryActivationPlan: {
+            /** Account Id */
+            account_id: string;
+            /** Actor */
+            actor: string;
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            evidence: components["schemas"]["CanaryActivationEvidence"];
+            /** Expected Ledger Head Hash */
+            expected_ledger_head_hash?: string | null;
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Ledger Path */
+            ledger_path: string;
+            /** Plan Id */
+            plan_id: string;
+            /** Program Key */
+            program_key: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+        };
+        /**
+         * CanaryActivationRequest
+         * @description Operator reason for preparing one exact Paper-access pairing.
+         */
+        CanaryActivationRequest: {
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * CanaryAdmissionEvent
+         * @description One append-only activation or revocation decision.
+         */
+        CanaryAdmissionEvent: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "activated" | "revoked";
+            /** Actor */
+            actor: string;
+            /** Event Hash */
+            event_hash: string;
+            evidence?: components["schemas"]["CanaryActivationEvidence"] | null;
+            /** Previous Event Hash */
+            previous_event_hash?: string | null;
+            /** Program Key */
+            program_key: string;
+            /** Reason */
+            reason: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Sequence */
+            sequence: number;
         };
         /**
          * CanaryRollbackDecision
@@ -22034,6 +22179,22 @@ export interface components {
              */
             symbol?: string;
         };
+        /** StrategyArtifactCheck */
+        StrategyArtifactCheck: {
+            /** Current Sha256 */
+            current_sha256?: string | null;
+            /** Label */
+            label: string;
+            /** Recorded Sha256 */
+            recorded_sha256?: string | null;
+            /** Ref */
+            ref?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "current" | "stale" | "missing" | "unreadable";
+        };
         /** StrategyBarCadenceInfo */
         StrategyBarCadenceInfo: {
             /** Multiplier */
@@ -22244,6 +22405,66 @@ export interface components {
             /** Type */
             type?: string | null;
         };
+        /** StrategyProofAction */
+        StrategyProofAction: {
+            /** Href */
+            href: string;
+            /**
+             * Kind
+             * @default external_link
+             * @constant
+             */
+            kind?: "external_link";
+            /** Label */
+            label: string;
+        };
+        /** StrategyProofDossier */
+        StrategyProofDossier: {
+            /** Blocking Stage Id */
+            blocking_stage_id?: string | null;
+            /** Blocking Summary */
+            blocking_summary?: string | null;
+            /**
+             * Completed Stages
+             * @default 0
+             */
+            completed_stages?: number;
+            /** Stages */
+            stages?: components["schemas"]["StrategyProofStage"][];
+            /**
+             * State
+             * @default missing
+             * @enum {string}
+             */
+            state?: "current" | "stale" | "missing" | "blocked" | "rejected" | "unreadable";
+            /**
+             * Total Stages
+             * @default 0
+             */
+            total_stages?: number;
+        };
+        /** StrategyProofStage */
+        StrategyProofStage: {
+            /** Actions */
+            actions?: components["schemas"]["StrategyProofAction"][];
+            /** Authority */
+            authority: string;
+            /** Evidence */
+            evidence?: components["schemas"]["StrategyArtifactCheck"][];
+            /** Next Step */
+            next_step?: string | null;
+            /** Stage Id */
+            stage_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "complete" | "stale" | "missing" | "blocked" | "not_applicable";
+            /** Summary */
+            summary: string;
+            /** Title */
+            title: string;
+        };
         /** StrategyReferenceCode */
         StrategyReferenceCode: {
             /**
@@ -22253,10 +22474,18 @@ export interface components {
             language?: string;
             /** Path */
             path: string;
+            /** Recorded Sha256 */
+            recorded_sha256?: string | null;
             /** Sha256 */
             sha256: string;
             /** Source */
             source: string;
+            /**
+             * State
+             * @default current
+             * @enum {string}
+             */
+            state?: "current" | "stale" | "missing" | "unreadable";
         };
         /**
          * StrategyRunListResponse
@@ -22448,6 +22677,7 @@ export interface components {
             display_name: string;
             /** Flag Events */
             flag_events?: components["schemas"]["StrategyValidationFlagEvent"][];
+            proof?: components["schemas"]["StrategyProofDossier"];
             /** Qc Cloud Backtest Id */
             qc_cloud_backtest_id?: string | null;
             /** Reconciliation Ref */
@@ -22459,6 +22689,12 @@ export interface components {
             settings_file_ref?: string | null;
             /** Settings File Sha256 */
             settings_file_sha256?: string | null;
+            /**
+             * Strategy Category
+             * @default production_candidate
+             * @enum {string}
+             */
+            strategy_category?: "production_candidate" | "operational_validation_harness";
             /** Strategy Key */
             strategy_key: string;
             /** Validation Case Symbol */
@@ -22507,6 +22743,7 @@ export interface components {
             display_name: string;
             /** Flag Events */
             flag_events?: components["schemas"]["StrategyValidationFlagEvent"][];
+            proof?: components["schemas"]["StrategyProofDossier"];
             /** Qc Cloud Backtest Id */
             qc_cloud_backtest_id?: string | null;
             /** Reconciliation Ref */
@@ -22517,6 +22754,12 @@ export interface components {
             settings_file_ref?: string | null;
             /** Settings File Sha256 */
             settings_file_sha256?: string | null;
+            /**
+             * Strategy Category
+             * @default production_candidate
+             * @enum {string}
+             */
+            strategy_category?: "production_candidate" | "operational_validation_harness";
             /** Strategy Key */
             strategy_key: string;
             /** Validation Case Symbol */
@@ -27694,6 +27937,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                program_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CanaryActivationConfirmation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CanaryAdmissionEvent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_plan_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                program_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CanaryActivationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CanaryActivationPlan"];
                 };
             };
             /** @description Validation Error */

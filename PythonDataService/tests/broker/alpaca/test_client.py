@@ -233,19 +233,16 @@ async def test_get_order_by_client_order_id_404_returns_none(
     assert result is None
 
 
-async def test_timed_out_submit_stays_uncertain_while_sdk_worker_is_in_flight(
+async def test_timed_out_submit_stays_uncertain_until_order_becomes_visible(
     make_api_error: ApiErrorFactory,
 ) -> None:
     fake = _FakeAlpaca()
-    started = Event()
     release = Event()
-    completed = Event()
+    visible = Event()
     lookup_calls: list[str] = []
 
     def delayed_post(path: str, data: Any = None) -> dict[str, Any]:
-        started.set()
-        release.wait(timeout=1)
-        completed.set()
+        release.wait()
         return {
             "id": "broker-order-delayed",
             "client_order_id": data["client_order_id"],
@@ -254,7 +251,7 @@ async def test_timed_out_submit_stays_uncertain_while_sdk_worker_is_in_flight(
 
     def lookup_after_visibility(client_id: str) -> dict[str, Any]:
         lookup_calls.append(client_id)
-        if not completed.is_set():
+        if not visible.is_set():
             raise make_api_error(404, message="order not found")
         return {
             "id": "broker-order-delayed",
@@ -273,30 +270,18 @@ async def test_timed_out_submit_stays_uncertain_while_sdk_worker_is_in_flight(
         "client_order_id": "manual/inkant/v1:delayed",
     }
 
-    with pytest.raises(BrokerUnavailable, match="timed out"):
-        await client.submit_order(order)
-    # The 1 ms timeout can fire before the abandoned in-flight worker thread has
-    # executed far enough to set ``started`` — that ordering is not guaranteed on
-    # a loaded runner. Wait for the in-flight worker to prove it started rather
-    # than asserting on a race (mirrors the poll-until-started idiom used by
-    # test_timeouts_do_not_exhaust_the_global_anyio_thread_limiter below).
-    assert started.wait(timeout=1)
+    try:
+        with pytest.raises(BrokerUnavailable, match="timed out"):
+            await client.submit_order(order)
 
-    with pytest.raises(BrokerUnavailable, match="still become visible"):
-        await client.get_order_by_client_order_id(order["client_order_id"])
-    assert lookup_calls == [order["client_order_id"]]
+        with pytest.raises(BrokerUnavailable, match="still become visible"):
+            await client.get_order_by_client_order_id(order["client_order_id"])
+        assert lookup_calls == [order["client_order_id"]]
 
-    release.set()
-    for _ in range(100):
-        try:
-            result = await client.get_order_by_client_order_id(
-                order["client_order_id"]
-            )
-            break
-        except BrokerUnavailable:
-            await asyncio.sleep(0.005)
-    else:
-        pytest.fail("timed-out SDK worker did not settle")
+        visible.set()
+        result = await client.get_order_by_client_order_id(order["client_order_id"])
+    finally:
+        release.set()
 
     assert result is not None
     assert result["id"] == "broker-order-delayed"

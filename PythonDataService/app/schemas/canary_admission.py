@@ -1,15 +1,136 @@
-"""Backend-authored verdict for stopping a canary at a Clerk-proved boundary.
+"""Durable canary activation evidence and Clerk-proved rollback verdicts.
 
-Issue #1729 AC10. See ``app/services/canary_admission.py`` for the pure
-function that builds this verdict and how it composes with the existing Stop
-custody proof (``app.services.bot_carryover.prove_stop_outcome``).
+See ``app/services/canary_admission.py`` for the operator-controlled
+activation ledger and how rollback composes with the existing Stop custody
+proof (``app.services.bot_carryover.prove_stop_outcome``).
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.schemas.signal_program_seal import semantic_payload_hash
+
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_INT64_MAX = 9_223_372_036_854_775_807
+
+
+class CanaryActivationEvidence(BaseModel):
+    """Fresh proof that one program is eligible for canary activation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    validation_event_id: str = Field(min_length=1)
+    validation_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    program_version: str = Field(min_length=1)
+    golden_trace_root: str = Field(pattern=_SHA256_PATTERN)
+    running_artifact_digest: str = Field(pattern=_SHA256_PATTERN)
+    qualification_receipt_hash: str = Field(pattern=_SHA256_PATTERN)
+    qualification_suite: str = Field(min_length=1)
+    qualified_at_ms: int = Field(ge=0, le=_INT64_MAX)
+
+
+class CanaryActivationPlan(BaseModel):
+    """Short-lived, content-addressed intent awaiting explicit confirmation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    plan_id: str = Field(pattern=_SHA256_PATTERN)
+    confirmation_token: str = Field(pattern=_SHA256_PATTERN)
+    program_key: str = Field(min_length=1)
+    account_id: str = Field(min_length=1)
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    created_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    expires_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    ledger_path: str = Field(min_length=1)
+    expected_ledger_head_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    evidence: CanaryActivationEvidence
+
+    @model_validator(mode="after")
+    def validate_content_identity(self) -> CanaryActivationPlan:
+        if self.expires_at_ms <= self.created_at_ms:
+            raise ValueError("activation plan expiry must be after creation")
+        expected = semantic_payload_hash(
+            self.model_dump(mode="json", exclude={"plan_id", "confirmation_token"})
+        )
+        if self.plan_id != expected or self.confirmation_token != expected:
+            raise ValueError("activation plan identity does not match its payload")
+        return self
+
+
+class CanaryActivationRequest(BaseModel):
+    """Operator reason for preparing one exact Paper-access pairing."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: str = Field(min_length=10, max_length=500)
+
+
+class CanaryActivationConfirmation(BaseModel):
+    """The exact reviewed plan and its content-addressed confirmation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    plan: CanaryActivationPlan
+    confirmation_token: str = Field(pattern=_SHA256_PATTERN)
+
+
+class CanaryAdmissionEvent(BaseModel):
+    """One append-only activation or revocation decision."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    sequence: int = Field(ge=1)
+    action: Literal["activated", "revoked"]
+    program_key: str = Field(min_length=1)
+    account_id: str = Field(min_length=1)
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    recorded_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    evidence: CanaryActivationEvidence | None = None
+    previous_event_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    event_hash: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_event(self) -> CanaryAdmissionEvent:
+        if self.action == "activated" and self.evidence is None:
+            raise ValueError("an activation event requires its proof evidence")
+        if self.action == "revoked" and self.evidence is not None:
+            raise ValueError("a revocation event cannot replace activation evidence")
+        expected = semantic_payload_hash(self.model_dump(mode="json", exclude={"event_hash"}))
+        if self.event_hash != expected:
+            raise ValueError("canary admission event hash does not match its payload")
+        return self
+
+
+class CanaryAdmissionLedger(BaseModel):
+    """Closed, append-only history from which active exact pairings derive."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    events: tuple[CanaryAdmissionEvent, ...] = ()
+
+
+class CanaryAdmissionCheckpoint(BaseModel):
+    """Head anchored outside the ledger so valid-prefix rollback fails closed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    event_count: int = Field(ge=0)
+    ledger_head_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_head_presence(self) -> CanaryAdmissionCheckpoint:
+        if (self.event_count == 0) != (self.ledger_head_hash is None):
+            raise ValueError("checkpoint count and ledger head must describe the same history")
+        return self
 
 
 class CanaryRollbackDecision(BaseModel):
@@ -34,7 +155,16 @@ class CanaryRollbackDecision(BaseModel):
         "STOP_REQUIRES_FLATTEN",
         "STOPPED_CUSTODY_UNPROVABLE",
     ]
-    evaluated_at_ms: int = Field(ge=0)
+    evaluated_at_ms: int = Field(ge=0, le=_INT64_MAX)
 
 
-__all__ = ["CanaryRollbackDecision"]
+__all__ = [
+    "CanaryActivationConfirmation",
+    "CanaryActivationEvidence",
+    "CanaryActivationPlan",
+    "CanaryActivationRequest",
+    "CanaryAdmissionCheckpoint",
+    "CanaryAdmissionEvent",
+    "CanaryAdmissionLedger",
+    "CanaryRollbackDecision",
+]

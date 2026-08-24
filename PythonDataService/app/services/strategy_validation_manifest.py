@@ -16,8 +16,11 @@ from pydantic import ValidationError
 
 from app.research.parity.qc_reconciler import DivergenceCategory
 from app.schemas.strategy_validation import (
+    StrategyArtifactCheck,
     StrategyBehavioralEquivalence,
+    StrategyCategory,
     StrategyEvidenceSnapshot,
+    StrategyProofDossier,
     StrategyReferenceCode,
     StrategyValidationDetail,
     StrategyValidationDiagnostics,
@@ -26,6 +29,8 @@ from app.schemas.strategy_validation import (
     StrategyValidationFlagRequest,
     StrategyValidationRefreshResult,
 )
+from app.services.strategy_proof_dossier import build_strategy_proof_dossier
+from app.services.strategy_validation_policy import strategy_validation_policy
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +47,9 @@ class StrategyRegistrySeed:
     strategy_key: str
     display_name: str
     description: str
+    strategy_category: StrategyCategory = "production_candidate"
+    has_signal_program: bool = False
+    reference_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,7 +57,7 @@ class StrategyEvidenceSeed:
     strategy_key: str
     settings_file_ref: str
     settings_file_sha256: str
-    qc_cloud_backtest_id: str
+    qc_cloud_backtest_id: str | None
     audit_copy_ref: str
     audit_copy_sha256: str
     reconciliation_ref: str
@@ -61,6 +69,7 @@ class StrategyEvidenceSeed:
     verdict: str = "passed"
     reconciliation_status: str = "passed"
     settings_file_verified: bool = True
+    validator_code_verified: bool = True
     audit_copy_verified: bool = True
     validator_code_ref: str | None = None
     validator_code_sha256: str | None = None
@@ -75,6 +84,13 @@ def strategy_registry_seeds() -> list[StrategyRegistrySeed]:
             strategy_key=key,
             display_name=registration.display_name,
             description=registration.description,
+            strategy_category=registration.strategy_category,
+            has_signal_program=registration.signal_program_contract is not None,
+            reference_summary=(
+                registration.signal_program_contract.numerical_provenance.reference
+                if registration.signal_program_contract is not None
+                else None
+            ),
         )
         for key, registration in sorted(_STRATEGY_REGISTRY.items())
         if registration.catalog_visible
@@ -85,6 +101,8 @@ def seed_strategy_validation_manifest(
     registry: list[StrategyRegistrySeed],
     evidence: list[StrategyEvidenceSeed],
     flag_events: list[StrategyValidationFlagEvent] | None = None,
+    *,
+    repo_root: Path = _REPO_ROOT,
 ) -> list[StrategyValidationEntry]:
     evidence_by_strategy = {item.strategy_key: item for item in evidence}
     events_by_strategy = _events_by_strategy(flag_events or [])
@@ -94,18 +112,18 @@ def seed_strategy_validation_manifest(
         events = events_by_strategy.get(strategy.strategy_key, [])
         current_event = _current_flag_event(events)
         if proof is None:
-            entries.append(
-                StrategyValidationEntry(
-                    strategy_key=strategy.strategy_key,
-                    display_name=strategy.display_name,
-                    description=strategy.description,
-                    validation_state=_validation_state_for_event(current_event),
-                    deployable=False,
-                    behavioral_equivalence=current_event.behavioral_equivalence if current_event else None,
-                    current_flag_event=current_event,
-                    flag_events=events,
-                )
+            entry = StrategyValidationEntry(
+                strategy_key=strategy.strategy_key,
+                display_name=strategy.display_name,
+                description=strategy.description,
+                strategy_category=strategy.strategy_category,
+                validation_state=_validation_state_for_event(current_event),
+                deployable=False,
+                behavioral_equivalence=current_event.behavioral_equivalence if current_event else None,
+                current_flag_event=current_event,
+                flag_events=events,
             )
+            entries.append(entry.model_copy(update={"proof": _proof_dossier(entry, strategy, repo_root=repo_root)}))
             continue
 
         _validate_divergence_categories(proof.divergence_counts)
@@ -114,42 +132,130 @@ def seed_strategy_validation_manifest(
             if current_event is not None and current_event.evidence_snapshot.qc_cloud_backtest_id
             else proof.qc_cloud_backtest_id
         )
-        evidence_deployable = _evidence_is_deployable(proof) and bool(qc_cloud_backtest_id)
+        policy = strategy_validation_policy(strategy.strategy_category)
+        if not policy.requires_external_reference:
+            qc_cloud_backtest_id = None
+        evidence_deployable = _evidence_is_deployable(
+            proof,
+            requires_qc_reference=policy.requires_external_reference,
+        ) and (not policy.requires_external_reference or bool(qc_cloud_backtest_id))
         deployable = _event_accepts_deploy(current_event) and evidence_deployable
         notes = list(proof.notes)
         if not evidence_deployable:
-            notes.extend(_validation_failure_notes(proof))
-        entries.append(
-            StrategyValidationEntry(
-                strategy_key=strategy.strategy_key,
-                display_name=strategy.display_name,
-                description=strategy.description,
-                validation_state=_validation_state_for_event(current_event),
-                deployable=deployable,
-                validator_code_ref=proof.validator_code_ref,
-                validator_code_sha256=proof.validator_code_sha256,
-                settings_file_ref=proof.settings_file_ref,
-                settings_file_sha256=proof.settings_file_sha256,
-                qc_cloud_backtest_id=qc_cloud_backtest_id,
-                audit_copy_ref=proof.audit_copy_ref,
-                audit_copy_sha256=proof.audit_copy_sha256,
-                reconciliation_ref=proof.reconciliation_ref,
-                validation_case_symbol=proof.validation_case_symbol,
-                reconciliation_status=proof.reconciliation_status,
-                diagnostics=StrategyValidationDiagnostics(
-                    verdict=proof.verdict,
-                    trades_matched=proof.trades_matched,
-                    trades_validated=proof.trades_validated,
-                    pnl_max_abs_diff=proof.pnl_max_abs_diff,
-                    divergence_counts=dict(proof.divergence_counts),
-                    notes=notes,
-                ),
-                behavioral_equivalence=current_event.behavioral_equivalence if current_event else None,
-                current_flag_event=current_event,
-                flag_events=events,
+            notes.extend(
+                _validation_failure_notes(
+                    proof,
+                    requires_qc_reference=policy.requires_external_reference,
+                )
             )
+        entry = StrategyValidationEntry(
+            strategy_key=strategy.strategy_key,
+            display_name=strategy.display_name,
+            description=strategy.description,
+            strategy_category=strategy.strategy_category,
+            validation_state=_validation_state_for_event(current_event),
+            deployable=deployable,
+            validator_code_ref=proof.validator_code_ref,
+            validator_code_sha256=proof.validator_code_sha256,
+            settings_file_ref=proof.settings_file_ref,
+            settings_file_sha256=proof.settings_file_sha256,
+            qc_cloud_backtest_id=qc_cloud_backtest_id,
+            audit_copy_ref=proof.audit_copy_ref,
+            audit_copy_sha256=proof.audit_copy_sha256,
+            reconciliation_ref=proof.reconciliation_ref,
+            validation_case_symbol=proof.validation_case_symbol,
+            reconciliation_status=proof.reconciliation_status,
+            diagnostics=StrategyValidationDiagnostics(
+                verdict=proof.verdict,
+                trades_matched=proof.trades_matched,
+                trades_validated=proof.trades_validated,
+                pnl_max_abs_diff=proof.pnl_max_abs_diff,
+                divergence_counts=dict(proof.divergence_counts),
+                notes=notes,
+            ),
+            behavioral_equivalence=current_event.behavioral_equivalence if current_event else None,
+            current_flag_event=current_event,
+            flag_events=events,
         )
+        entries.append(entry.model_copy(update={"proof": _proof_dossier(entry, strategy, repo_root=repo_root)}))
     return entries
+
+
+def _proof_dossier(
+    entry: StrategyValidationEntry,
+    strategy: StrategyRegistrySeed,
+    *,
+    repo_root: Path,
+) -> StrategyProofDossier:
+    artifact_checks = [
+        _artifact_check(
+            "Validated settings",
+            entry.settings_file_ref,
+            entry.settings_file_sha256,
+            repo_root=repo_root,
+        ),
+    ]
+    audit_check = None
+    policy = strategy_validation_policy(strategy.strategy_category)
+    if policy.requires_external_reference:
+        artifact_checks.insert(
+            0,
+            _artifact_check(
+                "LEAN validator",
+                entry.validator_code_ref,
+                entry.validator_code_sha256,
+                repo_root=repo_root,
+            ),
+        )
+        audit_check = _artifact_check(
+            "Reference audit copy",
+            entry.audit_copy_ref,
+            entry.audit_copy_sha256,
+            repo_root=repo_root,
+        )
+        artifact_checks.append(audit_check)
+    return build_strategy_proof_dossier(
+        entry,
+        strategy_category=strategy.strategy_category,
+        has_signal_program=strategy.has_signal_program,
+        reference_summary=strategy.reference_summary,
+        audit_check=audit_check,
+        artifact_checks=artifact_checks,
+    )
+
+
+def _artifact_check(
+    label: str,
+    ref: str | None,
+    recorded_sha256: str | None,
+    *,
+    repo_root: Path,
+) -> StrategyArtifactCheck:
+    if ref is None:
+        return StrategyArtifactCheck(label=label, state="missing")
+    try:
+        current_sha256 = _sha256(_resolve_project_ref(repo_root, ref))
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to read strategy validation ref %s: %s", ref, exc)
+        return StrategyArtifactCheck(
+            label=label,
+            ref=ref,
+            state="unreadable",
+            recorded_sha256=recorded_sha256,
+        )
+    if recorded_sha256 is None:
+        state = "missing"
+    elif hmac.compare_digest(recorded_sha256, current_sha256):
+        state = "current"
+    else:
+        state = "stale"
+    return StrategyArtifactCheck(
+        label=label,
+        ref=ref,
+        state=state,
+        recorded_sha256=recorded_sha256,
+        current_sha256=current_sha256,
+    )
 
 
 def load_strategy_validation_entries(
@@ -160,14 +266,16 @@ def load_strategy_validation_entries(
 ) -> list[StrategyValidationEntry]:
     raw = _load_manifest_raw(manifest_path)
 
-    evidence = [
-        _evidence_seed_from_raw(item, repo_root=repo_root)
-        for item in raw.get("validated_strategies", [])
-    ]
+    evidence = [_evidence_seed_from_raw(item, repo_root=repo_root) for item in raw.get("validated_strategies", [])]
     seed_events = _flag_events_from_raw(raw.get("seed_flag_events", raw.get("flag_events", [])))
     runtime_events = _load_runtime_flag_events(_resolve_flag_events_path(flag_events_path))
     flag_events = [*seed_events, *runtime_events]
-    return seed_strategy_validation_manifest(registry, evidence, flag_events)
+    return seed_strategy_validation_manifest(
+        registry,
+        evidence,
+        flag_events,
+        repo_root=repo_root,
+    )
 
 
 def append_strategy_validation_flag_event(
@@ -183,23 +291,21 @@ def append_strategy_validation_flag_event(
 ) -> StrategyValidationEntry:
     resolved_flag_events_path = _resolve_flag_events_path(flag_events_path)
     raw = _load_manifest_raw(manifest_path)
-    evidence = [
-        _evidence_seed_from_raw(item, repo_root=repo_root)
-        for item in raw.get("validated_strategies", [])
-    ]
+    evidence = [_evidence_seed_from_raw(item, repo_root=repo_root) for item in raw.get("validated_strategies", [])]
     proof_by_strategy = {item.strategy_key: item for item in evidence}
     if not any(seed.strategy_key == strategy_key for seed in registry):
         raise StrategyValidationNotFoundError(strategy_key)
+    strategy = next(seed for seed in registry if seed.strategy_key == strategy_key)
 
     proof = proof_by_strategy.get(strategy_key)
     if proof is not None:
         _validate_divergence_categories(proof.divergence_counts)
     current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     snapshot = _snapshot_for_proof(proof)
-    if request.qc_cloud_backtest_id is not None:
-        snapshot = snapshot.model_copy(
-            update={"qc_cloud_backtest_id": request.qc_cloud_backtest_id}
-        )
+    policy = strategy_validation_policy(strategy.strategy_category)
+    snapshot = policy.normalize_snapshot(snapshot)
+    if policy.requires_external_reference and request.qc_cloud_backtest_id is not None:
+        snapshot = snapshot.model_copy(update={"qc_cloud_backtest_id": request.qc_cloud_backtest_id})
     event = StrategyValidationFlagEvent(
         event_id=uuid.uuid4().hex,
         strategy_key=strategy_key,
@@ -211,6 +317,7 @@ def append_strategy_validation_flag_event(
             request.flag,
             proof,
             qc_cloud_backtest_id=snapshot.qc_cloud_backtest_id,
+            requires_qc_reference=policy.requires_external_reference,
         ),
         evidence_snapshot=snapshot,
         evidence_snapshot_sha256=_snapshot_sha256(snapshot),
@@ -263,7 +370,11 @@ def local_strategy_validation_actor() -> str:
     return f"local:{username}" if username else "local:unknown"
 
 
-def reference_code_for_entry(entry: StrategyValidationEntry, *, repo_root: Path = _REPO_ROOT) -> StrategyReferenceCode | None:
+def reference_code_for_entry(
+    entry: StrategyValidationEntry, *, repo_root: Path = _REPO_ROOT
+) -> StrategyReferenceCode | None:
+    if entry.strategy_category == "operational_validation_harness":
+        return None
     if entry.audit_copy_ref is None:
         return None
     path = _resolve_project_ref(repo_root, entry.audit_copy_ref)
@@ -271,13 +382,18 @@ def reference_code_for_entry(entry: StrategyValidationEntry, *, repo_root: Path 
         source_bytes = path.read_bytes()
         source = source_bytes.decode("utf-8")
     except (OSError, UnicodeDecodeError, ValueError) as exc:
-        logger.error("Failed to read strategy audit copy %s: %s", entry.audit_copy_ref, exc)
-        raise StrategyValidationManifestError("Strategy audit copy unreadable") from exc
+        logger.warning("Failed to read strategy audit copy %s: %s", entry.audit_copy_ref, exc)
+        return None
 
     sha256 = _sha256_bytes(source_bytes)
-    if entry.audit_copy_sha256 is not None and sha256 != entry.audit_copy_sha256:
-        raise StrategyValidationManifestError("Strategy audit copy SHA mismatch")
-    return StrategyReferenceCode(path=entry.audit_copy_ref, sha256=sha256, source=source)
+    state = "current" if entry.audit_copy_sha256 == sha256 else "stale"
+    return StrategyReferenceCode(
+        path=entry.audit_copy_ref,
+        sha256=sha256,
+        recorded_sha256=entry.audit_copy_sha256,
+        state=state,
+        source=source,
+    )
 
 
 def strategy_audit_copy_is_current(
@@ -446,11 +562,7 @@ def _events_by_strategy(
 
 
 def _current_flag_event(events: list[StrategyValidationFlagEvent]) -> StrategyValidationFlagEvent | None:
-    active_events = [
-        (index, event)
-        for index, event in enumerate(events)
-        if event.superseded_by_event_id is None
-    ]
+    active_events = [(index, event) for index, event in enumerate(events) if event.superseded_by_event_id is None]
     if not active_events:
         return None
     return max(active_events, key=lambda item: (item[1].flagged_at_ms, item[0]))[1]
@@ -506,10 +618,7 @@ def _snapshot_sha256(snapshot: StrategyEvidenceSnapshot) -> str:
 
 def _snapshot_hash_payload(snapshot: StrategyEvidenceSnapshot) -> dict[str, Any]:
     payload = snapshot.model_dump()
-    if (
-        snapshot.validator_code_ref is None
-        and snapshot.validator_code_sha256 is None
-    ):
+    if snapshot.validator_code_ref is None and snapshot.validator_code_sha256 is None:
         payload.pop("validator_code_ref", None)
         payload.pop("validator_code_sha256", None)
     return payload
@@ -520,6 +629,7 @@ def _behavioral_equivalence_for_flag(
     proof: StrategyEvidenceSeed | None,
     *,
     qc_cloud_backtest_id: str | None = None,
+    requires_qc_reference: bool = True,
 ) -> StrategyBehavioralEquivalence:
     if flag == "invalidated":
         return StrategyBehavioralEquivalence(
@@ -534,28 +644,51 @@ def _behavioral_equivalence_for_flag(
             detail="Human validation recorded without a registered engine evidence snapshot.",
             tolerance_reason="No registered evidence snapshot is available for a deployability decision.",
         )
-    if _evidence_is_deployable(proof) and bool(qc_cloud_backtest_id or proof.qc_cloud_backtest_id):
+    has_required_reference = not requires_qc_reference or bool(qc_cloud_backtest_id or proof.qc_cloud_backtest_id)
+    if (
+        _evidence_is_deployable(
+            proof,
+            requires_qc_reference=requires_qc_reference,
+        )
+        and has_required_reference
+    ):
         return StrategyBehavioralEquivalence(
             verdict="accepted_for_deploy",
             detail="Human validation accepted the current engine evidence for deployment.",
-                tolerance="manifest_reconciliation_passed",
-                tolerance_reason=(
+            tolerance="manifest_reconciliation_passed",
+            tolerance_reason=(
+                (
                     "Registered reconciliation status and diagnostics verdict are passed; "
                     "the manifest LEAN validator hash and deploy binding hash also match "
                     "the current source."
-                ),
+                )
+                if requires_qc_reference
+                else (
+                    "Registered reconciliation status and diagnostics verdict are passed; "
+                    "the deploy binding hash matches the current source. This operational "
+                    "harness does not require an external validator or audit copy."
+                )
+            ),
             gating_divergence_counts=_gating_divergence_counts(proof),
         )
     missing_id_reason = (
         " A QC Cloud backtest ID is also required."
-        if not (qc_cloud_backtest_id or proof.qc_cloud_backtest_id)
+        if requires_qc_reference and not (qc_cloud_backtest_id or proof.qc_cloud_backtest_id)
         else ""
     )
     return StrategyBehavioralEquivalence(
         verdict="evidence_only",
         detail="Human validation recorded, but engine evidence is not deployable.",
         tolerance="manifest_reconciliation_not_accepted",
-        tolerance_reason=(" ".join(_validation_failure_notes(proof)) + missing_id_reason).strip(),
+        tolerance_reason=(
+            " ".join(
+                _validation_failure_notes(
+                    proof,
+                    requires_qc_reference=requires_qc_reference,
+                )
+            )
+            + missing_id_reason
+        ).strip(),
         gating_divergence_counts=_gating_divergence_counts(proof),
     )
 
@@ -603,7 +736,7 @@ def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> Strategy
         validator_code_sha256=validator_code_sha256,
         settings_file_ref=settings_file_ref,
         settings_file_sha256=settings_file_sha256,
-        qc_cloud_backtest_id=str(raw["qc_cloud_backtest_id"]),
+        qc_cloud_backtest_id=_optional_manifest_string(raw.get("qc_cloud_backtest_id")),
         audit_copy_ref=audit_copy_ref,
         audit_copy_sha256=audit_copy_sha256,
         reconciliation_ref=str(raw["reconciliation_ref"]),
@@ -614,35 +747,49 @@ def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> Strategy
         divergence_counts=dict(diagnostics.get("divergence_counts") or {}),
         verdict=str(diagnostics.get("verdict", "passed")),
         reconciliation_status=str(raw.get("reconciliation_status", "passed")),
-        settings_file_verified=settings_file_verified and validator_code_verified,
+        settings_file_verified=settings_file_verified,
+        validator_code_verified=validator_code_verified,
         audit_copy_verified=audit_copy_verified,
         notes=list(diagnostics.get("notes") or []),
     )
 
 
-def _evidence_is_deployable(proof: StrategyEvidenceSeed) -> bool:
+def _evidence_is_deployable(
+    proof: StrategyEvidenceSeed,
+    *,
+    requires_qc_reference: bool,
+) -> bool:
     return (
         proof.reconciliation_status == "passed"
         and proof.verdict == "passed"
         and proof.settings_file_verified
-        and proof.audit_copy_verified
-        and proof.validator_code_ref is not None
-        and proof.validator_code_sha256 is not None
+        and (proof.validator_code_verified or not requires_qc_reference)
+        and (proof.audit_copy_verified or not requires_qc_reference)
+        and (
+            not requires_qc_reference
+            or (proof.validator_code_ref is not None and proof.validator_code_sha256 is not None)
+        )
         and not any(proof.divergence_counts.values())
     )
 
 
-def _validation_failure_notes(proof: StrategyEvidenceSeed) -> list[str]:
+def _validation_failure_notes(
+    proof: StrategyEvidenceSeed,
+    *,
+    requires_qc_reference: bool,
+) -> list[str]:
     notes: list[str] = []
     if proof.reconciliation_status != "passed":
         notes.append(f"Reconciliation status is {proof.reconciliation_status}; deployability requires passed.")
     if proof.verdict != "passed":
         notes.append(f"Diagnostics verdict is {proof.verdict}; deployability requires passed.")
-    if proof.validator_code_ref is None or proof.validator_code_sha256 is None:
+    if requires_qc_reference and (proof.validator_code_ref is None or proof.validator_code_sha256 is None):
         notes.append("LEAN validator evidence is missing; deployability requires an explicit validator binding.")
     if not proof.settings_file_verified:
-        notes.append("Validator/deploy binding hash no longer matches the validation manifest.")
-    if not proof.audit_copy_verified:
+        notes.append("The validated settings hash no longer matches the validation manifest.")
+    if requires_qc_reference and not proof.validator_code_verified:
+        notes.append("The LEAN validator hash no longer matches the validation manifest.")
+    if requires_qc_reference and not proof.audit_copy_verified:
         notes.append("The referenced LEAN audit copy no longer matches its validation hash.")
     if any(proof.divergence_counts.values()):
         notes.append("Gating divergences must all be zero before deployment.")
@@ -690,13 +837,7 @@ def _service_ref_fallback(ref: str) -> Path | None:
         path.relative_to(_SERVICE_ROOT.resolve())
         return path
     if ref.startswith("references/qc-shadow/"):
-        path = (
-            _SERVICE_ROOT
-            / "app"
-            / "data"
-            / "qc-shadow"
-            / ref.removeprefix("references/qc-shadow/")
-        ).resolve()
+        path = (_SERVICE_ROOT / "app" / "data" / "qc-shadow" / ref.removeprefix("references/qc-shadow/")).resolve()
         path.relative_to((_SERVICE_ROOT / "app" / "data" / "qc-shadow").resolve())
         return path
     return None

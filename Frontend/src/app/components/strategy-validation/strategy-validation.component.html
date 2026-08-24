@@ -30,6 +30,7 @@
             <span class="sv-row-main">
               <span class="sv-row-name">{{ strategy.display_name }}</span>
               <span class="sv-row-key mono">{{ strategy.strategy_key }}</span>
+              <span class="sv-row-category">{{ strategy.strategy_category | receiptLabel }}</span>
               <span class="sv-row-meta">
                 @if (strategy.diagnostics) {
                   {{ strategy.diagnostics.trades_validated }} trades · {{ (strategy.reconciliation_status ?? strategy.validation_state) | receiptLabel }}
@@ -40,7 +41,7 @@
                 }
               </span>
             </span>
-            <span class="sv-badge" [class.validated]="strategy.validation_state === 'validated'" [class.needs-validation]="strategy.validation_state !== 'validated'">
+            <span class="sv-badge" [class.validated]="strategy.proof?.state === 'current'" [class.needs-validation]="strategy.proof?.state !== 'current'">
               {{ stateLabel(strategy) }}
             </span>
           </button>
@@ -61,20 +62,37 @@
               <h2>{{ selected.display_name }}</h2>
               <p>{{ selected.description }}</p>
             </div>
-            <span class="sv-badge" [class.validated]="selected.validation_state === 'validated'" [class.needs-validation]="selected.validation_state !== 'validated'">
+            <span class="sv-badge" [class.validated]="selected.proof?.state === 'current'" [class.needs-validation]="selected.proof?.state !== 'current'">
               {{ stateLabel(selected) }}
             </span>
           </header>
 
+          @if (isOperationalHarness(selected)) {
+            <section class="sv-harness-notice" aria-label="Operational validation harness policy">
+              <i class="pi pi-wrench" aria-hidden="true"></i>
+              <div>
+                <h3>Operational validation harness</h3>
+                <p>
+                  This program tests deployment mechanics in Dry Run and Paper. It does not enter
+                  the external-reference promotion track and is permanently ineligible for Live.
+                </p>
+              </div>
+            </section>
+          }
+
+          @if (selected.proof; as proof) {
+            <app-strategy-proof-pipeline [proof]="proof" />
+          }
+
           <section class="sv-deploy-panel" [class.ready]="isAcceptedForDeploy(selected)" aria-label="Deploy decision">
             <div>
-              <p class="sv-panel-label">Deploy decision</p>
+              <p class="sv-panel-label">{{ isOperationalHarness(selected) ? 'Paper test readiness' : 'Deploy decision' }}</p>
               @if (isAcceptedForDeploy(selected)) {
-                <h3>Ready for Deploy</h3>
+                <h3>{{ isOperationalHarness(selected) ? 'Ready for Paper test' : 'Ready for Deploy' }}</h3>
                 <p>{{ selected.behavioral_equivalence?.detail }}</p>
               } @else {
-                <h3>Do not deploy yet</h3>
-                <p>Validation evidence is incomplete or has not been accepted for deployment.</p>
+                <h3>{{ isOperationalHarness(selected) ? 'Do not start Paper yet' : 'Do not deploy yet' }}</h3>
+                <p>{{ selected.proof?.blocking_summary ?? 'Validation evidence is incomplete.' }}</p>
               }
             </div>
             <div class="sv-panel-actions">
@@ -98,7 +116,7 @@
               } @else {
               <button type="button" class="sv-refresh compact" [disabled]="actionBusy()" (click)="refreshValidationEvidence()">
                 <i class="pi pi-refresh" aria-hidden="true"></i>
-                Refresh evidence
+                Recheck stored proof
               </button>
               }
             </div>
@@ -106,7 +124,10 @@
 
           <dl class="sv-decision-facts" aria-label="Selected strategy deploy facts">
             <div><dt>Behavior</dt><dd>{{ (selected.behavioral_equivalence?.verdict ?? 'evidence_missing') | receiptLabel }}</dd></div>
-            <div><dt>QC backtest</dt><dd>{{ selected.qc_cloud_backtest_id ?? 'n/a' }}</dd></div>
+            <div>
+              <dt>Reference</dt>
+              <dd>{{ isOperationalHarness(selected) ? 'Internal deterministic replay' : (selected.qc_cloud_backtest_id ?? 'Not attached') }}</dd>
+            </div>
             <div><dt>Validation case</dt><dd>{{ selected.validation_case_symbol ?? 'n/a' }}</dd></div>
             <div><dt>Reconciliation</dt><dd>{{ (selected.reconciliation_status ?? 'not_registered') | receiptLabel }}</dd></div>
           </dl>
@@ -114,7 +135,7 @@
           <section class="sv-actions" aria-label="Validation actions">
             <button type="button" class="sv-refresh" [disabled]="actionBusy()" (click)="refreshValidationEvidence()">
               <i class="pi pi-refresh" aria-hidden="true"></i>
-              Refresh evidence
+              Recheck stored proof
             </button>
             <fieldset class="sv-flag-choice">
               <legend>Human flag</legend>
@@ -131,17 +152,19 @@
               <span>Reason</span>
               <textarea [value]="flagReason()" (input)="setFlagReason($event)" rows="3"></textarea>
             </label>
-            <label class="sv-backtest-id">
-              <span>QC Cloud backtest ID</span>
-              <input
-                type="text"
-                [value]="backtestId() || selected.qc_cloud_backtest_id || ''"
-                (input)="setBacktestId($event)"
-                aria-label="QC Cloud backtest ID"
-                placeholder="Attach the accepted reference backtest"
-                autocomplete="off" />
-              <small>Required for acceptance. Trade reconciliation must also pass.</small>
-            </label>
+            @if (!isOperationalHarness(selected)) {
+              <label class="sv-backtest-id">
+                <span>QC Cloud backtest ID</span>
+                <input
+                  type="text"
+                  [value]="backtestId() || selected.qc_cloud_backtest_id || ''"
+                  (input)="setBacktestId($event)"
+                  aria-label="QC Cloud backtest ID"
+                  placeholder="Attach the accepted reference backtest"
+                  autocomplete="off" />
+                <small>Required for acceptance. Trade reconciliation must also pass.</small>
+              </label>
+            }
             <button type="button" class="sv-save" [disabled]="actionBusy()" (click)="submitFlag()">
               Save flag
             </button>
@@ -177,10 +200,16 @@
             </dl>
 
             <section class="sv-provenance" aria-label="Validation provenance">
-              <p><span>LEAN validator</span>{{ selected.validator_code_ref ?? 'Not recorded' }}</p>
-              <p><span>Deploy binding</span>{{ selected.settings_file_ref }}</p>
-              <p><span>Audit copy</span>{{ selected.audit_copy_ref }}</p>
-              <p><span>Reconciliation</span>{{ selected.reconciliation_ref }}</p>
+              @if (isOperationalHarness(selected)) {
+                <p><span>Harness settings</span>{{ selected.settings_file_ref }}</p>
+                <p><span>Qualification</span>Deterministic replay and golden trace</p>
+                <p><span>Running build</span>Checked again at Start</p>
+              } @else {
+                <p><span>LEAN validator</span>{{ selected.validator_code_ref ?? 'Not recorded' }}</p>
+                <p><span>Deploy binding</span>{{ selected.settings_file_ref }}</p>
+                <p><span>Audit copy</span>{{ selected.audit_copy_ref }}</p>
+                <p><span>Reconciliation</span>{{ selected.reconciliation_ref }}</p>
+              }
             </section>
 
             @if (divergenceEntries(selected).length > 0) {
@@ -198,8 +227,10 @@
             <p class="sv-empty">Validation evidence has not been registered yet.</p>
           }
 
-          @if (selected.reference_code; as code) {
-            <app-quantconnect-reference-code [referenceCode]="code" />
+          @if (!isOperationalHarness(selected)) {
+            @if (selected.reference_code; as code) {
+              <app-quantconnect-reference-code [referenceCode]="code" />
+            }
           }
         }
       </article>

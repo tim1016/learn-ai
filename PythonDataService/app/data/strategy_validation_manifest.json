@@ -10,18 +10,18 @@
       "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
       "audit_copy_ref": "references/qc-shadow/DeploymentValidationAlgorithm.py",
       "audit_copy_sha256": "3dbb1c0f54254951828f3c74e4dc6e2f7c1bcc0784465c8532f109ea191c3af0",
-      "reconciliation_ref": "references/qc-shadow/backtests/2024-03-28_to_2026-03-03/attribution.md",
+      "reconciliation_ref": "PythonDataService/tests/fixtures/golden/deployment-validation-signal/v1/attribution.md",
       "validation_case_symbol": "SPY",
       "reconciliation_status": "passed",
       "diagnostics": {
         "verdict": "passed",
-        "trades_matched": 56,
-        "trades_validated": 56,
+        "trades_matched": 10,
+        "trades_validated": 10,
         "pnl_max_abs_diff": "0.00",
         "divergence_counts": {},
         "notes": [
-          "Validated strategy binding promoted from stored run-ledger QC evidence and the committed QC audit copy.",
-          "The referenced QC attribution records 112 fills paired into 56 long round-trips for SPY."
+          "The committed deterministic corpus covers 10 cross-engine-study cells and 585,300 exact trace identities.",
+          "This operational harness makes no external-engine parity claim; it proves internal replay and deployment plumbing only."
         ]
       }
     },
@@ -58,38 +58,38 @@
       "flag": "validated",
       "flagged_by": "migration:strategy-validation-prd-seed",
       "flagged_at_ms": 1775088000000,
-      "reason": "Seeded from the committed QuantConnect reconciliation evidence accepted for deployment.",
+      "reason": "Seeded from the committed deterministic harness replay accepted for Paper deployment testing.",
       "behavioral_equivalence": {
         "verdict": "accepted_for_deploy",
-        "detail": "Human validation accepted the current engine evidence for deployment.",
-        "tolerance": "manifest_reconciliation_passed",
-        "tolerance_reason": "Registered reconciliation status and diagnostics verdict are passed; the manifest LEAN validator hash and deploy binding hash also match the current source.",
+        "detail": "Human validation accepted the current deterministic harness evidence for Paper deployment testing.",
+        "tolerance": "bit_exact_internal_replay",
+        "tolerance_reason": "The committed 10-cell trace corpus replays 585,300 exact trace identities with no external-engine parity claim.",
         "gating_divergence_counts": {}
       },
       "evidence_snapshot": {
-        "validator_code_ref": "PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py",
-        "validator_code_sha256": "980b5f3d4809e28794062ef00f7fe0c649c5b7892f0a3201f45344b75ecca895",
+        "validator_code_ref": null,
+        "validator_code_sha256": null,
         "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
         "settings_file_sha256": "0a0f0b8937464ef1ad85a9f2e658b481f520b5a177d35445a95eceef9beb21b0",
-        "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
-        "audit_copy_ref": "references/qc-shadow/DeploymentValidationAlgorithm.py",
-        "audit_copy_sha256": "3dbb1c0f54254951828f3c74e4dc6e2f7c1bcc0784465c8532f109ea191c3af0",
-        "reconciliation_ref": "references/qc-shadow/backtests/2024-03-28_to_2026-03-03/attribution.md",
+        "qc_cloud_backtest_id": null,
+        "audit_copy_ref": null,
+        "audit_copy_sha256": null,
+        "reconciliation_ref": "PythonDataService/tests/fixtures/golden/deployment-validation-signal/v1/attribution.md",
         "validation_case_symbol": "SPY",
         "reconciliation_status": "passed",
         "diagnostics": {
           "verdict": "passed",
-          "trades_matched": 56,
-          "trades_validated": 56,
+          "trades_matched": 10,
+          "trades_validated": 10,
           "pnl_max_abs_diff": "0.00",
           "divergence_counts": {},
           "notes": [
-            "Validated strategy binding promoted from stored run-ledger QC evidence and the committed QC audit copy.",
-            "The referenced QC attribution records 112 fills paired into 56 long round-trips for SPY."
+            "The committed deterministic corpus covers 10 cross-engine-study cells and 585,300 exact trace identities.",
+            "This operational harness makes no external-engine parity claim; it proves internal replay and deployment plumbing only."
           ]
         }
       },
-      "evidence_snapshot_sha256": "1ecd82810bc477490eb7b181e3b747b5b05cfeaf8f4a71e1727a6281b2e26da8",
+      "evidence_snapshot_sha256": "bfb6420ce69030b431721206f5bb4e5cd32bcf6f52bb38b41c9e2a1a136fd150",
       "superseded_by_event_id": null
     },
     {
