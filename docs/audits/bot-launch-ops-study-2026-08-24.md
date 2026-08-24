@@ -255,11 +255,11 @@ raw log `probes_study.jsonl`), and read-scalability measurements.
   never presented by the SQLite panel source in any state observed today
   (running, stopped, flat, exposed).
 
-## 8. Organic crash + supervised SIGKILL round (~14:25–15:20 ET)
+## 8. Organic crash + supervised SIGKILL round (~13:45–14:05 ET)
 
 ### The organic catch: F9→fixed — long bot names crash on their first trade
 
-At 14:26 ET `ceremony-spy-strategy-c-0824` got its first signal of the day and
+At 13:46 ET `ceremony-spy-strategy-c-0824` got its first signal of the day and
 **CRASHED** with `OrderRefTooLongError`: every order carries
 `learn-ai/{sid}/v1:{intent_id}` (35 fixed chars) under the 60-char order_ref
 cap, so any name over 25 chars deploys fine, runs fine, and dies the moment it
@@ -275,8 +275,8 @@ replacement (`cer-c-0824`). Positive note: the crash reporting was exemplary —
 
 ### The SIGKILL test: honesty perfect, recovery split exactly by exposure
 
-With 7 bots running (3 mid-hold), the data plane was killed with SIGKILL and
-restarted: back to healthy in 35.6 s, and **all bots immediately reported
+With 7 bots running (3 mid-hold), the data plane was killed with SIGKILL at
+13:51 ET and restarted: back to healthy in 35.6 s, and **all bots immediately reported
 not-running** — zero dishonest roster rows. Resume then split precisely on
 custody state: the three flat bots resumed; the three bots holding one share
 each (SPY, QQQ, AAPL) were refused with `RESUME_CARRYOVER_UNSUPPORTED` —
@@ -313,6 +313,47 @@ safe-flatten plan (or presenting `flatten_stop`); until one exists, **any
 crash while holding exposure requires out-of-band broker intervention**,
 which at fleet scale is untenable.
 
+## 9. Cadenced launch stress round (14:29–14:37 ET) + close-out
+
+Operator directive: stress bot launch and concurrent operation by launching
+at regular intervals. One bot every ~30 s, rotating all seven paired
+strategies across the four qualified symbols (raw log `stress_study.jsonl`).
+
+### Results — launch and concurrency scale cleanly
+
+- **14/14 launches succeeded, zero refusals** at the 30 s cadence — the
+  channel-health flap (F11) is a burst artifact, not a throughput limit:
+  4-in-1-second flapped, 1-per-30-seconds never did.
+- **Deploy latency flat as the fleet grew 5→18 running**: 234–512 ms, no
+  trend. Catalog reads flat too: 97–144 ms.
+- **18 concurrent bots, zero stale decisions** — the liveness sweep found
+  every running bot deciding on every minute bar. Several stress bots
+  completed full trade cycles within minutes of launch.
+- **Mass stop at the close: 17/17 in 8.6 s wall** (0.2–1.0 s per stop via
+  the runner route), zero failures.
+- Panel fan-out stayed the weak read (1.1–4.7 s for 5 concurrent), but its
+  cost tracks load, not fleet size — consistent with F13's global
+  serialization.
+
+### F19 — a concurrent reduce race crashes a healthy bot
+
+`st01-dv-spy` and `st08-dv-spy` entered SPY on the same signal bar and
+exited on the same decision clock. One of the two simultaneous reduces hit
+the Clerk's designed fail-closed refusal — `AdmissionBlockedError: reduce
+blocked: BROKER_SNAPSHOT_STALE — The Clerk changed while final broker truth
+was observed` — and the runner escalated that *retryable* refusal into a
+fatal crash (14:44 ET; duty outcome honest, bot ended flat, custody
+unharmed). Same-symbol signal cohorts exit in lockstep **by design**, so at
+fleet scale this race fires routinely and randomly kills members. The fix
+shape: classify snapshot-staleness admission blocks as retry-on-next-clock
+in the runner's error taxonomy, not as crashes.
+
+### Barrier verification
+
+The 15:45 stop/flatten barrier was observed live for the first time: the
+last pre-barrier entries (QQQ pair, ~15:41) were flattened at the barrier
+minute, and no bot entered between 15:45 and the 16:00 close.
+
 ### Additions to the recommendations
 
 - (extends §5.1) The one-lifecycle-surface cleanup should also decide
@@ -331,3 +372,9 @@ which at fleet scale is untenable.
   that walks crash → refuse-resume → flatten → resume to flat.
 - (new) Presented actions should carry their `mutation`/executability fact so
   a view action never renders as an executable enabled button (F17).
+- (new, from §9) **Make snapshot-staleness admission blocks retryable in the
+  runner** (F19): a fail-closed Clerk refusal during concurrent same-clock
+  reduces should defer to the next decision clock, not kill the bot. With
+  that fix plus the flatten executor, the measured envelope — flat deploy
+  latency to 18 bots, zero stale decisions, 8.6 s fleet-wide stop — says
+  the current architecture already carries a considerably larger fleet.

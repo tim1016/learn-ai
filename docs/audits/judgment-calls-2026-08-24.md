@@ -113,6 +113,26 @@ deployment-validation bots"):
     end-of-session patch; and closing the positions directly at Alpaca would
     manufacture foreign SELLs the clerk would rightly flag. Three 1-share
     paper positions are the cheapest possible standing evidence of the gap.
-17. **SIGKILL, not graceful restart, for the crash test** — a crash test
+17. **Stress cadence set to one launch per 30 s, all launches on the paper
+    ceremony account, capped at 14 new bots.** Cadence (not burst) isolates
+    steady-state launch behavior from the F11 flap; 14 bots on top of the
+    existing fleet reached 18 concurrent — enough to expose contention
+    (it exposed F19) without drowning the account's receipts in noise.
+18. **All running bots stopped at the bell.** The operator's "run through
+    the day" completed at 16:00; leaving 17 bots deciding against a closed
+    market adds noise, not data. The timed 17-bot mass stop doubled as the
+    stop-at-scale measurement. The three F18-stranded positions remain, per
+    call 16.
+19. **A one-hour clock error in my running commentary was caught and
+    corrected before it reached any document**: mid-afternoon I mislabeled
+    ordinary pre-barrier trading as a "post-barrier re-entry bug" and
+    "barrier verified" — both retracted once `date` disproved the premise;
+    every timestamp in these documents was then re-derived from logged
+    epoch-ms receipts, not narrative memory. (The real barrier verification
+    came later, live, at 15:45.)
+20. **SIGKILL, not graceful restart, for the crash test** — a crash test
     that lets shutdown hooks run isn't testing a crash. The same restart
-    doubled as the loader for the boundary fix.
+    doubled as the loader for the boundary fix. (Run at 13:51 ET, earlier
+    than the 14:40 slot planned in call 14: the organic Strategy C crash
+    forced the fix-and-restart forward, so the two restarts were merged
+    into one.)

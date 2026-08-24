@@ -166,8 +166,35 @@ Operator-directed follow-on (~12:45–13:15 ET), fully documented in
 
 ## 6. Session results (16:00 ET close)
 
-_To be completed at close: fills per bot, P&L, any attention flags, end-of-day
-bot handling._
+The day ended much larger than the morning's 5-bot plan: 26 bots were
+deployed across the session (ceremony fleet, validated fleet, stress fleet,
+probes), peaking at **18 running concurrently**, with **73 fills and
+−$3.98 realized P&L** (1-share validation cycles paying the spread — the
+deliverable was the pipeline, not alpha). All lifecycle history is
+receipt-backed; full per-bot numbers in the session's `close_stats.json`
+capture (scratchpad) and the Clerk ledger.
+
+- **Fills came from `deployment_validation` and its stress clones** —
+  12 bots traded; top: `validation-tsla-0824` 16 fills (−$0.82),
+  `st04-dv-tsla-0824` 8, `validation-aapl-0824` 7. Complete
+  enter→hold-3-clocks→exit cycles verified on all four qualified symbols.
+- **The ceremony strategies never traded** — four of the five had names
+  over the order_ref cap (they *could not* have traded; study §8), and SPY's
+  15-minute-bar signals stayed quiet in a drifting tape. Their deliverable —
+  the restored evidence-only launch path — was validated at deploy time.
+- **The 15:45 stop/flatten barrier held live**: the last entries (~15:41
+  QQQ pair) exited at the barrier minute and no bot entered between 15:45
+  and 16:00.
+- **End-of-day handling**: all 17 running bots were stopped at the bell in
+  8.6 s wall (0.2–1.0 s per stop via the runner route), zero failures.
+- **Open positions at close: exactly the three crash-stranded 1-share
+  positions** (SPY, QQQ, AAPL) from the 13:51 SIGKILL test — deliberately
+  left as standing evidence of study finding F18 (no flatten path exists).
+  Every other position was closed by the bots' own exits.
+- Two organic crashes, both diagnosed and documented: Strategy C's
+  first-order `OrderRefTooLongError` (13:46, fixed in `ff5ed49f`) and
+  st08's concurrent-reduce race (`BROKER_SNAPSHOT_STALE` escalated to
+  crash, 14:44 — study F19, open).
 
 ## 7. Follow-ups
 
