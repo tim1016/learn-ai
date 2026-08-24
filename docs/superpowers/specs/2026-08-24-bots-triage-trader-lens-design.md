@@ -1,6 +1,6 @@
 # Bots triage pane — Trader lens & price tape (design + build note)
 
-**Status:** Implemented (Frontend only) · **Date:** 2026-08-24 · **Type:** UX / Frontend (`v2-panel`)
+**Status:** Merged (PR #1748) · reviewed & hardened, see §10 · **Date:** 2026-08-24 · **Type:** UX / Frontend (`v2-panel`)
 
 Mockup this was built against (static, seeded values, published from the design review):
 https://claude.ai/code/artifact/7e00071a-afd6-4fa8-82a2-d276c5ac3589
@@ -29,7 +29,7 @@ The per-bot panel route (`/bots/:sid`) had already solved the audience problem w
 | D4 | **At most one runnable secondary command**, in backend-presented order; every remaining action folds into the existing `BotBannerOverflowComponent`. This is a *cut*, not a re-ranking: no frontend policy decides which command matters. |
 | D5 | **The tape is a compact canvas over `gallery/lib/candle-renderer`**, not `DualPaneChartComponent`. |
 | D6 | **The tape reads `chart/live` on a debounce and a poll — never a stream.** |
-| D7 | **The tape derives no numbers** (no last price, no session change) from its bars. |
+| D7 | **The tape derives no numbers** (no last price, no session change) from its bars. *(Enforced in review via `showLastPriceTag` — §10 R3; the shared renderer had still been drawing the last-price tag.)* |
 | D8 | **The copy rewrite is deliberately out of this change.** See §5. |
 
 ## 3. Why not `DualPaneChartComponent` (D5)
@@ -72,6 +72,15 @@ The Operator lens keeps the exact existing wording in all four steps.
 | `bot-triage-detail/bot-triage-detail.component.scss` | Lens bar, trader grid, standing rows; tape height clamped (§7). |
 | `bot-triage-detail/bot-triage-detail.component.spec.ts` | `getLiveChart` stub, `showOperator()` helper, 4 new tests. |
 
+Review fixes (§10) additionally touched:
+
+| File | Change |
+|---|---|
+| `gallery/lib/candle-renderer.{ts,spec.ts}` | R3: `showLastPriceTag` config field (default `true`, gallery unchanged) + unit test for the suppression. |
+| `bot-triage-detail/triage-tape.component.{ts,html,scss}` | R3/R4: `showLastPriceTag: false`; `source` + `notices` inputs; Polygon palette + honest notice chip. |
+| `bot-triage-detail/bot-triage-detail.component.{ts,html}` | R1: roving-tab keyboard nav + `role="tabpanel"`. R2: `journalSelection` gates the evidence read on the Operator lens. R4: threads dominant `source` + notices into the tape. |
+| `bots-list-page/bots-list-page.component.spec.ts` | R2: the audit-honesty guard test opens the Operator lens for its baseline evidence read. |
+
 ## 7. One bug worth recording
 
 The tape first shipped with `flex: 1` inside a scrolling column. The rail beside it (a decision list) set the grid row height, so the canvas stretched to **2181 px** and the candles fell below the fold — the `ResizeObserver` was working exactly as written. The tape is now *sized*, not stretched: `height: clamp(20rem, 46vh, 34rem)` with `align-items: start` on the grid.
@@ -82,6 +91,7 @@ The tape first shipped with `flex: 1` inside a scrolling column. The rail beside
 - `npm run test:guards` — proxy-control and chart-timestamp guards pass.
 - `eslint src/app/components/broker/v2-panel/bot-triage-detail --max-warnings 0` — clean.
 - Manual: `localhost:4200`, Alpaca paper account `PA3KWXU1C4C3`, both lenses, 1m and 5s.
+- **Post-review (§10):** 237 files / **1896 tests** pass (4 review-fix tests added); project-scope `eslint` clean; `tsc --noEmit` clean; chart-timestamp guard ok. All 22 CI checks green before merge.
 
 ## 9. References
 
@@ -90,3 +100,19 @@ The tape first shipped with `flex: 1` inside a scrolling column. The rail beside
 - Backend-owned primary action: `bot-detail-banner/lifecycle-action.ts`, issue #1665, ADR 0027
 - Canvas renderer: `gallery/lib/candle-renderer.ts`, `docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md` §3.1/§3.2
 - Closed operator vocabulary: `PythonDataService/app/broker/v2panel/vocabulary.py` (decision #7)
+
+## 10. Review fixes (shipped in the same PR)
+
+Five review findings (Codex, CodeRabbit) were genuine gaps — not deferred scope — and shipped in commit `c47aa919` before merge. One finding was declined with reasoning.
+
+| # | Finding | Fix | Authority |
+|---|---|---|---|
+| R1 | The lens tablist had no keyboard path to the inactive lens — only the active tab was tabbable, and no arrow-key handling. | `onLensKeydown` implements the roving-tab pattern (Arrow/Home/End move selection **and** focus), mirroring `DualPaneChartComponent`'s source switcher; each tab gains an id + `aria-controls`, and the lens content is a `role="tabpanel"` labelled by the active tab. | WCAG AA · `angular.md` a11y |
+| R2 | The audit-logged evidence read fired on Trader-default selection, so `evidence_audit.jsonl` recorded a read the operator never saw — and a later Operator switch showed a page fetched at the wrong time. | The journal resource is parked on a `journalSelection` computed that returns `undefined` unless the Operator lens is showing; evidence is read only when Operator is opened, retried, or acted on. The 15 s poll still never touches evidence. | Audit honesty — `read_evidence_page` append-only log |
+| R3 | D7 was not actually enforced: the shared renderer's `draw()` unconditionally drew `drawLastPriceTag`, which reads `bars[last].close` and compares `bars[0].open` to derive a session direction — a client-side price/direction the tape had promised not to derive. | `CandleRendererConfig` gains `showLastPriceTag` (default `true`, gallery tile unchanged); the tape sets it `false`, so the tag path never runs and D7 becomes literally true. | D7 · CLAUDE.md #5 (single numerical authority) |
+| R4 | The tape passed only bars/markers to the renderer, dropping `ChartBar.source` and `ChartLiveResponse.overlay_notices`, so Polygon/mixed fallback bars looked identical to live IBKR. | The tape now takes `source` + `notices` inputs: notices render as an honest chip and Polygon bars get the distinct `sourceColors` palette from `DualPaneChartComponent`; `bot-triage-detail` threads a dominant-source reduction (matching dual-pane's `liveSource`). | ADR 0032 §2 |
+| R5 | `fakeLiveChart()` was untyped, so contract drift would pass silently. | Typed against the generated `ChartLiveResponse`; typing it surfaced four missing fields (`as_of_ms`, `strategy_instance_id`, `symbol`, `trading_date_close_ms`) and a wrong `trading_date_open_ms: null`. | Contract-drift guard |
+
+**Declined — split the lens branches into child components** (CodeRabbit; template > ~80 lines). The two branches already delegate to focused children (`app-triage-tape` + `app-triage-activity`; `app-triage-evidence`); wrapping each in a lens container would create shallow forwarders threading ~12 inputs with no logic of their own — prop-drilling that reads worse under this repo's deep-module guidance. The ~80-line figure is a guideline and the excess here is declarative `@if`/binding markup, not branching complexity. The tabpanel refactor (R1) tightened the structure without adding a shallow layer.
+
+New tests: keyboard lens switching, the evidence gate, the fallback notice, and a renderer unit test for `showLastPriceTag`. The `bots-list-page` "does not refresh another bot's audited evidence" guard test now opens the Operator lens to establish its baseline read.
