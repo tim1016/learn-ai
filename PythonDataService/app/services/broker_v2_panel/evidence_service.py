@@ -114,6 +114,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "External order acknowledged",
         "An operator acknowledged the held external-order evidence.",
     ),
+    "ENTRY_NEVER_ACCEPTED": (
+        "Entry order never reached the broker",
+        "The Account Clerk proved this entry order was never accepted by the broker.",
+    ),
     "ENTRY_TERMINAL_CONFIRMED": (
         "Entry terminal state confirmed",
         "The Account Clerk confirmed the entry order reached a terminal state.",

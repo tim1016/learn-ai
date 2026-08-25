@@ -688,6 +688,32 @@ def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any])
     )
 
 
+def _fold_entry_never_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """An enumerated ENTRY order is proven never to have reached the broker.
+
+    Unlike :func:`_fold_order_submit_failed`, this never terminates the effect
+    carrying it: the transition belongs to the EXIT that enumerated the dead
+    entry, not to the ENTER that lost it. It releases the exact identity from
+    any open unknown-outcome episode and, once nothing else about the effect
+    is unknown, returns that effect to ``in_progress`` so the EXIT can reach
+    its own outcome instead of looping on an order that can never be
+    cancelled.
+    """
+    unknown_evidence = _resolve_unknown_outcome_if_proven(conn, payload)
+    if unknown_evidence.effect_still_unknown:
+        return
+    conn.execute(
+        "UPDATE effect_operations SET state = 'in_progress', updated_at_ms = ? "
+        "WHERE effect_operation_id = ? AND state NOT IN ('succeeded','failed','rejected')",
+        (payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    conn.execute(
+        "UPDATE commands SET state = 'in_progress', updated_at_ms = ? WHERE command_id = ? "
+        "AND state NOT IN ('succeeded','failed','rejected')",
+        (payload["recorded_at_ms"], payload["command_id"]),
+    )
+
+
 def _fold_manual_order_canceled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Terminally cancel a source leg only after local or exact broker proof."""
     validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
@@ -1317,6 +1343,7 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_unce
 # receipt" fold body — no separate function, see _fold_order_submit_uncertain
 # and order_evidence.fold_uncertain's docstrings.
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_uncertain)
+DEFAULT_FOLD_REGISTRY.register("ENTRY_NEVER_ACCEPTED", _fold_entry_never_accepted)
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_SLICE_FILLED", _fold_execution_slice_filled)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution_coverage_quarantined)

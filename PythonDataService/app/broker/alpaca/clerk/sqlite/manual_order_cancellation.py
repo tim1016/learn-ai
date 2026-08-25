@@ -32,7 +32,12 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence, fold_uncertain
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_order_evidence,
+    fold_submit_absence_void,
+    fold_uncertain,
+    order_never_reached_broker,
+)
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
 )
@@ -347,6 +352,28 @@ async def _resolve_claimed_manual_order_cancellation(
         )
         return
     observed = await broker.observe_exact(target.client_order_id)
+    # Sibling of EXIT's never-accepted branch (#1775). The other
+    # cancel-uncertain folds below are deliberately *not* absence proofs: a
+    # returned snapshot missing a broker id contradicts itself, a lost cancel
+    # response says nothing about the order, and once a broker order id exists
+    # an absent lookup is a contradiction to investigate, not a confirmation.
+    if observed is None and order_never_reached_broker(repo, target):
+        # Voided as never-submitted rather than closed with
+        # ``MANUAL_ORDER_TERMINAL``: that transition is evidence of an
+        # observed terminal *broker* state, and here no broker order ever
+        # existed to observe. Same producer the submit resolver uses.
+        fold_submit_absence_void(
+            repo,
+            effect_operation_id=source_effect.effect_operation_id,
+            order_ref=target.order_ref,
+        )
+        _append_cancellation_result(
+            repo,
+            cancellation=cancellation,
+            succeeded=False,
+            why="The manual order never reached the broker, so there was nothing to cancel.",
+        )
+        return
     if isinstance(observed, BrokerError) or observed is None:
         fold_uncertain(
             repo,

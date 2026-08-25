@@ -103,6 +103,29 @@ order-free) is documented but unexercised. **Fix direction**:
 reconciliation observing broker-not-found for an unacked submit past a TTL
 emits a terminal "never accepted" fact and resolves the episode.
 
+> **Correction (2026-08-25, #1775).** Two mechanism claims in this finding
+> were disproven while the fix was built. The original text is left standing
+> above; the receipts are here.
+>
+> 1. *"The PRD #1150 registrar TTL auto-void was never ported to the Alpaca
+>    SQLite clerk."* **Wrong — it is ported, and it fired.**
+>    `resolve_order_submission` folds `ORDER_SUBMIT_FAILED_ABSENT` once the
+>    exact lookup is definitively absent past the R4 grace window
+>    (`order_evidence.py:492`), and this incident's ENTER effect did reach
+>    its terminal receipt that way. The defect was one step downstream: the
+>    EXIT that then enumerated the dead entry had no definitive-absence
+>    branch in its cancel-prove step (`exit_resolution.py:279`), so an exact
+>    lookup answering "absent" folded `ORDER_CANCEL_UNCERTAIN`
+>    unconditionally and re-opened the episode against the EXIT effect on
+>    every pass. Fixed in #1775.
+> 2. *"`reset_authority`, now armed since the account is flat and
+>    order-free."* **Wrong — it was not armed.** Authority recovery refuses
+>    while a live execution lease exists (`recovery.py:956`), and the running
+>    Clerk — the same process that runs the 15 s sweep — is the lease holder.
+>    The escape needs a stopped Clerk or a process-stop proof, which is why
+>    it could not be exercised. Choosing between an offline/CLI-only recovery
+>    path and an orchestrated quiesce protocol is the open decision in #1779.
+
 ### S3 — Forming-bar warmup seal crashed every bot at first live bar *(CRITICAL, fixed in PR #1772 + regression test)*
 
 IBKR's historical endpoint includes the still-forming minute as its last
@@ -157,7 +180,16 @@ self-releases on the next healthy observation (~2–3 min). Verified
 mid-cohort: exits/reductions proceeded during the hold (entries-only
 freeze, matching `STREAM_HEALTH_HOLD_CODE` docs); the "self-release" is the
 sweep re-deriving the journal-backed hold, consistent with "never
-auto-cleared". UI honesty gaps during a hold: roster chips read "Running 0,
+auto-cleared".
+
+> **Correction (2026-08-25, #1775).** *"The 'self-release' is the sweep
+> re-deriving the journal-backed hold."* **Wrong — the sweep never touches
+> the hold.** `_sync_stream_health_hold` has exactly one call site, inside
+> ENTER-purpose effect execution (`runtime.py:661`); the reconciliation pass
+> does not call it at all. What read as a sweep-driven self-release was the
+> next bot attempting an ENTER and re-deriving the hold on its way in —
+> which is also why a quiet fleet can hold a stale freeze indefinitely. The
+> independent fixed-cadence hold sync is #1777. UI honesty gaps during a hold: roster chips read "Running 0,
 Stopped 0" while 50 bots run; banner and guidance say "no active hold"
 beside the active hold.
 
@@ -273,9 +305,20 @@ markers for DUM284968; two data-plane restarts (S12d hot loop; fix loads).
 ## 9. Open items
 
 - **g01-dv-spy-0825** left quarantined under the S15c uncertainty as a
-  live reproduction; account otherwise flat/clean. Escape when desired:
-  `reset_authority` (flat + order-free proof is now satisfied), or the
-  S15c code fix.
+  live reproduction; account otherwise flat/clean. Escape when desired: the
+  S15c code fix (#1775). `reset_authority` is *not* available while the
+  Clerk process holds its execution lease — see the S15c correction above
+  and the open decision in #1779.
+- **Intent-gate rescope (decided 2026-08-25, #1775; implementation not yet
+  ticketed).** The Start/deploy gate counts unresolved effects
+  *account-wide* (`runtime.py:883` → `bot_start_admission.py:207`), while the
+  uncertainty episode underneath it is scoped to a single custody subject —
+  which is why one bot's stuck intent refused every resume fleet-wide.
+  **Decision**: gate the owning custody subject, and keep the account-wide
+  refusal only for an unresolved effect that cannot be attributed to a
+  subject, which genuinely is an account-level unknown. #1775 removes the
+  class of stuck intent that triggered this incident but deliberately does
+  not change the gate's scope.
 - S12d hot-loop root cause (77% CPU at zero bots) — reproduce and profile.
 - S9 drop cadence attribution (idle timeout vs competing listener) — run
   one bare listener with no fleet and time the drops.

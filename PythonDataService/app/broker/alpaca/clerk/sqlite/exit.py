@@ -26,7 +26,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    entry_never_accepted_durably,
+    entry_order_symbol,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
@@ -61,6 +64,36 @@ def _exit_identity(
         ).encode("utf-8")
     ).hexdigest()
     return idempotency_key, payload_hash, command_id, effect_idempotency_key
+
+
+def _exit_cancellable_entries(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    symbol: str,
+    target_order_ref: str,
+) -> list[OrderResource]:
+    """The entries one EXIT must cancel-prove — narrower than every entry.
+
+    ``repo.entry_orders_for_strategy`` stays whole for its other consumers
+    (safe flatten, runtime recovery, the stuck-EXIT watchdog): they need full
+    custody evidence, and narrowing that shared read would hide orders they
+    exist to find. Cancel-prove planning wants only orders that could still be
+    working — a sibling already proven never to have reached the broker holds
+    no exposure and can never be cancelled, so enumerating it just adds a dead
+    order for every pass to prove. The EXIT's own target is kept whatever its
+    state: an EXIT with no linked entry has nothing to resolve, and the
+    never-accepted branch in ``exit_resolution`` resolves that target correctly.
+    """
+    return [
+        candidate
+        for candidate in repo.entry_orders_for_strategy(strategy_instance_id)
+        if entry_order_symbol(repo, candidate.order_ref) == symbol
+        and (
+            candidate.order_ref == target_order_ref
+            or not entry_never_accepted_durably(repo, candidate)
+        )
+    ]
 
 
 def _accept_exit_capture(
@@ -100,9 +133,12 @@ def _accept_exit_capture(
         run_id = resolve_run_id(target)
         symbol = entry_order_symbol(repo, target.order_ref)
         entry_order_refs: list[str] = []
-        for candidate in repo.entry_orders_for_strategy(strategy_instance_id):
-            if entry_order_symbol(repo, candidate.order_ref) != symbol:
-                continue
+        for candidate in _exit_cancellable_entries(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            symbol=symbol,
+            target_order_ref=target.order_ref,
+        ):
             require_owned_entry_order(
                 repo,
                 strategy_instance_id=strategy_instance_id,

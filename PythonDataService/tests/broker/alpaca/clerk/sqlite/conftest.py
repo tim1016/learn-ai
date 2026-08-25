@@ -130,10 +130,18 @@ class _FakeTradePort:
     ``submit`` echoes the submitted leg's side *and* quantity, so a caller that
     regresses to an under- or over-sized reduction cannot pass an exact-close
     assertion. ``submitted_legs`` records each submitted leg for that check.
+    ``lookup_absent`` models a broker that definitively has no order for the
+    exact client order id, which is how a never-accepted submit reads.
     """
 
-    def __init__(self, *, submit_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        submit_error: Exception | None = None,
+        lookup_absent: bool = False,
+    ) -> None:
         self._submit_error = submit_error
+        self._lookup_absent = lookup_absent
         self.submit_calls: list[str] = []
         self.submitted_legs: list[BrokerOrderLeg] = []
         self.cancel_calls: list[str] = []
@@ -153,6 +161,10 @@ class _FakeTradePort:
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         self.lookup_calls.append(client_order_id)
+        if self._lookup_absent:
+            # Definitive absence: the broker has no order for this exact
+            # client order id (Alpaca answers the read-only lookup with 404).
+            return None
         return _broker_order_fixture(client_order_id).model_copy(
             update={"order_id": f"bo-{client_order_id}"}
         )

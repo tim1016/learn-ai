@@ -1297,6 +1297,68 @@ async def test_manual_cancel_never_activated_leg_requires_exact_broker_absence_e
 
 
 @pytest.mark.asyncio
+async def test_manual_cancel_resolves_a_target_that_never_reached_the_broker(
+    tmp_path: Path,
+) -> None:
+    """Sibling of the EXIT cancel-prove absence branch (#1775, finding S15c).
+
+    A manual leg whose submit response was lost and which the broker never had
+    cannot be cancelled and can never become working. Once absence is proven
+    past the R4 grace window, the cancellation reaches a terminal outcome
+    instead of folding cancel-uncertain on every recovery pass.
+
+    ``lease_ttl_ms`` is bumped past the 30 s grace window so the clock jump
+    exercises only the grace-window math, not an incidental lease expiry.
+    """
+    clock = _clock_at(1_700_000_000_000)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=clock,
+        lease_ttl_ms=300_000,
+    )
+    trade = FakeTrade(repo=repo, unavailable=True)
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=trade,
+    )
+    assert submitted.leg.order_ref is not None
+    cancellation = await submit_manual_order_cancellation(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        order_ref=submitted.leg.order_ref,
+        cancel_request_id="6f0c3c0f-1f2a-4a1a-9a3a-0f27a1b1b9c2",
+        trade=trade,
+    )
+    assert cancellation.effect.state == "unknown"  # absence not yet provable
+
+    clock.advance(30_001)  # past the R4 submit-absence grace window
+    await resolve_manual_order_cancellation(
+        repo,
+        effect_operation_id=cancellation.effect.effect_operation_id,
+        trade=trade,
+    )
+
+    effect = repo.effect_operation(cancellation.effect.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    source = repo.effect_operation(submitted.leg.effect_operation_id)
+    assert source is not None and source.state == "failed"
+    assert repo.uncertain_orders() == []
+    # The source leg is voided as never-submitted, not claimed terminal at the
+    # broker: no broker order or broker state ever existed to observe.
+    source_transitions = repo.transitions_for_order(submitted.leg.order_ref)
+    assert any(t["summary_code"] == "ORDER_SUBMIT_FAILED_ABSENT" for t in source_transitions)
+    assert not any(t["transition_kind"] == "MANUAL_ORDER_TERMINAL" for t in source_transitions)
+    repo.close()
+
+
+@pytest.mark.asyncio
 async def test_manual_cancel_records_a_broker_rejection_when_exact_evidence_stays_working(
     repo: ClerkSqliteRepository,
 ) -> None:

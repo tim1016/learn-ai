@@ -19,11 +19,15 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNCERTAIN_SUBMIT_GRACE_MS,
+    entry_never_accepted_durably,
     entry_order_symbol,
+    fold_entry_never_accepted,
     fold_failed,
     fold_order_evidence,
     fold_order_submission_acknowledgement,
+    fold_submit_absence_void,
     fold_uncertain,
+    order_never_reached_broker,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -39,7 +43,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
-from app.broker.contract.models import BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 
@@ -280,6 +284,8 @@ async def _cancel_and_prove_entry(
     entry: OrderResource,
     broker: ClaimedBrokerIO,
 ) -> bool:
+    if _prove_never_accepted_durably(repo, effect_operation_id=effect_operation_id, entry=entry):
+        return True
     cancel_error: BrokerError | None = None
     if not _is_terminal(entry.broker_state) and entry.broker_order_id is not None:
         _append_order_phase_once(repo, effect_operation_id, entry, "ORDER_CANCEL_REQUESTED")
@@ -302,6 +308,10 @@ async def _cancel_and_prove_entry(
             cancel_error = exc
 
     observed = await broker.observe_exact(entry.client_order_id)
+    if _prove_never_accepted_if_absent(
+        repo, effect_operation_id=effect_operation_id, entry=entry, observed=observed
+    ):
+        return True
     if isinstance(observed, BrokerError) or observed is None:
         fold_uncertain(
             repo,
@@ -326,6 +336,91 @@ async def _cancel_and_prove_entry(
     return True
 
 
+def _prove_never_accepted_durably(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    entry: OrderResource,
+) -> bool:
+    """Is this entry already provably never-accepted, without asking the broker?"""
+    if not entry_never_accepted_durably(repo, entry):
+        return False
+    _prove_never_accepted(
+        repo,
+        effect_operation_id=effect_operation_id,
+        entry=entry,
+        why="The owning ENTER voided this exact order as definitively absent at the broker.",
+    )
+    return True
+
+
+def _prove_never_accepted_if_absent(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    entry: OrderResource,
+    observed: BrokerOrder | BrokerError | None,
+) -> bool:
+    """Did this pass's exact lookup prove the entry never reached the broker?
+
+    Only a definitively-absent answer counts — a lost lookup (a
+    ``BrokerError``) says nothing about the order — and absence itself is
+    only terminal under :func:`order_never_reached_broker`.
+    """
+    if observed is not None or not order_never_reached_broker(repo, entry):
+        return False
+    _prove_never_accepted(
+        repo,
+        effect_operation_id=effect_operation_id,
+        entry=entry,
+        why=(
+            "The exact broker lookup is definitively absent past the "
+            "submit-absence grace window, and the order carries no broker identity."
+        ),
+    )
+    return True
+
+
+def _prove_never_accepted(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    entry: OrderResource,
+    why: str,
+) -> None:
+    """Close the entry's own ENTER, then confirm its end state to this EXIT.
+
+    Both halves matter. The unknown-outcome episode is keyed by
+    ``(effect_operation_id, order_ref)``, so proof recorded only against the
+    EXIT would leave the ENTER's identity — and the outstanding intent the
+    admission gate counts — open after the EXIT finished. Voiding the ENTER
+    uses the same producer the submit resolver uses, so an EXIT that reaches
+    the proof first writes exactly the evidence a later sweep would have.
+
+    The EXIT-side confirmation is appended once per order: it is what
+    :func:`entry_never_accepted_durably` reads on every later pass, so a
+    repeated reconciliation cannot re-append it.
+    """
+    owner = repo.effect_operation(entry.effect_operation_id)
+    if owner is not None and owner.state not in ("succeeded", "failed", "rejected"):
+        fold_submit_absence_void(
+            repo,
+            effect_operation_id=entry.effect_operation_id,
+            order_ref=entry.order_ref,
+        )
+    if any(
+        transition["transition_kind"] == "ENTRY_NEVER_ACCEPTED"
+        for transition in repo.transitions_for_order(entry.order_ref)
+    ):
+        return
+    fold_entry_never_accepted(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=entry.order_ref,
+        why=why,
+    )
+
+
 async def _refresh_terminal_entries(
     repo: ClerkSqliteRepository,
     *,
@@ -334,7 +429,15 @@ async def _refresh_terminal_entries(
     broker: ClaimedBrokerIO,
 ) -> bool:
     for entry in entries:
+        # Nothing to refresh for an order the broker never accepted: it holds
+        # no exposure and cannot change state.
+        if _prove_never_accepted_durably(repo, effect_operation_id=effect_operation_id, entry=entry):
+            continue
         observed = await broker.observe_exact(entry.client_order_id)
+        if _prove_never_accepted_if_absent(
+            repo, effect_operation_id=effect_operation_id, entry=entry, observed=observed
+        ):
+            continue
         if isinstance(observed, BrokerError) or observed is None:
             fold_uncertain(
                 repo,

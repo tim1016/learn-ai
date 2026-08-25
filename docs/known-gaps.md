@@ -31,22 +31,28 @@ On **2026-08-25**, the 54-bot fleet stress run added the critical S15c
 cancel-resolution gap to §1 and the remaining verified operational/UI gaps
 to §10. Source verification while lifting S15c corrected the supporting
 audit's initial mechanism attribution: submit absence already has a bounded
-terminal branch; the still-open loop is in EXIT cancel proof.
+terminal branch; the still-open loop was in EXIT cancel proof. That loop was
+**closed the same day** (#1775): EXIT cancel proof now has a definitive-absence
+branch, so the S15c bullet is deleted per the status convention above and its
+account-wide amplifier — a separate defect — remains in §1 in its own right.
 
 ---
 
 ## 1. Safety-critical
 
-- **S15c — a terminal-failed ENTER can strand a later EXIT in cancel
-  uncertainty and freeze unrelated account actions.** The submit-recovery
-  path already folds exact broker absence to terminal failure after its 30 s
-  grace (`app/broker/alpaca/clerk/sqlite/order_evidence.py`), but EXIT cancel
-  proof treats the same definitive absence as `ORDER_CANCEL_UNCERTAIN`, even
-  when the owning ENTER effect is durably terminal-failed
-  (`app/broker/alpaca/clerk/sqlite/exit_resolution.py`). The live reproduction
-  `g01-dv-spy-0825` remains stuck, and the account-wide outstanding-intent
-  deploy/resume gate amplifies that one subject's EXIT across the fleet.
-  Supporting evidence: `docs/audits/bot-fleet-stress-2026-08-25.md` S15c.
+- **The outstanding-intent admission gate is account-wide while the
+  uncertainty it reflects is not.** `unresolved_effect_count()` counts every
+  reconcilable effect on the account
+  (`app/broker/alpaca/clerk/sqlite/runtime.py`), and Start/deploy admission
+  refuses on any nonzero count (`app/services/bot_start_admission.py`), while
+  the underlying `ORDER_OUTCOME_UNKNOWN` episode is scoped to one custody
+  subject. One bot's unresolved intent therefore refuses resume and deploy
+  fleet-wide — the amplifier that turned S15c's single stuck EXIT into a
+  50-bot freeze. **Decided 2026-08-25 (#1775), not yet implemented**: gate the
+  owning custody subject, keeping the account-wide refusal only for an
+  unresolved effect that cannot be attributed to a subject. Supporting
+  evidence: `docs/audits/bot-fleet-stress-2026-08-25.md` S15c and its
+  open-items entry.
 
 The two 2026-08-24 safety-critical findings — F18
 (crash-held exposure had no path to flat) and F19 (retryable EXIT refusal

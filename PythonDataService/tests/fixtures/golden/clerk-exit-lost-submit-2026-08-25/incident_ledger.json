@@ -1,0 +1,26 @@
+{
+  "entry_order_ledger": [
+    {
+      "transition_kind": "ENTER_ACCEPTED",
+      "summary_code": "ENTER_ACCEPTED",
+      "operation_state": "accepted"
+    },
+    {
+      "transition_kind": "ORDER_SUBMIT_UNCERTAIN",
+      "summary_code": "ORDER_SUBMIT_UNCERTAIN",
+      "operation_state": "unknown"
+    },
+    {
+      "transition_kind": "ORDER_SUBMIT_FAILED",
+      "summary_code": "ORDER_SUBMIT_FAILED_ABSENT",
+      "operation_state": "failed"
+    },
+    {
+      "transition_kind": "EXIT_ACCEPTED",
+      "summary_code": "EXIT_ACCEPTED",
+      "operation_state": "accepted"
+    }
+  ],
+  "entry_broker_order_id": null,
+  "pre_fix_loop_transition_kind": "ORDER_CANCEL_UNCERTAIN"
+}
