@@ -94,6 +94,7 @@ ActionId = Literal[
     "resolve_execution_coverage",
     "cancel_verified_working_orders",
     "prepare_safe_flatten",
+    "execute_safe_flatten",
     "stop_bot_decisions",
     "open_custody_timeline",
     "rebuild_from_mirror",
@@ -113,6 +114,7 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "resolve_execution_coverage",
     "cancel_verified_working_orders",
     "prepare_safe_flatten",
+    "execute_safe_flatten",
     "stop_bot_decisions",
     "open_custody_timeline",
     "rebuild_from_mirror",
@@ -311,6 +313,10 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     "prepare_safe_flatten": OperatorCopy(
         "Prepare safe flatten",
         "Prepare a fresh reduction plan without submitting an order.",
+    ),
+    "execute_safe_flatten": OperatorCopy(
+        "Execute safe flatten",
+        "Submit the prepared reduction as recovery EXIT custody with exact attributed quantities.",
     ),
     "stop_bot_decisions": OperatorCopy(
         "Stop bot decisions",
