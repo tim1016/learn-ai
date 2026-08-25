@@ -27,12 +27,28 @@ count corrected after #1687. On **2026-08-24** the backlog was reconciled
 against the F1–F19 adjudication table from the same-day session (PR #1747):
 §1 now carries the two safety-critical findings, §9 lifts the remaining open
 findings, and §8's FR-016 scope bullet was closed against current code.
+On **2026-08-25**, the 54-bot fleet stress run added the critical S15c
+cancel-resolution gap to §1 and the remaining verified operational/UI gaps
+to §10. Source verification while lifting S15c corrected the supporting
+audit's initial mechanism attribution: submit absence already has a bounded
+terminal branch; the still-open loop is in EXIT cancel proof.
 
 ---
 
 ## 1. Safety-critical
 
-No known-open items. The two 2026-08-24 safety-critical findings — F18
+- **S15c — a terminal-failed ENTER can strand a later EXIT in cancel
+  uncertainty and freeze unrelated account actions.** The submit-recovery
+  path already folds exact broker absence to terminal failure after its 30 s
+  grace (`app/broker/alpaca/clerk/sqlite/order_evidence.py`), but EXIT cancel
+  proof treats the same definitive absence as `ORDER_CANCEL_UNCERTAIN`, even
+  when the owning ENTER effect is durably terminal-failed
+  (`app/broker/alpaca/clerk/sqlite/exit_resolution.py`). The live reproduction
+  `g01-dv-spy-0825` remains stuck, and the account-wide outstanding-intent
+  deploy/resume gate amplifies that one subject's EXIT across the fleet.
+  Supporting evidence: `docs/audits/bot-fleet-stress-2026-08-25.md` S15c.
+
+The two 2026-08-24 safety-critical findings — F18
 (crash-held exposure had no path to flat) and F19 (retryable EXIT refusal
 escalating to a bot crash) — were closed 2026-08-25 by the exposure-lifecycle-
 closure work (PRD #1752, ADR 0045): the `execute_safe_flatten` recovery action
@@ -267,3 +283,37 @@ handoff §5 cites a judgment call that does not exist in
 instruction cannot work after the squash-merge — the eight session commits are
 individually reachable only via the `audit/unreviewed-findings-2026-08-24`
 branch.
+
+## 10. 2026-08-25 fleet-stress findings (PR #1772)
+
+The live 54-bot campaign is recorded in
+`docs/audits/bot-fleet-stress-2026-08-25.md`. S15c is safety-critical and lives
+in §1. The verified open items below remain after PR #1772; the session-tooling
+promotion is a chore, not an open product defect, and retire remains tracked as
+F16 in §9 rather than duplicated here.
+
+- **S12d — stopped fleet leaves a hot data plane and 105–145 s panel reads
+  (high).** After mass stop, zero running bots still consumed 77% CPU until a
+  data-plane restart. The responsible background loop is not yet identified;
+  reproduce under profiling before choosing a fix.
+- **S9/S10 — a brief trade-update disconnect produces a minutes-long,
+  account-wide entry hold (high).** Recurrent 2–5 s websocket recoveries were
+  followed by single-sample `STREAM_HEALTH_HOLD` episodes affecting the full
+  roster. The periodic disconnect cause remains unclassified, and hold
+  raise/release is still coupled to entry-time evaluation rather than a
+  continuously sampled health authority.
+- **S3b — crashed bots render as ordinary off-duty rows (high).** A crashed bot
+  projects `needs_attention=false` with an innocent "Off duty · Flat" label,
+  hiding a runtime failure from fleet triage.
+- **S7 — roster polling can freeze silently across a data-plane restart
+  (medium).** The 5 s poll remained stale for more than nine minutes while the
+  footer continued to look current; manual refresh recovered it. Add a bounded
+  request timeout, automatic recovery, and an explicit stale state.
+- **S10 UI — active holds contradict roster counts and guidance (medium).** An
+  active stream-health hold can coexist with "Running 0, Stopped 0" and "no
+  active hold" copy while dozens of bots are running.
+- **S17 — safe flatten is hard to discover and its blocker recommends the
+  wrong disposition (medium).** `execute_safe_flatten` is buried in overflow,
+  and stale evidence is authored as `wait` even though reconciliation is the
+  operator cure. Promote Flatten for exposed stopped bots and attach the
+  reconcile move under `fix_here`.

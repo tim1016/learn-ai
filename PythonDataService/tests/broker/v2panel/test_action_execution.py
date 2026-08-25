@@ -973,3 +973,4 @@ def test_program_build_for_display_falls_back_to_live_check_when_no_evidence_rec
     fact = panel_data_source._program_build_for_display(binding, verified_at_ms=9_999)
 
     assert fact is sentinel
+

@@ -72,6 +72,12 @@ class _FakeBrokerPort:
 
 
 class _FakeRegistry:
+    def __init__(self, receipts_root: Path | None = None) -> None:
+        self._receipts_root = receipts_root or Path("receipts")
+
+    def panel_action_receipt_path(self, sid: str) -> Path:
+        return self._receipts_root / f"{sid}-panel-action-receipts.json"
+
     def status(self, broker: str, sid: str) -> BotStatusView:
         assert broker == "alpaca"
         assert sid == SID
@@ -120,7 +126,7 @@ def api(tmp_path: Path):
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
     set_active_clerk_runtime(None)
-    set_bot_task_registry(_FakeRegistry())  # type: ignore[arg-type]
+    set_bot_task_registry(_FakeRegistry(tmp_path))  # type: ignore[arg-type]
     port = _FakeBrokerPort()
     get_broker_registry().register(port)  # type: ignore[arg-type]
     repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path)
@@ -348,7 +354,14 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
     assert "id: epoch-new:7" in stream.text
 
 
-async def test_presented_action_executes_and_stale_repost_fails_closed(api) -> None:
+async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None:
+    """A repost of an applied action must never re-execute (2026-08-25 / F15).
+
+    The SQLite executor now consults the same durable idempotency ledger as
+    the shared executor, checked BEFORE the staleness fence: the retry of an
+    applied action is a safe ``applied=False`` replay of the recorded
+    receipt, not a 409 and not a second execution.
+    """
     app, _repo = api
     async with _client(app) as client:
         panel = await client.get(
@@ -372,19 +385,9 @@ async def test_presented_action_executes_and_stale_repost_fails_closed(api) -> N
 
     assert first.status_code == 200
     assert first.json()["applied"] is True
-    assert second.status_code == 409
-    body = second.json()["detail"]
-    assert body.keys() >= {
-        "action_id",
-        "outcome",
-        "receipt_id",
-        "recorded_at_ms",
-        "message",
-        "why",
-        "reason_code",
-    }
-    assert body["action_id"] == "reconcile_now"
-    assert body["outcome"] == "conflict"
+    assert second.status_code == 200
+    assert second.json()["applied"] is False
+    assert second.json()["receipt_id"] == first.json()["receipt_id"]
 
 
 async def test_live_chart_accepts_five_second_resolution(
