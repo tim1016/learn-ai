@@ -1844,3 +1844,25 @@ async def test_accept_recovery_exit_forbid_active_run_fails_closed_under_live_ru
         entry_order_ref=entry_ref,
     )
     assert accepted.created is True
+
+
+# ── redrive-count read (stuck-EXIT watchdog audit) ───────────────────────────
+
+
+async def test_exit_effects_created_since_counts_only_rows_at_or_after_cutoff(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref, _ = await _filled_entry_with_position(repo)
+    before_accept_ms = repo.clock()
+    accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-count-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+
+    assert repo.exit_effects_created_since(SID, before_accept_ms) == 1
+    assert repo.exit_effects_created_since(SID, before_accept_ms + 1) == 0
+    assert repo.exit_effects_created_since("other-bot", before_accept_ms) == 0

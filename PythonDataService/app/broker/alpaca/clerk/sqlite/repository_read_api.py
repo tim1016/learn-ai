@@ -361,6 +361,12 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.reconcilable_effect_operations(self._conn)
 
+    def exit_effects_created_since(
+        self: ClerkSqliteRepository, strategy_instance_id: str, since_ms: int
+    ) -> int:
+        with self._write_lock:
+            return reads.exit_effects_created_since(self._conn, strategy_instance_id, since_ms)
+
     def position(
         self: ClerkSqliteRepository,
         strategy_instance_id: str,
