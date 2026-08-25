@@ -416,9 +416,71 @@ class AutoReconnectMonitor:
                 self._client.is_connected() and not self._client.connection_lost
             ):
                 self._link_interrupted_since_ms = None
-                self._advance_recovery("recovery_succeeded")
-                return "aborted"
-            return "succeeded" if await self._run_one_attempt(attempt) else "failed"
+                return await self._adopt_externally_restored_socket()
+            if await self._run_one_attempt(attempt):
+                return "succeeded"
+            await self._drop_half_recovered_socket()
+            return "failed"
+
+    async def _adopt_externally_restored_socket(self) -> AttemptOutcome:
+        """Finish recovery on a socket someone else restored under the lock.
+
+        Reaching here means the connection came back between the tick that
+        observed the drop and this lock acquisition — in practice the
+        operator's ``/connect`` or ``/reconnect``. Those routes call
+        ``client.connect()`` and warm account evidence, but they never run
+        the monitor's recovery callbacks, so ``resubscribe_all`` and the
+        broker-activity sweep have not run. ``connect()`` also clears
+        ``subscriptions_stale``, so ``_recover_subscriptions_if_stale``
+        cannot pick it up on a later tick either — charts would stay frozen
+        and mid-drop executions unswept while health reported HEALTHY.
+
+        Running them here is safe: it is the same idempotent chain
+        ``_run_one_attempt`` runs, under the same lock. Failure is handled
+        the same way too — the monitor does not claim HEALTHY on a
+        connection whose recovery did not complete.
+        """
+        if not await self._run_recovery_callbacks():
+            self._advance_recovery("recovery_failed")
+            await self._drop_half_recovered_socket()
+            return "failed"
+        self._advance_recovery("recovery_succeeded")
+        return "aborted"
+
+    async def _drop_half_recovered_socket(self) -> None:
+        """Tear down a socket a failed attempt left connected.
+
+        ``_run_one_attempt`` fails in two shapes. Either ``connect()``
+        raised — every refusal inside it (``managedAccounts()`` empty,
+        multi-account, paper/live sentinel mismatch) disconnects before
+        raising, so the socket is already down and this is a no-op — or
+        ``connect()`` succeeded and a recovery callback raised. That second
+        shape leaves a live socket whose subscriptions, open orders,
+        executions and positions were never re-requested.
+
+        Left alone, the next tick's hard-down branch observes
+        ``is_connected() and not connection_lost`` and collapses straight to
+        HEALTHY: health would report that account evidence can refresh when
+        recovery never completed, and the HARD_DOWN the open probe just
+        re-asserted would be silently overwritten. Dropping the socket keeps
+        the breaker's open state honest — the next attempt re-runs the whole
+        disconnect -> connect -> callbacks cycle rather than inheriting a
+        connection that never finished recovering.
+        """
+        if not self._client.is_connected():
+            return
+        logger.warning(
+            "Post-connect recovery failed; dropping the half-recovered socket "
+            "so the reconnect breaker stays open",
+            extra={"action": "auto_reconnect_drop_half_recovered"},
+        )
+        try:
+            await self._client.disconnect()
+        except Exception:
+            logger.exception(
+                "Disconnect of half-recovered socket raised; continuing",
+                extra={"action": "auto_reconnect_drop_half_recovered_error"},
+            )
 
     async def _attempt_reconnect_loop(self, *, force: bool = False) -> None:
         """Retry ``client.connect()`` with exponential backoff until it

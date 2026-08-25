@@ -173,7 +173,7 @@ describe('BrokerSessionMirrorComponent', () => {
     );
 
     const text = pageText(fixture);
-    expect(text).toContain('Broker down, retrying');
+    expect(text).toContain('Broker recovery exhausted');
     expect(text).toContain('Hard down');
   });
 

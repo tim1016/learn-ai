@@ -209,7 +209,9 @@ beside the active hold.
 > * **37.9 % downtime** — 1 021 of 2 691 observed minutes with no successful
 >   30 s probe: 08-24 00:44->08:49 ET (8.1 h) and 08-25 00:44->09:41 ET (8.9 h).
 > * **3 `HARD_DOWN` latches in 1.9 days** (~1.6/day). Each followed the same
->   script: attempts open at 00:45:0x, exhaust `1+2+4+8+16+32+60x4 = 303 s`,
+>   script: attempts open at 00:45:0x, exhaust the ten-attempt ladder's nine
+>   inter-attempt waits (`1+2+4+8+16+32+60x3 = 243 s`, excluding `connect()`
+>   duration — the loop latches on the tenth failure without sleeping again),
 >   latch ~5 min 46 s in.
 > * **The latch, not the outage, set the downtime.** `_tick`'s hard-down branch
 >   only *observed* the client, so after latching the monitor emitted nothing
