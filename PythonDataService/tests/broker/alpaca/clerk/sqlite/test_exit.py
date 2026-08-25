@@ -16,12 +16,14 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
+    RecoveryRunActiveError,
     accept_exit,
+    accept_recovery_exit,
     resolve_accepted_exit,
     resolve_exit,
     submit_exit,
@@ -1737,3 +1739,108 @@ async def test_resolve_accepted_exit_defers_whole_cohort_without_a_crash(
         result = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
         assert result.reducing_order_ref is None
         assert trade.submit_calls == []
+
+
+# ── run-fence-exempt recovery EXIT accept (F18 / watchdog foundation) ─────────
+
+
+async def test_accept_recovery_exit_captures_reduction_without_active_run(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref, recovered = await _filled_entry_with_position(repo)
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    with pytest.raises(NoActiveRunError):
+        accept_exit(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="exit-after-stop",
+            lifecycle_run_id=RUN_ID,
+            entry_order_ref=entry_ref,
+        )
+
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-abc123",
+        entry_order_ref=entry_ref,
+    )
+
+    assert accepted.created is True
+    assert accepted.effect_operation_id is not None
+    trade = _FakeTrade(
+        lookup_results=[recovered, recovered],
+        submit_result=_broker_order("placeholder", side="sell", status="accepted"),
+    )
+    resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+    assert resolved.reducing_order_ref is not None
+    submitted_leg, submitted_ref = trade.submit_calls[0]
+    assert submitted_ref == resolved.reducing_order_ref
+    assert submitted_leg.side == "sell"
+    assert submitted_leg.quantity == 10
+
+
+async def test_accept_recovery_exit_is_idempotent_per_decision_id(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref, _ = await _filled_entry_with_position(repo)
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    first = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-abc123",
+        entry_order_ref=entry_ref,
+    )
+    retry = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-abc123",
+        entry_order_ref=entry_ref,
+    )
+
+    assert retry.created is False
+    assert retry.effect_operation_id == first.effect_operation_id
+
+
+async def test_accept_recovery_exit_forbid_active_run_fails_closed_under_live_run(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """P0 race guard: the no-active-run fact must hold inside the capture
+    transaction itself, not only at recovery-policy recheck time."""
+    entry_ref, _ = await _filled_entry_with_position(repo)  # run still ACTIVE
+
+    with pytest.raises(RecoveryRunActiveError):
+        accept_recovery_exit(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="recovery-flatten-raceguard",
+            entry_order_ref=entry_ref,
+            forbid_active_run=True,
+        )
+
+    # The watchdog path (default forbid_active_run=False) still captures under
+    # a live run — a stuck EXIT on a running bot is re-drivable by design.
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-abcdef123456-1",
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.created is True

@@ -11,6 +11,7 @@ broker unreachability.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any, Literal
 
 import pytest
 
+import app.broker.alpaca.clerk.sqlite.exit_watchdog as watchdog_module
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
@@ -46,13 +48,26 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
     admit_new_exposure,
     raise_uncertainty,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_STUCK_REASON_CODE,
+    ExitNotFlatCause,
+    ExitStuckCause,
+)
+from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
+from app.broker.contract.models import (
+    BrokerOrder,
+    BrokerOrderEvent,
+    BrokerOrderLeg,
+    BrokerPosition,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _hold_transition
 
 ACCOUNT_ID = "PA-TEST"
@@ -107,6 +122,8 @@ def _broker_order(
     order_id: str = "broker-order-1",
     symbol: str = "SPY",
     status: str = "accepted",
+    side: str = "buy",
+    quantity: float = 1.0,
     filled_quantity: float = 0.0,
     filled_avg_price: float | None = None,
 ) -> BrokerOrder:
@@ -116,10 +133,10 @@ def _broker_order(
         client_order_id=client_order_id,
         symbol=symbol,
         asset_class="us_equity",
-        side="buy",
+        side=side,
         order_type="market",
         time_in_force="day",
-        quantity=1.0,
+        quantity=quantity,
         filled_quantity=filled_quantity,
         limit_price=None,
         stop_price=None,
@@ -2049,3 +2066,354 @@ async def test_started_sweep_renews_the_execution_lease_while_idle(tmp_path: Pat
     finally:
         await sweep.stop()
         clerk_repo.close()
+
+
+# ── stuck-EXIT watchdog: bounded redrive then durable EXIT_STUCK ──────────────
+
+WATCHDOG_SID = "wd-bot"
+WATCHDOG_RUN = "wd-run-1"
+
+
+@pytest.fixture
+def clocked_repo(tmp_path: Path):
+    clock = _clock_at(1_700_000_000_000)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1"
+    )
+    submit_start_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
+        lifecycle_run_id=WATCHDOG_RUN,
+    )
+    yield repo, clock
+    repo.close()
+
+
+class _NoReconciler:
+    async def reconcile_account(self, *, trigger: str):
+        raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
+
+
+async def _held_position(repo: ClerkSqliteRepository, *, suffix: str = "1") -> str:
+    """Filled 10-share SPY entry with an exact execution slice -> attributed +10."""
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=WATCHDOG_SID,
+        decision_id=f"wd-enter-{suffix}",
+        lifecycle_run_id=WATCHDOG_RUN,
+        leg=_leg(quantity=10),
+        trade=_FakeTrade(),
+    )
+    assert submission.order_ref is not None
+    filled = _broker_order(
+        submission.order_ref, status="filled", quantity=10.0,
+        filled_quantity=10, filled_avg_price=100.0,
+    )
+    fold_order_evidence(
+        repo, effect_operation_id=submission.effect_operation_id, order=filled
+    )
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler()
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=submission.order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=1_700_000_000_600,
+            price=100, quantity=10, execution_id=f"wd-exec-{suffix}",
+        ),
+        event_key=f"execution:wd-exec-{suffix}",
+        order=filled,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+    return submission.order_ref
+
+
+def _raise_exit_not_flat(
+    repo: ClerkSqliteRepository, *, attributed_qty: float, evidence_ref: str = "wd-evidence"
+) -> None:
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=WATCHDOG_SID,
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        headline="A completed EXIT left attributed exposure",
+        explanation="test: reducing order resolved without flattening",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Run another EXIT or reconcile until attributed exposure is flat.",
+        evidence_refs=(evidence_ref,),
+        cause_facts=ExitNotFlatCause(symbol="SPY", attributed_qty=attributed_qty).to_mapping(),
+        severity="error",
+    )
+
+
+async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> None:
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    trade = _FakeTrade()
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=trade,
+    )
+
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
+    assert len(trade.submit_calls) == 1  # the recovery reducing order reached the broker
+
+
+async def test_reconcile_account_does_not_redrive_a_fresh_exit_not_flat(clocked_repo) -> None:
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS - 1)
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+    )
+
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is None
+
+
+async def test_reconcile_account_escalates_exit_stuck_after_redrive_cap(
+    clocked_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    monkeypatch.setattr(watchdog_module, "EXIT_NOT_FLAT_MAX_REDRIVES", 0)
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+    )
+
+    stuck = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_STUCK_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert stuck is not None  # durable, operator-visible escalation
+
+
+async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> None:
+    """P1 regression: a later, independent stuck episode for the same strategy
+    must mint fresh redrive identities. A bare `exit-redrive-<n>` collides:
+    `_exit_identity` keys idempotency on (strategy_instance_id, decision_id)
+    only, so a reused id either replays the earlier episode's terminal effect
+    (same entry ref) or raises CommandExistingConflict forever (new entry ref,
+    different payload hash)."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode_a = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode_a is not None
+    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+    )
+    token_a = hashlib.sha256(episode_a["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    command_a = repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token_a}-1")
+    assert command_a is not None
+
+    # Episode A's redrive fills completely -> flat -> the fence resolves A.
+    reducing_a = next(
+        order
+        for order in repo.orders_for_effect_operation(command_a.effect_operation_id)
+        if order.role == "REDUCING"
+    )
+    filled_reducing = _broker_order(
+        reducing_a.order_ref, status="filled", side="sell", quantity=10.0,
+        filled_quantity=10, filled_avg_price=101.0,
+    )
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler()
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=reducing_a.order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=repo.clock(),
+            price=101.0, quantity=10, execution_id="wd-exec-flat-a",
+        ),
+        event_key="execution:wd-exec-flat-a",
+        order=filled_reducing,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=_FakeTrade())
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    ) is None
+
+    # A fresh entry gets stuck later: independent episode B on a new entry ref.
+    submission = await submit_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
+        decision_id="wd-enter-2", lifecycle_run_id=WATCHDOG_RUN,
+        leg=_leg(quantity=10), trade=_FakeTrade(),
+    )
+    filled_entry = _broker_order(
+        submission.order_ref, status="filled", quantity=10.0,
+        filled_quantity=10, filled_avg_price=100.0,
+    )
+    fold_order_evidence(
+        repo, effect_operation_id=submission.effect_operation_id, order=filled_entry
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=submission.order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=repo.clock(),
+            price=100.0, quantity=10, execution_id="wd-exec-enter-2",
+        ),
+        event_key="execution:wd-exec-enter-2",
+        order=filled_entry,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+    clock.advance(1_000)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode_b = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode_b is not None
+    assert episode_b["uncertainty_id"] != episode_a["uncertainty_id"]
+    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+    )
+
+    token_b = hashlib.sha256(episode_b["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert token_b != token_a
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token_b}-1") is not None
+
+
+async def test_watchdog_redrive_count_survives_episode_refresh(
+    clocked_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1 regression (Codex): a redrive that completes non-flat REFRESHES the
+    EXIT_NOT_FLAT episode (exit_resolution re-raises with the new reducing
+    order_ref), overwriting observed_at_ms. If the redrive count were anchored
+    to observed_at_ms it would reset to zero, so the watchdog would re-mint
+    `exit-redrive-<token>-1` forever and never escalate. With the count anchored
+    to the episode identity, one redrive followed by a refresh must still be
+    counted, so the next pass escalates. (MAX=1 isolates the count: the
+    escalation branch runs before the active-exit entry filter.)"""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    monkeypatch.setattr(watchdog_module, "EXIT_NOT_FLAT_MAX_REDRIVES", 1)
+
+    # Pass 1: one redrive, no escalation yet.
+    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    await reconcile_account(
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=_FakeTrade()
+    )
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_STUCK_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    ) is None
+
+    # The redrive completes non-flat: exit_resolution refreshes the same episode
+    # with the new reducing order_ref, moving observed_at_ms forward.
+    clock.advance(5_000)
+    _raise_exit_not_flat(repo, attributed_qty=10.0, evidence_ref="reducing-redrive-1")
+    refreshed = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert refreshed is not None
+    assert refreshed["uncertainty_id"] == episode["uncertainty_id"]  # same episode
+    assert refreshed["observed_at_ms"] > episode["observed_at_ms"]  # observed moved
+
+    # Pass 2: the one prior redrive is still counted (redrives=1 >= MAX=1), so
+    # the watchdog escalates. A time-anchored count would read zero here and
+    # never escalate.
+    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    await reconcile_account(
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=_FakeTrade()
+    )
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_STUCK_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    ) is not None
+
+
+async def test_exit_stuck_is_resolved_once_attributed_reaches_flat(clocked_repo) -> None:
+    """P1 regression (Codex): a durable EXIT_STUCK escalation must clear when
+    the position later reaches flat — otherwise the now-flat strategy stays
+    permanently barred from new exposure."""
+    repo, _clock = clocked_repo
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=WATCHDOG_SID,
+        reason_code=EXIT_STUCK_REASON_CODE,
+        headline="A stuck EXIT exhausted automatic re-drives",
+        explanation="test",
+        operator_impact="new exposure paused; exact reduction available",
+        next_step="execute the presented safe flatten",
+        evidence_refs=("wd-evidence",),
+        cause_facts=ExitStuckCause(
+            symbol="SPY", attributed_qty=10.0, redrive_count=3,
+            first_observed_at_ms=1_700_000_000_000,
+        ).to_mapping(),
+        severity="error",
+    )
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_STUCK_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    ) is not None
+
+    # Attributed exposure is flat (operator completed the safe flatten).
+    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=_FakeTrade())
+
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_STUCK_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    ) is None
+    admit_new_exposure(repo, strategy_instance_id=WATCHDOG_SID)  # must not raise
