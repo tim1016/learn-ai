@@ -266,7 +266,7 @@ function brokerPresentation(
 ): BrokerSessionRosterRow['presentation']['broker'] {
   if (state === 'connected') return { label: 'Broker connected', severity: 'ok' };
   if (state === 'hard_down') {
-    return { label: 'Broker recovery exhausted', severity: 'critical' };
+    return { label: 'Broker down, retrying', severity: 'critical' };
   }
   if (state === null) return { label: 'Broker state not reported', severity: 'neutral' };
   return { label: state.replaceAll('_', ' '), severity: 'warning' };

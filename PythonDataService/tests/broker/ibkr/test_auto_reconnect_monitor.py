@@ -460,6 +460,117 @@ async def test_monitor_uses_finite_default_attempt_cap() -> None:
 
 
 @pytest.mark.asyncio
+async def test_monitor_keeps_probing_and_self_recovers_after_hard_down() -> None:
+    """HARD_DOWN is the breaker's OPEN state, not a terminal one (#1777 WP4).
+
+    Fleet evidence: the ladder exhausted 5m46s into a gateway outage at
+    00:50 ET, and the monitor then emitted nothing for eight hours because
+    the hard-down branch only *observed* the client instead of retrying.
+    Recovery had to arrive from an unrelated data-farm event. The open
+    state must keep attempting on its own slow cadence so the connection
+    comes back without an operator click.
+    """
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[boom, boom, boom, True],
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=2,
+        open_probe_interval_s=0.01,
+    )
+    monitor.start()
+    for _ in range(300):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    # The ladder burned exactly its 2 attempts; everything beyond that is
+    # the open state probing on its own.
+    assert client.connect_calls > 2
+    assert monitor.is_hard_down is False
+    assert monitor.recovery_state == "HEALTHY"
+    assert monitor.successful_reconnect_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_monitor_paces_open_state_probes_instead_of_hammering() -> None:
+    """The open state retries forever, but slowly.
+
+    Without pacing, the 3s poll tick would drive a reconnect every tick and
+    generate rejected attempts against a gateway that is down on purpose --
+    the exact behaviour MAX_BACKOFF_S exists to avoid. With a probe interval
+    longer than the test window, no attempt beyond the ladder may fire.
+    """
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(is_connected=False, connect_outcomes=[boom])
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=1,
+        open_probe_interval_s=1000.0,
+    )
+    monitor.start()
+    for _ in range(100):
+        if monitor.is_hard_down:
+            break
+        await asyncio.sleep(0.005)
+    await asyncio.sleep(0.15)
+    await monitor.stop()
+
+    assert monitor.is_hard_down is True
+    assert client.connect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_open_state_probe_serialises_against_the_lifecycle_lock() -> None:
+    """The open probe reconnects like any other attempt, so it must hold the
+    shared client lifecycle lock.
+
+    That lock serialises the monitor against the operator's /connect,
+    /disconnect and /reconnect routes. A probe that skipped it could
+    double-call ``connectAsync`` on the same client, or reconnect a client
+    the operator was deliberately taking down.
+    """
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[boom, boom, boom, True],
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=1,
+        open_probe_interval_s=0.01,
+    )
+    monitor.start()
+    for _ in range(200):
+        if monitor.is_hard_down:
+            break
+        await asyncio.sleep(0.005)
+    calls_at_latch = client.connect_calls
+
+    async with get_client_lifecycle_lock():
+        # Several probe intervals elapse while the operator holds the lock.
+        await asyncio.sleep(0.12)
+        assert client.connect_calls == calls_at_latch
+
+    for _ in range(200):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert client.connect_calls > calls_at_latch
+
+
+@pytest.mark.asyncio
 async def test_monitor_retries_when_post_reconnect_recovery_fails() -> None:
     client = _FakeClient(
         is_connected=False,

@@ -29,7 +29,7 @@ const BROKER_CONNECTION_RENDERING: Readonly<Record<
   soft_lost: { state: 'warn', headline: 'Degraded', baseDetail: 'Connection degraded — feed lost, recovering' },
   subscriptions_stale: { state: 'warn', headline: 'Degraded', baseDetail: 'Subscriptions stale — resubscribe required' },
   degraded_data_farm: { state: 'warn', headline: 'Degraded', baseDetail: 'IBKR data farm degraded' },
-  hard_down: { state: 'down', headline: 'Offline', baseDetail: 'Recovery exhausted' },
+  hard_down: { state: 'down', headline: 'Offline', baseDetail: 'Retrying automatically' },
   disabled: { state: 'unknown', headline: 'Disabled', baseDetail: 'Disabled' },
   disconnected: { state: 'down', headline: 'Offline', baseDetail: 'Disconnected' },
 };

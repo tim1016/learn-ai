@@ -30,7 +30,7 @@ import asyncio
 import logging
 import random
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from app.broker.ibkr.recovery_state_machine import (
     RecoverySignal,
@@ -43,6 +43,8 @@ if TYPE_CHECKING:
     from app.broker.ibkr.client import IbkrClient
 
 logger = logging.getLogger(__name__)
+
+type AttemptOutcome = Literal["succeeded", "failed", "aborted"]
 
 
 class AutoReconnectMonitor:
@@ -86,7 +88,12 @@ class AutoReconnectMonitor:
     and reconnecting more aggressively only generates rejected attempts."""
 
     MAX_RECONNECT_ATTEMPTS = 10
-    """Production finite cap before the monitor enters HARD_DOWN."""
+    """Attempts in the fast ladder before the breaker opens (HARD_DOWN)."""
+
+    OPEN_PROBE_INTERVAL_S = 60.0
+    """Cadence of the breaker's open-state probe. The open state retries
+    indefinitely, so this is the one knob deciding how long a resolved
+    outage stays visible as HARD_DOWN."""
 
     def __init__(
         self,
@@ -99,6 +106,7 @@ class AutoReconnectMonitor:
         probe_timeout_s: float = 4.0,
         link_interruption_wait_s: float = 30.0,
         max_reconnect_attempts: int | None = None,
+        open_probe_interval_s: float | None = None,
         backoff_jitter_fraction: float = 0.10,
         backoff_jitter_source: Callable[[], float] | None = None,
         subscription_recovery_interval_s: float = 10.0,
@@ -117,6 +125,13 @@ class AutoReconnectMonitor:
             if max_reconnect_attempts is None
             else max_reconnect_attempts,
         )
+        self._open_probe_interval_s = (
+            self.OPEN_PROBE_INTERVAL_S
+            if open_probe_interval_s is None
+            else max(0.0, open_probe_interval_s)
+        )
+        self._last_open_probe_ms = 0
+        self._open_probe_count = 0
         self._backoff_jitter_fraction = max(0.0, backoff_jitter_fraction)
         self._backoff_jitter_source = backoff_jitter_source or random.random
         self._subscription_recovery_interval_s = subscription_recovery_interval_s
@@ -263,6 +278,8 @@ class AutoReconnectMonitor:
             if self._client.is_connected() and not self._client.connection_lost:
                 self._link_interrupted_since_ms = None
                 self._advance_recovery("recovery_succeeded")
+                return
+            await self._probe_open_circuit_if_due()
             return
         if self._client.is_connected() and not self._client.connection_lost:
             self._link_interrupted_since_ms = None
@@ -375,11 +392,37 @@ class AutoReconnectMonitor:
             return True
         return False
 
+    async def _attempt_under_lifecycle_lock(
+        self, attempt: int, *, force: bool
+    ) -> AttemptOutcome:
+        """One reconnect attempt holding the shared client lifecycle lock.
+
+        The lock serialises the monitor against the operator's /connect,
+        /disconnect and /reconnect routes, so intent and observable state
+        are re-checked *after* acquisition: between the tick that decided
+        to reconnect and this point an operator may have changed either.
+        ``desired_connected`` flipping False means the operator clicked
+        Disconnect, and we stand down without one more attempt.
+
+        Shared by the fast ladder and the open breaker's slow probe so the
+        two can never diverge on locking or on those re-checks.
+        """
+        from app.broker.ibkr.client import get_client_lifecycle_lock
+
+        async with get_client_lifecycle_lock():
+            if not self._client.desired_connected:
+                return "aborted"
+            if not force and (
+                self._client.is_connected() and not self._client.connection_lost
+            ):
+                self._link_interrupted_since_ms = None
+                self._advance_recovery("recovery_succeeded")
+                return "aborted"
+            return "succeeded" if await self._run_one_attempt(attempt) else "failed"
+
     async def _attempt_reconnect_loop(self, *, force: bool = False) -> None:
         """Retry ``client.connect()`` with exponential backoff until it
         succeeds OR the stop event fires."""
-        from app.broker.ibkr.client import get_client_lifecycle_lock
-
         backoff = self._initial_backoff_s
         attempt = 0
         while not self._stop_event.is_set():
@@ -390,30 +433,15 @@ class AutoReconnectMonitor:
                 self._mark_hard_down(attempt)
                 return
             attempt += 1
-            async with get_client_lifecycle_lock():
-                # Re-check once the lock is held — an operator's manual
-                # /connect, /disconnect, or /reconnect may have changed
-                # the intent or the observable state between the tick and
-                # this acquisition. ``desired_connected`` flipping False
-                # means the operator clicked Disconnect; we exit cleanly
-                # without one more attempt.
-                if not self._client.desired_connected:
-                    return
-                if not force and (
-                    self._client.is_connected() and not self._client.connection_lost
-                ):
-                    self._link_interrupted_since_ms = None
-                    self._advance_recovery("recovery_succeeded")
-                    return
-                if await self._run_one_attempt(attempt):
-                    return
-                force = self._recovery_state == "SOCKET_DOWN"
-                if (
-                    self._max_reconnect_attempts is not None
-                    and attempt >= self._max_reconnect_attempts
-                ):
-                    self._mark_hard_down(attempt)
-                    return
+            if await self._attempt_under_lifecycle_lock(attempt, force=force) != "failed":
+                return
+            force = self._recovery_state == "SOCKET_DOWN"
+            if (
+                self._max_reconnect_attempts is not None
+                and attempt >= self._max_reconnect_attempts
+            ):
+                self._mark_hard_down(attempt)
+                return
             # Sleep OUTSIDE the lock so an operator can still reconnect
             # manually during the backoff window without queueing behind
             # the monitor's wait.
@@ -534,12 +562,41 @@ class AutoReconnectMonitor:
         self._is_recovering = False
         self._current_attempt = 0
         self._last_transition_ms = now_ms_utc()
+        # Start the open-state clock here so the first slow probe waits a
+        # full interval: the ladder's final backoff already just elapsed.
+        self._last_open_probe_ms = self._last_transition_ms
+        self._open_probe_count = 0
         self._record_recovery_event("BROKER_RECONNECT_HARD_DOWN", attempts=attempts)
         logger.error(
-            "IBKR auto-reconnect exhausted %d attempt(s); entering HARD_DOWN",
+            "IBKR auto-reconnect ladder spent after %d attempt(s); breaker open, "
+            "probing every %.0fs until the gateway accepts a connection",
             attempts,
-            extra={"action": "auto_reconnect_hard_down", "attempts": attempts},
+            self._open_probe_interval_s,
+            extra={
+                "action": "auto_reconnect_hard_down",
+                "attempts": attempts,
+                "open_probe_interval_s": self._open_probe_interval_s,
+            },
         )
+
+    async def _probe_open_circuit_if_due(self) -> None:
+        """Retry once on the open breaker's slow cadence.
+
+        HARD_DOWN means "stop hammering", never "stop trying". Before this
+        existed the branch only observed the client, so the monitor's
+        downtime was set by whatever unrelated event happened to reconnect
+        it -- a gateway outage of minutes became one of hours.
+        """
+        now_ms = now_ms_utc()
+        if now_ms - self._last_open_probe_ms < int(self._open_probe_interval_s * 1000):
+            return
+        self._last_open_probe_ms = now_ms
+        self._open_probe_count += 1
+        outcome = await self._attempt_under_lifecycle_lock(
+            self._open_probe_count, force=False
+        )
+        if outcome == "failed":
+            self._advance_recovery("open_probe_failed")
 
     def _end_attempt(self, *, success: bool) -> None:
         self._is_attempting = False
