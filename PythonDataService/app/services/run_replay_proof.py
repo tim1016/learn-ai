@@ -12,9 +12,10 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections import deque
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
@@ -24,9 +25,17 @@ from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     UnsupportedShadowProgramError,
     run_shadow_trace_evaluation,
 )
+from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
 from app.engine.data.trade_bar import TradeBar
-from app.marketdata.feed import MarketDataBar
+from app.engine.strategy.signal_program import Settlement, trace_root
+from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.services.bot_trade_strategy import _includes_session_phase, strategy_evaluations
+from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.utils.timestamps import now_ms_utc
+
+if TYPE_CHECKING:
+    from app.services.bot_binding_repository import BrokerBotBinding
 
 logger = logging.getLogger(__name__)
 
@@ -234,4 +243,295 @@ def engine_parity_over_bars(
         compared_count=evaluation.compared_count,
         divergence=None,
         error=None,
+    )
+
+
+_OUTCOMES_BY_STAGED_KIND: dict[str, frozenset[str]] = {
+    "ENTER": frozenset({"enter_intent", "entered"}),
+    "EXIT": frozenset({"exit_intent", "exited"}),
+}
+
+EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
+    {
+        # bot_trade_strategy.py: the pause gate's blocked-receipt reason.
+        "PAUSED_OBSERVE_ONLY",
+        # app/services/market_liveness.py — every liveness fact reason that can
+        # block an ENTER at the pre-Clerk gate. MARKET_TRADABLE is deliberately
+        # absent: it never blocks.
+        "MARKET_LIVENESS_UNAVAILABLE",
+        "MARKET_CLOCK_UNAVAILABLE",
+        "SYMBOL_HALTED",
+        "SYMBOL_STATUS_UNKNOWN",
+        "MARKET_CLOSED",
+        "MARKET_CLOCK_UNKNOWN",
+        "STATUS_STREAM_DISCONNECTED",
+        # app/broker/alpaca/clerk/sqlite/runtime.py — every rejected() branch
+        # that appends a pre-custody `blocked` receipt, plus the stream-health
+        # hold whose constant we import.
+        STREAM_HEALTH_REASON_CODE,
+        "MARKET_LIVENESS_BLOCKED",
+        "SIMULATED_SOURCE_BAR_UNPROVEN",
+        "EXIT_CUSTODY_UNPROVEN",
+    }
+)
+"""The CLOSED set of live-only gates (PR #1751 finding 3b).
+
+A `blocked` receipt whose reason is outside this set is classified `drift`
+(`UNRECOGNIZED_BLOCK_REASON`), never trusted. When a new live-only gate is
+added to the runner or Clerk intake, its reason code must be added here in
+the same PR -- the classifier failing closed on the new code is the reminder.
+"""
+
+
+@dataclass(frozen=True)
+class RunFidelityDivergence:
+    """One classified disagreement between the replayed math and the live record."""
+
+    evaluation_id: str
+    bar_close_ms: int
+    classification: str  # "expected_live_effect" | "drift"
+    reason_code: str
+    replay_staged: str | None
+    live_outcome: str | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class RunFidelityResult:
+    compared_count: int
+    match_count: int
+    expected_live_effect_count: int
+    drift_count: int
+    # Aligned buckets whose live trace_digest was present AND matched the
+    # replayed trace -- the receipt's disclosure of content-level coverage
+    # (digest-less legacy rows fall back to intent-kind comparison).
+    digest_verified_count: int
+    divergences: tuple[RunFidelityDivergence, ...]
+
+
+class _RunReplayFeed:
+    """In-memory feed replaying one retained stream through the shared seam.
+
+    ``recent_closed_bars`` returns the warmup slice regardless of
+    ``lookback_days`` -- the exact behavior of ``_RetainedSourceBarFeed``'s
+    retained branch, which is what the live run's own warmup consumed.
+    Exposes no ``evaluation_mode_for``, so every bar replays in DECIDE mode
+    (``bot_trade_strategy._evaluation_mode_for`` fallback); live OBSERVE_ONLY
+    buckets are receipted ``blocked``/``PAUSED_OBSERVE_ONLY`` and classify as
+    expected live effects.
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        symbol: str,
+        warmup_bars: Sequence[MarketDataBar],
+        live_bars: Sequence[MarketDataBar],
+    ) -> None:
+        self.feed_id = provider
+        self._symbol = symbol
+        self._warmup_bars = list(warmup_bars)
+        self._live_bars = list(live_bars)
+
+    @property
+    def capability_account_id(self) -> None:
+        return None
+
+    async def stream_bars(self, symbol: str, *, use_rth: bool = True) -> AsyncIterator[MarketDataBar]:
+        for bar in self._live_bars:
+            if bar.symbol == symbol and _includes_session_phase(bar, use_rth=use_rth):
+                yield bar
+
+    async def recent_closed_bars(
+        self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5
+    ) -> list[MarketDataBar]:
+        del lookback_days
+        return [
+            bar
+            for bar in self._warmup_bars
+            if bar.symbol == symbol and _includes_session_phase(bar, use_rth=use_rth)
+        ]
+
+    def health(self, symbol: str | None = None) -> FeedHealth:
+        del symbol
+        return FeedHealth(
+            connected=True,
+            stale=False,
+            last_bar_ms=self._live_bars[-1].end_ms if self._live_bars else None,
+            reason="",
+            active_subscription_count=1,
+            observed_at_ms=now_ms_utc(),
+        )
+
+
+async def run_fidelity_over_bars(
+    binding: BrokerBotBinding,
+    *,
+    provider: str,
+    warmup: Sequence[RetainedSourceBar],
+    live: Sequence[RetainedSourceBar],
+    records: Sequence[LiveDecisionRecord],
+    captured_decisions: Mapping[str, str],
+) -> RunFidelityResult:
+    """Replay the run's bars through the production seam, settling each stage
+    with the live-recorded disposition, and classify every disagreement.
+
+    Warmup buckets settle inside ``strategy_evaluations`` via
+    ``captured_decisions`` (the FR-016 machinery) and are never yielded, so
+    yielded evaluations align 1:1 with the run's own receipt sequence.
+    """
+    feed = _RunReplayFeed(
+        provider=provider,
+        symbol=binding.symbol,
+        warmup_bars=[to_market_bar(bar) for bar in warmup],
+        live_bars=[to_market_bar(bar) for bar in live],
+    )
+    pending = deque(records)
+    divergences: list[RunFidelityDivergence] = []
+    compared = 0
+    match_count = 0
+    digest_verified = 0
+    async for evaluation in strategy_evaluations(
+        binding, feed, captured_decisions=dict(captured_decisions)
+    ):
+        if evaluation.crash_recovered:
+            # A warmup bucket whose receipt aged out of retention replays as
+            # uncaptured; it precedes this run's live window and was already
+            # settled DISCARD inside the warmup machinery. Not part of the
+            # alignment sequence.
+            continue
+        compared += 1
+        staged = evaluation.intents[0].kind.value if evaluation.intents else None
+        record = pending.popleft() if pending else None
+        if record is None:
+            divergences.append(
+                RunFidelityDivergence(
+                    evaluation_id=evaluation.evaluation_id,
+                    bar_close_ms=evaluation.decision_bar_close_ms,
+                    classification="drift",
+                    reason_code="MISSING_LIVE_RECORD",
+                    replay_staged=staged,
+                    live_outcome=None,
+                    detail="The replay produced a decision bucket the live journal never recorded.",
+                )
+            )
+            evaluation.settle_stage(Settlement.DISCARD)
+            continue
+        if record.evaluation_id != evaluation.evaluation_id:
+            divergences.append(
+                RunFidelityDivergence(
+                    evaluation_id=evaluation.evaluation_id,
+                    bar_close_ms=evaluation.decision_bar_close_ms,
+                    classification="drift",
+                    reason_code="EVALUATION_ID_MISMATCH",
+                    replay_staged=staged,
+                    live_outcome=record.outcome,
+                    detail=f"Live journal recorded {record.evaluation_id!r} at this position.",
+                )
+            )
+            evaluation.settle_stage(Settlement.DISCARD)
+            continue
+        settlement = (
+            Settlement.COMMIT if record.outcome in _COMMIT_WORTHY_OUTCOMES else Settlement.DISCARD
+        )
+        # Content-level comparison first (PR #1751 finding 3): evaluation_id
+        # hashes identity, not decision content -- only the digest proves the
+        # replayed trace IS the live trace. Digest-less legacy rows fall back
+        # to intent-kind comparison and are excluded from digest_verified.
+        replay_digest = None if evaluation.trace is None else trace_root([evaluation.trace])
+        digest_checked = bool(record.trace_digest) and replay_digest is not None
+        if digest_checked and record.trace_digest != replay_digest:
+            divergences.append(
+                RunFidelityDivergence(
+                    evaluation_id=evaluation.evaluation_id,
+                    bar_close_ms=evaluation.decision_bar_close_ms,
+                    classification="drift",
+                    reason_code="TRACE_DIGEST_MISMATCH",
+                    replay_staged=staged,
+                    live_outcome=record.outcome,
+                    detail=(
+                        "Replayed trace content differs from the live-captured digest "
+                        f"(live={record.trace_digest} replay={replay_digest})."
+                    ),
+                )
+            )
+            evaluation.settle_stage(settlement)
+            continue
+        if digest_checked:
+            digest_verified += 1
+        staged_matches_live = staged is not None and record.outcome in _OUTCOMES_BY_STAGED_KIND.get(
+            staged, frozenset()
+        )
+        if (staged is None and record.outcome == "no_action") or staged_matches_live:
+            match_count += 1
+        elif staged is not None and record.outcome == "blocked":
+            # A blocked row is cross-checked, never trusted on presence: the
+            # replay staged the intent (guaranteed by this branch), the digest
+            # matched (checked above when present), and the reason must be a
+            # known live-only gate -- anything else is drift, fail closed.
+            if record.reason_code in EXPECTED_LIVE_GATE_REASON_CODES:
+                divergences.append(
+                    RunFidelityDivergence(
+                        evaluation_id=evaluation.evaluation_id,
+                        bar_close_ms=evaluation.decision_bar_close_ms,
+                        classification="expected_live_effect",
+                        reason_code=record.reason_code,
+                        replay_staged=staged,
+                        live_outcome=record.outcome,
+                        detail=(
+                            "The shared math staged this intent; a live-only gate "
+                            "(liveness, pause, or Clerk refusal) durably refused it."
+                        ),
+                    )
+                )
+            else:
+                divergences.append(
+                    RunFidelityDivergence(
+                        evaluation_id=evaluation.evaluation_id,
+                        bar_close_ms=evaluation.decision_bar_close_ms,
+                        classification="drift",
+                        reason_code="UNRECOGNIZED_BLOCK_REASON",
+                        replay_staged=staged,
+                        live_outcome=record.outcome,
+                        detail=(
+                            f"Blocked reason {record.reason_code!r} is not in the closed "
+                            "live-only-gate set; refusing to classify it as expected."
+                        ),
+                    )
+                )
+        else:
+            divergences.append(
+                RunFidelityDivergence(
+                    evaluation_id=evaluation.evaluation_id,
+                    bar_close_ms=evaluation.decision_bar_close_ms,
+                    classification="drift",
+                    reason_code="DECISION_MISMATCH",
+                    replay_staged=staged,
+                    live_outcome=record.outcome,
+                    detail="Replayed decision and live receipt disagree with no enumerating live effect.",
+                )
+            )
+        evaluation.settle_stage(settlement)
+    for leftover in pending:
+        divergences.append(
+            RunFidelityDivergence(
+                evaluation_id=leftover.evaluation_id,
+                bar_close_ms=0,
+                classification="drift",
+                reason_code="UNMATCHED_LIVE_RECORD",
+                replay_staged=None,
+                live_outcome=leftover.outcome,
+                detail=f"Live journal receipt (bar_ref={leftover.bar_ref!r}) has no replayed bucket.",
+            )
+        )
+    expected = sum(1 for d in divergences if d.classification == "expected_live_effect")
+    drift = sum(1 for d in divergences if d.classification == "drift")
+    return RunFidelityResult(
+        compared_count=compared,
+        match_count=match_count,
+        expected_live_effect_count=expected,
+        drift_count=drift,
+        digest_verified_count=digest_verified,
+        divergences=tuple(divergences),
     )
