@@ -26,7 +26,7 @@ from app.broker.alpaca.clerk.sqlite.folds import (
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_order_completion import manual_order_has_exact_terminal_coverage
-from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.models import OrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder
@@ -37,13 +37,16 @@ if TYPE_CHECKING:
 UNCERTAIN_SUBMIT_GRACE_MS = 30_000
 
 __all__ = [
+    "entry_never_accepted_durably",
     "entry_order_symbol",
+    "fold_entry_never_accepted",
     "fold_failed",
     "fold_order_acknowledgement",
     "fold_order_evidence",
     "fold_order_submission_acknowledgement",
     "fold_uncertain",
     "resolve_order_submission",
+    "submit_absence_grace_elapsed",
 ]
 
 
@@ -338,6 +341,82 @@ def fold_failed(
             operation_state="failed",
             clerk_observed_at_ms=repo.clock(),
             summary_code=summary_code,
+            facts_json=facts.to_facts_json(),
+        )
+    )
+
+
+SUBMIT_ABSENCE_SUMMARY_CODE = "ORDER_SUBMIT_FAILED_ABSENT"
+"""Summary code of the definitive-absence void — the durable proof that one
+exact order identity never reached the broker."""
+
+
+def submit_absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
+    """Has the R4 submit-absence grace window closed for this exact order?
+
+    Same anchor :func:`resolve_order_submission` uses — the order's durable
+    accept boundary — so a definitively-absent lookup means the same thing to
+    the ENTER-side void and to EXIT's cancel-prove step.
+    """
+    return repo.clock() - _uncertain_since_ms(repo, order_ref) >= UNCERTAIN_SUBMIT_GRACE_MS
+
+
+def entry_never_accepted_durably(repo: ClerkSqliteRepository, order: OrderResource) -> bool:
+    """Is this entry order provably never-accepted from durable evidence alone?
+
+    Two durable proofs, neither needing a broker call: a prior pass already
+    recorded the never-accepted confirmation, or the owning ENTER effect
+    reached its terminal receipt on the definitive-absence void. Both require
+    the order to carry no broker identity — a failure mode that did produce a
+    broker order id is a different, still-cancellable animal.
+    """
+    if order.broker_order_id is not None:
+        return False
+    transitions = repo.transitions_for_order(order.order_ref)
+    if any(transition["transition_kind"] == "ENTRY_NEVER_ACCEPTED" for transition in transitions):
+        return True
+    owner = repo.effect_operation(order.effect_operation_id)
+    if owner is None or owner.state != "failed" or owner.terminal_receipt_id is None:
+        return False
+    return any(
+        transition["summary_code"] == SUBMIT_ABSENCE_SUMMARY_CODE for transition in transitions
+    )
+
+
+def fold_entry_never_accepted(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    why: str,
+) -> None:
+    """Record proof that an enumerated ENTRY order never reached the broker.
+
+    Deliberately not :func:`fold_failed`: this transition belongs to the EXIT
+    that enumerated the dead entry, and that EXIT is not the thing that
+    failed. It records the entry's proven end state and releases the exact
+    identity from any open unknown-outcome episode, leaving the EXIT free to
+    continue to its own outcome.
+    """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    facts = OrderSubmitFailedFacts(
+        reason="The entry order never reached the broker.",
+        why=why,
+    )
+    repo.append_transition(
+        TransitionInput(
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            transition_kind="ENTRY_NEVER_ACCEPTED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="ENTRY_NEVER_ACCEPTED",
             facts_json=facts.to_facts_json(),
         )
     )
