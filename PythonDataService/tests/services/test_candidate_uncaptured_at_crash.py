@@ -170,6 +170,12 @@ async def test_replay_recreates_a_crashed_candidate_as_uncaptured_with_no_broker
         assert facts["reason_code"] == "CANDIDATE_UNCAPTURED_AT_CRASH"
         assert facts["retention_class"] == "protected_crash_evidence"
         assert facts["run_id"] == "run-2"
+        # Direction 2: the reconstructed stage's trace is carried into the
+        # crash-recovered evaluation, so this protected crash-window receipt
+        # captures its per-bucket digest -- crash-window decision content stays
+        # content-verifiable, not digest-less (Codex PR #1766).
+        assert len(facts["trace_digest"]) == 64
+        assert facts["decision_bar_close_ms"] == _EMA_FIRST_EXIT_MS
         # Nothing else ever recorded this exact candidate as reaching custody.
         assert not any(receipt.outcome in ("exit_intent", "exited") for receipt in receipts)
     finally:

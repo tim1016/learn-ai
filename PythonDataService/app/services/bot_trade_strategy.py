@@ -458,6 +458,11 @@ async def _warm_up_signal_strategy(
         settle_stage=lambda _settlement: None,
         evaluation_mode=EvaluationMode.OBSERVE_ONLY,
         crash_recovered=True,
+        # Carry the reconstructed stage's trace so the protected
+        # candidate_uncaptured_at_crash receipt captures its digest (Direction 2):
+        # this bucket came from a registered Signal Program, so its crash-window
+        # decision content stays content-verifiable rather than digest-less.
+        trace=candidate_stage.trace,
     )
 
 
