@@ -643,8 +643,21 @@ def alpaca_paper_strategy_default_symbol(strategy_key: str) -> str:
     return registration.param_schema().symbol  # type: ignore[attr-defined]
 
 
-async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
-    """Execute one admitted strategy; the Clerk owns all execution truth."""
+async def run_trade_bot(
+    binding: BrokerBotBinding,
+    feed: MarketDataFeed,
+    *,
+    source_bars: SourceBarLedger | None = None,
+) -> None:
+    """Execute one admitted strategy; the Clerk owns all execution truth.
+
+    ``source_bars`` retains every unfiltered feed observation before the
+    sealed session's RTH policy applies (Direction 2: a paper run must be
+    replayable from its own retained bars). ``None`` disables retention and
+    exists only for focused unit tests; production wiring
+    (``bot_runtime.execute_bot_run``) always supplies the instance-scoped
+    ledger and fails closed without one.
+    """
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise RuntimeError("The SQLite Alpaca Clerk is unavailable; trade-mode decisions are blocked.")
@@ -665,9 +678,10 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
+    run_feed = _RetainedSourceBarFeed(feed, source_bars) if source_bars is not None else feed
     async for evaluation in strategy_evaluations(
         binding,
-        feed,
+        run_feed,
         captured_decisions=captured_decision_outcomes(decision_receipts),
     ):
         if len(evaluation.intents) > 1:
