@@ -2345,6 +2345,8 @@ def test_runner_is_daemon_free_by_construction() -> None:
 
 @pytest.mark.asyncio
 async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.account_authority import paper_evidence_account_id_for_strategy
+
     feed = _FakeFeed([_bar(_T0)], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
@@ -2362,7 +2364,17 @@ async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path
     # per-run program-build evidence record -- both new, correct artifacts
     # for a sealed program's deploy, not present for a legacy compatibility
     # strategy.
+    #
+    # Direction 2 (run-scoped replay proof): a real-paper trade run now
+    # retains its exact source bars in the instance-scoped
+    # ``paper:<sid>`` evidence ledger (the WAL-mode sqlite file plus its
+    # -wal/-shm sidecars), mirroring Dry Run's ``sim:<sid>`` scoping. The
+    # ledger stays open for the run's lifetime exactly as Dry Run's does,
+    # so the sidecars are the expected on-disk shape.
     assert written == [
+        f"accounts/alpaca/{paper_evidence_account_id_for_strategy(_SID)}/source_bars.sqlite3",
+        f"accounts/alpaca/{paper_evidence_account_id_for_strategy(_SID)}/source_bars.sqlite3-shm",
+        f"accounts/alpaca/{paper_evidence_account_id_for_strategy(_SID)}/source_bars.sqlite3-wal",
         f"live_state/{_SID}/current_run.json",
         f"live_state/{_SID}/desired_state.json",
         f"live_state/{_SID}/lifecycle_state.json",
