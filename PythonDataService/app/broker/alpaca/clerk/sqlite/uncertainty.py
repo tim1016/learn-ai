@@ -326,6 +326,46 @@ def resolve_exit_not_flat_uncertainty(
     )
 
 
+def resolve_exit_stuck_uncertainty(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    evidence_refs: tuple[str, ...],
+) -> bool:
+    """Close the escalated stuck-EXIT fence after attributed-flat proof.
+
+    An ``EXIT_STUCK`` episode outlives its originating ``EXIT_NOT_FLAT`` (the
+    watchdog resolves the latter's fence only implicitly, by re-driving). Once
+    the operator's safe flatten — or any later reduction — proves the strategy
+    attributed-flat, this must clear too, or the now-flat strategy stays
+    permanently barred from new exposure.
+    """
+
+    def build_transition(uncertainty_id: str) -> TransitionInput:
+        facts = UncertaintyResolvedFacts(
+            uncertainty_id=uncertainty_id,
+            resolution_kind="ATTRIBUTED_FLAT_PROVEN",
+            evidence_refs=list(evidence_refs),
+        )
+        return TransitionInput(
+            strategy_instance_id=strategy_instance_id,
+            transition_kind="UNCERTAINTY_RESOLVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXIT_STUCK_RESOLVED",
+            facts_json=facts.to_facts_json(),
+        )
+
+    return repo.resolve_uncertainty_if_active(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_STUCK_REASON_CODE,
+        strategy_instance_id=strategy_instance_id,
+        build_transition=build_transition,
+    )
+
+
 @dataclass(frozen=True)
 class CapabilityDecision:
     allowed: bool
@@ -745,6 +785,7 @@ __all__ = [
     "require_manual_admission",
     "require_manual_reduction",
     "resolve_exit_not_flat_uncertainty",
+    "resolve_exit_stuck_uncertainty",
     "resolve_incomplete_reconciliation_uncertainty",
     "resolve_reconciliation_uncertainty",
 ]

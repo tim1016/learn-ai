@@ -490,23 +490,6 @@ def reconcilable_effect_operations(conn: sqlite3.Connection) -> list[EffectOpera
     return [EffectOperationResource(**dict(row)) for row in rows]
 
 
-def exit_effects_created_since(
-    conn: sqlite3.Connection, strategy_instance_id: str, since_ms: int
-) -> int:
-    """Count EXIT effect operations created at or after ``since_ms``.
-
-    The stuck-EXIT watchdog's re-drive audit: the failed EXIT that raised an
-    ``EXIT_NOT_FLAT`` episode was created before the episode's
-    ``observed_at_ms``, so rows at/after it are exactly the re-drives.
-    """
-    row = conn.execute(
-        "SELECT COUNT(*) AS n FROM effect_operations "
-        "WHERE strategy_instance_id = ? AND kind = 'EXIT' AND created_at_ms >= ?",
-        (strategy_instance_id, since_ms),
-    ).fetchone()
-    return int(row["n"])
-
-
 def position(conn: sqlite3.Connection, strategy_instance_id: str, symbol: str) -> float:
     row = conn.execute(
         "SELECT attributed_qty FROM positions WHERE strategy_instance_id = ? AND symbol = ?",

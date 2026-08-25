@@ -81,7 +81,24 @@ async def redrive_or_escalate_stale_exits(
         remaining = repo.position(sid, cause.symbol)
         if not position_quantity_is_nonzero(remaining):
             continue  # the flat fence resolver clears this episode in this pass
-        redrives = repo.exit_effects_created_since(sid, episode["observed_at_ms"])
+        # Episode-scoped redrive count. `_exit_identity` keys idempotency on
+        # (strategy_instance_id, decision_id) only, and a completed-but-non-flat
+        # redrive REFRESHES this EXIT_NOT_FLAT episode (exit_resolution re-raises
+        # with the new reducing order_ref), which overwrites observed_at_ms. A
+        # time-anchored count would therefore reset to zero every cycle and the
+        # watchdog would loop at attempt 1 forever, never escalating. Count by
+        # the stable per-episode redrive namespace instead, minted from the
+        # immutable uncertainty id (colon-bearing "uncertainty:<seq>" hashed to
+        # a colon-free hex token) so successive episodes never collide.
+        episode_token = hashlib.sha256(
+            episode["uncertainty_id"].encode("utf-8")
+        ).hexdigest()[:12]
+        redrives = 0
+        while (
+            repo.get_command(f"cmd:{sid}:exit-redrive-{episode_token}-{redrives + 1}")
+            is not None
+        ):
+            redrives += 1
         if redrives >= EXIT_NOT_FLAT_MAX_REDRIVES:
             async with intake:
                 escalated = raise_uncertainty(
@@ -128,15 +145,6 @@ async def redrive_or_escalate_stale_exits(
         ]
         if not entries:
             continue
-        # Episode-scoped redrive identity. `_exit_identity` keys idempotency on
-        # (strategy_instance_id, decision_id) only, so a bare `exit-redrive-<n>`
-        # would collide with an earlier, independent episode's redrives — either
-        # replaying its terminal effect (same entry) or conflicting durably
-        # (new entry). Uncertainty ids are minted as "uncertainty:<seq>"
-        # (colon-bearing), so hash to a colon-free hex token.
-        episode_token = hashlib.sha256(
-            episode["uncertainty_id"].encode("utf-8")
-        ).hexdigest()[:12]
         try:
             async with intake:
                 accepted = accept_recovery_exit(
