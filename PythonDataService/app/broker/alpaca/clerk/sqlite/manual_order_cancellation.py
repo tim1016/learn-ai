@@ -35,7 +35,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
     fold_uncertain,
-    submit_absence_grace_elapsed,
+    order_never_reached_broker,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -322,20 +322,6 @@ def _append_cancellation_result(
     )
 
 
-def _target_never_reached_broker(repo: ClerkSqliteRepository, target: OrderResource) -> bool:
-    """Is a definitively-absent exact lookup terminal proof for this target?
-
-    Sibling of EXIT's never-accepted branch (#1775): only for a target that
-    carries no broker identity, and only once the submit-absence grace window
-    has closed. The other cancel-uncertain folds in this flow are deliberately
-    *not* absence proofs — a returned snapshot missing a broker id contradicts
-    itself, a lost cancel response says nothing about the order, and once a
-    broker order id exists an absent lookup is a contradiction to investigate
-    rather than a confirmation.
-    """
-    return target.broker_order_id is None and submit_absence_grace_elapsed(repo, target.order_ref)
-
-
 def _terminal(order_state: str | None) -> bool:
     return order_state is not None and order_state.lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 
@@ -365,7 +351,12 @@ async def _resolve_claimed_manual_order_cancellation(
         )
         return
     observed = await broker.observe_exact(target.client_order_id)
-    if observed is None and _target_never_reached_broker(repo, target):
+    # Sibling of EXIT's never-accepted branch (#1775). The other
+    # cancel-uncertain folds below are deliberately *not* absence proofs: a
+    # returned snapshot missing a broker id contradicts itself, a lost cancel
+    # response says nothing about the order, and once a broker order id exists
+    # an absent lookup is a contradiction to investigate, not a confirmation.
+    if observed is None and order_never_reached_broker(repo, target):
         _append_source_terminal(
             repo,
             order_ref=target.order_ref,

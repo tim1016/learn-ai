@@ -26,7 +26,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
     fold_order_submission_acknowledgement,
     fold_uncertain,
-    submit_absence_grace_elapsed,
+    order_never_reached_broker,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -362,16 +362,11 @@ def _prove_never_accepted_if_absent(
 ) -> bool:
     """Did this pass's exact lookup prove the entry never reached the broker?
 
-    Only a definitively-absent answer counts — a lost lookup says nothing —
-    and only for an order carrying no broker identity: one that did get a
-    broker order id and then reads absent is a contradiction to investigate,
-    not an absence to confirm. The submit-absence grace window must also have
-    closed, so a submit still inside the broker's own visibility window is
-    never mistaken for one that never happened.
+    Only a definitively-absent answer counts — a lost lookup (a
+    ``BrokerError``) says nothing about the order — and absence itself is
+    only terminal under :func:`order_never_reached_broker`.
     """
-    if observed is not None or entry.broker_order_id is not None:
-        return False
-    if not submit_absence_grace_elapsed(repo, entry.order_ref):
+    if observed is not None or not order_never_reached_broker(repo, entry):
         return False
     _record_never_accepted(
         repo,

@@ -45,8 +45,8 @@ __all__ = [
     "fold_order_evidence",
     "fold_order_submission_acknowledgement",
     "fold_uncertain",
+    "order_never_reached_broker",
     "resolve_order_submission",
-    "submit_absence_grace_elapsed",
 ]
 
 
@@ -351,14 +351,21 @@ SUBMIT_ABSENCE_SUMMARY_CODE = "ORDER_SUBMIT_FAILED_ABSENT"
 exact order identity never reached the broker."""
 
 
-def submit_absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
-    """Has the R4 submit-absence grace window closed for this exact order?
+def order_never_reached_broker(repo: ClerkSqliteRepository, order: OrderResource) -> bool:
+    """Is a definitively-absent exact lookup terminal proof for this order?
 
-    Same anchor :func:`resolve_order_submission` uses — the order's durable
-    accept boundary — so a definitively-absent lookup means the same thing to
-    the ENTER-side void and to EXIT's cancel-prove step.
+    The one predicate every caller uses to read an absent lookup as an answer
+    rather than a silence. Two conditions, both required: the order carries no
+    broker identity — one that did get a broker order id and then reads absent
+    is a contradiction to investigate, never an absence to confirm — and the
+    R4 submit-absence grace window has closed, anchored exactly where
+    :func:`resolve_order_submission` anchors it, so a submit still inside the
+    broker's own visibility window is never mistaken for one that never
+    happened.
     """
-    return repo.clock() - _uncertain_since_ms(repo, order_ref) >= UNCERTAIN_SUBMIT_GRACE_MS
+    if order.broker_order_id is not None:
+        return False
+    return repo.clock() - _uncertain_since_ms(repo, order.order_ref) >= UNCERTAIN_SUBMIT_GRACE_MS
 
 
 def entry_never_accepted_durably(repo: ClerkSqliteRepository, order: OrderResource) -> bool:

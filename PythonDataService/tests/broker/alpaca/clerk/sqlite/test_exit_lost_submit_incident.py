@@ -22,6 +22,8 @@ from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNCERTAIN_SUBMIT_GRACE_MS,
+    fold_entry_never_accepted,
+    fold_uncertain,
     resolve_order_submission,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -143,8 +145,9 @@ async def test_one_reconciliation_pass_resolves_an_exit_whose_entry_never_reache
     effect = repo.effect_operation(exit_effect_id)
     assert effect is not None and effect.state == "succeeded"
     assert repo.uncertain_orders() == []
+    pre_fix_loop_kind = _incident_fixture()["pre_fix_loop_transition_kind"]
     assert not any(
-        transition["transition_kind"] == _incident_fixture()["pre_fix_loop_transition_kind"]
+        transition["transition_kind"] == pre_fix_loop_kind
         for transition in repo.transitions_for_order(entry_ref)
     )
 
@@ -255,3 +258,38 @@ async def test_the_shared_entry_read_still_returns_every_entry(
     every_entry = {order.order_ref for order in repo.entry_orders_for_strategy(SID)}
 
     assert every_entry == {dead_ref, live_ref}
+
+
+async def test_a_never_accepted_proof_leaves_an_effect_unknown_for_another_order(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Proving one entry never landed must not declare the whole EXIT healthy
+    while a different linked order's outcome is still unknown."""
+    dead_ref = await _void_lost_entry(repo, decision_id="enter-lost")
+    sibling_ref = await _make_working_entry(repo, decision_id="enter-live")
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-dead-target",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=dead_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    fold_uncertain(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order_ref=sibling_ref,
+        why="The cancel response for the sibling entry was lost.",
+        transition_kind="ORDER_CANCEL_UNCERTAIN",
+    )
+
+    fold_entry_never_accepted(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order_ref=dead_ref,
+        why="The owning ENTER voided this exact order as definitively absent at the broker.",
+    )
+
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
