@@ -69,14 +69,20 @@ def test_live_run_decision_evidence_from_rows_filters_orders_and_classifies() ->
     assert evidence.truncated is False
 
 
-def test_live_run_decision_evidence_from_rows_flags_a_full_retention_window() -> None:
+def test_live_run_decision_evidence_from_rows_flags_truncation_by_pruning_not_fullness() -> None:
     from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
 
-    rows = [
+    # A full window that still starts at seq 1 is COMPLETE, not truncated:
+    # nothing has been pruned yet (Codex PR #1767 — fullness must not deny parity).
+    full_but_unpruned = [
         _row(seq, outcome="no_action", run_id="run-1", evaluation_id=f"e{seq}", reason_code="NO_ACTION")
         for seq in range(1, MAX_DECISION_RECEIPTS_PER_STRATEGY + 1)
     ]
+    assert live_run_decision_evidence_from_rows(full_but_unpruned, "run-1").truncated is False
 
-    evidence = live_run_decision_evidence_from_rows(rows, "run-1")
-
-    assert evidence.truncated is True
+    # An earliest retained seq > 1 proves earlier rows were pruned -> truncated.
+    pruned = [
+        _row(seq, outcome="no_action", run_id="run-1", evaluation_id=f"e{seq}", reason_code="NO_ACTION")
+        for seq in range(2, MAX_DECISION_RECEIPTS_PER_STRATEGY + 2)
+    ]
+    assert live_run_decision_evidence_from_rows(pruned, "run-1").truncated is True
