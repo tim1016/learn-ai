@@ -93,6 +93,7 @@ def classify_document(root: Path, path: Path) -> str | None:
         "domain",
         "process",
         "references",
+        "research",
         "runbooks",
         "screenshots",
         "spy-lean-output",

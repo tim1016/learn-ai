@@ -5,8 +5,8 @@ byte-equivalence against the committed bars.json. Catches the case
 where Polygon amends historical bars (rare but observed); a failure
 here means the fixture needs regeneration with a justification commit.
 
-@pytest.mark.slow — opt in via ``pytest -m slow``.
-Requires POLYGON_API_KEY.
+@pytest.mark.slow — opt in via ``pytest -m slow`` plus
+``POLYGON_LIVE_FIXTURE_CANARY=1``. Requires ``POLYGON_API_KEY``.
 """
 
 from __future__ import annotations
@@ -23,8 +23,12 @@ from tests._helpers.parity_fixture import parity_fixture_dir
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    not os.environ.get("POLYGON_API_KEY"),
-    reason="POLYGON_API_KEY unset; freshness canary needs live Polygon access",
+    os.environ.get("POLYGON_LIVE_FIXTURE_CANARY") != "1"
+    or not os.environ.get("POLYGON_API_KEY"),
+    reason=(
+        "set POLYGON_LIVE_FIXTURE_CANARY=1 with POLYGON_API_KEY to run the live "
+        "fixture freshness canary"
+    ),
 )
 def test_polygon_fixture_matches_live_refetch() -> None:
     from app.lean_sidecar.polygon_canonical import PolygonProvider

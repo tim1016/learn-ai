@@ -54,6 +54,15 @@ def test_validate_repository_current_repository_passes() -> None:
     assert checker.validate_repository(REPOSITORY_ROOT) == []
 
 
+def test_research_documents_are_supporting_evidence(tmp_path: Path) -> None:
+    checker = _checker_module()
+    path = tmp_path / "docs/research/fixture.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("# Research evidence\n", encoding="utf-8")
+
+    assert checker.classify_document(tmp_path, path) == "supporting"
+
+
 def test_validate_repository_reports_independent_contract_failures(tmp_path: Path) -> None:
     checker = _checker_module()
     _write_fixture(tmp_path)
