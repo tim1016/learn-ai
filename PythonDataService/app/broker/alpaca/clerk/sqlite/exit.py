@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
@@ -22,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     CommandExistingConflict,
     CommandExistingSame,
     ExitSubmission,
+    OrderResource,
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
@@ -61,20 +63,26 @@ def _exit_identity(
     return idempotency_key, payload_hash, command_id, effect_idempotency_key
 
 
-def accept_exit(
+def _accept_exit_capture(
     repo: ClerkSqliteRepository,
     *,
     account_id: str,
     strategy_instance_id: str,
     decision_id: str,
-    lifecycle_run_id: str,
     entry_order_ref: str,
-    decision_receipt: AtomicDecisionReceipt | None = None,
+    resolve_run_id: Callable[[OrderResource], str],
+    decision_receipt: AtomicDecisionReceipt | None,
 ) -> ExitSubmission:
-    """Capture one EXIT and every same-strategy/symbol entry before contact."""
+    """Capture one EXIT and every same-strategy/symbol entry before contact.
+
+    The run identity is supplied by ``resolve_run_id``: a strategy decision
+    binds to the currently ACTIVE run (``accept_exit``); a recovery EXIT binds
+    to the run recorded on the targeted entry's effect operation
+    (``accept_recovery_exit``), which is why crash/stop-held exposure can be
+    driven to flat after ``runtime.recover()`` retired every active run.
+    """
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("decision_id", decision_id)
-    reject_colon("lifecycle_run_id", lifecycle_run_id)
     idempotency_key, payload_hash, command_id, effect_idempotency_key = _exit_identity(
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
@@ -84,12 +92,12 @@ def accept_exit(
 
     def build_transition() -> TransitionInput:
         require_strategy_instance(repo, strategy_instance_id)
-        active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
         target = require_owned_entry_order(
             repo,
             strategy_instance_id=strategy_instance_id,
             entry_order_ref=entry_order_ref,
         )
+        run_id = resolve_run_id(target)
         symbol = entry_order_symbol(repo, target.order_ref)
         entry_order_refs: list[str] = []
         for candidate in repo.entry_orders_for_strategy(strategy_instance_id):
@@ -117,7 +125,7 @@ def accept_exit(
         )
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,
-            run_id=active.run_id,
+            run_id=run_id,
             command_id=command_id,
             effect_operation_id=effect_operation_id,
             order_ref=entry_order_ref,
@@ -154,6 +162,105 @@ def accept_exit(
         entry_order_ref=entry_order_ref,
         reducing_order_ref=None,
         created=True,
+    )
+
+
+def accept_exit(
+    repo: ClerkSqliteRepository,
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+    decision_id: str,
+    lifecycle_run_id: str,
+    entry_order_ref: str,
+    decision_receipt: AtomicDecisionReceipt | None = None,
+) -> ExitSubmission:
+    """Capture one EXIT and every same-strategy/symbol entry before contact."""
+    reject_colon("lifecycle_run_id", lifecycle_run_id)
+
+    def resolve_run_id(_target: OrderResource) -> str:
+        return require_active_run(repo, strategy_instance_id, lifecycle_run_id).run_id
+
+    return _accept_exit_capture(
+        repo,
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+        decision_id=decision_id,
+        entry_order_ref=entry_order_ref,
+        resolve_run_id=resolve_run_id,
+        decision_receipt=decision_receipt,
+    )
+
+
+class RecoveryRunActiveError(Exception):
+    """A recovery EXIT that forbids live runs found one at capture time.
+
+    Raised inside the ``build_transition`` closure — i.e. under the
+    repository write lock — so a Resume landing between recovery-policy
+    recheck and EXIT capture fails closed instead of racing the flatten.
+    """
+
+    def __init__(self, strategy_instance_id: str) -> None:
+        self.strategy_instance_id = strategy_instance_id
+        super().__init__(
+            f"strategy instance {strategy_instance_id!r} re-activated a run "
+            "before the recovery EXIT was captured"
+        )
+
+
+def accept_recovery_exit(
+    repo: ClerkSqliteRepository,
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+    decision_id: str,
+    entry_order_ref: str,
+    forbid_active_run: bool = False,
+) -> ExitSubmission:
+    """Capture one reduction-only recovery EXIT without the active-run fence.
+
+    ``accept_exit`` requires the caller's ``lifecycle_run_id`` to be the
+    currently ACTIVE run (``require_active_run``) — correct for strategy
+    decisions, and exactly why crash/stop-held exposure (F18) and a stuck
+    EXIT could never be re-driven: after a crash, ``runtime.recover()``
+    retires every active run. A recovery EXIT is anchored to the *exposure*,
+    not to a live run: its ``run_id`` is the run recorded on the targeted
+    entry's effect operation. Admission is owned by the caller (the
+    SafeFlattenPlan recheck gates, or the stuck-EXIT watchdog policy) plus
+    the downstream ``require_capability(Capability.REDUCE, …)`` in
+    ``exit_resolution.py``, which only authorizes movement toward zero.
+
+    ``forbid_active_run=True`` (the safe-flatten executor) additionally
+    re-asserts *inside the capture transaction* that no run is ACTIVE —
+    recovery-policy already refused presentation with ``RUN_STILL_ACTIVE``,
+    but a Resume (approved-carryover resumes are legitimate while exposure
+    is held) can land between recheck and capture; the closure runs under
+    the repository write lock, so this check cannot race a registration
+    commit. The watchdog re-drive keeps the default ``False``: a stuck EXIT
+    on a running bot is re-drivable by design.
+
+    Decision-id namespaces: ``recovery-flatten-<hex16>``,
+    ``exit-redrive-<episode-hex12>-<n>`` (both colon-free; the idempotency
+    key is ``(strategy_instance_id, decision_id)`` only — see
+    ``_exit_identity`` — so each namespace must be unique per intent).
+    """
+
+    def resolve_run_id(target: OrderResource) -> str:
+        if forbid_active_run and repo.active_run(strategy_instance_id) is not None:
+            raise RecoveryRunActiveError(strategy_instance_id)
+        origin = repo.effect_operation(target.effect_operation_id)
+        assert origin is not None, "an owned ENTRY order always has an effect operation"
+        assert origin.run_id is not None, "an owned ENTRY effect always records its run"
+        return origin.run_id
+
+    return _accept_exit_capture(
+        repo,
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+        decision_id=decision_id,
+        entry_order_ref=entry_order_ref,
+        resolve_run_id=resolve_run_id,
+        decision_receipt=None,
     )
 
 
