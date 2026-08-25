@@ -11,6 +11,7 @@ from typing import Literal
 from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_watchdog import redrive_or_escalate_stale_exits
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
@@ -747,6 +748,8 @@ async def _reconcile_account_serialized(
         trade=trade,
         intake=intake,
     )
+
+    await redrive_or_escalate_stale_exits(repo, trade=trade, intake=intake)
 
     # Recovery can poll fills, cancel entries, or submit a reducing order.
     # Re-read broker truth and fold the newest open-order evidence before the
