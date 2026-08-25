@@ -689,3 +689,34 @@ async def test_recent_closed_bars_drops_the_forming_bar(
 
     assert [bar.start_ms for bar in bars] == [closed_start]
     assert all(bar.end_ms <= now_ms_utc() for bar in bars)
+
+
+@pytest.mark.asyncio
+async def test_recent_closed_bars_anchors_cutoff_before_history_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A minute open when the request starts stays excluded after rollover."""
+    request_started_ms = 1_700_000_059_000
+    request_finished_ms = 1_700_000_061_000
+    clock_ms = request_started_ms
+
+    async def _history_crossing_minute_boundary(
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> list[SimpleNamespace]:
+        nonlocal clock_ms
+        clock_ms = request_finished_ms
+        return [_make_ibkr_bar("SPY", start_ms=1_700_000_000_000, volume=42)]
+
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.now_ms_utc",
+        lambda: clock_ms,
+    )
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.fetch_historical_minute_bars",
+        _history_crossing_minute_boundary,
+    )
+
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+
+    assert await feed.recent_closed_bars("SPY", use_rth=False) == []

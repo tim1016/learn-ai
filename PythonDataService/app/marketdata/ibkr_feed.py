@@ -197,6 +197,11 @@ class IbkrMarketDataFeed:
         callers fall back to a cold start, matching pre-warmup behavior.
         """
         normalized_symbol = symbol.upper()
+        # Anchor the closed-bar cutoff before broker I/O. A request that starts
+        # just before a minute boundary can finish just after it; sampling the
+        # clock after the await would then misclassify IBKR's partial snapshot
+        # of that minute as closed.
+        requested_at_ms = now_ms_utc()
         try:
             historical = await fetch_historical_minute_bars(
                 self._client,
@@ -221,8 +226,7 @@ class IbkrMarketDataFeed:
         # the source-bar ledger makes the later live close of the same window
         # a SOURCE_BAR_IDENTITY_CONFLICT (fleet run 2026-08-25 — every bot
         # deployed mid-minute crashed on its first live bar).
-        now_ms = now_ms_utc()
-        closed = [bar for bar in bars if bar.end_ms <= now_ms]
+        closed = [bar for bar in bars if bar.end_ms <= requested_at_ms]
         if len(closed) < len(bars):
             logger.info(
                 "Dropped forming bar(s) from historical warmup",

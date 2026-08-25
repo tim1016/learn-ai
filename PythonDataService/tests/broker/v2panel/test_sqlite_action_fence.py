@@ -18,9 +18,12 @@ import pytest
 from app.schemas.broker_v2_panel import PanelActionRequest
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
+    IdempotencyStore,
     StaleRevisionError,
 )
-from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
+from app.services.broker_v2_panel.sqlite_panel_source import (
+    execute_sqlite_panel_action,
+)
 
 _SID = "bot-alpha"
 
@@ -77,3 +80,112 @@ async def test_fence_rejects_token_mismatch(monkeypatch: pytest.MonkeyPatch) -> 
             availability_error=None,
         )
     assert exc.value.http_status == 409
+
+
+async def test_context_read_failure_releases_the_same_key_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed pre-execution projection read leaves no in-flight command."""
+    facade = SimpleNamespace(repository=object())
+    store = IdempotencyStore(wait_timeout_s=0)
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",
+        lambda _broker: facade,
+    )
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_repository",
+        lambda _repository: (_ for _ in ()).throw(RuntimeError("projection read failed")),
+    )
+
+    async def attempt() -> None:
+        await execute_sqlite_panel_action(
+            "alpaca",
+            "account-1",
+            _SID,
+            request=_request(action_id="reconcile_now"),
+            panel=SimpleNamespace(revision=42),
+            action=SimpleNamespace(concurrency_token="token", label="Reconcile now"),
+            availability_error=None,
+            store=store,
+        )
+
+    with pytest.raises(RuntimeError, match="projection read failed"):
+        await attempt()
+    with pytest.raises(RuntimeError, match="projection read failed"):
+        await attempt()
+
+
+async def test_stop_failure_releases_the_same_key_to_redrive_quiescence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retry reaches durable STOP replay after post-commit quiescence fails."""
+
+    class _Reader:
+        def recovery_context(self, *, strategy_instance_id: str) -> SimpleNamespace:
+            assert strategy_instance_id == _SID
+            return SimpleNamespace(strategy_instance_id=_SID)
+
+        def close(self) -> None:
+            return None
+
+    attempts = 0
+    facade = SimpleNamespace(repository=object())
+    store = IdempotencyStore(wait_timeout_s=0)
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",
+        lambda _broker: facade,
+    )
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_repository",
+        lambda _repository: _Reader(),
+    )
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.sqlite_panel_source.build_recovery_catalog",
+        lambda _context: [
+            SimpleNamespace(action_id="stop_bot_decisions", execution_ref="run-1")
+        ],
+    )
+
+    async def execute_stop(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("local quiescence failed after durable STOP")
+        return SimpleNamespace(
+            receipt_id="cmd:stop:run-1",
+            recorded_at_ms=1_700_000_000_000,
+            applied=False,
+        )
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.sqlite_panel_source.execute_recovery_action",
+        execute_stop,
+    )
+    request = _request(action_id="stop_bot_decisions")
+
+    with pytest.raises(RuntimeError, match="local quiescence failed"):
+        await execute_sqlite_panel_action(
+            "alpaca",
+            "account-1",
+            _SID,
+            request=request,
+            panel=SimpleNamespace(revision=42),
+            action=SimpleNamespace(concurrency_token="token", label="Stop decisions"),
+            availability_error=None,
+            store=store,
+        )
+
+    retried = await execute_sqlite_panel_action(
+        "alpaca",
+        "account-1",
+        _SID,
+        request=request,
+        panel=SimpleNamespace(revision=43),
+        action=SimpleNamespace(concurrency_token="token", label="Stop decisions"),
+        availability_error=None,
+        store=store,
+    )
+
+    assert retried is not None and retried.applied is False
+    assert retried.receipt_id == "cmd:stop:run-1"
+    assert attempts == 2

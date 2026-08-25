@@ -921,7 +921,10 @@ async def execute_sqlite_panel_action(
 
     try:
         context = await current_context()
-    except SqlitePanelBotNotFound:
+    except Exception:
+        # Context/catalog projection is still pre-execution. A transient read
+        # failure must not strand the key as an outcome-unknown command when
+        # no mutation was attempted.
         await _release_reservation()
         raise
     capability = next(
@@ -959,10 +962,18 @@ async def execute_sqlite_panel_action(
             detail=exc.capability.next_step,
         ) from exc
     except Exception as exc:
-        # Execution was attempted; the key must not be silently reusable.
-        await ledger.fail(
-            strategy_instance_id, request.action_id, request.idempotency_key, str(exc)
-        )
+        if request.action_id == "stop_bot_decisions":
+            # STOP is durably idempotent beneath this panel ledger. It can
+            # commit before local task quiescence fails; releasing the panel
+            # reservation lets the same-key retry reach the recovery layer's
+            # existing-command branch and re-drive that quiescence.
+            await _release_reservation()
+        else:
+            # Other attempted actions have no equivalent committed-command
+            # replay contract, so a blind same-key retry remains unsafe.
+            await ledger.fail(
+                strategy_instance_id, request.action_id, request.idempotency_key, str(exc)
+            )
         if isinstance(exc, RecoveryExecutionError):
             raise ActionNotAvailableError(str(exc)) from exc
         raise

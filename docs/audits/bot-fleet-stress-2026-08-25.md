@@ -15,7 +15,7 @@ peak 53 running concurrently, **523 fills**, peak same-symbol cohort of ~18
 bots entering/exiting in lockstep, ~5.5 h of live RTH operation,
 **zero custody errors** (clerk attribution matched broker truth at every
 cross-check, including final flat-and-order-free verification at 13:00 CT).
-Two fleet-killing platform bugs found, root-caused, fixed in-tree, and
+Two fleet-killing platform bugs found, root-caused, fixed in PR #1772, and
 verified live. One permanent-freeze defect class identified with no
 resolution path (left reproduced on the account, deliberately).
 
@@ -56,7 +56,7 @@ freshness at act time — "the bucket fills and drains through the same tap."
 
 ## 2. Critical findings
 
-### S16 — Panel actions structurally un-executable: revision fence vs. self-bumping reads *(CRITICAL, fixed in-tree)*
+### S16 — Panel actions structurally un-executable: revision fence vs. self-bumping reads *(CRITICAL, fixed in PR #1772)*
 
 `execute_sqlite_panel_action` fenced every guarded action with strict
 revision equality (`request.revision != panel.revision → 409`,
@@ -72,8 +72,9 @@ staleness check, deliberately narrower than the display revision
 (`schemas/broker_v2_panel.py:119-122`) — was empirically **stable across
 reads** and never consulted by this fence. This is the third incident of
 the token-churn class the 0824 study warned about.
-**Fix (working tree)**: fence on `request.concurrency_token !=
-action.concurrency_token` per the documented contract. Verified live:
+**Fix (PR #1772)**: fence on `request.concurrency_token !=
+action.concurrency_token` per the documented contract, backed by the durable
+SQLite panel-action idempotency ledger and regression tests. Verified live:
 0/15 → first-try success, and the operator's UI flatten clicks worked.
 **UI remedy pre-fix: none** — humans cannot outrace their own reads.
 
@@ -102,7 +103,7 @@ order-free) is documented but unexercised. **Fix direction**:
 reconciliation observing broker-not-found for an unacked submit past a TTL
 emits a terminal "never accepted" fact and resolves the episode.
 
-### S3 — Forming-bar warmup seal crashed every bot at first live bar *(CRITICAL, fixed in-tree + regression test)*
+### S3 — Forming-bar warmup seal crashed every bot at first live bar *(CRITICAL, fixed in PR #1772 + regression test)*
 
 IBKR's historical endpoint includes the still-forming minute as its last
 row; `recent_closed_bars` sealed it into the per-bot source-bar ledger
@@ -112,7 +113,7 @@ bot crash ~60 s after deploy. Proven empirically: f01's ledger row for the
 crash window had `fetched_at_ms` **45 s before** its own `end_ms`, volume
 4,031 vs 32k–85k neighbors. f01/f03/f04 all died this way; every bot
 deployed mid-minute would have.
-**Fix**: drop bars with `end_ms > now` at the feed boundary
+**Fix**: drop bars with `end_ms` after the pre-request observation time at the feed boundary
 (`marketdata/ibkr_feed.py`, enforcing the docstring's own "closed"
 contract) + regression test `test_recent_closed_bars_drops_the_forming_bar`
 (verified red pre-fix, green post-fix). All 50+ subsequent deploys ran
@@ -250,15 +251,21 @@ act-time re-proof inside mutating transactions (`accept_recovery_exit`).
 Zero custody errors across 523 fills is their evidence. Bucket for
 admission; proof for commitment.
 
-## 8. Fixes shipped this session (working tree, PR to follow)
+## 8. Fixes shipped in PR #1772
 
 1. `app/marketdata/ibkr_feed.py` — drop forming bars from warmup
-   (`end_ms > now`); regression test in `tests/marketdata/test_feed.py`
+   (anchored to the pre-request observation time); regression tests in
+   `tests/marketdata/test_feed.py`
    (red pre-fix / green post-fix verified).
 2. `app/services/broker_v2_panel/sqlite_panel_source.py` — action fence on
    the action-scoped `concurrency_token` (the documented contract) instead
    of unsatisfiable strict revision equality; verified live by scripted
-   actions and human UI clicks. Regression test to accompany the PR.
+   actions and human UI clicks, with regression coverage in
+   `tests/broker/v2panel/test_sqlite_action_fence.py`.
+3. The SQLite panel action path now uses the durable per-bot idempotency
+   store before its staleness fence; an applied action retry replays the
+   original receipt as `applied=false` instead of executing twice or 409ing.
+   Router regression coverage is included in PR #1772.
 
 Also performed (state, not code): removed 3-week-orphaned account-safety
 markers for DUM284968; two data-plane restarts (S12d hot loop; fix loads).
