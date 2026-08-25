@@ -10,6 +10,7 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan, SafeFlattenPlanLeg
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
@@ -23,7 +24,12 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     execute_safe_flatten_plan,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    raise_uncertainty,
+)
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.contract.errors import BrokerOrderRejected
 from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderEvent,
@@ -101,13 +107,16 @@ def _position(symbol: str, *, quantity: float, side: str = "long") -> BrokerPosi
 class _FakeTrade:
     """A minimal ``BrokerTradePort`` double — submit + lookup, configurable."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, submit_error: Exception | None = None) -> None:
+        self._submit_error = submit_error
         self.submit_calls: list[str] = []
         self.cancel_calls: list[str] = []
         self.lookup_calls: list[str] = []
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self.submit_calls.append(client_order_id)
+        if self._submit_error is not None:
+            raise self._submit_error
         return _broker_order(client_order_id, side=leg.side).model_copy(
             update={"order_id": f"bo-{client_order_id}"}
         )
@@ -224,13 +233,14 @@ async def test_execute_safe_flatten_plan_reduces_attributed_exposure_exactly(
     plan = await _reconciled_flatten_plan(repo)
     trade = _FakeTrade()
 
-    orders = await execute_safe_flatten_plan(
+    result = await execute_safe_flatten_plan(
         repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID
     )
 
-    assert len(orders) == 1
+    assert len(result.orders) == 1
+    assert len(result.accepted_effect_operation_ids) == 1
     assert len(trade.submit_calls) == 1
-    reducing = repo.order(orders[0].order_ref)
+    reducing = repo.order(result.orders[0].order_ref)
     assert reducing is not None and reducing.role == "REDUCING"
 
 
@@ -381,3 +391,132 @@ async def test_execute_recovery_action_dispatches_safe_flatten(
     assert len(result.orders) == 1
     reducing = repo.order(result.orders[0].order_ref)
     assert reducing is not None and reducing.role == "REDUCING"
+
+
+# ── Codex review 2026-08-25: per-leg outcome + scope regressions ─────────────
+
+
+async def test_execute_safe_flatten_plan_raises_when_broker_rejects_reduction(
+    crashed_with_exposure,
+) -> None:
+    """P1 (Codex): a broker-rejected reduction folds the EXIT to `failed` but
+    the order row (and its ref) still exists. The executor must read the
+    terminal state, never report success while exposure remains."""
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    plan = await _reconciled_flatten_plan(repo)
+    trade = _FakeTrade(submit_error=BrokerOrderRejected("insufficient buying power"))
+
+    with pytest.raises(SafeFlattenExecutionError, match="rejected"):
+        await execute_safe_flatten_plan(
+            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID
+        )
+
+
+async def test_execute_safe_flatten_plan_defers_pending_on_transient_admission_refusal(
+    crashed_with_exposure,
+) -> None:
+    """P1 (Codex): a transient admission refusal (stale broker snapshot) leaves
+    the EXIT durably accepted with no reducing order for the sweep to re-drive.
+    That is a committed, pending reduction — never an effect-free failure."""
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    plan = await _reconciled_flatten_plan(repo)
+    # An account-wide stale-snapshot episode lands after the plan was prepared:
+    # resolve_exit's REDUCE admission is refused transiently, so the sweep
+    # re-drives later.
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE,
+        headline="Broker account truth is unavailable",
+        explanation="test: snapshot read failed",
+        operator_impact="New exposure and unproven reduction are paused account-wide.",
+        next_step="Reconcile now after broker connectivity is restored.",
+        evidence_refs=(),
+        cause_facts={"snapshot": "open_orders_and_positions"},
+        severity="error",
+    )
+    trade = _FakeTrade()
+
+    result = await execute_safe_flatten_plan(
+        repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID
+    )
+
+    assert result.orders == ()  # nothing at the broker yet
+    assert len(result.accepted_effect_operation_ids) == 1  # durably captured, sweep re-drives
+    assert trade.submit_calls == []
+
+
+async def test_execute_safe_flatten_plan_refuses_manual_custody_leg(
+    crashed_with_exposure,
+) -> None:
+    """P1 (Codex): the executor cannot reduce a manual (NULL-strategy) leg;
+    it must refuse before any broker contact rather than fail mid-flatten."""
+    repo, _clock = crashed_with_exposure
+    manual_plan = SafeFlattenPlan(
+        version_token="vt-manual",
+        account_id=ACCOUNT_ID,
+        authority_generation=1,
+        db_identity_token="db-token",
+        control_revision=1,
+        scope="ACCOUNT_CLERK",
+        strategy_instance_id=None,
+        reconciliation_id="reconciliation:1",
+        prepared_at_ms=1_700_000_000_000,
+        expires_at_ms=1_700_000_999_999,
+        legs=(
+            SafeFlattenPlanLeg(
+                strategy_instance_id="",  # manual custody has no strategy owner
+                symbol="SPY",
+                side="sell",
+                quantity=10.0,
+                position_updated_at_ms=1_700_000_000_000,
+            ),
+        ),
+    )
+    trade = _FakeTrade()
+
+    with pytest.raises(SafeFlattenExecutionError, match="manual-custody"):
+        await execute_safe_flatten_plan(
+            repo, plan=manual_plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID
+        )
+    assert trade.submit_calls == []
+
+
+async def test_execute_safe_flatten_unavailable_for_account_scope(
+    crashed_with_exposure,
+) -> None:
+    """P1 (Codex): account-scoped recovery must not advertise execute_safe_flatten
+    (it can span strategies and manual custody the executor cannot reduce)."""
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+        trigger="OPERATOR_RECONCILE_NOW",
+    )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    try:
+        account_context = reader.recovery_context(strategy_instance_id=None)
+    finally:
+        reader.close()
+    assert account_context is not None
+    catalog = {item.action_id: item for item in build_recovery_catalog(account_context)}
+
+    execute = catalog["execute_safe_flatten"]
+    assert execute.available is False
+    assert execute.unavailable_reason_code == "RECOVERY_SCOPE_UNSUPPORTED"

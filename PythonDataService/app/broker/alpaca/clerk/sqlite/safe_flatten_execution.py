@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.exit import (
     RecoveryRunActiveError,
@@ -37,6 +38,30 @@ class SafeFlattenExecutionError(Exception):
     """The prepared plan cannot be executed against current custody."""
 
 
+# An EXIT effect the reducing broker order failed to reach (broker rejection,
+# folded via ``fold_failed``). The order row still exists, so reference
+# presence alone must never be read as a successful reduction — the terminal
+# state is the truth (Codex review 2026-08-25 P1).
+_FAILED_EFFECT_STATES = frozenset({"failed", "rejected"})
+
+
+@dataclass(frozen=True)
+class SafeFlattenResult:
+    """The durable outcome of executing one prepared plan.
+
+    ``orders`` are reducing orders that reached the broker. Every captured
+    recovery EXIT — whether its order is already working or the transient sweep
+    will re-drive it — appears in ``accepted_effect_operation_ids``; a leg whose
+    reduction was *rejected* never reaches here (the executor raises). So an
+    empty ``orders`` with a non-empty accepted list is a durably-committed,
+    sweep-pending reduction, not a failed one.
+    """
+
+    orders: tuple[OrderResource, ...]
+    accepted_effect_operation_ids: tuple[str, ...]
+    recorded_at_ms: int
+
+
 async def execute_safe_flatten_plan(
     repo: ClerkSqliteRepository,
     *,
@@ -44,20 +69,32 @@ async def execute_safe_flatten_plan(
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     account_id: str,
-) -> tuple[OrderResource, ...]:
+) -> SafeFlattenResult:
     if plan.account_id != account_id:
         raise SafeFlattenExecutionError(
             "The prepared plan belongs to a different account authority."
         )
-    if repo.clock() > plan.expires_at_ms:
-        raise SafeFlattenExecutionError(
-            "The prepared reduction plan expired; prepare a fresh plan."
-        )
     if not plan.legs:
         raise SafeFlattenExecutionError("The prepared plan has no reduction legs.")
+    # Preflight before any broker contact so an unsupported leg never leaves a
+    # partially applied mutation (Codex review 2026-08-25 P1). Manual-custody
+    # legs (NULL strategy) are prepare-only; the recovery-policy gate already
+    # refuses to present them, this is the executor-side backstop.
+    for leg in plan.legs:
+        if not leg.strategy_instance_id:
+            raise SafeFlattenExecutionError(
+                "A manual-custody leg cannot be flattened through strategy recovery EXITs."
+            )
     decision_token = hashlib.sha256(plan.version_token.encode("utf-8")).hexdigest()[:16]
     submitted: list[OrderResource] = []
+    accepted_effect_operation_ids: list[str] = []
     for leg in plan.legs:
+        # Re-check expiry before each leg so a long, multi-leg run cannot submit
+        # a later reduction on reconciliation evidence that has gone stale.
+        if repo.clock() > plan.expires_at_ms:
+            raise SafeFlattenExecutionError(
+                "The prepared reduction plan expired; prepare a fresh plan."
+            )
         async with intake:
             entries = [
                 order
@@ -88,6 +125,17 @@ async def execute_safe_flatten_plan(
                     "the flatten was presented; stop the bot and prepare a fresh plan."
                 ) from exc
         resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+        assert accepted.effect_operation_id is not None
+        effect = repo.effect_operation(accepted.effect_operation_id)
+        if effect is not None and effect.state in _FAILED_EFFECT_STATES:
+            # The broker rejected this reduction (the order row exists but its
+            # effect folded to failed). Never report success while exposure
+            # remains — surface an honest failure.
+            raise SafeFlattenExecutionError(
+                f"The broker rejected the {leg.symbol} reduction; attributed exposure "
+                "remains. Reconcile the account and retry the flatten."
+            )
+        accepted_effect_operation_ids.append(accepted.effect_operation_id)
         if resolved.reducing_order_ref is not None:
             reducing = repo.order(resolved.reducing_order_ref)
             if reducing is not None:
@@ -100,10 +148,14 @@ async def execute_safe_flatten_plan(
                 "strategy_instance_id": leg.strategy_instance_id,
                 "symbol": leg.symbol,
                 "effect_operation_id": accepted.effect_operation_id,
+                "reducing_order_ref": resolved.reducing_order_ref,
             },
         )
-    if not submitted:
-        raise SafeFlattenExecutionError(
-            "No reducing order was submitted; inspect the EXIT custody timeline."
-        )
-    return tuple(submitted)
+    recorded_at_ms = (
+        max(order.updated_at_ms for order in submitted) if submitted else repo.clock()
+    )
+    return SafeFlattenResult(
+        orders=tuple(submitted),
+        accepted_effect_operation_ids=tuple(accepted_effect_operation_ids),
+        recorded_at_ms=recorded_at_ms,
+    )

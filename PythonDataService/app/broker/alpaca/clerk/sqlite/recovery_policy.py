@@ -663,8 +663,29 @@ def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         ),
     )
     base = _safe_flatten_decision(reduction_safe_ctx)
+    legs = _relevant_positions(reduction_safe_ctx)
+    # The executor drives one strategy-owned recovery EXIT to flat. An
+    # account-scoped context spans strategies and manual (NULL-strategy)
+    # custody the executor cannot reduce, so presenting execute there would be
+    # a lie and could leave a partially applied multi-leg mutation. Restrict
+    # execution to a single strategy-owned leg; account-wide and manual-custody
+    # flatten stay prepare-only (Codex review 2026-08-25 P1). ``prepare`` still
+    # renders the full plan for review.
+    single_strategy_leg = ctx.strategy_instance_id is not None and len(legs) == 1
     active_run_ids = [run.run_id for run in ctx.runs if run.state == "ACTIVE"]
     token_facts = {"base": base.token_facts, "active_runs": active_run_ids}
+    if base.available and not single_strategy_leg:
+        return replace(
+            base,
+            available=False,
+            reason_code="RECOVERY_SCOPE_UNSUPPORTED",
+            reason=(
+                "Execute a safe flatten from a single bot holding one attributed "
+                "symbol; account-wide and manual-custody flatten remain prepare-only."
+            ),
+            next_step="Open the specific bot to execute its flatten, or prepare the plan for review.",
+            token_facts=token_facts,
+        )
     if base.available and active_run_ids:
         return replace(
             base,
