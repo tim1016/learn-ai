@@ -25,6 +25,7 @@ export const ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
   resolve_execution_coverage: 'warning',
   cancel_verified_working_orders: 'danger',
   prepare_safe_flatten: 'neutral',
+  execute_safe_flatten: 'danger',
   open_custody_timeline: 'neutral',
   rebuild_from_mirror: 'warning',
   reset_authority: 'danger',

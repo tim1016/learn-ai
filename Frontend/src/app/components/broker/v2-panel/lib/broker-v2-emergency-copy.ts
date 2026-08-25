@@ -156,6 +156,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Prepare safe flatten',
     explanation: 'Prepare a fresh reduction plan without submitting an order.',
   },
+  execute_safe_flatten: {
+    label: 'Execute safe flatten',
+    explanation:
+      'Submit the prepared reduction as recovery EXIT custody with exact attributed quantities.',
+  },
   rebuild_from_mirror: {
     label: 'Rebuild from mirror',
     explanation: 'Rebuild a failed authority only from a contiguous verified mirror.',

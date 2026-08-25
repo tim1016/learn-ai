@@ -29,6 +29,7 @@
     "clean",
     "continue",
     "deploy",
+    "execute_safe_flatten",
     "flatten_stop",
     "healthy",
     "missing_intent",
@@ -149,6 +150,10 @@
     "deploy": {
       "label": "Deploy",
       "explanation": "Create and start a new bot bound to this account. The bot begins evaluating bars immediately after creation."
+    },
+    "execute_safe_flatten": {
+      "label": "Execute safe flatten",
+      "explanation": "Submit the prepared reduction as recovery EXIT custody with exact attributed quantities."
     },
     "flatten_stop": {
       "label": "Flatten & stop",

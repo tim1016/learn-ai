@@ -559,6 +559,7 @@ answers "can this ever appear for me", not "is it enabled right now".
 | `resolve_execution_coverage` | Resolve execution coverage | Replace one matching cumulative recovery record with verified exact execution evidence. | SQLite Clerk recovery catalog |
 | `cancel_verified_working_orders` | Cancel verified working orders | Cancel only working orders whose exact Clerk and broker identities are proven. | SQLite Clerk recovery catalog |
 | `prepare_safe_flatten` | Prepare safe flatten | Prepare a fresh reduction plan without submitting an order. | SQLite Clerk recovery catalog |
+| `execute_safe_flatten` | Execute safe flatten | Submit the prepared reduction as recovery EXIT custody with exact attributed quantities. | SQLite Clerk recovery catalog |
 | `stop_bot_decisions` | Stop bot decisions | Stop new decisions while existing exposure remains under Clerk custody. | SQLite Clerk recovery catalog |
 | `open_custody_timeline` | Open custody timeline | Inspect the immutable operation-first evidence timeline. | SQLite Clerk recovery catalog |
 | `rebuild_from_mirror` | Rebuild from mirror | Rebuild a failed authority only from a contiguous verified mirror. | SQLite Clerk recovery catalog |
