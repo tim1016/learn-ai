@@ -129,6 +129,9 @@ class _StubEvaluation:
     evaluation_id = "eval-refusal-1"
     decision_bar_close_ms = 1_700_000_000_000
     bar = _StubBar()
+    # Matches StrategyEvaluation.trace (default None): _append_decision_receipt
+    # reads it to capture the per-bucket trace digest (Direction 2).
+    trace = None
 
     def __init__(self) -> None:
         self.settlements: list[object] = []

@@ -12,7 +12,10 @@ import hashlib
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
+from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.engine.data.trade_bar import TradeBar
 from app.marketdata.feed import MarketDataBar
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -108,3 +111,76 @@ def replay_provider_for(ledger: SourceBarLedger, symbol: str) -> str:
             detail="A replay over mixed provider streams would not reproduce any single run.",
         )
     return providers[0]
+
+
+_CRASH_OUTCOME = "candidate_uncaptured_at_crash"
+
+
+@dataclass(frozen=True)
+class LiveDecisionRecord:
+    """One durable per-bucket decision fact from the run's receipt journal."""
+
+    seq: int
+    evaluation_id: str
+    outcome: str
+    reason_code: str
+    bar_ref: str
+    # Task 5b live-time capture; empty/0 on rows recorded before it existed.
+    trace_digest: str
+    bar_close_ms: int
+
+
+@dataclass(frozen=True)
+class LiveRunDecisionEvidence:
+    """Everything the fidelity replay needs from the decision-receipt journal."""
+
+    records: tuple[LiveDecisionRecord, ...]
+    crash_records: tuple[LiveDecisionRecord, ...]
+    captured_decisions: dict[str, str]
+    truncated: bool
+
+
+def live_run_decision_evidence_from_rows(
+    rows: Sequence[DecisionReceiptResource],
+    run_id: str,
+) -> LiveRunDecisionEvidence:
+    """Shape one instance's retained receipt window into run-scoped evidence.
+
+    ``records`` alignment excludes crash-window receipts: FR-016 records them
+    during the *next* run's warmup replay, and warmup evaluations are never
+    yielded by ``strategy_evaluations``, so they can never align with a
+    replayed live bucket. They are reported as expected live effects instead.
+    ``captured_decisions`` deliberately spans every run -- it is the same
+    map ``captured_decision_outcomes`` builds for the live warmup replay.
+    """
+    records: list[LiveDecisionRecord] = []
+    crash_records: list[LiveDecisionRecord] = []
+    captured: dict[str, str] = {}
+    for row in rows:  # retained_window() yields ascending seq order
+        facts = json.loads(row.facts_json) if row.facts_json else {}
+        evaluation_id = row.intent_id or str(facts.get("evaluation_id") or "")
+        if evaluation_id:
+            captured[evaluation_id] = row.outcome
+        if str(facts.get("run_id") or "") != run_id:
+            continue
+        if not evaluation_id:
+            raise RunReplayUnavailableError(
+                f"Decision receipt seq {row.seq} for run {run_id!r} carries no evaluation identity.",
+                detail="Replay alignment is keyed on evaluation_id; this journal cannot be aligned.",
+            )
+        record = LiveDecisionRecord(
+            seq=row.seq,
+            evaluation_id=evaluation_id,
+            outcome=row.outcome,
+            reason_code=str(facts.get("reason_code") or ""),
+            bar_ref=str(facts.get("bar_ref") or ""),
+            trace_digest=str(facts.get("trace_digest") or ""),
+            bar_close_ms=int(facts.get("decision_bar_close_ms") or 0),
+        )
+        (crash_records if row.outcome == _CRASH_OUTCOME else records).append(record)
+    return LiveRunDecisionEvidence(
+        records=tuple(records),
+        crash_records=tuple(crash_records),
+        captured_decisions=captured,
+        truncated=len(rows) >= MAX_DECISION_RECEIPTS_PER_STRATEGY,
+    )

@@ -17,6 +17,13 @@ class EffectDecisionEvidence(BaseModel):
     symbol: str = Field(min_length=1)
     outcome: Literal["enter_intent", "exit_intent"]
     observed_at_ms: int = Field(ge=0)
+    # Direction 2 (run-scoped replay proof): the canonical per-bucket trace
+    # digest (`trace_root([trace])`) and the decision bucket's close, captured
+    # at live time so a replay can compare decision CONTENT, not just intent
+    # direction. Optional: legacy callers and traceless compatibility
+    # strategies omit them; the replay receipt discloses digest coverage.
+    trace_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    decision_bar_close_ms: int | None = Field(default=None, ge=0)
 
     @property
     def reason_code(self) -> str:
