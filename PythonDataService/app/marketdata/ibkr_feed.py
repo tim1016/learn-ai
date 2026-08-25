@@ -215,7 +215,25 @@ class IbkrMarketDataFeed:
                 },
             )
             return []
-        return [self._translate(bar) for bar in historical]
+        bars = [self._translate(bar) for bar in historical]
+        # IBKR's historical endpoint includes the still-forming minute as its
+        # last row. A forming bar is not a closed observation: sealing it into
+        # the source-bar ledger makes the later live close of the same window
+        # a SOURCE_BAR_IDENTITY_CONFLICT (fleet run 2026-08-25 — every bot
+        # deployed mid-minute crashed on its first live bar).
+        now_ms = now_ms_utc()
+        closed = [bar for bar in bars if bar.end_ms <= now_ms]
+        if len(closed) < len(bars):
+            logger.info(
+                "Dropped forming bar(s) from historical warmup",
+                extra={
+                    "action": "warmup_forming_bars_dropped",
+                    "feed_id": self.feed_id,
+                    "symbol": normalized_symbol,
+                    "dropped": len(bars) - len(closed),
+                },
+            )
+        return closed
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         """Return aggregate or symbol-scoped point-in-time feed health."""

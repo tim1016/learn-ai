@@ -45,7 +45,10 @@ from app.schemas.broker_v2_panel import (
 )
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
+    ActionOutcomeUnknownError,
+    IdempotencyStore,
     StaleRevisionError,
+    get_idempotency_store,
 )
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
@@ -822,6 +825,7 @@ async def execute_sqlite_panel_action(
     panel: BotPanelView,
     action: PanelAction,
     availability_error: ActionNotAvailableError | None,
+    store: IdempotencyStore | None = None,
 ) -> PanelActionResult | None:
     """Execute through the same policy that authored the presented action."""
     facade = active_sqlite_facade(broker)
@@ -829,18 +833,74 @@ async def execute_sqlite_panel_action(
         return None
     if request.action_id in SQLITE_PANEL_LIFECYCLE_ACTION_IDS:
         return None
-    if request.revision != panel.revision:
-        raise StaleRevisionError(
-            "The SQLite Clerk projection changed after this action was presented.",
-            detail="Refresh the panel and review the current evidence-bound action.",
+
+    # Idempotency BEFORE the staleness fence, mirroring the shared executor
+    # (action_execution_service.execute_action): a genuine retry of an
+    # already-applied action stays a safe no-op even after the panel advances.
+    # The SQLite path previously had no idempotency ledger at all — the old
+    # revision fence accidentally doubled as its double-execution guard.
+    ledger = store if store is not None else get_idempotency_store()
+    record = await ledger.reserve_or_get(
+        strategy_instance_id, request.action_id, request.idempotency_key
+    )
+    if record is not None:
+        if record.state == "succeeded" and record.result is not None:
+            return PanelActionResult(
+                action_id=request.action_id,
+                receipt_id=record.result.receipt_id,
+                recorded_at_ms=record.result.recorded_at_ms,
+                applied=False,
+                revision=panel.revision,
+                concurrency_token=action.concurrency_token,
+                message=record.result.message,
+            )
+        if record.state == "failed":
+            raise ActionNotAvailableError(
+                "This action previously failed; the idempotency key cannot be reused.",
+                detail=record.error_detail,
+            )
+        raise ActionOutcomeUnknownError(
+            "This command is still processing.",
+            detail=(
+                "No terminal receipt arrived before the idempotency wait expired. "
+                "Do not retry this key; inspect Clerk evidence for the final outcome."
+            ),
         )
-    if availability_error is not None:
-        raise availability_error
-    if request.action_id in {"open_custody_timeline", "prepare_safe_flatten"}:
-        raise ActionNotAvailableError(
-            "This recovery capability is a view action, not a broker mutation.",
-            detail="Use the presented navigation control in the panel.",
+
+    async def _release_reservation() -> None:
+        await ledger.release(
+            strategy_instance_id, request.action_id, request.idempotency_key
         )
+
+    try:
+        # Optimistic-concurrency fence. The action-scoped concurrency_token is
+        # the authoritative staleness check per the PanelAction contract
+        # (schemas/broker_v2_panel.py): it is deliberately narrower than the
+        # display revision so unrelated churn cannot make a presented action
+        # falsely stale. Fencing on strict revision equality is unsatisfiable —
+        # every panel read (including this executor's own re-derivation) bumps
+        # the revision, so panel.revision is always ahead of request.revision
+        # (fleet run 2026-08-25: 15/15 action POSTs 409'd on an idle account).
+        # The recovery layer re-proves its own token at commit
+        # (StaleRecoveryTokenError below): fence for admission, proof for
+        # commitment.
+        if request.concurrency_token != action.concurrency_token:
+            raise StaleRevisionError(
+                "The SQLite Clerk projection changed after this action was presented.",
+                detail="Refresh the panel and review the current evidence-bound action.",
+            )
+        if availability_error is not None:
+            raise availability_error
+        if request.action_id in {"open_custody_timeline", "prepare_safe_flatten"}:
+            raise ActionNotAvailableError(
+                "This recovery capability is a view action, not a broker mutation.",
+                detail="Use the presented navigation control in the panel.",
+            )
+    except (StaleRevisionError, ActionNotAvailableError):
+        # Pre-execution rejection: nothing ran, free the key for a corrected
+        # retry (same contract as the shared executor's release-on-reject).
+        await _release_reservation()
+        raise
 
     async def current_context():
         def read_context():
@@ -859,7 +919,11 @@ async def execute_sqlite_panel_action(
             )
         return context
 
-    context = await current_context()
+    try:
+        context = await current_context()
+    except SqlitePanelBotNotFound:
+        await _release_reservation()
+        raise
     capability = next(
         (
             candidate
@@ -882,19 +946,28 @@ async def execute_sqlite_panel_action(
             current_context=current_context,
         )
     except StaleRecoveryTokenError as exc:
+        # Recovery-layer admission rejection: nothing was committed.
+        await _release_reservation()
         raise StaleRevisionError(
             str(exc),
             detail="Refresh the panel before retrying.",
         ) from exc
     except RecoveryActionUnavailableError as exc:
+        await _release_reservation()
         raise ActionNotAvailableError(
             str(exc),
             detail=exc.capability.next_step,
         ) from exc
-    except RecoveryExecutionError as exc:
-        raise ActionNotAvailableError(str(exc)) from exc
+    except Exception as exc:
+        # Execution was attempted; the key must not be silently reusable.
+        await ledger.fail(
+            strategy_instance_id, request.action_id, request.idempotency_key, str(exc)
+        )
+        if isinstance(exc, RecoveryExecutionError):
+            raise ActionNotAvailableError(str(exc)) from exc
+        raise
 
-    return PanelActionResult(
+    outcome = PanelActionResult(
         action_id=request.action_id,
         receipt_id=result.receipt_id,
         recorded_at_ms=result.recorded_at_ms,
@@ -907,6 +980,10 @@ async def execute_sqlite_panel_action(
             else f"{action.label} was already durably recorded."
         ),
     )
+    await ledger.complete(
+        strategy_instance_id, request.action_id, request.idempotency_key, outcome
+    )
+    return outcome
 
 
 __all__ = [

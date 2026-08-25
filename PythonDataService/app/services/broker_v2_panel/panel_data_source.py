@@ -1111,6 +1111,7 @@ async def run_action(
                 else "Refresh the panel and inspect the operation's readiness check."
             ),
         )
+    registry = get_bot_task_registry()
     try:
         sqlite_result = await execute_sqlite_panel_action(
             broker,
@@ -1120,12 +1121,19 @@ async def run_action(
             panel=panel,
             action=action,
             availability_error=availability_error,
+            # Same durable receipt ledger the shared executor uses, so a
+            # repost of an applied SQLite recovery action replays as a no-op
+            # instead of re-executing (fleet run 2026-08-25 / F15).
+            store=(
+                durable_idempotency_store_for(registry.panel_action_receipt_path(sid))
+                if registry is not None
+                else None
+            ),
         )
     except SqlitePanelBotNotFound as exc:
         raise UnknownBotError(str(exc)) from exc
     if sqlite_result is not None:
         return sqlite_result
-    registry = get_bot_task_registry()
     if registry is None:
         raise PanelUnavailableError("The bot runner is not available.")
     return await execute_action(
