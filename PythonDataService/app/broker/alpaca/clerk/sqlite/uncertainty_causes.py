@@ -16,6 +16,7 @@ BROKER_SNAPSHOT_STALE_REASON_CODE = "BROKER_SNAPSHOT_STALE"
 RECONCILIATION_INCOMPLETE_REASON_CODE = "RECONCILIATION_INCOMPLETE"
 ORDER_OUTCOME_UNKNOWN_REASON_CODE = "ORDER_OUTCOME_UNKNOWN"
 EXIT_NOT_FLAT_REASON_CODE = "EXIT_NOT_FLAT"
+EXIT_STUCK_REASON_CODE = "EXIT_STUCK"
 EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
 
 
@@ -109,6 +110,51 @@ class ExitNotFlatCause:
 
 
 @dataclass(frozen=True)
+class ExitStuckCause:
+    """A stale EXIT_NOT_FLAT episode that exhausted automatic re-drives."""
+
+    symbol: str
+    attributed_qty: float
+    redrive_count: int
+    first_observed_at_ms: int
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "attributed_qty": self.attributed_qty,
+            "redrive_count": self.redrive_count,
+            "first_observed_at_ms": self.first_observed_at_ms,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> ExitStuckCause:
+        if not isinstance(value, dict):
+            raise ValueError("EXIT-stuck cause must be an object")
+        _require_exact_keys(
+            value, {"symbol", "attributed_qty", "redrive_count", "first_observed_at_ms"}
+        )
+        symbol = value["symbol"]
+        if not isinstance(symbol, str) or not symbol or symbol != symbol.upper():
+            raise ValueError("EXIT-stuck symbol must be a non-empty uppercase string")
+        redrive_count = value["redrive_count"]
+        if not isinstance(redrive_count, int) or isinstance(redrive_count, bool) or redrive_count < 0:
+            raise ValueError("EXIT-stuck redrive_count must be a non-negative integer")
+        first_observed_at_ms = value["first_observed_at_ms"]
+        if (
+            not isinstance(first_observed_at_ms, int)
+            or isinstance(first_observed_at_ms, bool)
+            or first_observed_at_ms < 0
+        ):
+            raise ValueError("EXIT-stuck first_observed_at_ms must be int64 ms UTC")
+        return cls(
+            symbol=symbol,
+            attributed_qty=_finite_number(value["attributed_qty"], field_name="attributed_qty"),
+            redrive_count=redrive_count,
+            first_observed_at_ms=first_observed_at_ms,
+        )
+
+
+@dataclass(frozen=True)
 class ExecutionCoverageConflictCause:
     """Exact execution that cannot be safely merged with aggregate recovery."""
 
@@ -196,11 +242,13 @@ __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
     "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
+    "EXIT_STUCK_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
     "RECONCILIATION_INCOMPLETE_REASON_CODE",
     "ExecutionCoverageConflictCause",
     "ExitNotFlatCause",
+    "ExitStuckCause",
     "OrderOutcomeUnknownCause",
     "PositionDriftCause",
     "PositionDriftObservation",

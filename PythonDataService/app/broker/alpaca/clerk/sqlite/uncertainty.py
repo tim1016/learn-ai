@@ -24,11 +24,13 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
+    EXIT_STUCK_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
+    ExitStuckCause,
     PositionDriftCause,
     broker_snapshot_stale_cause_is_valid,
     reconciliation_incomplete_cause_is_valid,
@@ -89,6 +91,14 @@ def _exit_not_flat_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _exit_stuck_cause_is_valid(value: Any) -> bool:
+    try:
+        ExitStuckCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
     try:
         ExecutionCoverageConflictCause.from_mapping(value)
@@ -127,6 +137,12 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=True,
         cause_is_valid=_exit_not_flat_cause_is_valid,
+    ),
+    EXIT_STUCK_REASON_CODE: ReasonPolicy(
+        scope="CUSTODY_SUBJECT",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        cause_is_valid=_exit_stuck_cause_is_valid,
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -401,6 +417,20 @@ def _exit_not_flat_allows_action(
     return cause.symbol == intent.symbol.upper()
 
 
+def _exit_stuck_allows_action(
+    *,
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+) -> bool:
+    if intent is None or intent.quantity <= 0 or intent.side.upper() not in {"BUY", "SELL"}:
+        return False
+    try:
+        cause = ExitStuckCause.from_mapping(facts.cause_facts)
+    except ValueError:
+        return False
+    return cause.symbol == intent.symbol.upper()
+
+
 def decide_capability(
     repo: ClerkSqliteRepository,
     *,
@@ -483,6 +513,22 @@ def decide_capability(
                     or (
                         reason_code == EXIT_NOT_FLAT_REASON_CODE
                         and _exit_not_flat_allows_action(
+                            facts=facts,
+                            intent=reduction_intent,
+                        )
+                        and strategy_instance_id is not None
+                        and reduction_intent is not None
+                        and _moves_toward_zero_without_crossing(
+                            repo.position(
+                                strategy_instance_id,
+                                reduction_intent.symbol.upper(),
+                            ),
+                            reduction_intent.signed_delta,
+                        )
+                    )
+                    or (
+                        reason_code == EXIT_STUCK_REASON_CODE
+                        and _exit_stuck_allows_action(
                             facts=facts,
                             intent=reduction_intent,
                         )
@@ -680,6 +726,7 @@ __all__ = [
     "DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS",
     "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
+    "EXIT_STUCK_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
     "RECONCILIATION_INCOMPLETE_REASON_CODE",
