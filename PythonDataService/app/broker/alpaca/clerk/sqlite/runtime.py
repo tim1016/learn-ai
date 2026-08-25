@@ -81,6 +81,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
@@ -89,6 +90,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import execute_safe_flatten_plan
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
 from app.broker.contract.errors import BrokerError
@@ -473,6 +475,31 @@ class SqliteAlpacaClerkFacade:
                 lifecycle_run_id=run_id,
                 operator_reason=reason,
             )
+
+    async def execute_safe_flatten(
+        self,
+        *,
+        plan: SafeFlattenPlan,
+        reason: str | None = None,
+    ) -> tuple[OrderResource, ...]:
+        """Execute the presented SafeFlattenPlan as recovery EXIT custody (F18)."""
+        orders = await execute_safe_flatten_plan(
+            self._repo,
+            plan=plan,
+            trade=self._trade,
+            intake=self._intake,
+            account_id=self.account_id,
+        )
+        logger.info(
+            "operator safe flatten executed",
+            extra={
+                "action": "safe_flatten_executed",
+                "account_id": self.account_id,
+                "reason": reason,
+                "order_count": len(orders),
+            },
+        )
+        return orders
 
     async def execute_for_instance(
         self,
