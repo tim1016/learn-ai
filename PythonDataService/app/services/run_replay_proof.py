@@ -12,9 +12,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from collections import deque
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
@@ -26,9 +29,11 @@ from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     run_shadow_trace_evaluation,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
+from app.broker.alpaca.paths import safe_path_component
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.signal_program import Settlement, trace_root
 from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.schemas.run_replay import RunReplayReceipt
 from app.services.bot_trade_strategy import _includes_session_phase, strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -535,3 +540,38 @@ async def run_fidelity_over_bars(
         digest_verified_count=digest_verified,
         divergences=tuple(divergences),
     )
+
+
+def _receipt_path(instance_dir: Path, run_id: str) -> Path:
+    return instance_dir / RUN_REPLAY_RECEIPTS_DIRECTORY / f"{safe_path_component(run_id, 'run id')}.json"
+
+
+def write_run_replay_receipt(instance_dir: Path, receipt: RunReplayReceipt) -> Path:
+    """Atomically persist one run's replay receipt (replaceable: pending -> final)."""
+    path = _receipt_path(instance_dir, receipt.run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(receipt.model_dump(mode="json"), sort_keys=True, indent=2) + "\n"
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{receipt.run_id}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(serialized)
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+    return path
+
+
+def read_run_replay_receipt(
+    instance_dir: Path,
+    strategy_instance_id: str,
+    run_id: str,
+) -> RunReplayReceipt | None:
+    """Return one run's replay receipt, or an honest None when never generated."""
+    path = _receipt_path(instance_dir, run_id)
+    if not path.is_file():
+        return None
+    receipt = RunReplayReceipt.model_validate_json(path.read_text(encoding="utf-8"))
+    if receipt.strategy_instance_id != strategy_instance_id or receipt.run_id != run_id:
+        raise ValueError("replay receipt belongs to another run identity")
+    return receipt
