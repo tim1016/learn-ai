@@ -2090,6 +2090,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one run's durable replay-parity receipt */
+        get: operations["read_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_get"];
+        put?: never;
+        /** Recompute one completed run's replay-parity receipt from its retained bars */
+        post: operations["generate_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/bots/{strategy_instance_id}/stop": {
         parameters: {
             query?: never;
@@ -12416,6 +12434,22 @@ export interface components {
             requested_qty?: number | null;
             sizing_provenance?: components["schemas"]["SizingProvenance"] | null;
         };
+        /**
+         * EngineParityDivergenceModel
+         * @description The first field where the BacktestEngine and runner-seam traces disagree.
+         */
+        EngineParityDivergenceModel: {
+            /** Evaluation Id */
+            evaluation_id: string | null;
+            /** Expected */
+            expected: string;
+            /** Field */
+            field: string;
+            /** Index */
+            index: number;
+            /** Observed */
+            observed: string;
+        };
         /** EngineTradeResponse */
         EngineTradeResponse: {
             /** Entry Price */
@@ -20314,6 +20348,89 @@ export interface components {
             total_fill_events: number;
             /** Total Recorded Fees */
             total_recorded_fees: string;
+        };
+        /**
+         * RunReplayDivergenceModel
+         * @description One classified fidelity-leg disagreement between replay and live record.
+         */
+        RunReplayDivergenceModel: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /**
+             * Classification
+             * @enum {string}
+             */
+            classification: "expected_live_effect" | "drift";
+            /** Detail */
+            detail: string;
+            /** Evaluation Id */
+            evaluation_id: string;
+            /** Live Outcome */
+            live_outcome: string | null;
+            /** Reason Code */
+            reason_code: string;
+            /** Replay Staged */
+            replay_staged: string | null;
+        };
+        /**
+         * RunReplayReceipt
+         * @description Durable parity receipt for one completed run (Direction 2). All temporal fields are int64 ms UTC.
+         */
+        RunReplayReceipt: {
+            /** Bar Set Digest */
+            bar_set_digest: string;
+            /** Digest Verified Count */
+            digest_verified_count: number;
+            /** Divergences */
+            divergences: components["schemas"]["RunReplayDivergenceModel"][];
+            /** Drift Count */
+            drift_count: number;
+            /** Engine Parity Compared Count */
+            engine_parity_compared_count: number;
+            engine_parity_divergence: components["schemas"]["EngineParityDivergenceModel"] | null;
+            /** Engine Parity Trace Root */
+            engine_parity_trace_root: string | null;
+            /** Error */
+            error?: string | null;
+            /** Expected Live Effect Count */
+            expected_live_effect_count: number;
+            /** Generated At Ms */
+            generated_at_ms: number;
+            /** Ledger End Seq */
+            ledger_end_seq: number | null;
+            /** Live Compared Count */
+            live_compared_count: number;
+            /** Match Count */
+            match_count: number;
+            /** Program Version */
+            program_version: string | null;
+            /** Provider */
+            provider: string;
+            /** Records Truncated */
+            records_truncated: boolean;
+            /** Retained Bar Count */
+            retained_bar_count: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Sealed Program Hash */
+            sealed_program_hash: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "parity" | "parity_with_expected_live_effects" | "indeterminate" | "drift" | "replay_failed";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * RunSignalEngineRequest
@@ -28526,6 +28643,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotRunHistoryUnprocessableResponse"];
+                };
+            };
+        };
+    };
+    read_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                strategy_instance_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunReplayReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                strategy_instance_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunReplayReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

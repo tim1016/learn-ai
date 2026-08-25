@@ -16391,6 +16391,49 @@
         "title": "EngineOverlay",
         "type": "object"
       },
+      "EngineParityDivergenceModel": {
+        "additionalProperties": false,
+        "description": "The first field where the BacktestEngine and runner-seam traces disagree.",
+        "properties": {
+          "evaluation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluation Id"
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "index": {
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "observed": {
+            "title": "Observed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "evaluation_id",
+          "field",
+          "expected",
+          "observed"
+        ],
+        "title": "EngineParityDivergenceModel",
+        "type": "object"
+      },
       "EngineTradeResponse": {
         "properties": {
           "entry_price": {
@@ -34371,6 +34414,261 @@
         "title": "RunReconciliationReportModel",
         "type": "object"
       },
+      "RunReplayDivergenceModel": {
+        "additionalProperties": false,
+        "description": "One classified fidelity-leg disagreement between replay and live record.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "classification": {
+            "enum": [
+              "expected_live_effect",
+              "drift"
+            ],
+            "title": "Classification",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "evaluation_id": {
+            "title": "Evaluation Id",
+            "type": "string"
+          },
+          "live_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Outcome"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "replay_staged": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replay Staged"
+          }
+        },
+        "required": [
+          "evaluation_id",
+          "bar_close_ms",
+          "classification",
+          "reason_code",
+          "replay_staged",
+          "live_outcome",
+          "detail"
+        ],
+        "title": "RunReplayDivergenceModel",
+        "type": "object"
+      },
+      "RunReplayReceipt": {
+        "additionalProperties": false,
+        "description": "Durable parity receipt for one completed run (Direction 2). All temporal fields are int64 ms UTC.",
+        "properties": {
+          "bar_set_digest": {
+            "title": "Bar Set Digest",
+            "type": "string"
+          },
+          "digest_verified_count": {
+            "minimum": 0.0,
+            "title": "Digest Verified Count",
+            "type": "integer"
+          },
+          "divergences": {
+            "items": {
+              "$ref": "#/components/schemas/RunReplayDivergenceModel"
+            },
+            "title": "Divergences",
+            "type": "array"
+          },
+          "drift_count": {
+            "minimum": 0.0,
+            "title": "Drift Count",
+            "type": "integer"
+          },
+          "engine_parity_compared_count": {
+            "minimum": 0.0,
+            "title": "Engine Parity Compared Count",
+            "type": "integer"
+          },
+          "engine_parity_divergence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EngineParityDivergenceModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "engine_parity_trace_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine Parity Trace Root"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_live_effect_count": {
+            "minimum": 0.0,
+            "title": "Expected Live Effect Count",
+            "type": "integer"
+          },
+          "generated_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Generated At Ms",
+            "type": "integer"
+          },
+          "ledger_end_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ledger End Seq"
+          },
+          "live_compared_count": {
+            "minimum": 0.0,
+            "title": "Live Compared Count",
+            "type": "integer"
+          },
+          "match_count": {
+            "minimum": 0.0,
+            "title": "Match Count",
+            "type": "integer"
+          },
+          "program_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Version"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "records_truncated": {
+            "title": "Records Truncated",
+            "type": "boolean"
+          },
+          "retained_bar_count": {
+            "minimum": 0.0,
+            "title": "Retained Bar Count",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          },
+          "sealed_program_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sealed Program Hash"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "parity",
+              "parity_with_expected_live_effects",
+              "indeterminate",
+              "drift",
+              "replay_failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "run_id",
+          "strategy_key",
+          "symbol",
+          "provider",
+          "status",
+          "bar_set_digest",
+          "retained_bar_count",
+          "ledger_end_seq",
+          "engine_parity_trace_root",
+          "engine_parity_compared_count",
+          "engine_parity_divergence",
+          "live_compared_count",
+          "match_count",
+          "expected_live_effect_count",
+          "drift_count",
+          "digest_verified_count",
+          "records_truncated",
+          "divergences",
+          "program_version",
+          "sealed_program_hash",
+          "generated_at_ms"
+        ],
+        "title": "RunReplayReceipt",
+        "type": "object"
+      },
       "RunSignalEngineRequest": {
         "description": "Request body for POST /research/run-signal.",
         "properties": {
@@ -52170,6 +52468,156 @@
         "summary": "Read one bounded page of previous runs",
         "tags": [
           "broker-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt": {
+      "get": {
+        "operationId": "read_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReplayReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read one run's durable replay-parity receipt",
+        "tags": [
+          "run-replay"
+        ]
+      },
+      "post": {
+        "operationId": "generate_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReplayReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recompute one completed run's replay-parity receipt from its retained bars",
+        "tags": [
+          "run-replay"
         ]
       }
     },

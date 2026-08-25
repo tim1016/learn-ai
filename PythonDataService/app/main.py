@@ -58,6 +58,7 @@ from app.routers import (
     research,
     research_divergence,
     research_runs,
+    run_replay,
     sanitize,
     snapshot,
     spec_strategy,
@@ -614,6 +615,12 @@ app.include_router(
 # Control actions on live broker state — always-on data-plane secret.
 app.include_router(
     broker_bots.router,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+)
+# Per-run replay-parity receipts (Direction 2). Reads + recompute over live
+# broker evidence — always-on data-plane control secret, like broker_bots.
+app.include_router(
+    run_replay.router,
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 # Broker-v2 bot control panel contracts + projections (S1 — #1297).

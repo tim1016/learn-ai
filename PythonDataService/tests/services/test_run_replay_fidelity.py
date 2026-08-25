@@ -202,6 +202,33 @@ async def test_run_fidelity_digest_verifies_a_faithful_crash_window_receipt() ->
 
 
 @pytest.mark.asyncio
+async def test_run_fidelity_treats_a_digest_less_crash_receipt_as_unverified() -> None:
+    """PR #1771: a crash receipt with no live digest cannot be content-verified,
+    so it is an unverified expected effect (never a clean proof verdict) — not a
+    laundered `expected_live_effect` with a false 'digest-verified' claim."""
+    bars, captured, exit_record = await _crash_setup()
+    digestless = LiveDecisionRecord(
+        seq=exit_record.seq, evaluation_id=exit_record.evaluation_id,
+        outcome="candidate_uncaptured_at_crash", reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+        bar_ref="", trace_digest="", bar_close_ms=exit_record.bar_close_ms,
+    )
+
+    result = await run_fidelity_over_bars(
+        _binding(run_id="run-1"), provider="fake-phase",
+        warmup=_retained(bars), live=[], records=[],
+        captured_decisions=captured, crash_records=[digestless],
+    )
+
+    assert result.drift_count == 0
+    assert result.unverified_crash_count >= 1
+    unverified = next(
+        d for d in result.divergences if d.reason_code == "CANDIDATE_UNCAPTURED_AT_CRASH"
+    )
+    assert unverified.classification == "expected_live_effect"
+    assert "no live digest" in unverified.detail
+
+
+@pytest.mark.asyncio
 async def test_run_fidelity_flags_a_tampered_crash_window_receipt_as_drift() -> None:
     """A crash receipt whose captured digest no longer matches the replayed
     crash-window trace is drift, not a laundered expected effect (PR #1767)."""
