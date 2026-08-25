@@ -45,9 +45,13 @@ record.
   (`app/services/bot_carryover.py` — `STOP_REQUIRES_FLATTEN` is a recorded
   outcome, not an action). Every recovery pointer dead-ends: `SafeFlattenPlan`
   is built (`app/broker/alpaca/clerk/sqlite/recovery_policy.py:653`) but has
-  no executor anywhere in the codebase; the working `flatten_stop` performer
+  no executor anywhere in the codebase; the `flatten_stop` performer
   (`app/services/broker_v2_panel/panel_data_source.py:1016`) is never
-  presented (`sqlite_panel_adapter.py:61` presents only `resume`);
+  presented (`sqlite_panel_adapter.py:61` presents only `resume`) and was
+  never exercisable under SQLite custody anyway — `require_active_run`
+  (`app/broker/alpaca/clerk/sqlite/idempotency.py:77`) refuses EXITs once the
+  run is retired, and its `panel-flatten:` decision id trips `reject_colon`
+  (`app/broker/alpaca/clerk/sqlite/exit.py:68`);
   `EXPOSURE_CARRYOVER_STRATEGY_KEYS` is empty
   (`app/services/bot_trade_strategy.py:63`); manual tickets are gated
   `MANUAL_TRADING_NOT_QUALIFIED`; `emergency_flatten_strategy_instance_id`
@@ -209,30 +213,76 @@ carries the F1–F19 adjudication table; the ops study
 (`docs/audits/bot-launch-ops-study-2026-08-24.md`) carries the detail and the
 timings (the session scratchpad logs were ephemeral — the study doc is the
 primary record). F1 and F9 were fixed in-session (`238821c7`, `ff5ed49f`);
-F18/F19 are lifted to §1 above. Still open, grouped by theme; per-finding
-adjudication (confirm/refute + issue filing) remains assigned to the
-independent reviewer per the handoff:
+F18/F19 are lifted to §1 above. The items below entered this backlog on
+static code verification plus live observation during the session; severities
+were assigned at lift time from that evidence. The handoff's independent
+adjudication (confirm/refute, one issue per confirmed finding) may still
+reclassify an item — if it refutes one, delete the bullet. F15 (action
+idempotency lookup ordered after the presentation check) is
+informational-only in the handoff and is deliberately **not** tracked here as
+a defect.
 
-- **Dead or dishonest control vocabulary** — F2 (`pause`/`continue` never
-  presented under SQLite custody), F16 (`retire` never presented), F17
-  (`prepare_safe_flatten` presents `enabled: true`, always 409s), F3 (two
-  stop surfaces ~60× apart in latency with different receipts).
-- **Admission/refusal ergonomics** — F4 (post-restart ~45 s feed warmup
-  refusal reads as a fault), F5 (refusal ordering names the wrong gate first;
-  the full-ladder admission preview endpoint exists unused), F11 (burst
-  deploys flap "Market Data is unhealthy", masking real refusals).
-- **Deploy atomicity** — F10 (dry-run 500s on the reference topology, leaks
-  orphan `sim:<sid>/` dirs, raw error envelope instead of the typed refusal).
-- **Read-path scale and staleness** — F12 (LIVE chart pane 7–17 min stale
-  with `overlay_notices` empty), F13 (panel reads serialize globally: 56 ms
-  alone → 2.6 s each at 10 concurrent), F14 (`gallery/snapshot` unbounded by
-  liveness: 5.6 s / 751 KB / 25 tiles).
-- **Fence scope** — F15 (action idempotency lookup runs after the
-  presentation check; informational, harmless today).
-- **Form defects** — F7 (QC-ID hard-required client-side though ignored for
-  proof-less candidates), F8 (human-flag toggle defaults to Reject).
-- **Engine honesty** — F6 (zero-bar engine run returns `success=True`; hit
-  via `daily_sma_crossover`, which has no daily-bar fetch path).
+- **F2 — `pause`/`continue` are dead vocabulary under SQLite custody
+  (medium).** Guards and performers exist but can never fire:
+  `app/services/broker_v2_panel/sqlite_panel_adapter.py:61`
+  `SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume"})`.
+- **F16 — `retire` never presented by the SQLite panel source (medium).**
+  Same dead-vocabulary class, same pointer as F2 (study §7).
+- **F17 — `prepare_safe_flatten` presents `enabled: true` but always 409s
+  (medium).** The `mutation: false` fact exists server-side and is not
+  reflected in presented enablement
+  (`app/services/broker_v2_panel/sqlite_panel_source.py:839-842`; study §8).
+  Executor work planned in
+  `docs/superpowers/plans/2026-08-24-exposure-lifecycle-closure.md`.
+- **F3 — two parallel stop surfaces ~60× apart in latency (medium).** Panel
+  `stop_bot_decisions` ≈20 s (full panel re-projection inside `run_action`,
+  `app/services/broker_v2_panel/panel_data_source.py`) vs legacy runner stop
+  0.29 s, with different receipts (study §2, §5.1).
+- **F4 — post-restart feed warmup presents as a fault (low).** ~45 s
+  feed-readiness cold start refuses Resume with copy that reads like a
+  failure (market-data gate, `app/services/run_admission.py:286-297`; study
+  §3).
+- **F5 — refusal ordering names the wrong gate first (low).** The first
+  admission error can name a different problem than the one to fix; the
+  full-ladder preview (`POST …/bots/admission`) exists and is unused for
+  refusal shaping (gate order `app/services/run_admission.py:105-435`; study
+  §3).
+- **F6 — zero-bar engine run reports `success=True` (high).**
+  `daily_sma_crossover` has no daily-bar fetch path and its engine run
+  succeeded over zero bars (`execute_engine_backtest`,
+  `app/routers/engine.py:1042`; ceremony doc §1 calls it a platform gap). An
+  engine that cannot fail on empty input is an honesty defect.
+- **F7 — QC-ID hard-required client-side though ignored for proof-less
+  candidates (low).** Flag-form validation out of sync with the backend
+  recording rule
+  (`Frontend/src/app/components/strategy-validation/strategy-validation.component.ts`;
+  ceremony §3).
+- **F8 — human-flag toggle defaults to Reject (low).** Users have saved
+  rejections by accident (same component as F7; ceremony §3).
+- **F10 — dry-run deploys break atomicity on refusal (medium).** 500s on the
+  reference topology (virtiofs bind mount), leaks orphan `sim:<sid>/` dirs
+  with partially provisioned `source_bars.sqlite3`, raw error envelope
+  instead of the typed refusal
+  (`app/services/broker_v2_panel/paper_deploy_service.py` dry-run path;
+  study §7 — "refused deploys must not leak state").
+- **F11 — burst deploys flap "Market Data is unhealthy" (medium).** Admission
+  couples to an instantaneous feed-age sample with no settling semantics,
+  masking real refusals under load (market-data gate,
+  `app/services/run_admission.py:286-297`; study §7/§9 proposes
+  two-consecutive-samples settling).
+- **F12 — LIVE chart pane serves stale bars unmarked (medium).** 7–17 min
+  behind its own bot with `overlay_notices` empty — the staleness field
+  exists in the contract and is unpopulated
+  (`Frontend/src/app/components/broker/v2-panel/bot-triage-detail/bot-triage-detail.component.ts`;
+  study §7; same defect class as the R4 tape fix recorded in
+  `docs/superpowers/specs/2026-08-24-bots-triage-trader-lens-design.md` §10).
+- **F13 — panel reads serialize globally (medium).** 56 ms alone → 2.6 s each
+  at 10 concurrent; ~21 s/sweep projected at 80 bots (projection path,
+  `app/services/broker_v2_panel/panel_data_source.py`; study §7/§9 proposes a
+  fan-out budget).
+- **F14 — `gallery/snapshot` unbounded by liveness (low).** 5.6 s / 751 KB /
+  25 tiles including retired bots (`app/routers/broker_v2_gallery.py`; study
+  §7).
 
 Evidence-base corrections for whoever adjudicates: study §3 and handoff §3
 disagree on F6–F9 numbering, which orphans the (already-repaired) pre-#1746

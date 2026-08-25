@@ -580,11 +580,11 @@ git commit -m "fix(runner): honor the refusal taxonomy at the EXIT call site ins
 
 **Interfaces:**
 - Consumes: everything `accept_exit` already uses (`_exit_identity`, `require_strategy_instance`, `require_active_run`, `require_owned_entry_order`, `entry_order_symbol`, `ExitAcceptedFacts`, `TransitionInput`, `repo.commit_first_transition`, `CommandCreated`/`CommandExistingSame`/`CommandExistingConflict`, `DurableConflictError`); `repo.effect_operation` (read API) for the exposure-anchored `run_id`.
-- Produces: `accept_recovery_exit(repo, *, account_id: str, strategy_instance_id: str, decision_id: str, entry_order_ref: str) -> ExitSubmission`. Consumed by Task 7 (watchdog re-drive) and Task 8 (flatten executor core). `decision_id` must be colon-free (callers use the namespaces `exit-redrive-<n>` and `recovery-flatten-<hex16>`).
+- Produces: `accept_recovery_exit(repo, *, account_id: str, strategy_instance_id: str, decision_id: str, entry_order_ref: str, forbid_active_run: bool = False) -> ExitSubmission` and `class RecoveryRunActiveError(Exception)`. Consumed by Task 7 (watchdog re-drive, default `forbid_active_run=False` — a stuck EXIT on a *running* bot is re-drivable by design) and Task 8 (flatten executor core, `forbid_active_run=True` — re-asserted inside the capture transaction to close the recheck→capture Resume race). `decision_id` must be colon-free (callers use the namespaces `exit-redrive-<episode-hex12>-<n>` and `recovery-flatten-<hex16>`; note `_exit_identity` at `exit.py:36-53` keys idempotency on `(strategy_instance_id, decision_id)` **only** — the entry ref is in the payload hash, not the key — so every caller-namespace must be globally unique per intent, which is why the redrive id carries the episode token).
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `test_exit.py` (imports: add `accept_recovery_exit` to the `exit` import; `submit_stop_run` add to the `commands` import — `submit_start_run` is already there):
+Append to `test_exit.py` (imports: add `accept_recovery_exit, RecoveryRunActiveError` to the `exit` import; `submit_stop_run` add to the `commands` import — `submit_start_run` is already there):
 
 ```python
 async def test_accept_recovery_exit_captures_reduction_without_active_run(
@@ -658,6 +658,35 @@ async def test_accept_recovery_exit_is_idempotent_per_decision_id(
 
     assert retry.created is False
     assert retry.effect_operation_id == first.effect_operation_id
+
+
+async def test_accept_recovery_exit_forbid_active_run_fails_closed_under_live_run(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """P0 race guard: the no-active-run fact must hold inside the capture
+    transaction itself, not only at recovery-policy recheck time."""
+    entry_ref, _ = await _filled_entry_with_position(repo)  # run still ACTIVE
+
+    with pytest.raises(RecoveryRunActiveError):
+        accept_recovery_exit(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="recovery-flatten-raceguard",
+            entry_order_ref=entry_ref,
+            forbid_active_run=True,
+        )
+
+    # The watchdog path (default forbid_active_run=False) still captures under
+    # a live run — a stuck EXIT on a running bot is re-drivable by design.
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-abcdef123456-1",
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.created is True
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -793,6 +822,22 @@ def accept_exit(
     )
 
 
+class RecoveryRunActiveError(Exception):
+    """A recovery EXIT that forbids live runs found one at capture time.
+
+    Raised inside the ``build_transition`` closure — i.e. under the
+    repository write lock — so a Resume landing between recovery-policy
+    recheck and EXIT capture fails closed instead of racing the flatten.
+    """
+
+    def __init__(self, strategy_instance_id: str) -> None:
+        self.strategy_instance_id = strategy_instance_id
+        super().__init__(
+            f"strategy instance {strategy_instance_id!r} re-activated a run "
+            "before the recovery EXIT was captured"
+        )
+
+
 def accept_recovery_exit(
     repo: ClerkSqliteRepository,
     *,
@@ -800,6 +845,7 @@ def accept_recovery_exit(
     strategy_instance_id: str,
     decision_id: str,
     entry_order_ref: str,
+    forbid_active_run: bool = False,
 ) -> ExitSubmission:
     """Capture one reduction-only recovery EXIT without the active-run fence.
 
@@ -813,10 +859,25 @@ def accept_recovery_exit(
     SafeFlattenPlan recheck gates, or the stuck-EXIT watchdog policy) plus
     the downstream ``require_capability(Capability.REDUCE, …)`` in
     ``exit_resolution.py``, which only authorizes movement toward zero.
-    Decision-id namespaces: ``recovery-flatten-<hex16>``, ``exit-redrive-<n>``.
+
+    ``forbid_active_run=True`` (the safe-flatten executor) additionally
+    re-asserts *inside the capture transaction* that no run is ACTIVE —
+    recovery-policy already refused presentation with ``RUN_STILL_ACTIVE``,
+    but a Resume (approved-carryover resumes are legitimate while exposure
+    is held) can land between recheck and capture; the closure runs under
+    the repository write lock, so this check cannot race a registration
+    commit. The watchdog re-drive keeps the default ``False``: a stuck EXIT
+    on a running bot is re-drivable by design.
+
+    Decision-id namespaces: ``recovery-flatten-<hex16>``,
+    ``exit-redrive-<episode-hex12>-<n>`` (both colon-free; the idempotency
+    key is ``(strategy_instance_id, decision_id)`` only — see
+    ``_exit_identity`` — so each namespace must be unique per intent).
     """
 
     def resolve_run_id(target: OrderResource) -> str:
+        if forbid_active_run and repo.active_run(strategy_instance_id) is not None:
+            raise RecoveryRunActiveError(strategy_instance_id)
         origin = repo.effect_operation(target.effect_operation_id)
         assert origin is not None, "an owned ENTRY order always has an effect operation"
         return origin.run_id
@@ -1142,7 +1203,7 @@ git commit -m "feat(clerk): EXIT_STUCK escalation reason code with reduction-tow
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `test_reconcile.py`. It already has `_FakeRead(orders=…, positions=…)`, `_position(symbol, quantity=…)`, `_FakeTrade`, `_broker_order` (lines 100–258). Add a clocked fixture plus a held-position helper (imports to add: `submit_start_run` from `commands`, `submit_enter` from `enter`, `fold_order_evidence` from `order_evidence`, `SqliteTradeUpdateEvidenceSink` from `app.broker.alpaca.clerk.trade_evidence`, `BrokerOrderEvent` from `app.broker.contract.models`, `ReentrantAsyncLock` from wherever this file's runtime imports resolve it — `app.broker.alpaca.clerk.sqlite.runtime` re-exports it, matching `test_exit.py`; `raise_uncertainty`, `EXIT_NOT_FLAT_REASON_CODE` from `uncertainty`; `ExitNotFlatCause`, `EXIT_STUCK_REASON_CODE` from `uncertainty_causes`; `_clock_at` from this package's `conftest`; `reconcile` module itself for monkeypatching):
+Append to `test_reconcile.py`. It already has `_FakeRead(orders=…, positions=…)`, `_position(symbol, quantity=…)`, `_FakeTrade`, `_broker_order` (lines 100–258). Add a clocked fixture plus a held-position helper (imports to add: `submit_start_run` from `commands`, `submit_enter` from `enter`, `fold_order_evidence` from `order_evidence`, `SqliteTradeUpdateEvidenceSink` from `app.broker.alpaca.clerk.trade_evidence`, `BrokerOrderEvent` from `app.broker.contract.models`, `ReentrantAsyncLock` from wherever this file's runtime imports resolve it — `app.broker.alpaca.clerk.sqlite.runtime` re-exports it, matching `test_exit.py`; `raise_uncertainty`, `resolve_exit_not_flat_uncertainty`, `EXIT_NOT_FLAT_REASON_CODE` from `uncertainty`; `ExitNotFlatCause`, `EXIT_STUCK_REASON_CODE` from `uncertainty_causes`; `_clock_at` from this package's `conftest`; stdlib `import hashlib`; `reconcile` module itself for monkeypatching):
 
 ```python
 WATCHDOG_SID = "wd-bot"
@@ -1285,6 +1346,107 @@ async def test_reconcile_account_escalates_exit_stuck_after_redrive_cap(
         strategy_instance_id=WATCHDOG_SID,
     )
     assert stuck is not None  # durable, operator-visible escalation
+
+
+async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> None:
+    """P1 regression: a later, independent stuck episode for the same strategy
+    must mint fresh redrive identities. A bare `exit-redrive-<n>` collides:
+    `_exit_identity` keys idempotency on (strategy_instance_id, decision_id)
+    only, so a reused id either replays the earlier episode's terminal effect
+    (same entry ref) or raises CommandExistingConflict forever (new entry ref,
+    different payload hash)."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode_a = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode_a is not None
+    clock.advance(reconcile_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+    )
+    token_a = hashlib.sha256(episode_a["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    command_a = repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token_a}-1")
+    assert command_a is not None
+
+    # Episode A's redrive fills completely -> flat -> the fence resolves A.
+    reducing_a = next(
+        order
+        for order in repo.orders_for_effect_operation(command_a.effect_operation_id)
+        if order.role == "REDUCING"
+    )
+    filled_reducing = _broker_order(
+        reducing_a.order_ref, status="filled", filled_quantity=10, filled_avg_price=101.0
+    )
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler()
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=reducing_a.order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=repo.clock(),
+            price=101.0, quantity=10, execution_id="wd-exec-flat-a",
+        ),
+        event_key="execution:wd-exec-flat-a",
+        order=filled_reducing,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=_FakeTrade())
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    ) is None
+
+    # A fresh entry gets stuck later: independent episode B on a new entry ref.
+    submission = await submit_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
+        decision_id="wd-enter-2", lifecycle_run_id=WATCHDOG_RUN,
+        leg=_leg(quantity=10), trade=_FakeTrade(),
+    )
+    filled_entry = _broker_order(
+        submission.order_ref, status="filled", filled_quantity=10, filled_avg_price=100.0
+    )
+    fold_order_evidence(
+        repo, effect_operation_id=submission.effect_operation_id, order=filled_entry
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=submission.order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=repo.clock(),
+            price=100.0, quantity=10, execution_id="wd-exec-enter-2",
+        ),
+        event_key="execution:wd-exec-enter-2",
+        order=filled_entry,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+    clock.advance(1_000)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode_b = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode_b is not None
+    assert episode_b["uncertainty_id"] != episode_a["uncertainty_id"]
+    clock.advance(reconcile_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+    )
+
+    token_b = hashlib.sha256(episode_b["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert token_b != token_a
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token_b}-1") is not None
+    assert repo.exit_effects_created_since(WATCHDOG_SID, episode_b["observed_at_ms"]) == 1
 ```
 
 Add `import app.broker.alpaca.clerk.sqlite.reconcile as reconcile_module` to the imports (the file may already import names from it — keep both).
@@ -1398,6 +1560,15 @@ async def _redrive_or_escalate_stale_exits(
         ]
         if not entries:
             continue
+        # Episode-scoped redrive identity. `_exit_identity` keys idempotency on
+        # (strategy_instance_id, decision_id) only, so a bare `exit-redrive-<n>`
+        # would collide with an earlier, independent episode's redrives — either
+        # replaying its terminal effect (same entry) or conflicting durably
+        # (new entry). Uncertainty ids are minted as "uncertainty:<seq>"
+        # (colon-bearing), so hash to a colon-free hex token.
+        episode_token = hashlib.sha256(
+            episode["uncertainty_id"].encode("utf-8")
+        ).hexdigest()[:12]
         try:
             accepted = await _under_intake(
                 intake,
@@ -1405,7 +1576,7 @@ async def _redrive_or_escalate_stale_exits(
                 repo,
                 account_id=repo.account_id,
                 strategy_instance_id=sid,
-                decision_id=f"exit-redrive-{redrives + 1}",
+                decision_id=f"exit-redrive-{episode_token}-{redrives + 1}",
                 entry_order_ref=entries[-1].order_ref,
             )
             await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
@@ -1437,7 +1608,7 @@ Call site in `_reconcile_account_serialized`, directly after the `resolved_count
     await _redrive_or_escalate_stale_exits(repo, trade=trade, intake=intake)
 ```
 
-Imports to add at the top of `reconcile.py`: `accept_recovery_exit, resolve_accepted_exit` from `.exit`; `DurableConflictError` from `.idempotency`; `entry_order_symbol` from `.order_evidence`; `EXIT_NOT_FLAT_REASON_CODE` (extend the existing `.uncertainty` import; `raise_uncertainty`, `AdmissionBlockedError` may already be there — check), `EXIT_STUCK_REASON_CODE, ExitNotFlatCause, ExitStuckCause` from `.uncertainty_causes`; `UncertaintyRaisedFacts` from the module `uncertainty.py` imports it from (check `uncertainty.py`'s import block — likely `.facts`); `position_quantity_is_nonzero` from `.folds` if not already imported.
+Imports to add at the top of `reconcile.py`: `import hashlib` (stdlib block); `accept_recovery_exit, resolve_accepted_exit` from `.exit`; `DurableConflictError` from `.idempotency`; `entry_order_symbol` from `.order_evidence`; `EXIT_NOT_FLAT_REASON_CODE` (extend the existing `.uncertainty` import; `raise_uncertainty`, `AdmissionBlockedError` may already be there — check), `EXIT_STUCK_REASON_CODE, ExitNotFlatCause, ExitStuckCause` from `.uncertainty_causes`; `UncertaintyRaisedFacts` from the module `uncertainty.py` imports it from (check `uncertainty.py`'s import block — likely `.facts`); `position_quantity_is_nonzero` from `.folds` if not already imported.
 
 Note on Task 2 interplay: `resolve_accepted_exit` now absorbs TRANSIENT refusals itself; the `except AdmissionBlockedError` here still catches TERMINAL ones (e.g. a concurrent unknown-cause account episode) — both classes defer the redrive to the next pass, matching `_recover_operations`' policy at `reconcile.py:580`.
 
@@ -1464,7 +1635,7 @@ git commit -m "feat(clerk): stuck-EXIT watchdog - bounded redrive then durable E
 - Test: `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_safe_flatten_execution.py` (new)
 
 **Interfaces:**
-- Consumes: Task 4's `accept_recovery_exit`; existing `resolve_accepted_exit`, `entry_order_symbol`, `SafeFlattenPlan` (dataclass in `projection_models.py:186-197`: `version_token, account_id, authority_generation, db_identity_token, control_revision, scope, strategy_instance_id, reconciliation_id, prepared_at_ms, expires_at_ms, legs`), `SafeFlattenPlanLeg` (`strategy_instance_id, symbol, side, quantity, position_updated_at_ms`), `OrderResource`, `ClerkSqliteRepository`, `BrokerTradePort`, `ReentrantAsyncLock` — import the lock type from its defining module (check: `app.broker.alpaca.clerk.sqlite.intake_fence`; `runtime.py` re-exports it, but `safe_flatten_execution` must NOT import `runtime` or a cycle forms with the facade import added below).
+- Consumes: Task 4's `accept_recovery_exit` (called with `forbid_active_run=True`) and `RecoveryRunActiveError`; existing `resolve_accepted_exit`, `entry_order_symbol`, `SafeFlattenPlan` (dataclass in `projection_models.py:186-197`: `version_token, account_id, authority_generation, db_identity_token, control_revision, scope, strategy_instance_id, reconciliation_id, prepared_at_ms, expires_at_ms, legs`), `SafeFlattenPlanLeg` (`strategy_instance_id, symbol, side, quantity, position_updated_at_ms`), `OrderResource`, `ClerkSqliteRepository`, `BrokerTradePort`, `ReentrantAsyncLock` — import the lock type from its defining module (check: `app.broker.alpaca.clerk.sqlite.intake_fence`; `runtime.py` re-exports it, but `safe_flatten_execution` must NOT import `runtime` or a cycle forms with the facade import added below).
 - Produces: `class SafeFlattenExecutionError(Exception)`; `async execute_safe_flatten_plan(repo, *, plan: SafeFlattenPlan, trade: BrokerTradePort, intake: ReentrantAsyncLock, account_id: str) -> tuple[OrderResource, ...]`; facade method `SqliteAlpacaClerkFacade.execute_safe_flatten(*, plan: SafeFlattenPlan, reason: str | None = None) -> tuple[OrderResource, ...]`. Consumed by Task 9's dispatcher branch and Task 11.
 
 - [ ] **Step 1: Write the failing test**
@@ -1574,6 +1745,35 @@ async def test_execute_safe_flatten_plan_refuses_expired_plans(
             repo, plan=plan, trade=_FakeTrade(), intake=ReentrantAsyncLock(),
             account_id=ACCOUNT_ID,
         )
+
+
+async def test_execute_safe_flatten_plan_refuses_when_a_resume_landed_after_recheck(
+    crashed_with_exposure,
+) -> None:
+    """P0 race regression: policy checks no-active-run at presentation/recheck,
+    but execution happens later. A Resume landing before EXIT capture must fail
+    closed inside the capture transaction, never submit a reduction."""
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    plan = await _reconciled_flatten_plan(repo)
+    # Resume analog lands between recheck and capture (approved-carryover
+    # resumes are legitimate while custody holds exposure).
+    submit_start_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-2"
+    )
+    trade = _FakeTrade()
+
+    with pytest.raises(SafeFlattenExecutionError, match="re-activated"):
+        await execute_safe_flatten_plan(
+            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(),
+            account_id=ACCOUNT_ID,
+        )
+
+    assert trade.submit_calls == []
 ```
 
 Note on `_FakeTrade` variant: the `test_reconcile.py` copy always submits `side="buy"` orders — extend the copied helper so `submit` echoes `leg.side` into the returned order (one-line change in the copy: pass `side=leg.side` through `_broker_order`, which the `test_exit.py` variant already does). Use whichever copied variant makes the reducing-order lookups deterministic; the `test_exit.py` `_FakeTrade` (queue-based `lookup_results`) is the better base if entry-terminal refresh lookups occur — the entry here is already terminal (`status="filled"` folded), so the default lookup path suffices.
@@ -1608,7 +1808,11 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from app.broker.alpaca.clerk.sqlite.exit import accept_recovery_exit, resolve_accepted_exit
+from app.broker.alpaca.clerk.sqlite.exit import (
+    RecoveryRunActiveError,
+    accept_recovery_exit,
+    resolve_accepted_exit,
+)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
@@ -1655,13 +1859,24 @@ async def execute_safe_flatten_plan(
                 raise SafeFlattenExecutionError(
                     f"No owned entry order proves a reduction target for {leg.symbol!r}."
                 )
-            accepted = accept_recovery_exit(
-                repo,
-                account_id=account_id,
-                strategy_instance_id=leg.strategy_instance_id,
-                decision_id=f"recovery-flatten-{decision_token}",
-                entry_order_ref=entries[-1].order_ref,
-            )
+            try:
+                accepted = accept_recovery_exit(
+                    repo,
+                    account_id=account_id,
+                    strategy_instance_id=leg.strategy_instance_id,
+                    decision_id=f"recovery-flatten-{decision_token}",
+                    entry_order_ref=entries[-1].order_ref,
+                    # Re-asserted inside the capture transaction: recovery
+                    # policy refused presentation with RUN_STILL_ACTIVE, but a
+                    # Resume can land between recheck and capture (approved-
+                    # carryover resumes are legitimate with exposure held).
+                    forbid_active_run=True,
+                )
+            except RecoveryRunActiveError as exc:
+                raise SafeFlattenExecutionError(
+                    f"A run re-activated for {leg.strategy_instance_id!r} after "
+                    "the flatten was presented; stop the bot and prepare a fresh plan."
+                ) from exc
         resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
         if resolved.reducing_order_ref is not None:
             reducing = repo.order(resolved.reducing_order_ref)
@@ -1853,7 +2068,10 @@ def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     ``require_capability(REDUCE, …)`` still enforces movement toward zero
     per leg. (2) No run may be ACTIVE: a running strategy could re-enter
     right after the flatten; the operator stops decisions first
-    (``stop_bot_decisions`` is presented alongside).
+    (``stop_bot_decisions`` is presented alongside). This gate is
+    presentation/recheck-time only — the same fact is re-asserted inside the
+    capture transaction by ``accept_recovery_exit(forbid_active_run=True)``,
+    closing the recheck→capture Resume race (Task 4/Task 8).
     """
     reduction_safe_ctx = replace(
         ctx,
@@ -1998,14 +2216,28 @@ python scripts/export_openapi_contract.py
 - [ ] **Step 5: Verify all gates**
 
 ```bash
+# Scoped for iteration only — the Final gate below runs the FULL pytest suite,
+# which is the repo's one pre-push authority (.claude/rules/testing.md).
 cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" python -m pytest tests/broker/v2panel/ tests/schemas/ -v
 ruff check PythonDataService/app/ PythonDataService/tests/
 npx eslint Frontend/src/ --max-warnings 0
-podman exec my-frontend npx ng test --watch=false --include='**/broker-v2*.spec.ts' || true  # run the panel spec surface if present; investigate any failure
+
+# Frontend spec surface: enumerate the specs that cover the touched maps, then
+# run each with an EXACT --include (repo rule: exact spec filenames, never
+# directory globs, which sweep .scss/.html into the build and fail it).
+ls Frontend/src/app/components/broker/v2-panel/bot-detail-banner/*.spec.ts \
+   Frontend/src/app/components/broker/v2-panel/lib/*.spec.ts
+# For EVERY file the ls prints, run (no || true — a gate that cannot fail is
+# not a gate; a failure here blocks the commit):
+podman exec my-frontend npx ng test --watch=false --include='<one spec path relative to Frontend/, exactly as printed>'
+# If ls prints nothing, skip the ng-test step explicitly and record the reason
+# in the PR description: "no spec covers the tone/copy maps; change is
+# gated by eslint + the vocabulary-snapshot parity test instead."
+
 git status --short contracts/
 ```
 
-Expected: pytest green, eslint clean, the contracts diff shows only the new enum value.
+Expected: pytest green, eslint clean, every listed spec green (or the explicit no-spec skip recorded), the contracts diff shows only the new enum value.
 
 - [ ] **Step 6: Commit**
 
@@ -2152,41 +2384,83 @@ git commit -m "test(clerk): crash -> refuse-resume -> flatten -> resume-to-flat 
 
 **Files:**
 - Create: `docs/architecture/adrs/0045-exposure-lifecycle-closure.md`
-- Modify: `docs/architecture/adrs/0010-operator-action-contract-flatten-pause-stop.md` (Status line only)
+- Modify: `docs/architecture/adrs/0010-operator-action-contract-flatten-pause-stop.md` (Status value + Provenance line — ADR 0039 idiom)
+- Modify: `docs/doc-authority.md` (ADR index table — add the 0045 row after 0044, currently line ~129)
+- Modify: `CONTEXT.md` (new glossary section named by ADR 0045's `Vocabulary:` line)
 - Modify: `docs/known-gaps.md` (§1 rewrite; §9 pointer line)
 
-**Interfaces:** documentation only; no code.
+**Interfaces:** documentation only; no code. Governance gates this task must satisfy (verified against `docs/doc-authority.md:76-83` and ADR 0039): (a) every newly accepted ADR carries a `Vocabulary:` header line — unconditional (ADR 0040 Decision 4); (b) the doc-authority ADR index gains the 0045 row in the same PR; (c) `**Status:**` values come from the closed set and match ADR 0039's regex `^\*\*Status:\*\* (Accepted|Proposed|Superseded|Retired)( \d{4}-\d{2}-\d{2})?$` — exactly one Status line per file, supersession narrative goes in `**Provenance:**` (ADR 0013 is the corpus idiom).
 
 - [ ] **Step 1: Write ADR 0045**
 
-Create `docs/architecture/adrs/0045-exposure-lifecycle-closure.md` with this structure and content (match the house ADR style — Status/Provenance/Decision drivers/Related header block, then Context/Decision/Consequences):
-
-- **Status:** Accepted 2026-08-24. **Supersedes:** ADR 0010 for the active Alpaca/SQLite control plane.
-- **Decision drivers:** F18/F19 (ops study 2026-08-24 §8–§9), Direction 1 of `docs/audits/strategy-execution-research-directions-2026-08-24.md`, the "correct mechanism exists, unwired" failure mode.
-- **Decisions to record verbatim from this plan:**
-  1. The flatten executor is the recovery-catalog action `execute_safe_flatten` consuming the prepared `SafeFlattenPlan` through the claimed-broker-IO EXIT machine — not the `flatten_stop` panel performer. Record the performer's two latent defects (active-run fence self-defeat; colon in `decision_id`) and that `flatten_stop`, `pause`, `continue`, `retire` remain unpresented dead vocabulary whose fate belongs to Direction 5's one-lifecycle-surface work.
-  2. Recovery EXITs are run-fence-exempt but exposure-anchored (`run_id` from the originating entry's effect operation) and reduction-only; admission is the SafeFlattenPlan gates or the watchdog policy, plus `require_capability(REDUCE)` toward zero.
-  3. The refusal taxonomy: `TRANSIENT = {BROKER_SNAPSHOT_STALE, RECONCILIATION_INCOMPLETE, RECONCILIATION_IN_PROGRESS}`, everything else TERMINAL (fail-closed); consumers: EXIT resolve boundary, runner EXIT path, sweep (pre-existing), ENTER (pre-existing).
-  4. Stuck-EXIT policy: re-drive after 120 000 ms, max 3 re-drives, then durable `EXIT_STUCK` escalation; constants live in `reconcile.py`.
-  5. **Deferred (with reasons):** RQ4 strategy-intent-vs-journal comparison (needs the `SignalSession` read-back seam Direction 2 will design; concrete harm removed by the watchdog); presented-action `mutation`/executability facts (F17) and admission-refusal copy ordering (F5) — Direction 5.
-- ADR 0010's `FLATTEN_NOW`/desired-state vocabulary was retired with the IBKR control plane (evaluator control plane #1678, legacy broker control #1679); the Alpaca/SQLite plane's operator flatten contract is this ADR.
-
-- [ ] **Step 2: Mark ADR 0010 superseded**
-
-In ADR 0010, change only the Status line, preserving the provenance sentence after it:
+Create `docs/architecture/adrs/0045-exposure-lifecycle-closure.md`. The header block is exact (the `Status:` line must match ADR 0039's regex; the `Vocabulary:` line is unconditional per ADR 0040 Decision 4 and names the CONTEXT.md section Step 2 adds):
 
 ```markdown
-**Status:** Superseded 2026-08-24 by [ADR 0045](0045-exposure-lifecycle-closure.md) for the active Alpaca/SQLite control plane (was: Accepted 2026-08-18). The FLATTEN_NOW / durable-desired-state vocabulary it specifies belonged to the retired IBKR control plane (#1678/#1679).
+# ADR 0045 — Exposure lifecycle closure: recovery flatten executor, EXIT refusal taxonomy, stuck-EXIT watchdog
+
+**Status:** Accepted 2026-08-24
+**Provenance:** Authored with the exposure-lifecycle-closure implementation (this PR), from `docs/superpowers/plans/2026-08-24-exposure-lifecycle-closure.md`; spec: `docs/audits/strategy-execution-research-directions-2026-08-24.md` Direction 1. Supersedes [ADR 0010](0010-operator-action-contract-flatten-pause-stop.md) for the active Alpaca/SQLite control plane.
+**Decision drivers:** F18/F19 (ops study 2026-08-24 §8–§9); the "correct mechanism exists, unwired" failure mode named by the same-day research directions.
+**Related:** ADR 0035 (SQLite sole Alpaca custody authority), ADR 0038 (Alpaca sole bot control plane), ADR 0041 (generated Button Reference), ADR 0010 (superseded).
+**Vocabulary:** `CONTEXT.md` § "Exposure lifecycle closure" — Recovery EXIT, Safe flatten, Redrive, `EXIT_STUCK`.
 ```
 
-- [ ] **Step 3: Update known-gaps**
+Then Context / Decision / Consequences sections recording verbatim from this plan:
+
+1. The flatten executor is the recovery-catalog action `execute_safe_flatten` consuming the prepared `SafeFlattenPlan` through the claimed-broker-IO EXIT machine — not the `flatten_stop` panel performer. Record the performer's two latent defects (active-run fence self-defeat; colon in `decision_id`) and that `flatten_stop`, `pause`, `continue`, `retire` remain unpresented dead vocabulary whose fate belongs to Direction 5's one-lifecycle-surface work.
+2. Recovery EXITs are run-fence-exempt but exposure-anchored (`run_id` from the originating entry's effect operation) and reduction-only; admission is the SafeFlattenPlan gates or the watchdog policy, plus `require_capability(REDUCE)` toward zero. The no-active-run fact is enforced twice: `RUN_STILL_ACTIVE` at presentation/recheck, and again inside the capture transaction (`accept_recovery_exit(forbid_active_run=True)` raising `RecoveryRunActiveError`) so a Resume landing between recheck and capture fails closed.
+3. The refusal taxonomy: `TRANSIENT = {BROKER_SNAPSHOT_STALE, RECONCILIATION_INCOMPLETE, RECONCILIATION_IN_PROGRESS}`, everything else TERMINAL (fail-closed); consumers: EXIT resolve boundary, runner EXIT path, sweep (pre-existing), ENTER (pre-existing).
+4. Stuck-EXIT policy: re-drive after 120 000 ms, max 3 re-drives per episode, then durable `EXIT_STUCK` escalation; constants live in `reconcile.py`. Redrive identity is episode-scoped — `exit-redrive-<sha256(uncertainty_id)[:12]>-<attempt>` — because `_exit_identity` keys idempotency on `(strategy_instance_id, decision_id)` alone, so an unscoped id would replay or conflict with an earlier episode's redrives.
+5. **Deferred (with reasons):** RQ4 strategy-intent-vs-journal comparison (needs the `SignalSession` read-back seam Direction 2 will design; concrete harm removed by the watchdog); presented-action `mutation`/executability facts (F17) and admission-refusal copy ordering (F5) — Direction 5.
+6. ADR 0010's `FLATTEN_NOW`/desired-state vocabulary was retired with the IBKR control plane (evaluator control plane #1678, legacy broker control #1679); the Alpaca/SQLite plane's operator flatten contract is this ADR.
+
+- [ ] **Step 2: Add the CONTEXT.md vocabulary section and the doc-authority index row**
+
+Append to `CONTEXT.md`, matching the file's established section form (`## <Name> (resolved YYYY-MM-DD)` + a `**Lineage: …**` marker, per ADR 0040):
+
+```markdown
+## Exposure lifecycle closure (resolved 2026-08-24)
+
+**Lineage: live.**
+
+- **Recovery EXIT** — a reduction-only EXIT captured without the active-run fence, anchored to the run recorded on the targeted entry's effect operation. Admitted only by the safe-flatten gates or the stuck-EXIT watchdog policy, and always subject to the REDUCE capability's movement-toward-zero check.
+- **Safe flatten** — the two-step operator capability over a prepared `SafeFlattenPlan`: `prepare_safe_flatten` (view) builds the versioned exact-close plan; `execute_safe_flatten` (mutation) submits it as recovery EXITs, re-deriving quantities from durable attributed positions and re-asserting no-active-run inside the capture transaction.
+- **Redrive** — the watchdog's bounded automatic re-submission of a reduction for a stale `EXIT_NOT_FLAT` episode; identity `exit-redrive-<episode-hex12>-<attempt>`, at most 3 per episode.
+- **`EXIT_STUCK`** — the durable custody-subject escalation raised when redrives exhaust; blocks new exposure, allows reduction toward zero.
+```
+
+In `docs/doc-authority.md`, add to the ADR index table directly after the `| 0044 | … |` row:
+
+```markdown
+| 0045 | Exposure lifecycle closure: `execute_safe_flatten` recovery action over run-fence-exempt recovery EXITs; transient-vs-terminal EXIT refusal taxonomy; stuck-EXIT watchdog with bounded episode-scoped redrives and durable `EXIT_STUCK` escalation (supersedes 0010) |
+```
+
+- [ ] **Step 3: Mark ADR 0010 superseded (ADR 0039 idiom — closed Status value, narrative in Provenance)**
+
+In ADR 0010, replace the Status line's value (it must still match ADR 0039's regex, one Status line per file):
+
+```markdown
+**Status:** Superseded 2026-08-24
+```
+
+and prepend the supersession narrative to the existing `**Provenance:**` line, keeping the original text after it verbatim:
+
+```markdown
+**Provenance:** Superseded by [ADR 0045](0045-exposure-lifecycle-closure.md) for the active Alpaca/SQLite control plane — the FLATTEN_NOW / durable-desired-state vocabulary specified here was retired with the IBKR control plane (evaluator control plane #1678, legacy broker control #1679). Original provenance: Promoted from `Proposed` to `Accepted` on 2026-08-18 under [ADR 0039](0039-adr-status-is-decision-standing.md) Decision 1 — …(rest of the existing line unchanged).
+```
+
+- [ ] **Step 4: Update known-gaps**
 
 In `docs/known-gaps.md` §1 ("Safety-critical"), per the file's own convention ("When an item is fixed, delete its bullet — git history is the record"): delete the **F18** and **F19** bullets and replace the section body with a closure note in the same voice as §2, e.g.: "No known-open items. The two 2026-08-24 safety-critical findings (F18 crash-held exposure path-to-flat; F19 retryable EXIT refusal crashing bots) were closed on <merge date> by the exposure-lifecycle-closure work (ADR 0045): `execute_safe_flatten` recovery action, run-fence-exempt recovery EXITs, the transient-refusal taxonomy at the EXIT boundary, and the stuck-EXIT watchdog with durable `EXIT_STUCK` escalation. The three stranded 1-share evidence positions on `PA3KWXU1C4C3` can now be flattened through the presented action — flattening them remains the operator's call." Also update §9's line "F18/F19 are lifted to §1 above" to "F18/F19 were closed by ADR 0045 (see §1)". Do this step **only in the PR that lands the code** — never mark a gap closed ahead of the fix merging.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Verify the governance gates, then commit**
 
 ```bash
-git add docs/architecture/adrs/0045-exposure-lifecycle-closure.md docs/architecture/adrs/0010-operator-action-contract-flatten-pause-stop.md docs/known-gaps.md
+# ADR 0039 Status-regex check on both touched ADRs (exactly one match each):
+grep -cE '^\*\*Status:\*\* (Accepted|Proposed|Superseded|Retired)( [0-9]{4}-[0-9]{2}-[0-9]{2})?$' docs/architecture/adrs/0045-exposure-lifecycle-closure.md docs/architecture/adrs/0010-operator-action-contract-flatten-pause-stop.md
+grep -c '^\*\*Vocabulary:\*\*' docs/architecture/adrs/0045-exposure-lifecycle-closure.md
+grep -n '| 0045 |' docs/doc-authority.md
+git add docs/architecture/adrs/0045-exposure-lifecycle-closure.md docs/architecture/adrs/0010-operator-action-contract-flatten-pause-stop.md docs/doc-authority.md CONTEXT.md docs/known-gaps.md
 git commit -m "docs(adr): ADR 0045 exposure lifecycle closure; supersede ADR 0010; close F18/F19 in known-gaps"
 ```
 

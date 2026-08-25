@@ -26,7 +26,8 @@
 - **Sealed-program bytes are untouchable:** `app/engine/strategy/signal_program.py`, `app/engine/engine.py`, and every module listed in registered programs' `artifact_paths` must NOT be edited — an edit invalidates every qualification receipt. This plan only *calls* them.
 - **No silent evidence repair:** never `drop_duplicates`, forward-fill, or reorder retained bars; ledger conflicts propagate as their typed errors.
 - **Don't duplicate canonical helpers:** the settlement policy is `bot_trade_strategy_warmup._COMMIT_WORTHY_OUTCOMES` (a module-level frozenset) — import it, never re-declare the set. Same for `_includes_session_phase` (import from `app.services.bot_trade_strategy`).
-- **Before push:** project-scope `ruff check PythonDataService/app/ PythonDataService/tests/`, project-scope pytest, `python scripts/export_openapi_contract.py --check`, and the `thermo-nuclear-code-quality-review` skill (one-shot, before the PR-opening push).
+- **Engine/math authority registries (AGENTS.md "Engine and math authority"):** any change that introduces, retires, or moves a math/engine path updates BOTH `docs/math-sources-of-truth.md` and `docs/architecture/engine-authority-map.md` in the same PR. This plan introduces an engine path (the replay receipt path) — Task 12 Step 2b carries the map row and the explicit no-new-math-concept statement.
+- **Before push:** project-scope `ruff check PythonDataService/app/ PythonDataService/tests/`, the **full** pytest suite (no `-k "not slow"` — the full suite is the one pre-push gate per `.claude/rules/testing.md`), `python scripts/export_openapi_contract.py --check`, and the `thermo-nuclear-code-quality-review` skill (one-shot, before the PR-opening push).
 - **Line citations in this plan were verified on origin/master 2fd0df84 (2026-08-24). Re-verify each before editing — lines drift.**
 
 ---
@@ -39,11 +40,15 @@
 **(b) When the replay runs: background task triggered by Stop, receipt `pending` → final.**
 `_stop_locked` (`app/services/bot_runner.py:836-945`) already does network-bound terminal custody proof after a 5 s cancel timeout (`_STOP_TIMEOUT_S`, `:175`), but the replay is CPU-bound over up to 200k bars — synchronous execution inside Stop would wreck the fleet stop budget (17 bots in 8.6 s today). So: `_stop_locked` writes a `status="pending"` receipt synchronously (durable intent survives a crash), then schedules `asyncio.create_task` held in a registry-owned set; the task runs the replay via `asyncio.to_thread` and atomically replaces the receipt with the final verdict (or `replay_failed` + error). POST regenerates on demand for any non-live run.
 
-**(c) Run slicing without per-run bar copies.** The replay input for run N is the **full retained stream** for `(provider, symbol)` at generation time: the live run's own warmup consumed exactly the retained prefix (retained branch of `_RetainedSourceBarFeed.recent_closed_bars`, `app/services/bot_trade_strategy.py:266-300`) and streamed the rest, so warmup/live split is derived, not stored: `end_ms <= BotRunRecord.started_at_ms` → warmup, else live. `BotRunRecord.started_at_ms` is durable launch evidence (`app/services/bot_binding_repository.py:167-178`).
+**(c) Run slicing without per-run bar copies — but run-BOUNDED (PR #1751 finding 4).** The replay input for run N is the retained stream for `(provider, symbol)` **bounded at both ends**, so regenerating run N after run N+1 has appended more bars yields byte-identical input, digest, and verdict:
+- **End bound (primary, ledger-sequence):** `ledger_end_seq` — the stream's max `seq` snapshotted into the `pending` receipt at Stop time (`write_pending`), carried into the final receipt, and reused by every regeneration. **Fallback (wall-clock, for crashed/legacy runs with no snapshot):** `BotRunOutcomeRecord.recorded_at_ms` (`bot_binding_repository.py:227-241`, read via `read_outcome` :420-441) — bars with `end_ms <=` it. No snapshot AND no terminal outcome → refuse (`RunReplayUnavailableError`): an unbounded replay is not evidence. `BotRunRecord` is create-once (frozen), so the end bound lives in the receipt, not the run record.
+- **Start/warmup split:** primary rule is decision-anchored — when the run has live decision records, warmup = bars with `end_ms <= first_record.bar_close_ms - decision_timeframe_ms` (the first recorded bucket's open; `decision_bar_close_ms` is captured into receipt facts by Task 5b, timeframe from `binding.sealed_program.configured_signal.clock.decision_timeframe_ms` — re-verify that attribute path against the seal model; `clock.warmup_lookback_days` on the same path is proven by `bot_trade_strategy_warmup.py:77-79`). Wall-clock fallback when no records/seal: `end_ms <= BotRunRecord.started_at_ms` (`bot_binding_repository.py:167-178`). The decision-anchored rule eliminates the startup race where a bar closing between launch and the warmup fetch would be misclassified live-vs-warmup.
 
 **(d) Why the fidelity leg replays dispositions instead of diffing against the all-COMMIT reference.** `test_signal_program_mode_parity.py:56-67` documents the exact residual seam: Paper's liveness gate on ENTER and real Clerk rejections live outside the `SignalProgram` surface. Both are durably receipted as `outcome="blocked"` decision receipts (liveness/pause: `bot_trade_strategy._append_decision_receipt`; Clerk rejections: `_append_pre_custody_refusal`, `app/broker/alpaca/clerk/sqlite/runtime.py:1073-1085`, invoked from every `rejected(...)` branch of `execute_for_instance`). Because the reference (BacktestEngine) commits everything, a single legitimately-blocked ENTER would make every later bucket diverge (position state forks). The fidelity replay therefore settles each replayed stage with the *live-recorded* disposition (`_COMMIT_WORTHY_OUTCOMES` mapping — the exact FR-016 warmup policy from `bot_trade_strategy_warmup.py:56-58`), so state tracks the live path and every bucket is comparable full-length; each COMMIT/DISCARD fork point is itself classified (`expected_live_effect` when an enumerating `blocked`/crash receipt exists, `drift` otherwise). `evaluation_id` is a deterministic semantic hash of `(program_key, program_version, settings, bar_close_ms)` (`app/engine/strategy/signal_program.py:251-258`) — independent of decision content — so replay↔receipt alignment by `evaluation_id` is exact.
 
-**(e) Receipt fields** (design question c): run id, instance id, strategy key, symbol, provider, bar-set digest + count, engine-parity trace root / compared count / first divergence, fidelity counts (compared/match/expected/drift) + bounded divergence list, records-truncated honesty flag, program version + sealed program hash, `generated_at_ms`, status, error.
+**(d2) Content-level comparison, not intent-kind-only (PR #1751 finding 3).** `evaluation_id` hashes identity, **not decision content**, and intent-kind matching alone would let numerical trace drift that preserves direction pass undetected. So live capture is extended (Task 5b): every decision receipt's facts gain `trace_digest = trace_root([evaluation.trace])` (per-bucket digest via the *existing canonical* `trace_root`, `signal_program.py:359-361` — no new hashing math) and `decision_bar_close_ms`. The fidelity replay then compares digest-by-digest; a `blocked` row is **never trusted on presence alone** — it classifies `expected_live_effect` only when (i) the replay staged an intent at that bucket, (ii) the row's digest (when present) matches the replayed trace digest, and (iii) its `reason_code` is in the closed live-only-gate set `EXPECTED_LIVE_GATE_REASON_CODES` (enumerated from the owning modules: `PAUSED_OBSERVE_ONLY` from `bot_trade_strategy.py`; the seven liveness fact codes from `app/services/market_liveness.py:60-205`; `STREAM_HEALTH_HOLD`/`MARKET_LIVENESS_BLOCKED`/`SIMULATED_SOURCE_BAR_UNPROVEN`/`EXIT_CUSTODY_UNPROVEN` from `clerk/sqlite/runtime.py:124,595,668,729,752`). Residual blind spot, stated in the schema: rows recorded **before** this feature carry no digest — those buckets fall back to intent-kind comparison and are excluded from `digest_verified_count`, so the receipt itself discloses its digest coverage.
+
+**(e) Receipt fields** (design question c): run id, instance id, strategy key, symbol, provider, bar-set digest + count, `ledger_end_seq` (run-end bound snapshot), engine-parity trace root / compared count / first divergence, fidelity counts (compared/match/expected/drift/`digest_verified_count`) + bounded divergence list, records-truncated honesty flag, program version + sealed program hash, `generated_at_ms`, status (`pending | parity | parity_with_expected_live_effects | indeterminate | drift | replay_failed` — truncated or unprovable evidence yields `indeterminate`, never a proof verdict; PR #1751 finding 6), error.
 
 ---
 
@@ -791,7 +796,7 @@ git commit -m "feat(replay-proof): engine-parity leg wires run_shadow_trace_eval
 **Interfaces:**
 - Consumes: `DecisionReceiptResource` (frozen dataclass: `strategy_instance_id, seq, outcome, symbol, intent_id, order_ref, observed_at_ms, facts_json` — re-verify in `app/broker/alpaca/clerk/models.py:87-97` or wherever `grep -rn "class DecisionReceiptResource" app/` lands), `MAX_DECISION_RECEIPTS_PER_STRATEGY` (`app/broker/alpaca/clerk/sqlite/decision_receipts.py:25`). Stored `facts_json` carries `run_id`/`evaluation_id`/`reason_code` merged server-side for both ordinary and atomic appends — re-verify at `decision_receipts.py:150-270` (`stable_keys` at :496 confirms the merged identity keys).
 - Produces:
-  - `@dataclass(frozen=True) LiveDecisionRecord(seq: int, evaluation_id: str, outcome: str, reason_code: str, bar_ref: str)`
+  - `@dataclass(frozen=True) LiveDecisionRecord(seq: int, evaluation_id: str, outcome: str, reason_code: str, bar_ref: str, trace_digest: str, bar_close_ms: int)` — `trace_digest`/`bar_close_ms` parse the `trace_digest`/`decision_bar_close_ms` facts Task 5b captures at live time; empty string / `0` for rows recorded before that capture existed (legacy rows)
   - `@dataclass(frozen=True) LiveRunDecisionEvidence(records: tuple[LiveDecisionRecord, ...], crash_records: tuple[LiveDecisionRecord, ...], captured_decisions: dict[str, str], truncated: bool)`
   - `live_run_decision_evidence_from_rows(rows: Sequence[DecisionReceiptResource], run_id: str) -> LiveRunDecisionEvidence`
   - Semantics later tasks rely on: `records` is the run's per-bucket alignment sequence in `seq` order, **excluding** `candidate_uncaptured_at_crash` rows (those describe a *previous* run's crash window replayed at this run's warmup boundary, and warmup evaluations are never yielded by `strategy_evaluations` — they go to `crash_records` and are receipted as expected live effects directly); `captured_decisions` maps `evaluation_id -> outcome` over **all** rows (all runs), exactly the map `captured_decision_outcomes` (`bot_trade_strategy_warmup.py:174-195`) would build, so the fidelity replay's warmup reapplies prior-run dispositions exactly as the live run did.
@@ -809,7 +814,16 @@ from app.broker.alpaca.clerk.models import DecisionReceiptResource
 from app.services.run_replay_proof import live_run_decision_evidence_from_rows
 
 
-def _row(seq: int, *, outcome: str, run_id: str, evaluation_id: str, reason_code: str = "") -> DecisionReceiptResource:
+def _row(
+    seq: int,
+    *,
+    outcome: str,
+    run_id: str,
+    evaluation_id: str,
+    reason_code: str = "",
+    trace_digest: str = "",
+    bar_close_ms: int = 0,
+) -> DecisionReceiptResource:
     return DecisionReceiptResource(
         strategy_instance_id="bot-a",
         seq=seq,
@@ -819,7 +833,14 @@ def _row(seq: int, *, outcome: str, run_id: str, evaluation_id: str, reason_code
         order_ref=None,
         observed_at_ms=1_700_000_000_000 + seq,
         facts_json=json.dumps(
-            {"run_id": run_id, "evaluation_id": evaluation_id, "reason_code": reason_code, "bar_ref": f"bar-{seq}"}
+            {
+                "run_id": run_id,
+                "evaluation_id": evaluation_id,
+                "reason_code": reason_code,
+                "bar_ref": f"bar-{seq}",
+                "trace_digest": trace_digest,
+                "decision_bar_close_ms": bar_close_ms,
+            }
         ),
     )
 
@@ -830,7 +851,8 @@ def test_live_run_decision_evidence_from_rows_filters_orders_and_classifies() ->
         _row(2, outcome="candidate_uncaptured_at_crash", run_id="run-1", evaluation_id="e1",
              reason_code="CANDIDATE_UNCAPTURED_AT_CRASH"),
         _row(3, outcome="no_action", run_id="run-1", evaluation_id="e2", reason_code="NO_ACTION"),
-        _row(4, outcome="blocked", run_id="run-1", evaluation_id="e3", reason_code="MARKET_CLOSED"),
+        _row(4, outcome="blocked", run_id="run-1", evaluation_id="e3", reason_code="MARKET_CLOSED",
+             trace_digest="a" * 64, bar_close_ms=1_700_000_900_000),
         _row(5, outcome="enter_intent", run_id="run-1", evaluation_id="e4"),
     ]
 
@@ -839,6 +861,10 @@ def test_live_run_decision_evidence_from_rows_filters_orders_and_classifies() ->
     assert [record.evaluation_id for record in evidence.records] == ["e2", "e3", "e4"]
     assert [record.evaluation_id for record in evidence.crash_records] == ["e1"]
     assert evidence.records[1].reason_code == "MARKET_CLOSED"
+    assert evidence.records[1].trace_digest == "a" * 64
+    assert evidence.records[1].bar_close_ms == 1_700_000_900_000
+    assert evidence.records[0].trace_digest == ""  # legacy row: digest-less, disclosed not guessed
+    assert evidence.records[0].bar_close_ms == 0
     assert evidence.captured_decisions == {
         "e0": "no_action",
         "e1": "candidate_uncaptured_at_crash",
@@ -889,6 +915,9 @@ class LiveDecisionRecord:
     outcome: str
     reason_code: str
     bar_ref: str
+    # Task 5b live-time capture; empty/0 on rows recorded before it existed.
+    trace_digest: str
+    bar_close_ms: int
 
 
 @dataclass(frozen=True)
@@ -935,6 +964,8 @@ def live_run_decision_evidence_from_rows(
             outcome=row.outcome,
             reason_code=str(facts.get("reason_code") or ""),
             bar_ref=str(facts.get("bar_ref") or ""),
+            trace_digest=str(facts.get("trace_digest") or ""),
+            bar_close_ms=int(facts.get("decision_bar_close_ms") or 0),
         )
         (crash_records if row.outcome == _CRASH_OUTCOME else records).append(record)
     return LiveRunDecisionEvidence(
@@ -959,6 +990,207 @@ git commit -m "feat(replay-proof): run-scoped live decision evidence assembly"
 
 ---
 
+### Task 5b: Live-time trace-digest capture into decision receipts (PR #1751 finding 3a)
+
+**Files:**
+- Modify: `app/services/bot_trade_strategy.py` (`_append_decision_receipt` at :811-839; the two `EffectDecisionEvidence(...)` constructions in `run_trade_bot` :766-776 and `run_dry_run_bot` :950-964; the signal_program import block at :31-38 gains `trace_root`)
+- Modify: `app/broker/alpaca/clerk/decision_evidence.py` (`EffectDecisionEvidence` at :10-19)
+- Modify: `app/broker/alpaca/clerk/sqlite/runtime.py` (atomic facts dict at :606-618; `_append_pre_custody_refusal` facts at :1073-1085)
+- Test: `tests/services/test_run_replay_live_capture.py` (create)
+
+**Interfaces:**
+- Consumes: `trace_root` (`app/engine/strategy/signal_program.py:359-361` — the canonical trace hashing; NOT re-implemented), `StrategyEvaluation.trace` (`bot_trade_strategy.py:100` — the full canonical trace, populated for every registered Signal Program), `EvaluationTrace` (constructible dataclass, `signal_program.py:51-71`), `_append_pre_custody_refusal` (`runtime.py:1073` — signature `(repo, *, strategy_instance_id, run_id, evidence, reason_code, explanation)`, re-verify), `ClerkSqliteRepository.initialize` / `SqliteDecisionReceipts` (as in Task 2's test).
+- Produces: every decision-receipt fact dict (ordinary appends, atomic effect appends, and Clerk pre-custody `blocked` refusals) carries `"trace_digest"` (per-bucket `trace_root([trace])`, omitted only when the evaluation has no trace) and `"decision_bar_close_ms"` (int64 ms UTC). `EffectDecisionEvidence` gains `trace_digest: str | None = None` and `decision_bar_close_ms: int | None = None` (optional with `None` defaults — every existing constructor keeps working). Sealed-program bytes untouched: `signal_program.py` is only *called*.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+"""Live-time capture: decision receipts carry the canonical per-bucket trace digest."""
+
+from __future__ import annotations
+
+import json
+from decimal import Decimal
+from pathlib import Path
+
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
+from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import _append_pre_custody_refusal
+from app.engine.strategy.signal_program import EvaluationMode, EvaluationTrace, trace_root
+from app.marketdata.feed import MarketDataBar
+from app.services.bot_trade_strategy import StrategyEvaluation, _append_decision_receipt
+from tests.services.test_candidate_uncaptured_at_crash import _binding
+
+_T0 = 1_700_000_000_000
+_EVAL_ID = "ab" * 32
+
+
+def _trace() -> EvaluationTrace:
+    return EvaluationTrace(
+        program_key="ema_crossover_signal",
+        program_version="v1",
+        evaluation_id=_EVAL_ID,
+        bar_close_ms=_T0 + 900_000,
+        bar_qualified=True,
+        bucket_closed=True,
+        ready=True,
+        relation_facts={},
+        signal_facts={},
+        staged_candidate=None,
+        reason_evidence={},
+        action_plan_request=None,
+        evaluation_mode=EvaluationMode.DECIDE,
+    )
+
+
+def _evaluation(trace: EvaluationTrace | None) -> StrategyEvaluation:
+    bar = MarketDataBar(
+        symbol="SPY", start_ms=_T0, end_ms=_T0 + 60_000,
+        open=Decimal("400"), high=Decimal("401"), low=Decimal("399"), close=Decimal("400.5"),
+        volume=100, fetched_at_ms=_T0 + 60_500, feed_id="fake-phase", session_phase="RTH",
+    )
+    return StrategyEvaluation(
+        bar=bar,
+        evaluation_id=_EVAL_ID,
+        decision_bar_close_ms=_T0 + 900_000,
+        intents=(),
+        settle_stage=lambda _settlement: None,
+        trace=trace,
+    )
+
+
+class _CapturingReceipts:
+    def __init__(self) -> None:
+        self.appended: list[dict] = []
+
+    def append(self, **kwargs) -> None:
+        self.appended.append(kwargs)
+
+
+def test_append_decision_receipt_captures_trace_digest_and_bucket_close() -> None:
+    receipts = _CapturingReceipts()
+    trace = _trace()
+
+    _append_decision_receipt(
+        receipts,  # type: ignore[arg-type] -- duck-typed capture double
+        binding=_binding(run_id="run-1"),
+        evaluation=_evaluation(trace),
+        outcome="no_action",
+        reason_code="NO_ACTION",
+    )
+
+    facts = receipts.appended[0]["facts"]
+    assert facts["trace_digest"] == trace_root([trace])
+    assert facts["decision_bar_close_ms"] == _T0 + 900_000
+
+
+def test_append_decision_receipt_omits_digest_for_a_traceless_evaluation() -> None:
+    receipts = _CapturingReceipts()
+
+    _append_decision_receipt(
+        receipts,  # type: ignore[arg-type]
+        binding=_binding(run_id="run-1"),
+        evaluation=_evaluation(None),
+        outcome="no_action",
+        reason_code="NO_ACTION",
+    )
+
+    assert "trace_digest" not in receipts.appended[0]["facts"]
+
+
+def test_pre_custody_refusal_receipt_carries_the_evidence_digest(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-CAP", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id="bot-a", symbol="SPY", config_hash="c1")
+
+    _append_pre_custody_refusal(
+        repo,
+        strategy_instance_id="bot-a",
+        run_id="run-1",
+        evidence=EffectDecisionEvidence(
+            evaluation_id=_EVAL_ID,
+            bar_ref="decision-bar:fake-phase:SPY:1700000900000",
+            symbol="SPY",
+            outcome="enter_intent",
+            observed_at_ms=_T0,
+            trace_digest="cd" * 32,
+            decision_bar_close_ms=_T0 + 900_000,
+        ),
+        reason_code="MARKET_LIVENESS_BLOCKED",
+        explanation="stale evidence at intake",
+    )
+
+    rows = SqliteDecisionReceipts(repo, strategy_instance_id="bot-a").retained_window()
+    facts = json.loads(rows[-1].facts_json)
+    assert facts["trace_digest"] == "cd" * 32
+    assert facts["decision_bar_close_ms"] == _T0 + 900_000
+```
+
+Re-verify before running: `_append_pre_custody_refusal`'s exact parameters at `runtime.py:1073` (mirror the call site at :571-579) and whether `register_strategy_instance`'s kwargs match Task 2's usage.
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `DATA_PLANE_CONTROL_SECRET="" python -m pytest tests/services/test_run_replay_live_capture.py -x -q`
+Expected: FAIL — `TypeError`/`ValidationError`: `EffectDecisionEvidence` got unexpected `trace_digest` (extra="forbid"), and `facts["trace_digest"]` KeyError for the ordinary append.
+
+- [ ] **Step 3: Implement the capture**
+
+1. `app/broker/alpaca/clerk/decision_evidence.py` — add two optional fields to `EffectDecisionEvidence` (after `observed_at_ms`):
+
+```python
+    # Direction 2 (run-scoped replay proof): the canonical per-bucket trace
+    # digest (`trace_root([trace])`) and the decision bucket's close, captured
+    # at live time so a replay can compare decision CONTENT, not just intent
+    # direction. Optional: legacy callers and traceless compatibility
+    # strategies omit them; the replay receipt discloses digest coverage.
+    trace_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    decision_bar_close_ms: int | None = Field(default=None, ge=0)
+```
+
+2. `app/services/bot_trade_strategy.py`:
+   - Add `trace_root` to the `app.engine.strategy.signal_program` import block (:31-38).
+   - In `_append_decision_receipt` (:811-839), after the `facts` dict literal:
+
+```python
+    facts["decision_bar_close_ms"] = evaluation.decision_bar_close_ms
+    if evaluation.trace is not None:
+        facts["trace_digest"] = trace_root([evaluation.trace])
+```
+
+   - In `run_trade_bot`'s `EffectDecisionEvidence(...)` construction (:766-776) and `run_dry_run_bot`'s (:950-964), add:
+
+```python
+                trace_digest=(
+                    trace_root([evaluation.trace]) if evaluation.trace is not None else None
+                ),
+                decision_bar_close_ms=evaluation.decision_bar_close_ms,
+```
+
+3. `app/broker/alpaca/clerk/sqlite/runtime.py`:
+   - Atomic facts dict inside `execute_for_instance` (:612-618) — extend the `canonicalize({...})` dict:
+
+```python
+                            "reason_code": decision_evidence.reason_code,
+                            "trace_digest": decision_evidence.trace_digest,
+                            "decision_bar_close_ms": decision_evidence.decision_bar_close_ms,
+```
+
+   - `_append_pre_custody_refusal` (:1073-1085) — extend its facts dict the same way (`evidence.trace_digest`, `evidence.decision_bar_close_ms`). These receipt facts live in the receipts table, not in the custody transition `row_hash` payload (re-verify against `repository.py:846-876`: `row_hash` covers `payload`, the receipt is a separate insert in the same transaction), so no hash chain or sealed identity is touched.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `DATA_PLANE_CONTROL_SECRET="" python -m pytest tests/services/test_run_replay_live_capture.py tests/services/test_candidate_uncaptured_at_crash.py tests/broker/alpaca/clerk/sqlite -q`
+Expected: PASS — the clerk sqlite suite proves no hash-chain/receipt regression from the two new fact keys (`None` values serialize as JSON null for legacy-shaped evidence).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/services/bot_trade_strategy.py app/broker/alpaca/clerk/decision_evidence.py app/broker/alpaca/clerk/sqlite/runtime.py tests/services/test_run_replay_live_capture.py
+git commit -m "feat(replay-proof): capture canonical trace digests into decision receipts at live time"
+```
+
+---
+
 ### Task 6: Run-fidelity leg — disposition-faithful replay + divergence classifier
 
 **Files:**
@@ -968,8 +1200,9 @@ git commit -m "feat(replay-proof): run-scoped live decision evidence assembly"
 **Interfaces:**
 - Consumes: `strategy_evaluations` (`app/services/bot_trade_strategy.py:572-591` — the exact generator Paper and Dry Run share), `_includes_session_phase` (`bot_trade_strategy.py:306-312`), `_COMMIT_WORTHY_OUTCOMES` (`bot_trade_strategy_warmup.py:56-58`), `Settlement` (`app.engine.strategy.signal_program`), `FeedHealth`/`MarketDataBar` (`app.marketdata.feed`), `now_ms_utc` (`app.utils.timestamps`), Task 3's `to_market_bar`, Task 5's `LiveDecisionRecord`.
 - Produces:
-  - `@dataclass(frozen=True) RunFidelityDivergence(evaluation_id: str, bar_close_ms: int, classification: str, reason_code: str, replay_staged: str | None, live_outcome: str | None, detail: str)` where `classification` is `"expected_live_effect"` or `"drift"`
-  - `@dataclass(frozen=True) RunFidelityResult(compared_count: int, match_count: int, expected_live_effect_count: int, drift_count: int, divergences: tuple[RunFidelityDivergence, ...])`
+  - `EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str]` — the closed live-only-gate set (owners cited per entry; `STREAM_HEALTH_REASON_CODE` imported from `clerk/sqlite/runtime.py:124`, not restated)
+  - `@dataclass(frozen=True) RunFidelityDivergence(evaluation_id: str, bar_close_ms: int, classification: str, reason_code: str, replay_staged: str | None, live_outcome: str | None, detail: str)` where `classification` is `"expected_live_effect"` or `"drift"`; drift reasons: `TRACE_DIGEST_MISMATCH`, `DECISION_MISMATCH`, `UNRECOGNIZED_BLOCK_REASON`, `MISSING_LIVE_RECORD`, `EVALUATION_ID_MISMATCH`, `UNMATCHED_LIVE_RECORD`
+  - `@dataclass(frozen=True) RunFidelityResult(compared_count: int, match_count: int, expected_live_effect_count: int, drift_count: int, digest_verified_count: int, divergences: tuple[RunFidelityDivergence, ...])` — `digest_verified_count` = aligned buckets whose live `trace_digest` was present and matched the replayed `trace_root([evaluation.trace])` (finding 3's coverage disclosure)
   - `class _RunReplayFeed` — in-memory feed: `feed_id = provider`, `capability_account_id -> None`, `recent_closed_bars` returns the warmup list (session-phase-filtered, `lookback_days` ignored — mirroring the retained branch of `_RetainedSourceBarFeed`), `stream_bars` yields the live list (session-phase-filtered), `health` returns a connected `FeedHealth`.
   - `async run_fidelity_over_bars(binding: BrokerBotBinding, *, provider: str, warmup: Sequence[RetainedSourceBar], live: Sequence[RetainedSourceBar], records: Sequence[LiveDecisionRecord], captured_decisions: Mapping[str, str]) -> RunFidelityResult`
 
@@ -986,7 +1219,7 @@ import pytest
 
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_trade_strategy import strategy_evaluations
-from app.engine.strategy.signal_program import Settlement
+from app.engine.strategy.signal_program import Settlement, trace_root
 from app.services.run_replay_proof import (
     LiveDecisionRecord,
     run_fidelity_over_bars,
@@ -1004,26 +1237,32 @@ def _retained(bars: Sequence[MarketDataBar]) -> list[RetainedSourceBar]:
 
 
 async def _record_live_pass(bars: Sequence[MarketDataBar], *, block_first_enter: bool) -> list[LiveDecisionRecord]:
-    """Simulate exactly what run_trade_bot durably records for each bucket."""
+    """Simulate exactly what run_trade_bot durably records for each bucket,
+    including the Task 5b live-time trace-digest capture."""
     binding = _binding(run_id="run-1")
     records: list[LiveDecisionRecord] = []
     blocked_once = False
     async for evaluation in strategy_evaluations(binding, _PhaseFeed(live_bars=list(bars))):
         staged = evaluation.intents[0].kind.value if evaluation.intents else None
         seq = len(records) + 1
+        digest = trace_root([evaluation.trace]) if evaluation.trace is not None else ""
+        close_ms = evaluation.decision_bar_close_ms
         if staged is None:
             records.append(LiveDecisionRecord(seq=seq, evaluation_id=evaluation.evaluation_id,
-                                              outcome="no_action", reason_code="NO_ACTION", bar_ref=""))
+                                              outcome="no_action", reason_code="NO_ACTION", bar_ref="",
+                                              trace_digest=digest, bar_close_ms=close_ms))
             evaluation.settle_stage(Settlement.COMMIT)
         elif block_first_enter and staged == "ENTER" and not blocked_once:
             blocked_once = True
             records.append(LiveDecisionRecord(seq=seq, evaluation_id=evaluation.evaluation_id,
-                                              outcome="blocked", reason_code="MARKET_CLOSED", bar_ref=""))
+                                              outcome="blocked", reason_code="MARKET_CLOSED", bar_ref="",
+                                              trace_digest=digest, bar_close_ms=close_ms))
             evaluation.settle_stage(Settlement.DISCARD)
         else:
             outcome = "enter_intent" if staged == "ENTER" else "exit_intent"
             records.append(LiveDecisionRecord(seq=seq, evaluation_id=evaluation.evaluation_id,
-                                              outcome=outcome, reason_code="", bar_ref=""))
+                                              outcome=outcome, reason_code="", bar_ref="",
+                                              trace_digest=digest, bar_close_ms=close_ms))
             evaluation.settle_stage(Settlement.COMMIT)
     return records
 
@@ -1047,6 +1286,7 @@ async def test_run_fidelity_over_bars_full_parity_on_an_unblocked_run() -> None:
     assert result.match_count == len(records)
     assert result.expected_live_effect_count == 0
     assert result.drift_count == 0
+    assert result.digest_verified_count == len(records)  # every bucket content-verified
 
 
 @pytest.mark.asyncio
@@ -1096,9 +1336,69 @@ async def test_run_fidelity_over_bars_classifies_a_tampered_record_as_drift() ->
     assert result.drift_count >= 1
     drift = next(d for d in result.divergences if d.classification == "drift")
     assert drift.reason_code == "DECISION_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_run_fidelity_over_bars_flags_a_content_level_digest_mismatch_as_drift() -> None:
+    """PR #1751 finding 3: same intent direction, different trace CONTENT -> drift."""
+    bars = _ema_parity_bars_through_first_exit()
+    records = await _record_live_pass(bars, block_first_enter=False)
+    victim = next(i for i, record in enumerate(records) if record.outcome == "no_action")
+    records[victim] = LiveDecisionRecord(
+        seq=records[victim].seq,
+        evaluation_id=records[victim].evaluation_id,
+        outcome=records[victim].outcome,          # intent-level identical
+        reason_code=records[victim].reason_code,
+        bar_ref="",
+        trace_digest="f" * 64,                    # content-level different
+        bar_close_ms=records[victim].bar_close_ms,
+    )
+
+    result = await run_fidelity_over_bars(
+        _binding(run_id="run-1"),
+        provider="fake-phase",
+        warmup=[],
+        live=_retained(bars),
+        records=records,
+        captured_decisions={},
+    )
+
+    assert result.drift_count >= 1
+    drift = next(d for d in result.divergences if d.classification == "drift")
+    assert drift.reason_code == "TRACE_DIGEST_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_run_fidelity_over_bars_refuses_a_blocked_row_with_an_unrecognized_reason() -> None:
+    """PR #1751 finding 3b: a `blocked` row is cross-checked, never trusted on presence."""
+    bars = _ema_parity_bars_through_first_exit()
+    records = await _record_live_pass(bars, block_first_enter=True)
+    blocked = next(i for i, record in enumerate(records) if record.outcome == "blocked")
+    records[blocked] = LiveDecisionRecord(
+        seq=records[blocked].seq,
+        evaluation_id=records[blocked].evaluation_id,
+        outcome="blocked",
+        reason_code="TOTALLY_MADE_UP_GATE",       # outside the closed live-only-gate set
+        bar_ref="",
+        trace_digest=records[blocked].trace_digest,
+        bar_close_ms=records[blocked].bar_close_ms,
+    )
+
+    result = await run_fidelity_over_bars(
+        _binding(run_id="run-1"),
+        provider="fake-phase",
+        warmup=[],
+        live=_retained(bars),
+        records=records,
+        captured_decisions={},
+    )
+
+    assert result.drift_count >= 1
+    drift = next(d for d in result.divergences if d.classification == "drift")
+    assert drift.reason_code == "UNRECOGNIZED_BLOCK_REASON"
 ```
 
-Note the important property this test pins: because the fake blocked ENTER is settled `DISCARD` in **both** the recorder and the replay, every bucket after it still matches — the expected-live-effect fork never cascades into drift.
+Note the important property the blocked-ENTER test pins: because the fake blocked ENTER is settled `DISCARD` in **both** the recorder and the replay, every bucket after it still matches — the expected-live-effect fork never cascades into drift. And per finding 3, `MARKET_CLOSED` classifies as expected only because it is in `EXPECTED_LIVE_GATE_REASON_CODES` *and* its digest matches — the two new tests pin both refusal directions.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1110,7 +1410,8 @@ Expected: FAIL — `ImportError: cannot import name 'run_fidelity_over_bars'`.
 Append to `app/services/run_replay_proof.py` (new imports: `AsyncIterator`, `Mapping`, `deque` from `collections`, `Settlement`, `strategy_evaluations`, `_includes_session_phase`, `_COMMIT_WORTHY_OUTCOMES`, `FeedHealth`, `BrokerBotBinding` (TYPE_CHECKING import mirroring `bot_trade_strategy.py:49-51` to avoid a cycle — re-verify: `run_replay_proof` importing `bot_trade_strategy` at runtime is fine since `bot_trade_strategy` does not import this module; a plain runtime import is acceptable), `now_ms_utc`):
 
 ```python
-from app.engine.strategy.signal_program import Settlement
+from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
+from app.engine.strategy.signal_program import Settlement, trace_root
 from app.marketdata.feed import FeedHealth
 from app.services.bot_trade_strategy import _includes_session_phase, strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
@@ -1120,6 +1421,37 @@ _OUTCOMES_BY_STAGED_KIND: dict[str, frozenset[str]] = {
     "ENTER": frozenset({"enter_intent", "entered"}),
     "EXIT": frozenset({"exit_intent", "exited"}),
 }
+
+EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
+    {
+        # bot_trade_strategy.py: the pause gate's blocked-receipt reason.
+        "PAUSED_OBSERVE_ONLY",
+        # app/services/market_liveness.py:60-205 — every liveness fact reason
+        # that can block an ENTER at the pre-Clerk gate. MARKET_TRADABLE is
+        # deliberately absent: it never blocks.
+        "MARKET_LIVENESS_UNAVAILABLE",
+        "MARKET_CLOCK_UNAVAILABLE",
+        "SYMBOL_HALTED",
+        "SYMBOL_STATUS_UNKNOWN",
+        "MARKET_CLOSED",
+        "MARKET_CLOCK_UNKNOWN",
+        "STATUS_STREAM_DISCONNECTED",
+        # app/broker/alpaca/clerk/sqlite/runtime.py — every rejected() branch
+        # that appends a pre-custody `blocked` receipt (:595, :668, :729, :752
+        # plus the stream-health hold whose constant we import).
+        STREAM_HEALTH_REASON_CODE,
+        "MARKET_LIVENESS_BLOCKED",
+        "SIMULATED_SOURCE_BAR_UNPROVEN",
+        "EXIT_CUSTODY_UNPROVEN",
+    }
+)
+"""The CLOSED set of live-only gates (PR #1751 finding 3b).
+
+A `blocked` receipt whose reason is outside this set is classified `drift`
+(`UNRECOGNIZED_BLOCK_REASON`), never trusted. When a new live-only gate is
+added to the runner or Clerk intake, its reason code must be added here in
+the same PR — the classifier failing closed on the new code is the reminder.
+"""
 
 
 @dataclass(frozen=True)
@@ -1141,6 +1473,10 @@ class RunFidelityResult:
     match_count: int
     expected_live_effect_count: int
     drift_count: int
+    # Aligned buckets whose live trace_digest was present AND matched the
+    # replayed trace — the receipt's disclosure of content-level coverage
+    # (digest-less legacy rows fall back to intent-kind comparison).
+    digest_verified_count: int
     divergences: tuple[RunFidelityDivergence, ...]
 
 
@@ -1226,6 +1562,7 @@ async def run_fidelity_over_bars(
     divergences: list[RunFidelityDivergence] = []
     compared = 0
     match_count = 0
+    digest_verified = 0
     async for evaluation in strategy_evaluations(
         binding, feed, captured_decisions=dict(captured_decisions)
     ):
@@ -1269,25 +1606,70 @@ async def run_fidelity_over_bars(
         settlement = (
             Settlement.COMMIT if record.outcome in _COMMIT_WORTHY_OUTCOMES else Settlement.DISCARD
         )
+        # Content-level comparison first (PR #1751 finding 3): evaluation_id
+        # hashes identity, not decision content — only the digest proves the
+        # replayed trace IS the live trace. Digest-less legacy rows fall back
+        # to intent-kind comparison and are excluded from digest_verified.
+        replay_digest = None if evaluation.trace is None else trace_root([evaluation.trace])
+        digest_checked = bool(record.trace_digest) and replay_digest is not None
+        if digest_checked and record.trace_digest != replay_digest:
+            divergences.append(
+                RunFidelityDivergence(
+                    evaluation_id=evaluation.evaluation_id,
+                    bar_close_ms=evaluation.decision_bar_close_ms,
+                    classification="drift",
+                    reason_code="TRACE_DIGEST_MISMATCH",
+                    replay_staged=staged,
+                    live_outcome=record.outcome,
+                    detail=(
+                        "Replayed trace content differs from the live-captured digest "
+                        f"(live={record.trace_digest} replay={replay_digest})."
+                    ),
+                )
+            )
+            evaluation.settle_stage(settlement)
+            continue
+        if digest_checked:
+            digest_verified += 1
         if staged is None and record.outcome == "no_action":
             match_count += 1
         elif staged is not None and record.outcome in _OUTCOMES_BY_STAGED_KIND.get(staged, frozenset()):
             match_count += 1
         elif staged is not None and record.outcome == "blocked":
-            divergences.append(
-                RunFidelityDivergence(
-                    evaluation_id=evaluation.evaluation_id,
-                    bar_close_ms=evaluation.decision_bar_close_ms,
-                    classification="expected_live_effect",
-                    reason_code=record.reason_code or "BLOCKED",
-                    replay_staged=staged,
-                    live_outcome=record.outcome,
-                    detail=(
-                        "The shared math staged this intent; a live-only gate "
-                        "(liveness, pause, or Clerk refusal) durably refused it."
-                    ),
+            # A blocked row is cross-checked, never trusted on presence: the
+            # replay staged the intent (guaranteed by this branch), the digest
+            # matched (checked above when present), and the reason must be a
+            # known live-only gate — anything else is drift, fail closed.
+            if record.reason_code in EXPECTED_LIVE_GATE_REASON_CODES:
+                divergences.append(
+                    RunFidelityDivergence(
+                        evaluation_id=evaluation.evaluation_id,
+                        bar_close_ms=evaluation.decision_bar_close_ms,
+                        classification="expected_live_effect",
+                        reason_code=record.reason_code,
+                        replay_staged=staged,
+                        live_outcome=record.outcome,
+                        detail=(
+                            "The shared math staged this intent; a live-only gate "
+                            "(liveness, pause, or Clerk refusal) durably refused it."
+                        ),
+                    )
                 )
-            )
+            else:
+                divergences.append(
+                    RunFidelityDivergence(
+                        evaluation_id=evaluation.evaluation_id,
+                        bar_close_ms=evaluation.decision_bar_close_ms,
+                        classification="drift",
+                        reason_code="UNRECOGNIZED_BLOCK_REASON",
+                        replay_staged=staged,
+                        live_outcome=record.outcome,
+                        detail=(
+                            f"Blocked reason {record.reason_code!r} is not in the closed "
+                            "live-only-gate set; refusing to classify it as expected."
+                        ),
+                    )
+                )
         else:
             divergences.append(
                 RunFidelityDivergence(
@@ -1320,6 +1702,7 @@ async def run_fidelity_over_bars(
         match_count=match_count,
         expected_live_effect_count=expected,
         drift_count=drift,
+        digest_verified_count=digest_verified,
         divergences=tuple(divergences),
     )
 ```
@@ -1327,7 +1710,7 @@ async def run_fidelity_over_bars(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `DATA_PLANE_CONTROL_SECRET="" python -m pytest tests/services/test_run_replay_fidelity.py -x -q`
-Expected: PASS (3 passed).
+Expected: PASS (5 passed).
 
 - [ ] **Step 5: Lint the touched files**
 
@@ -1355,7 +1738,7 @@ git commit -m "feat(replay-proof): disposition-faithful fidelity replay with div
 - Produces (schemas, all snake_case, all times `int64 ms UTC`):
   - `EngineParityDivergenceModel(index: int, evaluation_id: str | None, field: str, expected: str, observed: str)`
   - `RunReplayDivergenceModel(evaluation_id: str, bar_close_ms: int, classification: Literal["expected_live_effect", "drift"], reason_code: str, replay_staged: str | None, live_outcome: str | None, detail: str)`
-  - `RunReplayReceipt` — fields exactly: `schema_version: Literal[1] = 1`, `strategy_instance_id: str`, `run_id: str`, `strategy_key: str`, `symbol: str`, `provider: str`, `status: Literal["pending", "parity", "parity_with_expected_live_effects", "drift", "replay_failed"]`, `bar_set_digest: str`, `retained_bar_count: int (ge=0)`, `engine_parity_trace_root: str | None`, `engine_parity_compared_count: int (ge=0)`, `engine_parity_divergence: EngineParityDivergenceModel | None`, `live_compared_count: int (ge=0)`, `match_count: int (ge=0)`, `expected_live_effect_count: int (ge=0)`, `drift_count: int (ge=0)`, `records_truncated: bool`, `divergences: list[RunReplayDivergenceModel]`, `program_version: str | None`, `sealed_program_hash: str | None`, `generated_at_ms: int (ge=0)`, `error: str | None = None`. `model_config = ConfigDict(frozen=True, extra="forbid")`.
+  - `RunReplayReceipt` — fields exactly: `schema_version: Literal[1] = 1`, `strategy_instance_id: str`, `run_id: str`, `strategy_key: str`, `symbol: str`, `provider: str`, `status: Literal["pending", "parity", "parity_with_expected_live_effects", "indeterminate", "drift", "replay_failed"]` (`indeterminate` = evidence known-incomplete or engine leg unprovable — never a proof verdict from partial evidence; PR #1751 finding 6), `bar_set_digest: str`, `retained_bar_count: int (ge=0)`, `ledger_end_seq: int | None` (run-end bound snapshotted at Stop; PR #1751 finding 4 — regeneration reuses it so run N's input never grows when run N+1 appends), `engine_parity_trace_root: str | None`, `engine_parity_compared_count: int (ge=0)`, `engine_parity_divergence: EngineParityDivergenceModel | None`, `live_compared_count: int (ge=0)`, `match_count: int (ge=0)`, `expected_live_effect_count: int (ge=0)`, `drift_count: int (ge=0)`, `digest_verified_count: int (ge=0)` (content-level coverage disclosure — buckets whose live trace digest was verified; digest-less legacy rows are the receipt's stated residual blind spot), `records_truncated: bool`, `divergences: list[RunReplayDivergenceModel]`, `program_version: str | None`, `sealed_program_hash: str | None`, `generated_at_ms: int (ge=0)`, `error: str | None = None`. `model_config = ConfigDict(frozen=True, extra="forbid")`.
   - Store: `write_run_replay_receipt(instance_dir: Path, receipt: RunReplayReceipt) -> Path` (atomic temp+`os.replace`; replaceable — pending→final and on-demand regeneration are legitimate rewrites, unlike the create-once `run_build_evidence` pattern) and `read_run_replay_receipt(instance_dir: Path, strategy_instance_id: str, run_id: str) -> RunReplayReceipt | None` (identity-checked like `read_program_build_evidence`).
 
 - [ ] **Step 1: Write the failing test**
@@ -1386,6 +1769,7 @@ def _receipt(*, status: str = "pending", run_id: str = "run-1") -> RunReplayRece
         status=status,
         bar_set_digest="0" * 64,
         retained_bar_count=0,
+        ledger_end_seq=None,
         engine_parity_trace_root=None,
         engine_parity_compared_count=0,
         engine_parity_divergence=None,
@@ -1393,6 +1777,7 @@ def _receipt(*, status: str = "pending", run_id: str = "run-1") -> RunReplayRece
         match_count=0,
         expected_live_effect_count=0,
         drift_count=0,
+        digest_verified_count=0,
         records_truncated=False,
         divergences=[],
         program_version=None,
@@ -1509,6 +1894,7 @@ class RunReplayProofService:
     binding_for: Callable[[str, str], BrokerBotBinding]          # (broker, sid) -> binding; raises typed runner errors
     run_record_for: Callable[[str, str], BotRunRecord | None]    # (sid, run_id)
     is_running: Callable[[str], bool]
+    run_outcome_for: Callable[[str, str], BotRunOutcomeRecord | None] | None = None  # (sid, run_id); wall-clock end-bound fallback
     authority_for: Callable[[BrokerBotBinding], Any] | None = None   # BindingAuthority; None only in tests
     records_for_run: Callable[[BrokerBotBinding, str], Awaitable[LiveRunDecisionEvidence]] | None = None
 
@@ -1517,7 +1903,10 @@ class RunReplayProofService:
     async def generate(self, broker: str, strategy_instance_id: str, run_id: str) -> RunReplayReceipt: ...
 ```
 
-  - `generate` semantics later tasks rely on: raises `RunReplayUnavailableError(http_status=409)` when `run_id` is the instance's current run AND `is_running(sid)`; raises `RunReplayUnavailableError(http_status=404)` when no `BotRunRecord` exists; on any *compute* failure it persists and returns a `status="replay_failed"` receipt (never raises for compute errors); otherwise persists and returns the final receipt with status derived as: `drift` if the engine leg diverged/errored or `drift_count > 0`; else `parity_with_expected_live_effects` if `expected_live_effect_count > 0`; else `parity`.
+  - Pure input-bounding helpers (PR #1751 finding 4), both module-level and unit-tested here:
+    - `bounded_replay_bars(bars: Sequence[RetainedSourceBar], *, ledger_end_seq: int | None, terminal_recorded_at_ms: int | None) -> list[RetainedSourceBar]` — seq bound wins; wall-clock terminal bound is the fallback; **neither bound → `RunReplayUnavailableError`** (an unbounded replay is not evidence)
+    - `refine_split_with_first_decision(warmup: list[RetainedSourceBar], live: list[RetainedSourceBar], *, first_decision_close_ms: int | None, decision_timeframe_ms: int | None) -> tuple[list[RetainedSourceBar], list[RetainedSourceBar]]` — decision-anchored warmup/live boundary (first recorded bucket's open); no-op passthrough when either input is `None`/`0`
+  - `generate` semantics later tasks rely on: raises `RunReplayUnavailableError(http_status=409)` when `run_id` is the instance's current run AND `is_running(sid)`; raises `RunReplayUnavailableError(http_status=404)` when no `BotRunRecord` exists; replay input is bounded by the stored receipt's `ledger_end_seq` (snapshotted by `write_pending` at Stop) or, when absent, by the run's `BotRunOutcomeRecord.recorded_at_ms` — with neither, it refuses (409); on any *compute* failure it persists and returns a `status="replay_failed"` receipt (never raises for compute errors); otherwise persists and returns the final receipt with status derived as: `drift` if the engine leg **diverged** or `drift_count > 0`; else `indeterminate` if `records_truncated` or the engine leg was **unprovable** (`parity.error`) — known-incomplete evidence never yields a proof verdict (finding 6); else `parity_with_expected_live_effects` if `expected_live_effect_count > 0`; else `parity`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1531,7 +1920,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.account_authority import paper_evidence_account_id_for_strategy
-from app.services.bot_binding_repository import BotRunRecord
+from app.services.bot_binding_repository import BotRunOutcomeRecord, BotRunRecord
 from app.services.run_replay_proof import (
     LiveRunDecisionEvidence,
     RunReplayProofService,
@@ -1553,8 +1942,19 @@ def _run_record(started_at_ms: int) -> BotRunRecord:
     )
 
 
+def _outcome(recorded_at_ms: int) -> BotRunOutcomeRecord:
+    return BotRunOutcomeRecord(
+        strategy_instance_id=_SID,
+        run_id="run-1",
+        kind="STOPPED",
+        reason_code="OPERATOR_STOP",
+        recorded_at_ms=recorded_at_ms,
+    )
+
+
 def _service(tmp_path: Path, evidence: LiveRunDecisionEvidence, *, running: bool = False,
-             record: BotRunRecord | None = None) -> RunReplayProofService:
+             record: BotRunRecord | None = None,
+             outcome: BotRunOutcomeRecord | None = None) -> RunReplayProofService:
     async def _records_for_run(binding, run_id: str) -> LiveRunDecisionEvidence:
         del binding, run_id
         return evidence
@@ -1565,6 +1965,7 @@ def _service(tmp_path: Path, evidence: LiveRunDecisionEvidence, *, running: bool
         binding_for=lambda broker, sid: _binding(run_id="run-1"),
         run_record_for=lambda sid, run_id: record,
         is_running=lambda sid: running,
+        run_outcome_for=lambda sid, run_id: outcome,
         records_for_run=_records_for_run,
     )
 
@@ -1583,13 +1984,20 @@ async def test_generate_produces_a_parity_receipt_for_a_faithful_run(tmp_path: P
     for bar in bars:
         ledger.append(bar)
     ledger.close()
-    service = _service(tmp_path, evidence, record=_run_record(bars[0].start_ms - 1))
+    service = _service(
+        tmp_path,
+        evidence,
+        record=_run_record(bars[0].start_ms - 1),
+        outcome=_outcome(bars[-1].end_ms),  # wall-clock end bound: run ended after the last bar
+    )
 
     receipt = await service.generate("alpaca", _SID, "run-1")
 
     assert receipt.status == "parity"
     assert receipt.drift_count == 0
     assert receipt.retained_bar_count == len(bars)
+    assert receipt.ledger_end_seq == len(bars)  # the applied bound is disclosed for stable regeneration
+    assert receipt.digest_verified_count == len(records)
     assert receipt.engine_parity_trace_root is not None
     assert receipt.live_compared_count == len(records) > 0
     assert service.read(_SID, "run-1") == receipt  # durably persisted
@@ -1613,6 +2021,51 @@ async def test_generate_without_launch_evidence_is_a_404(tmp_path: Path) -> None
     with pytest.raises(RunReplayUnavailableError) as excinfo:
         await service.generate("alpaca", _SID, "run-1")
     assert excinfo.value.http_status == 404
+
+
+@pytest.mark.asyncio
+async def test_generate_with_truncated_evidence_is_indeterminate_never_parity(tmp_path: Path) -> None:
+    """PR #1751 finding 6: known-incomplete decision history must not prove parity."""
+    bars = _ema_parity_bars_through_first_exit()
+    records = await _record_live_pass(bars, block_first_enter=False)
+    evidence = LiveRunDecisionEvidence(
+        records=tuple(records), crash_records=(), captured_decisions={}, truncated=True
+    )
+    ledger = SourceBarLedger(
+        artifacts_root=tmp_path / "artifacts",
+        account_id=paper_evidence_account_id_for_strategy(_SID),
+    )
+    for bar in bars:
+        ledger.append(bar)
+    ledger.close()
+    service = _service(
+        tmp_path, evidence,
+        record=_run_record(bars[0].start_ms - 1),
+        outcome=_outcome(bars[-1].end_ms),
+    )
+
+    receipt = await service.generate("alpaca", _SID, "run-1")
+
+    assert receipt.status == "indeterminate"
+    assert receipt.records_truncated is True
+
+
+@pytest.mark.asyncio
+async def test_generate_without_any_end_bound_refuses(tmp_path: Path) -> None:
+    """PR #1751 finding 4: an unbounded replay input is not evidence."""
+    bars = _ema_parity_bars_through_first_exit()
+    evidence = LiveRunDecisionEvidence(records=(), crash_records=(), captured_decisions={}, truncated=False)
+    ledger = SourceBarLedger(
+        artifacts_root=tmp_path / "artifacts",
+        account_id=paper_evidence_account_id_for_strategy(_SID),
+    )
+    for bar in bars:
+        ledger.append(bar)
+    ledger.close()
+    service = _service(tmp_path, evidence, record=_run_record(bars[0].start_ms - 1), outcome=None)
+
+    with pytest.raises(RunReplayUnavailableError):
+        await service.generate("alpaca", _SID, "run-1")
 ```
 
 Note: `_record_live_pass` is imported from Task 6's test module — if the import feels awkward, move `_record_live_pass` into a shared helper `tests/_helpers/run_replay.py` in this step and import it in both test modules (do the move, don't copy).
@@ -1628,6 +2081,67 @@ Append to `app/services/run_replay_proof.py` (new imports: `Awaitable`, `Callabl
 
 ```python
 _MAX_RECEIPT_DIVERGENCES = 50
+
+
+def bounded_replay_bars(
+    bars: Sequence[RetainedSourceBar],
+    *,
+    ledger_end_seq: int | None,
+    terminal_recorded_at_ms: int | None,
+) -> list[RetainedSourceBar]:
+    """Bound one run's replay input at its durable end (PR #1751 finding 4).
+
+    The ledger-sequence bound (snapshotted at Stop) wins; the run's terminal
+    outcome instant is the wall-clock fallback for crashed/legacy runs. With
+    neither, refuse: regenerating run N after run N+1 appended bars would
+    otherwise change N's input, digest, and verdict.
+    """
+    if ledger_end_seq is not None:
+        return [bar for bar in bars if bar.seq <= ledger_end_seq]
+    if terminal_recorded_at_ms is not None:
+        return [bar for bar in bars if bar.end_ms <= terminal_recorded_at_ms]
+    raise RunReplayUnavailableError(
+        "The run has no durable end boundary (no receipt snapshot and no terminal outcome).",
+        detail="An unbounded replay input is not evidence; stop the run or repair its terminal record.",
+    )
+
+
+def refine_split_with_first_decision(
+    warmup: list[RetainedSourceBar],
+    live: list[RetainedSourceBar],
+    *,
+    first_decision_close_ms: int | None,
+    decision_timeframe_ms: int | None,
+) -> tuple[list[RetainedSourceBar], list[RetainedSourceBar]]:
+    """Anchor the warmup/live boundary at the first recorded decision bucket.
+
+    The wall-clock split can misclassify a bar that closed between launch and
+    the warmup fetch; the run's own first decision receipt names its bucket
+    exactly, so when both facts exist the boundary is that bucket's open
+    (``bar_close_ms - decision_timeframe_ms``). Passthrough otherwise.
+    """
+    if not first_decision_close_ms or not decision_timeframe_ms:
+        return warmup, live
+    boundary_ms = first_decision_close_ms - decision_timeframe_ms
+    merged = warmup + live
+    return (
+        [bar for bar in merged if bar.end_ms <= boundary_ms],
+        [bar for bar in merged if bar.end_ms > boundary_ms],
+    )
+
+
+def _seal_decision_timeframe_ms(binding: BrokerBotBinding) -> int | None:
+    """The seal-attested decision clock width, when this instance carries one.
+
+    Attribute path mirrors ``bot_trade_strategy_warmup._warmup_lookback_days_for``
+    (:77-79), which reads ``seal.configured_signal.clock.warmup_lookback_days``
+    — re-verify ``decision_timeframe_ms`` sits on the same ``clock`` model
+    before shipping; fall back to ``None`` (wall-clock split) when absent.
+    """
+    seal = binding.sealed_program
+    if seal is None:
+        return None
+    return int(seal.configured_signal.clock.decision_timeframe_ms)
 
 
 def ledger_account_id_for(binding: BrokerBotBinding) -> str:
@@ -1660,10 +2174,38 @@ class RunReplayProofService:
         )
 
     def write_pending(self, binding: BrokerBotBinding, run_id: str) -> None:
-        """Durably record that a receipt is owed before background compute starts."""
+        """Durably record that a receipt is owed before background compute starts.
+
+        Snapshots the retained stream's terminal ``seq`` as the run's end
+        bound (PR #1751 finding 4) — Stop time is the one moment "everything
+        retained so far" and "everything this run observed" coincide. Bound
+        resolution failures degrade to ``None`` (the terminal-outcome
+        fallback still bounds generation); they must never fail Stop itself.
+        """
+        end_seq: int | None = None
+        try:
+            ledger = SourceBarLedger(
+                artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
+            )
+            try:
+                provider = replay_provider_for(ledger, binding.symbol)
+                stream = ledger.bars(provider=provider, symbol=binding.symbol)
+                end_seq = stream[-1].seq if stream else None
+            finally:
+                ledger.close(checkpoint=False)
+        except RunReplayUnavailableError as error:
+            logger.warning(
+                "Pending replay receipt written without a ledger end bound",
+                extra={
+                    "action": "run_replay_end_bound_unavailable",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": run_id,
+                    "reason": str(error),
+                },
+            )
         write_run_replay_receipt(
             self.instance_dir_for(binding.strategy_instance_id),
-            self._skeleton(binding, run_id, status="pending"),
+            self._skeleton(binding, run_id, status="pending", ledger_end_seq=end_seq),
         )
 
     async def generate(self, broker: str, strategy_instance_id: str, run_id: str) -> RunReplayReceipt:
@@ -1692,7 +2234,16 @@ class RunReplayProofService:
                     "run_id": run_id,
                 },
             )
-            receipt = self._skeleton(binding, run_record.run_id, status="replay_failed", error=str(error))
+            stored = self.read(strategy_instance_id, run_id)
+            receipt = self._skeleton(
+                binding,
+                run_record.run_id,
+                status="replay_failed",
+                error=str(error),
+                # Preserve the Stop-time end bound so a later regeneration
+                # replays the same run-bounded input (PR #1751 finding 4).
+                ledger_end_seq=None if stored is None else stored.ledger_end_seq,
+            )
         write_run_replay_receipt(instance_dir, receipt)
         return receipt
 
@@ -1702,16 +2253,37 @@ class RunReplayProofService:
         )
         try:
             provider = replay_provider_for(ledger, binding.symbol)
-            bars = ledger.bars(provider=provider, symbol=binding.symbol)
+            all_bars = ledger.bars(provider=provider, symbol=binding.symbol)
         finally:
             ledger.close(checkpoint=False)
+        # Run-bounded input (PR #1751 finding 4): stored seq snapshot first,
+        # terminal-outcome wall clock second, refuse when neither exists.
+        stored = self.read(binding.strategy_instance_id, run_record.run_id)
+        outcome = (
+            None
+            if self.run_outcome_for is None
+            else self.run_outcome_for(binding.strategy_instance_id, run_record.run_id)
+        )
+        bars = bounded_replay_bars(
+            all_bars,
+            ledger_end_seq=None if stored is None else stored.ledger_end_seq,
+            terminal_recorded_at_ms=None if outcome is None else outcome.recorded_at_ms,
+        )
         if not bars:
             raise RunReplayUnavailableError(
-                f"No retained source bars exist for {binding.symbol!r}; nothing to replay.",
+                f"No retained source bars exist for {binding.symbol!r} within this run's bounds.",
                 http_status=404,
             )
-        warmup, live = split_warmup_and_live(bars, run_record.started_at_ms)
         evidence = await self._evidence(binding, run_record.run_id)
+        warmup, live = split_warmup_and_live(bars, run_record.started_at_ms)
+        warmup, live = refine_split_with_first_decision(
+            warmup,
+            live,
+            first_decision_close_ms=(
+                evidence.records[0].bar_close_ms if evidence.records else None
+            ),
+            decision_timeframe_ms=_seal_decision_timeframe_ms(binding),
+        )
         decided = [bar for bar in bars if _includes_session_phase(bar, use_rth=binding.use_rth)]
 
         def _compute_sync() -> tuple[EngineParityResult, RunFidelityResult]:
@@ -1777,6 +2349,7 @@ class RunReplayProofService:
         *,
         status: str,
         error: str | None = None,
+        ledger_end_seq: int | None = None,
     ) -> RunReplayReceipt:
         proof = binding.program_build
         seal = binding.sealed_program
@@ -1789,6 +2362,7 @@ class RunReplayProofService:
             status=status,
             bar_set_digest="",
             retained_bar_count=0,
+            ledger_end_seq=ledger_end_seq,
             engine_parity_trace_root=None,
             engine_parity_compared_count=0,
             engine_parity_divergence=None,
@@ -1796,6 +2370,7 @@ class RunReplayProofService:
             match_count=0,
             expected_live_effect_count=0,
             drift_count=0,
+            digest_verified_count=0,
             records_truncated=False,
             divergences=[],
             program_version=None if proof is None else proof.program_version,
@@ -1830,9 +2405,15 @@ class RunReplayProofService:
         ]
         all_divergences = crash_divergences + list(fidelity.divergences)
         expected = fidelity.expected_live_effect_count + len(crash_divergences)
-        engine_ok = parity.divergence is None and parity.error is None
-        if not engine_ok or fidelity.drift_count > 0:
+        # Verdict ordering (PR #1751 finding 6): real drift is the loudest
+        # verdict; known-incomplete evidence (truncated records) or an
+        # unprovable engine leg (`parity.error`) is INDETERMINATE — partial
+        # evidence never earns a proof verdict; only complete, clean evidence
+        # may claim parity.
+        if parity.divergence is not None or fidelity.drift_count > 0:
             status = "drift"
+        elif evidence.truncated or parity.error is not None:
+            status = "indeterminate"
         elif expected > 0:
             status = "parity_with_expected_live_effects"
         else:
@@ -1843,6 +2424,11 @@ class RunReplayProofService:
                 "provider": provider,
                 "bar_set_digest": bar_set_digest(bars),
                 "retained_bar_count": len(bars),
+                # Disclose the applied end bound so every regeneration — even
+                # one that resolved the bound via the terminal outcome — is
+                # seq-pinned from here on (stable under later appends).
+                "ledger_end_seq": bars[-1].seq,
+                "digest_verified_count": fidelity.digest_verified_count,
                 "engine_parity_trace_root": parity.trace_root,
                 "engine_parity_compared_count": parity.compared_count,
                 "engine_parity_divergence": (
@@ -1895,20 +2481,23 @@ git commit -m "feat(replay-proof): RunReplayProofService orchestrates the two-le
 
 ---
 
-### Task 9: Stop-path trigger — every stopped run gets a receipt
+### Task 9: Terminal-path triggers + boot recovery — every terminal run gets a receipt
+
+Coverage contract (PR #1751 finding 5 — this replaces the unqualified "every run" language): a run stopped through Stop gets its receipt scheduled at Stop; a run that ends via stream-end, feed death, or an in-process crash gets it scheduled from `_supervise`'s terminal branches; a run whose *process* died (pending receipt orphaned, or terminal outcome with no receipt at all) is caught by a boot-time scan hooked into `run_boot_recovery`. Only runs older than the instance's current-run pointer stay on-demand-only (POST).
 
 **Files:**
-- Modify: `app/services/bot_runner.py` (`BotTaskRegistry.__init__` at :186-300, `_stop_locked` at :836-945)
+- Modify: `app/services/bot_runner.py` (`BotTaskRegistry.__init__` at :186-300, `_stop_locked` at :836-945, `_supervise` at :1139-1199, `run_boot_recovery` at :990-1006)
 - Test: `tests/services/test_run_replay_stop_trigger.py` (create)
 
 **Interfaces:**
-- Consumes: `RunReplayProofService`, `RunReplayUnavailableError` (Task 8), `supported_alpaca_paper_strategy_keys` (`bot_trade_strategy.py:610-637`), registry internals: `self._confined_instance_dir` (:1388), `self.binding_for_control` (:1098-1100 region — re-verify exact def), `self._bindings.read_run_record` (Task 3), `self._is_running` (referenced at :252), `self._authorities.for_binding` (:236-242).
+- Consumes: `RunReplayProofService`, `RunReplayUnavailableError` (Task 8), `supported_alpaca_paper_strategy_keys` (`bot_trade_strategy.py:610-637`), registry internals: `self._confined_instance_dir` (:1388), `self.binding_for_control` (:1098-1100 region — re-verify exact def), `self._bindings.read_run_record` / `.read_outcome` (:706, Task 3), `self._bindings.list_for_broker` (:1088-1096), `self._is_running` (referenced at :252), `self._authorities.for_binding` (:236-242), `_STOP_TIMEOUT_S` (:175).
 - Produces (on `BotTaskRegistry`):
   - `self._replay_proof: RunReplayProofService` and `self._replay_receipt_tasks: set[asyncio.Task[None]]` (constructed in `__init__`)
   - `_schedule_run_replay_receipt(self, binding: BrokerBotBinding) -> None` — writes the `pending` receipt synchronously, then schedules background generation; skips (with an info log) bindings that are not trade/dry_run or whose strategy has no Signal Program
+  - `_resume_pending_replay_receipts(self) -> None` — boot repair: for every alpaca binding whose current run is terminal (has a `BotRunOutcomeRecord`) and whose receipt is absent or still `pending`, re-schedule generation
   - `run_replay_receipt(self, broker: str, strategy_instance_id: str, run_id: str) -> RunReplayReceipt | None`
   - `async generate_run_replay_receipt(self, broker: str, strategy_instance_id: str, run_id: str) -> RunReplayReceipt`
-  - `_stop_locked` calls `_schedule_run_replay_receipt(managed.binding)` after `replace_provisional_stop`.
+  - `_stop_locked` calls `_schedule_run_replay_receipt(managed.binding)` after `replace_provisional_stop`; `_supervise` calls it in its three non-cancel terminal branches (feed death, crash, stream end); `run_boot_recovery` calls `_resume_pending_replay_receipts()` after the recovery sweep.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1950,6 +2539,17 @@ def test_stop_locked_schedules_the_replay_receipt() -> None:
     assert _method_calls(BotTaskRegistry._stop_locked, "_schedule_run_replay_receipt")
 
 
+def test_supervise_schedules_the_replay_receipt_on_terminal_exits() -> None:
+    """PR #1751 finding 5: stream-ended / feed-death / crashed runs owe a
+    receipt too — not only operator Stops."""
+    assert _method_calls(BotTaskRegistry._supervise, "_schedule_run_replay_receipt")
+
+
+def test_run_boot_recovery_resumes_pending_replay_receipts() -> None:
+    """PR #1751 finding 5: a process crash must not orphan `pending` evidence."""
+    assert _method_calls(BotTaskRegistry.run_boot_recovery, "_resume_pending_replay_receipts")
+
+
 @pytest.mark.asyncio
 async def test_schedule_run_replay_receipt_writes_pending_then_generates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1982,6 +2582,68 @@ async def test_schedule_run_replay_receipt_skips_a_log_only_binding(tmp_path: Pa
 
     assert not registry._replay_receipt_tasks
     assert registry._replay_proof.read(_SID, "run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_resume_pending_replay_receipts_schedules_terminal_runs_lacking_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Boot scan (PR #1751 finding 5): a terminal current run with no receipt —
+    the crashed-process case — gets its generation scheduled at next boot."""
+    from app.services.bot_binding_repository import BotRunOutcomeRecord
+
+    registry = _registry(tmp_path)
+    binding = _binding(run_id="run-1")
+    outcome = BotRunOutcomeRecord(
+        strategy_instance_id=_SID,
+        run_id="run-1",
+        kind="CRASHED",
+        reason_code="FEED_DEATH",
+        recorded_at_ms=1_700_000_000_000,
+    )
+    monkeypatch.setattr(registry._bindings, "list_for_broker", lambda broker: [binding])
+    monkeypatch.setattr(registry._bindings, "read_outcome", lambda sid, run_id: outcome)
+    calls: list[tuple[str, str, str]] = []
+
+    async def _fake_generate(broker: str, sid: str, run_id: str):
+        calls.append((broker, sid, run_id))
+
+    monkeypatch.setattr(registry._replay_proof, "generate", _fake_generate)
+
+    registry._resume_pending_replay_receipts()
+
+    await asyncio.gather(*registry._replay_receipt_tasks)
+    assert calls == [("alpaca", _SID, "run-1")]
+
+
+@pytest.mark.asyncio
+async def test_resume_pending_replay_receipts_skips_runs_with_final_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.bot_binding_repository import BotRunOutcomeRecord
+    from tests.services.test_run_replay_receipt_store import _receipt
+
+    registry = _registry(tmp_path)
+    binding = _binding(run_id="run-1")
+    outcome = BotRunOutcomeRecord(
+        strategy_instance_id=_SID,
+        run_id="run-1",
+        kind="STOPPED",
+        reason_code="OPERATOR_STOP",
+        recorded_at_ms=1_700_000_000_000,
+    )
+    monkeypatch.setattr(registry._bindings, "list_for_broker", lambda broker: [binding])
+    monkeypatch.setattr(registry._bindings, "read_outcome", lambda sid, run_id: outcome)
+    from app.services.run_replay_proof import write_run_replay_receipt
+
+    final = _receipt(status="parity").model_copy(
+        update={"strategy_instance_id": _SID, "strategy_key": binding.strategy_key}
+    )
+    write_run_replay_receipt(registry._replay_proof.instance_dir_for(_SID), final)
+
+    registry._resume_pending_replay_receipts()
+
+    assert not registry._replay_receipt_tasks  # nothing owed, nothing scheduled
 ```
 
 Re-verify: `BrokerBotBinding` is a Pydantic model (frozen) — if `model_copy(update={"mode": ...})` trips a validator, construct the log-only binding explicitly with `mode="log_only"` instead. Also re-verify the exact `mode` literal for log-only bindings (grep `_run_log_only_bot` callers in `bot_runtime.py:137-138` — the else branch means any non-trade/dry_run mode string).
@@ -2049,6 +2711,13 @@ In `app/services/bot_runner.py`:
         task.add_done_callback(self._replay_receipt_tasks.discard)
 
     async def _generate_replay_receipt_in_background(self, binding: BrokerBotBinding) -> None:
+        # When scheduled from a terminal branch of the run's own task
+        # (_supervise), that task has not finished yet, so `is_running` would
+        # briefly refuse generation. Wait for the supervised task to settle
+        # first — bounded by the same timeout Stop uses for cancellation.
+        managed = self._bots.get(binding.strategy_instance_id)
+        if managed is not None and not managed.task.done():
+            await asyncio.wait({managed.task}, timeout=_STOP_TIMEOUT_S)
         try:
             await self._replay_proof.generate(
                 binding.broker, binding.strategy_instance_id, binding.run_id
@@ -2063,9 +2732,46 @@ In `app/services/bot_runner.py`:
                     "reason": str(error),
                 },
             )
+
+    def _resume_pending_replay_receipts(self) -> None:
+        """Boot repair (Direction 2): re-schedule receipts a dead process owed.
+
+        Covers two crash shapes: a `pending` receipt whose in-memory task died
+        with the process, and a terminal run (crashed / stream-ended /
+        service-shutdown) that never reached scheduling at all. Scope is each
+        instance's *current* run — older runs stay on-demand via POST.
+        Alpaca is the only in-container runner broker (IBKR bots are
+        host-daemon-managed), so the sweep is alpaca-scoped like _supervise.
+        """
+        for binding in self._bindings.list_for_broker("alpaca"):
+            if binding.mode not in ("trade", "dry_run"):
+                continue
+            if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
+                continue
+            if self._is_running(binding.strategy_instance_id):
+                continue
+            try:
+                receipt = self._replay_proof.read(binding.strategy_instance_id, binding.run_id)
+                if receipt is not None and receipt.status != "pending":
+                    continue
+                outcome = self._bindings.read_outcome(binding.strategy_instance_id, binding.run_id)
+            except (ValueError, OSError) as error:
+                logger.warning(
+                    "Boot replay-receipt scan skipped one instance",
+                    extra={
+                        "action": "run_replay_boot_scan_skipped",
+                        "strategy_instance_id": binding.strategy_instance_id,
+                        "run_id": binding.run_id,
+                        "reason": str(error),
+                    },
+                )
+                continue
+            if outcome is None:
+                continue  # not terminal; its own Stop/terminal path will schedule
+            self._schedule_run_replay_receipt(binding)
 ```
 
-(No blanket `except Exception` here: `generate` already converts compute failures into a durable `replay_failed` receipt; anything else is a real bug that should surface through the event-loop exception handler.)
+(No blanket `except Exception` around `generate`: it already converts compute failures into a durable `replay_failed` receipt; anything else is a real bug that should surface through the event-loop exception handler. The boot scan's per-instance `(ValueError, OSError)` catch is the explicit corrupt-file skip — one bad instance must not block boot repair for the fleet.)
 
 4. In `_stop_locked`, immediately after `self._terminal.replace_provisional_stop(...)` (:939-943) and before `await self._authority_for(managed.binding).release_if_unused()`:
 
@@ -2073,7 +2779,19 @@ In `app/services/bot_runner.py`:
         self._schedule_run_replay_receipt(managed.binding)
 ```
 
-Caution: `_schedule_run_replay_receipt` runs while the ledger's writing run has just closed; the background `generate` opens its own read connection (WAL, 5 s busy timeout) — no coordination needed. `_stop_locked` must stay under the thermo threshold — this adds 1 line there; the ~55 new lines are new methods.
+5. In `_supervise` (:1139-1199), add the same one-line call in each of the three non-cancel terminal branches, immediately after their `finalize_*` call (PR #1751 finding 5 — stream-ended and crashed runs owe receipts too): after `finalize_crash(..., reason_code="FEED_DEATH")` in the `MarketDataFeedError` branch; after `finalize_crash(..., reason_code=type(exc).__name__)` in the generic `except Exception` branch; after `finalize_after_authority_stop(..., reason_code="BAR_STREAM_ENDED")` in the `else` branch. Do NOT add it to the `CancelledError` branch — `_stop_locked` already schedules for operator stops, and cancel-without-intent is finalized `EXITED_UNVERIFIED` whose boot scan / POST path covers it.
+
+```python
+            self._schedule_run_replay_receipt(binding)
+```
+
+6. In `run_boot_recovery` (:990-1006), after the recovery sweep completes (after `report = await self._boot_recovery.run(...)`, before the return — re-verify exact locals):
+
+```python
+        self._resume_pending_replay_receipts()
+```
+
+Caution: `_schedule_run_replay_receipt` runs while the ledger's writing run has just closed; the background `generate` opens its own read connection (WAL, 5 s busy timeout) — no coordination needed. `_stop_locked` must stay under the thermo threshold — this adds 1 line there; the ~110 new lines are new methods.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2084,7 +2802,7 @@ Expected: PASS. If any existing `test_bot_runner.py` stop test now schedules a r
 
 ```bash
 git add app/services/bot_runner.py tests/services/test_run_replay_stop_trigger.py
-git commit -m "feat(replay-proof): Stop writes a pending receipt and generates it in the background"
+git commit -m "feat(replay-proof): terminal-path receipt triggers plus boot-time pending recovery"
 ```
 
 ---
@@ -2316,8 +3034,8 @@ import pytest
 from app.broker.alpaca.clerk.account_authority import paper_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.engine.strategy.signal_program import Settlement
-from app.services.bot_binding_repository import BotRunRecord
+from app.engine.strategy.signal_program import Settlement, trace_root
+from app.services.bot_binding_repository import BotRunOutcomeRecord, BotRunRecord
 from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.run_replay_proof import (
     RunReplayProofService,
@@ -2329,7 +3047,8 @@ from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFe
 
 
 async def _run_and_receipt_live_pass(receipts: SqliteDecisionReceipts, *, block_first_enter: bool) -> None:
-    """Drive the shared seam exactly as run_trade_bot would and durably receipt it."""
+    """Drive the shared seam exactly as run_trade_bot would and durably receipt it,
+    including the Task 5b live-time trace-digest capture."""
     binding = _binding(run_id="run-1")
     blocked_once = False
     async for evaluation in strategy_evaluations(binding, _PhaseFeed(live_bars=_ema_parity_bars_through_first_exit())):
@@ -2339,7 +3058,10 @@ async def _run_and_receipt_live_pass(receipts: SqliteDecisionReceipts, *, block_
             "decision_id": evaluation.evaluation_id,
             "evaluation_id": evaluation.evaluation_id,
             "run_id": "run-1",
+            "decision_bar_close_ms": evaluation.decision_bar_close_ms,
         }
+        if evaluation.trace is not None:
+            facts["trace_digest"] = trace_root([evaluation.trace])
         if staged is None:
             receipts.append(outcome="no_action", symbol="SPY", observed_at_ms=evaluation.decision_bar_close_ms,
                             facts={**facts, "reason_code": "NO_ACTION"}, intent_id=evaluation.evaluation_id)
@@ -2370,6 +3092,11 @@ def _service(tmp_path: Path, receipts: SqliteDecisionReceipts) -> RunReplayProof
             launch_reason="deploy", started_at_ms=bars[0].start_ms - 1,
         ),
         is_running=lambda sid: False,
+        # Wall-clock end bound: the run terminated right after its last bar.
+        run_outcome_for=lambda sid, run_id: BotRunOutcomeRecord(
+            strategy_instance_id=_SID, run_id="run-1", kind="STOPPED",
+            reason_code="OPERATOR_STOP", recorded_at_ms=bars[-1].end_ms,
+        ),
         records_for_run=_records_for_run,
     )
 
@@ -2404,6 +3131,7 @@ async def test_end_to_end_faithful_run_yields_full_parity(tmp_path: Path, receip
     assert receipt.drift_count == 0
     assert receipt.expected_live_effect_count == 0
     assert receipt.live_compared_count > 0
+    assert receipt.digest_verified_count == receipt.live_compared_count  # content-verified end to end
     assert receipt.engine_parity_trace_root is not None
     assert receipt.bar_set_digest != ""
 
@@ -2424,6 +3152,48 @@ async def test_end_to_end_blocked_enter_is_classified_not_reported_as_drift(
         d.classification == "expected_live_effect" and d.reason_code == "MARKET_CLOSED"
         for d in receipt.divergences
     )
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_regenerating_run_one_after_later_appends_is_stable(
+    tmp_path: Path, receipts: SqliteDecisionReceipts
+) -> None:
+    """PR #1751 finding 4: run N's receipt must not change when run N+1 has
+    appended more bars to the same instance-scoped ledger."""
+    _retain_all(tmp_path)
+    await _run_and_receipt_live_pass(receipts, block_first_enter=False)
+    service = _service(tmp_path, receipts)
+
+    first = await service.generate("alpaca", _SID, "run-1")
+
+    # Simulate run N+1: append later bars beyond run-1's terminal instant.
+    bars = _ema_parity_bars_through_first_exit()
+    ledger = SourceBarLedger(
+        artifacts_root=tmp_path / "artifacts",
+        account_id=paper_evidence_account_id_for_strategy(_SID),
+    )
+    try:
+        last = bars[-1]
+        for offset in range(1, 4):
+            ledger.append(
+                last.model_copy(
+                    update={
+                        "start_ms": last.start_ms + offset * 60_000,
+                        "end_ms": last.end_ms + offset * 60_000,
+                        "fetched_at_ms": last.fetched_at_ms + offset * 60_000,
+                    }
+                )
+            )
+    finally:
+        ledger.close()
+
+    second = await service.generate("alpaca", _SID, "run-1")
+
+    assert second.bar_set_digest == first.bar_set_digest
+    assert second.retained_bar_count == first.retained_bar_count
+    assert second.ledger_end_seq == first.ledger_end_seq
+    assert second.status == first.status == "parity"
+    assert second.engine_parity_trace_root == first.engine_parity_trace_root
 ```
 
 Re-verify `SqliteDecisionReceipts.append`'s exact kwargs against `decision_receipts.py:519-538` (as read: `outcome, symbol, observed_at_ms, facts, intent_id, order_ref`) and `ClerkSqliteRepository.initialize` / `register_strategy_instance` against `tests/services/test_candidate_uncaptured_at_crash.py:130-135` before running.
@@ -2431,7 +3201,7 @@ Re-verify `SqliteDecisionReceipts.append`'s exact kwargs against `decision_recei
 - [ ] **Step 2: Run the tests**
 
 Run: `DATA_PLANE_CONTROL_SECRET="" python -m pytest tests/services/test_run_replay_receipt_end_to_end.py -x -q`
-Expected: PASS (2 passed). If the parity case reports drift, debug with superpowers:systematic-debugging — the most likely culprits, in order: the `facts` shape diverging from what `live_run_decision_evidence_from_rows` parses; the run-boundary split putting bar 0 into warmup; a session-close flush bucket receipted by the recorder but not yielded on replay (or vice versa) — compare `evaluation_id` sequences before touching tolerances or classifications.
+Expected: PASS (3 passed). If the parity case reports drift, debug with superpowers:systematic-debugging — the most likely culprits, in order: the `facts` shape diverging from what `live_run_decision_evidence_from_rows` parses; the run-boundary split putting bar 0 into warmup; a session-close flush bucket receipted by the recorder but not yielded on replay (or vice versa) — compare `evaluation_id` sequences before touching tolerances or classifications. If the stability case fails on `ledger_end_seq`, check that the first generation disclosed the applied bound (`bars[-1].seq`) and the second generation read it back from the stored receipt before consulting the terminal outcome.
 
 - [ ] **Step 3: Commit**
 
@@ -2447,6 +3217,8 @@ git commit -m "test(replay-proof): end-to-end retained-run -> classified receipt
 **Files:**
 - Create: `docs/references/run-replay-proof.md`
 - Modify: `docs/architecture/adrs/0043-signal-program-build-proof-and-legacy-seal-migration.md` (one cross-reference line under §5 "Consequences"-adjacent text — an addition, not a rewrite of an Accepted ADR)
+- Modify: `docs/architecture/engine-authority-map.md` (one new row — AGENTS.md "Engine and math authority" requires it in the same PR as any change introducing an engine path)
+- Modify: `docs/math-sources-of-truth.md` — **no new row** (see Step 2b for the explicit rationale the AGENTS.md rule demands; only touch this file if the reviewer of the map row disagrees that no new math concept exists)
 
 **Interfaces:** none produced; consumes the shipped feature's real names.
 
@@ -2462,38 +3234,59 @@ git commit -m "test(replay-proof): end-to-end retained-run -> classified receipt
 
 Every paper/dry run retains its exact source observations in an
 instance-scoped `SourceBarLedger` (`paper:<sid>` / `sim:<sid>` under
-`accounts/alpaca/`), and on Stop (or on demand via
-`POST /api/brokers/{broker}/bots/{sid}/runs/{run_id}/replay-receipt`)
-produces a durable `RunReplayReceipt` at
+`accounts/alpaca/`) and produces a durable `RunReplayReceipt` at
 `live_state/<sid>/run_replay_receipts/<run_id>.json` with two proofs:
 
 1. **Engine parity** — `run_shadow_trace_evaluation`
    (`app/broker/alpaca/clerk/sqlite/qualification_shadow_trace.py`) over the
-   run's full retained stream: BacktestEngine vs the shared runner seam,
-   all-COMMIT, fails on the first divergent trace field.
+   run's retained stream, **bounded at the run's durable end** (the
+   `ledger_end_seq` snapshot taken at Stop, or the terminal outcome's
+   `recorded_at_ms` for crashed/legacy runs): BacktestEngine vs the shared
+   runner seam, all-COMMIT, fails on the first divergent trace field.
 2. **Run fidelity** — a disposition-faithful replay through the production
    `strategy_evaluations` generator, aligned to the run's decision receipts
-   by deterministic `evaluation_id`, settling each stage with the
-   live-recorded disposition so a legitimately-refused intent never cascades
-   into false drift.
+   by deterministic `evaluation_id` and verified **content-by-content**
+   against each receipt's live-captured `trace_digest`
+   (`trace_root([trace])`), settling each stage with the live-recorded
+   disposition so a legitimately-refused intent never cascades into false
+   drift. `digest_verified_count` discloses coverage; digest-less rows
+   (recorded before capture existed) fall back to intent-kind comparison —
+   the receipt's stated residual blind spot.
+
+## When a receipt is generated (coverage contract)
+
+- **Operator Stop** — scheduled at Stop (`pending` written synchronously,
+  compute in the background).
+- **Stream end / feed death / in-process crash** — scheduled from the
+  supervisor's terminal branches.
+- **Process death** — the boot-recovery sweep re-schedules orphaned
+  `pending` receipts and terminal current runs that never got one.
+- **Older historical runs** — on demand only, via
+  `POST /api/brokers/{broker}/bots/{sid}/runs/{run_id}/replay-receipt`.
 
 ## Divergence classification (deliverable 3)
 
 | classification | reason codes | meaning |
 |---|---|---|
-| `expected_live_effect` | receipt `reason_code` of a `blocked` row (liveness gate, `PAUSED_OBSERVE_ONLY`, stream-health hold, Clerk pre-custody refusal), `CANDIDATE_UNCAPTURED_AT_CRASH` | live-only gates the mode-parity seam documents (`tests/engine/strategy/test_signal_program_mode_parity.py`); math agreed, custody legitimately refused |
-| `drift` | `DECISION_MISMATCH`, `MISSING_LIVE_RECORD`, `EVALUATION_ID_MISMATCH`, `UNMATCHED_LIVE_RECORD` | replayed math and durable live record disagree with no enumerating live effect — a real bug, treat like a failed reconciliation |
+| `expected_live_effect` | a `blocked` row whose reason is in the CLOSED set `EXPECTED_LIVE_GATE_REASON_CODES` (liveness gate, `PAUSED_OBSERVE_ONLY`, stream-health hold, Clerk pre-custody refusal) AND whose trace digest matched the replay; `CANDIDATE_UNCAPTURED_AT_CRASH` | live-only gates the mode-parity seam documents (`tests/engine/strategy/test_signal_program_mode_parity.py`); math agreed, custody legitimately refused — a `blocked` row is cross-checked, never trusted on presence |
+| `drift` | `TRACE_DIGEST_MISMATCH`, `DECISION_MISMATCH`, `UNRECOGNIZED_BLOCK_REASON`, `MISSING_LIVE_RECORD`, `EVALUATION_ID_MISMATCH`, `UNMATCHED_LIVE_RECORD` | replayed math and durable live record disagree with no enumerating live effect — a real bug, treat like a failed reconciliation |
 
 Statuses: `pending` → `parity` | `parity_with_expected_live_effects` |
-`drift` | `replay_failed`.
+`indeterminate` | `drift` | `replay_failed`. Verdict ordering: real drift is
+the loudest; known-incomplete evidence (`records_truncated`) or an
+unprovable engine leg yields `indeterminate` — partial evidence never earns
+a proof verdict.
 
 ## Known bounds (documented, not hidden)
 
 - **Receipt-retention truncation:** a run longer than
-  `MAX_DECISION_RECEIPTS_PER_STRATEGY` decisions sets `records_truncated`;
-  alignment beyond the retained window reports drift honestly rather than
-  guessing. The retention floor test pins that a normal daily run never hits
-  this.
+  `MAX_DECISION_RECEIPTS_PER_STRATEGY` decisions sets `records_truncated`
+  and forces the verdict to `indeterminate` — never `parity`. The retention
+  floor test pins that a normal daily run never hits this.
+- **Digest coverage:** rows recorded before live-time trace-digest capture
+  existed verify at intent level only; `digest_verified_count` vs
+  `live_compared_count` discloses exactly how much of the run was
+  content-verified.
 - **Ledger capacity:** `SOURCE_BAR_STREAM_CAPACITY` (200k bars/stream) fails
   closed per #1740; a months-old instance needs a reviewed rollover before
   its next run can retain.
@@ -2515,23 +3308,37 @@ the bars — the bars themselves are retained separately per instance by the
 per-run replay receipt that joins the two after every run.
 ```
 
-- [ ] **Step 3: Project-scope verification (pre-push gate)**
+- [ ] **Step 2b: Update the engine/math authority registries (AGENTS.md gate — PR #1751 finding 1)**
+
+AGENTS.md ("Engine and math authority") requires **both** registries updated in the same PR as any change that introduces an engine path. This plan introduces one (the replay/parity receipt path), so:
+
+1. `docs/architecture/engine-authority-map.md` — append this row to "The map" table (match the existing five-column format `| Job | Owning engine (canonical) | Path / entry point | Role | Status |`) and add this PR to the "Last reviewed" line:
+
+```markdown
+| Run-scoped replay proof (per-run parity receipt for Paper/Dry Run) | `BacktestEngine` (reference leg, via `qualification_shadow_trace.run_shadow_trace_evaluation`) + the shared runner seam `strategy_evaluations` (fidelity leg) — no third engine is introduced | `app/services/run_replay_proof.py` (`RunReplayProofService`) | Evidence generation only: replays a completed run's retained bars through the two existing engines and classifies divergence against the run's decision receipts. Never a decision, admission, or promotion gate. | Active |
+```
+
+2. `docs/math-sources-of-truth.md` — **no new row, stated explicitly here per the rule:** this plan introduces no new math concept. Both proof legs re-execute *existing* canonical implementations (`BacktestEngine`, `strategy_evaluations`, the sealed programs' own math); the only "computation" added is content hashing, which reuses the already-canonical `trace_root` / `_semantic_hash` (`app/engine/strategy/signal_program.py:359-371`) and a `sha256` over canonical JSON for `bar_set_digest` — hashing for identity, not a numerical concept with a reference or tolerance. If a reviewer disagrees, the row to add would name `bar_set_digest` with canonical file `app/services/run_replay_proof.py` and its validating test `tests/services/test_run_replay_proof_assembly.py::test_bar_set_digest_changes_when_a_payload_changes` — but the default position of this plan is that no registry entry is owed, and the engine-authority-map row above is the required update.
+
+- [ ] **Step 3: Full-suite verification (pre-push gate — PR #1751 finding 2)**
 
 Run, in order:
 
 ```bash
 ruff check app/ tests/
-DATA_PLANE_CONTROL_SECRET="" python -m pytest tests/ -q -k "not slow"
+DATA_PLANE_CONTROL_SECRET="" python -m pytest tests/ -q
 python scripts/export_openapi_contract.py --check
 ```
 
-Expected: ruff clean; pytest — zero failures beyond the pre-existing baseline (establish the baseline on the base branch per `.claude/rules/testing.md` before attributing any failure); contract check exits 0. Fix anything new before proceeding.
+The pytest run is the **full suite, deliberately without `-k "not slow"`**: per `.claude/rules/testing.md` the full per-stack suite is the ONE pre-push gate, and the `-k "not slow"` filter (from `.claude/CLAUDE.md`'s container quick-loop) would exclude the slow-marked LEAN↔spec parity surface — exactly the surface this PR's replay proof touches. Budget the extra minutes; do not substitute the fast loop here.
+
+Expected: ruff clean; pytest — zero failures beyond the pre-existing baseline (establish the baseline on the base branch **with the same full-suite command** per `.claude/rules/testing.md` before attributing any failure; surface pre-existing failures in the PR description); contract check exits 0. Fix anything new before proceeding.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/references/run-replay-proof.md docs/architecture/adrs/0043-signal-program-build-proof-and-legacy-seal-migration.md
-git commit -m "docs(replay-proof): reference note + ADR 0043 cross-link for run-scoped replay receipts"
+git add docs/references/run-replay-proof.md docs/architecture/adrs/0043-signal-program-build-proof-and-legacy-seal-migration.md docs/architecture/engine-authority-map.md
+git commit -m "docs(replay-proof): reference note, ADR 0043 cross-link, engine-authority-map entry"
 ```
 
 - [ ] **Step 5: Before opening the PR**
@@ -2546,7 +3353,8 @@ Invoke the `thermo-nuclear-code-quality-review` skill (one-shot gate, per CLAUDE
 |---|---|
 | RQ1: wire `SourceBarLedger` into `run_trade_bot`; retention/size economics | Tasks 1–2 (wiring), design decision (a) (economics: existing 200k fail-closed capacity, #1740 rollover, retention-floor test) |
 | RQ2: per-run parity receipt on Stop/on demand via `run_shadow_trace_evaluation`, receipt in evidence dir alongside `run_build_evidence/` | Tasks 4 (engine leg), 7 (schema/store at `run_replay_receipts/`), 8 (orchestrator), 9 (Stop trigger), 10 (on demand) |
-| RQ3: classify divergence (liveness gate on ENTER, Clerk rejections — the mode-parity residual gaps) instead of a bare boolean | Tasks 5–6 (classifier: `expected_live_effect` — blocked receipts cover liveness, pause, stream-health, Clerk pre-custody refusals; crash windows; vs `drift`), design decision (d) |
+| RQ3: classify divergence (liveness gate on ENTER, Clerk rejections — the mode-parity residual gaps) instead of a bare boolean | Tasks 5, 5b, 6 (content-level `trace_digest` capture + digest-by-digest comparison; `blocked` rows cross-checked against the closed `EXPECTED_LIVE_GATE_REASON_CODES` set, never trusted on presence; crash windows; vs `drift`), design decisions (d)/(d2) |
 | RQ4: where does the receipt surface | Task 10 (REST read path; UI explicitly out of scope per plan brief). Promotion-evidence wiring (Direction 3) is **deferred** — it belongs to Direction 3's chain-of-custody design, which will consume `bar_set_digest` + `engine_parity_trace_root` from this receipt |
-| "Done when": deterministic replay from own retained bars, mechanical trace-root comparison, durable evidence attached to the run | Task 11 end-to-end test is the executable form of the done-when |
-| EOD trigger (spec: "on Stop/EOD") | Covered by Stop: the daily lifecycle stops bots at the bell (memory: EOD stop sweeps), and `BAR_STREAM_ENDED` runs end through `_supervise`'s terminal path, not `_stop_locked` — a receipt for stream-ended runs remains reachable via POST. If automatic stream-end receipts are wanted later, add the same `_schedule_run_replay_receipt` call to `finalize_after_authority_stop`'s call site in `_supervise` (:1192-1197); deferred deliberately to keep the crash path change-free in this plan |
+| "Done when": deterministic replay from own retained bars, mechanical trace-root comparison, durable evidence attached to the run | Task 11 end-to-end test is the executable form of the done-when, including the regenerate-after-later-appends stability property (run-bounded input) |
+| EOD trigger (spec: "on Stop/EOD") | Task 9: Stop schedules at Stop (the daily lifecycle stops bots at the bell); `_supervise`'s terminal branches schedule for `BAR_STREAM_ENDED`, feed-death, and crash exits; the `run_boot_recovery` scan covers process-death orphans (pending receipts and terminal runs lacking one). Coverage contract stated at the top of Task 9 and in `docs/references/run-replay-proof.md` |
+| PR #1751 review findings 1–6 | 1: Task 12 Step 2b (engine-authority-map row + explicit no-new-math statement). 2: Task 12 Step 3 (full suite, no slow-exclusion, with rationale). 3: design (d2), Tasks 5/5b/6 (digest capture + closed gate set + coverage disclosure). 4: design (c), Tasks 7–8, 11 (`ledger_end_seq` snapshot, outcome fallback, refuse-unbounded, decision-anchored split, stability test). 5: Task 9 (terminal-branch triggers + boot scan + narrowed coverage contract). 6: Tasks 7–8 (`indeterminate` status, truncated-forces-indeterminate test) |
