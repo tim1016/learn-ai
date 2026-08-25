@@ -614,6 +614,8 @@ class SqliteAlpacaClerkFacade:
                             "decision_id": decision_evidence.evaluation_id,
                             "evaluation_id": decision_evidence.evaluation_id,
                             "reason_code": decision_evidence.reason_code,
+                            "trace_digest": decision_evidence.trace_digest,
+                            "decision_bar_close_ms": decision_evidence.decision_bar_close_ms,
                         }
                     ),
                 )
@@ -1096,6 +1098,8 @@ def _append_pre_custody_refusal(
                 "reason_code": reason_code,
                 "refusal_reason": explanation,
                 "retention_class": "protected_refusal",
+                "trace_digest": evidence.trace_digest,
+                "decision_bar_close_ms": evidence.decision_bar_close_ms,
             }
         ),
     )

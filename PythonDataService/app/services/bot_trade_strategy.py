@@ -40,6 +40,7 @@ from app.engine.strategy.signal_program import (
     Settlement,
     SignalProgram,
     StageQuarantine,
+    trace_root,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
@@ -800,6 +801,10 @@ async def run_trade_bot(
                         else "exit_intent"
                     ),
                     observed_at_ms=now_ms_utc(),
+                    trace_digest=(
+                        trace_root([evaluation.trace]) if evaluation.trace is not None else None
+                    ),
+                    decision_bar_close_ms=evaluation.decision_bar_close_ms,
                 ),
             )
         except AdmissionBlockedError as exc:
@@ -859,6 +864,9 @@ def _append_decision_receipt(
         "reason_code": reason_code,
         "retention_class": _PROTECTED_RETENTION_CLASS_BY_OUTCOME.get(outcome, "tail"),
     }
+    facts["decision_bar_close_ms"] = evaluation.decision_bar_close_ms
+    if evaluation.trace is not None:
+        facts["trace_digest"] = trace_root([evaluation.trace])
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
     receipts.append(
@@ -1030,6 +1038,10 @@ async def run_dry_run_bot(
                     else "exit_intent"
                 ),
                 observed_at_ms=now_ms_utc(),
+                trace_digest=(
+                    trace_root([evaluation.trace]) if evaluation.trace is not None else None
+                ),
+                decision_bar_close_ms=evaluation.decision_bar_close_ms,
             ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
