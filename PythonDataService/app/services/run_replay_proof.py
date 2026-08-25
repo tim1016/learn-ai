@@ -15,12 +15,20 @@ import logging
 import os
 import tempfile
 from collections import deque
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
+from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import (
+    paper_evidence_account_id_for_strategy,
+    synthetic_account_id_for_strategy,
+)
+from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    MAX_DECISION_RECEIPTS_PER_STRATEGY,
+    SqliteDecisionReceipts,
+)
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     ShadowTraceDivergence,
@@ -40,7 +48,11 @@ from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
-    from app.services.bot_binding_repository import BrokerBotBinding
+    from app.services.bot_binding_repository import (
+        BotRunOutcomeRecord,
+        BotRunRecord,
+        BrokerBotBinding,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -575,3 +587,387 @@ def read_run_replay_receipt(
     if receipt.strategy_instance_id != strategy_instance_id or receipt.run_id != run_id:
         raise ValueError("replay receipt belongs to another run identity")
     return receipt
+
+
+_MAX_RECEIPT_DIVERGENCES = 50
+
+
+def bounded_replay_bars(
+    bars: Sequence[RetainedSourceBar],
+    *,
+    ledger_end_seq: int | None,
+    terminal_recorded_at_ms: int | None,
+) -> list[RetainedSourceBar]:
+    """Bound one run's replay input at its durable end (PR #1751 finding 4).
+
+    The ledger-sequence bound (snapshotted at Stop) wins; the run's terminal
+    outcome instant is the wall-clock fallback for crashed/legacy runs. With
+    neither, refuse: regenerating run N after run N+1 appended bars would
+    otherwise change N's input, digest, and verdict.
+    """
+    if ledger_end_seq is not None:
+        return [bar for bar in bars if bar.seq <= ledger_end_seq]
+    if terminal_recorded_at_ms is not None:
+        return [bar for bar in bars if bar.end_ms <= terminal_recorded_at_ms]
+    raise RunReplayUnavailableError(
+        "The run has no durable end boundary (no receipt snapshot and no terminal outcome).",
+        detail="An unbounded replay input is not evidence; stop the run or repair its terminal record.",
+    )
+
+
+def refine_split_with_first_decision(
+    warmup: list[RetainedSourceBar],
+    live: list[RetainedSourceBar],
+    *,
+    first_decision_close_ms: int | None,
+    decision_timeframe_ms: int | None,
+) -> tuple[list[RetainedSourceBar], list[RetainedSourceBar]]:
+    """Anchor the warmup/live boundary at the first recorded decision bucket.
+
+    The wall-clock split can misclassify a bar that closed between launch and
+    the warmup fetch; the run's own first decision receipt names its bucket
+    exactly, so when both facts exist the boundary is that bucket's open
+    (``bar_close_ms - decision_timeframe_ms``). Passthrough otherwise.
+    """
+    if not first_decision_close_ms or not decision_timeframe_ms:
+        return warmup, live
+    boundary_ms = first_decision_close_ms - decision_timeframe_ms
+    merged = warmup + live
+    return (
+        [bar for bar in merged if bar.end_ms <= boundary_ms],
+        [bar for bar in merged if bar.end_ms > boundary_ms],
+    )
+
+
+def _seal_decision_timeframe_ms(binding: BrokerBotBinding) -> int | None:
+    """The seal-attested decision clock width, when this instance carries one.
+
+    ``decision_timeframe_ms`` lives on the sealed program's inner
+    ``configured_signal.data`` contract (``app/schemas/signal_program_seal.py``);
+    fall back to ``None`` (wall-clock split) for a compatibility-mode strategy
+    with no seal.
+    """
+    seal = binding.sealed_program
+    if seal is None:
+        return None
+    return int(seal.configured_signal.data.decision_timeframe_ms)
+
+
+def ledger_account_id_for(binding: BrokerBotBinding) -> str:
+    """Return the evidence namespace whose ledger retained this binding's bars."""
+    if binding.mode == "dry_run":
+        return synthetic_account_id_for_strategy(binding.strategy_instance_id)
+    if binding.mode == "trade":
+        return paper_evidence_account_id_for_strategy(binding.strategy_instance_id)
+    raise RunReplayUnavailableError(
+        f"Mode {binding.mode!r} retains no source-bar evidence; nothing to replay.",
+        http_status=404,
+    )
+
+
+@dataclass
+class RunReplayProofService:
+    """Compute and persist one run's replay-parity receipt."""
+
+    artifacts_root: Path
+    instance_dir_for: Callable[[str], Path]
+    binding_for: Callable[[str, str], BrokerBotBinding]
+    run_record_for: Callable[[str, str], BotRunRecord | None]
+    is_running: Callable[[str], bool]
+    run_outcome_for: Callable[[str, str], BotRunOutcomeRecord | None] | None = None
+    authority_for: Callable[[BrokerBotBinding], Any] | None = None
+    records_for_run: Callable[[BrokerBotBinding, str], Awaitable[LiveRunDecisionEvidence]] | None = None
+
+    def read(self, strategy_instance_id: str, run_id: str) -> RunReplayReceipt | None:
+        return read_run_replay_receipt(
+            self.instance_dir_for(strategy_instance_id), strategy_instance_id, run_id
+        )
+
+    def write_pending(self, binding: BrokerBotBinding, run_id: str) -> None:
+        """Durably record that a receipt is owed before background compute starts.
+
+        Snapshots the retained stream's terminal ``seq`` as the run's end
+        bound (PR #1751 finding 4) -- Stop time is the one moment "everything
+        retained so far" and "everything this run observed" coincide. Bound
+        resolution failures degrade to ``None`` (the terminal-outcome
+        fallback still bounds generation); they must never fail Stop itself.
+        """
+        end_seq: int | None = None
+        try:
+            ledger = SourceBarLedger(
+                artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
+            )
+            try:
+                provider = replay_provider_for(ledger, binding.symbol)
+                stream = ledger.bars(provider=provider, symbol=binding.symbol)
+                end_seq = stream[-1].seq if stream else None
+            finally:
+                ledger.close(checkpoint=False)
+        except RunReplayUnavailableError as error:
+            logger.warning(
+                "Pending replay receipt written without a ledger end bound",
+                extra={
+                    "action": "run_replay_end_bound_unavailable",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": run_id,
+                    "reason": str(error),
+                },
+            )
+        write_run_replay_receipt(
+            self.instance_dir_for(binding.strategy_instance_id),
+            self._skeleton(binding, run_id, status="pending", ledger_end_seq=end_seq),
+        )
+
+    async def generate(self, broker: str, strategy_instance_id: str, run_id: str) -> RunReplayReceipt:
+        binding = self.binding_for(broker, strategy_instance_id)
+        if binding.run_id == run_id and self.is_running(strategy_instance_id):
+            raise RunReplayUnavailableError(
+                "The run is still live; stop it before generating its replay receipt.",
+                detail="A live run's decision journal is still growing.",
+            )
+        run_record = self.run_record_for(strategy_instance_id, run_id)
+        if run_record is None:
+            raise RunReplayUnavailableError(
+                f"Run {run_id!r} has no durable launch evidence.", http_status=404
+            )
+        instance_dir = self.instance_dir_for(strategy_instance_id)
+        try:
+            receipt = await self._compute(binding, run_record)
+        except RunReplayUnavailableError:
+            raise
+        except Exception as error:  # compute failure becomes durable evidence, not silence
+            logger.exception(
+                "Run replay receipt computation failed",
+                extra={
+                    "action": "run_replay_receipt_failed",
+                    "strategy_instance_id": strategy_instance_id,
+                    "run_id": run_id,
+                },
+            )
+            stored = self.read(strategy_instance_id, run_id)
+            receipt = self._skeleton(
+                binding,
+                run_record.run_id,
+                status="replay_failed",
+                error=str(error),
+                # Preserve the Stop-time end bound so a later regeneration
+                # replays the same run-bounded input (PR #1751 finding 4).
+                ledger_end_seq=None if stored is None else stored.ledger_end_seq,
+            )
+        write_run_replay_receipt(instance_dir, receipt)
+        return receipt
+
+    async def _compute(self, binding: BrokerBotBinding, run_record: BotRunRecord) -> RunReplayReceipt:
+        ledger = SourceBarLedger(
+            artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
+        )
+        try:
+            provider = replay_provider_for(ledger, binding.symbol)
+            all_bars = ledger.bars(provider=provider, symbol=binding.symbol)
+        finally:
+            ledger.close(checkpoint=False)
+        # Run-bounded input (PR #1751 finding 4): stored seq snapshot first,
+        # terminal-outcome wall clock second, refuse when neither exists.
+        stored = self.read(binding.strategy_instance_id, run_record.run_id)
+        outcome = (
+            None
+            if self.run_outcome_for is None
+            else self.run_outcome_for(binding.strategy_instance_id, run_record.run_id)
+        )
+        bars = bounded_replay_bars(
+            all_bars,
+            ledger_end_seq=None if stored is None else stored.ledger_end_seq,
+            terminal_recorded_at_ms=None if outcome is None else outcome.recorded_at_ms,
+        )
+        if not bars:
+            raise RunReplayUnavailableError(
+                f"No retained source bars exist for {binding.symbol!r} within this run's bounds.",
+                http_status=404,
+            )
+        evidence = await self._evidence(binding, run_record.run_id)
+        warmup, live = split_warmup_and_live(bars, run_record.started_at_ms)
+        warmup, live = refine_split_with_first_decision(
+            warmup,
+            live,
+            first_decision_close_ms=(
+                evidence.records[0].bar_close_ms if evidence.records else None
+            ),
+            decision_timeframe_ms=_seal_decision_timeframe_ms(binding),
+        )
+        decided = [bar for bar in bars if _includes_session_phase(bar, use_rth=binding.use_rth)]
+
+        def _compute_sync() -> tuple[EngineParityResult, RunFidelityResult]:
+            parity = engine_parity_over_bars(
+                binding.strategy_key,
+                binding.symbol,
+                binding.strategy_params,
+                [to_trade_bar(bar) for bar in decided],
+            )
+            fidelity = asyncio.run(
+                run_fidelity_over_bars(
+                    binding,
+                    provider=provider,
+                    warmup=warmup,
+                    live=live,
+                    records=evidence.records,
+                    captured_decisions=evidence.captured_decisions,
+                )
+            )
+            return parity, fidelity
+
+        parity, fidelity = await asyncio.to_thread(_compute_sync)
+        return self._final_receipt(binding, run_record, provider, bars, evidence, parity, fidelity)
+
+    async def _evidence(self, binding: BrokerBotBinding, run_id: str) -> LiveRunDecisionEvidence:
+        if self.records_for_run is not None:
+            return await self.records_for_run(binding, run_id)
+        rows = await self._receipt_rows(binding)
+        return live_run_decision_evidence_from_rows(rows, run_id)
+
+    async def _receipt_rows(self, binding: BrokerBotBinding) -> Sequence[DecisionReceiptResource]:
+        if binding.mode == "dry_run":
+            if self.authority_for is None:
+                raise RunReplayUnavailableError(
+                    "No authority selector is wired; Dry Run receipts are unreachable.",
+                    http_status=503,
+                )
+            async with self.authority_for(binding).runtime_for_projection() as runtime:
+                repository = None if runtime is None else runtime.sqlite_repository
+                if repository is None:
+                    raise RunReplayUnavailableError(
+                        "The Dry Run synthetic authority could not be projected.",
+                        http_status=503,
+                    )
+                return SqliteDecisionReceipts(
+                    repository, strategy_instance_id=binding.strategy_instance_id
+                ).retained_window()
+        clerk = get_alpaca_clerk()
+        repository = getattr(clerk, "repository", None)
+        if repository is None:
+            raise RunReplayUnavailableError(
+                "The active SQLite Clerk is unavailable for replay evidence.",
+                http_status=503,
+            )
+        return SqliteDecisionReceipts(
+            repository, strategy_instance_id=binding.strategy_instance_id
+        ).retained_window()
+
+    def _skeleton(
+        self,
+        binding: BrokerBotBinding,
+        run_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+        ledger_end_seq: int | None = None,
+    ) -> RunReplayReceipt:
+        proof = binding.program_build
+        seal = binding.sealed_program
+        return RunReplayReceipt(
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=run_id,
+            strategy_key=binding.strategy_key,
+            symbol=binding.symbol,
+            provider="",
+            status=status,
+            bar_set_digest="",
+            retained_bar_count=0,
+            ledger_end_seq=ledger_end_seq,
+            engine_parity_trace_root=None,
+            engine_parity_compared_count=0,
+            engine_parity_divergence=None,
+            live_compared_count=0,
+            match_count=0,
+            expected_live_effect_count=0,
+            drift_count=0,
+            digest_verified_count=0,
+            records_truncated=False,
+            divergences=[],
+            program_version=None if proof is None else proof.program_version,
+            sealed_program_hash=None if seal is None else seal.bot_configuration_hash,
+            generated_at_ms=now_ms_utc(),
+            error=error,
+        )
+
+    def _final_receipt(
+        self,
+        binding: BrokerBotBinding,
+        run_record: BotRunRecord,
+        provider: str,
+        bars: Sequence[RetainedSourceBar],
+        evidence: LiveRunDecisionEvidence,
+        parity: EngineParityResult,
+        fidelity: RunFidelityResult,
+    ) -> RunReplayReceipt:
+        from app.schemas.run_replay import EngineParityDivergenceModel, RunReplayDivergenceModel
+
+        crash_divergences = [
+            RunFidelityDivergence(
+                evaluation_id=record.evaluation_id,
+                bar_close_ms=0,
+                classification="expected_live_effect",
+                reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+                replay_staged=None,
+                live_outcome=record.outcome,
+                detail=f"FR-016 crash-window evidence (bar_ref={record.bar_ref!r}).",
+            )
+            for record in evidence.crash_records
+        ]
+        all_divergences = crash_divergences + list(fidelity.divergences)
+        expected = fidelity.expected_live_effect_count + len(crash_divergences)
+        # Verdict ordering (PR #1751 finding 6): real drift is the loudest
+        # verdict; known-incomplete evidence (truncated records) or an
+        # unprovable engine leg (`parity.error`) is INDETERMINATE -- partial
+        # evidence never earns a proof verdict; only complete, clean evidence
+        # may claim parity.
+        if parity.divergence is not None or fidelity.drift_count > 0:
+            status = "drift"
+        elif evidence.truncated or parity.error is not None:
+            status = "indeterminate"
+        elif expected > 0:
+            status = "parity_with_expected_live_effects"
+        else:
+            status = "parity"
+        skeleton = self._skeleton(binding, run_record.run_id, status=status, error=parity.error)
+        return skeleton.model_copy(
+            update={
+                "provider": provider,
+                "bar_set_digest": bar_set_digest(bars),
+                "retained_bar_count": len(bars),
+                # Disclose the applied end bound so every regeneration -- even
+                # one that resolved the bound via the terminal outcome -- is
+                # seq-pinned from here on (stable under later appends).
+                "ledger_end_seq": bars[-1].seq,
+                "digest_verified_count": fidelity.digest_verified_count,
+                "engine_parity_trace_root": parity.trace_root,
+                "engine_parity_compared_count": parity.compared_count,
+                "engine_parity_divergence": (
+                    None
+                    if parity.divergence is None
+                    else EngineParityDivergenceModel(
+                        index=parity.divergence.index,
+                        evaluation_id=parity.divergence.evaluation_id,
+                        field=parity.divergence.field,
+                        expected=repr(parity.divergence.expected),
+                        observed=repr(parity.divergence.observed),
+                    )
+                ),
+                "live_compared_count": fidelity.compared_count,
+                "match_count": fidelity.match_count,
+                "expected_live_effect_count": expected,
+                "drift_count": fidelity.drift_count,
+                "records_truncated": evidence.truncated,
+                "divergences": [
+                    RunReplayDivergenceModel(
+                        evaluation_id=d.evaluation_id,
+                        bar_close_ms=d.bar_close_ms,
+                        classification=d.classification,
+                        reason_code=d.reason_code,
+                        replay_staged=d.replay_staged,
+                        live_outcome=d.live_outcome,
+                        detail=d.detail,
+                    )
+                    for d in all_divergences[:_MAX_RECEIPT_DIVERGENCES]
+                ],
+            }
+        )
