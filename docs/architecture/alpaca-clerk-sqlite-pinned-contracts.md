@@ -57,6 +57,17 @@
   distinct indices for every historical ticket, adds the per-ticket uniqueness fence, and
   replaces the leg-identity trigger so an operator cannot reorder a reserved
   ticket after confirmation.
+- Issue #1775 narrows one clause of §3f. `EXIT_ACCEPTED.entry_order_refs`
+  captured *every* same-strategy/symbol sibling entry; it now captures every
+  sibling that is still **cancel-provable**, excluding one already carrying
+  durable proof that the broker never accepted it (no broker order id, no
+  acknowledgement, no fill, and a definitive-absence void on its owning
+  ENTER). Such an order can hold no exposure and can never be cancelled, so
+  enumerating it only gave each reconciliation pass a dead order to prove —
+  the mechanism behind fleet-stress finding S15c. The EXIT's own targeted
+  entry is always captured, whatever its state. No DDL change, so
+  `SCHEMA_VERSION` is unchanged; the shared every-ENTRY read that safe
+  flatten, runtime recovery and the stuck-EXIT watchdog use is unchanged too.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -1176,7 +1187,7 @@ duplicating the whole table:
 
 | Transition | Required facts beyond the outer transition row |
 | --- | --- |
-| `EXIT_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; `entry_order_ref` (the targeted entry) and `entry_order_refs` (every same-strategy/symbol sibling entry captured before broker contact). There is no `leg`, unlike `ENTER_ACCEPTED`: the reducing order's side/quantity are not knowable until every entry is terminal and refreshed. |
+| `EXIT_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; `entry_order_ref` (the targeted entry) and `entry_order_refs` (every still-cancel-provable same-strategy/symbol sibling entry captured before broker contact, plus the targeted entry itself — see the #1775 amendment above for what "cancel-provable" excludes and why). There is no `leg`, unlike `ENTER_ACCEPTED`: the reducing order's side/quantity are not knowable until every entry is terminal and refreshed. |
 
 `EXIT_REDUCING_ORDER_CREATED` falls outside §3d's table the same way §3e's two
 kinds do — it creates an `orders` row, but that row has no symbol/side/quantity
@@ -1187,6 +1198,7 @@ fidelity concern:
 | --- | --- | --- |
 | `EXIT_REDUCING_ORDER_CREATED` | `symbol`, `side`, `quantity` (the Clerk-proven final attributed quantity after every entry is terminal and immediately refreshed — the durable audit proof of the "final attributed-quantity calculation" pinned-contract step) | Inserts one immutable-origin `role='REDUCING'` `orders` row and one EXIT custody link. A partial unique index permits at most one reducing identity per EXIT. The facts reconstruct the order instruction during recovery. |
 | `ORDER_CANCEL_UNCERTAIN` | `why` | Same fold body as `ORDER_SUBMIT_UNCERTAIN` (registered under both transition_kind names) — a lost cancel-poll response is the identical "effect/command → `unknown`, no receipt" outcome, under a distinct name for audit-trail honesty about which broker call was actually attempted. |
+| `ENTRY_NEVER_ACCEPTED` (#1775) | `reason`, `why` | Records that an enumerated entry provably never reached the broker, so cancel proof has a terminal answer instead of folding `ORDER_CANCEL_UNCERTAIN` forever. Deliberately **not** `ORDER_SUBMIT_FAILED`: this transition belongs to the EXIT that enumerated the dead entry, and that EXIT has not failed. The fold releases the exact `(effect, order)` identity from any open unknown-outcome episode and returns the effect to `in_progress` only when nothing else about it is still unknown. The entry's own ENTER is voided separately, through the canonical definitive-absence producer. |
 | `EXIT_ATTRIBUTED_FLAT` | none (`{}`) | Same fold body as the generic terminal-success tail (`_fold_effect_terminal(..., terminal_state="succeeded")`) — EXIT is the first caller to ever reach `succeeded` through it; ENTER never does within its own module (#1377's own docstring defers that to EXIT/reconciliation). |
 
 ### 3g. Uncertainty transition facts (#1380, Part A)

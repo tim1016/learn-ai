@@ -44,6 +44,7 @@ __all__ = [
     "fold_order_acknowledgement",
     "fold_order_evidence",
     "fold_order_submission_acknowledgement",
+    "fold_submit_absence_void",
     "fold_uncertain",
     "order_never_reached_broker",
     "resolve_order_submission",
@@ -355,15 +356,25 @@ def order_never_reached_broker(repo: ClerkSqliteRepository, order: OrderResource
     """Is a definitively-absent exact lookup terminal proof for this order?
 
     The one predicate every caller uses to read an absent lookup as an answer
-    rather than a silence. Two conditions, both required: the order carries no
-    broker identity — one that did get a broker order id and then reads absent
-    is a contradiction to investigate, never an absence to confirm — and the
-    R4 submit-absence grace window has closed, anchored exactly where
-    :func:`resolve_order_submission` anchors it, so a submit still inside the
-    broker's own visibility window is never mistaken for one that never
-    happened.
+    rather than a silence. Absence is terminal only when nothing else in the
+    ledger says the broker ever knew this order:
+
+    - no broker identity, no acknowledgement, and no durable fill. Any of the
+      three contradicts absence, and a contradiction is something to
+      investigate, never something to confirm. The fill check is not
+      redundant with the identity check: the trade-update sink records an
+      execution slice *before* it acknowledges the order, so a filled order
+      can still be carrying a null broker order id.
+    - the R4 submit-absence grace window has closed, anchored exactly where
+      :func:`resolve_order_submission` anchors it, so a submit still inside
+      the broker's own visibility window is never mistaken for one that never
+      happened.
     """
     if order.broker_order_id is not None:
+        return False
+    if repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_ACKED"):
+        return False
+    if repo.fills_for_order(order.order_ref):
         return False
     return repo.clock() - _uncertain_since_ms(repo, order.order_ref) >= UNCERTAIN_SUBMIT_GRACE_MS
 
@@ -387,6 +398,28 @@ def entry_never_accepted_durably(repo: ClerkSqliteRepository, order: OrderResour
         return False
     return any(
         transition["summary_code"] == SUBMIT_ABSENCE_SUMMARY_CODE for transition in transitions
+    )
+
+
+def fold_submit_absence_void(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+) -> None:
+    """Void one exact order identity the broker definitively never had.
+
+    The single producer of the definitive-absence terminal receipt, so the
+    submit resolver and an EXIT that reaches the proof first write the same
+    evidence rather than two dialects of it.
+    """
+    fold_failed(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        summary_code=SUBMIT_ABSENCE_SUMMARY_CODE,
+        reason="The order did not reach the broker.",
+        why="Alpaca has no order for this client_order_id (definitively absent).",
     )
 
 
@@ -492,13 +525,10 @@ async def resolve_order_submission(
             grace_active = (repo.clock() - uncertain_since_ms) < UNCERTAIN_SUBMIT_GRACE_MS
             if grace_active:
                 return
-            fold_failed(
+            fold_submit_absence_void(
                 repo,
                 effect_operation_id=effect.effect_operation_id,
                 order_ref=order_ref,
-                summary_code="ORDER_SUBMIT_FAILED_ABSENT",
-                reason="The order did not reach the broker.",
-                why="Alpaca has no order for this client_order_id (definitively absent).",
             )
         else:
             fold_order_evidence(repo, effect_operation_id=effect.effect_operation_id, order=order)

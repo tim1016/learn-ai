@@ -1350,6 +1350,11 @@ async def test_manual_cancel_resolves_a_target_that_never_reached_the_broker(
     source = repo.effect_operation(submitted.leg.effect_operation_id)
     assert source is not None and source.state == "failed"
     assert repo.uncertain_orders() == []
+    # The source leg is voided as never-submitted, not claimed terminal at the
+    # broker: no broker order or broker state ever existed to observe.
+    source_transitions = repo.transitions_for_order(submitted.leg.order_ref)
+    assert any(t["summary_code"] == "ORDER_SUBMIT_FAILED_ABSENT" for t in source_transitions)
+    assert not any(t["transition_kind"] == "MANUAL_ORDER_TERMINAL" for t in source_transitions)
     repo.close()
 
 

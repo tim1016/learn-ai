@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_failed,
     fold_order_evidence,
     fold_order_submission_acknowledgement,
+    fold_submit_absence_void,
     fold_uncertain,
     order_never_reached_broker,
 )
@@ -344,7 +345,7 @@ def _prove_never_accepted_durably(
     """Is this entry already provably never-accepted, without asking the broker?"""
     if not entry_never_accepted_durably(repo, entry):
         return False
-    _record_never_accepted(
+    _prove_never_accepted(
         repo,
         effect_operation_id=effect_operation_id,
         entry=entry,
@@ -368,7 +369,7 @@ def _prove_never_accepted_if_absent(
     """
     if observed is not None or not order_never_reached_broker(repo, entry):
         return False
-    _record_never_accepted(
+    _prove_never_accepted(
         repo,
         effect_operation_id=effect_operation_id,
         entry=entry,
@@ -380,19 +381,33 @@ def _prove_never_accepted_if_absent(
     return True
 
 
-def _record_never_accepted(
+def _prove_never_accepted(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
     entry: OrderResource,
     why: str,
 ) -> None:
-    """Confirm the entry's proven end state without failing the EXIT.
+    """Close the entry's own ENTER, then confirm its end state to this EXIT.
 
-    Appended once per order: the durable proof this writes is what
+    Both halves matter. The unknown-outcome episode is keyed by
+    ``(effect_operation_id, order_ref)``, so proof recorded only against the
+    EXIT would leave the ENTER's identity — and the outstanding intent the
+    admission gate counts — open after the EXIT finished. Voiding the ENTER
+    uses the same producer the submit resolver uses, so an EXIT that reaches
+    the proof first writes exactly the evidence a later sweep would have.
+
+    The EXIT-side confirmation is appended once per order: it is what
     :func:`entry_never_accepted_durably` reads on every later pass, so a
     repeated reconciliation cannot re-append it.
     """
+    owner = repo.effect_operation(entry.effect_operation_id)
+    if owner is not None and owner.state not in ("succeeded", "failed", "rejected"):
+        fold_submit_absence_void(
+            repo,
+            effect_operation_id=entry.effect_operation_id,
+            order_ref=entry.order_ref,
+        )
     if any(
         transition["transition_kind"] == "ENTRY_NEVER_ACCEPTED"
         for transition in repo.transitions_for_order(entry.order_ref)

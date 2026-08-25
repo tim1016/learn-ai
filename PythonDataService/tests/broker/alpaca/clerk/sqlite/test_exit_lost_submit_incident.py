@@ -20,6 +20,8 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNCERTAIN_SUBMIT_GRACE_MS,
     fold_entry_never_accepted,
@@ -293,3 +295,147 @@ async def test_a_never_accepted_proof_leaves_an_effect_unknown_for_another_order
 
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "unknown"
+
+
+def _append_fill_slice(
+    repo: ClerkSqliteRepository,
+    *,
+    order_ref: str,
+    effect_operation_id: str,
+    execution_id: str = "exec-1",
+) -> None:
+    """One websocket execution slice, exactly as the trade-update sink records
+    it — before any submit acknowledgement, which is the real ordering
+    (`trade_evidence.py` appends the slice, then acknowledges the order)."""
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    facts = ExecutionSliceFilledFacts(
+        execution_id=execution_id,
+        symbol="SPY",
+        side="BUY",
+        slice_qty=4.0,
+        slice_price=100.0,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=repo.clock(),
+    )
+
+    def _transition() -> TransitionInput:
+        return TransitionInput(
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            proof_reference=execution_id,
+            source_event_at_ms=repo.clock(),
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=facts.to_facts_json(),
+        )
+
+    repo.append_execution_slice_if_absent(
+        execution_id=execution_id,
+        order_ref=order_ref,
+        build_transition=_transition,
+        build_coverage_conflict=_transition,
+    )
+
+
+async def test_a_durable_fill_outweighs_an_absent_lookup(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Absence is terminal only when nothing else says the order existed.
+
+    An execution slice can land before the submit acknowledgement, so an order
+    can hold durable fills while its broker order id is still null. An absent
+    lookup then contradicts the fills rather than proving the order never
+    happened — and skipping cancel proof there could reduce a position while
+    the entry is still working at the broker.
+    """
+    trade = _FakeTradePort(
+        submit_error=BrokerUnavailable("websocket drop swallowed the submit response"),
+        lookup_absent=True,
+    )
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-filled-then-lost",
+        lifecycle_run_id=RUN_ID,
+        leg=_broker_leg(),
+        trade=trade,
+    )
+    assert submission.order_ref is not None and submission.effect_operation_id is not None
+    entry = repo.order(submission.order_ref)
+    assert entry is not None and entry.broker_order_id is None
+    _append_fill_slice(
+        repo,
+        order_ref=submission.order_ref,
+        effect_operation_id=submission.effect_operation_id,
+    )
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-after-fill",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=submission.order_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    repo.clock.advance(UNCERTAIN_SUBMIT_GRACE_MS + 1)  # type: ignore[attr-defined]
+
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+
+    transitions = repo.transitions_for_order(submission.order_ref)
+    assert not any(t["transition_kind"] == "ENTRY_NEVER_ACCEPTED" for t in transitions)
+    assert any(t["transition_kind"] == "ORDER_CANCEL_UNCERTAIN" for t in transitions)
+
+
+async def test_live_absence_also_voids_the_entry_s_own_enter(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """An EXIT that proves absence first must close the entry's own ENTER too.
+
+    The unknown-outcome episode is keyed by (effect, order), so proof recorded
+    only against the EXIT leaves the ENTER's outstanding intent — and the
+    admission gate it feeds — open indefinitely.
+    """
+    trade = _FakeTradePort(
+        submit_error=BrokerUnavailable("websocket drop swallowed the submit response"),
+        lookup_absent=True,
+    )
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-lost",
+        lifecycle_run_id=RUN_ID,
+        leg=_broker_leg(),
+        trade=trade,
+    )
+    assert submission.order_ref is not None and submission.effect_operation_id is not None
+    enter_effect = repo.effect_operation(submission.effect_operation_id)
+    assert enter_effect is not None and enter_effect.state == "unknown"  # never resolved
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-before-void",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=submission.order_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    repo.clock.advance(UNCERTAIN_SUBMIT_GRACE_MS + 1)  # type: ignore[attr-defined]
+
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+
+    enter_effect = repo.effect_operation(submission.effect_operation_id)
+    assert enter_effect is not None and enter_effect.state == "failed"
+    assert enter_effect.terminal_receipt_id is not None
+    assert repo.uncertain_orders() == []

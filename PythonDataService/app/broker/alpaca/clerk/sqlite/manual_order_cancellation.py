@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
+    fold_submit_absence_void,
     fold_uncertain,
     order_never_reached_broker,
 )
@@ -357,11 +358,14 @@ async def _resolve_claimed_manual_order_cancellation(
     # response says nothing about the order, and once a broker order id exists
     # an absent lookup is a contradiction to investigate, not a confirmation.
     if observed is None and order_never_reached_broker(repo, target):
-        _append_source_terminal(
+        # Voided as never-submitted rather than closed with
+        # ``MANUAL_ORDER_TERMINAL``: that transition is evidence of an
+        # observed terminal *broker* state, and here no broker order ever
+        # existed to observe. Same producer the submit resolver uses.
+        fold_submit_absence_void(
             repo,
+            effect_operation_id=source_effect.effect_operation_id,
             order_ref=target.order_ref,
-            source_effect=source_effect,
-            why="The manual order never reached the broker; its exact identity is definitively absent.",
         )
         _append_cancellation_result(
             repo,
