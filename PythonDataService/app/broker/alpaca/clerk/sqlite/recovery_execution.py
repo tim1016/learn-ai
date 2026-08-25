@@ -13,6 +13,7 @@ from typing import Protocol
 
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission, stop_command_resource
 from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource
+from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryActionId,
@@ -20,6 +21,10 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     recheck_recovery_action,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
+    SafeFlattenExecutionError,
+    SafeFlattenResult,
+)
 
 
 class RecoveryExecutionError(Exception):
@@ -53,6 +58,13 @@ class ActiveSqliteRecoveryFacade(Protocol):
         strategy_instance_id: str | None,
         order_refs: tuple[str, ...],
     ) -> tuple[OrderResource, ...]: ...
+
+    async def execute_safe_flatten(
+        self,
+        *,
+        plan: SafeFlattenPlan,
+        reason: str | None = None,
+    ) -> SafeFlattenResult: ...
 
 
 @dataclass(frozen=True)
@@ -189,6 +201,39 @@ async def execute_recovery_action(
             receipt_id=orders[0].order_ref,
             recorded_at_ms=max(order.updated_at_ms for order in orders),
             orders=orders,
+        )
+    if request.action_id == "execute_safe_flatten":
+        if capability.reduction_plan is None:
+            raise RecoveryExecutionError(
+                "The presented flatten action carries no prepared reduction plan."
+            )
+        try:
+            result = await facade.execute_safe_flatten(
+                plan=capability.reduction_plan,
+                reason=request.reason,
+            )
+        except SafeFlattenExecutionError as exc:
+            # A rejected reduction (or any other executability failure) surfaces
+            # as an honest error, never a silent applied=True while exposure
+            # remains (Codex review 2026-08-25 P1).
+            raise RecoveryExecutionError(str(exc)) from exc
+        # Every captured recovery EXIT is a durably committed reduction: the
+        # reducing order is either already at the broker (``orders``) or the
+        # reconciliation sweep re-drives it. A transient deferral therefore
+        # reports an accepted receipt, not an effect-free rejection (P1). The
+        # receipt anchors to a real order ref when one exists, else the durable
+        # effect id.
+        receipt_id = (
+            result.orders[0].order_ref
+            if result.orders
+            else result.accepted_effect_operation_ids[0]
+        )
+        return RecoveryExecutionResult(
+            action_id=request.action_id,
+            applied=True,
+            receipt_id=receipt_id,
+            recorded_at_ms=result.recorded_at_ms,
+            orders=result.orders,
         )
     raise RecoveryExecutionError(
         f"{request.action_id} is navigation, preparation, or offline authority recovery; "
