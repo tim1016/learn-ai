@@ -79,3 +79,16 @@ async def test_post_replay_receipt_without_launch_evidence_is_404(api) -> None:
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
         response = await client.post("/api/brokers/alpaca/bots/bot-a/runs/run-1/replay-receipt")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_malformed_identifier_is_a_boundary_404_not_a_500(api) -> None:
+    """A malformed identifier (a space-bearing strategy_instance_id) must be
+    rejected at the boundary, not blow up in a filesystem read (Codex PR #1771).
+    ``bot%20a`` still routes to the handler as one path segment."""
+    app, _registry = api
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        get = await client.get("/api/brokers/alpaca/bots/bot%20a/runs/run-1/replay-receipt")
+        post = await client.post("/api/brokers/alpaca/bots/bot%20a/runs/run-1/replay-receipt")
+    assert get.status_code == 404
+    assert post.status_code == 404

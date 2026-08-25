@@ -347,6 +347,10 @@ class RunFidelityResult:
     # real-drift verdict (Codex PR #1767): content drift dominates always;
     # absence drift is real only when the journal is complete.
     content_drift_count: int
+    # Crash-window expected effects whose live digest was absent, so their
+    # replayed content could not be verified -- forces the receipt to
+    # `indeterminate`, never a clean proof verdict (Codex PR #1771).
+    unverified_crash_count: int
     # Aligned buckets whose live trace_digest was present AND matched the
     # replayed trace -- the receipt's disclosure of content-level coverage
     # (digest-less legacy rows fall back to intent-kind comparison).
@@ -445,6 +449,7 @@ async def run_fidelity_over_bars(
     compared = 0
     match_count = 0
     digest_verified = 0
+    unverified_crash = 0
 
     def _digest_mismatch(record: LiveDecisionRecord, replay_digest: str | None, *, staged: str | None) -> None:
         divergences.append(
@@ -492,8 +497,30 @@ async def run_fidelity_over_bars(
             if digest_checked and crash_record.trace_digest != replay_digest:
                 _digest_mismatch(crash_record, replay_digest, staged=None)
                 continue
-            if digest_checked:
-                digest_verified += 1
+            if not digest_checked:
+                # A crash-window live effect we cannot content-verify -- a legacy
+                # row recorded before live-time digest capture -- must never earn
+                # a clean proof verdict: its presence is legitimate FR-016
+                # evidence, so classify it expected, but count it as unverified so
+                # the receipt becomes `indeterminate` rather than laundering
+                # unverifiable post-crash content into parity (Codex PR #1771).
+                unverified_crash += 1
+                divergences.append(
+                    RunFidelityDivergence(
+                        evaluation_id=eval_id,
+                        bar_close_ms=crash_record.bar_close_ms,
+                        classification="expected_live_effect",
+                        reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+                        replay_staged=None,
+                        live_outcome=crash_record.outcome,
+                        detail=f"FR-016 crash-window evidence (bar_ref={crash_record.bar_ref!r}); no live digest to verify against.",
+                    )
+                )
+                continue
+            # Crash rows are not aligned live buckets, so a verified crash digest
+            # does NOT increment digest_verified/live_compared -- the disclosed
+            # coverage ratio stays scoped to the aligned decision sequence
+            # (Codex PR #1771).
             divergences.append(
                 RunFidelityDivergence(
                     evaluation_id=eval_id,
@@ -620,6 +647,7 @@ async def run_fidelity_over_bars(
         expected_live_effect_count=expected,
         drift_count=drift,
         content_drift_count=content_drift,
+        unverified_crash_count=unverified_crash,
         digest_verified_count=digest_verified,
         divergences=tuple(divergences),
     )
@@ -1005,7 +1033,10 @@ class RunReplayProofService:
         content_drift = parity.divergence is not None or fidelity.content_drift_count > 0
         if content_drift:
             status = "drift"
-        elif evidence.truncated or parity.error is not None:
+        elif evidence.truncated or parity.error is not None or fidelity.unverified_crash_count > 0:
+            # Known-incomplete evidence never earns a proof verdict (finding 6):
+            # a truncated window, an unprovable engine leg, or a crash-window
+            # effect with no live digest to verify against.
             status = "indeterminate"
         elif fidelity.drift_count > 0:
             status = "drift"

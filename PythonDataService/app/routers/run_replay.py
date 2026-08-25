@@ -12,6 +12,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
+from app.broker.alpaca.paths import safe_path_component
+from app.engine.live.identity import validate_strategy_instance_id
 from app.routers.broker_bots import _raise_runner_error, _require_registry, _resolve_broker
 from app.schemas.run_replay import RunReplayReceipt
 from app.services.bot_runner import BotRunnerError
@@ -20,6 +22,21 @@ from app.services.run_replay_proof import RunReplayUnavailableError
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/brokers", tags=["run-replay"])
+
+
+def _validate_run_reference(strategy_instance_id: str, run_id: str) -> None:
+    """Reject a malformed instance/run identifier at the boundary (not a 500).
+
+    Mirrors the artifact-path validators the service applies, so a
+    space-bearing ``strategy_instance_id`` or a ``run_id`` beginning with ``-``
+    is a clean 404 rather than an unhandled ``ValueError`` from a filesystem
+    read (Codex PR #1771; ``.claude/rules`` boundary-validation).
+    """
+    try:
+        validate_strategy_instance_id(strategy_instance_id)
+        safe_path_component(run_id, "run id")
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=f"Invalid run reference: {error}") from error
 
 
 @router.get(
@@ -31,6 +48,7 @@ async def read_run_replay_receipt(
     broker: str, strategy_instance_id: str, run_id: str
 ) -> RunReplayReceipt:
     _resolve_broker(broker)
+    _validate_run_reference(strategy_instance_id, run_id)
     registry = _require_registry()
     receipt = registry.run_replay_receipt(broker, strategy_instance_id, run_id)
     if receipt is None:
@@ -50,6 +68,7 @@ async def generate_run_replay_receipt(
     broker: str, strategy_instance_id: str, run_id: str
 ) -> RunReplayReceipt:
     _resolve_broker(broker)
+    _validate_run_reference(strategy_instance_id, run_id)
     registry = _require_registry()
     try:
         return await registry.generate_run_replay_receipt(broker, strategy_instance_id, run_id)

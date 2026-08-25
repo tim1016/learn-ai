@@ -63,15 +63,26 @@ a proof verdict.
 
 ## Known bounds (documented, not hidden)
 
-- **Receipt-retention truncation:** a run longer than
-  `MAX_DECISION_RECEIPTS_PER_STRATEGY` decisions has its earliest rows pruned,
-  sets `records_truncated`, and forces the verdict to `indeterminate` — never
-  `parity`. The retention floor test pins that a normal daily run never hits
-  this.
+- **Receipt-retention truncation is an instance-lifetime bound, not a
+  per-run one.** `records_truncated` is set whenever the retained decision
+  window (a per-strategy-*instance* suffix) starts above sequence 1 — i.e.
+  once the instance has accumulated more than
+  `MAX_DECISION_RECEIPTS_PER_STRATEGY` decisions *across all its runs* and the
+  oldest have been pruned. From that point on, **every** later run of that
+  instance is forced to `indeterminate` — never `parity` — even a normal-length
+  run whose own rows are all retained, because the evidence can no longer prove
+  no earlier row was dropped. A fresh instance's daily runs are unaffected (the
+  retention floor test pins that a single run never hits the cap); a long-lived
+  instance permanently loses parity verdicts until a future change tracks
+  completeness relative to the requested run rather than the whole instance.
 - **Digest coverage:** rows recorded before live-time trace-digest capture
   existed verify at intent level only; `digest_verified_count` vs
-  `live_compared_count` discloses exactly how much of the run was
-  content-verified.
+  `live_compared_count` discloses exactly how much of the aligned decision
+  sequence was content-verified. Crash-window (`candidate_uncaptured_at_crash`)
+  rows are verified separately against their reconstructed candidate and are
+  **not** part of that ratio; a crash row whose live digest is absent cannot be
+  content-verified and forces the receipt to `indeterminate` (never a clean
+  proof verdict).
 - **Ledger capacity:** `SOURCE_BAR_STREAM_CAPACITY` (200k bars/stream) fails
   closed per #1740; a months-old instance needs a reviewed rollover before
   its next run can retain.

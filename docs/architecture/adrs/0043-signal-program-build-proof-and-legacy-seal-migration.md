@@ -200,7 +200,8 @@ same hash-chained log, which this repository does not compact at all.
 Addendum (2026-08-24, Direction 2): receipts record what was decided, never
 the bars — the bars themselves are retained separately per instance by the
 `SourceBarLedger`, and `docs/references/run-replay-proof.md` describes the
-per-run replay receipt that joins the two after every run. The live-time
+per-run replay receipt that joins the two after each eligible terminal run
+(older historical runs are on-demand only — see that doc's coverage contract). The live-time
 `trace_digest` / `decision_bar_close_ms` those receipts now also carry live in
 the receipt facts, outside the custody transition `row_hash`, so this
 transaction's hash chain and sealed identity are untouched.
