@@ -12,9 +12,7 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
-import tempfile
-from collections import deque
+import sqlite3
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,10 +23,7 @@ from app.broker.alpaca.clerk.account_authority import (
     paper_evidence_account_id_for_strategy,
     synthetic_account_id_for_strategy,
 )
-from app.broker.alpaca.clerk.sqlite.decision_receipts import (
-    MAX_DECISION_RECEIPTS_PER_STRATEGY,
-    SqliteDecisionReceipts,
-)
+from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     ShadowTraceDivergence,
@@ -37,14 +32,20 @@ from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     run_shadow_trace_evaluation,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty import TRANSIENT_ADMISSION_REASON_CODES
 from app.broker.alpaca.paths import safe_path_component
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.signal_program import Settlement, trace_root
 from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
 from app.services.bot_trade_strategy import _includes_session_phase, strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.services.source_bar_ledger import (
+    RetainedSourceBar,
+    SourceBarLedger,
+    SourceBarLedgerCorruptError,
+)
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -212,11 +213,18 @@ def live_run_decision_evidence_from_rows(
             bar_close_ms=int(facts.get("decision_bar_close_ms") or 0),
         )
         (crash_records if row.outcome == _CRASH_OUTCOME else records).append(record)
+    # Truncation is proven by pruning, not by a full window: decision receipts
+    # are seq-numbered from 1 per instance and pruned oldest-first, so an
+    # earliest retained seq > 1 means earlier rows were dropped. A window that
+    # is exactly at capacity but still starts at seq 1 is complete, not
+    # truncated -- treating fullness as truncation would deny parity to a
+    # correct run (Codex PR #1767).
+    truncated = bool(rows) and rows[0].seq > 1
     return LiveRunDecisionEvidence(
         records=tuple(records),
         crash_records=tuple(crash_records),
         captured_decisions=captured,
-        truncated=len(rows) >= MAX_DECISION_RECEIPTS_PER_STRATEGY,
+        truncated=truncated,
     )
 
 
@@ -290,6 +298,11 @@ EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
         "SIMULATED_SOURCE_BAR_UNPROVEN",
         "EXIT_CUSTODY_UNPROVEN",
     }
+    # bot_trade_strategy._dispose_transient_exit_refusal (#1755/F19) records a
+    # protected `blocked` receipt and defers to the next decision clock for every
+    # code in this closed transient set. Import it rather than restate it so the
+    # two sets can never drift apart.
+    | TRANSIENT_ADMISSION_REASON_CODES
 )
 """The CLOSED set of live-only gates (PR #1751 finding 3b).
 
@@ -313,12 +326,27 @@ class RunFidelityDivergence:
     detail: str
 
 
+# Drift proven by a retained, aligned row (real math/decision disagreement) --
+# dominant even under a truncated window. The complement (absence drift:
+# MISSING_LIVE_RECORD / UNMATCHED_LIVE_RECORD) is an alignment gap a truncated
+# journal cannot distinguish from real drift, so it is only a verdict on a
+# complete journal.
+_CONTENT_DRIFT_REASONS: frozenset[str] = frozenset(
+    {"TRACE_DIGEST_MISMATCH", "DECISION_MISMATCH", "UNRECOGNIZED_BLOCK_REASON"}
+)
+
+
 @dataclass(frozen=True)
 class RunFidelityResult:
     compared_count: int
     match_count: int
     expected_live_effect_count: int
     drift_count: int
+    # Drift proven by a retained aligned row (content mismatch), separated from
+    # absence drift so a known-truncated window cannot be promoted to a
+    # real-drift verdict (Codex PR #1767): content drift dominates always;
+    # absence drift is real only when the journal is complete.
+    content_drift_count: int
     # Aligned buckets whose live trace_digest was present AND matched the
     # replayed trace -- the receipt's disclosure of content-level coverage
     # (digest-less legacy rows fall back to intent-kind comparison).
@@ -390,13 +418,18 @@ async def run_fidelity_over_bars(
     live: Sequence[RetainedSourceBar],
     records: Sequence[LiveDecisionRecord],
     captured_decisions: Mapping[str, str],
+    crash_records: Sequence[LiveDecisionRecord] = (),
 ) -> RunFidelityResult:
     """Replay the run's bars through the production seam, settling each stage
     with the live-recorded disposition, and classify every disagreement.
 
-    Warmup buckets settle inside ``strategy_evaluations`` via
-    ``captured_decisions`` (the FR-016 machinery) and are never yielded, so
-    yielded evaluations align 1:1 with the run's own receipt sequence.
+    Alignment is keyed on the deterministic ``evaluation_id``, not on receipt
+    order: a single missing mid-journal receipt produces one localized
+    divergence instead of cascading into a mismatched remainder (Codex PR
+    #1767). Warmup buckets settle inside ``strategy_evaluations`` via
+    ``captured_decisions`` (the FR-016 machinery); crash-window buckets replay
+    as ``crash_recovered`` and are digest-verified against their protected
+    receipts rather than trusted on presence.
     """
     feed = _RunReplayFeed(
         provider=provider,
@@ -404,27 +437,82 @@ async def run_fidelity_over_bars(
         warmup_bars=[to_market_bar(bar) for bar in warmup],
         live_bars=[to_market_bar(bar) for bar in live],
     )
-    pending = deque(records)
+    records_by_eval = {record.evaluation_id: record for record in records}
+    crash_by_eval = {record.evaluation_id: record for record in crash_records}
+    matched: set[str] = set()
+    matched_crash: set[str] = set()
     divergences: list[RunFidelityDivergence] = []
     compared = 0
     match_count = 0
     digest_verified = 0
+
+    def _digest_mismatch(record: LiveDecisionRecord, replay_digest: str | None, *, staged: str | None) -> None:
+        divergences.append(
+            RunFidelityDivergence(
+                evaluation_id=record.evaluation_id,
+                bar_close_ms=record.bar_close_ms,
+                classification="drift",
+                reason_code="TRACE_DIGEST_MISMATCH",
+                replay_staged=staged,
+                live_outcome=record.outcome,
+                detail=(
+                    "Replayed trace content differs from the live-captured digest "
+                    f"(live={record.trace_digest} replay={replay_digest})."
+                ),
+            )
+        )
+
     async for evaluation in strategy_evaluations(
         binding, feed, captured_decisions=dict(captured_decisions)
     ):
+        eval_id = evaluation.evaluation_id
+        replay_digest = None if evaluation.trace is None else trace_root([evaluation.trace])
         if evaluation.crash_recovered:
-            # A warmup bucket whose receipt aged out of retention replays as
-            # uncaptured; it precedes this run's live window and was already
-            # settled DISCARD inside the warmup machinery. Not part of the
-            # alignment sequence.
+            # Crash-window candidate (FR-016). It carries the same live-time
+            # trace digest as an ordinary decision, so verify it -- a tampered
+            # crash receipt or drift confined to the recovered candidate must
+            # not launder into an expected effect (Codex PR #1767).
+            evaluation.settle_stage(Settlement.DISCARD)
+            crash_record = crash_by_eval.get(eval_id)
+            if crash_record is None:
+                divergences.append(
+                    RunFidelityDivergence(
+                        evaluation_id=eval_id,
+                        bar_close_ms=evaluation.decision_bar_close_ms,
+                        classification="drift",
+                        reason_code="MISSING_LIVE_RECORD",
+                        replay_staged=None,
+                        live_outcome=None,
+                        detail="Replay reconstructed a crash-window candidate the journal never recorded.",
+                    )
+                )
+                continue
+            matched_crash.add(eval_id)
+            digest_checked = bool(crash_record.trace_digest) and replay_digest is not None
+            if digest_checked and crash_record.trace_digest != replay_digest:
+                _digest_mismatch(crash_record, replay_digest, staged=None)
+                continue
+            if digest_checked:
+                digest_verified += 1
+            divergences.append(
+                RunFidelityDivergence(
+                    evaluation_id=eval_id,
+                    bar_close_ms=crash_record.bar_close_ms,
+                    classification="expected_live_effect",
+                    reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+                    replay_staged=None,
+                    live_outcome=crash_record.outcome,
+                    detail=f"FR-016 crash-window evidence (bar_ref={crash_record.bar_ref!r}), digest-verified.",
+                )
+            )
             continue
         compared += 1
         staged = evaluation.intents[0].kind.value if evaluation.intents else None
-        record = pending.popleft() if pending else None
+        record = records_by_eval.get(eval_id)
         if record is None:
             divergences.append(
                 RunFidelityDivergence(
-                    evaluation_id=evaluation.evaluation_id,
+                    evaluation_id=eval_id,
                     bar_close_ms=evaluation.decision_bar_close_ms,
                     classification="drift",
                     reason_code="MISSING_LIVE_RECORD",
@@ -435,20 +523,7 @@ async def run_fidelity_over_bars(
             )
             evaluation.settle_stage(Settlement.DISCARD)
             continue
-        if record.evaluation_id != evaluation.evaluation_id:
-            divergences.append(
-                RunFidelityDivergence(
-                    evaluation_id=evaluation.evaluation_id,
-                    bar_close_ms=evaluation.decision_bar_close_ms,
-                    classification="drift",
-                    reason_code="EVALUATION_ID_MISMATCH",
-                    replay_staged=staged,
-                    live_outcome=record.outcome,
-                    detail=f"Live journal recorded {record.evaluation_id!r} at this position.",
-                )
-            )
-            evaluation.settle_stage(Settlement.DISCARD)
-            continue
+        matched.add(eval_id)
         settlement = (
             Settlement.COMMIT if record.outcome in _COMMIT_WORTHY_OUTCOMES else Settlement.DISCARD
         )
@@ -456,23 +531,9 @@ async def run_fidelity_over_bars(
         # hashes identity, not decision content -- only the digest proves the
         # replayed trace IS the live trace. Digest-less legacy rows fall back
         # to intent-kind comparison and are excluded from digest_verified.
-        replay_digest = None if evaluation.trace is None else trace_root([evaluation.trace])
         digest_checked = bool(record.trace_digest) and replay_digest is not None
         if digest_checked and record.trace_digest != replay_digest:
-            divergences.append(
-                RunFidelityDivergence(
-                    evaluation_id=evaluation.evaluation_id,
-                    bar_close_ms=evaluation.decision_bar_close_ms,
-                    classification="drift",
-                    reason_code="TRACE_DIGEST_MISMATCH",
-                    replay_staged=staged,
-                    live_outcome=record.outcome,
-                    detail=(
-                        "Replayed trace content differs from the live-captured digest "
-                        f"(live={record.trace_digest} replay={replay_digest})."
-                    ),
-                )
-            )
+            _digest_mismatch(record, replay_digest, staged=staged)
             evaluation.settle_stage(settlement)
             continue
         if digest_checked:
@@ -490,7 +551,7 @@ async def run_fidelity_over_bars(
             if record.reason_code in EXPECTED_LIVE_GATE_REASON_CODES:
                 divergences.append(
                     RunFidelityDivergence(
-                        evaluation_id=evaluation.evaluation_id,
+                        evaluation_id=eval_id,
                         bar_close_ms=evaluation.decision_bar_close_ms,
                         classification="expected_live_effect",
                         reason_code=record.reason_code,
@@ -505,7 +566,7 @@ async def run_fidelity_over_bars(
             else:
                 divergences.append(
                     RunFidelityDivergence(
-                        evaluation_id=evaluation.evaluation_id,
+                        evaluation_id=eval_id,
                         bar_close_ms=evaluation.decision_bar_close_ms,
                         classification="drift",
                         reason_code="UNRECOGNIZED_BLOCK_REASON",
@@ -520,7 +581,7 @@ async def run_fidelity_over_bars(
         else:
             divergences.append(
                 RunFidelityDivergence(
-                    evaluation_id=evaluation.evaluation_id,
+                    evaluation_id=eval_id,
                     bar_close_ms=evaluation.decision_bar_close_ms,
                     classification="drift",
                     reason_code="DECISION_MISMATCH",
@@ -530,25 +591,35 @@ async def run_fidelity_over_bars(
                 )
             )
         evaluation.settle_stage(settlement)
-    for leftover in pending:
+    # Live receipts the replay never produced a bucket for: use the record's own
+    # captured decision-bar close, not the Unix epoch (Codex PR #1767).
+    for record in (*records, *crash_records):
+        if record.evaluation_id in matched or record.evaluation_id in matched_crash:
+            continue
         divergences.append(
             RunFidelityDivergence(
-                evaluation_id=leftover.evaluation_id,
-                bar_close_ms=0,
+                evaluation_id=record.evaluation_id,
+                bar_close_ms=record.bar_close_ms,
                 classification="drift",
                 reason_code="UNMATCHED_LIVE_RECORD",
                 replay_staged=None,
-                live_outcome=leftover.outcome,
-                detail=f"Live journal receipt (bar_ref={leftover.bar_ref!r}) has no replayed bucket.",
+                live_outcome=record.outcome,
+                detail=f"Live journal receipt (bar_ref={record.bar_ref!r}) has no replayed bucket.",
             )
         )
     expected = sum(1 for d in divergences if d.classification == "expected_live_effect")
     drift = sum(1 for d in divergences if d.classification == "drift")
+    content_drift = sum(
+        1
+        for d in divergences
+        if d.classification == "drift" and d.reason_code in _CONTENT_DRIFT_REASONS
+    )
     return RunFidelityResult(
         compared_count=compared,
         match_count=match_count,
         expected_live_effect_count=expected,
         drift_count=drift,
+        content_drift_count=content_drift,
         digest_verified_count=digest_verified,
         divergences=tuple(divergences),
     )
@@ -559,18 +630,14 @@ def _receipt_path(instance_dir: Path, run_id: str) -> Path:
 
 
 def write_run_replay_receipt(instance_dir: Path, receipt: RunReplayReceipt) -> Path:
-    """Atomically persist one run's replay receipt (replaceable: pending -> final)."""
+    """Atomically persist one run's replay receipt (replaceable: pending -> final).
+
+    Uses the canonical ``atomic_write_pydantic_artifact`` helper, which fsyncs
+    the temp file and the parent directory before returning -- the pending
+    write must survive a host crash to drive boot repair.
+    """
     path = _receipt_path(instance_dir, receipt.run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(receipt.model_dump(mode="json"), sort_keys=True, indent=2) + "\n"
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{receipt.run_id}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(serialized)
-        os.replace(tmp_name, path)
-    except BaseException:
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
+    atomic_write_pydantic_artifact(path, receipt)
     return path
 
 
@@ -703,7 +770,11 @@ class RunReplayProofService:
                 end_seq = stream[-1].seq if stream else None
             finally:
                 ledger.close(checkpoint=False)
-        except RunReplayUnavailableError as error:
+        except (RunReplayUnavailableError, SourceBarLedgerCorruptError, sqlite3.Error, OSError) as error:
+            # A corrupt/locked/unreadable ledger must never fail Stop, which
+            # calls this synchronously: degrade to no seq bound (the
+            # terminal-outcome wall clock still bounds later generation) and
+            # surface the fault rather than swallowing it (Codex PR #1767).
             logger.warning(
                 "Pending replay receipt written without a ledger end bound",
                 extra={
@@ -744,14 +815,20 @@ class RunReplayProofService:
                     "run_id": run_id,
                 },
             )
-            stored = self.read(strategy_instance_id, run_id)
+            # Preserve the Stop-time end bound so a later regeneration replays
+            # the same run-bounded input (finding 4). A corrupt stored receipt
+            # must NOT abort the recovery path -- regeneration is exactly how a
+            # malformed artifact gets repaired (Codex PR #1767); drop the bound
+            # rather than re-raise on an unreadable prior receipt.
+            try:
+                stored = self.read(strategy_instance_id, run_id)
+            except (ValueError, OSError):
+                stored = None
             receipt = self._skeleton(
                 binding,
                 run_record.run_id,
                 status="replay_failed",
                 error=str(error),
-                # Preserve the Stop-time end bound so a later regeneration
-                # replays the same run-bounded input (PR #1751 finding 4).
                 ledger_end_seq=None if stored is None else stored.ledger_end_seq,
             )
         write_run_replay_receipt(instance_dir, receipt)
@@ -811,6 +888,7 @@ class RunReplayProofService:
                     live=live,
                     records=evidence.records,
                     captured_decisions=evidence.captured_decisions,
+                    crash_records=evidence.crash_records,
                 )
             )
             return parity, fidelity
@@ -901,29 +979,24 @@ class RunReplayProofService:
     ) -> RunReplayReceipt:
         from app.schemas.run_replay import EngineParityDivergenceModel, RunReplayDivergenceModel
 
-        crash_divergences = [
-            RunFidelityDivergence(
-                evaluation_id=record.evaluation_id,
-                bar_close_ms=0,
-                classification="expected_live_effect",
-                reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
-                replay_staged=None,
-                live_outcome=record.outcome,
-                detail=f"FR-016 crash-window evidence (bar_ref={record.bar_ref!r}).",
-            )
-            for record in evidence.crash_records
-        ]
-        all_divergences = crash_divergences + list(fidelity.divergences)
-        expected = fidelity.expected_live_effect_count + len(crash_divergences)
-        # Verdict ordering (PR #1751 finding 6): real drift is the loudest
-        # verdict; known-incomplete evidence (truncated records) or an
-        # unprovable engine leg (`parity.error`) is INDETERMINATE -- partial
-        # evidence never earns a proof verdict; only complete, clean evidence
-        # may claim parity.
-        if parity.divergence is not None or fidelity.drift_count > 0:
+        # Crash-window rows are already classified inside the fidelity leg
+        # (digest-verified expected effect or drift), so they are part of
+        # ``fidelity.divergences`` -- no separate presence-trusted list.
+        all_divergences = list(fidelity.divergences)
+        expected = fidelity.expected_live_effect_count
+        # Verdict ordering (PR #1751 findings 4/6): content drift proven by a
+        # retained aligned row is the loudest verdict and dominates even a
+        # truncated window; a known-incomplete window (truncated) or an
+        # unprovable engine leg is INDETERMINATE; only then does absence drift
+        # (alignment gaps on a *complete* journal) become a real-drift verdict --
+        # retention loss must never be promoted to drift (Codex PR #1767).
+        content_drift = parity.divergence is not None or fidelity.content_drift_count > 0
+        if content_drift:
             status = "drift"
         elif evidence.truncated or parity.error is not None:
             status = "indeterminate"
+        elif fidelity.drift_count > 0:
+            status = "drift"
         elif expected > 0:
             status = "parity_with_expected_live_effects"
         else:
@@ -967,7 +1040,13 @@ class RunReplayProofService:
                         live_outcome=d.live_outcome,
                         detail=d.detail,
                     )
-                    for d in all_divergences[:_MAX_RECEIPT_DIVERGENCES]
+                    # Drift entries first so a bounded list on a drift verdict
+                    # always surfaces the defect it reports, even behind many
+                    # expected effects (stable sort keeps chronological order
+                    # within each class) -- Codex PR #1767.
+                    for d in sorted(all_divergences, key=lambda d: d.classification != "drift")[
+                        :_MAX_RECEIPT_DIVERGENCES
+                    ]
                 ],
             }
         )

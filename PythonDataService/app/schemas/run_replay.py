@@ -9,6 +9,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+_INT64_MAX = 2**63 - 1
+"""Signed int64 ceiling: persisted ms-UTC values must fit the wire/storage contract."""
+
 RunReplayStatus = Literal[
     "pending",
     "parity",
@@ -37,7 +40,7 @@ class RunReplayDivergenceModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     evaluation_id: str
-    bar_close_ms: int = Field(ge=0)
+    bar_close_ms: int = Field(ge=0, le=_INT64_MAX)
     classification: Literal["expected_live_effect", "drift"]
     reason_code: str
     replay_staged: str | None
@@ -72,7 +75,7 @@ class RunReplayReceipt(BaseModel):
     divergences: list[RunReplayDivergenceModel]
     program_version: str | None
     sealed_program_hash: str | None
-    generated_at_ms: int = Field(ge=0)
+    generated_at_ms: int = Field(ge=0, le=_INT64_MAX)
     error: str | None = None
 
 

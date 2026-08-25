@@ -162,6 +162,67 @@ async def test_run_fidelity_over_bars_flags_a_content_level_digest_mismatch_as_d
     assert drift.reason_code == "TRACE_DIGEST_MISMATCH"
 
 
+async def _crash_setup() -> tuple[list, dict[str, str], LiveDecisionRecord]:
+    """All bars in warmup with the EXIT bucket left uncaptured, so the warmup
+    machinery reconstructs it as a crash-recovered candidate."""
+    bars = _ema_parity_bars_through_first_exit()
+    records = await _record_live_pass(bars, block_first_enter=False)
+    exit_idx = next(i for i, record in enumerate(records) if record.outcome == "exit_intent")
+    exit_record = records[exit_idx]
+    captured = {
+        record.evaluation_id: record.outcome
+        for index, record in enumerate(records)
+        if index != exit_idx
+    }
+    return bars, captured, exit_record
+
+
+@pytest.mark.asyncio
+async def test_run_fidelity_digest_verifies_a_faithful_crash_window_receipt() -> None:
+    """PR #1767: a crash-window receipt is accepted only after its digest is
+    verified against the reconstructed candidate — never on presence alone."""
+    bars, captured, exit_record = await _crash_setup()
+    crash_record = LiveDecisionRecord(
+        seq=exit_record.seq, evaluation_id=exit_record.evaluation_id,
+        outcome="candidate_uncaptured_at_crash", reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+        bar_ref="", trace_digest=exit_record.trace_digest, bar_close_ms=exit_record.bar_close_ms,
+    )
+
+    result = await run_fidelity_over_bars(
+        _binding(run_id="run-1"), provider="fake-phase",
+        warmup=_retained(bars), live=[], records=[],
+        captured_decisions=captured, crash_records=[crash_record],
+    )
+
+    assert result.drift_count == 0
+    assert any(
+        d.classification == "expected_live_effect" and d.reason_code == "CANDIDATE_UNCAPTURED_AT_CRASH"
+        for d in result.divergences
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_fidelity_flags_a_tampered_crash_window_receipt_as_drift() -> None:
+    """A crash receipt whose captured digest no longer matches the replayed
+    crash-window trace is drift, not a laundered expected effect (PR #1767)."""
+    bars, captured, exit_record = await _crash_setup()
+    tampered = LiveDecisionRecord(
+        seq=exit_record.seq, evaluation_id=exit_record.evaluation_id,
+        outcome="candidate_uncaptured_at_crash", reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+        bar_ref="", trace_digest="f" * 64, bar_close_ms=exit_record.bar_close_ms,
+    )
+
+    result = await run_fidelity_over_bars(
+        _binding(run_id="run-1"), provider="fake-phase",
+        warmup=_retained(bars), live=[], records=[],
+        captured_decisions=captured, crash_records=[tampered],
+    )
+
+    assert result.drift_count >= 1
+    drift = next(d for d in result.divergences if d.classification == "drift")
+    assert drift.reason_code == "TRACE_DIGEST_MISMATCH"
+
+
 @pytest.mark.asyncio
 async def test_run_fidelity_over_bars_refuses_a_blocked_row_with_an_unrecognized_reason() -> None:
     """PR #1751 finding 3b: a `blocked` row is cross-checked, never trusted on presence."""

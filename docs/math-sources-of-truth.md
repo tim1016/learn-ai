@@ -17,6 +17,15 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 
 ## Registry
 
+> **No-new-concept note — run-scoped replay proof (PRD #1753, Direction 2).** The
+> replay-proof engine path added by issues #1758–#1762
+> (`PythonDataService/app/services/run_replay_proof.py`) introduces **no new math
+> concept** and therefore gains **no registry row**. Its content hashing reuses
+> the canonical `trace_root` (`app/engine/strategy/signal_program.py`) and its
+> engine-parity leg reuses the already-existing BacktestEngine shadow-trace
+> comparator; the AGENTS.md "update both registries" rule is satisfied by the new
+> row in `docs/architecture/engine-authority-map.md` plus this explicit note.
+
 ### Broker display read models
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
