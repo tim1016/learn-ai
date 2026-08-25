@@ -8,14 +8,22 @@ added by later slices of the same plan.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
+    ShadowTraceDivergence,
+    ShadowTraceDivergenceError,
+    UnsupportedShadowProgramError,
+    run_shadow_trace_evaluation,
+)
 from app.engine.data.trade_bar import TradeBar
 from app.marketdata.feed import MarketDataBar
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -183,4 +191,47 @@ def live_run_decision_evidence_from_rows(
         crash_records=tuple(crash_records),
         captured_decisions=captured,
         truncated=len(rows) >= MAX_DECISION_RECEIPTS_PER_STRATEGY,
+    )
+
+
+@dataclass(frozen=True)
+class EngineParityResult:
+    """BacktestEngine vs runner-seam trace parity over one run's exact bars."""
+
+    trace_root: str | None
+    compared_count: int
+    divergence: ShadowTraceDivergence | None
+    error: str | None
+
+
+def engine_parity_over_bars(
+    strategy_key: str,
+    symbol: str,
+    strategy_params: Mapping[str, Any] | None,
+    bars: Sequence[TradeBar],
+) -> EngineParityResult:
+    """Prove (or refute) the two-seam decision-math parity for one bar set.
+
+    Synchronous by design: the orchestrator runs it inside
+    ``asyncio.to_thread``, where ``asyncio.run`` is legal because the worker
+    thread has no running loop. Never call this from a coroutine.
+    """
+    try:
+        evaluation = asyncio.run(
+            run_shadow_trace_evaluation(strategy_key, symbol, strategy_params, list(bars))
+        )
+    except ShadowTraceDivergenceError as error:
+        return EngineParityResult(
+            trace_root=None,
+            compared_count=error.divergence.index,
+            divergence=error.divergence,
+            error=None,
+        )
+    except UnsupportedShadowProgramError as error:
+        return EngineParityResult(trace_root=None, compared_count=0, divergence=None, error=str(error))
+    return EngineParityResult(
+        trace_root=evaluation.trace_root,
+        compared_count=evaluation.compared_count,
+        divergence=None,
+        error=None,
     )
