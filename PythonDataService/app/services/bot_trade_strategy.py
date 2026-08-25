@@ -801,9 +801,7 @@ async def run_trade_bot(
                         else "exit_intent"
                     ),
                     observed_at_ms=now_ms_utc(),
-                    trace_digest=(
-                        trace_root([evaluation.trace]) if evaluation.trace is not None else None
-                    ),
+                    trace_digest=_evaluation_trace_digest(evaluation),
                     decision_bar_close_ms=evaluation.decision_bar_close_ms,
                 ),
             )
@@ -845,6 +843,18 @@ _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
 }
 
 
+def _evaluation_trace_digest(evaluation: StrategyEvaluation) -> str | None:
+    """The canonical per-bucket trace digest, or None for a traceless evaluation.
+
+    Direction 2 (run-scoped replay proof): captured on every decision receipt at
+    live time so a replay can compare decision CONTENT, not just intent
+    direction. ``None`` for a compatibility-mode strategy with no SignalSession.
+    """
+    if evaluation.trace is None:
+        return None
+    return trace_root([evaluation.trace])
+
+
 def _append_decision_receipt(
     receipts: SqliteDecisionReceipts,
     *,
@@ -865,8 +875,9 @@ def _append_decision_receipt(
         "retention_class": _PROTECTED_RETENTION_CLASS_BY_OUTCOME.get(outcome, "tail"),
     }
     facts["decision_bar_close_ms"] = evaluation.decision_bar_close_ms
-    if evaluation.trace is not None:
-        facts["trace_digest"] = trace_root([evaluation.trace])
+    trace_digest = _evaluation_trace_digest(evaluation)
+    if trace_digest is not None:
+        facts["trace_digest"] = trace_digest
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
     receipts.append(
@@ -1038,9 +1049,7 @@ async def run_dry_run_bot(
                     else "exit_intent"
                 ),
                 observed_at_ms=now_ms_utc(),
-                trace_digest=(
-                    trace_root([evaluation.trace]) if evaluation.trace is not None else None
-                ),
+                trace_digest=_evaluation_trace_digest(evaluation),
                 decision_bar_close_ms=evaluation.decision_bar_close_ms,
             ),
         )
