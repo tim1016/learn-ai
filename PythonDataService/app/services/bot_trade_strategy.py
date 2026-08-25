@@ -40,6 +40,7 @@ from app.engine.strategy.signal_program import (
     Settlement,
     SignalProgram,
     StageQuarantine,
+    trace_root,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
@@ -457,6 +458,11 @@ async def _warm_up_signal_strategy(
         settle_stage=lambda _settlement: None,
         evaluation_mode=EvaluationMode.OBSERVE_ONLY,
         crash_recovered=True,
+        # Carry the reconstructed stage's trace so the protected
+        # candidate_uncaptured_at_crash receipt captures its digest (Direction 2):
+        # this bucket came from a registered Signal Program, so its crash-window
+        # decision content stays content-verifiable rather than digest-less.
+        trace=candidate_stage.trace,
     )
 
 
@@ -800,6 +806,8 @@ async def run_trade_bot(
                         else "exit_intent"
                     ),
                     observed_at_ms=now_ms_utc(),
+                    trace_digest=_evaluation_trace_digest(evaluation),
+                    decision_bar_close_ms=evaluation.decision_bar_close_ms,
                 ),
             )
         except AdmissionBlockedError as exc:
@@ -840,6 +848,18 @@ _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
 }
 
 
+def _evaluation_trace_digest(evaluation: StrategyEvaluation) -> str | None:
+    """The canonical per-bucket trace digest, or None for a traceless evaluation.
+
+    Direction 2 (run-scoped replay proof): captured on every decision receipt at
+    live time so a replay can compare decision CONTENT, not just intent
+    direction. ``None`` for a compatibility-mode strategy with no SignalSession.
+    """
+    if evaluation.trace is None:
+        return None
+    return trace_root([evaluation.trace])
+
+
 def _append_decision_receipt(
     receipts: SqliteDecisionReceipts,
     *,
@@ -859,6 +879,10 @@ def _append_decision_receipt(
         "reason_code": reason_code,
         "retention_class": _PROTECTED_RETENTION_CLASS_BY_OUTCOME.get(outcome, "tail"),
     }
+    facts["decision_bar_close_ms"] = evaluation.decision_bar_close_ms
+    trace_digest = _evaluation_trace_digest(evaluation)
+    if trace_digest is not None:
+        facts["trace_digest"] = trace_digest
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
     receipts.append(
@@ -1030,6 +1054,8 @@ async def run_dry_run_bot(
                     else "exit_intent"
                 ),
                 observed_at_ms=now_ms_utc(),
+                trace_digest=_evaluation_trace_digest(evaluation),
+                decision_bar_close_ms=evaluation.decision_bar_close_ms,
             ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
