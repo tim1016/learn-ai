@@ -472,21 +472,6 @@ class BotBindingRepository:
             raise ValueError("program-build evidence belongs to another run identity")
         return evidence
 
-    def read_run_record(
-        self,
-        strategy_instance_id: str,
-        run_id: str,
-    ) -> BotRunRecord | None:
-        """Return the create-once launch evidence for one run, if it exists."""
-        instance_dir = self._instance_dir_for(strategy_instance_id)
-        path = self._run_path(instance_dir, run_id)
-        if not path.is_file():
-            return None
-        record = BotRunRecord.model_validate_json(path.read_text(encoding="utf-8"))
-        if record.strategy_instance_id != strategy_instance_id or record.run_id != run_id:
-            raise ValueError("run record belongs to another run identity")
-        return record
-
     def ensure_legacy_migration_clone_lineage(
         self,
         *,

@@ -262,6 +262,13 @@ class _RetainedSourceBarFeed:
             self._ledger.append(bar)
             if _includes_session_phase(bar, use_rth=use_rth):
                 yield bar
+            else:
+                # The session only consumes (and pops) a captured evaluation
+                # mode for bars it actually evaluates, and it never sees a bar
+                # we filter here. Consume the mode ourselves so an upstream
+                # PauseAwareFeed's captured-mode map cannot grow unbounded over
+                # a long-running paper session.
+                self.evaluation_mode_for(bar)
 
     async def recent_closed_bars(
         self,

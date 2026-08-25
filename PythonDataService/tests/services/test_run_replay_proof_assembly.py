@@ -92,7 +92,10 @@ def test_replay_provider_for_requires_exactly_one_provider(tmp_path: Path) -> No
         ledger.close(checkpoint=False)
 
 
-def test_read_run_record_returns_durable_launch_evidence(tmp_path: Path) -> None:
+def test_read_run_serves_the_replay_run_boundary_reader(tmp_path: Path) -> None:
+    # Replay reuses the canonical BotBindingRepository.read_run reader for the
+    # run's durable launch instant (started_at_ms) rather than a bespoke
+    # duplicate; it validates run identity and returns None for an unknown run.
     repository = BotBindingRepository(tmp_path, instance_dir_for=lambda sid: tmp_path / "live_state" / sid)
     record = BotRunRecord(
         run_id="run-1",
@@ -105,8 +108,8 @@ def test_read_run_record_returns_durable_launch_evidence(tmp_path: Path) -> None
     runs_dir.mkdir(parents=True)
     (runs_dir / "run-1.json").write_text(record.model_dump_json(), encoding="utf-8")
 
-    loaded = repository.read_run_record("bot-a", "run-1")
+    loaded = repository.read_run("bot-a", "run-1")
 
     assert loaded is not None
     assert loaded.started_at_ms == _T0
-    assert repository.read_run_record("bot-a", "run-2") is None
+    assert repository.read_run("bot-a", "run-2") is None
