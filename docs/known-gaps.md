@@ -32,43 +32,17 @@ findings, and §8's FR-016 scope bullet was closed against current code.
 
 ## 1. Safety-critical
 
-Two open items, lifted 2026-08-24 from the F1–F19 adjudication table in
-`docs/audits/review-handoff-2026-08-24.md` (PR #1747) and re-verified in code
-the same day. Research directions covering both:
-`docs/audits/strategy-execution-research-directions-2026-08-24.md`
-(Direction 1). The previously tracked items (issues #1655, #1671, #1672,
-#1674, #1677, #1664, #1665) remain closed as of 2026-08-19; git history is the
-record.
-
-- **F18 — crash-held exposure has no path to flat (top priority).** Stop
-  cancels working entries and leaves attributed exposure by design
-  (`app/services/bot_carryover.py` — `STOP_REQUIRES_FLATTEN` is a recorded
-  outcome, not an action). Every recovery pointer dead-ends: `SafeFlattenPlan`
-  is built (`app/broker/alpaca/clerk/sqlite/recovery_policy.py:653`) but has
-  no executor anywhere in the codebase; the `flatten_stop` performer
-  (`app/services/broker_v2_panel/panel_data_source.py:1016`) is never
-  presented (`sqlite_panel_adapter.py:61` presents only `resume`) and was
-  never exercisable under SQLite custody anyway — `require_active_run`
-  (`app/broker/alpaca/clerk/sqlite/idempotency.py:77`) refuses EXITs once the
-  run is retired, and its `panel-flatten:` decision id trips `reject_colon`
-  (`app/broker/alpaca/clerk/sqlite/exit.py:68`);
-  `EXPOSURE_CARRYOVER_STRATEGY_KEYS` is empty
-  (`app/services/bot_trade_strategy.py:63`); manual tickets are gated
-  `MANUAL_TRADING_NOT_QUALIFIED`; `emergency_flatten_strategy_instance_id`
-  (`app/engine/live/order_identity.py:113`) has zero callers. Adjacent hole:
-  a terminal `EXIT_NOT_FLAT` folds the effect to `failed`, which
-  `reads.py:475-486` never re-selects — a stuck exit is never retried and has
-  no age watchdog. Standing evidence: three stranded 1-share paper positions
-  on `PA3KWXU1C4C3` (ops study §8; do not flatten out-of-band — operator's
-  call).
-- **F19 — retryable EXIT refusal escalates to bot crash (second priority).**
-  The EXIT path reaches `require_capability(REDUCE, …)`
-  (`app/broker/alpaca/clerk/sqlite/exit_resolution.py:158` via
-  `runtime.py:785`) outside any try block; `AdmissionBlockedError:
-  BROKER_SNAPSHOT_STALE` propagates to `_supervise`'s blanket handler →
-  `finalize_crash`. Only ENTER (`runtime.py:682`), manual orders, and the
-  sweep catch it. Same-symbol cohorts exit in lockstep by design, so the race
-  fires routinely at fleet scale (observed live: ops study §9).
+No known-open items. The two 2026-08-24 safety-critical findings — F18
+(crash-held exposure had no path to flat) and F19 (retryable EXIT refusal
+escalating to a bot crash) — were closed 2026-08-25 by the exposure-lifecycle-
+closure work (PRD #1752, ADR 0045): the `execute_safe_flatten` recovery action
+over run-fence-exempt recovery EXITs, the transient-vs-terminal refusal taxonomy
+at the EXIT boundary and the runner call site, and the stuck-EXIT watchdog with
+bounded episode-scoped redrives and durable `EXIT_STUCK` escalation. The three
+stranded 1-share evidence positions on `PA3KWXU1C4C3` can now be flattened
+through the presented action — flattening them remains the operator's call. The
+previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
+#1665) remain closed as of 2026-08-19; git history is the record.
 
 ## 2. Architecture-investigation P1 tier
 
@@ -213,7 +187,7 @@ carries the F1–F19 adjudication table; the ops study
 (`docs/audits/bot-launch-ops-study-2026-08-24.md`) carries the detail and the
 timings (the session scratchpad logs were ephemeral — the study doc is the
 primary record). F1 and F9 were fixed in-session (`238821c7`, `ff5ed49f`);
-F18/F19 are lifted to §1 above. The items below entered this backlog on
+F18/F19 were closed by ADR 0045 (see §1). The items below entered this backlog on
 static code verification plus live observation during the session; severities
 were assigned at lift time from that evidence. The handoff's independent
 adjudication (confirm/refute, one issue per confirmed finding) may still

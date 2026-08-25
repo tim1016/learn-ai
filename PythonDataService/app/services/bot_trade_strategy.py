@@ -22,6 +22,11 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     DecisionOutcome,
     SqliteDecisionReceipts,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    RefusalClass,
+    classify_admission_refusal,
+)
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
@@ -35,6 +40,7 @@ from app.engine.strategy.signal_program import (
     Settlement,
     SignalProgram,
     StageQuarantine,
+    trace_root,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
@@ -262,6 +268,13 @@ class _RetainedSourceBarFeed:
             self._ledger.append(bar)
             if _includes_session_phase(bar, use_rth=use_rth):
                 yield bar
+            else:
+                # The session only consumes (and pops) a captured evaluation
+                # mode for bars it actually evaluates, and it never sees a bar
+                # we filter here. Consume the mode ourselves so an upstream
+                # PauseAwareFeed's captured-mode map cannot grow unbounded over
+                # a long-running paper session.
+                self.evaluation_mode_for(bar)
 
     async def recent_closed_bars(
         self,
@@ -445,6 +458,11 @@ async def _warm_up_signal_strategy(
         settle_stage=lambda _settlement: None,
         evaluation_mode=EvaluationMode.OBSERVE_ONLY,
         crash_recovered=True,
+        # Carry the reconstructed stage's trace so the protected
+        # candidate_uncaptured_at_crash receipt captures its digest (Direction 2):
+        # this bucket came from a registered Signal Program, so its crash-window
+        # decision content stays content-verifiable rather than digest-less.
+        trace=candidate_stage.trace,
     )
 
 
@@ -643,8 +661,21 @@ def alpaca_paper_strategy_default_symbol(strategy_key: str) -> str:
     return registration.param_schema().symbol  # type: ignore[attr-defined]
 
 
-async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
-    """Execute one admitted strategy; the Clerk owns all execution truth."""
+async def run_trade_bot(
+    binding: BrokerBotBinding,
+    feed: MarketDataFeed,
+    *,
+    source_bars: SourceBarLedger | None = None,
+) -> None:
+    """Execute one admitted strategy; the Clerk owns all execution truth.
+
+    ``source_bars`` retains every unfiltered feed observation before the
+    sealed session's RTH policy applies (Direction 2: a paper run must be
+    replayable from its own retained bars). ``None`` disables retention and
+    exists only for focused unit tests; production wiring
+    (``bot_runtime.execute_bot_run``) always supplies the instance-scoped
+    ledger and fails closed without one.
+    """
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise RuntimeError("The SQLite Alpaca Clerk is unavailable; trade-mode decisions are blocked.")
@@ -665,9 +696,10 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
+    run_feed = _RetainedSourceBarFeed(feed, source_bars) if source_bars is not None else feed
     async for evaluation in strategy_evaluations(
         binding,
-        feed,
+        run_feed,
         captured_decisions=captured_decision_outcomes(decision_receipts),
     ):
         if len(evaluation.intents) > 1:
@@ -754,27 +786,35 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                 "bar_end_ms": intent.bar_close_ms,
             },
         )
-        receipt = await clerk.execute_for_instance(
-            strategy_instance_id=binding.strategy_instance_id,
-            run_id=binding.run_id,
-            decision_id=decision_id,
-            purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
-            action_plan=binding.action_plan,
-            quantity=binding.quantity,
-            use_rth=binding.use_rth,
-            capability_account_id=capability_account_id,
-            decision_evidence=EffectDecisionEvidence(
-                evaluation_id=decision_id,
-                bar_ref=_decision_bar_ref(binding, evaluation),
-                symbol=binding.symbol,
-                outcome=(
-                    "enter_intent"
-                    if intent.kind is SignalIntentKind.ENTER
-                    else "exit_intent"
+        try:
+            receipt = await clerk.execute_for_instance(
+                strategy_instance_id=binding.strategy_instance_id,
+                run_id=binding.run_id,
+                decision_id=decision_id,
+                purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
+                action_plan=binding.action_plan,
+                quantity=binding.quantity,
+                use_rth=binding.use_rth,
+                capability_account_id=capability_account_id,
+                decision_evidence=EffectDecisionEvidence(
+                    evaluation_id=decision_id,
+                    bar_ref=_decision_bar_ref(binding, evaluation),
+                    symbol=binding.symbol,
+                    outcome=(
+                        "enter_intent"
+                        if intent.kind is SignalIntentKind.ENTER
+                        else "exit_intent"
+                    ),
+                    observed_at_ms=now_ms_utc(),
+                    trace_digest=_evaluation_trace_digest(evaluation),
+                    decision_bar_close_ms=evaluation.decision_bar_close_ms,
                 ),
-                observed_at_ms=now_ms_utc(),
-            ),
-        )
+            )
+        except AdmissionBlockedError as exc:
+            _dispose_transient_exit_refusal(
+                decision_receipts, binding=binding, evaluation=evaluation, exc=exc
+            )
+            continue
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             # A distinct failure mode from the liveness gate above: that one
             # catches evidence already stale *before* the Clerk was reached,
@@ -808,6 +848,18 @@ _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
 }
 
 
+def _evaluation_trace_digest(evaluation: StrategyEvaluation) -> str | None:
+    """The canonical per-bucket trace digest, or None for a traceless evaluation.
+
+    Direction 2 (run-scoped replay proof): captured on every decision receipt at
+    live time so a replay can compare decision CONTENT, not just intent
+    direction. ``None`` for a compatibility-mode strategy with no SignalSession.
+    """
+    if evaluation.trace is None:
+        return None
+    return trace_root([evaluation.trace])
+
+
 def _append_decision_receipt(
     receipts: SqliteDecisionReceipts,
     *,
@@ -827,6 +879,10 @@ def _append_decision_receipt(
         "reason_code": reason_code,
         "retention_class": _PROTECTED_RETENTION_CLASS_BY_OUTCOME.get(outcome, "tail"),
     }
+    facts["decision_bar_close_ms"] = evaluation.decision_bar_close_ms
+    trace_digest = _evaluation_trace_digest(evaluation)
+    if trace_digest is not None:
+        facts["trace_digest"] = trace_digest
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
     receipts.append(
@@ -842,6 +898,43 @@ def _append_decision_receipt(
 def _effect_state_value(receipt: _EffectReceipt) -> str:
     state = receipt.state
     return str(getattr(state, "value", state))
+
+
+def _dispose_transient_exit_refusal(
+    decision_receipts: SqliteDecisionReceipts,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    exc: AdmissionBlockedError,
+) -> None:
+    """Settle one staged decision whose Clerk refusal is TRANSIENT (F19).
+
+    TERMINAL refusals re-raise so an unclassified admission failure stays
+    honest crash evidence at ``_supervise``'s boundary. TRANSIENT refusals
+    (snapshot staleness during same-clock cohort reduces, ops study §9) are
+    refused-and-deferred: DISCARD the staged candidate, record a protected
+    ``blocked`` receipt, and let the next decision clock retry.
+    """
+    if classify_admission_refusal(exc.decision.reason_code) is not RefusalClass.TRANSIENT:
+        raise exc
+    _discard_evaluation(evaluation)
+    _append_decision_receipt(
+        decision_receipts,
+        binding=binding,
+        evaluation=evaluation,
+        outcome="blocked",
+        reason_code=exc.decision.reason_code or "ADMISSION_BLOCKED",
+    )
+    logger.warning(
+        "Trade bot deferred a transient Clerk admission refusal to the next decision clock",
+        extra={
+            "action": "bot_admission_refusal_deferred",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "strategy_key": binding.strategy_key,
+            "symbol": binding.symbol,
+            "reason_code": exc.decision.reason_code,
+        },
+    )
 
 
 def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
@@ -961,6 +1054,8 @@ async def run_dry_run_bot(
                     else "exit_intent"
                 ),
                 observed_at_ms=now_ms_utc(),
+                trace_digest=_evaluation_trace_digest(evaluation),
+                decision_bar_close_ms=evaluation.decision_bar_close_ms,
             ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:

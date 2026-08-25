@@ -1892,3 +1892,12 @@ proves its running build at Start/Resume.
   original v1 bytes untouched forever; a clone is inspectable under its own id
   but the original can never Resume again under its old one.
   _Avoid_: seal migration, resealing, v2 upgrade.
+
+## Exposure lifecycle closure (resolved 2026-08-24)
+
+**Lineage: live.**
+
+- **Recovery EXIT** — a reduction-only EXIT captured without the active-run fence, anchored to the run recorded on the targeted entry's effect operation. Admitted only by the safe-flatten gates or the stuck-EXIT watchdog policy, and always subject to the REDUCE capability's movement-toward-zero check.
+- **Safe flatten** — the two-step operator capability over a prepared `SafeFlattenPlan`: `prepare_safe_flatten` (view) builds the versioned exact-close plan; `execute_safe_flatten` (mutation) submits it as recovery EXITs, re-deriving quantities from durable attributed positions and re-asserting no-active-run inside the capture transaction. Execution is gated to a single strategy-owned leg; account-wide and manual custody stay prepare-only.
+- **Redrive** — the watchdog's bounded automatic re-submission of a reduction for a stale `EXIT_NOT_FLAT` episode; identity `exit-redrive-<episode-hex12>-<attempt>`, at most 3 per episode, counted by the command namespace (not a mutable timestamp).
+- **`EXIT_STUCK`** — the durable custody-subject escalation raised when redrives exhaust; blocks new exposure, allows reduction toward zero, and clears on the same attributed-flat proof that clears `EXIT_NOT_FLAT`.

@@ -17970,7 +17970,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -18003,7 +18003,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Message */
             message: string;
             /**
@@ -18032,7 +18032,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -18055,7 +18055,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -18098,7 +18098,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
+            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
         };
         /**
          * ParamPropertySchema
@@ -18606,9 +18606,9 @@ export interface components {
          */
         PrimaryActionByLens: {
             /** Operator */
-            operator: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority") | null;
+            operator: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority") | null;
             /** Trader */
-            trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority") | null;
+            trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority") | null;
         };
         /**
          * ProgramBuildAdmissionFact
@@ -19032,7 +19032,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Ready */
             ready: boolean;
             /**
@@ -19363,7 +19363,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
         };
@@ -19380,7 +19380,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
             /** Execution Ref */
@@ -19394,7 +19394,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Applied */
             applied: boolean;
             command: components["schemas"]["CommandResponse"] | null;
@@ -19418,7 +19418,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Available */
             available: boolean;
             /** Concurrency Token */

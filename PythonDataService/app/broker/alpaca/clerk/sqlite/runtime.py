@@ -81,6 +81,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
@@ -89,6 +90,10 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
+    SafeFlattenResult,
+    execute_safe_flatten_plan,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
 from app.broker.contract.errors import BrokerError
@@ -474,6 +479,32 @@ class SqliteAlpacaClerkFacade:
                 operator_reason=reason,
             )
 
+    async def execute_safe_flatten(
+        self,
+        *,
+        plan: SafeFlattenPlan,
+        reason: str | None = None,
+    ) -> SafeFlattenResult:
+        """Execute the presented SafeFlattenPlan as recovery EXIT custody (F18)."""
+        result = await execute_safe_flatten_plan(
+            self._repo,
+            plan=plan,
+            trade=self._trade,
+            intake=self._intake,
+            account_id=self.account_id,
+        )
+        logger.info(
+            "operator safe flatten executed",
+            extra={
+                "action": "safe_flatten_executed",
+                "account_id": self.account_id,
+                "reason": reason,
+                "order_count": len(result.orders),
+                "accepted_effect_count": len(result.accepted_effect_operation_ids),
+            },
+        )
+        return result
+
     async def execute_for_instance(
         self,
         *,
@@ -614,6 +645,8 @@ class SqliteAlpacaClerkFacade:
                             "decision_id": decision_evidence.evaluation_id,
                             "evaluation_id": decision_evidence.evaluation_id,
                             "reason_code": decision_evidence.reason_code,
+                            "trace_digest": decision_evidence.trace_digest,
+                            "decision_bar_close_ms": decision_evidence.decision_bar_close_ms,
                         }
                     ),
                 )
@@ -1096,6 +1129,8 @@ def _append_pre_custody_refusal(
                 "reason_code": reason_code,
                 "refusal_reason": explanation,
                 "retention_class": "protected_refusal",
+                "trace_digest": evidence.trace_digest,
+                "decision_bar_close_ms": evidence.decision_bar_close_ms,
             }
         ),
     )

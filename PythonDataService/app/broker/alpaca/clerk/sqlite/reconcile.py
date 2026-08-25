@@ -11,6 +11,7 @@ from typing import Literal
 from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_watchdog import redrive_or_escalate_stale_exits
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
@@ -49,6 +50,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
     raise_uncertainty,
     resolve_exit_not_flat_uncertainty,
+    resolve_exit_stuck_uncertainty,
     resolve_incomplete_reconciliation_uncertainty,
     resolve_reconciliation_uncertainty,
 )
@@ -490,6 +492,14 @@ def _resolve_flat_exit_fences(
             strategy_instance_id=strategy_instance_id,
             evidence_refs=("fresh_account_snapshot", "attributed_flat"),
         )
+        # A stuck-EXIT escalation outlives its EXIT_NOT_FLAT origin; the same
+        # attributed-flat proof must clear it, or the now-flat strategy stays
+        # permanently barred from new exposure.
+        resolve_exit_stuck_uncertainty(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            evidence_refs=("fresh_account_snapshot", "attributed_flat"),
+        )
 
 
 @dataclass(frozen=True)
@@ -747,6 +757,8 @@ async def _reconcile_account_serialized(
         trade=trade,
         intake=intake,
     )
+
+    await redrive_or_escalate_stale_exits(repo, trade=trade, intake=intake)
 
     # Recovery can poll fills, cancel entries, or submit a reducing order.
     # Re-read broker truth and fold the newest open-order evidence before the

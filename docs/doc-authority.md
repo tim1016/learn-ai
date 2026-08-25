@@ -127,6 +127,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0042 | Sealed signal decisions meet account-scoped custody at one semantic seam |
 | 0043 | Signal Program build proof, two-level seal identity, and append-or-clone legacy migration |
 | 0044 | Two strategy-validation categories with a permanent Live ceiling for operational harnesses |
+| 0045 | Exposure lifecycle closure: `execute_safe_flatten` recovery action over run-fence-exempt recovery EXITs; transient-vs-terminal EXIT refusal taxonomy; stuck-EXIT watchdog with bounded episode-scoped redrives and durable `EXIT_STUCK` escalation (supersedes 0010) |
 
 ---
 

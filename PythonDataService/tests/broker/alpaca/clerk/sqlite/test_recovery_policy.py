@@ -64,6 +64,7 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
         "resolve_execution_coverage",
         "cancel_verified_working_orders",
         "prepare_safe_flatten",
+        "execute_safe_flatten",
         "stop_bot_decisions",
         "open_custody_timeline",
     }

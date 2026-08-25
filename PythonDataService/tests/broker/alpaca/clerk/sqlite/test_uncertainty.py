@@ -19,16 +19,23 @@ from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
+    EXIT_STUCK_REASON_CODE,
+    RECONCILIATION_INCOMPLETE_REASON_CODE,
     AdmissionBlockedError,
     Capability,
     ReductionIntent,
+    RefusalClass,
     admit_new_exposure,
+    classify_admission_refusal,
     decide_capability,
     raise_uncertainty,
     require_admission,
     resolve_reconciliation_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    ExitStuckCause,
     OrderOutcomeUnknownCause,
     PositionDriftCause,
     PositionDriftObservation,
@@ -390,3 +397,64 @@ def test_require_admission_raises_when_blocked(repo: ClerkSqliteRepository) -> N
     with pytest.raises(AdmissionBlockedError) as exc_info:
         require_admission(repo, strategy_instance_id=SID)
     assert exc_info.value.decision.reason_code == "ORDER_OUTCOME_UNKNOWN"
+
+
+# ── refusal taxonomy (F19) ───────────────────────────────────────────────────
+
+
+def test_classify_admission_refusal_marks_sweep_resolvable_codes_transient() -> None:
+    assert classify_admission_refusal(BROKER_SNAPSHOT_STALE_REASON_CODE) is RefusalClass.TRANSIENT
+    assert classify_admission_refusal(RECONCILIATION_INCOMPLETE_REASON_CODE) is RefusalClass.TRANSIENT
+    assert classify_admission_refusal("RECONCILIATION_IN_PROGRESS") is RefusalClass.TRANSIENT
+
+
+def test_classify_admission_refusal_fails_closed_for_unknown_or_subject_codes() -> None:
+    assert classify_admission_refusal(None) is RefusalClass.TERMINAL
+    assert classify_admission_refusal("SOME_FUTURE_CODE") is RefusalClass.TERMINAL
+    assert classify_admission_refusal(EXIT_NOT_FLAT_REASON_CODE) is RefusalClass.TERMINAL
+
+
+# ── EXIT_STUCK escalation (stuck-EXIT watchdog) ──────────────────────────────
+
+
+def test_exit_stuck_cause_roundtrips_and_rejects_malformed_mappings() -> None:
+    cause = ExitStuckCause(
+        symbol="SPY", attributed_qty=4.0, redrive_count=3, first_observed_at_ms=1_700_000_000_000
+    )
+    assert ExitStuckCause.from_mapping(cause.to_mapping()) == cause
+    with pytest.raises(ValueError):
+        ExitStuckCause.from_mapping({"symbol": "spy", "attributed_qty": 4.0,
+                                     "redrive_count": 3, "first_observed_at_ms": 1})
+    with pytest.raises(ValueError):
+        ExitStuckCause.from_mapping({"symbol": "SPY", "attributed_qty": 4.0,
+                                     "redrive_count": -1, "first_observed_at_ms": 1})
+
+
+def test_exit_stuck_blocks_new_exposure_and_foreign_symbol_reduction(repo) -> None:
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=SID,
+        reason_code=EXIT_STUCK_REASON_CODE,
+        headline="A stuck EXIT exhausted automatic re-drives",
+        explanation="test",
+        operator_impact="new exposure paused; exact reduction available",
+        next_step="execute the presented safe flatten",
+        evidence_refs=(),
+        cause_facts=ExitStuckCause(
+            symbol="SPY", attributed_qty=4.0, redrive_count=3,
+            first_observed_at_ms=1_700_000_000_000,
+        ).to_mapping(),
+        severity="error",
+    )
+
+    blocked_enter = decide_capability(repo, capability=Capability.NEW_EXPOSURE, strategy_instance_id=SID)
+    assert blocked_enter.allowed is False
+    assert blocked_enter.reason_code == EXIT_STUCK_REASON_CODE
+
+    blocked_reduce = decide_capability(
+        repo,
+        capability=Capability.REDUCE,
+        strategy_instance_id=SID,
+        reduction_intent=ReductionIntent(symbol="QQQ", side="SELL", quantity=4),
+    )
+    assert blocked_reduce.allowed is False
