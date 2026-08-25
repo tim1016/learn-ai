@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     accept_exit,
+    resolve_accepted_exit,
     resolve_exit,
     submit_exit,
 )
@@ -205,6 +206,8 @@ async def _make_entry(
     quantity: float = 10,
     filled_quantity: float = 0.0,
     status: str = "accepted",
+    sid: str = SID,
+    run_id: str = RUN_ID,
 ) -> str:
     """Drive a real ENTER through to a fully-acked (and optionally
     partially/fully filled) working order, returning its order_ref."""
@@ -219,9 +222,9 @@ async def _make_entry(
     submission = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
+        strategy_instance_id=sid,
         decision_id=decision_id,
-        lifecycle_run_id=RUN_ID,
+        lifecycle_run_id=run_id,
         leg=_leg(quantity=quantity),
         trade=trade,
     )
@@ -1601,3 +1604,136 @@ async def test_submit_exit_on_a_duplicate_decision_still_advances_the_state_mach
     assert resuming_trade.submit_calls == []  # never re-submitted a duplicate reducing order
     effect_after = repo.effect_operation(second.effect_operation_id)  # type: ignore[arg-type]
     assert effect_after is not None and effect_after.state == "succeeded"
+
+
+# ── transient EXIT refusal deferral (F19 core) ───────────────────────────────
+
+
+def _raise_stale_snapshot(repo: ClerkSqliteRepository) -> None:
+    """The exact account-wide episode reconcile.py raises on a failed snapshot."""
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE,
+        headline="Broker account truth is unavailable",
+        explanation="test: snapshot read failed",
+        operator_impact="New exposure and unproven reduction are paused account-wide.",
+        next_step="Reconcile now after broker connectivity is restored.",
+        evidence_refs=(),
+        cause_facts={"snapshot": "open_orders_and_positions"},
+        severity="error",
+    )
+
+
+async def _filled_entry_with_position(
+    repo: ClerkSqliteRepository, *, sid: str = SID, run_id: str = RUN_ID
+) -> tuple[str, BrokerOrder]:
+    """Entry filled 10 @ 100 with an exact execution slice → attributed +10."""
+    entry_ref = await _make_entry(
+        repo, sid=sid, run_id=run_id, status="filled", filled_quantity=10
+    )
+    recovered = _broker_order(entry_ref, status="filled", filled_quantity=10, filled_avg_price=100)
+    sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler())
+    await sink.record_lifecycle_event(
+        client_order_id=entry_ref,
+        event=BrokerOrderEvent(
+            event_type="fill",
+            occurred_at_ms=1_700_000_000_600,
+            price=100,
+            quantity=10,
+            execution_id=f"exec-{entry_ref}",
+        ),
+        event_key=f"execution:exec-{entry_ref}",
+        order=recovered,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+    return entry_ref, recovered
+
+
+async def test_resolve_accepted_exit_defers_transient_snapshot_stale_refusal(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref, recovered = await _filled_entry_with_position(repo)
+    _raise_stale_snapshot(repo)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-stale-defer",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    trade = _FakeTrade(lookup_results=[recovered, recovered])
+
+    result = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+
+    assert result.reducing_order_ref is None
+    assert trade.submit_calls == []
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None
+    assert effect.state not in ("succeeded", "failed", "rejected")
+    assert any(
+        item.effect_operation_id == accepted.effect_operation_id
+        for item in repo.reconcilable_effect_operations()
+    )
+
+
+async def test_resolve_accepted_exit_reraises_terminal_refusals(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref, recovered = await _filled_entry_with_position(repo)
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code="OPERATOR_CUSTODY_REVIEW",  # unknown code -> fail-closed TERMINAL
+        headline="test terminal",
+        explanation="unknown-cause episode fails closed account-wide",
+        operator_impact="all mutation paused",
+        next_step="operator review",
+        evidence_refs=(),
+        cause_facts={},
+        severity="error",
+    )
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-terminal-refusal",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+
+    with pytest.raises(AdmissionBlockedError):
+        await resolve_accepted_exit(
+            repo, accepted=accepted, trade=_FakeTrade(lookup_results=[recovered, recovered])
+        )
+
+
+async def test_resolve_accepted_exit_defers_whole_cohort_without_a_crash(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Done-when property: N same-clock exits under a stale snapshot -> N deferrals, zero raises."""
+    sid2, run2 = "spy-bot-2", "run-2"
+    repo.register_strategy_instance(strategy_instance_id=sid2, symbol="SPY", config_hash="h2")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid2, lifecycle_run_id=run2)
+    entry_1, recovered_1 = await _filled_entry_with_position(repo)
+    entry_2, recovered_2 = await _filled_entry_with_position(repo, sid=sid2, run_id=run2)
+    _raise_stale_snapshot(repo)
+
+    for sid, run_id, entry_ref, recovered in (
+        (SID, RUN_ID, entry_1, recovered_1),
+        (sid2, run2, entry_2, recovered_2),
+    ):
+        accepted = accept_exit(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=sid,
+            decision_id="exit-cohort-clock",
+            lifecycle_run_id=run_id,
+            entry_order_ref=entry_ref,
+        )
+        trade = _FakeTrade(lookup_results=[recovered, recovered])
+        result = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+        assert result.reducing_order_ref is None
+        assert trade.submit_calls == []

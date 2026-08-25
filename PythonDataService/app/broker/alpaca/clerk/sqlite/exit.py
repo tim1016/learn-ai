@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import replace
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
@@ -28,7 +29,14 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    RefusalClass,
+    classify_admission_refusal,
+)
 from app.broker.contract.ports import BrokerTradePort
+
+logger = logging.getLogger(__name__)
 
 ACTION_EXIT = "EXIT"
 
@@ -178,7 +186,16 @@ async def resolve_accepted_exit(
     accepted: ExitSubmission,
     trade: BrokerTradePort,
 ) -> ExitSubmission:
-    """Drive a previously accepted EXIT outside the intake decision segment."""
+    """Drive a previously accepted EXIT outside the intake decision segment.
+
+    A TRANSIENT admission refusal (see ``classify_admission_refusal``) is not
+    an error for a durably accepted EXIT: the effect stays non-terminal, so
+    ``reconcilable_effect_operations`` keeps selecting it and the 15 s sweep
+    re-drives it once the refusal self-heals. Returning the accepted snapshot
+    here is the F19 fix — the caller (runner or panel) sees an honest
+    "accepted, await reconciliation" receipt instead of a crash. TERMINAL
+    refusals still raise.
+    """
     assert accepted.effect_operation_id is not None
     try:
         resolved = await resolve_exit(
@@ -192,6 +209,18 @@ async def resolve_accepted_exit(
         # A concurrent attempt already owns the broker-contact claim for this
         # exact durable EXIT. A transport retry returns the existing snapshot;
         # it must not turn idempotency into a 500 or contact the broker again.
+        return accepted
+    except AdmissionBlockedError as exc:
+        if classify_admission_refusal(exc.decision.reason_code) is not RefusalClass.TRANSIENT:
+            raise
+        logger.warning(
+            "Deferred a transient Clerk refusal on an accepted EXIT; the sweep re-drives it",
+            extra={
+                "action": "exit_transient_refusal_deferred",
+                "effect_operation_id": accepted.effect_operation_id,
+                "reason_code": exc.decision.reason_code,
+            },
+        )
         return accepted
     return replace(resolved, created=accepted.created)
 

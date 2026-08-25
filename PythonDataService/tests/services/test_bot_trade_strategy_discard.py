@@ -20,14 +20,23 @@ rather than merely unused.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    AdmissionBlockedError,
+    Capability,
+    CapabilityDecision,
+)
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import Settlement
 from app.marketdata.feed import MarketDataBar
+from app.services import bot_trade_strategy as bts
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy import (
     StrategyEvaluation,
     _build_signal_strategy,
@@ -88,3 +97,93 @@ def test_building_a_live_runtime_refuses_a_strategy_with_no_signal_program() -> 
 
     with pytest.raises(ValueError, match="not live-executable"):
         _build_signal_strategy(key, "SPY", None)
+
+
+# ── F19 boundary: runner EXIT path honors the refusal taxonomy ───────────────
+
+
+def _binding() -> BrokerBotBinding:
+    # Same factory as tests/broker/alpaca/clerk/sqlite/test_runtime.py:107-121.
+    return BrokerBotBinding(
+        strategy_instance_id="spy-bot",
+        strategy_key="deployment_validation",
+        broker="alpaca",
+        symbol="SPY",
+        use_rth=True,
+        mode="trade",
+        quantity=1,
+        carryover_policy="FORBID",
+        sealed_account_id="PA-TEST",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-1",
+        created_at_ms=1,
+    )
+
+
+@dataclass
+class _StubBar:
+    feed_id: str = "test-feed"
+
+
+class _StubEvaluation:
+    evaluation_id = "eval-refusal-1"
+    decision_bar_close_ms = 1_700_000_000_000
+    bar = _StubBar()
+
+    def __init__(self) -> None:
+        self.settlements: list[object] = []
+
+    def settle_stage(self, settlement: object) -> None:
+        self.settlements.append(settlement)
+
+
+class _RecorderReceipts:
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def append(self, **kwargs: object) -> None:
+        self.rows.append(kwargs)
+
+
+def _refusal(reason_code: str) -> AdmissionBlockedError:
+    return AdmissionBlockedError(
+        CapabilityDecision(
+            allowed=False,
+            capability=Capability.REDUCE,
+            reason_code=reason_code,
+            why="test refusal",
+        )
+    )
+
+
+def test_dispose_transient_exit_refusal_discards_and_records_blocked_receipt() -> None:
+    receipts = _RecorderReceipts()
+    evaluation = _StubEvaluation()
+
+    bts._dispose_transient_exit_refusal(
+        receipts,
+        binding=_binding(),
+        evaluation=evaluation,
+        exc=_refusal(BROKER_SNAPSHOT_STALE_REASON_CODE),
+    )
+
+    assert evaluation.settlements == [bts.Settlement.DISCARD]
+    assert len(receipts.rows) == 1
+    assert receipts.rows[0]["outcome"] == "blocked"
+    assert receipts.rows[0]["facts"]["reason_code"] == BROKER_SNAPSHOT_STALE_REASON_CODE
+
+
+def test_dispose_transient_exit_refusal_reraises_terminal_refusals() -> None:
+    receipts = _RecorderReceipts()
+    evaluation = _StubEvaluation()
+
+    with pytest.raises(AdmissionBlockedError):
+        bts._dispose_transient_exit_refusal(
+            receipts,
+            binding=_binding(),
+            evaluation=evaluation,
+            exc=_refusal("UNKNOWN_FUTURE_CODE"),
+        )
+
+    assert evaluation.settlements == []
+    assert receipts.rows == []

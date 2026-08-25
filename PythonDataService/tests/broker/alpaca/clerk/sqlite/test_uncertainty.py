@@ -19,10 +19,15 @@ from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
+    RECONCILIATION_INCOMPLETE_REASON_CODE,
     AdmissionBlockedError,
     Capability,
     ReductionIntent,
+    RefusalClass,
     admit_new_exposure,
+    classify_admission_refusal,
     decide_capability,
     raise_uncertainty,
     require_admission,
@@ -390,3 +395,18 @@ def test_require_admission_raises_when_blocked(repo: ClerkSqliteRepository) -> N
     with pytest.raises(AdmissionBlockedError) as exc_info:
         require_admission(repo, strategy_instance_id=SID)
     assert exc_info.value.decision.reason_code == "ORDER_OUTCOME_UNKNOWN"
+
+
+# ── refusal taxonomy (F19) ───────────────────────────────────────────────────
+
+
+def test_classify_admission_refusal_marks_sweep_resolvable_codes_transient() -> None:
+    assert classify_admission_refusal(BROKER_SNAPSHOT_STALE_REASON_CODE) is RefusalClass.TRANSIENT
+    assert classify_admission_refusal(RECONCILIATION_INCOMPLETE_REASON_CODE) is RefusalClass.TRANSIENT
+    assert classify_admission_refusal("RECONCILIATION_IN_PROGRESS") is RefusalClass.TRANSIENT
+
+
+def test_classify_admission_refusal_fails_closed_for_unknown_or_subject_codes() -> None:
+    assert classify_admission_refusal(None) is RefusalClass.TERMINAL
+    assert classify_admission_refusal("SOME_FUTURE_CODE") is RefusalClass.TERMINAL
+    assert classify_admission_refusal(EXIT_NOT_FLAT_REASON_CODE) is RefusalClass.TERMINAL
