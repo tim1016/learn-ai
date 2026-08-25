@@ -13,6 +13,7 @@ from typing import Protocol
 
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission, stop_command_resource
 from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource
+from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryActionId,
@@ -20,6 +21,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     recheck_recovery_action,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import SafeFlattenExecutionError
 
 
 class RecoveryExecutionError(Exception):
@@ -52,6 +54,13 @@ class ActiveSqliteRecoveryFacade(Protocol):
         *,
         strategy_instance_id: str | None,
         order_refs: tuple[str, ...],
+    ) -> tuple[OrderResource, ...]: ...
+
+    async def execute_safe_flatten(
+        self,
+        *,
+        plan: SafeFlattenPlan,
+        reason: str | None = None,
     ) -> tuple[OrderResource, ...]: ...
 
 
@@ -183,6 +192,25 @@ async def execute_recovery_action(
             strategy_instance_id=context.strategy_instance_id,
             order_refs=order_refs,
         )
+        return RecoveryExecutionResult(
+            action_id=request.action_id,
+            applied=True,
+            receipt_id=orders[0].order_ref,
+            recorded_at_ms=max(order.updated_at_ms for order in orders),
+            orders=orders,
+        )
+    if request.action_id == "execute_safe_flatten":
+        if capability.reduction_plan is None:
+            raise RecoveryExecutionError(
+                "The presented flatten action carries no prepared reduction plan."
+            )
+        try:
+            orders = await facade.execute_safe_flatten(
+                plan=capability.reduction_plan,
+                reason=request.reason,
+            )
+        except SafeFlattenExecutionError as exc:
+            raise RecoveryExecutionError(str(exc)) from exc
         return RecoveryExecutionResult(
             action_id=request.action_id,
             applied=True,

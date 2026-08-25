@@ -12,9 +12,13 @@ from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+from app.broker.alpaca.clerk.sqlite.recovery_execution import (
+    RecoveryExecutionRequest,
+    execute_recovery_action,
+)
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock, SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     execute_safe_flatten_plan,
@@ -276,3 +280,104 @@ async def test_execute_safe_flatten_plan_refuses_when_a_resume_landed_after_rech
         )
 
     assert trade.submit_calls == []
+
+
+async def test_execute_safe_flatten_presented_for_stopped_bot_with_exposure(
+    crashed_with_exposure,
+) -> None:
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+        trigger="OPERATOR_RECONCILE_NOW",
+    )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    try:
+        context = reader.recovery_context(strategy_instance_id=SID)
+    finally:
+        reader.close()
+    catalog = {item.action_id: item for item in build_recovery_catalog(context)}
+
+    execute = catalog["execute_safe_flatten"]
+    assert execute.available, execute.unavailable_reason
+    assert execute.mutation is True
+    assert execute.confirmation is not None
+    assert execute.reduction_plan is not None
+    assert [leg.symbol for leg in execute.reduction_plan.legs] == ["SPY"]
+
+
+async def test_execute_safe_flatten_blocked_while_a_run_is_active(
+    crashed_with_exposure,
+) -> None:
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)  # run still ACTIVE - no stop
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+        trigger="OPERATOR_RECONCILE_NOW",
+    )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    try:
+        context = reader.recovery_context(strategy_instance_id=SID)
+    finally:
+        reader.close()
+    catalog = {item.action_id: item for item in build_recovery_catalog(context)}
+
+    execute = catalog["execute_safe_flatten"]
+    assert execute.available is False
+    assert execute.unavailable_reason_code == "RUN_STILL_ACTIVE"
+
+
+async def test_execute_recovery_action_dispatches_safe_flatten(
+    crashed_with_exposure,
+) -> None:
+    """The generic recovery dispatcher drives execute_safe_flatten end-to-end
+    through the facade, exactly as the panel does."""
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+    )
+    await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
+
+    async def current_context():
+        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        try:
+            context = reader.recovery_context(strategy_instance_id=SID)
+        finally:
+            reader.close()
+        assert context is not None
+        return context
+
+    catalog = {item.action_id: item for item in build_recovery_catalog(await current_context())}
+    capability = catalog["execute_safe_flatten"]
+    assert capability.available, capability.unavailable_reason
+
+    result = await execute_recovery_action(
+        facade,
+        request=RecoveryExecutionRequest(
+            action_id="execute_safe_flatten",
+            concurrency_token=capability.concurrency_token,
+            execution_ref=capability.execution_ref,
+            reason="test-dispatch",
+        ),
+        current_context=current_context,
+    )
+
+    assert result.applied is True
+    assert len(result.orders) == 1
+    reducing = repo.order(result.orders[0].order_ref)
+    assert reducing is not None and reducing.role == "REDUCING"

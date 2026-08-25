@@ -36,6 +36,10 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SafeFlattenPlan,
     SafeFlattenPlanLeg,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    EXIT_STUCK_REASON_CODE,
+)
 
 RecoveryActionId = Literal[
     "reconcile_now",
@@ -43,6 +47,7 @@ RecoveryActionId = Literal[
     "resolve_execution_coverage",
     "cancel_verified_working_orders",
     "prepare_safe_flatten",
+    "execute_safe_flatten",
     "stop_bot_decisions",
     "open_custody_timeline",
     "rebuild_from_mirror",
@@ -184,6 +189,21 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
         ),
         mutation=False,
         confirmation=None,
+    ),
+    _Descriptor(
+        action_id="execute_safe_flatten",
+        label="Execute safe flatten",
+        explanation=(
+            "Submit the prepared exact reduction as recovery EXIT custody; "
+            "quantities are re-derived from durable attributed positions at submit time."
+        ),
+        mutation=True,
+        confirmation=_confirmation(
+            "Flatten attributed exposure?",
+            "The Clerk will submit reduction-only orders for the exact attributed "
+            "quantities in the prepared plan.",
+            "Flatten now",
+        ),
     ),
     _Descriptor(
         action_id="stop_bot_decisions",
@@ -511,6 +531,8 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
         )
     if action_id == "prepare_safe_flatten":
         return _safe_flatten_decision(ctx)
+    if action_id == "execute_safe_flatten":
+        return _execute_safe_flatten_decision(ctx)
     raise AssertionError(f"healthy catalog cannot evaluate {action_id!r}")
 
 
@@ -616,6 +638,43 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             ),
         },
     )
+
+
+def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
+    """Executor gates = prepare gates, two deltas.
+
+    (1) EXIT_NOT_FLAT / EXIT_STUCK episodes do not block: both declare
+    ``allows_reduction=True`` over a proven attributed quantity — they are
+    the exact states this executor exists to clear, and the downstream
+    ``require_capability(REDUCE, …)`` still enforces movement toward zero
+    per leg. (2) No run may be ACTIVE: a running strategy could re-enter
+    right after the flatten; the operator stops decisions first
+    (``stop_bot_decisions`` is presented alongside). This gate is
+    presentation/recheck-time only — the same fact is re-asserted inside the
+    capture transaction by ``accept_recovery_exit(forbid_active_run=True)``,
+    closing the recheck→capture Resume race (Task 4/Task 8).
+    """
+    reduction_safe_ctx = replace(
+        ctx,
+        uncertainties=tuple(
+            item
+            for item in ctx.uncertainties
+            if item.reason_code not in (EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE)
+        ),
+    )
+    base = _safe_flatten_decision(reduction_safe_ctx)
+    active_run_ids = [run.run_id for run in ctx.runs if run.state == "ACTIVE"]
+    token_facts = {"base": base.token_facts, "active_runs": active_run_ids}
+    if base.available and active_run_ids:
+        return replace(
+            base,
+            available=False,
+            reason_code="RUN_STILL_ACTIVE",
+            reason="Stop the bot's active run before executing a recovery flatten.",
+            next_step="Stop bot decisions first, then execute the prepared flatten.",
+            token_facts=token_facts,
+        )
+    return replace(base, token_facts=token_facts)
 
 
 def _execution_coverage_resolution_decision(ctx: RecoveryPolicyContext) -> _Decision:
@@ -793,7 +852,7 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
                         ctx,
                         version_token=concurrency_token,
                     )
-                    if descriptor.action_id == "prepare_safe_flatten"
+                    if descriptor.action_id in ("prepare_safe_flatten", "execute_safe_flatten")
                     and decision.available
                     else None
                 ),
@@ -823,6 +882,7 @@ def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
         "cancel_verified_working_orders",
         "reconcile_now",
         "stop_bot_decisions",
+        "execute_safe_flatten",
         "prepare_safe_flatten",
         "open_custody_timeline",
     )
