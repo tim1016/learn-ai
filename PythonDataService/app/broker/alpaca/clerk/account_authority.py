@@ -56,6 +56,23 @@ def synthetic_account_id_for_strategy(strategy_instance_id: str) -> str:
     return f"{SIM_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
 
 
+PAPER_EVIDENCE_ACCOUNT_PREFIX = "paper:"
+"""Instance-scoped evidence namespace for real-paper retained source bars.
+
+Not a Clerk custody account: custody stays on the real Alpaca account. This
+namespace only scopes the ``SourceBarLedger`` file so each paper instance's
+retained-replay warmup (FR-016) sees exactly its own observations, mirroring
+Dry Run's ``sim:`` scoping.
+"""
+
+
+def paper_evidence_account_id_for_strategy(strategy_instance_id: str) -> str:
+    """Return the isolated real-paper source-bar namespace for one instance."""
+    from app.engine.live.identity import validate_strategy_instance_id
+
+    return f"{PAPER_EVIDENCE_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
+
+
 @dataclass(frozen=True)
 class AccountBoundBrokerPorts:
     """Ports bound to one verified account identity at composition time."""
@@ -97,6 +114,7 @@ def bind_synthetic_ports(
 
 
 __all__ = [
+    "PAPER_EVIDENCE_ACCOUNT_PREFIX",
     "SIM_ACCOUNT_PREFIX",
     "AccountAuthorityIdentityError",
     "AccountAuthorityKind",
@@ -105,6 +123,7 @@ __all__ = [
     "bind_real_alpaca_ports",
     "bind_synthetic_ports",
     "is_synthetic_account_id",
+    "paper_evidence_account_id_for_strategy",
     "require_real_paper_account_id",
     "require_synthetic_account_id",
     "synthetic_account_id_for_strategy",

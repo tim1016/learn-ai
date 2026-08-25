@@ -13,7 +13,10 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.account_authority import (
+    paper_evidence_account_id_for_strategy,
+    synthetic_account_id_for_strategy,
+)
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     activate_synthetic_clerk_authority,
@@ -69,6 +72,7 @@ class RealPaperBindingAuthority(BindingAuthority):
     binding: BrokerBotBinding
     projector: AlpacaLifecycleProjector
     external_start_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
+    artifacts_root: Path
     account_id: str = "real_paper"
 
     def start_custody_guard(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
@@ -78,6 +82,14 @@ class RealPaperBindingAuthority(BindingAuthority):
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         return self.projector
+
+    def source_bars(self) -> SourceBarLedger:
+        return SourceBarLedger(
+            artifacts_root=self.artifacts_root,
+            account_id=paper_evidence_account_id_for_strategy(
+                self.binding.strategy_instance_id
+            ),
+        )
 
 
 @dataclass
@@ -216,6 +228,7 @@ class BindingAuthoritySelector:
             binding=binding,
             projector=self.real_projector,
             external_start_guard=self.external_start_guard,
+            artifacts_root=self.artifacts_root,
         )
 
 

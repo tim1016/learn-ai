@@ -126,7 +126,9 @@ async def execute_bot_run(
     """Execute one binding's configured mode behind its same-run pause gate."""
     run_feed = PauseAwareFeed(feed, run_gate) if run_gate is not None else feed
     if binding.mode == "trade":
-        await run_trade_bot(binding, run_feed)
+        if source_bars is None:
+            raise RuntimeError("Paper trade runs require their durable source-bar ledger.")
+        await run_trade_bot(binding, run_feed, source_bars=source_bars)
     elif binding.mode == "dry_run":
         await run_dry_run_bot(
             binding,
