@@ -11,7 +11,10 @@ os.environ.setdefault("POLYGON_API_KEY", "test-key-for-testing")
 # Router tests exercise control endpoints without modeling the local
 # data-plane shared-secret hop; opt out explicitly here while dedicated
 # security tests monkeypatch this off to prove production fail-closed behavior.
-os.environ.setdefault("DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", "true")
+# Assign rather than setdefault so a developer's real .env secret cannot make
+# otherwise isolated ASGI tests fail with 403 responses.
+os.environ["DATA_PLANE_CONTROL_SECRET"] = ""
+os.environ["DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL"] = "true"
 
 from app.main import app
 

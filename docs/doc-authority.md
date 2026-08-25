@@ -23,7 +23,7 @@ rows below take precedence. The remaining rules, in order, are:
 |---|---|---|
 | `docs/architecture/adrs/**` | `canonical` | Durable decision rationale; the ADR file owns its status. |
 | `docs/prds/**` | `in-flight` | Design context; verify status before acting on it. |
-| `docs/architecture/**`, `docs/audits/**`, `docs/design/**`, `docs/domain/**`, `docs/process/**`, `docs/references/**`, `docs/runbooks/**`, `docs/screenshots/**`, `docs/spy-lean-output/**`, `docs/superpowers/**`, `docs/validation/**` | `supporting` | Context or evidence, never a replacement for its canonical authority. |
+| `docs/architecture/**`, `docs/audits/**`, `docs/design/**`, `docs/domain/**`, `docs/process/**`, `docs/references/**`, `docs/research/**`, `docs/runbooks/**`, `docs/screenshots/**`, `docs/spy-lean-output/**`, `docs/superpowers/**`, `docs/validation/**` | `supporting` | Context or evidence, never a replacement for its canonical authority. |
 | Other `docs/*.md` files | `supporting`, unless listed as canonical below | Root-level context or index. |
 | `docs/archive/**` | `archived` | Retained non-operational history; never implementation authority. |
 
