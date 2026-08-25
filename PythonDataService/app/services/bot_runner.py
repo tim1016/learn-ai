@@ -1153,7 +1153,24 @@ class BotTaskRegistry:
                 },
             )
             return
-        self._replay_proof.write_pending(binding, binding.run_id)
+        try:
+            self._replay_proof.write_pending(binding, binding.run_id)
+        except OSError as error:
+            # An unwritable receipt directory (disk full, path conflict) must
+            # not fail Stop -- and must not abort boot repair for the whole
+            # fleet when scheduled from _resume_pending_replay_receipts (Codex
+            # PR #1769). Skip scheduling; the run's terminal outcome persists,
+            # so the next boot scan re-attempts.
+            logger.warning(
+                "Run replay pending receipt could not be written; skipping generation",
+                extra={
+                    "action": "run_replay_pending_write_failed",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                    "reason": str(error),
+                },
+            )
+            return
         task = asyncio.get_running_loop().create_task(
             self._generate_replay_receipt_in_background(binding)
         )
@@ -1180,6 +1197,22 @@ class BotTaskRegistry:
                     "strategy_instance_id": binding.strategy_instance_id,
                     "run_id": binding.run_id,
                     "reason": str(error),
+                },
+            )
+        except (BotRunnerError, ValueError, OSError):
+            # generate() converts compute failures into a durable replay_failed
+            # receipt itself; the failures that can still escape it -- a reaped
+            # binding (BotRunnerError), a corrupt runs/<run_id>.json read
+            # (ValueError), or a failed final receipt write (OSError) -- would
+            # otherwise be lost as an unretrieved-task warning, leaving the
+            # receipt stuck `pending`. Log them structured so they stay
+            # observable and the boot scan can retry (Codex PR #1769).
+            logger.exception(
+                "Run replay background generation failed",
+                extra={
+                    "action": "run_replay_background_failed",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
                 },
             )
 

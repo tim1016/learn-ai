@@ -29,16 +29,57 @@ def _method_calls(func, name: str) -> bool:
     )
 
 
+def _exc_label(exc_type) -> str:
+    if isinstance(exc_type, ast.Attribute):
+        return exc_type.attr
+    if isinstance(exc_type, ast.Name):
+        return exc_type.id
+    return "?"
+
+
+def _supervise_terminal_branches() -> dict[str, list]:
+    """Map each branch of _supervise's terminal-dispatch try/except/else to its body."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(BotTaskRegistry._supervise)))
+    for node in ast.walk(tree):
+        labels = (
+            {_exc_label(handler.type) for handler in node.handlers}
+            if isinstance(node, ast.Try)
+            else set()
+        )
+        if isinstance(node, ast.Try) and "MarketDataFeedError" in labels and node.orelse:
+            branches = {_exc_label(handler.type): handler.body for handler in node.handlers}
+            branches["else"] = node.orelse
+            return branches
+    raise AssertionError("could not find _supervise's terminal-dispatch try/except/else")
+
+
+def _body_calls(body: list, name: str) -> bool:
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == name
+        for stmt in body
+        for node in ast.walk(stmt)
+    )
+
+
 def test_stop_locked_schedules_the_replay_receipt() -> None:
     """AST pin, same idiom as test_signal_program_mode_parity's stream check:
     if Stop ever stops scheduling the receipt, this is the test that notices."""
     assert _method_calls(BotTaskRegistry._stop_locked, "_schedule_run_replay_receipt")
 
 
-def test_supervise_schedules_the_replay_receipt_on_terminal_exits() -> None:
-    """PR #1751 finding 5: stream-ended / feed-death / crashed runs owe a
-    receipt too — not only operator Stops."""
-    assert _method_calls(BotTaskRegistry._supervise, "_schedule_run_replay_receipt")
+def test_supervise_schedules_the_replay_receipt_on_every_terminal_branch() -> None:
+    """PR #1751 finding 5 + Codex PR #1769: each non-cancel terminal branch
+    (feed death, crash, stream end) must schedule — a per-branch pin, so
+    deleting the call from one branch while leaving another is caught."""
+    branches = _supervise_terminal_branches()
+    assert _body_calls(branches["MarketDataFeedError"], "_schedule_run_replay_receipt")  # feed death
+    assert _body_calls(branches["Exception"], "_schedule_run_replay_receipt")  # in-process crash
+    assert _body_calls(branches["else"], "_schedule_run_replay_receipt")  # bar stream ended
+    # The cancel branch is deliberately excluded: operator Stop already
+    # scheduled, and a kill is EXITED_UNVERIFIED, covered by the boot scan.
+    assert not _body_calls(branches["CancelledError"], "_schedule_run_replay_receipt")
 
 
 def test_run_boot_recovery_resumes_pending_replay_receipts() -> None:

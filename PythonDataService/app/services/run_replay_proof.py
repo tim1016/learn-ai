@@ -766,8 +766,13 @@ class RunReplayProofService:
             )
             try:
                 provider = replay_provider_for(ledger, binding.symbol)
-                stream = ledger.bars(provider=provider, symbol=binding.symbol)
-                end_seq = stream[-1].seq if stream else None
+                # Bounded LIMIT-1 query, not a full stream materialization:
+                # this runs synchronously on Stop's event-loop path and a stream
+                # near the 200k-row cap would otherwise block it (Codex PR #1769).
+                # The ledger enforces monotonic delivery, so the newest bar is the
+                # max seq.
+                latest = ledger.latest(provider=provider, symbol=binding.symbol)
+                end_seq = None if latest is None else latest.seq
             finally:
                 ledger.close(checkpoint=False)
         except (RunReplayUnavailableError, SourceBarLedgerCorruptError, sqlite3.Error, OSError) as error:
@@ -835,45 +840,52 @@ class RunReplayProofService:
         return receipt
 
     async def _compute(self, binding: BrokerBotBinding, run_record: BotRunRecord) -> RunReplayReceipt:
-        ledger = SourceBarLedger(
-            artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
-        )
-        try:
-            provider = replay_provider_for(ledger, binding.symbol)
-            all_bars = ledger.bars(provider=provider, symbol=binding.symbol)
-        finally:
-            ledger.close(checkpoint=False)
-        # Run-bounded input (PR #1751 finding 4): stored seq snapshot first,
-        # terminal-outcome wall clock second, refuse when neither exists.
+        # Only small bounded reads stay on the loop; the heavy work -- the
+        # up-to-200k bar materialization, the run-bounding/split list passes, and
+        # both compute legs -- all runs in one worker thread so a large retained
+        # stream never blocks the event loop, even for a background task scheduled
+        # right after Stop or during boot repair (Codex PR #1769).
         stored = self.read(binding.strategy_instance_id, run_record.run_id)
         outcome = (
             None
             if self.run_outcome_for is None
             else self.run_outcome_for(binding.strategy_instance_id, run_record.run_id)
         )
-        bars = bounded_replay_bars(
-            all_bars,
-            ledger_end_seq=None if stored is None else stored.ledger_end_seq,
-            terminal_recorded_at_ms=None if outcome is None else outcome.recorded_at_ms,
-        )
-        if not bars:
-            raise RunReplayUnavailableError(
-                f"No retained source bars exist for {binding.symbol!r} within this run's bounds.",
-                http_status=404,
-            )
         evidence = await self._evidence(binding, run_record.run_id)
-        warmup, live = split_warmup_and_live(bars, run_record.started_at_ms)
-        warmup, live = refine_split_with_first_decision(
-            warmup,
-            live,
-            first_decision_close_ms=(
-                evidence.records[0].bar_close_ms if evidence.records else None
-            ),
-            decision_timeframe_ms=_seal_decision_timeframe_ms(binding),
-        )
-        decided = [bar for bar in bars if _includes_session_phase(bar, use_rth=binding.use_rth)]
+        # Run-bounded input (PR #1751 finding 4): stored seq snapshot first,
+        # terminal-outcome wall clock second, refuse when neither exists.
+        ledger_end_seq = None if stored is None else stored.ledger_end_seq
+        terminal_recorded_at_ms = None if outcome is None else outcome.recorded_at_ms
+        first_decision_close_ms = evidence.records[0].bar_close_ms if evidence.records else None
+        decision_timeframe_ms = _seal_decision_timeframe_ms(binding)
 
-        def _compute_sync() -> tuple[EngineParityResult, RunFidelityResult]:
+        def _compute_sync() -> tuple[str, list[RetainedSourceBar], EngineParityResult, RunFidelityResult]:
+            ledger = SourceBarLedger(
+                artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
+            )
+            try:
+                provider = replay_provider_for(ledger, binding.symbol)
+                all_bars = ledger.bars(provider=provider, symbol=binding.symbol)
+            finally:
+                ledger.close(checkpoint=False)
+            bars = bounded_replay_bars(
+                all_bars,
+                ledger_end_seq=ledger_end_seq,
+                terminal_recorded_at_ms=terminal_recorded_at_ms,
+            )
+            if not bars:
+                raise RunReplayUnavailableError(
+                    f"No retained source bars exist for {binding.symbol!r} within this run's bounds.",
+                    http_status=404,
+                )
+            warmup, live = split_warmup_and_live(bars, run_record.started_at_ms)
+            warmup, live = refine_split_with_first_decision(
+                warmup,
+                live,
+                first_decision_close_ms=first_decision_close_ms,
+                decision_timeframe_ms=decision_timeframe_ms,
+            )
+            decided = [bar for bar in bars if _includes_session_phase(bar, use_rth=binding.use_rth)]
             parity = engine_parity_over_bars(
                 binding.strategy_key,
                 binding.symbol,
@@ -891,9 +903,9 @@ class RunReplayProofService:
                     crash_records=evidence.crash_records,
                 )
             )
-            return parity, fidelity
+            return provider, bars, parity, fidelity
 
-        parity, fidelity = await asyncio.to_thread(_compute_sync)
+        provider, bars, parity, fidelity = await asyncio.to_thread(_compute_sync)
         return self._final_receipt(binding, run_record, provider, bars, evidence, parity, fidelity)
 
     async def _evidence(self, binding: BrokerBotBinding, run_id: str) -> LiveRunDecisionEvidence:
