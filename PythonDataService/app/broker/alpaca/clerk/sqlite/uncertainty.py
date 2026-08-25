@@ -560,6 +560,36 @@ class AdmissionBlockedError(Exception):
         super().__init__(f"{decision.capability.value.lower()} blocked: {decision.reason_code} — {decision.why}")
 
 
+class RefusalClass(StrEnum):
+    """Whether an admission refusal self-heals via the reconciliation sweep."""
+
+    TRANSIENT = "transient"
+    TERMINAL = "terminal"
+
+
+# Codes the automatic reconciliation sweep resolves without operator action:
+# a fresh successful broker snapshot clears BROKER_SNAPSHOT_STALE, a complete
+# pass clears RECONCILIATION_INCOMPLETE, and RECONCILIATION_IN_PROGRESS ends
+# when the in-flight pass ends. Everything else — including every
+# CUSTODY_SUBJECT episode and every unknown future code — stays TERMINAL so
+# an unclassified refusal keeps today's fail-closed behavior (F19 fix shape:
+# ops study §9 "classify snapshot-staleness admission blocks as
+# retry-on-next-clock in the runner's error taxonomy").
+TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
+    {
+        BROKER_SNAPSHOT_STALE_REASON_CODE,
+        RECONCILIATION_INCOMPLETE_REASON_CODE,
+        "RECONCILIATION_IN_PROGRESS",
+    }
+)
+
+
+def classify_admission_refusal(reason_code: str | None) -> RefusalClass:
+    if reason_code in TRANSIENT_ADMISSION_REASON_CODES:
+        return RefusalClass.TRANSIENT
+    return RefusalClass.TERMINAL
+
+
 def require_capability(
     repo: ClerkSqliteRepository,
     *,
@@ -653,11 +683,14 @@ __all__ = [
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
     "RECONCILIATION_INCOMPLETE_REASON_CODE",
+    "TRANSIENT_ADMISSION_REASON_CODES",
     "AdmissionBlockedError",
     "Capability",
     "CapabilityDecision",
     "ReductionIntent",
+    "RefusalClass",
     "admit_new_exposure",
+    "classify_admission_refusal",
     "decide_capability",
     "raise_uncertainty",
     "require_admission",
