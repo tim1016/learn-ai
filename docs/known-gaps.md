@@ -23,16 +23,52 @@ deleting the complete order-actuation boundary on **2026-08-19**. The §1
 safety-critical, §2 architecture-P1, and §7 contract-drift clusters were pruned
 on **2026-08-19** after their items were verified closed or retired (see those
 sections); §5 was re-verified still-open the same day, with its clock-constant
-count corrected after #1687.
+count corrected after #1687. On **2026-08-24** the backlog was reconciled
+against the F1–F19 adjudication table from the same-day session (PR #1747):
+§1 now carries the two safety-critical findings, §9 lifts the remaining open
+findings, and §8's FR-016 scope bullet was closed against current code.
 
 ---
 
 ## 1. Safety-critical
 
-No known-open safety-critical gaps. The execution-path fail-open,
-temporal-authority/liveness, and non-numeric operator-verdict items previously
-tracked here (issues #1655, #1671, #1672, #1674, #1677, #1664, #1665) are closed
-and merged to master as of 2026-08-19; git history is the record.
+Two open items, lifted 2026-08-24 from the F1–F19 adjudication table in
+`docs/audits/review-handoff-2026-08-24.md` (PR #1747) and re-verified in code
+the same day. Research directions covering both:
+`docs/audits/strategy-execution-research-directions-2026-08-24.md`
+(Direction 1). The previously tracked items (issues #1655, #1671, #1672,
+#1674, #1677, #1664, #1665) remain closed as of 2026-08-19; git history is the
+record.
+
+- **F18 — crash-held exposure has no path to flat (top priority).** Stop
+  cancels working entries and leaves attributed exposure by design
+  (`app/services/bot_carryover.py` — `STOP_REQUIRES_FLATTEN` is a recorded
+  outcome, not an action). Every recovery pointer dead-ends: `SafeFlattenPlan`
+  is built (`app/broker/alpaca/clerk/sqlite/recovery_policy.py:653`) but has
+  no executor anywhere in the codebase; the `flatten_stop` performer
+  (`app/services/broker_v2_panel/panel_data_source.py:1016`) is never
+  presented (`sqlite_panel_adapter.py:61` presents only `resume`) and was
+  never exercisable under SQLite custody anyway — `require_active_run`
+  (`app/broker/alpaca/clerk/sqlite/idempotency.py:77`) refuses EXITs once the
+  run is retired, and its `panel-flatten:` decision id trips `reject_colon`
+  (`app/broker/alpaca/clerk/sqlite/exit.py:68`);
+  `EXPOSURE_CARRYOVER_STRATEGY_KEYS` is empty
+  (`app/services/bot_trade_strategy.py:63`); manual tickets are gated
+  `MANUAL_TRADING_NOT_QUALIFIED`; `emergency_flatten_strategy_instance_id`
+  (`app/engine/live/order_identity.py:113`) has zero callers. Adjacent hole:
+  a terminal `EXIT_NOT_FLAT` folds the effect to `failed`, which
+  `reads.py:475-486` never re-selects — a stuck exit is never retried and has
+  no age watchdog. Standing evidence: three stranded 1-share paper positions
+  on `PA3KWXU1C4C3` (ops study §8; do not flatten out-of-band — operator's
+  call).
+- **F19 — retryable EXIT refusal escalates to bot crash (second priority).**
+  The EXIT path reaches `require_capability(REDUCE, …)`
+  (`app/broker/alpaca/clerk/sqlite/exit_resolution.py:158` via
+  `runtime.py:785`) outside any try block; `AdmissionBlockedError:
+  BROKER_SNAPSHOT_STALE` propagates to `_supervise`'s blanket handler →
+  `finalize_crash`. Only ENTER (`runtime.py:682`), manual orders, and the
+  sweep catch it. Same-symbol cohorts exit in lockstep by design, so the race
+  fires routinely at fleet scale (observed live: ops study §9).
 
 ## 2. Architecture-investigation P1 tier
 
@@ -128,20 +164,15 @@ here (issues #1666, #1667, #1668) are closed and merged to master as of
 
 ## 8. Sealed Signal Program admission (verified 2026-08-21, issue #1728 / ADR 0043)
 
-- **`CANDIDATE_UNCAPTURED_AT_CRASH` (FR-016) is scoped to `ema_crossover_signal`
-  only.** Implemented in `_warm_up_signal_strategy`
-  (`app/services/bot_trade_strategy.py`): warmup replay now reapplies each
-  bucket's own known Clerk disposition (COMMIT for an effect-bearing outcome,
-  DISCARD otherwise) instead of blanket-discarding every replayed bucket, so
-  position-lifecycle state carries forward correctly; the first bucket with a
-  live candidate and no known disposition is recorded as
-  `candidate_uncaptured_at_crash` (retention class `protected_crash_evidence`)
-  and discarded, never reaching custody. This only applies to strategies with
-  a registered `signal_program_factory` (currently `ema_crossover_signal`
-  alone) — legacy strategies (`sma_crossover`, `rsi_mean_reversion`,
-  `spy_strategy_a/b/c`) have no `SignalSession`/`EvaluationStage` staging
-  record to recreate a candidate from, and remain uncovered until PRD Slice 5
-  promotes them. See `tests/services/test_candidate_uncaptured_at_crash.py`.
+*The former first bullet — FR-016 crash-candidate capture "scoped to
+`ema_crossover_signal` only" — was closed 2026-08-24: the #1730 promotion
+registered `signal_program_factory` for all seven sealed programs (verified
+against `app/engine/strategy/registry.py`), so `_warm_up_signal_strategy`'s
+capture now covers every deployable strategy. The residual factory-less pair
+is exactly the next bullet, and neither is live-deployable
+(`supported_alpaca_paper_strategy_keys` derives from factory presence). Git
+history has the old bullet.*
+
 - **`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
   of their own.** Both were left with `signal_program_contract=None` /
   `signal_program_factory=None` after the `dataclasses.replace()` identity-leak
@@ -174,3 +205,91 @@ here (issues #1666, #1667, #1668) are closed and merged to master as of
   strategy decision-receipt tail by row count, not by trading-day coverage;
   whether 1,000 rows safely covers every retained, non-`protected_*` receipt
   across a cycle longer than 30 trading days has not been demonstrated.
+
+## 9. 2026-08-24 session findings (PR #1747, reconciled 2026-08-24)
+
+The independent-review handoff (`docs/audits/review-handoff-2026-08-24.md` §3)
+carries the F1–F19 adjudication table; the ops study
+(`docs/audits/bot-launch-ops-study-2026-08-24.md`) carries the detail and the
+timings (the session scratchpad logs were ephemeral — the study doc is the
+primary record). F1 and F9 were fixed in-session (`238821c7`, `ff5ed49f`);
+F18/F19 are lifted to §1 above. The items below entered this backlog on
+static code verification plus live observation during the session; severities
+were assigned at lift time from that evidence. The handoff's independent
+adjudication (confirm/refute, one issue per confirmed finding) may still
+reclassify an item — if it refutes one, delete the bullet. F15 (action
+idempotency lookup ordered after the presentation check) is
+informational-only in the handoff and is deliberately **not** tracked here as
+a defect.
+
+- **F2 — `pause`/`continue` are dead vocabulary under SQLite custody
+  (medium).** Guards and performers exist but can never fire:
+  `app/services/broker_v2_panel/sqlite_panel_adapter.py:61`
+  `SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume"})`.
+- **F16 — `retire` never presented by the SQLite panel source (medium).**
+  Same dead-vocabulary class, same pointer as F2 (study §7).
+- **F17 — `prepare_safe_flatten` presents `enabled: true` but always 409s
+  (medium).** The `mutation: false` fact exists server-side and is not
+  reflected in presented enablement
+  (`app/services/broker_v2_panel/sqlite_panel_source.py:839-842`; study §8).
+  Executor work planned in
+  `docs/superpowers/plans/2026-08-24-exposure-lifecycle-closure.md`.
+- **F3 — two parallel stop surfaces ~60× apart in latency (medium).** Panel
+  `stop_bot_decisions` ≈20 s (full panel re-projection inside `run_action`,
+  `app/services/broker_v2_panel/panel_data_source.py`) vs legacy runner stop
+  0.29 s, with different receipts (study §2, §5.1).
+- **F4 — post-restart feed warmup presents as a fault (low).** ~45 s
+  feed-readiness cold start refuses Resume with copy that reads like a
+  failure (market-data gate, `app/services/run_admission.py:286-297`; study
+  §3).
+- **F5 — refusal ordering names the wrong gate first (low).** The first
+  admission error can name a different problem than the one to fix; the
+  full-ladder preview (`POST …/bots/admission`) exists and is unused for
+  refusal shaping (gate order `app/services/run_admission.py:105-435`; study
+  §3).
+- **F6 — zero-bar engine run reports `success=True` (high).**
+  `daily_sma_crossover` has no daily-bar fetch path and its engine run
+  succeeded over zero bars (`execute_engine_backtest`,
+  `app/routers/engine.py:1042`; ceremony doc §1 calls it a platform gap). An
+  engine that cannot fail on empty input is an honesty defect.
+- **F7 — QC-ID hard-required client-side though ignored for proof-less
+  candidates (low).** Flag-form validation out of sync with the backend
+  recording rule
+  (`Frontend/src/app/components/strategy-validation/strategy-validation.component.ts`;
+  ceremony §3).
+- **F8 — human-flag toggle defaults to Reject (low).** Users have saved
+  rejections by accident (same component as F7; ceremony §3).
+- **F10 — dry-run deploys break atomicity on refusal (medium).** 500s on the
+  reference topology (virtiofs bind mount), leaks orphan `sim:<sid>/` dirs
+  with partially provisioned `source_bars.sqlite3`, raw error envelope
+  instead of the typed refusal
+  (`app/services/broker_v2_panel/paper_deploy_service.py` dry-run path;
+  study §7 — "refused deploys must not leak state").
+- **F11 — burst deploys flap "Market Data is unhealthy" (medium).** Admission
+  couples to an instantaneous feed-age sample with no settling semantics,
+  masking real refusals under load (market-data gate,
+  `app/services/run_admission.py:286-297`; study §7/§9 proposes
+  two-consecutive-samples settling).
+- **F12 — LIVE chart pane serves stale bars unmarked (medium).** 7–17 min
+  behind its own bot with `overlay_notices` empty — the staleness field
+  exists in the contract and is unpopulated
+  (`Frontend/src/app/components/broker/v2-panel/bot-triage-detail/bot-triage-detail.component.ts`;
+  study §7; same defect class as the R4 tape fix recorded in
+  `docs/superpowers/specs/2026-08-24-bots-triage-trader-lens-design.md` §10).
+- **F13 — panel reads serialize globally (medium).** 56 ms alone → 2.6 s each
+  at 10 concurrent; ~21 s/sweep projected at 80 bots (projection path,
+  `app/services/broker_v2_panel/panel_data_source.py`; study §7/§9 proposes a
+  fan-out budget).
+- **F14 — `gallery/snapshot` unbounded by liveness (low).** 5.6 s / 751 KB /
+  25 tiles including retired bots (`app/routers/broker_v2_gallery.py`; study
+  §7).
+
+Evidence-base corrections for whoever adjudicates: study §3 and handoff §3
+disagree on F6–F9 numbering, which orphans the (already-repaired) pre-#1746
+canary-ledger checkpoint item without an ID; F1's failed-attempt count is
+reported as both 21/21 and 0/20; F12's lag window as both 7–12 and 7–17 min;
+handoff §5 cites a judgment call that does not exist in
+`judgment-calls-2026-08-24.md`; and handoff §6's `git log origin/master -8`
+instruction cannot work after the squash-merge — the eight session commits are
+individually reachable only via the `audit/unreviewed-findings-2026-08-24`
+branch.
