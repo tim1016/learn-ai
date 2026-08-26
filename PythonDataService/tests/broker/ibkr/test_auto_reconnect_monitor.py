@@ -27,6 +27,23 @@ from app.broker.ibkr.auto_reconnect_monitor import (
 from app.broker.ibkr.client import get_client_lifecycle_lock
 
 
+@pytest.fixture(autouse=True)
+def _fresh_lifecycle_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rebind the process-wide lifecycle lock for each test.
+
+    ``client._client_lifecycle_lock`` is a module-level ``asyncio.Lock``
+    created at import time, but pytest-asyncio gives every test its own
+    event loop. Once one test binds the lock to its loop, every later test
+    that awaits it raises "bound to a different event loop" -- and the
+    monitor's tick swallows that as a logged error, silently disabling the
+    very reconnect path under test. Binding is lazy (first acquire), so a
+    plain sync fixture is enough.
+    """
+    from app.broker.ibkr import client as client_module
+
+    monkeypatch.setattr(client_module, "_client_lifecycle_lock", asyncio.Lock())
+
+
 class _FakeClient:
     """Just enough surface for the monitor: ``is_connected``,
     ``connection_lost``, ``connect()``, ``disconnect()``. Notably no
@@ -460,6 +477,117 @@ async def test_monitor_uses_finite_default_attempt_cap() -> None:
 
 
 @pytest.mark.asyncio
+async def test_monitor_keeps_probing_and_self_recovers_after_hard_down() -> None:
+    """HARD_DOWN is the breaker's OPEN state, not a terminal one (#1777 WP4).
+
+    Fleet evidence: the ladder exhausted 5m46s into a gateway outage at
+    00:50 ET, and the monitor then emitted nothing for eight hours because
+    the hard-down branch only *observed* the client instead of retrying.
+    Recovery had to arrive from an unrelated data-farm event. The open
+    state must keep attempting on its own slow cadence so the connection
+    comes back without an operator click.
+    """
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[boom, boom, boom, True],
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=2,
+        open_probe_interval_s=0.01,
+    )
+    monitor.start()
+    for _ in range(300):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    # The ladder burned exactly its 2 attempts; everything beyond that is
+    # the open state probing on its own.
+    assert client.connect_calls > 2
+    assert monitor.is_hard_down is False
+    assert monitor.recovery_state == "HEALTHY"
+    assert monitor.successful_reconnect_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_monitor_paces_open_state_probes_instead_of_hammering() -> None:
+    """The open state retries forever, but slowly.
+
+    Without pacing, the 3s poll tick would drive a reconnect every tick and
+    generate rejected attempts against a gateway that is down on purpose --
+    the exact behaviour MAX_BACKOFF_S exists to avoid. With a probe interval
+    longer than the test window, no attempt beyond the ladder may fire.
+    """
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(is_connected=False, connect_outcomes=[boom])
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=1,
+        open_probe_interval_s=1000.0,
+    )
+    monitor.start()
+    for _ in range(100):
+        if monitor.is_hard_down:
+            break
+        await asyncio.sleep(0.005)
+    await asyncio.sleep(0.15)
+    await monitor.stop()
+
+    assert monitor.is_hard_down is True
+    assert client.connect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_open_state_probe_serialises_against_the_lifecycle_lock() -> None:
+    """The open probe reconnects like any other attempt, so it must hold the
+    shared client lifecycle lock.
+
+    That lock serialises the monitor against the operator's /connect,
+    /disconnect and /reconnect routes. A probe that skipped it could
+    double-call ``connectAsync`` on the same client, or reconnect a client
+    the operator was deliberately taking down.
+    """
+    boom = OSError("Gateway unreachable")
+    client = _FakeClient(
+        is_connected=False,
+        connect_outcomes=[boom, boom, boom, True],
+    )
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=1,
+        open_probe_interval_s=0.01,
+    )
+    monitor.start()
+    for _ in range(200):
+        if monitor.is_hard_down:
+            break
+        await asyncio.sleep(0.005)
+    calls_at_latch = client.connect_calls
+
+    async with get_client_lifecycle_lock():
+        # Several probe intervals elapse while the operator holds the lock.
+        await asyncio.sleep(0.12)
+        assert client.connect_calls == calls_at_latch
+
+    for _ in range(200):
+        if monitor.successful_reconnect_count >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert client.connect_calls > calls_at_latch
+
+
+@pytest.mark.asyncio
 async def test_monitor_retries_when_post_reconnect_recovery_fails() -> None:
     client = _FakeClient(
         is_connected=False,
@@ -491,6 +619,89 @@ async def test_monitor_retries_when_post_reconnect_recovery_fails() -> None:
     assert client.recovery_failed_calls == 1
     assert client.recovery_succeeded_calls == 1
     assert monitor.recovery_state == "HEALTHY"
+
+
+@pytest.mark.asyncio
+async def test_hard_down_does_not_inherit_a_socket_whose_recovery_failed() -> None:
+    """A spent ladder must not hand the open breaker a half-recovered socket.
+
+    ``connect()`` can succeed while ``resubscribe_all`` or the
+    broker-activity recovery sweep raises. That leaves a live socket whose
+    subscriptions, orders, executions and positions were never
+    re-requested. If the ladder's final attempt fails that way, the next
+    tick's hard-down branch would see ``is_connected() and not
+    connection_lost`` and collapse to HEALTHY -- health reporting that
+    account evidence can refresh when recovery never ran.
+    """
+    client = _FakeClient(is_connected=False)
+
+    async def always_failing_resubscribe() -> None:
+        raise RuntimeError("resubscribe_all failed")
+
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=1,
+        # Longer than the test window: this pins the ladder-exhaustion
+        # path only, with no open probe confusing the observation.
+        open_probe_interval_s=1000.0,
+        recovery_callbacks=[always_failing_resubscribe],
+    )
+    monitor.start()
+    for _ in range(200):
+        if monitor.is_hard_down:
+            break
+        await asyncio.sleep(0.005)
+    # Several further ticks in the open state — the leak showed up on the
+    # tick *after* hard-down was latched, not on the latch itself.
+    await asyncio.sleep(0.1)
+    await monitor.stop()
+
+    assert monitor.is_hard_down is True
+    assert monitor.recovery_state == "HARD_DOWN"
+    assert client.is_connected() is False
+    assert client.recovery_succeeded_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_open_probe_that_fails_recovery_keeps_the_breaker_open() -> None:
+    """The same leak, in the open state's steady loop.
+
+    Each open probe reconnects and re-runs the recovery callbacks. When a
+    callback keeps raising, every probe re-asserts HARD_DOWN via
+    ``open_probe_failed`` — but a socket left connected would let the very
+    next tick overwrite that back to HEALTHY, defeating the signal and
+    stopping all further probing.
+    """
+    client = _FakeClient(is_connected=False)
+
+    async def always_failing_resubscribe() -> None:
+        raise RuntimeError("resubscribe_all failed")
+
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.005,
+        initial_backoff_s=0.005,
+        max_reconnect_attempts=1,
+        open_probe_interval_s=0.01,
+        recovery_callbacks=[always_failing_resubscribe],
+    )
+    monitor.start()
+    for _ in range(200):
+        if client.connect_calls > 1:
+            break
+        await asyncio.sleep(0.005)
+    await asyncio.sleep(0.05)
+    await monitor.stop()
+
+    # The open state kept probing rather than latching HEALTHY on a socket
+    # whose recovery never completed.
+    assert client.connect_calls > 1
+    assert monitor.is_hard_down is True
+    assert monitor.recovery_state == "HARD_DOWN"
+    assert client.is_connected() is False
+    assert client.recovery_succeeded_calls == 0
 
 
 # ──────────────────────────── shared lock ────────────────────────────
@@ -563,6 +774,58 @@ async def test_monitor_reexits_when_operator_restored_connection_under_lock() ->
     # not monitor-driven.)
     assert client.connect_calls == 0
     assert monitor.successful_reconnect_count == 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_recovers_subscriptions_when_operator_restored_under_lock() -> None:
+    """Short-circuiting on an operator-restored socket must still recover.
+
+    ``POST /connect`` and ``/reconnect`` call ``client.connect()`` and warm
+    account evidence, but they never run the monitor's recovery callbacks
+    (``LIVE_BAR_AGGREGATOR.resubscribe_all`` and the broker-activity sweep,
+    registered in ``main.py``). ``connect()`` also clears
+    ``subscriptions_stale``, so ``_recover_subscriptions_if_stale`` cannot
+    catch it on a later tick. Advancing straight to HEALTHY would leave
+    charts frozen and mid-drop executions unswept while health reported the
+    session recovered.
+    """
+    client = _FakeClient(is_connected=False)
+    client.set_desired_connected(True)
+    resubscribe_calls = 0
+
+    async def resubscribe_all() -> None:
+        nonlocal resubscribe_calls
+        resubscribe_calls += 1
+
+    monitor = AutoReconnectMonitor(
+        client,
+        poll_interval_s=0.01,
+        initial_backoff_s=0.01,
+        recovery_callbacks=[resubscribe_all],
+    )
+    lock = get_client_lifecycle_lock()
+    await lock.acquire()
+    try:
+        monitor.start()
+        await asyncio.sleep(0.05)  # let the monitor reach the lock and wait
+        # The operator's /connect lands while we hold the lock.
+        client._is_connected = True
+        client._connection_lost = False
+        client._subscriptions_stale = False
+    finally:
+        lock.release()
+
+    for _ in range(50):
+        if resubscribe_calls >= 1:
+            break
+        await asyncio.sleep(0.01)
+    await monitor.stop()
+
+    assert resubscribe_calls == 1
+    # Still no duplicate connect — the short-circuit is preserved, it just
+    # finishes recovery before claiming health.
+    assert client.connect_calls == 0
+    assert monitor.recovery_state == "HEALTHY"
 
 
 # ──────────────────────────── intentional disconnect ─────────────────

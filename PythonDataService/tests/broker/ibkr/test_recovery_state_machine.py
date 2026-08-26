@@ -42,11 +42,26 @@ def test_wait_expiry_promotes_to_socket_down_reconnect() -> None:
     assert transition.should_reconnect is True
 
 
-def test_exhausted_reconnect_attempts_are_terminal_hard_down() -> None:
+def test_exhausted_reconnect_attempts_open_the_breaker_without_latching() -> None:
+    """HARD_DOWN is the breaker's OPEN state, not a dead end.
+
+    It used to be marked terminal, which matched a monitor that stopped
+    trying once the fast ladder was spent. The monitor now probes the open
+    breaker on a slow cadence, so nothing about HARD_DOWN is final.
+    """
     transition = transition_recovery_state("RECONNECTING", "reconnect_exhausted")
 
     assert transition.state == "HARD_DOWN"
-    assert transition.terminal is True
+    assert transition.terminal is False
+
+
+def test_failed_open_probe_keeps_the_breaker_open() -> None:
+    """A failed slow probe must re-assert HARD_DOWN rather than fall back to
+    SOCKET_DOWN, which would restart the fast ladder on the next tick."""
+    transition = transition_recovery_state("RECONNECTING", "open_probe_failed")
+
+    assert transition.state == "HARD_DOWN"
+    assert transition.should_reconnect is False
 
 
 @pytest.mark.parametrize(

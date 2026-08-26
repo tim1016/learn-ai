@@ -30,6 +30,7 @@ RecoverySignal = Literal[
     "reconnect_succeeded",
     "reconnect_failed",
     "reconnect_exhausted",
+    "open_probe_failed",
     "recovery_succeeded",
     "recovery_failed",
 ]
@@ -68,7 +69,11 @@ def transition_recovery_state(
     if signal == "reconnect_failed":
         return RecoveryTransition(state="SOCKET_DOWN", should_reconnect=True)
     if signal == "reconnect_exhausted":
-        return RecoveryTransition(state="HARD_DOWN", terminal=True)
+        # Not terminal: HARD_DOWN is the breaker's OPEN state. The fast
+        # ladder is spent, but the monitor keeps probing on a slow cadence.
+        return RecoveryTransition(state="HARD_DOWN")
+    if signal == "open_probe_failed":
+        return RecoveryTransition(state="HARD_DOWN")
     if signal == "recovery_succeeded":
         return RecoveryTransition(state="HEALTHY")
     if signal == "recovery_failed":

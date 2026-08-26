@@ -419,7 +419,7 @@ _BROKER_CONNECTION_PRESENTATION: dict[str, tuple[str, BrokerSessionDisplaySeveri
     "degraded_data_farm": ("Data farm degraded", "critical"),
     "reconnecting": ("Broker reconnecting", "warning"),
     "recovering": ("Broker recovering streams", "warning"),
-    "hard_down": ("Broker recovery exhausted", "critical"),
+    "hard_down": ("Broker down, retrying", "critical"),
     "disconnected": ("Broker disconnected", "warning"),
     "disabled": ("Broker disabled", "info"),
     "unknown": ("Broker state unproven", "warning"),

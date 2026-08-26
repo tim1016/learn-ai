@@ -201,6 +201,39 @@ beside the active hold.
 | S4 | Orphaned account-safety admission markers (`gate`+`writer`, dated Aug 3 — no TTL/staleness handling, `account_safety.py:235`) broke every account-truth refresh cycle for 3 weeks and inflated deploy latency to 10 s+. | **None exists.** Removed manually. Needs staleness detection + operator surface. |
 | S5 | Legacy typo bot `Aug11` (symbol "APPL") drives doomed IBKR subscriptions forever; cannot be retired (F16 dead vocabulary). | **None** — no retire/delete. |
 | S6/S8/S9/S11 | The deploy-refusal taxonomy (all correct-by-copy, all account-wide): first-per-symbol subscription warm-up marks Market Data stale ≤60 s (S6); one stale pooled REST connection → unhandled 500 → Execution unhealthy (S8; reads never retry); trade_updates drops every ~3–5 min, recovers in 2–5 s, each drop a deploy-freeze window (S9; cause unresolved — idle timeout vs competing listener); `clerk.intent_custody` requires **zero** outstanding intents account-wide, so deploying into live order flow is a stochastic race (S11). | Sweep-until-converge works (12 refusals absorbed across 4 launch passes); the structural fixes are §7 items 1 and 3. |
+> **Quantified + fixed (2026-08-25, #1777 WP4).** S1 was scored *moderate*.
+> The retained broker connection log (`artifacts/live_runs/_broker/connection_events.jsonl`,
+> 5 000 events, 23 Aug 22:17 -> 25 Aug 19:09 ET) shows it is the single
+> largest availability defect measured in this repo.
+>
+> * **37.9 % downtime** — 1 021 of 2 691 observed minutes with no successful
+>   30 s probe: 08-24 00:44->08:49 ET (8.1 h) and 08-25 00:44->09:41 ET (8.9 h).
+> * **3 `HARD_DOWN` latches in 1.9 days** (~1.6/day). Each followed the same
+>   script: attempts open at 00:45:0x, exhaust the ten-attempt ladder's nine
+>   inter-attempt waits (`1+2+4+8+16+32+60x3 = 243 s`, excluding `connect()`
+>   duration — the loop latches on the tenth failure without sleeping again),
+>   latch ~5 min 46 s in.
+> * **The latch, not the outage, set the downtime.** `_tick`'s hard-down branch
+>   only *observed* the client, so after latching the monitor emitted nothing
+>   for eight hours — 3 303 `BROKER_PROBE_OK` events in the file and zero
+>   `BROKER_PROBE_FAILED`. Recovery arrived from an unrelated data-farm event,
+>   not the reconnect path (30 of 31 attempts failed; exactly 1 succeeded).
+>   The third latch proves the cost: `09:21:19 -> 09:41:22`, a **20-minute**
+>   outage that a longer-patience ladder would have absorbed with no latch.
+> * **Root cause was not IBKR.** IB Gateway's own log records
+>   `Daily auto-restart is not enabled.` and an `IB GATEWAY RESTART` at
+>   08-24 07:46 and 08-25 08:25 — manual morning relaunches. The gateway
+>   auto-logged-off nightly and stayed down until a human opened it.
+>   Operator remedy: IB Gateway -> Configure -> Settings -> Lock and Exit ->
+>   **Auto restart** (preserves the session; IBKR still forces a weekly
+>   re-login).
+> * **Fix shipped:** `HARD_DOWN` is now the breaker's OPEN state, probing every
+>   `OPEN_PROBE_INTERVAL_S` (60 s) indefinitely through the shared client
+>   lifecycle lock. Downtime is now bounded by the gateway's real availability
+>   rather than by whatever unrelated event happens to poke the monitor.
+>   The transient farm flaps in the same window (`2103->2104`, `2105->2106`)
+>   all recovered in **~1 s**, so they need no debounce beyond WP4's.
+
 | S7 | Roster 5 s poll dies silently across a data-plane restart (9+ min stale, "Running 0" while bots run; only tell is the small "observed" caption). | **Works**: ↻ Refresh. Needs staleness banner + poll retry. |
 | S15 | `ORDER_OUTCOME_UNKNOWN` presentation: bot auto-sorted to top, "Mission blocked" chip, precise copy, prominent Reconcile button, header flips to "Stale". Excellent — but see S15c and S16. | Presentation excellent; remedies dead-ended pre-fix. |
 | S17 | The stranded-exposure remedy (`execute_safe_flatten`) is buried at the bottom of an unlabeled ⋯ overflow, below four near-always-disabled actions; its disabled hint says disposition **"wait"** — the one thing that makes the freshness blocker *worse*. | Exists but hard to find; make Flatten first-class next to Resume for exposed stopped bots; fix the "wait" disposition. |

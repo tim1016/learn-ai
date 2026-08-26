@@ -211,9 +211,13 @@ def _broker_health_condition(
             title="Data-plane broker session down",
             summary=(
                 "IB Gateway/TWS may be logged in, but the FastAPI data-plane IBKR client is not connected. "
-                "Account positions, connected-account identity, and reconciliation evidence cannot refresh."
+                "Account positions, connected-account identity, and reconciliation evidence cannot refresh. "
+                "The monitor keeps retrying on a slow cadence and reconnects on its own once the gateway accepts connections."
             ),
-            remediation="Use the IBKR Connect/Reconnect control after confirming Gateway API access is enabled.",
+            remediation=(
+                "Reconnection is automatic and retries indefinitely; no operator click is required. "
+                "If this persists, confirm IB Gateway is running, logged in, and has API access enabled."
+            ),
         )
     if state == "disabled":
         return BrokerHealthCondition(

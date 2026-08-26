@@ -149,7 +149,7 @@ export class BrokerBannerComponent {
       case 'recovering':
         return 'recovering subscriptions';
       case 'hard_down':
-        return 'recovery exhausted';
+        return 'retrying automatically';
       case 'subscriptions_stale':
         return 'subscriptions stale';
       case 'degraded_data_farm':

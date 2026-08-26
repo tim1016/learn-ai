@@ -128,6 +128,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0043 | Signal Program build proof, two-level seal identity, and append-or-clone legacy migration |
 | 0044 | Two strategy-validation categories with a permanent Live ceiling for operational harnesses |
 | 0045 | Exposure lifecycle closure: `execute_safe_flatten` recovery action over run-fence-exempt recovery EXITs; transient-vs-terminal EXIT refusal taxonomy; stuck-EXIT watchdog with bounded episode-scoped redrives and durable `EXIT_STUCK` escalation (supersedes 0010) |
+| 0046 | `HARD_DOWN` is a circuit-breaker OPEN state, not a terminal one: the spent fast ladder opens a breaker that probes indefinitely on a slow cadence under the shared lifecycle lock, and never presents a half-recovered socket as healthy (supersedes 0018 Decision 5's terminal clause) |
 
 ---
 
