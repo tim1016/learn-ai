@@ -45,7 +45,7 @@ from tests.services.bot_runner.conftest import (
 
 @pytest.fixture(autouse=True)
 def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mirror test_bot_runner.py's autouse fixture of the same name.
+    """Mirror ``bot_runner/conftest.py``'s autouse fixture of the same name.
 
     This module calls ``run_trade_bot`` directly rather than through
     ``BotTaskRegistry``, so only the two module-level bindings it actually
