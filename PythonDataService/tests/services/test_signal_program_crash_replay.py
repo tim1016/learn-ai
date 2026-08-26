@@ -69,7 +69,7 @@ ever reach ``run_trade_bot``) and the recorded contacts above (a
 defense-in-depth signal on the strategy's own internal reapplication
 path). GAP: a direct proof against ``clerk.execute_for_instance`` itself
 would need the full SQLite Clerk integration (``run_trade_bot``'s own test
-coverage in ``tests/services/test_bot_runner.py`` exercises that boundary);
+coverage in ``tests/services/bot_runner/`` exercises that boundary);
 it is out of scope for this file, which is scoped to ``replay_warmup_bars``.
 """
 

@@ -10,7 +10,7 @@ restores a crashed bot's process; this proves the evidence trail for one
 specific evaluation that never reached custody.
 
 Reuses the proven LEAN-parity EMA crossover fixture and Clerk test double
-from ``tests/services/test_bot_runner.py`` (``_ema_parity_bars_through_first_exit``,
+from ``tests/services/bot_runner/conftest.py`` (``_ema_parity_bars_through_first_exit``,
 ``_FakeClerk``, ``_tradable_market_liveness``) instead of re-deriving a
 fresh crossover fixture -- see CLAUDE.md "don't duplicate utility
 functions". Modeled on the crash-simulation idiom in
@@ -33,7 +33,7 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-from tests.services.test_bot_runner import (
+from tests.services.bot_runner.conftest import (
     _EMA_FIRST_EXIT_MS,
     _SID,
     _ema_parity_bars_through_first_exit,

@@ -14,7 +14,7 @@ from app.services.run_replay_proof import (
     run_fidelity_over_bars,
 )
 from app.services.source_bar_ledger import RetainedSourceBar
-from tests.services.test_bot_runner import _ema_parity_bars_through_first_exit
+from tests.services.bot_runner.conftest import _ema_parity_bars_through_first_exit
 from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFeed
 
 

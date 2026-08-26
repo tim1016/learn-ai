@@ -25,7 +25,7 @@ from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.routers.broker_bots import router
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.utils.timestamps import now_ms_utc
-from tests.services.test_bot_runner import (  # noqa: F401 -- _fresh_live_market_liveness is an autouse fixture, registered by import
+from tests.services.bot_runner.conftest import (  # noqa: F401 -- _fresh_live_market_liveness is an autouse fixture, registered by import
     _custody_proof,
     _CustodyClerk,
     _flat_start_guard,

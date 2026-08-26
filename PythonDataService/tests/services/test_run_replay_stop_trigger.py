@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.services.bot_runner import BotTaskRegistry
-from tests.services.test_bot_runner import _SID
+from tests.services.bot_runner.conftest import _SID
 from tests.services.test_candidate_uncaptured_at_crash import _binding
 
 
