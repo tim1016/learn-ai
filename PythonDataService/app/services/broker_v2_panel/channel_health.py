@@ -9,9 +9,11 @@ Two questions, deliberately distinct:
 
 * :func:`evaluate_channel_health` -- is this channel *usable*? Submission
   gates and symbol-scoped views ask this.
-* :func:`evaluate_channel_connectivity` -- is this channel *present and
-  connected*? Account-level surfaces ask this, so one symbol's warm-up
-  cannot refuse every deploy on the account (finding S6).
+* :func:`evaluate_channels_at_account_scope` -- is this channel good enough at
+  *account* scope? Account-level surfaces ask this, so one symbol's warm-up
+  cannot refuse every deploy on the account (finding S6). The per-channel
+  answer is the clerk's canonical ``account_scope_satisfied``, shared with
+  the durable stream-health hold.
 
 Presence and freshness bind both: an observation older than the threshold
 is absence of evidence, not evidence of health.
@@ -23,6 +25,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.models import ChannelHealth
+from app.broker.alpaca.clerk.stream_health import account_scope_satisfied
 from app.broker.v2panel.vocabulary import ChannelState
 
 # A channel-health observation older than this is not "fresh" for the
@@ -114,13 +117,13 @@ def _evaluate_channels(
     )
 
 
-def evaluate_channel_connectivity(
+def evaluate_channels_at_account_scope(
     channel_healths: Sequence[ChannelHealth] | None,
     now_ms: int,
     *,
     required_streams: tuple[str, ...] = REQUIRED_CLERK_CHANNELS,
 ) -> ChannelHealthEvaluation:
-    """Evaluate channel *presence and transport only* — installed + connected.
+    """Evaluate the channels at *account* scope.
 
     The account-level deploy view uses this instead of
     :func:`evaluate_channel_health` so that one symbol still warming up its
@@ -128,33 +131,21 @@ def evaluate_channel_connectivity(
     finding S6). Per-symbol usability is the symbol-scoped view's question,
     and remains the submission gate's question in every case.
 
-    Presence and freshness still apply: an observation older than the
-    threshold proves nothing about current connectivity, whatever it
-    claims. Only per-symbol *usability* is excluded. ``unhealthy`` here
-    names the streams that are not connected.
+    What "account scope" relaxes is decided once, by the clerk's
+    :func:`~app.broker.alpaca.clerk.stream_health.account_scope_satisfied`:
+    market data drops to connectivity because warm-up is per-symbol;
+    execution still requires health because an unusable evidence frame is
+    account-wide. Presence and freshness still apply on top -- an
+    observation older than the threshold proves nothing about the channel's
+    current state, whatever it claims. ``unhealthy`` here names the streams
+    that failed that predicate.
     """
     return _evaluate_channels(
         channel_healths,
         now_ms,
         required_streams=required_streams,
-        satisfied=_account_scope_satisfied,
+        satisfied=account_scope_satisfied,
     )
-
-
-def _account_scope_satisfied(health: ChannelHealth) -> bool:
-    """Relax *market data only* to connectivity; execution still needs health.
-
-    Warm-up is a market-data concept: a subscription that has not produced its
-    first closed bar is per-symbol and transient, so the account must not be
-    refused for it. Execution has no per-symbol dimension -- a `trade_updates`
-    socket that delivered an unusable evidence frame reports
-    ``connected=True, healthy=False`` and is broken for every symbol. Relaxing
-    it here would let the account view call a broken execution channel ready
-    and describe it as healthy, while every real submission gate rejects it.
-    """
-    if health.stream == "market_data":
-        return health.connected
-    return health.healthy
 
 
 def channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int) -> ChannelState:
@@ -169,6 +160,6 @@ __all__ = [
     "REQUIRED_CLERK_CHANNELS",
     "ChannelHealthEvaluation",
     "channel_state",
-    "evaluate_channel_connectivity",
     "evaluate_channel_health",
+    "evaluate_channels_at_account_scope",
 ]

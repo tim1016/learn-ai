@@ -22,10 +22,10 @@ from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJou
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.v2panel.vocabulary import (
-    HOLD_REASONS,
     ActionId,
     copy_for,
     duty_outcome_copy_key,
+    hold_reason_for,
 )
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -82,17 +82,6 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
         "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
     ),
 }
-
-
-def _hold_reason_code(hold_active: bool, raw_reason_code: str | None) -> str:
-    """Map the clerk's raw hold code to the closed HoldReason vocabulary.
-
-    An inactive hold — or an active hold whose code is not in the closed set —
-    resolves to ``NO_HOLD``, so an unknown backend code never leaks to the UI.
-    """
-    if hold_active and raw_reason_code in HOLD_REASONS:
-        return raw_reason_code
-    return "NO_HOLD"
 
 
 def compute_revision(
@@ -223,7 +212,7 @@ def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealth
 def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     """Project the account Clerk state shared by panel and roster actions."""
     hold = clerk_status.hold
-    reason_code = _hold_reason_code(hold.active, hold.reason_code)
+    reason_code = hold_reason_for(active=hold.active, stored_code=hold.reason_code)
     reason_copy = copy_for(reason_code)
     reconciliation = clerk_status.latest_reconciliation
     verdict = reconciliation.verdict if reconciliation is not None else None
@@ -231,7 +220,7 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     return ClerkCard(
         account_id=clerk_status.account_id,
         hold_active=hold.active,
-        hold_reason=reason_code,  # type: ignore[arg-type]
+        hold_reason=reason_code,
         hold_reason_label=reason_copy.label,
         hold_reason_explanation=reason_copy.explanation,
         hold_since_ms=hold.since_ms,

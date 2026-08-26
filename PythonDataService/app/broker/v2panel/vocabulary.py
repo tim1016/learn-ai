@@ -43,12 +43,34 @@ DUTY_OUTCOME_KINDS: Final[frozenset[str]] = frozenset(
 )
 
 # ── Hold reasons (§7.3) ──────────────────────────────────────────────────────
-# The closed set of exposure-hold reason codes the clerk can journal, plus the
-# no-hold sentinel.
-HoldReason = Literal["NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD"]
+# The closed set of exposure-hold reason codes the clerk can journal, plus two
+# sentinels that no cause ever carries: ``NO_HOLD`` says the account is clear,
+# and ``UNKNOWN_HOLD`` is the fail-closed answer for an active hold whose
+# cause this build cannot name. Without the latter, the only way to describe
+# an unrecognised code was ``NO_HOLD`` — denying a live account-wide freeze.
+HoldReason = Literal[
+    "NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD", "UNKNOWN_HOLD"
+]
 HOLD_REASONS: Final[frozenset[str]] = frozenset(
-    {"NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD"}
+    {"NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD", "UNKNOWN_HOLD"}
 )
+
+# Every stored clerk hold code that names a cause, and the wire code it means.
+# Identity entries and the SQLite authority's own spellings live in one table
+# so that adding a cause is one edit: a code absent from here is, by
+# definition, one this build cannot name.
+#
+# ``UNEXPLAINED_ORDER`` is what ``sqlite/reconcile.py``,
+# ``sqlite/trade_evidence.py`` and ``sqlite/external_order_folds.py`` actually
+# write; ``UNEXPLAINED_ORDER_HOLD`` is the wire spelling of the same cause.
+# ADR 0048 Decision 2 normalises the stored row itself in the v12 migration,
+# which retires that row of this table — an operator staring at a frozen
+# account cannot wait for a migration.
+HOLD_REASON_BY_STORED_CODE: Final[dict[str, HoldReason]] = {
+    "UNEXPLAINED_ORDER_HOLD": "UNEXPLAINED_ORDER_HOLD",
+    "UNEXPLAINED_ORDER": "UNEXPLAINED_ORDER_HOLD",
+    "STREAM_HEALTH_HOLD": "STREAM_HEALTH_HOLD",
+}
 
 # ── Reconciliation verdicts (§7.3) ───────────────────────────────────────────
 # Mirrors clerk.models.ReconciliationVerdict exactly (kept in lockstep by the
@@ -195,6 +217,12 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Stream-health hold",
         "A market-data or execution channel is unhealthy. "
         "New submits are paused account-wide.",
+    ),
+    "UNKNOWN_HOLD": OperatorCopy(
+        "Hold active; cause unrecognised",
+        "The Clerk holds this account against new entries under a cause this "
+        "build cannot name. New submits are paused account-wide until it "
+        "clears. Read the Clerk's own hold record for the cause.",
     ),
     # Reconciliation verdicts
     "clean": OperatorCopy(
@@ -360,6 +388,20 @@ def copy_for(code: str) -> OperatorCopy:
     raw enum leaking to the UI.
     """
     return OPERATOR_COPY[code]
+
+
+def hold_reason_for(*, active: bool, stored_code: str | None) -> HoldReason:
+    """Narrow one stored clerk hold code into the closed HoldReason set.
+
+    Fails **closed**: an active hold whose stored code names no known cause
+    renders as ``UNKNOWN_HOLD`` — still an active, entry-blocking hold —
+    never as ``NO_HOLD``. Telling an operator "No hold" while the Clerk is
+    refusing every entry account-wide is the one answer this seam must never
+    give, and it is exactly what an unrecognised code used to produce.
+    """
+    if not active:
+        return "NO_HOLD"
+    return HOLD_REASON_BY_STORED_CODE.get(stored_code or "", "UNKNOWN_HOLD")
 
 
 def duty_outcome_copy_key(kind: str) -> str:

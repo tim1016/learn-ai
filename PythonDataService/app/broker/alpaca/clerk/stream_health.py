@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.hold_debounce import HoldSample
+from app.broker.alpaca.clerk.hold_debounce import HoldSampleVerdict
 from app.broker.alpaca.clerk.models import ChannelHealth
 from app.marketdata.feed import FeedHealth
 
@@ -224,57 +224,63 @@ def build_default_stream_health_gate() -> StreamHealthGate:
     )
 
 
+def account_scope_satisfied(health: ChannelHealth) -> bool:
+    """Is this channel good enough, judged at the account's own scope?
+
+    The canonical account-scope predicate. Both account-scoped consumers --
+    the durable stream-health hold (:func:`account_scope_broken`) and the
+    deploy view's connectivity evaluation -- ask this one question, because
+    two account-scoped surfaces disagreeing about what "broken account"
+    means is how the strictest of them ends up the most permissive.
+
+    The two channels are not symmetric, and relaxing both was the bug:
+
+    - **market_data** is judged on ``connected`` alone. The shared feed's
+      unscoped ``health(None)`` folds *every* subscribed symbol together and
+      reports stale while any one of them is still warming, so keying the
+      account on ``healthy`` freezes entries for every bot on one symbol's
+      warmup -- finding S6, at account scope. Per-symbol usability is not
+      lost: the ENTER-time refusal still checks it, symbol-scoped, and still
+      refuses immediately.
+    - **execution** is judged on ``healthy``. It has no per-symbol
+      dimension, so there is no warmup to forgive: a ``trade_updates`` socket
+      that delivered an unusable evidence frame reports
+      ``connected=True, healthy=False`` and is broken for every symbol on the
+      account. Judging it on ``connected`` let the account-wide hold call a
+      broken execution channel fine while every submission gate rejected it.
+    """
+    if health.stream == "market_data":
+        return health.connected
+    return health.healthy
+
+
 def account_scope_broken(
     channels: tuple[ChannelHealth, ...],
 ) -> tuple[ChannelHealth, ...]:
-    """Channels whose connection is down, in the account's own scope.
-
-    ``healthy`` is the wrong fact for an account-scoped hold. The shared
-    feed's unscoped ``health(None)`` folds *every* subscribed symbol
-    together and reports stale while any one of them is still warming, so
-    keying the hold on ``healthy`` freezes entries for every bot on one
-    symbol's warmup -- finding S6, at account scope. ``connected`` is the
-    half of the fact that is genuinely account-wide.
-
-    Per-symbol usability is not lost: the ENTER-time refusal still checks
-    it, symbol-scoped, and still refuses immediately.
-    """
-    return tuple(health for health in channels if not health.connected)
+    """Channels that fail :func:`account_scope_satisfied`, in that scope."""
+    return tuple(
+        health for health in channels if not account_scope_satisfied(health)
+    )
 
 
 def sample_channels(
     channels: tuple[ChannelHealth, ...] | None,
-    *,
-    now_ms: int,
-) -> HoldSample:
-    """Reduce one snapshot of both channels into a debounce sample.
+) -> HoldSampleVerdict:
+    """Reduce one snapshot of both channels into a debounce verdict.
 
     Takes the already-taken snapshot rather than the gate so the caller
     decides and records evidence from the *same* observation -- deciding
     on one snapshot and journalling another is a race, however small.
 
-    ``observed_at_ms`` is the sync's own clock, because that is honestly
-    when this observation happened: the providers are pull-based closures
-    that recompute on every call, and an absent provider reports unhealthy
-    rather than returning a cached reading. There is no such thing here as
-    a sample that arrived stale.
-
-    A per-channel freshness window used to gate this, on the theory that a
-    provider could stop reporting and leave a stale reading clearing the
-    gate. It could not, and the window was actively harmful: the only
-    channels whose ``observed_at_ms`` ever freezes are the already-broken
-    ones (a disconnected channel reports ``connection_changed_at_ms`` --
-    when it *broke*). A healthy reading always carries a current
-    timestamp, so the window could never prevent a false release, only a
-    true raise. An outage older than the window stopped being actionable.
+    The verdict carries no observation time, and an absent provider samples
+    ``unknown`` rather than returning a cached reading. Both follow from the
+    sampling contract in :mod:`app.broker.alpaca.clerk.hold_debounce`, which
+    is where that reasoning lives.
     """
     if not channels:
-        return HoldSample(verdict="unknown")
+        return "unknown"
 
-    return HoldSample(
-        verdict="unhealthy" if account_scope_broken(channels) else "healthy",
-        observed_at_ms=now_ms,
-    )
+    return "unhealthy" if account_scope_broken(channels) else "healthy"
 
 
 def channel_evidence_refs(channels: tuple[ChannelHealth, ...]) -> list[str]:

@@ -7,7 +7,6 @@ from threading import Event, Thread
 
 import pytest
 
-import app.engine.live.account_safety as account_safety_module
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_epoch import (
     AccountEpochAuthority,
@@ -20,23 +19,14 @@ from app.engine.live.account_registry import (
     bot_order_namespace_for_instance,
 )
 from app.engine.live.account_safety import (
-    AccountSafetyAdmissionError,
-    AccountSafetyAdmissionParticipant,
     AccountSafetyAuthority,
-    AccountSafetyCorruptError,
     AccountSafetyEntryBlockedError,
     AccountSafetyVerdict,
     RetiredOwnerCustody,
     account_safety_admission_lock,
-    account_safety_admission_path,
-    account_safety_admission_repair_path,
     account_safety_blocks_current_bot,
     account_safety_entry_admission_lock,
-    repair_account_safety_admission,
     retired_owner_nonterminal_custody,
-)
-from tests._helpers.legacy_ibkr_artifacts import (
-    write_historical_clerk_generation,
 )
 
 ACCOUNT_ID = "DU1234567"
@@ -164,227 +154,6 @@ def test_shared_entry_permits_drain_before_exclusive_suspension(tmp_path: Path) 
     assert not suspension.is_alive()
 
 
-def test_admission_repair_waits_for_cross_runtime_participants_before_removal(
-    tmp_path: Path,
-) -> None:
-    """Maintenance fences new marker creation and drains a live remote reader."""
-
-    write_historical_clerk_generation(
-        tmp_path,
-        ACCOUNT_ID,
-        phase="accepting",
-        recorded_at_ms=NOW_MS,
-        source="test",
-    )
-    reader_entered = Event()
-    release_reader = Event()
-    repair_finished = Event()
-    receipts = []
-
-    def hold_remote_reader() -> None:
-        with account_safety_entry_admission_lock(tmp_path, ACCOUNT_ID):
-            reader_entered.set()
-            assert release_reader.wait(timeout=1)
-
-    def repair() -> None:
-        receipts.append(
-            repair_account_safety_admission(
-                tmp_path,
-                ACCOUNT_ID,
-                operation_id="s6-admission-repair-002",
-                authorized_by="clerk-host",
-                repaired_at_ms=NOW_MS,
-            )
-        )
-        repair_finished.set()
-
-    reader = Thread(target=hold_remote_reader)
-    reader.start()
-    assert reader_entered.wait(timeout=1)
-    maintenance = Thread(target=repair)
-    maintenance.start()
-    assert not repair_finished.wait(timeout=0.05)
-
-    release_reader.set()
-    reader.join(timeout=1)
-    maintenance.join(timeout=1)
-    assert not reader.is_alive()
-    assert not maintenance.is_alive()
-    assert receipts[0].removed_markers == ()
-
-
-def test_repair_fails_closed_when_a_crashed_participant_cannot_be_proven_dead(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A generation alone cannot prove an old host stopped its critical section."""
-
-    first = write_historical_clerk_generation(
-        tmp_path,
-        ACCOUNT_ID,
-        phase="accepting",
-        recorded_at_ms=NOW_MS,
-        source="old-host",
-    )
-    anchor = account_safety_admission_path(tmp_path, ACCOUNT_ID)
-    coordinator = anchor.with_name(f".{anchor.name}")
-    participants = coordinator / "participants"
-    readers = coordinator / "readers"
-    participants.mkdir(parents=True)
-    readers.mkdir()
-    participant_id = "c" * 32
-    (participants / participant_id).write_text(
-        AccountSafetyAdmissionParticipant(
-            account_id=ACCOUNT_ID,
-            participant_id=participant_id,
-            clerk_generation=first.generation,
-            enrolled_at_ms=NOW_MS,
-        ).model_dump_json(),
-        encoding="utf-8",
-    )
-    (readers / "crashed-reader").write_text("stale", encoding="utf-8")
-    fence = write_historical_clerk_generation(
-        tmp_path,
-        ACCOUNT_ID,
-        phase="frozen",
-        recorded_at_ms=NOW_MS + 1,
-        source="new-host-repair",
-    )
-    monkeypatch.setattr(account_safety_module, "_ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S", 0.01)
-
-    with pytest.raises(AccountSafetyAdmissionError, match="participants did not quiesce"):
-        repair_account_safety_admission(
-            tmp_path,
-            ACCOUNT_ID,
-            operation_id="s6-admission-repair-003",
-            authorized_by="new-clerk-host",
-            repaired_at_ms=NOW_MS + 1,
-            clerk_fence_generation=fence.generation,
-        )
-
-    assert list(participants.iterdir()) == [participants / participant_id]
-    assert (readers / "crashed-reader").exists()
-
-
-def test_repair_replay_finalizes_maintenance_after_receipt_fsync_crash(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A retry of the same operation closes the receipt-before-OPEN crash gap."""
-
-    original_write = account_safety_module._write_admission_maintenance_locked
-
-    def fail_before_open(path: Path, state: object) -> None:
-        if getattr(state, "status", None) == "OPEN":
-            raise OSError("simulated crash after repair receipt fsync")
-        original_write(path, state)
-
-    monkeypatch.setattr(
-        account_safety_module,
-        "_write_admission_maintenance_locked",
-        fail_before_open,
-    )
-    with pytest.raises(OSError, match="simulated crash"):
-        repair_account_safety_admission(
-            tmp_path,
-            ACCOUNT_ID,
-            operation_id="s6-admission-repair-004",
-            authorized_by="clerk-host",
-            repaired_at_ms=NOW_MS,
-        )
-    monkeypatch.setattr(
-        account_safety_module,
-        "_write_admission_maintenance_locked",
-        original_write,
-    )
-
-    replayed = repair_account_safety_admission(
-        tmp_path,
-        ACCOUNT_ID,
-        operation_id="s6-admission-repair-004",
-        authorized_by="clerk-host",
-        repaired_at_ms=NOW_MS,
-    )
-    with account_safety_entry_admission_lock(tmp_path, ACCOUNT_ID):
-        pass
-
-    assert replayed.operation_id == "s6-admission-repair-004"
-
-
-def test_repair_rechecks_receipt_inside_cross_runtime_transition(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A concurrent host receipt wins instead of being duplicated after flock."""
-
-    original_read = account_safety_module._repair_receipt_for_operation
-    injected = account_safety_module.AccountSafetyAdmissionRepairReceipt(
-        account_id=ACCOUNT_ID,
-        operation_id="s6-admission-repair-005",
-        authorized_by="other-host",
-        repaired_at_ms=NOW_MS,
-        maintenance_generation=1,
-        clerk_fence_generation=1,
-        removed_markers=(),
-    )
-    calls = 0
-
-    def receipt_from_other_host(path: Path, operation_id: str):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            path.write_text(injected.model_dump_json() + "\n", encoding="utf-8")
-        return original_read(path, operation_id)
-
-    monkeypatch.setattr(
-        account_safety_module,
-        "_repair_receipt_for_operation",
-        receipt_from_other_host,
-    )
-
-    repaired = repair_account_safety_admission(
-        tmp_path,
-        ACCOUNT_ID,
-        operation_id="s6-admission-repair-005",
-        authorized_by="this-host",
-        repaired_at_ms=NOW_MS,
-    )
-
-    assert repaired == injected
-    with account_safety_entry_admission_lock(tmp_path, ACCOUNT_ID):
-        pass
-
-
-def test_repair_rejects_a_same_operation_receipt_from_another_fence_or_account(
-    tmp_path: Path,
-) -> None:
-    """An idempotency key is scoped to both account path and Clerk fence."""
-
-    receipt_path = account_safety_admission_repair_path(tmp_path, ACCOUNT_ID)
-    receipt_path.parent.mkdir(parents=True)
-    receipt_path.write_text(
-        account_safety_module.AccountSafetyAdmissionRepairReceipt(
-            account_id=ACCOUNT_ID,
-            operation_id="s6-admission-repair-006",
-            authorized_by="other-host",
-            repaired_at_ms=NOW_MS,
-            maintenance_generation=1,
-            clerk_fence_generation=2,
-            removed_markers=(),
-        ).model_dump_json()
-        + "\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(AccountSafetyCorruptError, match="different Clerk fence"):
-        repair_account_safety_admission(
-            tmp_path,
-            ACCOUNT_ID,
-            operation_id="s6-admission-repair-006",
-            authorized_by="this-host",
-            repaired_at_ms=NOW_MS,
-            clerk_fence_generation=1,
-        )
 
 
 # ---------------------------------------------------------------------------

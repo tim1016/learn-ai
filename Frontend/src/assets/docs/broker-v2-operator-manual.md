@@ -630,6 +630,7 @@ generated from the same backend copy map the panel itself renders.
 | `NO_HOLD` | No hold | No exposure hold is active. Order submission is allowed. |
 | `UNEXPLAINED_ORDER_HOLD` | Unexplained-order hold | An order this account did not submit was seen in the journal. New submits are paused account-wide. |
 | `STREAM_HEALTH_HOLD` | Stream-health hold | A market-data or execution channel is unhealthy. New submits are paused account-wide. |
+| `UNKNOWN_HOLD` | Hold active; cause unrecognised | The Clerk holds this account against new entries under a cause this build cannot name. New submits are paused account-wide until it clears. Read the Clerk's own hold record for the cause. |
 
 ### Reconciliation Verdicts
 

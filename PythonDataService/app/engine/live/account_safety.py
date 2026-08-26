@@ -28,13 +28,11 @@ from app.engine.live.account_artifacts import account_artifact_file_path, read_a
 from app.engine.live.account_clerk_journal import is_economic_terminal_broker_event
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_epoch import AccountEpoch, AccountEpochState
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live.live_state_sidecar import _fsync_parent_dir
 from app.schemas.account_truth import AccountTruthResponse
 
 ACCOUNT_SAFETY_FILENAME = "account_safety.json"
 ACCOUNT_SAFETY_ADMISSION_FILENAME = "account_safety_admission"
-ACCOUNT_SAFETY_ADMISSION_MAINTENANCE_FILENAME = "account_safety_admission_maintenance.json"
-ACCOUNT_SAFETY_ADMISSION_REPAIR_FILENAME = "account_safety_admission_repairs.jsonl"
 _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S = 10.0
 _ACCOUNT_SAFETY_ADMISSION_POLL_S = 0.01
 logger = logging.getLogger(__name__)
@@ -112,45 +110,8 @@ class AccountSafetyAdmissionError(RuntimeError):
     """The host/VM-shared account safety permit cannot be acquired."""
 
 
-class AccountSafetyAdmissionRepairReceipt(BaseModel):
-    """Audited, host-authorized removal of stranded admission markers."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    account_id: str = Field(min_length=1, max_length=64)
-    operation_id: str = Field(min_length=16, max_length=128)
-    authorized_by: str = Field(min_length=1, max_length=128)
-    repaired_at_ms: int = Field(ge=0)
-    maintenance_generation: int = Field(ge=1)
-    clerk_fence_generation: int = Field(ge=1)
-    removed_markers: tuple[str, ...]
-
-
-class AccountSafetyAdmissionMaintenanceState(BaseModel):
-    """Durable cross-runtime fence around admission-marker repair."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: int = 1
-    account_id: str = Field(min_length=1, max_length=64)
-    generation: int = Field(ge=0)
-    status: Literal["OPEN", "REPAIRING"] = "OPEN"
-    repair_operation_id: str | None = Field(default=None, min_length=16, max_length=128)
-
-
-class AccountSafetyAdmissionParticipant(BaseModel):
-    """One cross-runtime admission operation enrolled in a Clerk generation."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    account_id: str = Field(min_length=1, max_length=64)
-    participant_id: str = Field(min_length=16, max_length=64)
-    clerk_generation: int = Field(ge=0)
-    enrolled_at_ms: int = Field(ge=0)
-
-
 class AccountSafetyAdmissionTransition(BaseModel):
-    """The O_EXCL mutex owner for a maintenance-state transition."""
+    """The O_EXCL mutex owner for a durable safety-state transition."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -175,26 +136,6 @@ def account_safety_admission_path(artifacts_root: Path, account_id: str) -> Path
     )
 
 
-def account_safety_admission_repair_path(artifacts_root: Path, account_id: str) -> Path:
-    """Return the append-only receipt ledger for explicit admission repairs."""
-
-    return account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_SAFETY_ADMISSION_REPAIR_FILENAME,
-    )
-
-
-def account_safety_admission_maintenance_path(artifacts_root: Path, account_id: str) -> Path:
-    """Return the durable generation fence for admission-marker maintenance."""
-
-    return account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_SAFETY_ADMISSION_MAINTENANCE_FILENAME,
-    )
-
-
 def _account_safety_admission_paths(
     artifacts_root: Path,
     account_id: str,
@@ -209,20 +150,6 @@ def _account_safety_admission_paths(
         coordinator / "writer",
         coordinator / "readers",
     )
-
-
-def _account_safety_admission_participants_path(artifacts_root: Path, account_id: str) -> Path:
-    """Return the shared liveness roster for active admission participants."""
-
-    target = account_safety_admission_path(artifacts_root, account_id)
-    return target.with_name(f".{target.name}") / "participants"
-
-
-def _account_safety_admission_transition_path(artifacts_root: Path, account_id: str) -> Path:
-    """Return the O_EXCL cross-runtime mutex for maintenance transitions."""
-
-    target = account_safety_admission_path(artifacts_root, account_id)
-    return target.with_name(f".{target.name}") / "maintenance-transition"
 
 
 def _account_safety_state_transition_path(artifacts_root: Path, account_id: str) -> Path:
@@ -264,77 +191,10 @@ def _remove_marker(path: Path) -> None:
         logger.error("account safety admission marker disappeared while held", extra={"path": str(path)})
 
 
-def _read_admission_maintenance_locked(
-    path: Path,
-    *,
-    account_id: str,
-) -> AccountSafetyAdmissionMaintenanceState:
-    if not path.exists():
-        return AccountSafetyAdmissionMaintenanceState(account_id=account_id, generation=0)
-    try:
-        state = AccountSafetyAdmissionMaintenanceState.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
-    except (OSError, ValidationError, ValueError) as exc:
-        raise AccountSafetyCorruptError(
-            f"account safety admission maintenance state at {path} is unreadable: {exc}"
-        ) from exc
-    if state.account_id != account_id:
-        raise AccountSafetyCorruptError("account safety admission maintenance account id mismatch")
-    return state
-
-
-def _write_admission_maintenance_locked(
-    path: Path,
-    state: AccountSafetyAdmissionMaintenanceState,
-) -> None:
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    payload = state.model_dump_json().encode("utf-8")
-    with open(temp_path, "wb") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
-    try:
-        os.replace(temp_path, path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            temp_path.unlink()
-        raise
-    _fsync_parent_dir(path)
-
-
-@contextmanager
-def _account_safety_admission_transition_lock(
-    artifacts_root: Path,
-    account_id: str,
-    *,
-    repair_generation: int | None = None,
-) -> Iterator[None]:
-    """Serialize admission enrollment and repair with a shared O_EXCL marker.
-
-    ``flock`` is not reliable across the host/VM filesystem boundary, so this
-    lock deliberately uses the same durable O_EXCL primitive as the admission
-    gate. A generation identifies the owner for audit, but is not proof that
-    the process died: repair therefore never breaks an extant transition
-    marker and fails closed until external host termination is confirmed.
-    """
-
-    transition_path = _account_safety_admission_transition_path(artifacts_root, account_id)
-    with _account_safety_generation_transition_lock(
-        transition_path,
-        artifacts_root=artifacts_root,
-        account_id=account_id,
-        repair_generation=repair_generation,
-    ):
-        yield
-
-
 @contextmanager
 def _account_safety_state_transition_lock(
     artifacts_root: Path,
     account_id: str,
-    *,
-    repair_generation: int | None = None,
 ) -> Iterator[None]:
     """Serialize durable safety projection mutations with a host/VM O_EXCL lock."""
 
@@ -342,7 +202,6 @@ def _account_safety_state_transition_lock(
         _account_safety_state_transition_path(artifacts_root, account_id),
         artifacts_root=artifacts_root,
         account_id=account_id,
-        repair_generation=repair_generation,
     ):
         yield
 
@@ -353,27 +212,20 @@ def _account_safety_generation_transition_lock(
     *,
     artifacts_root: Path,
     account_id: str,
-    repair_generation: int | None,
 ) -> Iterator[None]:
     """Acquire one generation-stamped O_EXCL transition marker."""
 
     transition_path.parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
-    while True:
-        try:
-            transition = AccountSafetyAdmissionTransition(
-                account_id=account_id,
-                clerk_generation=(repair_generation or _current_clerk_generation(artifacts_root, account_id)),
-                acquired_at_ms=time.time_ns() // 1_000_000,
-            )
-            _create_exclusive_marker(
-                transition_path,
-                deadline=(deadline if repair_generation is None else time.monotonic()),
-                payload=transition.model_dump_json(),
-            )
-            break
-        except AccountSafetyAdmissionError:
-            raise
+    transition = AccountSafetyAdmissionTransition(
+        account_id=account_id,
+        clerk_generation=_current_clerk_generation(artifacts_root, account_id),
+        acquired_at_ms=time.time_ns() // 1_000_000,
+    )
+    _create_exclusive_marker(
+        transition_path,
+        deadline=time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S,
+        payload=transition.model_dump_json(),
+    )
     try:
         yield
     finally:
@@ -383,52 +235,6 @@ def _account_safety_generation_transition_lock(
 def _current_clerk_generation(artifacts_root: Path, account_id: str) -> int:
     generation = read_account_clerk_generation(artifacts_root, account_id)
     return generation.generation if generation is not None else 0
-
-
-def _marker_clerk_generation(path: Path, model: type[BaseModel]) -> int | None:
-    try:
-        marker = model.model_validate_json(path.read_text(encoding="utf-8"))
-    except (OSError, ValidationError, ValueError):
-        return None
-    generation = getattr(marker, "clerk_generation", None)
-    return generation if isinstance(generation, int) else None
-
-
-@contextmanager
-def _account_safety_admission_participant(
-    artifacts_root: Path,
-    account_id: str,
-) -> Iterator[None]:
-    """Enroll one reader/writer atomically with the maintenance generation."""
-
-    maintenance_path = account_safety_admission_maintenance_path(artifacts_root, account_id)
-    participants = _account_safety_admission_participants_path(artifacts_root, account_id)
-    maintenance_path.parent.mkdir(parents=True, exist_ok=True)
-    participants.mkdir(parents=True, exist_ok=True)
-    participant_id = uuid4().hex
-    participant = participants / participant_id
-    deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
-    with _account_safety_admission_transition_lock(artifacts_root, account_id):
-        state = _read_admission_maintenance_locked(maintenance_path, account_id=account_id)
-        if state.status != "OPEN":
-            raise AccountSafetyAdmissionError(
-                "account safety admission is fenced for maintenance: "
-                f"operation={state.repair_operation_id!r} generation={state.generation}"
-            )
-        _create_exclusive_marker(
-            participant,
-            deadline=deadline,
-            payload=AccountSafetyAdmissionParticipant(
-                account_id=account_id,
-                participant_id=participant_id,
-                clerk_generation=_current_clerk_generation(artifacts_root, account_id),
-                enrolled_at_ms=time.time_ns() // 1_000_000,
-            ).model_dump_json(),
-        )
-    try:
-        yield
-    finally:
-        _remove_marker(participant)
 
 
 class _AccountSafetySuspensionReservation:
@@ -469,22 +275,21 @@ def account_safety_suspension_reservation(
     own entry permit can drain.
     """
 
-    with _account_safety_admission_participant(artifacts_root, account_id):
-        target, gate, writer, readers = _account_safety_admission_paths(artifacts_root, account_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        readers.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
-        _create_exclusive_marker(gate, deadline=deadline)
-        try:
-            _create_exclusive_marker(writer, deadline=deadline)
-        except Exception:
-            _remove_marker(gate)
-            raise
-        reservation = _AccountSafetySuspensionReservation(gate=gate, writer=writer, readers=readers)
-        try:
-            yield reservation
-        finally:
-            reservation.close()
+    target, gate, writer, readers = _account_safety_admission_paths(artifacts_root, account_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    readers.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
+    _create_exclusive_marker(gate, deadline=deadline)
+    try:
+        _create_exclusive_marker(writer, deadline=deadline)
+    except Exception:
+        _remove_marker(gate)
+        raise
+    reservation = _AccountSafetySuspensionReservation(gate=gate, writer=writer, readers=readers)
+    try:
+        yield reservation
+    finally:
+        reservation.close()
 
 
 @contextmanager
@@ -495,27 +300,35 @@ def account_safety_entry_admission_lock(artifacts_root: Path, account_id: str) -
     the turnstile, waits for all existing readers, and then has exclusive
     authority. Every marker is created with ``O_EXCL`` on the shared mount,
     which works across the host/VM boundary where ``flock`` is insufficient.
+
+    **Superseded, and awaiting removal by ADR 0048 Decision 4f.** #1285 wired
+    this into the legacy ``AccountClerk``; #1679 removed every call site with
+    that control path, and Alpaca admission is now owned by the SQLite
+    Clerk's ``decide_capability``. It is kept only because deleting the
+    reader half alone would strand ``wait_for_readers`` and ``readers/`` as
+    the next dead machinery: 4f replaces all four marker classes with one
+    fenced single-writer claim, and that is where this goes. Do not re-wire
+    it into an entry path in the meantime.
     """
 
-    with _account_safety_admission_participant(artifacts_root, account_id):
-        target, gate, writer, readers = _account_safety_admission_paths(artifacts_root, account_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        readers.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
-        _create_exclusive_marker(gate, deadline=deadline)
-        reader = readers / uuid4().hex
-        try:
-            if writer.exists():
-                raise AccountSafetyAdmissionError(
-                    f"account safety suspension is reserving admission: {writer}"
-                )
-            _create_exclusive_marker(reader, deadline=deadline)
-        finally:
-            _remove_marker(gate)
-        try:
-            yield
-        finally:
-            _remove_marker(reader)
+    target, gate, writer, readers = _account_safety_admission_paths(artifacts_root, account_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    readers.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
+    _create_exclusive_marker(gate, deadline=deadline)
+    reader = readers / uuid4().hex
+    try:
+        if writer.exists():
+            raise AccountSafetyAdmissionError(
+                f"account safety suspension is reserving admission: {writer}"
+            )
+        _create_exclusive_marker(reader, deadline=deadline)
+    finally:
+        _remove_marker(gate)
+    try:
+        yield
+    finally:
+        _remove_marker(reader)
 
 
 @contextmanager
@@ -525,269 +338,6 @@ def account_safety_admission_lock(artifacts_root: Path, account_id: str) -> Iter
     with account_safety_suspension_reservation(artifacts_root, account_id) as reservation:
         reservation.wait_for_readers()
         yield
-
-
-def repair_account_safety_admission(
-    artifacts_root: Path,
-    account_id: str,
-    *,
-    operation_id: str,
-    authorized_by: str,
-    repaired_at_ms: int,
-    clerk_fence_generation: int = 1,
-) -> AccountSafetyAdmissionRepairReceipt:
-    """Repair stranded markers behind an atomic cross-runtime maintenance fence.
-
-    The O_EXCL transition marker serializes repair with every reader/writer's
-    participant enrollment across the host/VM boundary. Neither a generation
-    nor a timeout proves that a remote process stopped, so any extant
-    participant or state-transition marker remains fail-closed. The repair
-    only removes ordinary markers once the shared protocol proves no owner is
-    still in a critical section.
-    """
-
-    target, gate, writer, readers = _account_safety_admission_paths(artifacts_root, account_id)
-    receipt_path = account_safety_admission_repair_path(artifacts_root, account_id)
-    maintenance_path = account_safety_admission_maintenance_path(artifacts_root, account_id)
-    participants = _account_safety_admission_participants_path(artifacts_root, account_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    participants.mkdir(parents=True, exist_ok=True)
-    with _file_lock(receipt_path):
-        existing = _repair_receipt_for_operation(receipt_path, operation_id)
-        if existing is not None:
-            _finalize_admission_maintenance_after_receipt(
-                artifacts_root,
-                account_id,
-                operation_id=operation_id,
-                clerk_fence_generation=clerk_fence_generation,
-                receipt=existing,
-            )
-            return existing
-        with _account_safety_admission_transition_lock(
-            artifacts_root,
-            account_id,
-            repair_generation=clerk_fence_generation,
-        ):
-            maintenance = _read_admission_maintenance_locked(
-                maintenance_path,
-                account_id=account_id,
-            )
-            if maintenance.status == "OPEN":
-                maintenance = maintenance.model_copy(
-                    update={
-                        "generation": maintenance.generation + 1,
-                        "status": "REPAIRING",
-                        "repair_operation_id": operation_id,
-                    }
-                )
-                _write_admission_maintenance_locked(maintenance_path, maintenance)
-            elif maintenance.repair_operation_id != operation_id:
-                raise AccountSafetyAdmissionError(
-                    "account safety admission is already fenced for maintenance: "
-                    f"operation={maintenance.repair_operation_id!r} generation={maintenance.generation}"
-                )
-
-        deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
-        while _admission_participants_remain(participants):
-            if time.monotonic() >= deadline:
-                raise AccountSafetyAdmissionError(
-                    "account safety admission participants did not quiesce during maintenance: "
-                    f"operation={operation_id!r}"
-                )
-            time.sleep(_ACCOUNT_SAFETY_ADMISSION_POLL_S)
-
-        _require_no_state_transition(
-            _account_safety_state_transition_path(artifacts_root, account_id),
-        )
-
-        # The O_EXCL transition excludes new enrollment. Existing contexts
-        # remove their normal marker before their participant marker, so an
-        # empty/current-fenced roster proves the remaining markers are
-        # orphaned rather than active broker work.
-        with _account_safety_admission_transition_lock(
-            artifacts_root,
-            account_id,
-            repair_generation=clerk_fence_generation,
-        ):
-            maintenance = _read_admission_maintenance_locked(
-                maintenance_path,
-                account_id=account_id,
-            )
-            # ``flock`` above is a same-host optimization only. Re-read the
-            # durable receipt under the cross-runtime O_EXCL transition before
-            # appending so two VM/host callers cannot duplicate an operation.
-            committed = _repair_receipt_for_operation(receipt_path, operation_id)
-            if committed is not None:
-                _validate_repair_receipt_identity(
-                    committed,
-                    account_id=account_id,
-                    clerk_fence_generation=clerk_fence_generation,
-                )
-                if maintenance.status == "REPAIRING" and maintenance.repair_operation_id == operation_id:
-                    _write_admission_maintenance_locked(
-                        maintenance_path,
-                        maintenance.model_copy(update={"status": "OPEN", "repair_operation_id": None}),
-                    )
-                elif maintenance.status != "OPEN":
-                    raise AccountSafetyAdmissionError(
-                        "account safety maintenance generation changed after repair receipt"
-                    )
-                return committed
-            if maintenance.status != "REPAIRING" or maintenance.repair_operation_id != operation_id:
-                raise AccountSafetyAdmissionError("account safety maintenance generation changed during repair")
-            if _admission_participants_remain(participants):
-                raise AccountSafetyAdmissionError("account safety participants reappeared during repair")
-            removed = _remove_orphaned_admission_markers(gate=gate, writer=writer, readers=readers)
-            receipt = AccountSafetyAdmissionRepairReceipt(
-                account_id=account_id,
-                operation_id=operation_id,
-                authorized_by=authorized_by,
-                repaired_at_ms=repaired_at_ms,
-                maintenance_generation=maintenance.generation,
-                clerk_fence_generation=clerk_fence_generation,
-                removed_markers=removed,
-            )
-            with open(receipt_path, "a", encoding="utf-8") as handle:
-                handle.write(receipt.model_dump_json() + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            _fsync_parent_dir(receipt_path)
-            _write_admission_maintenance_locked(
-                maintenance_path,
-                maintenance.model_copy(
-                    update={"status": "OPEN", "repair_operation_id": None}
-                ),
-            )
-            return receipt
-
-
-def _admission_participants_remain(participants: Path) -> bool:
-    """Validate the participant roster and report whether it remains nonempty."""
-
-    remaining = False
-    for marker in sorted(participants.iterdir(), key=lambda path: path.name):
-        if marker.is_symlink() or not marker.is_file():
-            raise AccountSafetyAdmissionError(
-                f"account safety admission participant is not a regular file: {marker}"
-            )
-        if _marker_clerk_generation(marker, AccountSafetyAdmissionParticipant) is None:
-            raise AccountSafetyAdmissionError(
-                f"account safety admission participant is unreadable: {marker}"
-            )
-        remaining = True
-    return remaining
-
-
-def _require_no_state_transition(marker: Path) -> None:
-    """Refuse to erase a possibly-live safety projection critical section."""
-
-    if not marker.exists():
-        return
-    raise AccountSafetyAdmissionError(
-        f"account safety state transition remains owned by a participant: {marker}"
-    )
-
-
-def _finalize_admission_maintenance_after_receipt(
-    artifacts_root: Path,
-    account_id: str,
-    *,
-    operation_id: str,
-    clerk_fence_generation: int,
-    receipt: AccountSafetyAdmissionRepairReceipt,
-) -> None:
-    """Complete a repair interrupted after its receipt fsync but before OPEN."""
-
-    _validate_repair_receipt_identity(
-        receipt,
-        account_id=account_id,
-        clerk_fence_generation=clerk_fence_generation,
-    )
-    maintenance_path = account_safety_admission_maintenance_path(artifacts_root, account_id)
-    with _account_safety_admission_transition_lock(
-        artifacts_root,
-        account_id,
-        repair_generation=clerk_fence_generation,
-    ):
-        maintenance = _read_admission_maintenance_locked(maintenance_path, account_id=account_id)
-        if maintenance.status == "OPEN":
-            return
-        if maintenance.status != "REPAIRING" or maintenance.repair_operation_id != operation_id:
-            raise AccountSafetyAdmissionError("account safety maintenance generation changed after receipt")
-        _write_admission_maintenance_locked(
-            maintenance_path,
-            maintenance.model_copy(update={"status": "OPEN", "repair_operation_id": None}),
-        )
-
-
-def _validate_repair_receipt_identity(
-    receipt: AccountSafetyAdmissionRepairReceipt,
-    *,
-    account_id: str,
-    clerk_fence_generation: int,
-) -> None:
-    if receipt.account_id != account_id:
-        raise AccountSafetyCorruptError("account safety repair receipt account id does not match its path")
-    if receipt.clerk_fence_generation != clerk_fence_generation:
-        raise AccountSafetyCorruptError(
-            "account safety repair replay used a different Clerk fence generation"
-        )
-
-
-def _remove_orphaned_admission_markers(
-    *,
-    gate: Path,
-    writer: Path,
-    readers: Path,
-) -> tuple[str, ...]:
-    removed: list[str] = []
-    for marker in (gate, writer):
-        if marker.exists():
-            if marker.is_symlink() or not marker.is_file():
-                raise AccountSafetyAdmissionError(
-                    f"account safety admission marker is not a regular file: {marker}"
-                )
-            marker.unlink()
-            _fsync_parent_dir(marker)
-            removed.append(marker.name)
-    if readers.exists():
-        if readers.is_symlink() or not readers.is_dir():
-            raise AccountSafetyAdmissionError(
-                f"account safety admission readers path is not a directory: {readers}"
-            )
-        for marker in sorted(readers.iterdir(), key=lambda path: path.name):
-            if marker.is_symlink() or not marker.is_file():
-                raise AccountSafetyAdmissionError(
-                    f"account safety reader marker is not a regular file: {marker}"
-                )
-            marker.unlink()
-            _fsync_parent_dir(marker)
-            removed.append(f"readers/{marker.name}")
-    return tuple(removed)
-
-
-def _repair_receipt_for_operation(
-    path: Path,
-    operation_id: str,
-) -> AccountSafetyAdmissionRepairReceipt | None:
-    if not path.exists():
-        return None
-    try:
-        rows = [
-            AccountSafetyAdmissionRepairReceipt.model_validate_json(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
-    except (OSError, ValidationError, ValueError) as exc:
-        raise AccountSafetyCorruptError(
-            f"account safety repair ledger at {path} is unreadable: {exc}"
-        ) from exc
-    matches = [row for row in rows if row.operation_id == operation_id]
-    if len(matches) > 1:
-        raise AccountSafetyCorruptError(
-            f"account safety repair ledger repeats operation_id {operation_id!r}"
-        )
-    return matches[0] if matches else None
 
 
 def retired_owner_nonterminal_custody(
@@ -1346,10 +896,8 @@ def account_safety_blocks_current_bot(
 
 __all__ = [
     "ACCOUNT_SAFETY_ADMISSION_FILENAME",
-    "ACCOUNT_SAFETY_ADMISSION_REPAIR_FILENAME",
     "ACCOUNT_SAFETY_FILENAME",
     "AccountSafetyAdmissionError",
-    "AccountSafetyAdmissionRepairReceipt",
     "AccountSafetyAuthority",
     "AccountSafetyCorruptError",
     "AccountSafetyEntryBlockedError",
@@ -1359,12 +907,10 @@ __all__ = [
     "RetiredOwnerCustody",
     "account_safety_admission_lock",
     "account_safety_admission_path",
-    "account_safety_admission_repair_path",
     "account_safety_blocks_current_bot",
     "account_safety_entry_admission_lock",
     "account_safety_path",
     "account_safety_suspension_reservation",
-    "repair_account_safety_admission",
     "retired_owner_broker_custody_from_account_truth",
     "retired_owner_nonterminal_custody",
 ]

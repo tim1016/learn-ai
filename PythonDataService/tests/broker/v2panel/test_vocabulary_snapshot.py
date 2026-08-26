@@ -20,6 +20,7 @@ from app.broker.v2panel.vocabulary import (
     CHANNEL_STATES,
     DESIRED_STATES,
     DUTY_OUTCOME_KINDS,
+    HOLD_REASON_BY_STORED_CODE,
     HOLD_REASONS,
     OPERATOR_COPY,
     PHASES,
@@ -36,6 +37,7 @@ from app.broker.v2panel.vocabulary import (
     StationId,
     StationState,
     copy_for,
+    hold_reason_for,
 )
 
 _SNAPSHOT_PATH = (
@@ -219,4 +221,48 @@ def test_literal_matches_runtime_collection(name: str, literal: object, collecti
     )
     assert not missing_from_literal, (
         f"{name}: in the runtime collection but not the Literal: {missing_from_literal}"
+    )
+
+
+# ── Hold-reason reachability ─────────────────────────────────────────────────
+# ``hold_reason_for`` narrows a stored clerk code into ``HoldReason`` through
+# ``HOLD_REASON_BY_STORED_CODE``. A cause added to the Literal but not to that
+# table is not merely undocumented — it is unreachable, and every hold carrying
+# it renders as ``UNKNOWN_HOLD`` while looking supported everywhere else.
+
+_HOLD_SENTINELS = frozenset({"NO_HOLD", "UNKNOWN_HOLD"})
+
+
+def test_every_nameable_hold_reason_is_reachable_from_a_stored_code() -> None:
+    """No `HoldReason` cause may exist that no stored code can produce."""
+    causes = HOLD_REASONS - _HOLD_SENTINELS
+    reachable = set(HOLD_REASON_BY_STORED_CODE.values())
+
+    assert causes == reachable, (
+        "unreachable hold cause(s) — add the stored code(s) the clerk writes "
+        f"to HOLD_REASON_BY_STORED_CODE: {sorted(causes - reachable)}; "
+        f"mapped to a code outside HoldReason: {sorted(reachable - causes)}"
+    )
+
+
+def test_the_sentinels_are_never_reachable_as_a_stored_cause() -> None:
+    """`NO_HOLD` and `UNKNOWN_HOLD` describe the seam, never a journalled cause.
+
+    A stored code mapping onto either would let the clerk assert "no hold"
+    while a hold is active — the exact failure the narrowing exists to stop.
+    """
+    assert not _HOLD_SENTINELS & set(HOLD_REASON_BY_STORED_CODE.values())
+
+
+def test_an_active_hold_never_narrows_to_no_hold() -> None:
+    """Fail-closed, swept over every code the table knows plus an unknown one."""
+    stored_codes = [*HOLD_REASON_BY_STORED_CODE, "SOME_FUTURE_HOLD_CAUSE", None, ""]
+
+    assert all(
+        hold_reason_for(active=True, stored_code=code) != "NO_HOLD"
+        for code in stored_codes
+    )
+    assert all(
+        hold_reason_for(active=False, stored_code=code) == "NO_HOLD"
+        for code in stored_codes
     )

@@ -96,6 +96,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     explanation:
       'An order this account did not submit was seen in the journal. New submits are paused account-wide.',
   },
+  UNKNOWN_HOLD: {
+    label: 'Hold active; cause unrecognised',
+    explanation:
+      "The Clerk holds this account against new entries under a cause this build cannot name. New submits are paused account-wide until it clears. Read the Clerk's own hold record for the cause.",
+  },
   blocked: {
     label: 'Blocked',
     explanation: 'An identified condition is preventing this station from progressing.',

@@ -10,6 +10,25 @@ Keeping the decision a pure function of the observation sequence is what
 makes the timing promises testable over virtual time -- no clock, no
 repository, no broker. Same shape as
 ``app/broker/ibkr/recovery_state_machine.py``, for the same reason.
+
+**Sampling contract: every observation is a fresh pull.** The providers
+behind :func:`~app.broker.alpaca.clerk.stream_health.sample_channels` are
+closures that recompute on every call, and an absent provider reports
+``unknown`` rather than returning a cached reading. There is therefore no
+such thing here as a replayed or out-of-order sample, and this table does
+not carry the machinery to detect one: no observation timestamp on the
+sample, no last-counted timestamp in the state.
+
+That machinery existed and could never fire. The only channels whose
+``observed_at_ms`` ever freezes are the already-broken ones -- a
+disconnected channel reports ``connection_changed_at_ms``, when it *broke*
+-- while a healthy reading always carries a current timestamp. A freshness
+window over it could therefore never prevent a false release, only a true
+raise: an outage simply aged out of being actionable. Keyed on a wall clock
+it would also have *suppressed* a legitimate sample across an NTP step
+backwards. If a provider is ever added that can hand back a cached reading,
+it owes a monotonic revision on the sample and this table owes the check
+back; the timestamp it used to carry was never that revision.
 """
 
 from __future__ import annotations
@@ -17,28 +36,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-# Raise only after this many consecutive fresh unhealthy observations;
-# release on the first fresh healthy one. Asymmetric deliberately: a false
-# raise pauses a working account, a false release lets an order at a dead
-# channel. We pay two ticks of latency to avoid the former and none to get
-# out of the latter.
+# Raise only after this many consecutive unhealthy observations; release on
+# the first healthy one. Asymmetric deliberately: a false raise pauses a
+# working account, a false release lets an order at a dead channel. We pay
+# two ticks of latency to avoid the former and none to get out of the latter.
 RAISE_AFTER_CONSECUTIVE_UNHEALTHY = 2
 
 type HoldSampleVerdict = Literal["healthy", "unhealthy", "unknown"]
 type HoldSyncAction = Literal["raise", "release", "none"]
-
-
-@dataclass(frozen=True)
-class HoldSample:
-    """One channel-health observation, already reduced across channels.
-
-    ``observed_at_ms`` is the provider's own observation time, not the
-    sync's wall clock -- that distinction is what makes a replayed reading
-    detectable.
-    """
-
-    verdict: HoldSampleVerdict
-    observed_at_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -47,11 +52,10 @@ class HoldDebounceState:
 
     Deliberately not persisted: #1777 fixes the restart semantics as
     "hold survives (it is fold-derived), counter resets". A restart
-    therefore costs one fresh healthy sample to release, or two fresh
-    unhealthy ones to re-raise.
+    therefore costs one healthy sample to release, or two unhealthy ones
+    to re-raise.
     """
 
-    counted_observed_at_ms: int | None = None
     consecutive_unhealthy: int = 0
 
 
@@ -63,43 +67,30 @@ class HoldDebounceStep:
 
 def advance_hold_debounce(
     state: HoldDebounceState,
-    sample: HoldSample,
+    verdict: HoldSampleVerdict,
 ) -> HoldDebounceStep:
     """Fold one observation into the debounce and say what to do about it.
 
     ``raise``/``release`` are *assertions*, not deltas: a persisting
-    outage re-asserts ``raise`` on every fresh sample. Suppressing the
-    duplicate write is the ledger's job (``observe_account_hold`` appends
-    only when the evidence identity changes), which keeps this table from
-    having to know what was already written.
+    outage re-asserts ``raise`` on every sample. Suppressing the duplicate
+    write is the ledger's job (``observe_account_hold`` appends only when
+    the evidence identity changes), which keeps this table from having to
+    know what was already written.
     """
-    if sample.verdict == "unknown" or sample.observed_at_ms is None:
-        # A provider that could not produce a fresh observation proves
-        # nothing in either direction; hold the line.
+    if verdict == "unknown":
+        # A provider that could not produce an observation proves nothing
+        # in either direction; hold the line.
         return HoldDebounceStep(state=state, action="none")
 
-    counted = state.counted_observed_at_ms
-    if counted is not None and sample.observed_at_ms <= counted:
-        # Sample identity: a replayed or out-of-order reading is not new
-        # evidence, so it can neither accumulate toward a raise nor
-        # release one.
-        return HoldDebounceStep(state=state, action="none")
-
-    if sample.verdict == "healthy":
+    if verdict == "healthy":
         return HoldDebounceStep(
-            state=HoldDebounceState(
-                counted_observed_at_ms=sample.observed_at_ms,
-                consecutive_unhealthy=0,
-            ),
+            state=HoldDebounceState(consecutive_unhealthy=0),
             action="release",
         )
 
     consecutive_unhealthy = state.consecutive_unhealthy + 1
     return HoldDebounceStep(
-        state=HoldDebounceState(
-            counted_observed_at_ms=sample.observed_at_ms,
-            consecutive_unhealthy=consecutive_unhealthy,
-        ),
+        state=HoldDebounceState(consecutive_unhealthy=consecutive_unhealthy),
         action=(
             "raise"
             if consecutive_unhealthy >= RAISE_AFTER_CONSECUTIVE_UNHEALTHY
@@ -112,7 +103,6 @@ __all__ = [
     "RAISE_AFTER_CONSECUTIVE_UNHEALTHY",
     "HoldDebounceState",
     "HoldDebounceStep",
-    "HoldSample",
     "HoldSampleVerdict",
     "HoldSyncAction",
     "advance_hold_debounce",
