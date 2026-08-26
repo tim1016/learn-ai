@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseHeld,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.stream_health_sync import StreamHealthHoldSync
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.synthetic_activation import (
     SyntheticActivationInvalid,
@@ -101,6 +102,7 @@ class ActiveClerkRuntime:
     authority_kind: AuthorityKind
     clerk: ActiveAlpacaClerk | None = None
     sweep: BackgroundSweep | None = None
+    hold_sync: StreamHealthHoldSync | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
@@ -114,7 +116,18 @@ class ActiveClerkRuntime:
             return None
         return self._sqlite_repository
 
+    def start_hold_sync(self) -> None:
+        """Begin sampling stream health, once both providers are installed.
+
+        Separate from selection because the ``trade_updates`` consumer is
+        registered after the selector returns; see the construction site.
+        """
+        if self.hold_sync is not None:
+            self.hold_sync.start()
+
     async def close(self) -> None:
+        if self.hold_sync is not None:
+            await self.hold_sync.stop()
         if self.sweep is not None:
             await self.sweep.stop()
         if isinstance(self.clerk, SqliteAlpacaClerkFacade):
@@ -257,6 +270,7 @@ async def select_active_clerk_runtime(
 
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
+    hold_sync: StreamHealthHoldSync | None = None
     try:
         repository = await _open_repository_after_lease_expiry(
             repository_opener,
@@ -303,11 +317,26 @@ async def select_active_clerk_runtime(
             on_result=facade.publish_reconciliation,
         )
         sweep.start_lease_heartbeat()
+        # #1777 WP4: the stream-health hold runs on its own fixed cadence,
+        # never the reconcile loop's -- a backoff that reaches 300 s on
+        # failure, exactly when a channel is down, must not delay a hold
+        # raise or release.
+        #
+        # Constructed here, but deliberately *not* started: one of its two
+        # providers (the trade_updates consumer) is registered by main.py
+        # only after this function returns, and this function then awaits
+        # startup recovery. Sampling before then reads "consumer is not
+        # running" -- indistinguishable from a real outage -- and would
+        # persist a false account-wide hold on every boot. main.py starts
+        # it via `start_hold_sync()` once the provider exists.
+        hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
         await asyncio.wait_for(
             facade.recover(),
             timeout=startup_recovery_timeout_s,
         )
     except Exception as exc:
+        if hold_sync is not None:
+            await hold_sync.stop()
         if sweep is not None:
             await sweep.stop()
         if repository is not None:
@@ -337,6 +366,7 @@ async def select_active_clerk_runtime(
         authority_kind="sqlite",
         clerk=facade,
         sweep=sweep,
+        hold_sync=hold_sync,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=repository,
             intake=facade.intake,

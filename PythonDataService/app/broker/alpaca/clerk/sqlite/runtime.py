@@ -47,7 +47,6 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionRecei
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_accepted_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_accepted_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owned_entry
-from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, AccountHoldResolvedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
@@ -80,7 +79,6 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ExecutionCoverageResolutionReceipt,
     ManualOrderTicketResource,
     OrderResource,
-    TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -96,7 +94,11 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     execute_safe_flatten_plan,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
-from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
+from app.broker.alpaca.clerk.stream_health import (
+    STREAM_HEALTH_REASON_CODE,
+    StreamHealthGate,
+    stream_health_refusal,
+)
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -124,10 +126,6 @@ _WORKING_ORDER_STATES = frozenset(
     }
 )
 _ENCODED_DECISION_PREFIX = "encoded-"
-# Same wire value as the legacy Clerk's STREAM_HEALTH_HOLD_CODE (S4, #1262)
-# so evidence surfaces that key off the reason code read identically across
-# both authorities.
-STREAM_HEALTH_REASON_CODE = "STREAM_HEALTH_HOLD"
 logger = logging.getLogger(__name__)
 
 
@@ -676,17 +674,25 @@ class SqliteAlpacaClerkFacade:
             )
             if purpose is EffectPurpose.ENTER:
                 if (
-                    _sync_stream_health_hold(
-                        self._repo,
-                        gate=self._stream_health,
+                    stream_health_refusal(
+                        self._stream_health,
                         symbol=entry.instrument.underlying,
                     )
                     is not None
                 ):
-                    # S4 parity (#1262): either channel unhealthy -> durable
-                    # ACCOUNT_CLERK hold + rejected receipt, no broker
-                    # contact. EXIT/cancel remain unaffected: exit.py never
-                    # consults `active_holds_for_admission`.
+                    # S4 parity (#1262): either channel unhealthy ->
+                    # rejected receipt, no broker contact. EXIT/cancel remain
+                    # unaffected: exit.py never consults
+                    # `active_holds_for_admission`.
+                    #
+                    # #1777 WP4/S10: this refuses but no longer writes the
+                    # durable ACCOUNT_CLERK hold. That hold is account-scoped
+                    # and gates admission for *every* bot, so raising it from
+                    # one bot's entry on a single sample is what froze the
+                    # account. `StreamHealthHoldSync` owns it now, on its own
+                    # cadence with debounce; this check stays as the
+                    # consumer-side guard so no entry escapes while the
+                    # durable record catches up.
                     return rejected(
                         reason_code=STREAM_HEALTH_REASON_CODE,
                         explanation="The required market-data or execution channel is unhealthy.",
@@ -1133,60 +1139,6 @@ class SqliteAlpacaClerkFacade:
                 and effect.strategy_instance_id == strategy_instance_id
             )
         )
-
-
-def _sync_stream_health_hold(
-    repo: ClerkSqliteRepository,
-    *,
-    gate: StreamHealthGate | None,
-    symbol: str | None = None,
-) -> tuple[str, str] | None:
-    """Raise/refresh or resolve the durable stream-health hold; return the
-    refusal (reason, detail) when either channel is unhealthy, else None.
-
-    Mirrors `reconcile.py`'s `_sync_unexplained_order_hold` evidence-driven
-    shape: no gate installed ("gate is None" — production wiring always
-    installs one) refuses nothing.
-    """
-    refusal = stream_health_refusal(gate, symbol=symbol)
-    if refusal is None:
-        facts = AccountHoldResolvedFacts(reason_code=STREAM_HEALTH_REASON_CODE, evidence_refs=[])
-        repo.resolve_account_hold_if_active(
-            reason_code=STREAM_HEALTH_REASON_CODE,
-            build_transition=lambda: TransitionInput(
-                transition_kind="ACCOUNT_HOLD_RESOLVED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="succeeded",
-                clerk_observed_at_ms=repo.clock(),
-                summary_code="ACCOUNT_HOLD_RESOLVED_BY_STREAM_RECOVERY",
-                facts_json=facts.to_facts_json(),
-            ),
-        )
-        return None
-
-    _reason, detail = refusal
-    evidence_refs = [detail]
-    facts = AccountHoldRaisedFacts(reason_code=STREAM_HEALTH_REASON_CODE, evidence_refs=evidence_refs)
-
-    def transition(kind: str) -> TransitionInput:
-        return TransitionInput(
-            transition_kind=kind,
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code=kind,
-            facts_json=facts.to_facts_json(),
-        )
-
-    repo.observe_account_hold(
-        reason_code=STREAM_HEALTH_REASON_CODE,
-        evidence_refs_json=canonicalize(evidence_refs),
-        build_raise=lambda: transition("ACCOUNT_HOLD_RAISED"),
-        build_refresh=lambda: transition("ACCOUNT_HOLD_REFRESHED"),
-    )
-    return refusal
 
 
 def _entry_leg(action_plan: ActionPlan) -> StockEntryLeg:
