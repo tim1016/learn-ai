@@ -185,6 +185,13 @@
   &[data-tone='positive'] { color: var(--bull); font-weight: var(--fw-semi); }
   &[data-tone='negative'] { color: var(--bear); font-weight: var(--fw-semi); }
   &[data-tone='neutral'] { color: var(--text-primary); }
+  &[data-tone='alert'] { color: var(--bear); font-weight: var(--fw-semi); }
+}
+
+// The row's recovery command sits under the row, not inside it: nesting a
+// button in the row button would be invalid and unreachable.
+.rail-row__action {
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + 0.5rem + var(--space-2));
 }
 
 .rail-row__detail {

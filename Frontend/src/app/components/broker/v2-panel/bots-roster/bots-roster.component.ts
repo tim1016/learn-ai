@@ -2,7 +2,19 @@ import { ChangeDetectionStrategy, Component, computed, input, output, signal } f
 
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
-import type { BotCatalogView } from '../lib/broker-v2-panel.types';
+import { actionTone } from '../bot-detail-banner/lifecycle-action';
+import type {
+  BotCatalogView,
+  PanelAction,
+  PanelActionTrigger,
+} from '../lib/broker-v2-panel.types';
+import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+
+/** One roster row's recovery command, named with the row it belongs to. */
+export interface RosterRowActionEvent {
+  readonly bot: BotCatalogView;
+  readonly action: PanelAction;
+}
 
 /** Rail grouping. `retired` has no design chip; it appears only when populated. */
 type RailGroup = 'attention' | 'running' | 'stopped' | 'retired';
@@ -25,7 +37,13 @@ interface RailBotRow {
   readonly bot: BotCatalogView;
   /** Right-aligned value: P&L, exposure, or last activity depending on group. */
   readonly value: RailValue;
-  readonly valueTone: 'positive' | 'negative' | 'neutral' | 'muted';
+  readonly valueTone: 'positive' | 'negative' | 'neutral' | 'muted' | 'alert';
+  /**
+   * The backend-authored recovery command for this row, or null. Offered
+   * only on attention rows: a healthy row is not a place to invite a
+   * recovery mutation.
+   */
+  readonly action: PanelAction | null;
   /** Second line: backend `status_label` plus a compact exposure/fills fact. */
   readonly detail: string;
   readonly dotTone: 'bear' | 'warn' | 'bull' | 'info' | 'muted';
@@ -63,7 +81,7 @@ const GROUPS: readonly GroupDefinition[] = [
 @Component({
   selector: 'app-bots-roster',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TimestampDisplayComponent],
+  imports: [PanelActionButtonComponent, TimestampDisplayComponent],
   templateUrl: './bots-roster.component.html',
   styleUrl: './bots-roster.component.scss',
   host: { class: 'flex min-h-0 flex-1 flex-col' },
@@ -73,9 +91,19 @@ export class BotsRosterComponent {
   readonly selectedSid = input<string | null>(null);
   readonly updatedAtMs = input<number | null>(null);
   readonly botSelected = output<string>();
+  readonly rowActionRequested = output<RosterRowActionEvent>();
 
   protected readonly searchTerm = signal('');
   protected readonly groupFilter = signal<RailGroup | null>(null);
+
+  /**
+   * The canonical action-id → tone map (`lifecycle-action.ts`), reused rather
+   * than re-decided here. Hardcoding `danger` painted whatever the backend
+   * picked as primary in destructive red — commonly `reconcile_now` (a
+   * refresh) or the read-only `open_custody_timeline` — which teaches an
+   * operator that red means nothing.
+   */
+  protected readonly actionTone = actionTone;
 
   private readonly grouped = computed(() => {
     const buckets = new Map<RailGroup, BotCatalogView[]>(GROUPS.map((g) => [g.key, []]));
@@ -136,6 +164,13 @@ export class BotsRosterComponent {
     this.botSelected.emit(bot.strategy_instance_id);
   }
 
+  protected requestRowAction(
+    bot: BotCatalogView,
+    { action }: PanelActionTrigger,
+  ): void {
+    this.rowActionRequested.emit({ bot, action });
+  }
+
   private matchesTerm(bot: BotCatalogView, term: string): boolean {
     if (!term) return true;
     return (
@@ -156,24 +191,38 @@ export class BotsRosterComponent {
     const group = this.groupOf(bot);
     const exposure = fmtExposure(bot.exposure);
     const detail = this.detailText(bot, exposure);
+    // Attention is a property of the bot, never of the group it sorts into.
+    // `groupOf` tests RETIRED first, so a retired bot still holding stranded
+    // exposure lands outside the `attention` group — and reading its severity
+    // off the group is what muted it and dropped its authored cure (#1778).
+    const attention = bot.needs_attention;
     return {
       bot,
-      ...this.railValue(bot, group, exposure),
+      ...this.railValue(bot, group, attention, exposure),
       detail,
-      dotTone: this.dotTone(bot, group),
-      ariaLabel:
-        group === 'attention'
-          ? `${bot.strategy_instance_id}, needs attention: ${detail}`
-          : `${bot.strategy_instance_id}, ${detail}`,
+      // Pass-through, not a re-gate. The backend decides which rows carry a
+      // recovery command (`_catalog_row_action`); a second frontend gate is
+      // precisely how the authored cure went missing.
+      action: bot.row_action ?? null,
+      dotTone: this.dotTone(bot, group, attention),
+      ariaLabel: attention
+        ? `${bot.strategy_instance_id}, needs attention: ${detail}`
+        : `${bot.strategy_instance_id}, ${detail}`,
     };
   }
 
   private railValue(
     bot: BotCatalogView,
     group: RailGroup,
+    attention: boolean,
     exposure: string,
   ): { value: RailValue; valueTone: RailBotRow['valueTone'] } {
-    if (group === 'attention' || group === 'retired') {
+    // An attention row's state is the point of the row; muting it is what
+    // let a crashed bot read like a deliberately stopped one (#1778).
+    if (attention) {
+      return { value: this.lastActivity(bot), valueTone: 'alert' };
+    }
+    if (group === 'retired') {
       return { value: this.lastActivity(bot), valueTone: 'muted' };
     }
     if (bot.mode === 'dry_run') {
@@ -209,8 +258,12 @@ export class BotsRosterComponent {
     return `${bot.status_label} · ${facts.join(' · ')}`;
   }
 
-  private dotTone(bot: BotCatalogView, group: RailGroup): RailBotRow['dotTone'] {
-    if (group === 'attention') return bot.phase === 'OFF_DUTY' ? 'bear' : 'warn';
+  private dotTone(
+    bot: BotCatalogView,
+    group: RailGroup,
+    attention: boolean,
+  ): RailBotRow['dotTone'] {
+    if (attention) return bot.phase === 'OFF_DUTY' ? 'bear' : 'warn';
     if (group === 'retired' || group === 'stopped') return 'muted';
     return bot.mode === 'dry_run' ? 'info' : 'bull';
   }

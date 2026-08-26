@@ -1,16 +1,13 @@
 <div class="alpaca-deploy">
-  @if (deployView.isLoading()) {
-    <section class="deploy-loading" role="status" aria-label="Loading deployment readiness">
-      <span></span><span></span><span></span>
-      <strong>Assembling current deployment truth…</strong>
-    </section>
-  } @else if (deployView.error()) {
-    <section class="deploy-unavailable" role="alert">
-      <h3>Current admission truth could not be loaded.</h3>
-      <p>No deployment action is available until the data plane can author a fresh contract.</p>
-      <button type="button" (click)="reload()">Try again</button>
-    </section>
-  } @else if (deployView.value(); as view) {
+  <!-- Readiness already on screen outranks a refresh that failed: it degrades
+       to an explicit staleness banner rather than collapsing the pane. -->
+  @if (currentView(); as view) {
+    @if (stalenessNotice(); as notice) {
+      <section class="deploy-stale" role="alert" aria-label="Deployment readiness is stale">
+        <strong>{{ notice }}</strong>
+        <button type="button" (click)="reload()">Retry</button>
+      </section>
+    }
     @if (receipt(); as deployReceipt) {
       <app-deploy-launch-receipt [receipt]="deployReceipt" />
     } @else {
@@ -107,9 +104,24 @@
               {{ submitting() ? 'Deploying…' : 'Deploy ' + executionLabel().toLowerCase() + ' bot' }}
             </button>
             <small id="deploy-submit-guidance" aria-live="polite">{{ submissionReadiness().guidance }}</small>
+            <!-- Server-observed, never a client clock (temporal-rigor.md). -->
+            <small class="deploy-footer__observed" data-testid="deploy-footer-observed">
+              Readiness observed <app-timestamp-display [value]="view.evaluated_at_ms" mode="local" />
+            </small>
           </div>
         </footer>
       </form>
     }
+  } @else if (deployView.isLoading()) {
+    <section class="deploy-loading" role="status" aria-label="Loading deployment readiness">
+      <span></span><span></span><span></span>
+      <strong>Assembling current deployment truth…</strong>
+    </section>
+  } @else if (deployView.error()) {
+    <section class="deploy-unavailable" role="alert">
+      <h3>Current admission truth could not be loaded.</h3>
+      <p>No deployment action is available until the data plane can author a fresh contract.</p>
+      <button type="button" (click)="reload()">Try again</button>
+    </section>
   }
 </div>

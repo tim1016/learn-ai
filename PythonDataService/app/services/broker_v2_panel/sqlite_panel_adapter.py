@@ -165,6 +165,64 @@ def adapt_sqlite_panel(
     )
 
 
+def _has_bot_scoped_custody_problem(projection: ClerkProjection) -> bool:
+    """True when THIS bot -- not the account -- owns a custody problem.
+
+    ``ClerkSqliteProjectionReader._holds`` and ``._uncertainties`` deliberately
+    fold every ``ACCOUNT_CLERK`` row into each bot's snapshot, because an
+    account-wide hold really does constrain every bot. That fold is right for
+    telling an operator the row is affected; it is wrong for deciding whose
+    button cures it.
+    """
+    return any(
+        item.scope == "CUSTODY_SUBJECT"
+        for item in (*projection.holds, *projection.uncertainties)
+    )
+
+
+def _catalog_row_action(
+    projection: ClerkProjection,
+    *,
+    row_needs_attention: bool,
+) -> PanelAction | None:
+    """The one recovery command a roster row may dispatch, or ``None``.
+
+    Only a row whose *own* trouble is bot-scoped carries one: either the
+    roster row already flagged itself (an unclean terminal exit, this bot's
+    incomplete execution coverage) or the Clerk holds a ``CUSTODY_SUBJECT``
+    hold/uncertainty against it. A healthy row's routine lifecycle commands
+    belong to the panel, and a compact rail has no room to justify a mutation
+    nobody asked for.
+
+    Account-scoped trouble is excluded on purpose. An ``ACCOUNT_CLERK`` hold
+    (and likewise degraded authority health, which is a property of the
+    account's SQLite authority, not of any bot) reaches every row through the
+    fold above; deriving the command from it would print N identical per-bot
+    mutation buttons for one account-scoped problem. An account-scoped problem
+    has an account-scoped cure, and fanning it out per bot is the same defect
+    family as the account-wide entry freeze this PRD exists to remove. Such a
+    row still reads ``needs_attention`` -- it is genuinely affected -- it just
+    offers no button.
+
+    This previously returned ``None`` unconditionally, on the reasoning that
+    "recovery mutations require the bot panel's typed confirmation flow". The
+    premise was right and the conclusion was wrong: ``_panel_action`` is the
+    same builder the panel uses, so the capability's revision, concurrency
+    token, blockers **and typed confirmation** all travel with it. Emitting it
+    here carries that flow onto the row rather than bypassing it -- while
+    returning ``None`` left an attention row with no command at all (#1778).
+    """
+    if not row_needs_attention and not _has_bot_scoped_custody_problem(projection):
+        return None
+    primary = next(
+        (item for item in projection.recovery_actions if item.primary),
+        None,
+    )
+    if primary is None:
+        return None
+    return _panel_action(primary, projection.control_revision)
+
+
 def adapt_sqlite_catalog(
     rows: list[BotCatalogView],
     projections: dict[str, ClerkProjection],
@@ -194,23 +252,24 @@ def adapt_sqlite_catalog(
         if projection is None:
             adapted.append(row.model_copy(update=economic_updates))
             continue
+        needs_attention = row.needs_attention or bool(
+            projection.holds
+            or projection.uncertainties
+            or projection.authority_health != "healthy"
+        )
         adapted.append(
             row.model_copy(
                 update={
                     **economic_updates,
-                    "needs_attention": row.needs_attention or bool(
-                        projection.holds
-                        or projection.uncertainties
-                        or projection.authority_health != "healthy"
-                    ),
+                    "needs_attention": needs_attention,
                     "status_explanation": _sqlite_catalog_explanation(
                         row,
                         projection,
                         exposure=exposure,
                     ),
-                    # Recovery mutations require the bot panel's typed
-                    # confirmation flow; the compact fleet row links there.
-                    "row_action": None,
+                    "row_action": _catalog_row_action(
+                        projection, row_needs_attention=row.needs_attention
+                    ),
                 }
             )
         )

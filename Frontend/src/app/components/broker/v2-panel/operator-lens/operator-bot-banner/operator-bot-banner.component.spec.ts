@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it } from 'vitest';
 
-import type { BotPanelView } from '../../lib/broker-v2-panel.types';
+import type { BotPanelView, PanelAction } from '../../lib/broker-v2-panel.types';
 import { OperatorBotBannerComponent } from './operator-bot-banner.component';
 
 const PANEL: BotPanelView = {
@@ -105,5 +105,101 @@ describe('OperatorBotBannerComponent', () => {
 
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Rebuild from mirror' })).toBeNull();
+  });
+
+  // ── S6 (#1778): safe flatten was reachable only inside a collapsed
+  // accordion. Exposure the operator cannot see a way to clear is the exact
+  // state that most needs a first-class control.
+
+  const prepareFlatten: PanelAction = {
+    action_id: 'prepare_safe_flatten', label: 'Prepare safe flatten',
+    explanation: 'Build the reducing-order plan.', enabled: true, blockers: [],
+    confirmation: null, revision: 1, concurrency_token: 'prepare-token',
+  };
+  const executeFlatten: PanelAction = {
+    action_id: 'execute_safe_flatten', label: 'Execute safe flatten',
+    explanation: 'Submit the reducing orders.', enabled: true, blockers: [],
+    confirmation: null, revision: 1, concurrency_token: 'execute-token',
+  };
+  const resume: PanelAction = {
+    action_id: 'resume', label: 'Resume', explanation: 'Resume the run.',
+    enabled: true, blockers: [], confirmation: null, revision: 1,
+    concurrency_token: 'resume-token',
+  };
+
+  function stoppedPanel(overrides: Partial<BotPanelView> = {}): BotPanelView {
+    return {
+      ...PANEL,
+      health: { ...PANEL.health, running: false, phase: 'OFF_DUTY', desired_state: 'STOPPED' },
+      actions: [resume, prepareFlatten],
+      primary_action_by_lens: { trader: null, operator: 'resume' },
+      ...overrides,
+    };
+  }
+
+  it('folds the safe-flatten pair into the operator overflow', async () => {
+    await render(OperatorBotBannerComponent, {
+      inputs: {
+        panel: { ...PANEL, actions: [...PANEL.actions, prepareFlatten, executeFlatten] },
+        tickerQuote: null,
+      },
+      providers: [provideRouter([])],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'More operator actions' }));
+
+    expect(screen.getByRole('button', { name: 'Prepare safe flatten' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Execute safe flatten' })).toBeTruthy();
+  });
+
+  it('promotes flatten beside Resume for a stopped bot still holding exposure', async () => {
+    await render(OperatorBotBannerComponent, {
+      inputs: { panel: stoppedPanel({ exposure: { SPY: 3 } }), tickerQuote: null },
+      providers: [provideRouter([])],
+    });
+
+    // Both first-class: promoted, not folded away behind the overflow.
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Prepare safe flatten' })).toBeTruthy();
+  });
+
+  it('prefers the execute step once the backend presents it', async () => {
+    await render(OperatorBotBannerComponent, {
+      inputs: {
+        panel: stoppedPanel({
+          exposure: { SPY: 3 },
+          actions: [resume, prepareFlatten, executeFlatten],
+        }),
+        tickerQuote: null,
+      },
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.getByRole('button', { name: 'Execute safe flatten' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Prepare safe flatten' })).toBeNull();
+  });
+
+  it('does not promote flatten for a stopped bot that is already flat', async () => {
+    await render(OperatorBotBannerComponent, {
+      inputs: { panel: stoppedPanel({ exposure: { SPY: 0 } }), tickerQuote: null },
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Prepare safe flatten' })).toBeNull();
+  });
+
+  it('does not promote flatten while the bot is still running', async () => {
+    // A running bot's exposure is the strategy's to manage; promotion is for
+    // exposure stranded by a stop.
+    await render(OperatorBotBannerComponent, {
+      inputs: {
+        panel: { ...PANEL, exposure: { SPY: 3 }, actions: [prepareFlatten, ...PANEL.actions] },
+        tickerQuote: null,
+      },
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.queryByRole('button', { name: 'Prepare safe flatten' })).toBeNull();
   });
 });

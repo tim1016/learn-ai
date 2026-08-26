@@ -41,7 +41,9 @@
                 [tone]="control.tone"
                 [suppressedBlockerId]="control.suppressedBlockerId"
                 [suppressedBlockerReasonCode]="control.suppressedBlockerReasonCode"
+                [moveIsSupported]="moveIsSupported()"
                 (triggered)="actionRequested.emit($event)"
+                (moveRequested)="requestMove($event)"
               />
             </div>
           }

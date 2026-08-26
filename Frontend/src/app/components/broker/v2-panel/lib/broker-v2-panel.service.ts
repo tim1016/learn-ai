@@ -85,13 +85,21 @@ export class BrokerV2PanelService {
     );
   }
 
+  /**
+   * `symbol` scopes the channel-health verdict to the instrument the operator
+   * intends to trade. Omitted, the view reports account-level channel presence
+   * and connectivity only (issue #1777).
+   */
   getDeployView(
     broker: string,
     accountId: string,
+    symbol?: string,
   ): Promise<DeployBotView> {
+    const params = symbol ? new HttpParams().set('symbol', symbol) : undefined;
     return firstValueFrom(
       this.http.get<DeployBotView>(
         `${this.base(broker, accountId)}/bots/deploy`,
+        { params },
       ),
     );
   }

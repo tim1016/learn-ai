@@ -23,7 +23,11 @@ import {
   PanelActionButtonComponent,
   type PanelActionTone,
 } from '../panel-action-button/panel-action-button.component';
-import { ACTION_TONES } from '../bot-detail-banner/lifecycle-action';
+import type { OperatorMove } from '../../../../api/operator-blocker.types';
+import {
+  ACTION_TONES,
+  panelActionForMove,
+} from '../bot-detail-banner/lifecycle-action';
 
 type ReadinessCheck = BotPanelView['readiness_checks'][number];
 
@@ -61,6 +65,24 @@ export class OperatorReadinessComponent {
   readonly bannerActionId = input<ActionId | null>(null);
   readonly actionPending = input(false);
   readonly actionRequested = output<PanelActionTrigger>();
+
+  /**
+   * A gate's blocker may name its own cure (stale recovery evidence is
+   * curable *here* by reconciling). This lens holds the panel, so it is the
+   * layer that can answer whether a move's anchor resolves to a presented,
+   * enabled command — and it dispatches that command through the same
+   * `actionRequested` output every other control already uses.
+   */
+  protected readonly moveIsSupported = computed(() => {
+    const panel = this.panel();
+    return (move: OperatorMove): boolean => panelActionForMove(panel, move) !== null;
+  });
+
+  protected requestMove(move: OperatorMove): void {
+    const action = panelActionForMove(this.panel(), move);
+    if (action === null) return;
+    this.actionRequested.emit({ action, reason: null });
+  }
 
   protected readonly readinessControls = computed<readonly ReadinessControl[]>(
     () => {

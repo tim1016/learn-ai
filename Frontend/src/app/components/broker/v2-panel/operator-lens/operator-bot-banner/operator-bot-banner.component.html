@@ -30,6 +30,16 @@
     />
   }
 
+  @if (promotedFlattenAction(); as flatten) {
+    <app-panel-action-button
+      botBannerAction
+      [action]="flatten"
+      [pending]="actionPending()"
+      [tone]="promotedFlattenTone()"
+      (triggered)="actionRequested.emit($event)"
+    />
+  }
+
   @if (overflowActions().length > 0) {
     <app-bot-banner-overflow botBannerOverflow label="More operator actions">
       @for (action of overflowActions(); track action.action_id) {
