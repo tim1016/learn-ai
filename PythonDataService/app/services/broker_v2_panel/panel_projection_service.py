@@ -84,15 +84,33 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
 }
 
 
-def _hold_reason_code(hold_active: bool, raw_reason_code: str | None) -> str:
-    """Map the clerk's raw hold code to the closed HoldReason vocabulary.
+# The SQLite authority stores its own spelling of a hold cause; the panel
+# renders the closed wire vocabulary. ``UNEXPLAINED_ORDER`` (stored at
+# ``sqlite/reconcile.py``, ``sqlite/trade_evidence.py`` and
+# ``sqlite/external_order_folds.py``) and ``UNEXPLAINED_ORDER_HOLD`` (wire)
+# are the same cause. ADR 0048 Decision 2 normalises the stored row itself in
+# the v12 migration; until that lands this seam owns the translation, because
+# an operator staring at a frozen account cannot wait for a migration.
+_STORED_HOLD_REASON_ALIASES: dict[str, str] = {
+    "UNEXPLAINED_ORDER": "UNEXPLAINED_ORDER_HOLD",
+}
 
-    An inactive hold — or an active hold whose code is not in the closed set —
-    resolves to ``NO_HOLD``, so an unknown backend code never leaks to the UI.
+
+def _hold_reason_code(hold_active: bool, raw_reason_code: str | None) -> str:
+    """Map the clerk's stored hold code to the closed HoldReason vocabulary.
+
+    Fails **closed**. An active hold whose stored code this build cannot name
+    renders as ``UNKNOWN_HOLD`` — still an active, entry-blocking hold — never
+    as ``NO_HOLD``. Telling an operator "No hold" while the Clerk is refusing
+    every entry account-wide is the one answer this seam must never give, and
+    it is what an unrecognised code used to produce.
     """
-    if hold_active and raw_reason_code in HOLD_REASONS:
-        return raw_reason_code
-    return "NO_HOLD"
+    if not hold_active:
+        return "NO_HOLD"
+    code = _STORED_HOLD_REASON_ALIASES.get(raw_reason_code or "", raw_reason_code)
+    if code in HOLD_REASONS and code != "NO_HOLD":
+        return code
+    return "UNKNOWN_HOLD"
 
 
 def compute_revision(

@@ -11355,7 +11355,8 @@
             "enum": [
               "NO_HOLD",
               "UNEXPLAINED_ORDER_HOLD",
-              "STREAM_HEALTH_HOLD"
+              "STREAM_HEALTH_HOLD",
+              "UNKNOWN_HOLD"
             ],
             "title": "Hold Reason",
             "type": "string"

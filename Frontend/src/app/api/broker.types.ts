@@ -10202,7 +10202,7 @@ export interface components {
              * Hold Reason
              * @enum {string}
              */
-            hold_reason: "NO_HOLD" | "UNEXPLAINED_ORDER_HOLD" | "STREAM_HEALTH_HOLD";
+            hold_reason: "NO_HOLD" | "UNEXPLAINED_ORDER_HOLD" | "STREAM_HEALTH_HOLD" | "UNKNOWN_HOLD";
             /** Hold Reason Explanation */
             hold_reason_explanation: string;
             /** Hold Reason Label */

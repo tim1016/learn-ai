@@ -23,6 +23,7 @@
     "STREAM_HEALTH_HOLD",
     "SUBMIT_GATE",
     "UNEXPLAINED_ORDER_HOLD",
+    "UNKNOWN_HOLD",
     "blocked",
     "cancel_order",
     "cancel_verified_working_orders",
@@ -126,6 +127,10 @@
     "UNEXPLAINED_ORDER_HOLD": {
       "label": "Unexplained-order hold",
       "explanation": "An order this account did not submit was seen in the journal. New submits are paused account-wide."
+    },
+    "UNKNOWN_HOLD": {
+      "label": "Hold active; cause unrecognised",
+      "explanation": "The Clerk holds this account against new entries under a cause this build cannot name. New submits are paused account-wide until it clears. Read the Clerk's own hold record for the cause."
     },
     "blocked": {
       "label": "Blocked",

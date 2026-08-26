@@ -45,9 +45,15 @@ DUTY_OUTCOME_KINDS: Final[frozenset[str]] = frozenset(
 # ── Hold reasons (§7.3) ──────────────────────────────────────────────────────
 # The closed set of exposure-hold reason codes the clerk can journal, plus the
 # no-hold sentinel.
-HoldReason = Literal["NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD"]
+# ``UNKNOWN_HOLD`` is the fail-closed member: an active hold whose stored
+# cause this build cannot name still renders as an active, entry-blocking
+# hold. Without it the projection's only way to describe an unrecognised
+# code was ``NO_HOLD``, i.e. to deny a live account-wide freeze.
+HoldReason = Literal[
+    "NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD", "UNKNOWN_HOLD"
+]
 HOLD_REASONS: Final[frozenset[str]] = frozenset(
-    {"NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD"}
+    {"NO_HOLD", "UNEXPLAINED_ORDER_HOLD", "STREAM_HEALTH_HOLD", "UNKNOWN_HOLD"}
 )
 
 # ── Reconciliation verdicts (§7.3) ───────────────────────────────────────────
@@ -195,6 +201,12 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Stream-health hold",
         "A market-data or execution channel is unhealthy. "
         "New submits are paused account-wide.",
+    ),
+    "UNKNOWN_HOLD": OperatorCopy(
+        "Hold active; cause unrecognised",
+        "The Clerk holds this account against new entries under a cause this "
+        "build cannot name. New submits are paused account-wide until it "
+        "clears. Read the Clerk's own hold record for the cause.",
     ),
     # Reconciliation verdicts
     "clean": OperatorCopy(

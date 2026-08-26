@@ -34,6 +34,16 @@ class _Providers:
     exactly that distinction: an aggregate feed reports ``healthy=False``
     while still connected when any one symbol is warming.
 
+    ``healthy``/``connected``/``reason`` script *both* channels; the
+    ``market_data_*`` fields override that one channel. The override is not
+    a convenience -- the two channels are not interchangeable at account
+    scope. Market data is judged on connectivity, because per-symbol warm-up
+    must not freeze the account; execution is judged on health, because an
+    unusable evidence frame is account-wide. A fake that could only say one
+    thing about both could not express either case, and the warm-up test
+    written against it passed for the wrong reason: it was scripting a
+    broken *execution* channel too, which must raise.
+
     ``observed_at_ms`` freezes unless ``observing``, which models the real
     unhealthy branches -- a disconnected execution channel reports the
     instant it *broke* (``connection_changed_at_ms``), not the instant it
@@ -45,6 +55,8 @@ class _Providers:
     connected: bool | None = None
     reason: str = "execution channel is down"
     observing: bool = True
+    market_data_healthy: bool | None = None
+    market_data_connected: bool | None = None
     _observed_at_ms: int = 1_000_000
 
     def advance(self, delta_ms: int = TICK_MS) -> None:
@@ -53,11 +65,17 @@ class _Providers:
             self._observed_at_ms = self.now_ms
 
     def _channel(self, stream: str) -> ChannelHealth:
+        healthy, connected = self.healthy, self.connected
+        if stream == "market_data":
+            if self.market_data_healthy is not None:
+                healthy = self.market_data_healthy
+            if self.market_data_connected is not None:
+                connected = self.market_data_connected
         return ChannelHealth(
             stream=stream,
-            healthy=self.healthy,
-            connected=self.healthy if self.connected is None else self.connected,
-            reason="" if self.healthy else self.reason,
+            healthy=healthy,
+            connected=healthy if connected is None else connected,
+            reason="" if healthy else self.reason,
             observed_at_ms=self._observed_at_ms,
         )
 
@@ -73,7 +91,6 @@ def _sync(repo: ClerkSqliteRepository, providers: _Providers) -> StreamHealthHol
         repo=repo,
         gate=providers.gate(),
         interval_s=INTERVAL_S,
-        now_ms=lambda: providers.now_ms,
     )
 
 
@@ -361,7 +378,6 @@ def test_the_sync_cannot_observe_the_reconciler_at_all(tmp_path: Path) -> None:
         "repo",
         "gate",
         "interval_s",
-        "now_ms",
         "sleep",
         "max_ticks",
     }, f"the hold sync grew a dependency; check it is not the reconciler: {parameters}"
@@ -379,7 +395,11 @@ def test_a_warming_symbol_never_raises_the_account_hold(tmp_path: Path) -> None:
     The symbol-scoped refusal at ENTER is what owns per-symbol usability.
     """
     repo = _repo(tmp_path)
-    providers = _Providers(healthy=False, connected=True, reason="SPY is warming")
+    providers = _Providers(
+        market_data_healthy=False,
+        market_data_connected=True,
+        reason="SPY is warming",
+    )
     sync = _sync(repo, providers)
 
     for _ in range(4):
@@ -388,6 +408,38 @@ def test_a_warming_symbol_never_raises_the_account_hold(tmp_path: Path) -> None:
 
     assert _hold(repo) is None
     assert _appends(repo, "ACCOUNT_HOLD_RAISED") == 0
+    repo.close()
+
+
+def test_an_unusable_execution_frame_does_raise_the_account_hold(
+    tmp_path: Path,
+) -> None:
+    """Execution gets no warm-up forgiveness, because it has no warm-up.
+
+    `execution_channel_health` reports `connected=True, healthy=False` when
+    the trade_updates socket delivers a frame it cannot use. That is broken
+    for every symbol on the account, and every submission gate rejects it --
+    so the durable account-wide hold, the strictest mechanism of the three,
+    must not be the one that calls it fine. Judging the whole snapshot on
+    connectivity did exactly that.
+    """
+    repo = _repo(tmp_path)
+    providers = _Providers(
+        healthy=False,
+        connected=True,
+        reason="Alpaca trade_updates received an unusable evidence frame.",
+        market_data_healthy=True,
+    )
+    sync = _sync(repo, providers)
+
+    for _ in range(2):
+        sync.tick()
+        providers.advance()
+
+    hold = _hold(repo)
+    assert hold is not None
+    assert "execution" in hold["evidence_refs_json"]
+    assert "market_data" not in hold["evidence_refs_json"]
     repo.close()
 
 
@@ -447,7 +499,7 @@ def test_evidence_names_the_disconnected_channel_not_the_warming_one(
         ),
     )
     sync = StreamHealthHoldSync(
-        repo=repo, gate=gate, interval_s=INTERVAL_S, now_ms=lambda: clock[0]
+        repo=repo, gate=gate, interval_s=INTERVAL_S
     )
 
     sync.tick()

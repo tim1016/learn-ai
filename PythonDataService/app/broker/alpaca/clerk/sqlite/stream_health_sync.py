@@ -45,13 +45,10 @@ from app.broker.alpaca.clerk.stream_health import (
     channel_evidence_refs,
     sample_channels,
 )
-from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 type Sleep = Callable[[float], Awaitable[None]]
-type Clock = Callable[[], int]
-
 
 
 class StreamHealthHoldSync:
@@ -68,14 +65,12 @@ class StreamHealthHoldSync:
         repo: ClerkSqliteRepository,
         gate: StreamHealthGate | None,
         interval_s: float = HOLD_SYNC_INTERVAL_S,
-        now_ms: Clock = now_ms_utc,
         sleep: Sleep = asyncio.sleep,
         max_ticks: int | None = None,
     ) -> None:
         self._repo = repo
         self._gate = gate
         self._interval_s = interval_s
-        self._now_ms = now_ms
         self._sleep = sleep
         self._max_ticks = max_ticks
         self._state = HoldDebounceState()
@@ -87,15 +82,13 @@ class StreamHealthHoldSync:
     def tick(self) -> HoldSyncAction:
         """Observe once, fold into the debounce, and act on the verdict."""
         # Account-scoped, so this reads the unscoped snapshot and judges it
-        # on connectivity alone -- see `account_scope_broken`. Neither the
-        # scoped nor the unscoped *usability* verdict belongs here: both
-        # fold per-symbol warmup, which would freeze every bot on one
-        # symbol (finding S6, at account scope).
+        # with the canonical `account_scope_satisfied` -- market data on
+        # connectivity (its unscoped *usability* verdict folds per-symbol
+        # warmup, which would freeze every bot on one symbol -- finding S6,
+        # at account scope), execution on health (it has no per-symbol
+        # dimension, so an unusable evidence frame is broken account-wide).
         channels = None if self._gate is None else self._gate.snapshot()
-        step = advance_hold_debounce(
-            self._state,
-            sample_channels(channels, now_ms=self._now_ms()),
-        )
+        step = advance_hold_debounce(self._state, sample_channels(channels))
         self._state = step.state
 
         if step.action == "raise" and channels is not None:
