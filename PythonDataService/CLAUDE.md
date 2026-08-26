@@ -6,7 +6,7 @@
 |------------|------------------------------------------------------------------------------|
 | Run        | `podman compose up python-service` (localhost:8000)                          |
 | Test       | `podman exec polygon-data-service python -m pytest tests/ -v`                |
-| Test (fast)| `podman exec polygon-data-service python -m pytest tests/ -v -k "not slow"`  |
+| Test (fast)| `podman exec polygon-data-service python -m pytest tests/ -v -m "not slow"`  |
 | Build      | `podman compose build python-service`                                        |
 | Lint       | `ruff check PythonDataService/app/`                                          |
 | Format     | `ruff format PythonDataService/app/`                                         |

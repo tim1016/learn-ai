@@ -1284,7 +1284,7 @@ async def test_deployed_bot_consumes_bars_and_logs_decisions(tmp_path: Path, cap
     feed = _FakeFeed([_bar(_T0), _bar(_T0 + 60_000)], mode="hold")
     registry = _registry(tmp_path, feed)
 
-    with caplog.at_level("INFO", logger="app.services.bot_runner"):
+    with caplog.at_level("INFO", logger="app.services.bot_runtime"):
         await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
         await _wait_for(lambda: feed.bars_consumed == 2)
         await registry.stop("alpaca", _SID)
@@ -3905,7 +3905,7 @@ async def test_log_only_bot_unchanged_after_trade_mode_added(tmp_path: Path, cap
     feed = _FakeFeed([_bar(_T0), _bar(_T0 + 60_000)], mode="hold")
     registry = _registry(tmp_path, feed)
 
-    with caplog.at_level("INFO", logger="app.services.bot_runner"):
+    with caplog.at_level("INFO", logger="app.services.bot_runtime"):
         await registry.deploy(
             broker="alpaca",
             strategy_instance_id=_SID,
