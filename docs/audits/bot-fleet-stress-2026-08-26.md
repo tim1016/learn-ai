@@ -27,7 +27,7 @@ and characterized at wind-down.
 
 **Verdict in one paragraph.** Yesterday's fixes hold under live fire — all
 ten passed explicit acceptance (A1–A13), including the classes that killed
-the 2025-08-25 fleet: the token fence, the idempotency ledger (now proven
+the 2026-08-25 fleet: the token fence, the idempotency ledger (now proven
 under true concurrency), pure reads (zero revision drift at 144 rows with
 50 trading bots), symbol-scoped warm-up, the stream-health debounce
 (validated by two natural Alpaca stream drops), and the cancel-absence
@@ -62,7 +62,7 @@ degrade with running-fleet size, T2/O4) and emergent fleet dynamics
   rows retained deliberately as read-scale ballast (144 total during run).
 - **Tooling**: rebuilt as committed scripts under `scripts/dev/fleet/`
   (`_api.py`, `fleet_launch.py`, `panel_action.py`, `action_storm.py`,
-  `churn_wave.py`, `runner_stop.py`, `read_bench.py`) — the 2025-08-25
+  `churn_wave.py`, `runner_stop.py`, `read_bench.py`) — the 2026-08-25
   session tooling lived in tmp and was purged; this closes that loop.
   Run artifacts in gitignored `.scratch/fleet-0826/`.
 
@@ -71,7 +71,7 @@ degrade with running-fleet size, T2/O4) and emergent fleet dynamics
 | # | Fix under test | Result |
 |---|---|---|
 | A1 | WP1 cancel-absence (#1781) | **PASSED.** g01-dv-spy-0825 self-healed on the first sweep after restart: hold cleared, reconciliation clean, `RESUME_ADMITTED`. The S15c permanent-freeze class is cured in production; no `reset_authority`. |
-| A2 | S16 token fence (#1772) | **PASSED.** First-try action success under a 6-thread read storm (2025-08-25 pre-fix: 0/15 scripted, 0/3 UI). |
+| A2 | S16 token fence (#1772) | **PASSED.** First-try action success under a 6-thread read storm (2026-08-25 pre-fix: 0/15 scripted, 0/3 UI). |
 | A3 | F15 idempotency, sequential (#1772) | **PASSED.** Same key 3× → one `applied=true`, replays share the receipt. |
 | A4 | WP2 pure reads (#1786) | **PASSED.** 96 concurrent reads at 94 rows: 0 errors, revision moved only at the deliberate mutation. Re-proven at 144 rows with 50 trading bots: **zero read-induced drift**. |
 | A5 | S5 doomed-subscription spam | **GONE.** 0 "APPL" log hits (read purity removed the trigger path). |
@@ -83,8 +83,8 @@ degrade with running-fleet size, T2/O4) and emergent fleet dynamics
 | A11 | WP7 S17 blocker authoring (#1788) | **PASSED.** Stale-freshness flatten shows `RECONCILIATION_EVIDENCE_STALE`, `disposition=fix_here`, backend-authored "Run Reconcile now" move. |
 | A12 | Fleet-scale recovery via operator surface | **PASSED twice.** Both outages recovered to 50/50 with only presented actions (resume + reconcile→flatten→resume ladders). Zero resets, zero manual surgery. |
 | A13 | Roster row actions (#1778/#1788) | **ALIVE.** With real attention rows existing post-T6-fix, every attention row renders its primary recovery action ("Reconcile now"). The affordance previously assessed as dead was starved of input, not dead. |
-| — | WP3 symbol-scoped deploy health (#1783) | **PASSED.** All four symbols warmed in parallel; each symbol's second deploy 409'd with a verdict naming **its own** symbol; the account kept accepting other symbols' deploys throughout (2025-08-25: one cold symbol froze all deploys ~60s). |
-| — | S3 forming-bar seal (#1772) | **PASSED.** Zero `SOURCE_BAR_IDENTITY_CONFLICT` across 50 deploys and two recoveries (2025-08-25: crashed bots ~60s after deploy). |
+| — | WP3 symbol-scoped deploy health (#1783) | **PASSED.** All four symbols warmed in parallel; each symbol's second deploy 409'd with a verdict naming **its own** symbol; the account kept accepting other symbols' deploys throughout (2026-08-25: one cold symbol froze all deploys ~60s). |
+| — | S3 forming-bar seal (#1772) | **PASSED.** Zero `SOURCE_BAR_IDENTITY_CONFLICT` across 50 deploys and two recoveries (2026-08-25: crashed bots ~60s after deploy). |
 | — | S7 poll timeout (frontend) | **PASSED implicitly.** Roster self-recovered after both outages without a manual ↻; outage states rendered honestly. |
 
 ## 3. Findings
@@ -141,7 +141,7 @@ before tuning either the timeout or the read path.
 
 ### T3 — Same-symbol cohorts strand in lockstep on a stop wave
 
-Churn wave (the phase S15c aborted on 2025-08-25, now executed): the TSLA
+Churn wave (the phase S15c aborted on 2026-08-25, now executed): the TSLA
 cohort churned clean 2/2 waves; **all four** QQQ bots were caught
 mid-position by the same stop wave — same-symbol dv bots enter/exit in
 lockstep, so a cohort-targeted stop lands mid-hold for every member at
@@ -245,8 +245,22 @@ clean, no hold, no freeze, 0 outstanding intents, 0 exposure across all
 canary spread noise), zero custody errors all day — including through
 three full-process outages (SIGTERM, SIGKILL, SIGSTOP-lease-loss).
 
-Test gates at close: Python full suite green in sibling container,
-Frontend 1944/1944, ruff + eslint project-scope clean.
+Test gates at close (as run on the day): Python **targeted subset** in
+the sibling container — `tests/broker/v2panel/` in full, plus
+lifecycle-state, broker-bots + gallery routers, bot-runner services and
+operator-manual regen: 457 passed, exit 0. The full suite was *not* run to
+completion that day; the attempt died on sibling-container mount topology,
+not on code, and the subset was substituted per operator instruction.
+Frontend 1944/1944; ruff + eslint clean at project scope.
+
+**Full suite, run during the review follow-up** (the mount topology is
+solved — see §7): **8,439 passed, 64 failed, 67 skipped** in 8m12s. All 64
+failures are byte-identical to the same 64 on the branch's base commit
+(`28b79db8`) under the identical harness — zero are attributable to this
+branch. Every one is a repo-root path the sibling does not expose
+(`/PythonDataService/…`, `/scripts/…`, `/compose.yaml`, `/references/…`);
+CI mounts the full checkout, where they pass. Read the Python gate as
+"full suite, baselined against base", not as "all green".
 
 ## 7. Ops lore added today
 
@@ -261,6 +275,17 @@ Frontend 1944/1944, ruff + eslint project-scope clean.
   a stopped-state phenomenon.
 - The compose mount covers `app/` only; container restart loads app code
   (hot-reload remains broken on macOS podman).
+- **Sibling-container pytest topology (solved).** The full suite needs
+  three mounts, not one: `PythonDataService:/app`, `contracts:/contracts`
+  (**not** `/app/contracts` — golden fixtures symlink out to
+  `../../../../../contracts`), and `docs:/docs` (schema-parity reads the
+  pinned-contracts doc). That takes the suite from "2 collection errors,
+  nothing runs" to 8,439 passing. The 64 residual failures are repo-root
+  readers (`/scripts`, `/compose.yaml`, `/references`) and must be
+  baselined against the base commit rather than chased. Do **not** try to
+  fix them by mounting the whole repo at `/repo` — the repo-scanning
+  contract tests then walk `.claude/worktrees/` (13 full checkouts) and
+  `Frontend/node_modules`, and the run wedges at ~32% burning CPU.
 - Convergence loops beat one-shot passes for fleet restore: warm-up,
   freshness fences, and admission races all self-resolve within ~2–3
   cycles of resume/reconcile/flatten sweeps.

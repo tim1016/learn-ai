@@ -1,18 +1,23 @@
 """Read-storm benchmark: concurrent catalog + panel reads.
 
 Usage:
-    python3 read_bench.py [--threads 6] [--iterations 10] [--panel-sids a,b,c]
+    python3 read_bench.py --panel-sids a,b,c [--threads 6] [--iterations 10]
         [--results read_bench.jsonl]
 
 Measures latency percentiles and — the WP2 (#1786) live gate — revision
 drift: pure reads must not bump the panel revision (pre-fix every read
 bumped it by +2, S16).
+
+Read purity is only *claimed* when a revision-bearing panel was actually
+sampled. With no ``--panel-sids`` the catalog storm runs alone, no revision
+is ever observed, and an empty drift set means "not measured" — reporting
+that as "pure reads hold" would let a regression where catalog GETs bump the
+revision sail through the benchmark untouched.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import statistics
 import sys
@@ -43,7 +48,7 @@ def run(threads: int, iterations: int, panel_sids: list[str], results_path: str)
                     latencies["catalog"].append(latency)
                     if status != 200:
                         errors.append(f"catalog {status}")
-            except Exception as exc:  # noqa: BLE001 — bench must count, not die
+            except Exception as exc:  # the bench must count failures, not die on them
                 with lock:
                     errors.append(f"catalog EXC {exc}")
             sid = panel_sids[(worker_id + i) % len(panel_sids)] if panel_sids else None
@@ -59,7 +64,7 @@ def run(threads: int, iterations: int, panel_sids: list[str], results_path: str)
                             revisions.setdefault(sid, []).append(payload["revision"])
                         else:
                             errors.append(f"panel {sid} {status}")
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:  # the bench must count failures, not die on them
                     with lock:
                         errors.append(f"panel {sid} EXC {exc}")
 
@@ -86,10 +91,15 @@ def run(threads: int, iterations: int, panel_sids: list[str], results_path: str)
         for sid, revs in revisions.items()
         if len(set(revs)) > 1
     }
-    summary["revision_drift"] = drift or "NONE (pure reads hold)"
+    sampled = sum(len(revs) for revs in revisions.values())
+    summary["revision_samples"] = sampled
+    if not sampled:
+        summary["revision_drift"] = "NOT SAMPLED (no panel revision read; purity unproven)"
+    else:
+        summary["revision_drift"] = drift or "NONE (pure reads hold)"
+    _api.emit(summary)
     _api.jsonl_append(results_path, {"kind": "read_bench_summary", **summary})
-    print(json.dumps(summary, indent=1))
-    return 1 if drift or errors else 0
+    return 1 if drift or errors or not sampled else 0
 
 
 def main() -> int:
@@ -99,8 +109,17 @@ def main() -> int:
     parser.add_argument("--panel-sids", default="")
     parser.add_argument("--results", default="read_bench.jsonl")
     args = parser.parse_args()
-    _api.setup_logging()
+    if args.threads < 1:
+        parser.error("--threads must be at least 1")
+    if args.iterations < 1:
+        parser.error("--iterations must be at least 1")
     sids = [s for s in args.panel_sids.split(",") if s]
+    if not sids:
+        parser.error(
+            "--panel-sids requires at least one bot: the revision-purity gate "
+            "cannot be evaluated without a revision-bearing panel"
+        )
+    _api.setup_logging()
     return run(args.threads, args.iterations, sids, args.results)
 
 

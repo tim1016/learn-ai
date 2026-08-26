@@ -93,8 +93,15 @@ def main() -> int:
     parser.add_argument("--waves", type=int, default=1)
     parser.add_argument("--results", default="churn_wave.jsonl")
     args = parser.parse_args()
+    sids = [s for s in args.sids.split(",") if s]
+    if not sids:
+        parser.error("--sids requires at least one bot to churn")
+    if args.cohort < 1:
+        parser.error("--cohort must be at least 1")
+    if args.waves < 1:
+        parser.error("--waves must be at least 1")
     _api.setup_logging()
-    return churn([s for s in args.sids.split(",") if s], args.cohort, args.waves, args.results)
+    return churn(sids, args.cohort, args.waves, args.results)
 
 
 if __name__ == "__main__":

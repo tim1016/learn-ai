@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -41,13 +42,25 @@ def control_secret() -> str:
     raise RuntimeError("DATA_PLANE_CONTROL_SECRET not found in env or .env files")
 
 
+TRANSPORT_FAILURE_STATUS = 0
+"""The status these tools report when no HTTP response was obtained at all."""
+
+
 def request(
     method: str,
     path: str,
     body: dict[str, Any] | None = None,
     timeout: float = 120.0,
 ) -> tuple[int, Any, float]:
-    """Return (status_code, parsed_json, latency_seconds)."""
+    """Return (status_code, parsed_json, latency_seconds).
+
+    A transport failure -- refused connection, timeout, dropped socket -- is
+    normalized to ``TRANSPORT_FAILURE_STATUS`` with a detail payload rather
+    than raised. These tools exist to run *through* the outages they induce
+    (SIGKILL, SIGSTOP, container restart); a raising client would abort the
+    sweep at the first casualty and lose every later observation, which is
+    exactly the evidence the probe was started to collect.
+    """
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         BASE_URL + path,
@@ -69,6 +82,13 @@ def request(
         except json.JSONDecodeError:
             payload = {"detail": raw[:500]}
         return err.code, payload, time.monotonic() - started
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        return (
+            TRANSPORT_FAILURE_STATUS,
+            {"detail": f"transport failure: {reason}"},
+            time.monotonic() - started,
+        )
 
 
 def list_roster() -> list[dict[str, Any]]:
@@ -165,6 +185,25 @@ def jsonl_append(path: str | Path, record: dict[str, Any]) -> None:
     record.setdefault("ts_ms", int(time.time() * 1000))
     with open(path, "a") as fh:
         fh.write(json.dumps(record) + "\n")
+
+
+def emit(record: dict[str, Any]) -> None:
+    """Write one machine-readable result line to the tools' stdout contract.
+
+    These are host CLIs whose stdout *is* the result -- the operator pipes it
+    into the campaign JSONL. Diagnostics and progress go to ``logger``; only
+    results come through here. Routing every result line through this one
+    seam keeps the contract single-sourced and greppable instead of
+    scattering writes across six tools.
+    """
+    sys.stdout.write(json.dumps(record, sort_keys=True) + "\n")
+    sys.stdout.flush()
+
+
+def emit_verdict(text: str) -> None:
+    """Write one human-readable verdict line to the same result stream."""
+    sys.stdout.write(text + "\n")
+    sys.stdout.flush()
 
 
 def setup_logging() -> None:

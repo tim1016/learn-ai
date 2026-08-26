@@ -12,7 +12,6 @@ idempotent-replay probes: exactly one applied=True expected).
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 import uuid
@@ -33,6 +32,8 @@ def main() -> int:
     parser.add_argument("--allow-disabled", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
     args = parser.parse_args()
+    if args.repeat < 1:
+        parser.error("--repeat must be at least 1")
     _api.setup_logging()
 
     idem = args.idem or f"fleet-{uuid.uuid4().hex}"
@@ -49,7 +50,7 @@ def main() -> int:
             "attempt %d: %s %s -> %d (%.1fs)",
             attempt, args.sid, args.action_id, status, latency,
         )
-        print(json.dumps({"attempt": attempt, "status": status, "payload": payload}))
+        _api.emit({"attempt": attempt, "status": status, "payload": payload})
         if status not in (200, 201):
             exit_code = 1
     return exit_code
