@@ -30,6 +30,27 @@ from app.engine.live.account_safety_admission_claim import (
 ACCOUNT_ID = "DU1234567"
 
 
+def _validate(artifacts_root: Path, claim: object, *, now_ms: int) -> None:
+    """Validate one claim on its own connection.
+
+    A test-only convenience. Production deliberately has no such helper:
+    validating on one connection and writing on another is the check-then-act
+    race ADR 0048 4f.3 forbids, so the only production path validates inside
+    the write transaction itself. These tests exercise the CAS predicate in
+    isolation, which is exactly the case that convenience is safe for.
+    """
+
+    conn = open_write_transaction(artifacts_root, ACCOUNT_ID)
+    try:
+        validate_claim_on_connection(conn, claim, now_ms=now_ms)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
 def test_paused_owner_with_broken_claim_cannot_complete_protected_mutation(tmp_path: Path) -> None:
     """The whole point of ADR 0048 4f.
 
@@ -58,10 +79,10 @@ def test_paused_owner_with_broken_claim_cannot_complete_protected_mutation(tmp_p
     # A resumes and, still believing it holds generation 1, attempts to
     # validate immediately before its protected write.
     with pytest.raises(AccountSafetyAdmissionClaimLost):
-        claim_a.validate_or_raise(now_ms=5_500)
+        _validate(tmp_path, claim_a, now_ms=5_500)
 
     # B's own current claim still validates fine.
-    claim_b.validate_or_raise(now_ms=5_500)
+    _validate(tmp_path, claim_b, now_ms=5_500)
 
 
 def test_claim_break_cannot_interleave_with_a_paused_validated_write(tmp_path: Path) -> None:
@@ -69,7 +90,7 @@ def test_claim_break_cannot_interleave_with_a_paused_validated_write(tmp_path: P
     be ONE atomic operation against the store -- not a check that succeeds,
     then a *separate* write with no re-check. A version that validates via
     this claim's SQLite store and then persists via something else entirely
-    (the previously committed design: ``validate_or_raise()`` followed by a
+    (the previously committed design: a bare validate followed by a
     plain ``os.replace`` on a JSON file) has exactly this gap: nothing
     prevents a break from landing in between.
 
@@ -162,7 +183,7 @@ def test_generation_increments_monotonically_across_breaks(tmp_path: Path) -> No
 
     # A's superseded generation is rejected by the store.
     with pytest.raises(AccountSafetyAdmissionClaimLost):
-        claim1.validate_or_raise(now_ms=150)
+        _validate(tmp_path, claim1, now_ms=150)
 
     # C breaks B's claim after it too expires -- generation bumps to 3.
     claim3 = try_acquire_or_break_claim(tmp_path, ACCOUNT_ID, owner="C", now_ms=300, ttl_ms=100)
@@ -171,10 +192,10 @@ def test_generation_increments_monotonically_across_breaks(tmp_path: Path) -> No
 
     # B's now-superseded generation is rejected too.
     with pytest.raises(AccountSafetyAdmissionClaimLost):
-        claim2.validate_or_raise(now_ms=300)
+        _validate(tmp_path, claim2, now_ms=300)
 
     # C's current claim validates.
-    claim3.validate_or_raise(now_ms=300)
+    _validate(tmp_path, claim3, now_ms=300)
 
 
 def test_orphaned_claim_is_breakable_without_operator_action(tmp_path: Path) -> None:
@@ -201,7 +222,7 @@ def test_admission_claim_context_manager_acquires_and_releases(tmp_path: Path) -
     with account_safety_admission_claim(tmp_path, ACCOUNT_ID, owner="A", now_ms=0, ttl_ms=1_000) as claim:
         assert claim.owner == "A"
         assert claim.generation == 1
-        claim.validate_or_raise(now_ms=0)
+        _validate(tmp_path, claim, now_ms=0)
 
     # After a clean release, a fresh acquisition is uncontended.
     with account_safety_admission_claim(tmp_path, ACCOUNT_ID, owner="B", now_ms=1, ttl_ms=1_000) as claim:

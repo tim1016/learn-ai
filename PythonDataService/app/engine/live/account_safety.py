@@ -257,8 +257,8 @@ def account_safety_admission_lock(
     #1679, so ``readers/`` was never populated in production.
 
     Yields the held :class:`AccountSafetyAdmissionClaim` so a caller
-    performing a protected mutation can validate it immediately before
-    writing (see :meth:`AccountSafetyAdmissionClaim.validate_or_raise`).
+    performing a protected mutation can validate it inside the same
+    transaction as that mutation (see :func:`open_write_transaction`).
     """
 
     with account_safety_admission_claim(artifacts_root, account_id) as claim:

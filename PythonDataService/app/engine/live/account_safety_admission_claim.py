@@ -31,9 +31,11 @@ mirrors, and shares the file-locking primitive with,
 ``ClerkSqliteRepository``'s own write-transaction discipline
 (``app/broker/alpaca/clerk/sqlite/repository.py``), which the ADR names as
 the reference for what "atomic against the durable state" means.
-:meth:`AccountSafetyAdmissionClaim.validate_or_raise` remains a standalone
-convenience for a bare liveness check; it must not be used as the first
-half of a protected write followed by a separate persist call.
+There is deliberately no "just validate my claim" entry point that manages
+its own connection. Such a convenience reads as the safe thing and is not:
+validating on one connection and then writing on another is a check-then-act
+race even against this same store, which is the defect 4f.3 exists to
+forbid. Callers validate on the connection they are about to write on.
 
 Engine-local by design (ADR 0048 4a/4f): this is a private SQLite file per
 IBKR account, under that account's own artifact directory. It is unrelated
@@ -113,26 +115,6 @@ class AccountSafetyAdmissionClaim:
     claim_path: Path
     ttl_ms: int
 
-    def validate_or_raise(self, *, now_ms: int) -> None:
-        """CAS-renew this exact ``(owner, generation)`` pair at the store.
-
-        Standalone convenience: opens and commits its own connection, so
-        it is safe to call on its own (as a liveness check, or for
-        renewal). **A protected durable mutation must not call this and
-        then separately persist its write** — that is a check-then-act
-        race across two operations, even though both talk to the same
-        store (ADR 0048 4f.3; see the module docstring). Use
-        :func:`open_write_transaction` + :func:`validate_claim_on_connection`
-        + :func:`persist_protected_payload_on_connection` instead, so the
-        validation and the write share one transaction.
-        """
-
-        conn = _connect(self.claim_path)
-        try:
-            validate_claim_on_connection(conn, self, now_ms=now_ms)
-        finally:
-            conn.close()
-
 
 def _connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,10 +175,13 @@ def validate_claim_on_connection(
 ) -> None:
     """The CAS half of a protected write, on a caller-managed connection.
 
-    Identical predicate to :meth:`AccountSafetyAdmissionClaim.validate_or_raise`,
-    but runs on a connection the caller controls so it can share one
-    transaction with the durable write that follows (see
-    `open_write_transaction`) instead of opening and committing its own.
+    Runs on a connection the caller controls, so it shares one transaction
+    with the durable write that follows (see `open_write_transaction`).
+    There is deliberately no variant that opens and commits its own
+    connection: validating on one connection and writing on another is a
+    check-then-act race even against the same store, and a convenience that
+    made it easy would be the whole defect ADR 0048 4f.3 forbids, one call
+    away.
     """
 
     cursor = conn.execute(
