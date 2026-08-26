@@ -41,7 +41,7 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import AccountFreezeState
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from tests._helpers.canary_admission import admit_canary_pairing
-from tests.services.test_bot_runner import (
+from tests.services.bot_runner.conftest import (
     _SID,
     _T0,
     _custody_proof,

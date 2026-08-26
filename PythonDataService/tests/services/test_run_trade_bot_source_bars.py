@@ -16,7 +16,7 @@ from app.marketdata.feed import MarketDataBar
 from app.services.bot_runtime import PauseAwareFeed, execute_bot_run
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed, run_trade_bot
 from app.services.source_bar_ledger import SourceBarLedger
-from tests.services.test_bot_runner import (
+from tests.services.bot_runner.conftest import (
     _SID,
     _ema_parity_bars_through_first_exit,
     _FakeClerk,

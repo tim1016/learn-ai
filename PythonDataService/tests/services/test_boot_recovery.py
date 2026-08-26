@@ -46,7 +46,7 @@ from app.services.bot_runner import (
     BootRecoveryIncompleteError,
     BotTaskRegistry,
 )
-from tests.services.test_bot_runner import (
+from tests.services.bot_runner.conftest import (
     _custody_proof,
     _CustodyClerk,
     _FakeFeed,
