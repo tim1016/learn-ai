@@ -12,7 +12,7 @@ Run all three test suites and report results.
 
 3. **Python** (pytest — runs in container):
    ```bash
-   podman exec polygon-data-service python -m pytest tests/ -v -k "not slow"
+   podman exec polygon-data-service python -m pytest tests/ -v -m "not slow"
    ```
 
 Run all three. Report a summary table: suite name, pass/fail count, any failures.

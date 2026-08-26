@@ -181,7 +181,7 @@ def test_spy_ema_crossover_matches_lean_reference_trades() -> None:
     polygon-data-service container which already exports it) to enable.
 
     Marked ``slow`` because the run materializes ~2 years of minute
-    bars and takes several minutes; ``pytest -k "not slow"`` skips it.
+    bars and takes several minutes; ``pytest -m "not slow"`` skips it.
     """
     lean_data_root = _resolve_lean_data_root()
     # Skip when the SPY minute corpus the validator needs is absent —

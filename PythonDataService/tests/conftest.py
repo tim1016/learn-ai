@@ -16,9 +16,6 @@ os.environ.setdefault("POLYGON_API_KEY", "test-key-for-testing")
 os.environ["DATA_PLANE_CONTROL_SECRET"] = ""
 os.environ["DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL"] = "true"
 
-from app.main import app
-
-
 @pytest.fixture(autouse=True)
 def _clerk_market_liveness_defaults_tradable(monkeypatch: pytest.MonkeyPatch):
     """The Alpaca Clerk's submission-boundary liveness recheck (#1671,
@@ -121,6 +118,8 @@ def anyio_backend():
 @pytest.fixture
 async def client():
     """Async HTTP client for testing FastAPI endpoints."""
+    from app.main import app
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

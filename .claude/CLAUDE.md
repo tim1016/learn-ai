@@ -22,7 +22,7 @@
 ```bash
 podman exec my-frontend npx ng test                                          # Frontend (Vitest, independent)
 cd Backend.Tests && dotnet test                                              # Backend (needs DB + Python running)
-podman exec polygon-data-service python -m pytest tests/ -v -k "not slow"   # Python (independent)
+podman exec polygon-data-service python -m pytest tests/ -v -m "not slow"   # Python (independent)
 ```
 
 ## Linting

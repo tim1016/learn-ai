@@ -347,7 +347,7 @@ jobs:
         run: |
           read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
           extra="${{ steps.changed.outputs.extra }}"
-          python -m pytest "${baseline_dirs[@]}" $extra -v -k "not slow" --tb=short
+          python -m pytest "${baseline_dirs[@]}" $extra -v -m "not slow" --tb=short
 
   alpaca-sqlite-qualification-smoke:
     name: Alpaca SQLite Qualification Smoke
