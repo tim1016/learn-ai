@@ -22,11 +22,12 @@ from app.broker.alpaca.clerk.models import (
     ClerkStatus,
     HoldState,
 )
+from app.broker.contract.registry import get_broker_registry
 from app.config import settings
 from app.services.bot_runner import AdmittedBotStart, BotRunnerError
 from app.services.broker_v2_panel import panel_data_source
 from app.utils.timestamps import now_ms_utc
-from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE, _T0, _FakeAccount
+from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE, _T0, account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
 
 # ema_crossover_signal is a sealed Signal Program (#1730); most tests below
@@ -893,7 +894,11 @@ async def test_account_trading_block_authors_ineligible_deploy_view(
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         _ALLOW_BODY_STRATEGY,
     )
-    monkeypatch.setattr(_FakeAccount, "trading_blocked", True)
+    monkeypatch.setattr(
+        get_broker_registry().resolve("alpaca"),
+        "account",
+        account_snapshot(trading_blocked=True),
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
-import statistics
-import time
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,13 +33,13 @@ from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotPanelLiveSnapshot, ChartLiveResponse
 from app.schemas.run_admission import RunAdmissionDecision
+from app.services import broker_account_snapshot
 from app.services.bot_runner import set_bot_task_registry
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
+from tests.broker.v2panel.conftest import account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
-
-logger = logging.getLogger(__name__)
 
 _T0 = 1_700_000_000_000
 
@@ -57,33 +55,6 @@ def _fleet_sids(size: int) -> tuple[str, ...]:
     return (SID, *(f"bot-{index:02d}" for index in range(1, size)))
 
 
-def _account_snapshot() -> BrokerAccountSnapshot:
-    """The real contract model, not a duck-typed stub.
-
-    The deploy view reads mode/status/blocked flags off this, so a stub with
-    only ``account_id`` would make the deploy read unreachable — and a read
-    that 500s proves nothing about its call budget.
-    """
-    return BrokerAccountSnapshot(
-        broker="alpaca",
-        account_id=ACCT,
-        account_mode="paper",
-        account_status="ACTIVE",
-        currency="USD",
-        cash=100_000.0,
-        equity=100_000.0,
-        buying_power=200_000.0,
-        portfolio_value=100_000.0,
-        long_market_value=0.0,
-        short_market_value=0.0,
-        pattern_day_trader=False,
-        trading_blocked=False,
-        account_blocked=False,
-        created_at_ms=_T0,
-        observed_at_ms=_T0,
-    )
-
-
 class _FakeBrokerPort:
     broker_id = "alpaca"
 
@@ -95,7 +66,7 @@ class _FakeBrokerPort:
     async def get_account(self) -> BrokerAccountSnapshot:
         self.calls += 1
         self.methods.append('get_account')
-        return _account_snapshot()
+        return account_snapshot()
 
     async def list_positions(self) -> list:
         self.calls += 1
@@ -136,7 +107,10 @@ class _FakeRegistry:
         self._receipts_root = receipts_root or Path("receipts")
         self._running = running
         self._sids = tuple(sids)
-        self.projected_states: list[str] = []
+        # Attributed per bot, not counted as a scalar: a fleet-wide total is
+        # met by the gallery's fan-out alone, so a per-bot panel read that
+        # stopped projecting custody would still clear a total-only bound.
+        self.custody_projections: list[tuple[str, str]] = []
 
     async def preview_resume_admission(self, broker: str, sid: str) -> RunAdmissionDecision:
         """Resolve custody through the real production projection.
@@ -152,7 +126,7 @@ class _FakeRegistry:
         async with default_start_custody_projection(
             self.binding_for_control(broker, sid)
         ) as snapshot:
-            self.projected_states.append(snapshot.reconciliation_state)
+            self.custody_projections.append((sid, snapshot.reconciliation_state))
         raise BotRunnerError("resume admission policy is not modelled in this harness")
 
     def panel_action_receipt_path(self, sid: str) -> Path:
@@ -273,9 +247,19 @@ def stopped_api(api, tmp_path: Path, fleet_size: int, monkeypatch: pytest.Monkey
     it is reset per test, and its 800 ms IO cache is switched off: a gate
     that passes because a request never reached the projection would be
     worthless. Zero TTL makes the gate strictly harder, never easier.
+
+    The account-identity TTL goes the other way and is pinned wide open.
+    These gates are about whether read paths reconcile, not about how long
+    one cached identity lookup survives; leaving the 60 s production TTL in
+    place would make a slow runner that spends more than a minute on the
+    read rounds re-fire `get_account` and fail the call-budget gate as if
+    a read had regressed to reconciling.
     """
     monkeypatch.setattr(broker_v2_gallery, "_HUB_CACHE", {})
     monkeypatch.setattr(broker_v2_gallery, "_GALLERY_IO_CACHE_TTL_MS", 0)
+    monkeypatch.setattr(
+        broker_account_snapshot, "_ACCOUNT_SNAPSHOT_TTL_MS", 86_400_000
+    )
     app, repo = api
     app.include_router(broker_v2_gallery.router)
     sids = _fleet_sids(fleet_size)
@@ -313,7 +297,42 @@ def _read_paths(fleet_size: int) -> tuple[str, ...]:
     )
 
 
-_READ_ROUNDS = 10
+# The regression class these gates catch is per-read, so width across surfaces
+# and bots buys far more than depth in rounds. Three rounds is enough to
+# separate first-read setup from steady state — the only thing repetition
+# discriminates once every read is attributed per bot — and keeps the module
+# inside a few seconds of CI time instead of half a minute.
+_READ_ROUNDS = 3
+
+# Measured at fleet 50 (2026-08-26): one round of `_read_paths` runs the
+# stopped-bot custody projection exactly twice per bot — once inside the
+# gallery's fan-out across the whole wall, once inside that bot's own panel
+# GET. The catalog and deploy reads project nothing.
+_PROJECTIONS_PER_BOT_PER_ROUND = 2
+
+
+def _assert_every_bot_ran_the_custody_projection(
+    registry: _FakeRegistry, fleet_size: int, rounds: int
+) -> None:
+    """Non-vacuity for the per-bot panel surface, attributed per bot.
+
+    A scalar total is the wrong instrument here: the gallery alone fans out
+    to every bot on every round, so ``fleet_size * rounds`` is already met
+    without a single panel GET doing any custody work. A panel read that
+    regressed to returning 200 without running ``preview_resume_admission``
+    — the exact custody-projection regression these gates exist to catch —
+    would clear a total-only bound on the gallery's output alone.
+
+    Counting per sid closes that: every bot must be projected at least
+    ``_PROJECTIONS_PER_BOT_PER_ROUND * rounds`` times, so losing either
+    contributing surface halves that bot's count and fails.
+    """
+    counts = Counter(sid for sid, _state in registry.custody_projections)
+    expected = _PROJECTIONS_PER_BOT_PER_ROUND * rounds
+    short = {
+        sid: counts[sid] for sid in _fleet_sids(fleet_size) if counts[sid] < expected
+    }
+    assert not short, f"bots projected fewer than {expected} times: {short}"
 
 
 async def _assert_every_read_surface_projected_the_whole_fleet(
@@ -340,7 +359,17 @@ async def _assert_every_read_surface_projected_the_whole_fleet(
     deploy = await client.get(f"{_ACCOUNT_ROOT}/bots/deploy?symbol=SPY")
     assert deploy.status_code == 200, deploy.text
     assert deploy.json()["account_id"] == ACCT
-    assert deploy.json()["readiness_checks"], "deploy view published no readiness checks"
+    # Not merely "some readiness checks were published" — that passes with the
+    # account gate red. `broker.account_posture` reads mode, status and both
+    # blocked flags off the account snapshot, which is exactly what the
+    # duck-typed account stub used to lack, so asserting it ready is what
+    # keeps this surface's fixture honest.
+    posture = next(
+        check
+        for check in deploy.json()["readiness_checks"]
+        if check["gate_id"] == "broker.account_posture"
+    )
+    assert posture["ready"] is True, posture["explanation"]
 
 
 @pytest.mark.parametrize("fleet_size", [1, 50], indirect=True)
@@ -370,17 +399,18 @@ async def test_reads_of_a_stopped_bot_never_invoke_the_broker_port(
             assert (await client.get(path)).status_code == 200, path
         assert port.methods == ["get_account"], port.methods
         port.calls, port.methods = 0, []
+        # Cleared with the port counters so the non-vacuity bound below is
+        # measured against the rounds alone, with no slack from the warm-up.
+        registry.custody_projections.clear()
 
         for _ in range(_READ_ROUNDS):
             for path in paths:
                 assert (await client.get(path)).status_code == 200, path
 
-    # Non-vacuity: the stopped-bot custody path really ran, at least once per
-    # bot per round — otherwise a gate of "zero broker calls" would pass on a
-    # read that never executed.
-    assert len(registry.projected_states) >= _READ_ROUNDS * fleet_size, len(
-        registry.projected_states
-    )
+    # Non-vacuity: the stopped-bot custody path really ran, for every bot —
+    # otherwise a gate of "zero broker calls" would pass on a read that never
+    # executed.
+    _assert_every_bot_ran_the_custody_projection(registry, fleet_size, _READ_ROUNDS)
     assert port.calls == 0, f"a read reached the broker port: {port.methods}"
 
 
@@ -390,8 +420,17 @@ async def test_repeated_reads_never_advance_the_control_revision(
 ) -> None:
     """Revision-drift gate (#1776 WP2): no read appends to the custody ledger.
 
-    Reads that append also move the revision panel actions fence against,
-    which is the S16 observer effect.
+    `control_revision` advances only through `writes.advance_control_revision`,
+    which every ledger append goes through, so a zero delta across the rounds
+    is the assertion that no read wrote. That, and only that, is what this
+    gate proves.
+
+    It is deliberately *not* an assertion about action staleness. Panel
+    actions no longer fence on this revision: #1772/S16 moved the fence to the
+    action-scoped `concurrency_token` (see `sqlite_panel_source.py`) precisely
+    because the displayed revision is bumped by ordinary panel reads,
+    including the action executor's own re-derivation, which made strict
+    revision equality unsatisfiable.
     """
     app, repo, registry = stopped_api
     before = repo.control_meta_snapshot().control_revision
@@ -399,61 +438,13 @@ async def test_repeated_reads_never_advance_the_control_revision(
 
     async with _client(app) as client:
         await _assert_every_read_surface_projected_the_whole_fleet(client, fleet_size)
+        registry.custody_projections.clear()
         for _ in range(_READ_ROUNDS):
             for path in paths:
                 assert (await client.get(path)).status_code == 200, path
 
-    assert len(registry.projected_states) >= _READ_ROUNDS * fleet_size, len(
-        registry.projected_states
-    )
+    _assert_every_bot_ran_the_custody_projection(registry, fleet_size, _READ_ROUNDS)
     assert repo.control_meta_snapshot().control_revision - before == 0
-
-
-@pytest.mark.parametrize("fleet_size", [50], indirect=True)
-async def test_panel_read_latency_p95_is_recorded_as_a_diagnostic(
-    stopped_api,
-    fleet_size: int,
-    record_property,
-) -> None:
-    """NON-GATING (#1776 WP2): p95 panel-read latency, for trend tracking only.
-
-    Wall-clock is deliberately not an acceptance gate — CI hardware variance
-    would make it flaky, and the real invariants (zero broker calls, zero
-    revision drift) are already asserted above. This records the number so a
-    regression in read cost is visible across runs; it must never fail on
-    timing, so nothing here asserts a duration.
-
-    Read the value from the junit XML property ``panel_read_p95_ms`` (with
-    ``-o junit_family=legacy``, which xunit2 needs for per-test properties),
-    or run with ``--log-cli-level=INFO`` to see it on the console.
-    """
-    app, _repo, _registry = stopped_api
-    sids = _fleet_sids(fleet_size)
-    durations_ms: list[float] = []
-
-    async with _client(app) as client:
-        # Warm the process-wide caches (account identity, validation manifest)
-        # so the sample measures steady-state read cost, not first-call setup.
-        await client.get(f"{_ACCOUNT_ROOT}/bots/{SID}/panel")
-        for sid in sids:
-            started_ns = time.perf_counter_ns()
-            response = await client.get(f"{_ACCOUNT_ROOT}/bots/{sid}/panel")
-            durations_ms.append((time.perf_counter_ns() - started_ns) / 1e6)
-            assert response.status_code == 200, response.text
-
-    assert len(durations_ms) == len(sids)
-    p95_ms = statistics.quantiles(durations_ms, n=20, method="inclusive")[-1]
-    record_property("panel_read_fleet_size", len(sids))
-    record_property("panel_read_p95_ms", round(p95_ms, 3))
-    record_property("panel_read_median_ms", round(statistics.median(durations_ms), 3))
-    logger.info(
-        "panel read latency diagnostic (non-gating)",
-        extra={
-            "fleet_size": len(sids),
-            "p95_ms": round(p95_ms, 3),
-            "median_ms": round(statistics.median(durations_ms), 3),
-        },
-    )
 
 
 async def test_panel_profile_endpoint(api) -> None:
