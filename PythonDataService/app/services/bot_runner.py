@@ -190,8 +190,9 @@ _RETIRE_REFUSAL: dict[str | None, tuple[str, str]] = {
         "Stop the bot before retiring its registration.",
     ),
     "STRATEGY_STILL_RUNNABLE": (
-        "This bot can still run.",
-        "Retire only clears registrations the runtime can no longer honour.",
+        "This bot's strategy program still exists.",
+        "Retire only clears a registration whose strategy program the runtime "
+        "no longer has.",
     ),
     "RETIRE_WOULD_STRAND_CUSTODY": (
         "The bot still holds custody.",

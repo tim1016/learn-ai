@@ -9,6 +9,15 @@ Retire here means exactly one thing: clean up a registration that can never
 run again. It is deliberately NOT "end this bot's life" -- a healthy stopped
 bot is not retire-eligible, because that is a destructive lifecycle action
 with its own safety story. Above all, retire must never strand exposure.
+
+**The motivating bot is still not covered** (T1, 2026-08-26; #1795). The
+implemented predicate is a dead *strategy key*, and "APPL"'s key
+(``deployment_validation``) is alive -- its *symbol* is what is dead. So
+the guard this module tests does not fire for the bot in the paragraph
+above. That is a real gap, not a wording quibble, and it needs a durable
+read-safe proof of symbol validity that does not exist yet. What is fixed
+here is the contradiction the operator saw: the blocker no longer claims
+the bot can run while the same panel refuses Resume permanently.
 """
 
 from __future__ import annotations
@@ -93,3 +102,20 @@ def test_runtime_missing_is_resolved_against_the_real_strategy_registry() -> Non
     """The predicate the guard depends on, checked against live vocabulary."""
     assert strategy_runtime_missing("deployment_validation") is False
     assert strategy_runtime_missing("strategy_that_no_longer_exists") is True
+
+
+def test_retire_blocker_never_claims_a_permanently_blocked_bot_can_run() -> None:
+    """T1 (#1795): the panel contradicted itself on the bot retire exists for.
+
+    `Aug11` showed "Resume is blocked." permanently and, on the same panel,
+    "This bot can still run." Both cannot be true. The retire blocker now
+    states what it actually checks -- that the strategy *program* exists --
+    and makes no claim about whether the bot can run.
+    """
+    retire = ACTION_REGISTRY["retire"]
+    _enabled, blockers = retire.guard(_ctx(strategy_runtime_missing=False))
+
+    assert blockers, "a runnable-program bot must still be refused retire"
+    rendered = " ".join(f"{b.headline} {b.detail}" for b in blockers).lower()
+    assert "can still run" not in rendered
+    assert "strategy program still exists" in rendered
