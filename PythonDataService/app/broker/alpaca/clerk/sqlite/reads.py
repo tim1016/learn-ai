@@ -472,8 +472,19 @@ def active_exit_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str
     return EffectOperationResource(**dict(row)) if row is not None else None
 
 
-def reconcilable_effect_operations(conn: sqlite3.Connection) -> list[EffectOperationResource]:
-    """Distinct nonterminal broker-facing operations requiring fresh evidence."""
+def reconcilable_effect_operations(
+    conn: sqlite3.Connection, *, subject_id: str | None = None
+) -> list[EffectOperationResource]:
+    """Distinct nonterminal broker-facing operations requiring fresh evidence.
+
+    ``subject_id`` narrows the read to one custody subject (#1793). The filter
+    is total: ``effect_operations.subject_id`` is NOT NULL with a foreign key
+    into ``custody_subjects``, so every operation belongs to exactly one
+    subject and no unattributable remainder exists. ``None`` keeps the
+    account-wide read, which is what a boot-time account summary wants.
+    """
+    subject_clause = "AND e.subject_id = ? " if subject_id is not None else ""
+    params = (subject_id,) if subject_id is not None else ()
     rows = conn.execute(
         "SELECT DISTINCT e.effect_operation_id, e.authority_generation, e.idempotency_key, "
         "e.command_id, e.strategy_instance_id, e.run_id, e.kind, e.state, e.custody_owner, "
@@ -482,10 +493,12 @@ def reconcilable_effect_operations(conn: sqlite3.Connection) -> list[EffectOpera
         "ON l.effect_operation_id = e.effect_operation_id LEFT JOIN orders o "
         "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT','MANUAL_ORDER','CANCEL') "
         "AND e.state NOT IN ('succeeded','failed','rejected') "
+        + subject_clause +
         "AND (e.state IN ('accepted','unknown') OR e.kind IN ('EXIT','CANCEL') "
         "OR o.broker_state IS NULL OR lower(o.broker_state) NOT IN "
         "('filled','canceled','expired','rejected','replaced')) "
-        "ORDER BY e.created_at_ms ASC"
+        "ORDER BY e.created_at_ms ASC",
+        params,
     ).fetchall()
     return [EffectOperationResource(**dict(row)) for row in rows]
 

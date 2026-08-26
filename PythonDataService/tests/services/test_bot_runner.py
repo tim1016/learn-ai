@@ -611,7 +611,8 @@ class _CustodyClerk:
     async def recover(self) -> None:
         return
 
-    async def unresolved_effect_count(self) -> int:
+    async def unresolved_effect_count(self, *, subject_id: str | None = None) -> int:
+        del subject_id
         return 0
 
     async def reconcile_once(self) -> ReconciliationVerdict:
@@ -1174,8 +1175,11 @@ async def test_start_preview_and_execution_share_unresolved_recovery_refusal(
     async def no_op() -> None:
         return None
 
-    async def one_unresolved_intent() -> int:
-        return 1
+    async def one_unresolved_intent(subject_id: str | None) -> int:
+        # Subject-aware on purpose: a double that answered 1 for every subject
+        # would flatten the very distinction #1793 introduced, and this test
+        # would keep passing if the gate regressed to an account-wide read.
+        return 1 if subject_id in (None, f"bot:{_SID}") else 0
 
     await registry.run_boot_recovery(
         recover=no_op,
@@ -1199,6 +1203,53 @@ async def test_start_preview_and_execution_share_unresolved_recovery_refusal(
         )
     assert refused.value.admission_decision is not None
     assert refused.value.admission_decision.reason_code == preview.reason_code
+
+
+@pytest.mark.asyncio
+async def test_one_bots_unresolved_intent_does_not_refuse_a_sibling(
+    tmp_path: Path,
+) -> None:
+    """#1793: the amplifier that turned one stuck EXIT into a 50-bot freeze.
+
+    The gate is per-bot; the count it read was per-account, so a single
+    unresolved intent refused Start and Resume fleet-wide. The probe is now
+    asked about the requesting bot's own custody subject.
+    """
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    frozen_sid, healthy_sid = "alpaca-frozen-1", "alpaca-healthy-1"
+    asked: list[str | None] = []
+
+    async def no_op() -> None:
+        return None
+
+    async def only_the_frozen_bot(subject_id: str | None) -> int:
+        asked.append(subject_id)
+        return 1 if subject_id == f"bot:{frozen_sid}" else 0
+
+    await registry.run_boot_recovery(
+        recover=no_op,
+        reconcile=no_op,
+        unresolved_intents_probe=only_the_frozen_bot,
+    )
+
+    frozen = await registry.preview_start_admission(
+        broker="alpaca", strategy_instance_id=frozen_sid, symbol="SPY"
+    )
+    healthy = await registry.preview_start_admission(
+        broker="alpaca", strategy_instance_id=healthy_sid, symbol="SPY"
+    )
+
+    # The bot that owns the unresolved intent is still refused by it.
+    assert frozen.allowed is False
+    assert frozen.reason_code == "RECOVERY_UNCERTAIN"
+
+    # Its sibling is not. Before #1793 this was RECOVERY_UNCERTAIN too.
+    assert healthy.reason_code != "RECOVERY_UNCERTAIN"
+
+    # Boot recovery reads account-wide (it is a summary of the whole
+    # authority); both admission decisions read one subject each. Asserting
+    # the whole call log keeps that distinction from silently collapsing.
+    assert asked == [None, f"bot:{frozen_sid}", f"bot:{healthy_sid}"]
 
 
 @pytest.mark.asyncio

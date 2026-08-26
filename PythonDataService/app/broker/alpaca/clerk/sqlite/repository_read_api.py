@@ -376,9 +376,11 @@ class ClerkSqliteRepositoryReadApi:
 
     def reconcilable_effect_operations(
         self: ClerkSqliteRepository,
+        *,
+        subject_id: str | None = None,
     ) -> list[EffectOperationResource]:
         with self._write_lock:
-            return reads.reconcilable_effect_operations(self._conn)
+            return reads.reconcilable_effect_operations(self._conn, subject_id=subject_id)
 
     def position(
         self: ClerkSqliteRepository,

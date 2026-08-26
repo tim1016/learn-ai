@@ -88,7 +88,7 @@ class BotBootRecovery:
         *,
         recover: Callable[[], Awaitable[None]] | None = None,
         reconcile: Callable[[], Awaitable[object]] | None = None,
-        unresolved_intents_probe: Callable[[], Awaitable[int]] | None = None,
+        unresolved_intents_probe: Callable[[str | None], Awaitable[int]] | None = None,
     ) -> BootRecoveryReport:
         """Recover SQLite authority first, then repair derived file projections."""
         for step_name, step in (("recover", recover), ("reconcile", reconcile)):
@@ -105,8 +105,10 @@ class BotBootRecovery:
                     f"SQLite boot authority step {step_name!r} failed"
                 ) from exc
         interrupted = await self._repair_lifecycle_artifacts()
+        # Account-wide on purpose: this is a boot summary of the whole
+        # authority, not an admission decision about one bot (#1793).
         unresolved = (
-            await unresolved_intents_probe() if unresolved_intents_probe is not None else 0
+            await unresolved_intents_probe(None) if unresolved_intents_probe is not None else 0
         )
         report = BootRecoveryReport(
             interrupted_instances=tuple(interrupted),

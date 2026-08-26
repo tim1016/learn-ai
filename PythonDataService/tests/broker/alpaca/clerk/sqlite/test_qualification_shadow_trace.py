@@ -112,7 +112,8 @@ class _DetonatingClerk:
     async def recover(self) -> None:
         self._detonate("recover")
 
-    async def unresolved_effect_count(self) -> int:
+    async def unresolved_effect_count(self, *, subject_id: str | None = None) -> int:
+        del subject_id
         self._detonate("unresolved_effect_count")
         return 0
 

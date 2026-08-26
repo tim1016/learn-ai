@@ -924,8 +924,14 @@ class SqliteAlpacaClerkFacade:
             )
         )
 
-    async def unresolved_effect_count(self) -> int:
-        return len(self._repo.reconcilable_effect_operations())
+    async def unresolved_effect_count(self, *, subject_id: str | None = None) -> int:
+        """Count nonterminal effects, for one custody subject or the account.
+
+        Start admission asks per subject (#1793); a bot may only ever be
+        refused by its own unresolved intent. ``None`` answers account-wide,
+        which is what the boot-recovery report records.
+        """
+        return len(self._repo.reconcilable_effect_operations(subject_id=subject_id))
 
     async def prove_instance_custody(self, strategy_instance_id: str) -> InstanceCustodyProof:
         result = await self._reconcile()
