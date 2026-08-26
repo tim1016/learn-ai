@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.models import ClerkStatus
@@ -67,12 +69,24 @@ from app.services.sqlite_clerk_compat import (
 )
 from app.utils.timestamps import now_ms_utc
 
+logger = logging.getLogger(__name__)
+
 
 class SqlitePanelBotNotFound(ValueError):
     """The process registry has a bot absent from active SQLite custody."""
 
 
+# ── Coherence-retry policy ───────────────────────────────────────────────
+# Every read here is all-or-unavailable: a torn cut is refused, never spliced.
+# These bound how many times a seam re-samples before refusing.
 _CATALOG_COHERENCE_ATTEMPTS = 2
+_TORN_READ_ATTEMPTS = 3
+#: Attempts used to run back-to-back, so under a trading fleet's write burst
+#: they all sampled the same instant and all lost to the same burst -- three
+#: retries spread over a few milliseconds are close to one (T5, #1796). The
+#: *count* is deliberately unchanged: picking a larger number is a guess, and
+#: the per-account contention behind these curves wants a profile first (#1801).
+_TORN_READ_BACKOFF_MS = 25
 
 
 class SqlitePanelEconomicUnavailable(RuntimeError):
@@ -297,7 +311,11 @@ async def read_sqlite_panel_evidence(
     session_window = current_trading_session_window(now_ms)
 
     def read_once() -> SqlitePanelEvidence | None:
-        for _attempt in range(3):
+        for attempt in range(_TORN_READ_ATTEMPTS):
+            if attempt:
+                # Spaced so each attempt samples a different moment; the whole
+                # ladder stays far below the frontend's 15 s poll budget.
+                time.sleep(_TORN_READ_BACKOFF_MS * attempt / 1000)
             custody_reader = SqliteClerkProjectionReader.from_repository(facade.repository)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
@@ -342,6 +360,20 @@ async def read_sqlite_panel_evidence(
                     projection=projection,
                     economics=economics,
                 )
+        # Exhaustion is still fail-closed -- a spliced view is never served --
+        # but it is no longer silent. Without this there is no way to tell a
+        # load-correlated blip from custody churning faster than the projection
+        # can ever settle (#1796).
+        logger.warning(
+            "Panel projection did not settle; refusing rather than splicing",
+            extra={
+                "action": "sqlite_panel_projection_torn_read_exhausted",
+                "broker": broker,
+                "account_id": account_id,
+                "strategy_instance_id": strategy_instance_id,
+                "attempts": _TORN_READ_ATTEMPTS,
+            },
+        )
         raise SqlitePanelEconomicUnavailable(
             "SQLite custody and execution economics changed during panel projection."
         )
@@ -404,7 +436,7 @@ async def read_sqlite_chart_evidence(
         raise ValueError("Requested account is not the active SQLite authority")
 
     def read_once() -> SqliteChartEvidence | None:
-        for _attempt in range(3):
+        for _attempt in range(_TORN_READ_ATTEMPTS):
             reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
                 fills = reader.bot_fill_window(

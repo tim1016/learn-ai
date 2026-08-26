@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -1033,3 +1035,23 @@ def test_panel_bot_not_found_maps_to_the_unknown_bot_status() -> None:
     """The 404/503 split the panel router renders is pinned to one taxonomy."""
     assert panel_data_source.UnknownBotError.http_status == 404
     assert panel_data_source.PanelUnavailableError.http_status == 503
+
+
+def test_torn_read_attempts_are_spaced_so_they_sample_different_moments() -> None:
+    """T5 (#1796): three back-to-back retries are close to one retry.
+
+    Under a trading fleet's write burst the attempts all sampled the same
+    instant and all lost to the same burst, surfacing an honest fail-closed
+    guard as flakiness exactly when an operator opened an active bot. The
+    guard is unchanged -- a torn cut is still refused, never spliced -- but
+    the attempts now sample genuinely different moments.
+    """
+    assert sqlite_panel_source._TORN_READ_BACKOFF_MS > 0
+
+    # The whole ladder must stay far below the frontend's 15 s poll budget:
+    # a retry that outlives the client's timeout has made things worse.
+    total_backoff_ms = sum(
+        sqlite_panel_source._TORN_READ_BACKOFF_MS * attempt
+        for attempt in range(sqlite_panel_source._TORN_READ_ATTEMPTS)
+    )
+    assert total_backoff_ms < 1_000

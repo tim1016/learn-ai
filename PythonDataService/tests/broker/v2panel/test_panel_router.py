@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import Counter
+from dataclasses import replace
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -777,3 +779,38 @@ async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(
     assert "can no longer write" not in rendered
     assert "handle" not in rendered
     assert "restart" in detail["why"].lower()
+
+
+async def test_exhausted_panel_projection_refuses_and_says_so(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T5 (#1796): exhaustion stays fail-closed, and is no longer silent.
+
+    A torn cut is still refused rather than spliced. What changed is that
+    exhausting the attempts now leaves a structured record -- without one
+    there is no way to tell a load-correlated blip from custody churning
+    faster than the projection can ever settle, since the 503 looks
+    identical either way.
+    """
+    app, repo = api
+    base = repo.control_meta_snapshot()
+    churn = iter(range(base.control_revision + 1, base.control_revision + 200))
+    monkeypatch.setattr(
+        repo,
+        "control_meta_snapshot",
+        lambda: replace(base, control_revision=next(churn)),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        async with _client(app) as client:
+            response = await client.get(
+                f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
+            )
+
+    assert response.status_code == 503
+    assert any(
+        getattr(record, "action", None) == "sqlite_panel_projection_torn_read_exhausted"
+        for record in caplog.records
+    ), "exhausting the coherence attempts must leave a structured record"
