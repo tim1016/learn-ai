@@ -208,3 +208,38 @@ app-deploy-launch-receipt {
   .deploy-footer__command { max-width: none; width: 100%; justify-items: stretch; }
   .deploy-footer__command small { text-align: left; }
 }
+
+// Stale readiness stays visible, but never quietly: the banner sits above the
+// gates it qualifies so a deployment decision is never made on silent staleness.
+.deploy-stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: rgba(255, 152, 0, 0.12);
+
+  strong { color: var(--text-primary); font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+
+  button {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--fs-xs);
+    cursor: pointer;
+
+    &:hover { background: var(--bg-surface); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  }
+}
+
+.deploy-footer__observed {
+  color: var(--text-muted);
+}

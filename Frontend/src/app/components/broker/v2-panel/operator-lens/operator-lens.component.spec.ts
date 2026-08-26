@@ -8,9 +8,12 @@ import type {
   ClerkCard,
   EvidencePage,
   PanelAction,
+  PanelActionTrigger,
   PanelProfile,
   TransactionRail,
 } from '../lib/broker-v2-panel.types';
+import { BOT_COCKPIT_RECONCILE_ANCHOR } from '../../../../api/operator-blocker.types';
+import type { OperatorBlocker } from '../../../../api/operator-blocker.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { MarketDataService } from '../../../../services/market-data.service';
 import { OperatorLensComponent } from './operator-lens.component';
@@ -845,4 +848,130 @@ describe('OperatorLensComponent', () => {
     ).toBe(true);
     expect(screen.queryByLabelText('Operator commands')).toBeNull();
   });
+
+  // ── S17 (#1778): the authored cure has to be dispatchable ─────────────────
+  // The backend authors stale recovery evidence as `fix_here` and attaches a
+  // `confirm_in_form` move on the `bot-reconciliation-action` anchor. Nothing
+  // handled that anchor, so the cure was authored-but-invisible.
+
+  const reconcileAction: PanelAction = {
+    action_id: 'reconcile_now',
+    label: 'Reconcile now',
+    explanation: 'Refresh Clerk evidence for this account.',
+    enabled: true,
+    blockers: [],
+    confirmation: null,
+    revision: 3,
+    concurrency_token: 'reconcile-token',
+  };
+
+  function staleEvidenceBlocker(
+    disposition: OperatorBlocker['disposition'],
+  ): OperatorBlocker {
+    return {
+      condition: {
+        id: 'RECOVERY_EVIDENCE_STALE',
+        severity: 'blocking',
+        scope: 'account',
+        evidence: {},
+      },
+      host: 'bot_cockpit',
+      anchor: { kind: 'surface', subject_key: null },
+      audience: 'both',
+      disposition,
+      headline: 'Clerk evidence for this account is stale.',
+      detail: 'Reconcile to refresh it.',
+      primary_move:
+        disposition === 'wait'
+          ? null
+          : {
+              label: 'Reconcile this account now',
+              action: { kind: 'confirm_in_form', anchor: BOT_COCKPIT_RECONCILE_ANCHOR },
+              target: null,
+            },
+      secondary_moves: [],
+      applies_to: 'run',
+    };
+  }
+
+  function panelWithStaleRecovery(
+    disposition: OperatorBlocker['disposition'],
+  ): BotPanelView {
+    const blocked: PanelAction = {
+      action_id: 'recover_exact_execution_evidence',
+      label: 'Recover execution evidence',
+      explanation: 'Recover the exact execution evidence for this run.',
+      enabled: false,
+      blockers: [staleEvidenceBlocker(disposition)],
+      confirmation: null,
+      revision: 3,
+      concurrency_token: 'recover-token',
+    };
+    return {
+      ...makePanel(),
+      actions: [blocked, reconcileAction],
+      readiness_checks: [makeReadinessCheck(blocked)],
+      readiness_blocked_count: 1,
+    };
+  }
+
+  async function renderRecoveryLens(
+    panel: BotPanelView,
+    actionRequested: (trigger: PanelActionTrigger) => void,
+  ): Promise<void> {
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel, profile: makeProfile(), actionPending: false,
+        broker: 'alpaca', accountId: 'acc-1', sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: makeFakePanelService() }],
+      on: { actionRequested },
+    });
+  }
+
+  it('dispatches the reconcile action a fix_here blocker names as its cure', async () => {
+    const actionRequested = vi.fn();
+    await renderRecoveryLens(panelWithStaleRecovery('fix_here'), actionRequested);
+
+    expandReadiness('Recover execution evidence');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Reconcile this account now' }),
+    );
+
+    expect(actionRequested).toHaveBeenCalledWith({
+      action: reconcileAction,
+      reason: null,
+    });
+  });
+
+  it('renders no cure for a wait blocker', async () => {
+    // `wait` carrying no move is the disposition contract working, not a
+    // rendering gap — the cure genuinely is not available here.
+    const actionRequested = vi.fn();
+    await renderRecoveryLens(panelWithStaleRecovery('wait'), actionRequested);
+
+    expandReadiness('Recover execution evidence');
+
+    expect(
+      screen.queryByRole('button', { name: 'Reconcile this account now' }),
+    ).toBeNull();
+  });
+
+  it('offers no cure when the panel presents no reconcile action to run', async () => {
+    // The anchor names a command; if the panel never presented it, the
+    // button would be a click that does nothing.
+    const actionRequested = vi.fn();
+    const panel = panelWithStaleRecovery('fix_here');
+    await renderRecoveryLens(
+      { ...panel, actions: panel.actions.filter((a) => a.action_id !== 'reconcile_now') },
+      actionRequested,
+    );
+
+    expandReadiness('Recover execution evidence');
+
+    expect(
+      screen.queryByRole('button', { name: 'Reconcile this account now' }),
+    ).toBeNull();
+  });
+
 });

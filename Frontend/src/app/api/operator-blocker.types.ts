@@ -172,6 +172,14 @@ export type AccountOperatorPostureHost = 'account_desk' | 'fleet_roster';
 export const ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR = 'account-desk-clerk-recovery';
 
 /**
+ * The `confirm_in_form` anchor the bot cockpit recognizes to run its own
+ * reconciliation. Mirrors `BOT_COCKPIT_RECONCILE_ANCHOR` in
+ * `app/services/broker_v2_panel/sqlite_panel_adapter.py`, which attaches
+ * this move to every `fix_here` stale-evidence blocker.
+ */
+export const BOT_COCKPIT_RECONCILE_ANCHOR = 'bot-reconciliation-action';
+
+/**
  * Backend-authored move list for one blocker, honoring the ADR 0027
  * disposition rules. `wait` never carries a move (the cure is elsewhere,
  * by design); every other disposition renders its primary move followed

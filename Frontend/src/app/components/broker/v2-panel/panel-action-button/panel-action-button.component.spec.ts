@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
+import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { OperatorBlocker, OperatorMove } from '../../../../api/operator-blocker.types';
+import { BOT_COCKPIT_RECONCILE_ANCHOR } from '../../../../api/operator-blocker.types';
 import type { PanelAction } from '../lib/broker-v2-panel.types';
 import { PanelActionButtonComponent } from './panel-action-button.component';
 
@@ -184,6 +187,118 @@ describe('PanelActionButtonComponent', () => {
     });
     fireEvent.click(submit);
     expect(triggered).toHaveBeenCalledTimes(1);
+  });
+
+  // ── S17: the cure the backend authored has to be reachable ────────────────
+  // `_capability_blocker` authors stale evidence as `fix_here` and attaches a
+  // reconcile move. Rendering the blocker prose alone left that cure invisible.
+
+  const reconcileMove: OperatorMove = {
+    label: 'Reconcile this account now',
+    action: { kind: 'confirm_in_form', anchor: BOT_COCKPIT_RECONCILE_ANCHOR },
+    target: null,
+  };
+
+  function staleBlocker(overrides: Partial<OperatorBlocker> = {}): OperatorBlocker {
+    return {
+      condition: {
+        id: 'RECOVERY_EVIDENCE_STALE',
+        severity: 'blocking',
+        scope: 'account',
+        evidence: {},
+      },
+      host: 'bot_cockpit',
+      anchor: { kind: 'surface', subject_key: null },
+      audience: 'both',
+      disposition: 'fix_here',
+      headline: 'Clerk evidence for this account is stale.',
+      detail: 'Reconcile to refresh it.',
+      primary_move: reconcileMove,
+      secondary_moves: [],
+      applies_to: 'run',
+      ...overrides,
+    };
+  }
+
+  const supportsReconcile = (move: OperatorMove): boolean =>
+    move.action.kind === 'confirm_in_form' &&
+    move.action.anchor === BOT_COCKPIT_RECONCILE_ANCHOR;
+
+  it('renders a fix_here blocker cure as a dispatchable control', async () => {
+    const moveRequested = vi.fn();
+    await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({ enabled: false, blockers: [staleBlocker()] }),
+        moveIsSupported: supportsReconcile,
+      },
+      on: { moveRequested },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile this account now' }));
+
+    expect(moveRequested).toHaveBeenCalledWith(reconcileMove);
+  });
+
+  it('renders no cure for a wait blocker', async () => {
+    // `wait` rendering nothing is the contract, not a gap: the cure is
+    // genuinely elsewhere, so offering a move here would be a lie.
+    await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({
+          enabled: false,
+          blockers: [staleBlocker({ disposition: 'wait' })],
+        }),
+        moveIsSupported: supportsReconcile,
+      },
+    });
+
+    expect(
+      screen.queryByRole('button', { name: 'Reconcile this account now' }),
+    ).toBeNull();
+  });
+
+  it('keeps the cure reachable when the parent suppresses the blocker prose', async () => {
+    // Suppression de-duplicates the *prose* a gate already prints; the cure
+    // is not prose, and suppressing it is what made the move invisible.
+    await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({ enabled: false, blockers: [staleBlocker()] }),
+        suppressedBlockerId: 'RECOVERY_EVIDENCE_STALE',
+        suppressedBlockerReasonCode: 'RECOVERY_EVIDENCE_STALE',
+        moveIsSupported: supportsReconcile,
+      },
+    });
+
+    expect(screen.queryByText('Clerk evidence for this account is stale.')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Reconcile this account now' }),
+    ).toBeTruthy();
+  });
+
+  it('renders the cure control accessibly', async () => {
+    await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({ enabled: false, blockers: [staleBlocker()] }),
+        moveIsSupported: supportsReconcile,
+      },
+    });
+
+    const results = await axe.run(document.body, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(results.violations).toEqual([]);
+  });
+
+  it('offers no move the host cannot dispatch', async () => {
+    // Default support covers only self-dispatchable moves. An unsupported
+    // anchor must render no button rather than a click that does nothing.
+    await render(PanelActionButtonComponent, {
+      inputs: { action: action({ enabled: false, blockers: [staleBlocker()] }) },
+    });
+
+    expect(
+      screen.queryByRole('button', { name: 'Reconcile this account now' }),
+    ).toBeNull();
   });
 
 });

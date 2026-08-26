@@ -64,6 +64,21 @@
                 <span class="rail-row__detail">{{ row.detail }}</span>
               </span>
             </button>
+            @if (row.action; as action) {
+              <!-- Sibling, never nested: a control inside the row button
+                   would be unreachable and invalid markup. -->
+              <div
+                class="rail-row__action"
+                role="group"
+                [attr.aria-label]="'Recovery command for ' + row.bot.strategy_instance_id"
+              >
+                <app-panel-action-button
+                  [action]="action"
+                  tone="danger"
+                  (triggered)="requestRowAction(row.bot, $event)"
+                />
+              </div>
+            }
           </li>
         }
       </ul>

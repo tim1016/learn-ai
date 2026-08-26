@@ -1,3 +1,5 @@
+import type { OperatorMove } from '../../../../api/operator-blocker.types';
+import { BOT_COCKPIT_RECONCILE_ANCHOR } from '../../../../api/operator-blocker.types';
 import type {
   ActionId,
   BotPanelView,
@@ -55,4 +57,37 @@ export function primaryActionForLens(
   const actionId = panel.primary_action_by_lens[lens];
   if (actionId === null) return null;
   return panel.actions.find((action) => action.action_id === actionId) ?? null;
+}
+
+/**
+ * The panel commands a blocker's `confirm_in_form` anchor names, keyed by
+ * anchor. The backend attaches the move; this map is the cockpit's answer to
+ * "what does that anchor actually run here?" (`BOT_COCKPIT_RECONCILE_ANCHOR`
+ * is authored in `sqlite_panel_adapter._capability_blocker`).
+ */
+const MOVE_ANCHOR_ACTIONS: Readonly<Record<string, ActionId>> = {
+  [BOT_COCKPIT_RECONCILE_ANCHOR]: 'reconcile_now',
+};
+
+/**
+ * Resolve the panel action one blocker move dispatches, or `null`.
+ *
+ * Fails closed on every step the cockpit cannot honour: a move kind it does
+ * not run, an anchor it does not recognize, an action the panel never
+ * presented, or one the backend presented but disabled. A caller renders the
+ * move only when this returns non-null, so the cure is never offered as a
+ * click that does nothing (#1778).
+ */
+export function panelActionForMove(
+  panel: Pick<BotPanelView, 'actions'>,
+  move: OperatorMove,
+): PanelAction | null {
+  if (move.action.kind !== 'confirm_in_form') return null;
+  const actionId = MOVE_ANCHOR_ACTIONS[move.action.anchor];
+  if (actionId === undefined) return null;
+  return (
+    panel.actions.find(
+      (action) => action.action_id === actionId && action.enabled,
+    ) ?? null
+  );
 }

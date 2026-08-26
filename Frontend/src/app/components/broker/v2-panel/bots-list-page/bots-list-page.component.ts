@@ -19,7 +19,10 @@ import { BrokersService } from '../../../../services/brokers.service';
 import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotTriageDetailComponent } from '../bot-triage-detail/bot-triage-detail.component';
-import { BotsRosterComponent } from '../bots-roster/bots-roster.component';
+import {
+  BotsRosterComponent,
+  type RosterRowActionEvent,
+} from '../bots-roster/bots-roster.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView, PanelActionTrigger } from '../lib/broker-v2-panel.types';
 import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-outcome';
@@ -239,7 +242,21 @@ export class BotsListPageComponent {
    */
   protected async onPanelAction(trigger: PanelActionTrigger): Promise<void> {
     const sid = this.selectedSid();
-    if (sid === null || this.pendingBotIds().has(sid)) return;
+    if (sid === null) return;
+    await this.runAction(sid, trigger);
+  }
+
+  /**
+   * A roster row commands its own bot, which is not necessarily the selected
+   * one. It still runs through the single execution owner above — same
+   * pending set, same toast path, same post-action refresh policy.
+   */
+  protected async onRowAction({ bot, action }: RosterRowActionEvent): Promise<void> {
+    await this.runAction(bot.strategy_instance_id, { action, reason: null });
+  }
+
+  private async runAction(sid: string, trigger: PanelActionTrigger): Promise<void> {
+    if (this.pendingBotIds().has(sid)) return;
 
     const action = trigger.action;
     const startedAt = this.performanceNow();

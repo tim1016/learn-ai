@@ -25,6 +25,22 @@
       @if (blocker.detail) { <span>{{ blocker.detail }}</span> }
     </div>
   }
+
+  @if (blockerMoves().length > 0) {
+    <div class="panel-action__moves">
+      @for (move of blockerMoves(); track move.label + move.action.kind) {
+        <button
+          type="button"
+          class="panel-action__move"
+          [disabled]="pending()"
+          [attr.aria-busy]="pending()"
+          (click)="requestMove(move)"
+        >
+          {{ move.label }}
+        </button>
+      }
+    </div>
+  }
 </div>
 
 @if (confirmationOpen()) {

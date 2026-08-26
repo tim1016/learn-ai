@@ -8,7 +8,11 @@ from typing import Literal, cast
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
-from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
+from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ClerkProjection,
+    RecoveryCapability,
+    RecoveryConfirmation,
+)
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.services.broker_v2_panel.catalog_projection_service import (
@@ -77,7 +81,13 @@ def _economic_snapshot(*, sid: str, control_revision: int = 42) -> EconomicSnaps
     )
 
 
-def _projection(*, sid: str, control_revision: int = 42) -> ClerkProjection:
+def _projection(
+    *,
+    sid: str,
+    control_revision: int = 42,
+    holds: tuple[object, ...] = (),
+    recovery_actions: tuple[RecoveryCapability, ...] = (),
+) -> ClerkProjection:
     return cast(
         ClerkProjection,
         SimpleNamespace(
@@ -85,10 +95,40 @@ def _projection(*, sid: str, control_revision: int = 42) -> ClerkProjection:
             strategy_instance_id=sid,
             authority_generation=7,
             control_revision=control_revision,
-            holds=(),
+            holds=holds,
             uncertainties=(),
             authority_health="healthy",
+            recovery_actions=recovery_actions,
         ),
+    )
+
+
+def _recovery_capability(
+    *,
+    primary: bool = True,
+    available: bool = True,
+) -> RecoveryCapability:
+    return RecoveryCapability(
+        action_id="cancel_verified_working_orders",
+        label="Cancel verified working orders",
+        explanation="Cancel the orders the Clerk can still prove it owns.",
+        available=available,
+        unavailable_reason_code=None if available else "EVIDENCE_UNAVAILABLE",
+        unavailable_reason=None if available else "Broker truth is unavailable.",
+        scope="CUSTODY_SUBJECT",
+        freshness="fresh",
+        evidence=(),
+        reduction_plan=None,
+        confirmation=RecoveryConfirmation(
+            title="Cancel working orders?",
+            explanation="The runtime stops before new orders are submitted.",
+            confirm_label="Cancel orders",
+        ),
+        next_step="Cancel the orders, then reconcile.",
+        concurrency_token="recovery-token",
+        execution_ref=None,
+        mutation=True,
+        primary=primary,
     )
 
 
@@ -205,3 +245,93 @@ def test_sqlite_catalog_refuses_custody_and_economics_from_different_revisions()
             economic_rollups={SID: _economic_snapshot(sid=SID, control_revision=42)},
             account_id=ACCT,
         )
+
+
+# ── S2/S4 (#1778): the roster's per-row recovery command ─────────────────────
+# `BotCatalogView.row_action` existed on the wire with no producer -- the
+# SQLite adaptation hardcoded `None` -- so an attention row offered the
+# operator no command at all. The row now carries its primary recovery
+# capability, built by the same `_panel_action` the panel uses so the
+# revision/token guard *and* the typed confirmation travel with it.
+
+
+def test_an_attention_row_carries_its_primary_recovery_command() -> None:
+    catalog = build_sqlite_catalog(
+        [_status(sid=SID)],
+        projections={
+            SID: _projection(
+                sid=SID,
+                holds=("exposure-hold",),
+                recovery_actions=(_recovery_capability(),),
+            )
+        },
+        economic_rollups={SID: _economic_snapshot(sid=SID)},
+        account_id=ACCT,
+    )
+
+    row = catalog[0]
+    assert row.needs_attention is True
+    assert row.row_action is not None
+    assert row.row_action.action_id == "cancel_verified_working_orders"
+    # The guard contract is the panel's, not a roster-local invention.
+    assert row.row_action.revision == 42
+    assert row.row_action.concurrency_token == "recovery-token"
+    # Promoting the command must not drop its typed confirmation.
+    assert row.row_action.confirmation is not None
+    assert row.row_action.confirmation.confirm_label == "Cancel orders"
+
+
+def test_an_unavailable_recovery_command_is_offered_with_its_blocker() -> None:
+    catalog = build_sqlite_catalog(
+        [_status(sid=SID)],
+        projections={
+            SID: _projection(
+                sid=SID,
+                holds=("exposure-hold",),
+                recovery_actions=(_recovery_capability(available=False),),
+            )
+        },
+        economic_rollups={SID: _economic_snapshot(sid=SID)},
+        account_id=ACCT,
+    )
+
+    row_action = catalog[0].row_action
+    assert row_action is not None
+    # Honest rather than hidden: the row shows why it cannot act.
+    assert row_action.enabled is False
+    assert row_action.blockers
+
+
+def test_a_healthy_row_carries_no_recovery_command() -> None:
+    """Contract regression the other way.
+
+    A row with nothing wrong must stay a plain roster row. Recovery commands
+    are for rows that need attention; offering one everywhere would make the
+    rail alarming and the command meaningless.
+    """
+    catalog = build_sqlite_catalog(
+        [_status(sid=SID)],
+        projections={SID: _projection(sid=SID, recovery_actions=(_recovery_capability(),))},
+        economic_rollups={SID: _economic_snapshot(sid=SID)},
+        account_id=ACCT,
+    )
+
+    assert catalog[0].needs_attention is False
+    assert catalog[0].row_action is None
+
+
+def test_an_attention_row_without_a_primary_capability_offers_nothing() -> None:
+    catalog = build_sqlite_catalog(
+        [_status(sid=SID)],
+        projections={
+            SID: _projection(
+                sid=SID,
+                holds=("exposure-hold",),
+                recovery_actions=(_recovery_capability(primary=False),),
+            )
+        },
+        economic_rollups={SID: _economic_snapshot(sid=SID)},
+        account_id=ACCT,
+    )
+
+    assert catalog[0].row_action is None

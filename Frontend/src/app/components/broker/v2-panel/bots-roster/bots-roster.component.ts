@@ -2,7 +2,18 @@ import { ChangeDetectionStrategy, Component, computed, input, output, signal } f
 
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
-import type { BotCatalogView } from '../lib/broker-v2-panel.types';
+import type {
+  BotCatalogView,
+  PanelAction,
+  PanelActionTrigger,
+} from '../lib/broker-v2-panel.types';
+import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+
+/** One roster row's recovery command, named with the row it belongs to. */
+export interface RosterRowActionEvent {
+  readonly bot: BotCatalogView;
+  readonly action: PanelAction;
+}
 
 /** Rail grouping. `retired` has no design chip; it appears only when populated. */
 type RailGroup = 'attention' | 'running' | 'stopped' | 'retired';
@@ -25,7 +36,13 @@ interface RailBotRow {
   readonly bot: BotCatalogView;
   /** Right-aligned value: P&L, exposure, or last activity depending on group. */
   readonly value: RailValue;
-  readonly valueTone: 'positive' | 'negative' | 'neutral' | 'muted';
+  readonly valueTone: 'positive' | 'negative' | 'neutral' | 'muted' | 'alert';
+  /**
+   * The backend-authored recovery command for this row, or null. Offered
+   * only on attention rows: a healthy row is not a place to invite a
+   * recovery mutation.
+   */
+  readonly action: PanelAction | null;
   /** Second line: backend `status_label` plus a compact exposure/fills fact. */
   readonly detail: string;
   readonly dotTone: 'bear' | 'warn' | 'bull' | 'info' | 'muted';
@@ -63,7 +80,7 @@ const GROUPS: readonly GroupDefinition[] = [
 @Component({
   selector: 'app-bots-roster',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TimestampDisplayComponent],
+  imports: [PanelActionButtonComponent, TimestampDisplayComponent],
   templateUrl: './bots-roster.component.html',
   styleUrl: './bots-roster.component.scss',
   host: { class: 'flex min-h-0 flex-1 flex-col' },
@@ -73,6 +90,7 @@ export class BotsRosterComponent {
   readonly selectedSid = input<string | null>(null);
   readonly updatedAtMs = input<number | null>(null);
   readonly botSelected = output<string>();
+  readonly rowActionRequested = output<RosterRowActionEvent>();
 
   protected readonly searchTerm = signal('');
   protected readonly groupFilter = signal<RailGroup | null>(null);
@@ -136,6 +154,13 @@ export class BotsRosterComponent {
     this.botSelected.emit(bot.strategy_instance_id);
   }
 
+  protected requestRowAction(
+    bot: BotCatalogView,
+    { action }: PanelActionTrigger,
+  ): void {
+    this.rowActionRequested.emit({ bot, action });
+  }
+
   private matchesTerm(bot: BotCatalogView, term: string): boolean {
     if (!term) return true;
     return (
@@ -160,6 +185,7 @@ export class BotsRosterComponent {
       bot,
       ...this.railValue(bot, group, exposure),
       detail,
+      action: group === 'attention' ? bot.row_action ?? null : null,
       dotTone: this.dotTone(bot, group),
       ariaLabel:
         group === 'attention'
@@ -173,7 +199,12 @@ export class BotsRosterComponent {
     group: RailGroup,
     exposure: string,
   ): { value: RailValue; valueTone: RailBotRow['valueTone'] } {
-    if (group === 'attention' || group === 'retired') {
+    // An attention row's state is the point of the row; muting it is what
+    // let a crashed bot read like a deliberately stopped one (#1778).
+    if (group === 'attention') {
+      return { value: this.lastActivity(bot), valueTone: 'alert' };
+    }
+    if (group === 'retired') {
       return { value: this.lastActivity(bot), valueTone: 'muted' };
     }
     if (bot.mode === 'dry_run') {

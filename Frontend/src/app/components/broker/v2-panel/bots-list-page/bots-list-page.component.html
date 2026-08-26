@@ -78,6 +78,7 @@
           [selectedSid]="selectedSid()"
           [updatedAtMs]="catalogUpdatedAtMs()"
           (botSelected)="selectBot($event)"
+          (rowActionRequested)="onRowAction($event)"
         />
       }
     </section>

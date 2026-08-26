@@ -1,8 +1,9 @@
 import { render, screen, fireEvent } from '@testing-library/angular';
+import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fakeCatalogBot } from '../../../../testing/bot-panel-fixtures';
-import type { BotCatalogView } from '../lib/broker-v2-panel.types';
+import type { BotCatalogView, PanelAction } from '../lib/broker-v2-panel.types';
 import { BotsRosterComponent } from './bots-roster.component';
 
 async function renderRail(
@@ -163,5 +164,98 @@ describe('BotsRosterComponent', () => {
 
     fireEvent.click(row);
     expect(botSelected).toHaveBeenCalledWith('spy-01');
+  });
+
+  // ── S2/S4 (#1778): the roster's own recovery command ──────────────────────
+  // `row_action` shipped on the wire with zero frontend references, so an
+  // attention row named a problem and offered no way to act on it.
+
+  const rowAction: PanelAction = {
+    action_id: 'cancel_verified_working_orders',
+    label: 'Cancel working orders',
+    explanation: 'Cancel the orders the Clerk can still prove it owns.',
+    enabled: true,
+    blockers: [],
+    confirmation: null,
+    revision: 42,
+    concurrency_token: 'row-token',
+  };
+
+  it('offers an attention row its backend-authored recovery command', async () => {
+    const rowActionRequested = vi.fn();
+    const bot = fakeCatalogBot({
+      strategy_instance_id: 'crashed-bot',
+      status_label: 'Crashed',
+      needs_attention: true,
+      running: false,
+      row_action: rowAction,
+    });
+    await render(BotsRosterComponent, {
+      componentInputs: { bots: [bot], selectedSid: null },
+      componentOutputs: { rowActionRequested: { emit: rowActionRequested } as never },
+    });
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Cancel working orders' }),
+    );
+
+    expect(rowActionRequested).toHaveBeenCalledWith({ bot, action: rowAction });
+  });
+
+  it('keeps the recovery command off rows that do not need attention', async () => {
+    // A healthy row is not a place to offer a recovery mutation.
+    await renderRail([
+      fakeCatalogBot({ strategy_instance_id: 'healthy-bot', row_action: rowAction }),
+    ]);
+
+    await screen.findByText('healthy-bot');
+    expect(screen.queryByRole('button', { name: 'Cancel working orders' })).toBeNull();
+  });
+
+  it('renders an attention row honestly when no command is offered', async () => {
+    await renderRail([
+      fakeCatalogBot({ strategy_instance_id: 'stuck-bot', needs_attention: true }),
+    ]);
+
+    expect(await screen.findByText('stuck-bot')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel working orders' })).toBeNull();
+  });
+
+  it('keeps a row carrying a recovery command accessible', async () => {
+    await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'crashed-bot',
+        status_label: 'Crashed',
+        needs_attention: true,
+        running: false,
+        row_action: rowAction,
+      }),
+    ]);
+    await screen.findByRole('button', { name: 'Cancel working orders' });
+
+    // `region` is a harness artifact: the rail is a fragment rendered without
+    // the route shell that supplies its landmark, and it flags pre-existing
+    // markup identically. Contrast is checked visually, as elsewhere here.
+    const results = await axe.run(document.body, {
+      rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
+    });
+    expect(results.violations).toEqual([]);
+  });
+
+  it('tones a crashed row as an alert rather than muting it', async () => {
+    // The row named the crash in its detail line but rendered its state in
+    // the same muted tone a flat, deliberately-stopped bot uses.
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'crashed-bot',
+        status_label: 'Crashed',
+        needs_attention: true,
+        running: false,
+      }),
+    ]);
+
+    await screen.findByText('crashed-bot');
+    const value = container.querySelector('.rail-row__value');
+    expect(value?.getAttribute('data-tone')).toBe('alert');
   });
 });

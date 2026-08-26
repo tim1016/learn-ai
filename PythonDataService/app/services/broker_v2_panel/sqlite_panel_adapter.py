@@ -165,6 +165,36 @@ def adapt_sqlite_panel(
     )
 
 
+def _catalog_row_action(
+    projection: ClerkProjection,
+    *,
+    needs_attention: bool,
+) -> PanelAction | None:
+    """The one recovery command a roster row may dispatch, or ``None``.
+
+    Only an attention row carries one. A healthy row's routine lifecycle
+    commands belong to the panel, and a compact rail has no room to justify a
+    mutation nobody asked for.
+
+    This previously returned ``None`` unconditionally, on the reasoning that
+    "recovery mutations require the bot panel's typed confirmation flow". The
+    premise was right and the conclusion was wrong: ``_panel_action`` is the
+    same builder the panel uses, so the capability's revision, concurrency
+    token, blockers **and typed confirmation** all travel with it. Emitting it
+    here carries that flow onto the row rather than bypassing it -- while
+    returning ``None`` left an attention row with no command at all (#1778).
+    """
+    if not needs_attention:
+        return None
+    primary = next(
+        (item for item in projection.recovery_actions if item.primary),
+        None,
+    )
+    if primary is None:
+        return None
+    return _panel_action(primary, projection.control_revision)
+
+
 def adapt_sqlite_catalog(
     rows: list[BotCatalogView],
     projections: dict[str, ClerkProjection],
@@ -194,23 +224,24 @@ def adapt_sqlite_catalog(
         if projection is None:
             adapted.append(row.model_copy(update=economic_updates))
             continue
+        needs_attention = row.needs_attention or bool(
+            projection.holds
+            or projection.uncertainties
+            or projection.authority_health != "healthy"
+        )
         adapted.append(
             row.model_copy(
                 update={
                     **economic_updates,
-                    "needs_attention": row.needs_attention or bool(
-                        projection.holds
-                        or projection.uncertainties
-                        or projection.authority_health != "healthy"
-                    ),
+                    "needs_attention": needs_attention,
                     "status_explanation": _sqlite_catalog_explanation(
                         row,
                         projection,
                         exposure=exposure,
                     ),
-                    # Recovery mutations require the bot panel's typed
-                    # confirmation flow; the compact fleet row links there.
-                    "row_action": None,
+                    "row_action": _catalog_row_action(
+                        projection, needs_attention=needs_attention
+                    ),
                 }
             )
         )

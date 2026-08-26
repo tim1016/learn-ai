@@ -2,12 +2,14 @@ import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   computed,
   effect,
   inject,
   input,
   resource,
   signal,
+  untracked,
 } from '@angular/core';
 import {
   form,
@@ -25,6 +27,7 @@ import {
   type DeployBotBody,
   type DeployBotReceipt,
   type DeployBotStrategy,
+  type DeployBotView,
   type DeployExecutionMode,
   type DeployStrategyParamsSchema,
   type RunAdmissionDecision,
@@ -42,9 +45,17 @@ import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component'
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
+import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
+
+/**
+ * The symbol input fires per keystroke. Scoping the readiness fetch to every
+ * intermediate prefix would burn a request per character and let a stale
+ * response land after a newer one; one settle beat is enough.
+ */
+const SYMBOL_SCOPE_DEBOUNCE_MS = 400;
 
 interface AlpacaDeployTicket {
   instanceId: string;
@@ -77,6 +88,7 @@ interface DeploySubmissionReadiness {
     DeployLaunchReceiptComponent,
     DeployPaperAccessComponent,
     DeployParametersSectionComponent,
+    TimestampDisplayComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
   styleUrl: './alpaca-deploy-workflow.component.scss',
@@ -86,6 +98,7 @@ export class AlpacaDeployWorkflowComponent {
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
+  private readonly destroyRef = inject(DestroyRef);
 
   /** Still read for the `?strategy=` deep link; the lens param is gone. */
   private readonly queryParams = toSignal(this.route.queryParamMap, {
@@ -98,14 +111,69 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly receipt = signal<DeployBotReceipt | null>(null);
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
 
+  /**
+   * The symbol the readiness fetch is scoped to, or null for the
+   * account-level view. Deliberately NOT the ticket symbol: the ticket is
+   * *seeded* from the loaded view, so keying the resource on it would loop
+   * (load → seed → reload → …) and strand the pane on its loading state.
+   * Only a genuine operator pick, debounced, writes here.
+   */
+  private readonly scopedSymbol = signal<string | null>(null);
+  private symbolScopeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * `params` stays keyed on the account alone. The scoped symbol is read
+   * untracked inside the loader and applied by an explicit `reload()`, which
+   * — unlike a `params` change — keeps the previous value on screen instead
+   * of dropping it and flickering the pane back to its loading state.
+   */
   protected readonly deployView = resource({
     params: () => this.accountId().trim(),
-    loader: ({ params }) => this.panelService.getDeployView('alpaca', params),
+    loader: async ({ params }) => {
+      const view = await this.panelService.getDeployView(
+        'alpaca',
+        params,
+        untracked(this.scopedSymbol) ?? undefined,
+      );
+      this.lastLoadedView.set({ accountId: params, view });
+      return view;
+    },
   });
 
-  private readonly currentView = computed(() =>
-    this.deployView.hasValue() ? this.deployView.value() : null,
-  );
+  /**
+   * The last readiness view that actually loaded, scoped to the account it
+   * came from. Retaining it lets a failed *refresh* degrade to an explicit
+   * staleness banner over the gates the operator already has, instead of
+   * collapsing the whole pane back to a loading state. Account-scoped so a
+   * route change never shows one account's readiness under another's name.
+   */
+  private readonly lastLoadedView = signal<{
+    accountId: string;
+    view: DeployBotView;
+  } | null>(null);
+
+  protected readonly currentView = computed(() => {
+    if (this.deployView.hasValue()) return this.deployView.value();
+    const retained = this.lastLoadedView();
+    return retained?.accountId === this.accountId().trim() ? retained.view : null;
+  });
+
+  /**
+   * Set when a refresh failed but earlier readiness is still on screen. The
+   * gates below it are real, just no longer current — saying so is the whole
+   * point, because silently serving stale admission truth is what makes a
+   * deployment decision unsafe.
+   */
+  protected readonly stalenessNotice = computed<string | null>(() => {
+    if (!this.deployView.error()) return null;
+    if (this.currentView() === null) return null;
+    const symbol = this.scopedSymbol();
+    const scope = symbol === null ? 'this account' : symbol;
+    return (
+      `Deployment readiness for ${scope} could not be refreshed. ` +
+      'The gates below are the last that loaded.'
+    );
+  });
 
   protected readonly ticket = signal<AlpacaDeployTicket>({
     instanceId: '',
@@ -305,6 +373,10 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly canSubmit = computed(() => this.submissionReadiness().canSubmit);
 
   constructor() {
+    this.destroyRef.onDestroy(() => {
+      if (this.symbolScopeTimer !== null) clearTimeout(this.symbolScopeTimer);
+    });
+
     effect(() => {
       const view = this.currentView();
       const requestedKey = this.queryParams().get('strategy') ?? this.queryParams().get('strategy_key');
@@ -375,9 +447,29 @@ export class AlpacaDeployWorkflowComponent {
     this.invalidParameterFields.set(fields);
   }
 
+  /**
+   * The operator-pick path — and the only one that re-scopes the readiness
+   * fetch. The seeding effect writes the ticket symbol directly and never
+   * comes through here, which is exactly what keeps the loop closed.
+   */
   protected setSymbol(value: string): void {
     this.clearAdmission();
-    this.ticket.update((current) => ({ ...current, symbol: value.trim().toUpperCase() }));
+    const symbol = value.trim().toUpperCase();
+    this.ticket.update((current) => ({ ...current, symbol }));
+    this.scheduleSymbolScope(symbol);
+  }
+
+  private scheduleSymbolScope(symbol: string): void {
+    if (this.symbolScopeTimer !== null) clearTimeout(this.symbolScopeTimer);
+    this.symbolScopeTimer = setTimeout(() => {
+      this.symbolScopeTimer = null;
+      // A half-typed ticker is not a scope. Wait for a symbol the broker
+      // contract would actually accept rather than round-tripping a 422.
+      if (!SYMBOL_RE.test(symbol)) return;
+      if (this.scopedSymbol() === symbol) return;
+      this.scopedSymbol.set(symbol);
+      this.deployView.reload();
+    }, SYMBOL_SCOPE_DEBOUNCE_MS);
   }
 
   protected setSizingPreset(value: DeploySizingPreset): void {

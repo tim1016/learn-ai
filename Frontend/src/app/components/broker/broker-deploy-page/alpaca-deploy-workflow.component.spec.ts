@@ -899,4 +899,131 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByText('Start blocked')).toBeTruthy();
     expect(screen.getByText(refusedAdmission.explanation)).toBeTruthy();
   });
+
+  // ── WP3 (#1777): symbol-scoped deploy readiness ───────────────────────────
+  // The GET accepts `?symbol=`, so channel health can be scoped to the symbol
+  // the operator actually intends to trade. The hazard is the feedback loop:
+  // the ticket symbol is SEEDED from the loaded view, so keying the resource
+  // on it would re-fetch forever and strand the pane on its loading state.
+
+  const SYMBOL_DEBOUNCE_MS = 400;
+
+  async function typeSymbol(value: string): Promise<void> {
+    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value } });
+  }
+
+  it('re-fetches the deploy view scoped to a symbol the operator picks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const service = mockService();
+      await renderWorkflow(service);
+      service.getDeployView.mockClear();
+
+      await typeSymbol('QQQ');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'QQQ');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not re-fetch for the symbol the view itself seeded', async () => {
+    // The seeding write is not an operator choice. If it re-fetched, the new
+    // view would seed again and the pane would never settle.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const service = mockService();
+      await renderWorkflow(service);
+      // The seed already ran; SPY is in the ticket.
+      expect((screen.getByPlaceholderText('SPY') as HTMLInputElement).value).toBe('SPY');
+      service.getDeployView.mockClear();
+
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS * 5);
+
+      expect(service.getDeployView).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('collapses a burst of keystrokes into one scoped fetch', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const service = mockService();
+      await renderWorkflow(service);
+      service.getDeployView.mockClear();
+
+      await typeSymbol('Q');
+      await typeSymbol('QQ');
+      await typeSymbol('QQQ');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      expect(service.getDeployView).toHaveBeenCalledTimes(1);
+      expect(service.getDeployView).toHaveBeenCalledWith('alpaca', 'PA9', 'QQQ');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the readiness pane rendered while the scoped view reloads', async () => {
+    // A `params` change drops the prior value and the pane flickers back to
+    // "Loading deployment readiness". An explicit reload() must not.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const service = mockService();
+      await renderWorkflow(service);
+
+      await typeSymbol('QQQ');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      expect(screen.queryByLabelText('Loading deployment readiness')).toBeNull();
+      expect(screen.getByRole('heading', { name: 'Bot binding' })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not scope the fetch to a symbol that is not yet a valid ticker', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const service = mockService();
+      await renderWorkflow(service);
+      service.getDeployView.mockClear();
+
+      await typeSymbol('!!');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      expect(service.getDeployView).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports the server-observed evaluation time in the footer', async () => {
+    await renderWorkflow();
+
+    const footer = screen.getByTestId('deploy-footer-observed');
+    // Server-authored `evaluated_at_ms`, rendered by the shared component —
+    // never a client clock (temporal-rigor.md).
+    expect(footer.querySelector('app-timestamp-display')).toBeTruthy();
+    expect(footer.textContent).toContain('Readiness observed');
+  });
+
+  it('raises an explicit staleness banner when a scoped refresh stops landing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const service = mockService();
+      await renderWorkflow(service);
+      service.getDeployView.mockRejectedValue(new Error('data plane unreachable'));
+
+      await typeSymbol('QQQ');
+      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+
+      const banner = await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
+      expect(banner.textContent).toContain('QQQ');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
