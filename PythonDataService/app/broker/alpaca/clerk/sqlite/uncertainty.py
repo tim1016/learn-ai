@@ -172,9 +172,9 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=_order_outcome_unknown_cause_is_valid,
         # Byte-identical replacement of the former UNCERTAIN_SUBMIT_GRACE_MS
-        # = 30_000 module constant in order_evidence.py; summary_code names
-        # the receipt order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE already
-        # writes.
+        # = 30_000 module constant in order_evidence.py. summary_code is the
+        # sole definition of the definitive-absence receipt code;
+        # order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE derives from it.
         age=VoidAfter(grace_ms=30_000, summary_code="ORDER_SUBMIT_FAILED_ABSENT"),
     ),
     EXIT_NOT_FLAT_REASON_CODE: ReasonPolicy(
@@ -208,15 +208,31 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
 }
 
 
-def reason_age_policy(reason_code: str) -> AgePolicy:
-    """The declared age policy for one registered reason code.
+def reason_age_policy[AgePolicyT: (CauseCleared, VoidAfter, RedriveThenEscalate)](
+    reason_code: str, expect: type[AgePolicyT]
+) -> AgePolicyT:
+    """The declared age policy for one registered reason code, narrowed.
 
     The single place an episode's life is specified (ADR 0048 Decision 1).
+
+    ``expect`` is required rather than optional because every caller reads a
+    shape-specific field (``grace_ms``, ``after_ms``) and so is already
+    coupled to one variant. Narrowing here instead of at each call site
+    keeps that check in one place and turns a mis-declared reason into a
+    named ``TypeError`` rather than an ``AttributeError`` several frames
+    later.
+
     Raises ``KeyError`` for an unregistered code: every caller passes a
     known reason-code constant, so a miss here is a programming error, not
     a runtime condition to absorb.
     """
-    return _REASON_POLICIES[reason_code].age
+    policy = _REASON_POLICIES[reason_code].age
+    if not isinstance(policy, expect):
+        raise TypeError(
+            f"reason code {reason_code!r} declares {type(policy).__name__}, "
+            f"not the {expect.__name__} this caller requires"
+        )
+    return policy
 
 
 def _effective_identity(

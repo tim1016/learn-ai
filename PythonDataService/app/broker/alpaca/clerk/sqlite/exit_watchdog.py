@@ -53,8 +53,7 @@ async def redrive_or_escalate_stale_exits(
     # former EXIT_NOT_FLAT_REDRIVE_AFTER_MS / EXIT_NOT_FLAT_MAX_REDRIVES
     # module constants; the watchdog keeps its execution logic and loses
     # its policy.
-    redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE)
-    assert isinstance(redrive_policy, RedriveThenEscalate)
+    redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
     now_ms = repo.clock()
     for instance in repo.strategy_instances():
         sid = instance["strategy_instance_id"]

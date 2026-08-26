@@ -81,9 +81,7 @@ APPROVED_POSITION_QTY_EPSILON = 0.000000001
 
 def _exit_not_flat_redrive_policy() -> RedriveThenEscalate:
     """The declared EXIT_NOT_FLAT age policy (ADR 0048 Decision 1)."""
-    policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE)
-    assert isinstance(policy, RedriveThenEscalate)
-    return policy
+    return reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
 
 
 def _set_exit_not_flat_max_redrives(monkeypatch: pytest.MonkeyPatch, max_count: int) -> None:
