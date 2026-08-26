@@ -345,3 +345,57 @@ async def test_the_loop_waits_its_own_cadence_between_ticks(tmp_path: Path) -> N
 
     assert waits == [INTERVAL_S, INTERVAL_S, INTERVAL_S]
     repo.close()
+
+
+async def test_failing_ticks_never_slow_the_cadence(tmp_path: Path) -> None:
+    """The independence claim, stated as behaviour (#1777 WP4 decision 1).
+
+    The reconciliation loop backs off to 300 s on repeated failure. This
+    loop must not: a channel outage is exactly when repeated failures and
+    the need for a prompt hold coincide, so backing off would delay the
+    raise precisely when it matters. There is no backoff here, and this
+    pins that a future "be polite on errors" change cannot add one.
+    """
+    repo = _repo(tmp_path)
+    waits: list[float] = []
+
+    async def record(seconds: float) -> None:
+        waits.append(seconds)
+
+    def exploding() -> ChannelHealth:
+        raise RuntimeError("provider blew up")
+
+    sync = StreamHealthHoldSync(
+        repo=repo,
+        gate=StreamHealthGate(market_data=exploding, execution=exploding),
+        interval_s=INTERVAL_S,
+        sleep=record,
+        max_ticks=4,
+    )
+
+    await sync.run()
+
+    assert waits == [INTERVAL_S] * 4, f"the loop backed off on failure: {waits}"
+    repo.close()
+
+
+def test_the_sync_cannot_observe_the_reconciler_at_all(tmp_path: Path) -> None:
+    """Structural companion to the test above.
+
+    Independence is easiest to preserve if the sync simply has no way to
+    consult the reconcile loop. It takes a repository and a health gate --
+    nothing that carries backoff state.
+    """
+    import inspect
+
+    parameters = set(inspect.signature(StreamHealthHoldSync.__init__).parameters)
+
+    assert parameters == {
+        "self",
+        "repo",
+        "gate",
+        "interval_s",
+        "now_ms",
+        "sleep",
+        "max_ticks",
+    }, f"the hold sync grew a dependency; check it is not the reconciler: {parameters}"
