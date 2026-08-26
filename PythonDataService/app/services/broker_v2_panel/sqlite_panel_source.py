@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Literal
 
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
@@ -32,14 +31,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     StaleRecoveryTokenError,
     build_recovery_catalog,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.engine.live.bot_lifecycle_state import (
-    BotLifecycleStateCorruptError,
-    BotLifecycleStateRecord,
-    BotLifecycleStateRepo,
-    stable_bot_lifecycle_state_path,
-)
 from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -49,8 +41,6 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
 )
-from app.services.account_truth_refresh import account_truth_artifacts_root
-from app.services.bot_registry_projection import duty_outcome_view
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
@@ -65,6 +55,10 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     SQLITE_PANEL_LIFECYCLE_ACTION_IDS,
     build_sqlite_catalog,
+)
+from app.services.broker_v2_panel.sqlite_roster_status import (
+    build_roster_status,
+    roster_identities,
 )
 from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
@@ -125,7 +119,7 @@ def read_sqlite_roster_statuses(broker: str) -> list[BotStatusView] | None:
     if facade is None:
         return None
     return [
-        _sqlite_roster_status(broker, registration, facade.repository)
+        build_roster_status(broker, registration, facade.repository)
         for registration in facade.repository.strategy_instances()
     ]
 
@@ -141,117 +135,8 @@ def read_sqlite_bot_status(
     registration = facade.repository.strategy_instance(strategy_instance_id)
     if registration is None:
         return None
-    return _sqlite_roster_status(broker, registration, facade.repository)
+    return build_roster_status(broker, registration, facade.repository)
 
-
-
-@dataclass(frozen=True)
-class _DeclaredConfiguration:
-    """The submission-capability facts a roster row must state truthfully."""
-
-    mode: Literal["log_only", "dry_run", "trade"]
-    quantity: int | None
-    carryover_policy: Literal["FORBID", "ALLOW"]
-
-
-def _declared_configuration(strategy_instance_id: str, config_json: str) -> _DeclaredConfiguration:
-    """Read mode, quantity, and carryover policy out of SQLite's own config.
-
-    Refuses rather than substitutes a default: guessing `trade` for a row
-    whose real mode is unreadable would overstate what the bot may do, and
-    guessing `log_only` would understate it. Neither is safe to render.
-    """
-    try:
-        declared = json.loads(config_json)
-    except json.JSONDecodeError as exc:
-        raise SqliteCatalogProjectionUnavailable(
-            f"Bot '{strategy_instance_id}' has unreadable immutable SQLite configuration."
-        ) from exc
-    mode = declared.get("mode")
-    carryover_policy = declared.get("carryover_policy")
-    if mode not in ("log_only", "dry_run", "trade") or carryover_policy not in ("FORBID", "ALLOW"):
-        raise SqliteCatalogProjectionUnavailable(
-            f"Bot '{strategy_instance_id}' has no declared mode or carryover policy in SQLite."
-        )
-    quantity = declared.get("quantity")
-    return _DeclaredConfiguration(
-        mode=mode,
-        quantity=int(quantity) if quantity is not None else None,
-        carryover_policy=carryover_policy,
-    )
-
-
-def _bot_lifecycle_record(strategy_instance_id: str) -> BotLifecycleStateRecord | None:
-    """Read the bot's durable lifecycle record for duty-outcome projection.
-
-    An absent record (legacy bots) projects None; a corrupt one refuses the
-    projection loudly, matching this module's incomplete-config contract —
-    silently projecting ``duty_outcome=None`` here is what hid a crashed
-    fleet behind "Off duty" (fleet-stress T6, 2026-08-26).
-    """
-    path = stable_bot_lifecycle_state_path(account_truth_artifacts_root(), strategy_instance_id)
-    try:
-        return BotLifecycleStateRepo(path).read()
-    except BotLifecycleStateCorruptError as exc:
-        raise SqliteCatalogProjectionUnavailable(
-            f"Bot '{strategy_instance_id}' has an unreadable lifecycle projection: {exc}"
-        ) from exc
-
-
-def _sqlite_roster_status(
-    broker: str,
-    registration: dict[str, object],
-    repository: ClerkSqliteRepository,
-) -> BotStatusView:
-    strategy_instance_id = str(registration["strategy_instance_id"])
-    config = repository.bot_config(strategy_instance_id)
-    if (
-        config is None
-        or config.strategy_instance_id != strategy_instance_id
-        or not config.strategy_key
-        or config.strategy_key == "unknown"
-        or not config.display_name
-    ):
-        raise SqliteCatalogProjectionUnavailable(
-            f"Bot '{strategy_instance_id}' has no immutable SQLite configuration."
-        )
-    # FR-031: the roster's immutable configuration is read from SQLite, not
-    # assumed. These three were previously hardcoded to `trade` / `None` /
-    # `FORBID`, and `panel_data_source._status_in_binding_mode` only patched
-    # them back for `dry_run` -- so a `log_only` bot, which must never submit
-    # an order, rendered on the roster as `trade`, and a bot deployed with
-    # `ALLOW` carryover rendered as `FORBID`. Both misstate what a bot may do
-    # with real money's paper stand-in. `config_json` carries the real values
-    # for every row this projection accepts; a row missing them cannot be
-    # projected honestly and is refused like any other incomplete config.
-    declared = _declared_configuration(strategy_instance_id, config.config_json)
-    active_run = repository.active_run(strategy_instance_id)
-    retired_at_ms = registration.get("retired_at_ms")
-    running = active_run is not None
-    lifecycle = _bot_lifecycle_record(strategy_instance_id)
-    return BotStatusView(
-        strategy_instance_id=strategy_instance_id,
-        strategy_key=config.strategy_key,
-        strategy_label=config.display_name,
-        broker=broker,
-        symbol=str(registration["symbol"]),
-        mode=declared.mode,
-        quantity=declared.quantity,
-        carryover_policy=declared.carryover_policy,
-        running=running,
-        phase=("RETIRED" if retired_at_ms is not None else "ON_DUTY" if running else "OFF_DUTY"),
-        desired_state="RUNNING" if running else "STOPPED",
-        active_run_id=(str(active_run.lifecycle_run_id) if active_run is not None else None),
-        duty_outcome=duty_outcome_view(lifecycle),
-        binding_created_at_ms=int(registration["created_at_ms"]),
-        last_transition_at_ms=(
-            int(retired_at_ms)
-            if retired_at_ms is not None
-            else int(active_run.started_at_ms)
-            if active_run is not None
-            else None
-        ),
-    )
 
 
 def _meta_matches(
@@ -291,7 +176,7 @@ def _bound_bot_status(
         )
     registration = repository.strategy_instance(strategy_instance_id)
     status = (
-        _sqlite_roster_status(broker, registration, repository)
+        build_roster_status(broker, registration, repository)
         if registration is not None
         else None
     )
@@ -329,7 +214,7 @@ def _bound_roster_statuses(
             "SQLite roster identity changed before lifecycle projection."
         )
     statuses = [
-        _sqlite_roster_status(broker, registration, repository)
+        build_roster_status(broker, registration, repository)
         for registration in repository.strategy_instances()
     ]
     after = repository.control_meta_snapshot()
@@ -715,12 +600,11 @@ async def read_sqlite_catalog(
     if facade.account_id != account_id:
         raise ValueError("Requested account is not the active SQLite authority")
     for attempt in range(_CATALOG_COHERENCE_ATTEMPTS):
-        candidate_statuses = read_sqlite_roster_statuses(broker)
-        if candidate_statuses is None:
-            return None
-        strategy_instance_ids = [
-            status.strategy_instance_id for status in candidate_statuses
-        ]
+        # Identities only. Building full status rows here and keeping just
+        # their ids would read every bot's lifecycle file twice per request
+        # (again per coherence retry); the fenced pass below builds each row
+        # exactly once, at a revision it can vouch for.
+        strategy_instance_ids = roster_identities(facade.repository)
         if not strategy_instance_ids:
             return []
         projections = await read_sqlite_catalog_projections(
@@ -779,11 +663,7 @@ async def read_sqlite_catalog_from_facade(
     """
     account_id = facade.account_id
     for attempt in range(_CATALOG_COHERENCE_ATTEMPTS):
-        candidate_statuses = [
-            _sqlite_roster_status(broker, registration, facade.repository)
-            for registration in facade.repository.strategy_instances()
-        ]
-        strategy_instance_ids = [status.strategy_instance_id for status in candidate_statuses]
+        strategy_instance_ids = roster_identities(facade.repository)
         if not strategy_instance_ids:
             return []
 
