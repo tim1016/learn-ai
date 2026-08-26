@@ -61,11 +61,48 @@ class Capability(StrEnum):
 
 
 @dataclass(frozen=True)
+class CauseCleared:
+    """The episode ends when, and only when, its cause is proven gone.
+
+    No clock at all. This is the honest declaration for an episode this ADR
+    does not add age behaviour to (ADR 0048 Decision 1).
+    """
+
+
+@dataclass(frozen=True)
+class VoidAfter:
+    """Auto-close the episode once its cause has stood unresolved for
+    ``grace_ms``, with a receipt whose ``summary_code`` names the age rule
+    that closed it."""
+
+    grace_ms: int
+    summary_code: str
+
+
+@dataclass(frozen=True)
+class RedriveThenEscalate:
+    """Retry the resolution every ``after_ms``, at most ``max_count`` times,
+    then open the ``escalate_to`` successor episode."""
+
+    after_ms: int
+    max_count: int
+    escalate_to: str
+
+
+# A closed sum of exactly three shapes (ADR 0048 Decision 1). Deliberately
+# not three optional fields on ReasonPolicy: independent fields admit
+# combinations with no meaning (e.g. a grace window racing a redrive clock
+# for the same episode). The sum makes those combinations unrepresentable.
+AgePolicy = CauseCleared | VoidAfter | RedriveThenEscalate
+
+
+@dataclass(frozen=True)
 class ReasonPolicy:
     scope: str
     blocks_new_exposure: bool
     allows_reduction: bool
     cause_is_valid: Callable[[Any], bool]
+    age: AgePolicy
     facts_schema_version: int = FACTS_SCHEMA_VERSION
 
 
@@ -113,44 +150,73 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=True,
         cause_is_valid=_position_drift_cause_is_valid,
+        age=CauseCleared(),
     ),
     BROKER_SNAPSHOT_STALE_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=broker_snapshot_stale_cause_is_valid,
+        age=CauseCleared(),
     ),
     RECONCILIATION_INCOMPLETE_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=reconciliation_incomplete_cause_is_valid,
+        age=CauseCleared(),
     ),
     ORDER_OUTCOME_UNKNOWN_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_order_outcome_unknown_cause_is_valid,
+        # Byte-identical replacement of the former UNCERTAIN_SUBMIT_GRACE_MS
+        # = 30_000 module constant in order_evidence.py; summary_code names
+        # the receipt order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE already
+        # writes.
+        age=VoidAfter(grace_ms=30_000, summary_code="ORDER_SUBMIT_FAILED_ABSENT"),
     ),
     EXIT_NOT_FLAT_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
         cause_is_valid=_exit_not_flat_cause_is_valid,
+        # Byte-identical replacement of the former
+        # EXIT_NOT_FLAT_REDRIVE_AFTER_MS = 120_000 / EXIT_NOT_FLAT_MAX_REDRIVES
+        # = 3 module constants in exit_watchdog.py.
+        age=RedriveThenEscalate(after_ms=120_000, max_count=3, escalate_to=EXIT_STUCK_REASON_CODE),
     ),
     EXIT_STUCK_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
         cause_is_valid=_exit_stuck_cause_is_valid,
+        # A durable escalation must not carry a clock: only an
+        # attributed-flat proof or an operator may end it. VoidAfter here
+        # would silently discard the episode the escalation exists to
+        # preserve (ADR 0048 Decision 1).
+        age=CauseCleared(),
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_execution_coverage_conflict_cause_is_valid,
+        age=CauseCleared(),
     ),
 }
+
+
+def reason_age_policy(reason_code: str) -> AgePolicy:
+    """The declared age policy for one registered reason code.
+
+    The single place an episode's life is specified (ADR 0048 Decision 1).
+    Raises ``KeyError`` for an unregistered code: every caller passes a
+    known reason-code constant, so a miss here is a programming error, not
+    a runtime condition to absorb.
+    """
+    return _REASON_POLICIES[reason_code].age
 
 
 def _effective_identity(

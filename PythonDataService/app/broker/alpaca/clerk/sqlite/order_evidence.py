@@ -28,13 +28,26 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_order_completion import manual_order_has_exact_terminal_coverage
 from app.broker.alpaca.clerk.sqlite.models import OrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import VoidAfter, reason_age_policy
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder
 
 if TYPE_CHECKING:
     from app.broker.contract.ports import BrokerTradePort
 
-UNCERTAIN_SUBMIT_GRACE_MS = 30_000
+
+def submit_absence_grace_ms() -> int:
+    """The declared ``VoidAfter`` grace window for ``ORDER_OUTCOME_UNKNOWN``.
+
+    Sourced from the reason-policy registry (``uncertainty._REASON_POLICIES``,
+    ADR 0048 Decision 1) rather than a locally hardcoded constant, so the
+    R4 submit-absence age rule has exactly one declaration.
+    """
+    policy = reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE)
+    assert isinstance(policy, VoidAfter)
+    return policy.grace_ms
+
 
 __all__ = [
     "entry_never_accepted_durably",
@@ -48,6 +61,7 @@ __all__ = [
     "fold_uncertain",
     "order_never_reached_broker",
     "resolve_order_submission",
+    "submit_absence_grace_ms",
 ]
 
 
@@ -376,7 +390,7 @@ def order_never_reached_broker(repo: ClerkSqliteRepository, order: OrderResource
         return False
     if repo.fills_for_order(order.order_ref):
         return False
-    return repo.clock() - _uncertain_since_ms(repo, order.order_ref) >= UNCERTAIN_SUBMIT_GRACE_MS
+    return repo.clock() - _uncertain_since_ms(repo, order.order_ref) >= submit_absence_grace_ms()
 
 
 def entry_never_accepted_durably(repo: ClerkSqliteRepository, order: OrderResource) -> bool:
@@ -522,7 +536,7 @@ async def resolve_order_submission(
         if order is None:
             if order_row.broker_order_id is not None:
                 return
-            grace_active = (repo.clock() - uncertain_since_ms) < UNCERTAIN_SUBMIT_GRACE_MS
+            grace_active = (repo.clock() - uncertain_since_ms) < submit_absence_grace_ms()
             if grace_active:
                 return
             fold_submit_absence_void(
