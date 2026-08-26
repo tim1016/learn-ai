@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+import app.broker.alpaca.clerk.sqlite.order_evidence as order_evidence
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -42,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     classify_admission_refusal,
     decide_capability,
     raise_uncertainty,
+    reason_age_policy,
     require_admission,
     resolve_reconciliation_uncertainty,
 )
@@ -532,3 +534,27 @@ def test_age_policy_is_a_closed_three_shape_sum() -> None:
     not optional fields on one class (ADR 0048 Decision 1 rationale)."""
     args = typing.get_args(AgePolicy)
     assert set(args) == {CauseCleared, VoidAfter, RedriveThenEscalate}
+
+
+def test_reason_age_policy_rejects_a_shape_the_caller_did_not_declare() -> None:
+    """Narrowing happens once, at the accessor, with a named error.
+
+    Each caller reads a shape-specific field, so it is already coupled to
+    one variant. Asserting that at every call site invites a caller to
+    forget and then fail with an ``AttributeError`` several frames from the
+    mis-declaration.
+    """
+    with pytest.raises(TypeError, match="declares CauseCleared, not the VoidAfter"):
+        reason_age_policy(POSITION_DRIFT_REASON_CODE, VoidAfter)
+
+
+def test_submit_absence_receipt_code_is_the_declared_summary_code() -> None:
+    """The receipt code written on the definitive-absence void is the one the
+    policy declares — derived, not a second copy of the same literal.
+
+    A drift guard rather than a regression test: both spellings agreed when
+    this was two literals. The point is that there is now one definition, so
+    they cannot stop agreeing.
+    """
+    declared = reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter)
+    assert declared.summary_code == order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE

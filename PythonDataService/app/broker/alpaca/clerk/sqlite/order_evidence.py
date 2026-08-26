@@ -44,9 +44,7 @@ def submit_absence_grace_ms() -> int:
     ADR 0048 Decision 1) rather than a locally hardcoded constant, so the
     R4 submit-absence age rule has exactly one declaration.
     """
-    policy = reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE)
-    assert isinstance(policy, VoidAfter)
-    return policy.grace_ms
+    return reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter).grace_ms
 
 
 __all__ = [
@@ -361,9 +359,16 @@ def fold_failed(
     )
 
 
-SUBMIT_ABSENCE_SUMMARY_CODE = "ORDER_SUBMIT_FAILED_ABSENT"
+SUBMIT_ABSENCE_SUMMARY_CODE = reason_age_policy(
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter
+).summary_code
 """Summary code of the definitive-absence void — the durable proof that one
-exact order identity never reached the broker."""
+exact order identity never reached the broker.
+
+Derived from the ``VoidAfter`` declaration rather than restated here: the
+policy names the receipt its grace window produces, so the code that writes
+the receipt and the code that declares the rule cannot drift apart
+(ADR 0048 Decision 1)."""
 
 
 def order_never_reached_broker(repo: ClerkSqliteRepository, order: OrderResource) -> bool:
