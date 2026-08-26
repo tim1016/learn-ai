@@ -25,6 +25,10 @@ from app.broker.alpaca.clerk.models import (
     EffectPurpose,
     OrderJournalEntry,
 )
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ExecutionLeaseLost,
+    RepositoryPoisoned,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
@@ -66,6 +70,8 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionPerformer,
     ActivationFailedError,
+    AuthorityPoisonedError,
+    ExecutionAuthorityLostError,
     durable_idempotency_store_for,
     execute_action,
 )
@@ -1097,6 +1103,50 @@ async def run_action(
     against), then delegates to the execution service. Identity is the
     configured ``operator_identity`` — never a request field.
     """
+    try:
+        return await _run_action_under_live_authority(
+            broker, account_id, sid, request, operator_identity=operator_identity
+        )
+    except (ExecutionLeaseLost, RepositoryPoisoned) as error:
+        # T7c (#1794): this account's authority cannot be written to. Refusing
+        # is correct; leaking the internal handle message as a raw 500 is not.
+        # Translated here rather than in the router so SQLite repository
+        # internals stay behind this seam.
+        #
+        # The two are kept apart because their cures differ: a lost lease means
+        # another process owns the account and a restart re-acquires it; a
+        # poisoned repository means this authority's own last transition is
+        # unproven until the fence reconciliation re-runs. Collapsing them
+        # would hand an operator the wrong remedy.
+        lost_lease = isinstance(error, ExecutionLeaseLost)
+        logger.warning(
+            "Panel action refused: account authority unavailable",
+            extra={
+                "action": (
+                    "panel_action_execution_authority_lost"
+                    if lost_lease
+                    else "panel_action_authority_poisoned"
+                ),
+                "broker": broker,
+                "account_id": account_id,
+                "strategy_instance_id": sid,
+                "action_id": request.action_id,
+                "error": str(error),
+            },
+        )
+        raise (
+            ExecutionAuthorityLostError() if lost_lease else AuthorityPoisonedError()
+        ) from error
+
+
+async def _run_action_under_live_authority(
+    broker: str,
+    account_id: str,
+    sid: str,
+    request: PanelActionRequest,
+    *,
+    operator_identity: str,
+) -> PanelActionResult:
     panel = await get_panel(broker, account_id, sid)
     action = next(
         (candidate for candidate in panel.actions if candidate.action_id == request.action_id),

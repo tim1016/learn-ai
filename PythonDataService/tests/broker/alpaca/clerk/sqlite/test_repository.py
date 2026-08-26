@@ -1007,3 +1007,66 @@ def test_active_holds_for_admission_includes_account_and_bot_scope(tmp_path: Pat
     assert len(holds) == 1
     assert holds[0]["scope"] == "ACCOUNT_CLERK"
     repo.close()
+
+
+def _seed_reconcilable_effect(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    operation_id: str,
+    now_ms: int,
+) -> None:
+    """Insert one nonterminal ENTER for a bot subject, with no linked order."""
+    command_id = f"cmd-{operation_id}"
+    subject_id = f"bot:{strategy_instance_id}"
+    repo._conn.execute(
+        "INSERT INTO commands "
+        "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, "
+        "kind, strategy_instance_id, run_id, action, intended_end_state, state, "
+        "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
+        "VALUES (?, 1, ?, ?, 'hash', 'strategy_decision', ?, NULL, 'ENTER', NULL, "
+        "'accepted', NULL, NULL, ?, ?)",
+        (command_id, subject_id, command_id, strategy_instance_id, now_ms, now_ms),
+    )
+    repo._conn.execute(
+        "INSERT INTO effect_operations "
+        "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
+        "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
+        "updated_at_ms) VALUES (?, 1, ?, ?, ?, ?, NULL, 'ENTER', 'accepted', "
+        "'ACCOUNT_CLERK', ?, ?)",
+        (operation_id, subject_id, operation_id, command_id, strategy_instance_id, now_ms, now_ms),
+    )
+    repo._conn.commit()
+
+
+def test_reconcilable_effect_operations_scope_to_one_custody_subject(
+    tmp_path: Path,
+) -> None:
+    """#1793: one bot's unresolved intent must be readable without the account's.
+
+    ``effect_operations.subject_id`` is NOT NULL with a foreign key into
+    ``custody_subjects``, so every effect belongs to exactly one subject and
+    the filter is total -- there is no unattributable remainder to fall back
+    to an account-wide read for.
+    """
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock_seq(),
+    )
+    now_ms = 1_700_000_000_000
+    for sid in ("frozen-bot", "healthy-bot"):
+        repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash="h1")
+    _seed_reconcilable_effect(
+        repo, strategy_instance_id="frozen-bot", operation_id="op-frozen", now_ms=now_ms
+    )
+
+    account_wide = repo.reconcilable_effect_operations()
+    frozen = repo.reconcilable_effect_operations(subject_id="bot:frozen-bot")
+    healthy = repo.reconcilable_effect_operations(subject_id="bot:healthy-bot")
+
+    assert [op.effect_operation_id for op in account_wide] == ["op-frozen"]
+    assert [op.effect_operation_id for op in frozen] == ["op-frozen"]
+    assert healthy == []
+
+    repo.close()

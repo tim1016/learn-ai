@@ -12,6 +12,7 @@ from uuid import uuid4
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
@@ -39,6 +40,11 @@ from app.services.signal_program_admission import (
 from app.services.strategy_validation_admission import current_strategy_validation_fact
 
 logger = logging.getLogger(__name__)
+
+#: Asks the authority for unresolved effect intents. The argument is the
+#: custody subject to scope the count to, or ``None`` for the whole account
+#: (#1793 -- admission always scopes; only the boot report reads account-wide).
+UnresolvedIntentsProbe = Callable[[str | None], Awaitable[int]]
 
 CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
@@ -172,7 +178,7 @@ async def resolve_start_runtime_fact(
     observed_at_ms: int,
     boot_recovery_required: bool,
     boot_recovery_complete: bool,
-    unresolved_intents_probe: Callable[[], Awaitable[int]] | None,
+    unresolved_intents_probe: UnresolvedIntentsProbe | None,
     projected_start_count: int,
     restart_threshold: int,
     restart_window_ms: int,
@@ -187,7 +193,7 @@ async def resolve_start_runtime_fact(
         )
     if unresolved_intents_probe is not None:
         try:
-            unresolved = await unresolved_intents_probe()
+            unresolved = await unresolved_intents_probe(bot_subject_id(strategy_instance_id))
         except Exception as exc:
             logger.warning(
                 "Start recovery probe failed",
@@ -207,7 +213,10 @@ async def resolve_start_runtime_fact(
             return StartRuntimeAdmissionFact(
                 state="RECOVERY_UNCERTAIN",
                 observed_at_ms=observed_at_ms,
-                explanation=f"{unresolved} order intent(s) remain unresolved after recovery.",
+                explanation=(
+                    f"{unresolved} order intent(s) for this bot remain unresolved "
+                    "after recovery."
+                ),
                 next_step="Resolve recovery intents before Start.",
             )
     if projected_start_count >= restart_threshold:

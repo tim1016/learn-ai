@@ -29,8 +29,6 @@ export const ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
   prepare_safe_flatten: 'neutral',
   execute_safe_flatten: 'danger',
   open_custody_timeline: 'neutral',
-  rebuild_from_mirror: 'warning',
-  reset_authority: 'danger',
 };
 
 /** The tone for one action, or the neutral-safe 'primary' default when unmapped. */

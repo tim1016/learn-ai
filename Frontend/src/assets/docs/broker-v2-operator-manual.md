@@ -12,11 +12,18 @@ broker-mutation capability. Legacy JSONL is not a selectable authority or fallba
 
 For activated SQLite accounts, the available actions are exactly `reconcile_now`,
 `recover_exact_execution_evidence`, `resolve_execution_coverage`,
-`cancel_verified_working_orders`, `prepare_safe_flatten`, `stop_bot_decisions`,
-`open_custody_timeline`, and—only during typed authority failure—
-`rebuild_from_mirror` or `reset_authority`. There is no generic Clear, blind Retry, or
-unproven Flatten. Historical exact-execution recovery is paper-only and never enables
-manual SQLite trading. See
+`cancel_verified_working_orders`, `prepare_safe_flatten`, `execute_safe_flatten`,
+`stop_bot_decisions`, and `open_custody_timeline`. There is no generic Clear, blind
+Retry, or unproven Flatten. Historical exact-execution recovery is paper-only and never
+enables manual SQLite trading.
+
+**Replacing a failed authority is not a panel action** (ADR 0047). Recovery refuses
+while the Clerk holds its execution lease, and the reconciliation sweep — the only
+thing that could produce the flat-and-order-free proof recovery requires — is the
+lease holder. The panel therefore presents no authority-recovery button: during a
+typed authority failure it raises a terminal blocker naming the offline ceremony.
+Stop the data plane, run the recovery CLI (which validates lease expiry and
+process-stop proof itself), then restart. See
 `docs/references/alpaca-sqlite-clerk-recovery-language.md` for the wording matrix and
 `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` for the offline subprocedure.
 
@@ -562,8 +569,6 @@ answers "can this ever appear for me", not "is it enabled right now".
 | `execute_safe_flatten` | Execute safe flatten | Submit the prepared reduction as recovery EXIT custody with exact attributed quantities. | SQLite Clerk recovery catalog |
 | `stop_bot_decisions` | Stop bot decisions | Stop new decisions while existing exposure remains under Clerk custody. | SQLite Clerk recovery catalog |
 | `open_custody_timeline` | Open custody timeline | Inspect the immutable operation-first evidence timeline. | SQLite Clerk recovery catalog |
-| `rebuild_from_mirror` | Rebuild from mirror | Rebuild a failed authority only from a contiguous verified mirror. | SQLite Clerk recovery catalog |
-| `reset_authority` | Reset authority | Create a new authority generation only after fresh flat and order-free proof. | SQLite Clerk recovery catalog |
 
 <!-- END GENERATED: button-reference -->
 

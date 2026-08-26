@@ -189,7 +189,9 @@ auto-cleared".
 > does not call it at all. What read as a sweep-driven self-release was the
 > next bot attempting an ENTER and re-deriving the hold on its way in —
 > which is also why a quiet fleet can hold a stale freeze indefinitely. The
-> independent fixed-cadence hold sync is #1777. UI honesty gaps during a hold: roster chips read "Running 0,
+> independent fixed-cadence hold sync is #1777.
+
+UI honesty gaps during a hold: roster chips read "Running 0,
 Stopped 0" while 50 bots run; banner and guidance say "no active hold"
 beside the active hold.
 

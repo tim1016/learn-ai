@@ -294,10 +294,24 @@ def evaluate_retirement(
     Ordered so an operator learns the closest thing they can act on, and so
     the custody guards are the last word: retire must never strand exposure.
 
-    ``strategy_runtime_missing`` is currently the only proof that a
-    registration can never run again. A bot bound to an unresolvable
-    *instrument* is equally dead but is not detectable without a broker-backed
-    security lookup, so it is not yet a cause here.
+    ``strategy_runtime_missing`` is the only proof available here that a
+    registration can never run again, and it is a *narrower* condition than
+    the one retire exists to clear. A bot bound to an unresolvable instrument
+    is equally dead, and is the case that motivated this guard -- but its
+    strategy key is alive, so this predicate does not fire for it (T1,
+    2026-08-26; #1795).
+
+    The blocker copy is worded accordingly. It says the strategy program
+    exists, which is what this actually checks; an earlier wording claimed
+    "This bot can still run", which the same panel contradicted by refusing
+    Resume permanently on the very bot retire exists for.
+
+    Widening this needs a durable, read-safe proof of symbol validity, which
+    does not exist yet: no admission reason code is structurally permanent
+    (``MARKET_DATA_STALE`` is also what a *warming* symbol reports, so keying
+    on it would make every starting bot retire-eligible), and a broker
+    security lookup is barred from this path by the #1776 pure-read
+    invariant. See #1795.
     """
     if phase == "RETIRED":
         return RetirementVerdict(eligible=False, already_retired=True)
@@ -316,9 +330,10 @@ _RETIRE_BLOCKER_COPY: dict[RetirementBlockedCause, tuple[str, str]] = {
         "A running bot still evaluates bars and can place orders.",
     ),
     "STRATEGY_STILL_RUNNABLE": (
-        "This bot can still run.",
-        "Retire only clears registrations the runtime can no longer honour. "
-        "Stop this bot instead of retiring it.",
+        "This bot's strategy program still exists.",
+        "Retire only clears a registration whose strategy program the runtime "
+        "no longer has. It does not cover a bot that cannot run for another "
+        "reason -- an unresolvable symbol, for instance.",
     ),
     "RETIRE_WOULD_STRAND_CUSTODY": (
         "This bot still holds custody.",

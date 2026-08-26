@@ -83,8 +83,8 @@ describe('TraderBotBannerComponent', () => {
       actions: [
         ...PANEL.actions,
         {
-          action_id: 'rebuild_from_mirror',
-          label: 'Rebuild from mirror',
+          action_id: 'resolve_execution_coverage',
+          label: 'Resolve execution coverage',
           explanation: 'Recover custody.',
           enabled: true,
           blockers: [],
@@ -96,7 +96,7 @@ describe('TraderBotBannerComponent', () => {
       // The backend never selects an Operator-only repair for the Trader lens;
       // this fixture proves the banner defers to that reference rather than
       // re-deriving a primary action from `actions`/`health` on its own.
-      primary_action_by_lens: { trader: null, operator: 'rebuild_from_mirror' },
+      primary_action_by_lens: { trader: null, operator: 'resolve_execution_coverage' },
     };
 
     await render(TraderBotBannerComponent, {
@@ -104,7 +104,7 @@ describe('TraderBotBannerComponent', () => {
       providers: [provideRouter([])],
     });
 
-    expect(screen.queryByRole('button', { name: 'Rebuild from mirror' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resolve execution coverage' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 });

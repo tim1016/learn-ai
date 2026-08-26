@@ -139,7 +139,14 @@ def test_available_recovery_is_fix_here_on_desk_and_fix_elsewhere_on_roster() ->
     assert posture.fleet_roster.primary_move.action.kind == "navigate"
 
 
-def test_unavailable_recovery_on_unhealthy_authority_waits_blocking() -> None:
+def test_unhealthy_authority_is_terminal_and_points_at_the_offline_runbook() -> None:
+    """ADR 0047 (#1779): no panel action can cure a failed authority.
+
+    Replaces a test that asserted `wait` with no move. Waiting cures nothing
+    here -- the authority stays failed until an operator stops the data plane
+    and runs the recovery CLI -- so the honest disposition is `terminal` with
+    the runbook as the move, on both hosts.
+    """
     posture = build_account_operator_posture(
         _context(
             authority_health="degraded_to_mirror",
@@ -153,9 +160,9 @@ def test_unavailable_recovery_on_unhealthy_authority_waits_blocking() -> None:
                 _recovery_action(
                     available=False,
                     primary=False,
-                    action_id="rebuild_from_mirror",
-                    unavailable_reason_code="EVIDENCE_STALE",
-                    unavailable_reason="Mirror evidence is not fresh enough yet.",
+                    action_id="open_custody_timeline",
+                    unavailable_reason_code="READABLE_TIMELINE_REQUIRED",
+                    unavailable_reason="The failed authority has no verified online timeline reader.",
                 ),
             ),
         )
@@ -163,11 +170,53 @@ def test_unavailable_recovery_on_unhealthy_authority_waits_blocking() -> None:
 
     assert posture.condition is not None
     assert posture.condition.severity == "blocking"
+    assert posture.condition.id == "alpaca_clerk_authority_failure:degraded_to_mirror"
+
     assert posture.account_desk is not None
-    assert posture.account_desk.disposition == "wait"
-    assert posture.account_desk.primary_move is None
+    assert posture.account_desk.disposition == "terminal"
+    assert posture.account_desk.primary_move is not None
+    assert posture.account_desk.primary_move.action.kind == "open_runbook"
     assert posture.fleet_roster is not None
-    assert posture.fleet_roster.disposition == "wait"
+    assert posture.fleet_roster.disposition == "terminal"
+
+    # The cure is named in the copy, not only in the move: the operator lens
+    # deliberately does not render an `open_runbook` button, so a blocker that
+    # carried the ceremony only in its move would render as a dead end.
+    assert "offline ceremony" in posture.account_desk.detail
+    assert "recovery CLI" in posture.account_desk.detail
+
+
+def test_a_readable_timeline_does_not_make_a_failed_authority_fixable_here() -> None:
+    """The failure this ADR names: a *view* presented as the cure.
+
+    An available `open_custody_timeline` used to drive the disposition to
+    `fix_here`, telling the operator that opening a timeline would fix a
+    failed authority. Authority health is now decided before the catalog is
+    consulted at all.
+    """
+    posture = build_account_operator_posture(
+        _context(
+            authority_health="failed",
+            uncertainty_count=1,
+            guidance=_guidance(
+                headline="Alpaca execution is paused",
+                explanation="The Account Clerk authority is unavailable.",
+                action_required=True,
+            ),
+            recovery_actions=(
+                _recovery_action(
+                    available=True,
+                    primary=True,
+                    action_id="open_custody_timeline",
+                ),
+            ),
+        )
+    )
+
+    assert posture.account_desk is not None
+    assert posture.account_desk.disposition == "terminal"
+    assert posture.account_desk.disposition != "fix_here"
+
 
 
 def test_terminal_authority_failure_with_no_recovery_action_is_terminal_on_both_hosts() -> None:

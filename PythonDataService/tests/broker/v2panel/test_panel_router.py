@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +23,11 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    ExecutionLeaseLost,
+    RepositoryPoisoned,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg
 from app.broker.contract.registry import (
@@ -721,3 +727,146 @@ async def test_chart_contract_rejects_unknown_resolution_and_timeframe(api) -> N
 
     assert live.status_code == 422
     assert history.status_code == 422
+
+
+async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T7c (#1794): a frozen process past its lease TTL bricked the surface.
+
+    On 2026-08-26 a ~50 s SIGSTOP let the execution lease expire; on resume
+    every panel action returned a raw 500 leaking the internal handle
+    message, with no operator-authored cure. Fail-closed is correct -- a
+    holder that lost its lease must not write -- but the surface has to say
+    so. The clerk router already translated this exception; the panel router
+    had no handler for it at all.
+    """
+    app, _repo = api
+
+    def _lease_lost(*_args: object, **_kwargs: object) -> None:
+        raise ExecutionLeaseLost(
+            f"account {ACCT!r} execution lease was lost or expired; "
+            "this handle can no longer write"
+        )
+
+    async with _client(app) as client:
+        panel = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
+        )
+        action = next(
+            item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now"
+        )
+        request = {
+            "action_id": "reconcile_now",
+            "revision": panel.json()["revision"],
+            "concurrency_token": action["concurrency_token"],
+            "idempotency_key": "sqlite-lease-lost",
+        }
+        # Patch beneath the translating seam so the translation itself runs.
+        monkeypatch.setattr(
+            broker_v2_panel.ds,
+            "_run_action_under_live_authority",
+            _lease_lost,
+            raising=True,
+        )
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXECUTION_LEASE_LOST"
+    assert detail["outcome"] == "failure"
+
+    # Authored copy, not the internal handle message.
+    rendered = json.dumps(detail)
+    assert "can no longer write" not in rendered
+    assert "handle" not in rendered
+    assert "restart" in detail["why"].lower()
+
+
+async def test_poisoned_authority_is_not_reported_as_a_lost_lease(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two fail-closed conditions have different cures (CodeRabbit, #1794).
+
+    `RepositoryPoisoned` means a transition committed but its mirror finalize
+    was unconfirmed -- this authority's own durability is unproven until the
+    exact fence reconciliation re-runs. A lost lease means another process owns
+    the account. Reporting the first as the second would send an operator to
+    wait out a lease timeout that is not the problem.
+    """
+    app, _repo = api
+
+    def _poisoned(*_args: object, **_kwargs: object) -> None:
+        raise RepositoryPoisoned("mirror finalize unconfirmed for transition 42")
+
+    async with _client(app) as client:
+        panel = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
+        )
+        action = next(
+            item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now"
+        )
+        monkeypatch.setattr(
+            broker_v2_panel.ds,
+            "_run_action_under_live_authority",
+            _poisoned,
+            raising=True,
+        )
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
+            json={
+                "action_id": "reconcile_now",
+                "revision": panel.json()["revision"],
+                "concurrency_token": action["concurrency_token"],
+                "idempotency_key": "sqlite-poisoned",
+            },
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "AUTHORITY_MIRROR_UNCONFIRMED"
+    assert detail["reason_code"] != "EXECUTION_LEASE_LOST"
+
+    # Names the actual condition, and never the lease-timeout remedy.
+    rendered = json.dumps(detail).lower()
+    assert "mirror" in rendered
+    assert "lease" not in rendered
+
+
+async def test_exhausted_panel_projection_refuses_and_says_so(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T5 (#1796): exhaustion stays fail-closed, and is no longer silent.
+
+    A torn cut is still refused rather than spliced. What changed is that
+    exhausting the attempts now leaves a structured record -- without one
+    there is no way to tell a load-correlated blip from custody churning
+    faster than the projection can ever settle, since the 503 looks
+    identical either way.
+    """
+    app, repo = api
+    base = repo.control_meta_snapshot()
+    churn = iter(range(base.control_revision + 1, base.control_revision + 200))
+    monkeypatch.setattr(
+        repo,
+        "control_meta_snapshot",
+        lambda: replace(base, control_revision=next(churn)),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        async with _client(app) as client:
+            response = await client.get(
+                f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
+            )
+
+    assert response.status_code == 503
+    assert any(
+        getattr(record, "action", None) == "sqlite_panel_projection_torn_read_exhausted"
+        for record in caplog.records
+    ), "exhausting the coherence attempts must leave a structured record"

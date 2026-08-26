@@ -381,8 +381,8 @@ async def lifespan(app: FastAPI):
         else None
     )
     if _boot_clerk is not None:
-        async def _unresolved_intents() -> int:
-            return await _boot_clerk.unresolved_effect_count()
+        async def _unresolved_intents(subject_id: str | None) -> int:
+            return await _boot_clerk.unresolved_effect_count(subject_id=subject_id)
 
         await bot_task_registry.run_boot_recovery(
             recover=_boot_clerk.recover,

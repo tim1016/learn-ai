@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import NoReturn
 
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
@@ -67,12 +71,69 @@ from app.services.sqlite_clerk_compat import (
 )
 from app.utils.timestamps import now_ms_utc
 
+logger = logging.getLogger(__name__)
+
 
 class SqlitePanelBotNotFound(ValueError):
     """The process registry has a bot absent from active SQLite custody."""
 
 
+# ── Coherence-retry policy ───────────────────────────────────────────────
+# Every read here is all-or-unavailable: a torn cut is refused, never spliced.
+# These bound how many times a seam re-samples before refusing.
 _CATALOG_COHERENCE_ATTEMPTS = 2
+_TORN_READ_ATTEMPTS = 3
+_TORN_READ_BACKOFF_MS = 25
+
+
+def _refuse_torn_read(
+    what: str,
+    message: str,
+    *,
+    broker: str,
+    account_id: str,
+    strategy_instance_id: str,
+) -> NoReturn:
+    """Refuse a projection that never settled, and record that it happened.
+
+    Fail-closed either way -- a spliced cut is never served. The record is what
+    distinguishes a load-correlated blip from custody churning faster than the
+    projection can ever settle; without it both produce an identical 503
+    (#1796).
+    """
+    logger.warning(
+        "%s projection did not settle; refusing rather than splicing",
+        what.capitalize(),
+        extra={
+            "action": f"sqlite_{what}_projection_torn_read_exhausted",
+            "broker": broker,
+            "account_id": account_id,
+            "strategy_instance_id": strategy_instance_id,
+            "attempts": _TORN_READ_ATTEMPTS,
+        },
+    )
+    raise SqlitePanelEconomicUnavailable(message)
+
+
+def _spaced_attempts(total: int = _TORN_READ_ATTEMPTS) -> Iterator[int]:
+    """Yield attempt indices, spacing each retry so it samples a new moment.
+
+    The attempts used to run back-to-back, so under a trading fleet's write
+    burst they all sampled the same instant and all lost to the same burst --
+    three retries spread over a few milliseconds are close to one (T5, #1796).
+    The whole ladder stays far below the frontend's 15 s poll budget.
+
+    The *count* is deliberately unchanged: picking a larger number is a guess,
+    and the per-account contention behind these curves wants a profile first
+    (#1801).
+
+    Callers run inside ``asyncio.to_thread``, so sleeping here does not block
+    the event loop.
+    """
+    for attempt in range(total):
+        if attempt:
+            time.sleep(_TORN_READ_BACKOFF_MS * attempt / 1000)
+        yield attempt
 
 
 class SqlitePanelEconomicUnavailable(RuntimeError):
@@ -297,7 +358,7 @@ async def read_sqlite_panel_evidence(
     session_window = current_trading_session_window(now_ms)
 
     def read_once() -> SqlitePanelEvidence | None:
-        for _attempt in range(3):
+        for _attempt in _spaced_attempts():
             custody_reader = SqliteClerkProjectionReader.from_repository(facade.repository)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
@@ -342,8 +403,12 @@ async def read_sqlite_panel_evidence(
                     projection=projection,
                     economics=economics,
                 )
-        raise SqlitePanelEconomicUnavailable(
-            "SQLite custody and execution economics changed during panel projection."
+        _refuse_torn_read(
+            "panel",
+            "SQLite custody and execution economics changed during panel projection.",
+            broker=broker,
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
         )
 
     try:
@@ -404,7 +469,7 @@ async def read_sqlite_chart_evidence(
         raise ValueError("Requested account is not the active SQLite authority")
 
     def read_once() -> SqliteChartEvidence | None:
-        for _attempt in range(3):
+        for _attempt in _spaced_attempts():
             reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
                 fills = reader.bot_fill_window(
@@ -430,8 +495,12 @@ async def read_sqlite_chart_evidence(
             if status is None:
                 return None
             return SqliteChartEvidence(status=status, fills=fills)
-        raise SqlitePanelEconomicUnavailable(
-            "SQLite history identity and execution folds changed during projection."
+        _refuse_torn_read(
+            "chart",
+            "SQLite history identity and execution folds changed during projection.",
+            broker=broker,
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
         )
 
     try:

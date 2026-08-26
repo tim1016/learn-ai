@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
@@ -1033,3 +1035,90 @@ def test_panel_bot_not_found_maps_to_the_unknown_bot_status() -> None:
     """The 404/503 split the panel router renders is pinned to one taxonomy."""
     assert panel_data_source.UnknownBotError.http_status == 404
     assert panel_data_source.PanelUnavailableError.http_status == 503
+
+
+def test_torn_read_attempts_are_spaced_so_they_sample_different_moments() -> None:
+    """T5 (#1796): three back-to-back retries are close to one retry.
+
+    Under a trading fleet's write burst the attempts all sampled the same
+    instant and all lost to the same burst, surfacing an honest fail-closed
+    guard as flakiness exactly when an operator opened an active bot. The
+    guard is unchanged -- a torn cut is still refused, never spliced -- but
+    the attempts now sample genuinely different moments.
+    """
+    assert sqlite_panel_source._TORN_READ_BACKOFF_MS > 0
+
+    started = time.monotonic()
+    attempts = list(sqlite_panel_source._spaced_attempts())
+    elapsed_ms = (time.monotonic() - started) * 1000
+
+    assert attempts == list(range(sqlite_panel_source._TORN_READ_ATTEMPTS))
+    # Genuinely spaced -- not merely a constant that nothing reads.
+    assert elapsed_ms >= sqlite_panel_source._TORN_READ_BACKOFF_MS
+    # And far below the frontend's 15 s poll budget: a retry ladder that
+    # outlives the client's timeout has made things worse, not better.
+    assert elapsed_ms < 1_000
+
+
+@pytest.mark.asyncio
+async def test_exhausted_chart_projection_records_its_refusal_too(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both seams share the retry policy, so they share the record (#1796).
+
+    The chart read used `_spaced_attempts()` while only the panel read logged
+    exhaustion -- a shared name without shared behaviour, which is the smell
+    the shared helper existed to remove.
+    """
+    repository = _Repository()
+    fills = FillWindowProjection(
+        account_id="paper-account",
+        strategy_instance_id="active-spy",
+        authority_generation=7,
+        control_revision=42,
+        fills=(),
+    )
+
+    class _Reader:
+        @classmethod
+        def from_repository(cls, received_repository: _Repository) -> _Reader:
+            assert received_repository is repository
+            return cls()
+
+        def bot_fill_window(self, *_args: object, **_kwargs: object) -> FillWindowProjection:
+            return fills
+
+        def close(self) -> None:
+            return None
+
+    base_meta = repository.control_meta_snapshot()
+    revisions = iter(range(100, 200))
+    monkeypatch.setattr(
+        repository,
+        "control_meta_snapshot",
+        lambda: replace(base_meta, control_revision=next(revisions)),
+    )
+    monkeypatch.setattr(
+        sqlite_panel_source,
+        "active_sqlite_facade",
+        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+    )
+    monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _Reader)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(
+        sqlite_panel_source.SqlitePanelEconomicUnavailable
+    ):
+        await sqlite_panel_source.read_sqlite_chart_evidence(
+            "alpaca",
+            "paper-account",
+            "active-spy",
+            from_ms=1_700_000_000_000,
+            to_ms=1_700_086_400_000,
+        )
+
+    assert any(
+        getattr(record, "action", None)
+        == "sqlite_chart_projection_torn_read_exhausted"
+        for record in caplog.records
+    )

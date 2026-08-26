@@ -145,6 +145,7 @@ from app.services.bot_start_admission import (
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartAdmissionUnavailable,
+    UnresolvedIntentsProbe,
     log_run_launch,
     make_start_request,
     resolve_start_runtime_fact,
@@ -189,8 +190,9 @@ _RETIRE_REFUSAL: dict[str | None, tuple[str, str]] = {
         "Stop the bot before retiring its registration.",
     ),
     "STRATEGY_STILL_RUNNABLE": (
-        "This bot can still run.",
-        "Retire only clears registrations the runtime can no longer honour.",
+        "This bot's strategy program still exists.",
+        "Retire only clears a registration whose strategy program the runtime "
+        "no longer has.",
     ),
     "RETIRE_WOULD_STRAND_CUSTODY": (
         "The bot still holds custody.",
@@ -241,7 +243,7 @@ class BotTaskRegistry:
         # opt out explicitly with ``boot_recovery_required=False``.
         self._boot_recovery_required = boot_recovery_required
         self._boot_recovery_complete = False
-        self._unresolved_intents_probe: Callable[[], Awaitable[int]] | None = None
+        self._unresolved_intents_probe: UnresolvedIntentsProbe | None = None
         # When set, the boot sweep skips bots whose binding carries a broker
         # tag that is not in this set (e.g. IBKR bots share the same
         # artifacts_root but are managed by the host daemon, not the
@@ -1087,7 +1089,7 @@ class BotTaskRegistry:
         *,
         recover: Callable[[], Awaitable[None]] | None = None,
         reconcile: Callable[[], Awaitable[object]] | None = None,
-        unresolved_intents_probe: Callable[[], Awaitable[int]] | None = None,
+        unresolved_intents_probe: UnresolvedIntentsProbe | None = None,
     ) -> BootRecoveryReport:
         """Reconcile durable ON_DUTY state against the (empty) task registry.
 
@@ -1110,25 +1112,6 @@ class BotTaskRegistry:
         # `_is_running` reflects the recovered fleet.
         self._resume_pending_replay_receipts()
         return report
-
-    async def _require_recovered(self) -> None:
-        """Fail-closed start gate (S5 AC4)."""
-        if self._boot_recovery_required and not self._boot_recovery_complete:
-            raise BootRecoveryIncompleteError(
-                "Bot starts are refused until the boot recovery sweep completes.",
-                detail="The data plane restarted; durable state is being reconciled.",
-            )
-        if self._unresolved_intents_probe is not None:
-            unresolved = await self._unresolved_intents_probe()
-            if unresolved > 0:
-                raise RecoveryUncertainError(
-                    f"Bot starts are refused: {unresolved} order intent(s) remain unresolved after recovery.",
-                    detail=(
-                        "An unresolved intent may still represent live broker "
-                        "exposure; resolve it (recovery replay / sweep) before "
-                        "starting bots."
-                    ),
-                )
 
     # ── read surface ──────────────────────────────────────────────────
 

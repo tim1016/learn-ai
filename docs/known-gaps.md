@@ -29,7 +29,12 @@ against the F1–F19 adjudication table from the same-day session (PR #1747):
 findings, and §8's FR-016 scope bullet was closed against current code.
 On **2026-08-25**, the 54-bot fleet stress run added the critical S15c
 cancel-resolution gap to §1 and the remaining verified operational/UI gaps
-to §10. Source verification while lifting S15c corrected the supporting
+to §10. On **2026-08-26** the day-two campaign served as the live-acceptance
+pass for those fixes: §10 lost S9/S10, S3b, S7 and S17 and §9 lost F13, each
+against an explicit acceptance result rather than a code reading; F3, F11 and
+F17 were rewritten to state what actually changed and what residual remains;
+and §11 lifted the new findings. Every open item in §11 carries an issue
+number — the issue is the working brief, this file is the durable index. Source verification while lifting S15c corrected the supporting
 audit's initial mechanism attribution: submit absence already has a bounded
 terminal branch; the still-open loop was in EXIT cancel proof. That loop was
 **closed the same day** (#1775): EXIT cancel proof now has a definitive-absence
@@ -40,19 +45,14 @@ account-wide amplifier — a separate defect — remains in §1 in its own right
 
 ## 1. Safety-critical
 
-- **The outstanding-intent admission gate is account-wide while the
-  uncertainty it reflects is not.** `unresolved_effect_count()` counts every
-  reconcilable effect on the account
-  (`app/broker/alpaca/clerk/sqlite/runtime.py`), and Start/deploy admission
-  refuses on any nonzero count (`app/services/bot_start_admission.py`), while
-  the underlying `ORDER_OUTCOME_UNKNOWN` episode is scoped to one custody
-  subject. One bot's unresolved intent therefore refuses resume and deploy
-  fleet-wide — the amplifier that turned S15c's single stuck EXIT into a
-  50-bot freeze. **Decided 2026-08-25 (#1775), not yet implemented**: gate the
-  owning custody subject, keeping the account-wide refusal only for an
-  unresolved effect that cannot be attributed to a subject. Supporting
-  evidence: `docs/audits/bot-fleet-stress-2026-08-25.md` S15c and its
-  open-items entry.
+**No known-open items.** The outstanding-intent admission gate — the last
+entry here, and the amplifier that turned a single stuck EXIT into the
+2026-08-25 fleet freeze — was scoped to the owning custody subject on
+2026-08-26 (#1793). A bot is now refused only by its own unresolved intent;
+the filter is total, because `effect_operations.subject_id` is NOT NULL with a
+foreign key, so no account-wide remainder exists. Foreign broker orders never
+reach that table and stay gated by the correctly account-scoped
+`UNEXPLAINED_ORDER` hold.
 
 The two 2026-08-24 safety-critical findings — F18
 (crash-held exposure had no path to flat) and F19 (retryable EXIT refusal
@@ -222,22 +222,52 @@ a defect.
   (medium).** Guards and performers exist but can never fire:
   `app/services/broker_v2_panel/sqlite_panel_adapter.py:61`
   `SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume"})`.
-- **F16 — `retire` never presented by the SQLite panel source (medium).**
-  Same dead-vocabulary class, same pointer as F2 (study §7).
-- **F17 — `prepare_safe_flatten` presents `enabled: true` but always 409s
-  (medium).** The `mutation: false` fact exists server-side and is not
-  reflected in presented enablement
-  (`app/services/broker_v2_panel/sqlite_panel_source.py:839-842`; study §8).
-  Executor work planned in
-  `docs/superpowers/plans/2026-08-24-exposure-lifecycle-closure.md`.
-- **F3 — two parallel stop surfaces ~60× apart in latency (medium).** Panel
-  `stop_bot_decisions` ≈20 s (full panel re-projection inside `run_action`,
-  `app/services/broker_v2_panel/panel_data_source.py`) vs legacy runner stop
-  0.29 s, with different receipts (study §2, §5.1).
+- **F16 — `retire`'s eligibility guard is narrower than the class it exists
+  to clear (medium).** *Reframed 2026-08-26.* This was filed as dead
+  vocabulary alongside F2, but `retire` **is** presented:
+  `SQLITE_PANEL_LIFECYCLE_ACTION_IDS` is
+  `frozenset({"resume", "retire"})` (`sqlite_panel_adapter.py:69`) and the
+  projection tests confirm it renders, disabled, for a runnable strategy. The
+  defect is the guard, not the adapter — do not follow F2's pointer here. The
+  2026-08-26 run re-found it as T1 with a sharper root cause — the guard requires a
+  dead *strategy key* while the zombie's dead thing is its *symbol*, so the
+  panel simultaneously says "This bot can still run." and "Resume is
+  blocked." **The contradiction was fixed 2026-08-26**: the blocker now states
+  what the guard checks (the strategy *program* exists) and makes no claim
+  about runnability. **The widening is still open and is now `needs-design`
+  (#1795)** — it needs a durable read-safe proof of symbol validity, and none
+  exists: no admission reason code is structurally permanent
+  (`MARKET_DATA_STALE` is also what a *warming* symbol reports), and a broker
+  security lookup is barred from the read path by #1776.
+- **F17 — `prepare_safe_flatten` enablement vs. its view-action nature
+  (low; reduced 2026-08-26).** The executor landed (#1756) and the POST path
+  now raises a typed `ActionNotAvailableError` — "This recovery capability is
+  a view action, not a broker mutation" — directing the operator to the
+  presented navigation control (`sqlite_panel_source.py:800-804`). The
+  2026-08-26 run accepted that behaviour (A9). **Residual, unverified:**
+  whether presented enablement still reads `enabled: true` in a way an
+  operator would read as "this will place orders". Re-verify against the
+  presentation path before spending effort — this may already be correct, in
+  which case delete the bullet.
+- **F3 — two parallel stop surfaces with different receipts (low; latency
+  half closed 2026-08-26).** The ~20 s panel figure came from a full panel
+  re-projection inside `run_action`; #1776 removed it — `_run_action` now
+  defers via `schedule_live_projection_refresh`
+  (`app/routers/broker_v2_panel.py:516-530`). **Residual:** two surfaces still
+  produce different receipts for the same operator intent, and the wire ids
+  differ (panel `stop_bot_decisions`; the performer map's `stop` is not the
+  wire id — 2026-08-26 ops lore §7). Re-measure the latency claim before
+  citing it.
 - **F4 — post-restart feed warmup presents as a fault (low).** ~45 s
   feed-readiness cold start refuses Resume with copy that reads like a
   failure (market-data gate, `app/services/run_admission.py:286-297`; study
-  §3).
+  §3). Re-observed 2026-08-26 as O3/O5: 48/50 first-pass resumes refused with
+  a bare `MARKET_DATA_STALE` and no warming prose, and the warm-up 409's
+  `next_action` says "Restore both Clerk channels" when nothing is broken and
+  it heals in ~60 s. The audit's recommendation is a copy fix, **not** an
+  operator-driven warm-up button (§4 O3 argues a button reintroduces an
+  unowned TTL-less subscription and puts a human back in the freshness loop
+  WP2/WP4 removed).
 - **F5 — refusal ordering names the wrong gate first (low).** The first
   admission error can name a different problem than the one to fix; the
   full-ladder preview (`POST …/bots/admission`) exists and is unused for
@@ -261,21 +291,31 @@ a defect.
   instead of the typed refusal
   (`app/services/broker_v2_panel/paper_deploy_service.py` dry-run path;
   study §7 — "refused deploys must not leak state").
-- **F11 — burst deploys flap "Market Data is unhealthy" (medium).** Admission
-  couples to an instantaneous feed-age sample with no settling semantics,
-  masking real refusals under load (market-data gate,
-  `app/services/run_admission.py:286-297`; study §7/§9 proposes
-  two-consecutive-samples settling).
+- **F11 — burst deploys flap "Market Data is unhealthy" (low; largely closed
+  2026-08-26).** The account-wide coupling is gone: #1783 made deploy health
+  symbol-scoped and the 2026-08-26 run proved all four symbols warming in
+  parallel with each symbol's verdict naming its own symbol, while the account
+  kept accepting other symbols' deploys. #1784 added the hold debounce.
+  **Residual:** the admission gate still reads an instantaneous feed-age
+  sample (`app/services/run_admission.py:286-297`); no flap was observed after
+  the fixes, so re-verify before treating this as open work.
 - **F12 — LIVE chart pane serves stale bars unmarked (medium).** 7–17 min
   behind its own bot with `overlay_notices` empty — the staleness field
   exists in the contract and is unpopulated
   (`Frontend/src/app/components/broker/v2-panel/bot-triage-detail/bot-triage-detail.component.ts`;
   study §7; same defect class as the R4 tape fix recorded in
   `docs/superpowers/specs/2026-08-24-bots-triage-trader-lens-design.md` §10).
-- **F13 — panel reads serialize globally (medium).** 56 ms alone → 2.6 s each
-  at 10 concurrent; ~21 s/sweep projected at 80 bots (projection path,
+- **F13 — panel reads serialize globally (medium; concurrency unmeasured
+  since #1776).** 56 ms alone → 2.6 s each at 10 concurrent; ~21 s/sweep
+  projected at 80 bots (projection path,
   `app/services/broker_v2_panel/panel_data_source.py`; study §7/§9 proposes a
-  fan-out budget).
+  fan-out budget). **Deleted and restored on 2026-08-26**: it was closed
+  against A4, which proved 96 concurrent reads with zero errors and zero
+  revision drift — that is read *purity*, not latency, and F13 is a latency
+  claim. The same day's T2 measured panel p50 rising 0.67 s idle → 2.7 s under
+  fleet load, which is consistent with this being *open*. Its concurrency
+  condition is carried into **#1801**, which must remeasure the 10-concurrent
+  case explicitly; delete this bullet then, not before.
 - **F14 — `gallery/snapshot` unbounded by liveness (low).** 5.6 s / 751 KB /
   25 tiles including retired bots (`app/routers/broker_v2_gallery.py`; study
   §7).
@@ -290,36 +330,107 @@ instruction cannot work after the squash-merge — the eight session commits are
 individually reachable only via the `audit/unreviewed-findings-2026-08-24`
 branch.
 
-## 10. 2026-08-25 fleet-stress findings (PR #1772)
+## 10. 2026-08-25 fleet-stress findings (PR #1772, pruned 2026-08-26)
 
 The live 54-bot campaign is recorded in
 `docs/audits/bot-fleet-stress-2026-08-25.md`. S15c is safety-critical and lives
-in §1. The verified open items below remain after PR #1772; the session-tooling
-promotion is a chore, not an open product defect, and retire remains tracked as
-F16 in §9 rather than duplicated here.
+in §1; retire is tracked as F16 in §9 rather than duplicated here.
+
+**Pruned 2026-08-26**, each against an explicit live acceptance in
+`docs/audits/bot-fleet-stress-2026-08-26.md` §2 — the audit and git history
+carry the detail, this index carries only the pointer:
+
+- **S9/S10** stream-blip entry freeze → A6 (#1777/#1784).
+- **S3b** crashed bots rendering innocent → T6 fix, live-verified (#1788/#1791).
+- **S7** silent roster-poll freeze → #1788. Its follow-on is a *different*
+  problem and is open as T2 in §11: that same 15 s timeout now trips on
+  healthy-but-slow catalog reads under fleet load.
+- **S17** flatten buried, wrong disposition → A11 (#1788).
+
+§9's F13 was pruned in the same pass and has been **restored** — see there for
+why its acceptance did not test it.
+
+The items below remain open.
 
 - **S12d — stopped fleet leaves a hot data plane and 105–145 s panel reads
   (high).** After mass stop, zero running bots still consumed 77% CPU until a
   data-plane restart. The responsible background loop is not yet identified;
-  reproduce under profiling before choosing a fix.
-- **S9/S10 — a brief trade-update disconnect produces a minutes-long,
-  account-wide entry hold (high).** Recurrent 2–5 s websocket recoveries were
-  followed by single-sample `STREAM_HEALTH_HOLD` episodes affecting the full
-  roster. The periodic disconnect cause remains unclassified, and hold
-  raise/release is still coupled to entry-time evaluation rather than a
-  continuously sampled health authority.
-- **S3b — crashed bots render as ordinary off-duty rows (high).** A crashed bot
-  projects `needs_attention=false` with an innocent "Off duty · Flat" label,
-  hiding a runtime failure from fleet triage.
-- **S7 — roster polling can freeze silently across a data-plane restart
-  (medium).** The 5 s poll remained stale for more than nine minutes while the
-  footer continued to look current; manual refresh recovered it. Add a bounded
-  request timeout, automatic recovery, and an explicit stale state.
-- **S10 UI — active holds contradict roster counts and guidance (medium).** An
-  active stream-health hold can coexist with "Running 0, Stopped 0" and "no
-  active hold" copy while dozens of bots are running.
-- **S17 — safe flatten is hard to discover and its blocker recommends the
-  wrong disposition (medium).** `execute_safe_flatten` is buried in overflow,
-  and stale evidence is authored as `wait` even though reconciliation is the
-  operator cure. Promote Flatten for exposed stopped bots and attach the
-  reconcile move under `fix_here`.
+  reproduce under profiling before choosing a fix. Worth profiling in the same
+  session as T2/O4 (**#1801**) — both are unexplained per-account cost curves
+  and may share a root.
+- **S10 UI — active holds contradict roster counts and guidance (medium;
+  partially cured).** An active stream-health hold can coexist with "Running 0,
+  Stopped 0" and "no active hold" copy while dozens of bots are running. The
+  worst half — an active account-wide `UNEXPLAINED_ORDER` hold rendering as
+  literally "No hold", because `_hold_reason_code` mapped anything outside the
+  closed vocabulary to `NO_HOLD` — was fixed in #1790, which also added the
+  fail-closed `UNKNOWN_HOLD` code and the end-to-end DB→compat→card test whose
+  absence let it survive. **Residual:** the roster count and guidance copy are
+  still derived independently of the hold, so they can still disagree.
+
+## 11. 2026-08-26 fleet-stress findings (PR #1791, lifted 2026-08-26)
+
+The day-two 50-bot campaign is recorded in
+`docs/audits/bot-fleet-stress-2026-08-26.md`. It was the live-acceptance pass
+for the ten fixes out of the 2026-08-25 run: **all ten passed (A1–A13)**, and
+the four §10 items they closed were pruned above. T6 was found, fixed,
+regression-tested and live-verified inside the same session (#1791) and is
+therefore not listed here. Every item below is filed as an issue — this section
+is the durable index, the issue is the working brief.
+
+- **T7 — a process freeze past the execution-lease TTL bricks the account
+  handle (critical).** `podman pause` (SIGSTOP) for ~50 s let the lease expire
+  while the process was frozen; on SIGCONT the ~24 still-running bots crashed,
+  **their terminal STOP evidence could not commit**, and every subsequent panel
+  action returned a raw 500 until a container restart. Fail-closed is correct —
+  a holder that lost its lease must not write. Three gaps, split by tractability:
+  the surface honesty fix (**#1794 — FIXED 2026-08-26**: the panel router now
+  translates the condition to a typed `EXECUTION_LEASE_LOST` refusal with
+  authored copy, instead of leaking the internal handle message as a raw 500;
+  the clerk router had translated it since the SQLite cutover, the panel router
+  simply had no handler) and the two design questions (**#1800**, open —
+  supervised re-acquisition; where terminal evidence commits when its authority
+  cannot be written). Real-world triggers are ordinary: laptop sleep, VM
+  migration, CPU starvation.
+- **T2/O4 — read and deploy latency degrade with running-fleet size (high).**
+  At 144 rows with 50 trading bots: catalog p50 16.8 s / p95 20.6 s (idle
+  baseline 3.3 s / 8.7 s); deploys 0.4 s median for the first ~30 and ~15 s
+  (max 21.9 s) for 31–50. The frontend's 15 s poll timeout now trips on
+  healthy-but-slow reads, surfacing "Account/Clerk refresh failed" during
+  normal operation. Read purity held throughout — a cost curve, not drift.
+  Suspected per-account lock contention between admission work and running
+  bots' clerk operations, **unverified**. **#1801** — profile before tuning
+  either the timeout or the read path.
+- **T3 — same-symbol cohorts strand in lockstep on a stop wave (medium).**
+  All four QQQ bots were caught mid-position by one cohort-targeted stop → 4×
+  `RESUME_CARRYOVER_UNSUPPORTED` at once. Every piece is by design; the
+  emergent effect is cohort-scale stranding whose only remedy is N×3 clicks.
+  **#1802** (needs design) — a cohort-scoped flatten, the inverse-scoped
+  sibling of the Two-Tap account-hold rule.
+- **T1 — narrow retire misses its motivating case (medium, partially fixed).**
+  The operator-visible contradiction is gone (2026-08-26); the widening is
+  `needs-design`. See §9 F16 and **#1795**.
+- **T5 — panel reads 503 under write pressure (medium).** An honest
+  fail-closed torn-read guard, but one torn read ends the request, so it
+  surfaces as flakiness exactly when an operator inspects an active bot.
+  Load-correlated (benches saw 0/96). **FIXED 2026-08-26 (#1796)** — though not
+  as the finding framed it: the bounded retry already existed (`range(3)`), but
+  the attempts ran back-to-back and so all sampled the same write burst. They
+  are now spaced, and exhaustion leaves a structured record instead of an
+  indistinguishable 503. The guard itself is unchanged, and the attempt *count*
+  was deliberately not raised — that is a magnitude, and #1801 owns it.
+- **T4 — transient `RECOVERY_UNCERTAIN` during post-outage sweeps (low,
+  observation).** A resume read can briefly return `RECOVERY_UNCERTAIN` before
+  settling. Honest but unexplained. **#1806.** Note that two distinct branches
+  return this state with different prose (`bot_start_admission.py:188-212`) —
+  probe failure and outstanding intents. #1793 deliberately did not collapse
+  them, and neither should the copy work.
+- **Copy nit (low).** A "Crashed"-labelled row can carry the explanation "Off
+  duty and flat." — a clerk-derived explanation beside a lifecycle-derived
+  label. Cosmetic sibling of T6. **#1806.**
+- **Open question for the operator (not a defect).** The roster-level "Live
+  refresh failed. Showing the last successful fleet snapshot." banner is a
+  third standing refresh message, not covered by the 2026-08-26 pill directive
+  that converted the account strip's two banners into transient popovers.
+  Whether it should match is a judgment call, not a bug — carried in **#1806**
+  as a question to answer before any change.
