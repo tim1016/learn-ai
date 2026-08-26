@@ -104,6 +104,55 @@ async function renderPage(
 }
 
 describe('BotsListPageComponent', () => {
+  describe('fleet staleness banner (#1806 item 3)', () => {
+    // The account strip's refresh pills fire on a failure *edge* -- they answer
+    // "did a refresh just fail?". This banner answers "is what I am looking at
+    // stale?", which is a state, so it is gated on the snapshot's actual age
+    // and quantifies it. A single failed poll that the next poll repairs was
+    // never meaningfully stale and must stay silent.
+    it('stays silent when a refresh fails but the snapshot is still fresh', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        let calls = 0;
+        const getCatalog = vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) return [fakeCatalogBot()];
+          throw new HttpErrorResponse({ status: 503 });
+        });
+        await renderPage([], { getCatalog });
+        await screen.findByRole('button', { name: /spy-momentum-01/ });
+
+        // One poll fires and fails; the snapshot underneath is ~5s old.
+        await vi.advanceTimersByTimeAsync(6_000);
+
+        expect(screen.queryByText(/last successful fleet snapshot/i)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports how stale the fleet snapshot is once refreshes stop landing', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        let calls = 0;
+        const getCatalog = vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) return [fakeCatalogBot()];
+          throw new HttpErrorResponse({ status: 503 });
+        });
+        await renderPage([], { getCatalog });
+        await screen.findByRole('button', { name: /spy-momentum-01/ });
+
+        await vi.advanceTimersByTimeAsync(45_000);
+
+        const banner = await screen.findByText(/last successful fleet snapshot/i);
+        expect(banner.textContent).toMatch(/4[0-9]s ago/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('renders account strip equity value', async () => {
     await renderPage([], { account: fakeAccount({ equity: 15_000 }) });
 

@@ -424,10 +424,33 @@ is the durable index, the issue is the working brief.
   settling. Honest but unexplained. **#1806.** Note that two distinct branches
   return this state with different prose (`bot_start_admission.py:188-212`) —
   probe failure and outstanding intents. #1793 deliberately did not collapse
-  them, and neither should the copy work.
-- **Copy nit (low).** A "Crashed"-labelled row can carry the explanation "Off
-  duty and flat." — a clerk-derived explanation beside a lifecycle-derived
-  label. Cosmetic sibling of T6. **#1806.**
+  them, and neither should the copy work. **Still open, and not a copy edit:**
+  distinguishing "the sweep is still evaluating" from "the probe is broken"
+  needs a sweep-in-flight fact, and no such fact exists anywhere in the
+  data plane today (`grep` for `sweep_in_flight`/`reconcile_in_flight`
+  returns nothing). It needs a new fact with a producer, so it is design
+  work, which is why the two shippable #1806 items landed without it.
+- **Copy nit (low).** A "Crashed"-labelled row could carry the explanation
+  "Off duty and flat." — a clerk-derived explanation beside a
+  lifecycle-derived label. Cosmetic sibling of T6. **FIXED 2026-08-26
+  (#1806)** — though the cause was not cosmetic: two authors answered the
+  same question, and the second overwrote the first. `status_explanation_for`
+  already handled the unclean-exit case; `_sqlite_catalog_explanation`
+  re-authored the explanation without it and clobbered the correct answer via
+  `model_copy`. The adapter now defers to the incoming explanation for both
+  unclean-exit labels, reading them from the shared vocabulary so the two
+  cannot drift.
+- **Roster staleness banner (low).** The roster-level "Live refresh failed"
+  banner stood permanently and was not covered by the account strip's pill
+  directive. **DECIDED + FIXED 2026-08-26 (#1806 item 3).** Operator decision:
+  it stays a standing banner rather than becoming a pill, because it is a
+  *state* claim about the data on screen, not a failure *event* — 144 rows
+  cannot show their own staleness the way the strip's few values can, and a
+  pill fires only on a false→true edge, so a persistently failing refresh
+  shows nothing. It is now gated on the snapshot's real age (6× the poll
+  cadence, deliberately above the #1801 latency curve so a slow-but-landing
+  read is not reported as a failure) and quantifies it via the shared
+  `fmtElapsedSince`.
 - **Open question for the operator (not a defect).** The roster-level "Live
   refresh failed. Showing the last successful fleet snapshot." banner is a
   third standing refresh message, not covered by the 2026-08-26 pill directive

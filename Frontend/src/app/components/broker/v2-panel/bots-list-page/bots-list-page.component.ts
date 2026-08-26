@@ -16,6 +16,7 @@ import { MessageService } from 'primeng/api';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
+import { fmtElapsedSince } from '../../format';
 import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotTriageDetailComponent } from '../bot-triage-detail/bot-triage-detail.component';
@@ -29,6 +30,21 @@ import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-o
 
 const CATALOG_POLL_MS = 5_000;
 const ACCOUNT_POLL_MS = 15_000;
+/**
+ * How old the fleet snapshot must be before the roster says so (#1806 item 3).
+ *
+ * Six poll cadences. The account strip's refresh *pills* fire on a failure
+ * edge -- they answer "did a refresh just fail?". This banner answers "is what
+ * I am looking at stale?", which is a state, so it is gated on the snapshot's
+ * real age: a single failed poll the next poll repairs was never meaningfully
+ * stale and stays silent.
+ *
+ * Deliberately well above the measured catalog read cost at fleet scale
+ * (p95 20.6s at 144 rows, #1801) so a slow-but-landing read is not reported
+ * as a failure. This is a staleness floor, not a latency budget -- #1801 owns
+ * the latency curve and this must not be tuned as a proxy for it.
+ */
+const FLEET_STALE_AFTER_MS = 6 * CATALOG_POLL_MS;
 
 interface ScopedSnapshot<T> {
   readonly scope: string;
@@ -187,9 +203,18 @@ export class BotsListPageComponent {
   protected readonly unavailable = computed(
     () => Boolean(this.catalog.error()) && this.bots().length === 0,
   );
-  protected readonly stale = computed(
-    () => Boolean(this.catalog.error()) && this.bots().length > 0,
-  );
+  /** Ticks so the rendered snapshot age stays true without a refetch. */
+  private readonly nowMs = signal(Date.now());
+  protected readonly stale = computed(() => {
+    const updatedAtMs = this.catalogUpdatedAtMs();
+    if (updatedAtMs === null || this.bots().length === 0) return false;
+    return this.nowMs() - updatedAtMs >= FLEET_STALE_AFTER_MS;
+  });
+  /** Quantifies the staleness the banner claims, via the shared formatter. */
+  protected readonly staleAge = computed(() => {
+    const updatedAtMs = this.catalogUpdatedAtMs();
+    return updatedAtMs === null ? '' : fmtElapsedSince(updatedAtMs, this.nowMs());
+  });
   constructor() {
     afterNextRender(() => this.mark('alpaca-bots-route-shell'));
 
@@ -198,6 +223,12 @@ export class BotsListPageComponent {
         this.catalog.reload();
       }
     }, CATALOG_POLL_MS);
+    const staleTimer = setInterval(() => {
+      if (this.document.visibilityState === 'visible') {
+        this.nowMs.set(Date.now());
+      }
+    }, 1_000);
+
     const accountTimer = setInterval(() => {
       if (
         this.document.visibilityState === 'visible' &&
@@ -210,6 +241,7 @@ export class BotsListPageComponent {
     }, ACCOUNT_POLL_MS);
     this.destroyRef.onDestroy(() => {
       clearInterval(catalogTimer);
+      clearInterval(staleTimer);
       clearInterval(accountTimer);
     });
   }
