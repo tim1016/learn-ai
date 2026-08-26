@@ -21,7 +21,10 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    ExecutionLeaseLost,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg
 from app.broker.contract.registry import (
@@ -721,3 +724,56 @@ async def test_chart_contract_rejects_unknown_resolution_and_timeframe(api) -> N
 
     assert live.status_code == 422
     assert history.status_code == 422
+
+
+async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T7c (#1794): a frozen process past its lease TTL bricked the surface.
+
+    On 2026-08-26 a ~50 s SIGSTOP let the execution lease expire; on resume
+    every panel action returned a raw 500 leaking the internal handle
+    message, with no operator-authored cure. Fail-closed is correct -- a
+    holder that lost its lease must not write -- but the surface has to say
+    so. The clerk router already translated this exception; the panel router
+    had no handler for it at all.
+    """
+    app, _repo = api
+
+    def _lease_lost(*_args: object, **_kwargs: object) -> None:
+        raise ExecutionLeaseLost(
+            f"account {ACCT!r} execution lease was lost or expired; "
+            "this handle can no longer write"
+        )
+
+    async with _client(app) as client:
+        panel = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
+        )
+        action = next(
+            item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now"
+        )
+        request = {
+            "action_id": "reconcile_now",
+            "revision": panel.json()["revision"],
+            "concurrency_token": action["concurrency_token"],
+            "idempotency_key": "sqlite-lease-lost",
+        }
+        monkeypatch.setattr(
+            broker_v2_panel.ds, "run_action", _lease_lost, raising=True
+        )
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXECUTION_LEASE_LOST"
+    assert detail["outcome"] == "failure"
+
+    # Authored copy, not the internal handle message.
+    rendered = json.dumps(detail)
+    assert "can no longer write" not in rendered
+    assert "handle" not in rendered
+    assert "restart" in detail["why"].lower()

@@ -78,6 +78,46 @@ class ActionOutcomeUnknownError(ActionExecutionError):
     http_status = 500
 
 
+#: Reason code for a lost/expired account execution lease (T7c, #1794).
+EXECUTION_AUTHORITY_LOST_REASON_CODE = "EXECUTION_LEASE_LOST"
+
+#: Operator-authored copy for that condition. Account-scoped problem,
+#: account-scoped cure -- the Two-Tap rule's own shape. The internal handle
+#: message ("this handle can no longer write") is diagnostic, not operator
+#: copy, and must not reach the surface.
+EXECUTION_AUTHORITY_LOST_MESSAGE = (
+    "This account's execution authority can no longer be written to."
+)
+EXECUTION_AUTHORITY_LOST_WHY = (
+    "The data plane lost this account's execution lease, which happens when the "
+    "process is frozen or starved past the lease timeout. Refusing writes is "
+    "deliberate: a holder that lost its lease must not act on stale authority. "
+    "A restart acquires a fresh lease and reconciles custody on boot."
+)
+EXECUTION_AUTHORITY_LOST_NEXT_ACTION = (
+    "Restart the data plane. No control on this panel can re-acquire the lease."
+)
+
+
+class ExecutionAuthorityLostError(ActionExecutionError):
+    """This account's execution lease expired or was reassigned (503).
+
+    Fail-closed is correct and stays; this type exists so the surface says so
+    in authored copy instead of leaking a raw 500 (T7c). The clerk router has
+    translated the same condition since the SQLite cutover -- the panel
+    router simply had no handler for it.
+    """
+
+    http_status = 503
+
+    def __init__(self) -> None:
+        super().__init__(
+            EXECUTION_AUTHORITY_LOST_MESSAGE,
+            detail=f"{EXECUTION_AUTHORITY_LOST_WHY} {EXECUTION_AUTHORITY_LOST_NEXT_ACTION}",
+            reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
+        )
+
+
 class ActivationFailedError(ActionExecutionError):
     """A performer registered real state, then failed with cleanup proven (500).
 
