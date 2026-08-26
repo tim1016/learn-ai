@@ -10,7 +10,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
-from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
+from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
@@ -227,7 +227,7 @@ async def resolve_start_runtime_fact(
     )
 
 
-def _admission_clerk(binding: BrokerBotBinding):
+def _admission_clerk(binding: BrokerBotBinding) -> ActiveAlpacaClerk:
     """Resolve only the real-paper Clerk; Dry Run supplies its exact sim authority."""
     from app.broker.alpaca.clerk import get_alpaca_clerk
 

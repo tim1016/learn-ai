@@ -28,6 +28,7 @@ import path.
 from __future__ import annotations
 
 from app.broker.v2panel.action_policy import ActionGuardContext, build_actions_from_registry
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import ClerkCard, PanelAction
 from app.schemas.run_admission import RunAdmissionDecision
@@ -38,11 +39,8 @@ def strategy_runtime_missing(strategy_key: str) -> bool:
 
     A registration the runtime no longer knows can never run again -- the
     legacy bot bound to a mistyped symbol is the standing example -- and
-    retire is its only cure (#1778, S5). Deferred import: the strategy
-    registry pulls in the engine, which must not load to present a panel.
+    retire is its only cure (#1778, S5).
     """
-    from app.engine.strategy.registry import _STRATEGY_REGISTRY
-
     return strategy_key not in _STRATEGY_REGISTRY
 
 

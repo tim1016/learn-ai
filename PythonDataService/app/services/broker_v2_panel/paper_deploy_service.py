@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from app.broker.alpaca.clerk.models import ClerkStatus
+from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, hidden_params_present, public_params_schema
 from app.schemas.broker_bots import (
@@ -27,6 +27,7 @@ from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.broker_v2_panel.channel_health import (
+    REQUIRED_CLERK_CHANNELS,
     ChannelHealthEvaluation,
     evaluate_channel_connectivity,
     evaluate_channel_health,
@@ -193,7 +194,7 @@ def _channel_evaluation(
     now_ms: int,
     *,
     symbol: str | None,
-    required_streams: tuple[str, ...] | None = None,
+    required_streams: tuple[str, ...] = REQUIRED_CLERK_CHANNELS,
 ) -> ChannelHealthEvaluation:
     """Pick the channel question this view's scope is entitled to ask.
 
@@ -202,10 +203,20 @@ def _channel_evaluation(
     because per-symbol warm-up is not an account-level fact and must not
     refuse every deploy on the account (#1777, finding S6).
     """
-    kwargs = {} if required_streams is None else {"required_streams": required_streams}
-    if symbol is None:
-        return evaluate_channel_connectivity(clerk_status.channel_healths, now_ms, **kwargs)
-    return evaluate_channel_health(clerk_status.channel_healths, now_ms, **kwargs)
+    evaluate = evaluate_channel_health if symbol is not None else evaluate_channel_connectivity
+    return evaluate(clerk_status.channel_healths, now_ms, required_streams=required_streams)
+
+
+def _channel_phrase(channel: ChannelHealth, failing: frozenset[str]) -> str:
+    """Name one channel's state, carrying its own reason when it failed.
+
+    The sample's reason names the symbol, and surfacing it is what makes a
+    symbol-scoped refusal legible rather than a blanket "unhealthy"
+    (#1777 decision 4).
+    """
+    if channel.stream not in failing:
+        return "healthy"
+    return f"unhealthy ({channel.reason})" if channel.reason else "unhealthy"
 
 
 def _readiness_checks(
@@ -236,16 +247,7 @@ def _readiness_checks(
     failing = channel_evaluation.failing
     channel_summary = (
         ", ".join(
-            f"{channel.stream.replace('_', ' ').title()} is "
-            # The sample's own reason names the symbol; surfacing it is what
-            # makes a symbol-scoped refusal legible (#1777 decision 4).
-            + (
-                f"unhealthy ({channel.reason})"
-                if channel.stream in failing and channel.reason
-                else "unhealthy"
-                if channel.stream in failing
-                else "healthy"
-            )
+            f"{channel.stream.replace('_', ' ').title()} is {_channel_phrase(channel, failing)}"
             for channel in channels
         )
         or "no channel observations"

@@ -22,14 +22,14 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
+from app.broker.alpaca.clerk.models import ChannelHealth
 from app.broker.v2panel.vocabulary import ChannelState
 from app.services.broker_v2_panel.station_derivation import STALE_THRESHOLD_MS
 
 # A channel-health observation older than this is not "fresh" for the clear-hold
 # gate (§7.3). Reuse the station staleness threshold — one trading day.
 CHANNEL_FRESH_THRESHOLD_MS = STALE_THRESHOLD_MS
-_REQUIRED_CLERK_CHANNELS = ("market_data", "execution")
+REQUIRED_CLERK_CHANNELS = ("market_data", "execution")
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ def evaluate_channel_health(
     channel_healths: Sequence[ChannelHealth] | None,
     now_ms: int,
     *,
-    required_streams: tuple[str, ...] = _REQUIRED_CLERK_CHANNELS,
+    required_streams: tuple[str, ...] = REQUIRED_CLERK_CHANNELS,
 ) -> ChannelHealthEvaluation:
     """Evaluate the exact channel set required by every submission gate.
 
@@ -111,7 +111,7 @@ def evaluate_channel_connectivity(
     channel_healths: Sequence[ChannelHealth] | None,
     now_ms: int,
     *,
-    required_streams: tuple[str, ...] = _REQUIRED_CLERK_CHANNELS,
+    required_streams: tuple[str, ...] = REQUIRED_CLERK_CHANNELS,
 ) -> ChannelHealthEvaluation:
     """Evaluate channel *presence and transport only* — installed + connected.
 
@@ -134,13 +134,6 @@ def evaluate_channel_connectivity(
     )
 
 
-def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
-    """True iff market-data and execution health are both healthy and fresh."""
-    return evaluate_channel_health(clerk_status.channel_healths, now_ms).ready
-
-
-
-
 def channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int) -> ChannelState:
     """Derive the closed channel state from health + freshness (§7.3)."""
     if now_ms - observed_at_ms > CHANNEL_FRESH_THRESHOLD_MS:
@@ -148,11 +141,10 @@ def channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int) -> Channel
     return "healthy" if healthy else "unhealthy"
 
 
-
 __all__ = [
     "CHANNEL_FRESH_THRESHOLD_MS",
+    "REQUIRED_CLERK_CHANNELS",
     "ChannelHealthEvaluation",
-    "channel_health_fresh",
     "channel_state",
     "evaluate_channel_connectivity",
     "evaluate_channel_health",

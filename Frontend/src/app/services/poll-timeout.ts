@@ -11,8 +11,11 @@ import { firstValueFrom, type Observable, timeout } from 'rxjs';
  * staleness affordances already handle, and the next tick recovers
  * unattended.
  *
- * Chosen well above a healthy p95 read and well below the poll intervals,
- * so a slow-but-live backend is never cut off mid-flight.
+ * Deliberately longer than the 5s catalog interval: each poll is guarded on
+ * `isLoading()`, so a request that outlives its interval skips ticks rather
+ * than stacking, and a ceiling below the interval would cut off a
+ * slow-but-live backend. The ceiling's job is to bound the freeze to one
+ * request, not to fit inside a tick.
  */
 export const POLL_REQUEST_TIMEOUT_MS = 15_000;
 
