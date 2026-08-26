@@ -272,20 +272,10 @@ def sample_channels(
     decides and records evidence from the *same* observation -- deciding
     on one snapshot and journalling another is a race, however small.
 
-    The verdict carries no observation time, because every observation is a
-    fresh pull: the providers are closures that recompute on every call, and
-    an absent one samples ``unknown`` rather than returning a cached
-    reading. See the sampling contract in
-    :mod:`app.broker.alpaca.clerk.hold_debounce`.
-
-    A per-channel freshness window used to gate this, on the theory that a
-    provider could stop reporting and leave a stale reading clearing the
-    gate. It could not, and the window was actively harmful: the only
-    channels whose ``observed_at_ms`` ever freezes are the already-broken
-    ones (a disconnected channel reports ``connection_changed_at_ms`` --
-    when it *broke*). A healthy reading always carries a current
-    timestamp, so the window could never prevent a false release, only a
-    true raise. An outage older than the window stopped being actionable.
+    The verdict carries no observation time, and an absent provider samples
+    ``unknown`` rather than returning a cached reading. Both follow from the
+    sampling contract in :mod:`app.broker.alpaca.clerk.hold_debounce`, which
+    is where that reasoning lives.
     """
     if not channels:
         return "unknown"

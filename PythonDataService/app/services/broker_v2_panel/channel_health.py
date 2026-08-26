@@ -9,7 +9,7 @@ Two questions, deliberately distinct:
 
 * :func:`evaluate_channel_health` -- is this channel *usable*? Submission
   gates and symbol-scoped views ask this.
-* :func:`evaluate_channel_connectivity` -- is this channel good enough at
+* :func:`evaluate_channels_at_account_scope` -- is this channel good enough at
   *account* scope? Account-level surfaces ask this, so one symbol's warm-up
   cannot refuse every deploy on the account (finding S6). The per-channel
   answer is the clerk's canonical ``account_scope_satisfied``, shared with
@@ -117,7 +117,7 @@ def _evaluate_channels(
     )
 
 
-def evaluate_channel_connectivity(
+def evaluate_channels_at_account_scope(
     channel_healths: Sequence[ChannelHealth] | None,
     now_ms: int,
     *,
@@ -160,6 +160,6 @@ __all__ = [
     "REQUIRED_CLERK_CHANNELS",
     "ChannelHealthEvaluation",
     "channel_state",
-    "evaluate_channel_connectivity",
     "evaluate_channel_health",
+    "evaluate_channels_at_account_scope",
 ]

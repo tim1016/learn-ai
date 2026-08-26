@@ -29,8 +29,8 @@ from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.broker_v2_panel.channel_health import (
     REQUIRED_CLERK_CHANNELS,
     ChannelHealthEvaluation,
-    evaluate_channel_connectivity,
     evaluate_channel_health,
+    evaluate_channels_at_account_scope,
 )
 from app.services.broker_v2_panel.strategy_catalog import compose_strategy_catalog
 from app.utils.timestamps import now_ms_utc
@@ -203,7 +203,7 @@ def _channel_evaluation(
     because per-symbol warm-up is not an account-level fact and must not
     refuse every deploy on the account (#1777, finding S6).
     """
-    evaluate = evaluate_channel_health if symbol is not None else evaluate_channel_connectivity
+    evaluate = evaluate_channel_health if symbol is not None else evaluate_channels_at_account_scope
     return evaluate(clerk_status.channel_healths, now_ms, required_streams=required_streams)
 
 

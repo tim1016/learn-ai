@@ -27,7 +27,7 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
 )
 from app.services.broker_v2_panel import panel_data_source
-from app.services.broker_v2_panel.channel_health import evaluate_channel_connectivity
+from app.services.broker_v2_panel.channel_health import evaluate_channels_at_account_scope
 from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE
 from tests.broker.v2panel.fixtures import ACCT
@@ -197,7 +197,7 @@ def test_account_scope_never_relaxes_a_broken_execution_channel() -> None:
         ),
     ]
 
-    evaluation = evaluate_channel_connectivity(channels, now_ms)
+    evaluation = evaluate_channels_at_account_scope(channels, now_ms)
 
     assert "market_data" not in evaluation.unhealthy, "warm-up must not refuse the account"
     assert "execution" in evaluation.unhealthy

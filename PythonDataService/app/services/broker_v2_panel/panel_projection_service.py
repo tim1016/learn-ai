@@ -22,10 +22,10 @@ from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJou
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.v2panel.vocabulary import (
-    HOLD_REASONS,
     ActionId,
     copy_for,
     duty_outcome_copy_key,
+    hold_reason_for,
 )
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -82,35 +82,6 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
         "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
     ),
 }
-
-
-# The SQLite authority stores its own spelling of a hold cause; the panel
-# renders the closed wire vocabulary. ``UNEXPLAINED_ORDER`` (stored at
-# ``sqlite/reconcile.py``, ``sqlite/trade_evidence.py`` and
-# ``sqlite/external_order_folds.py``) and ``UNEXPLAINED_ORDER_HOLD`` (wire)
-# are the same cause. ADR 0048 Decision 2 normalises the stored row itself in
-# the v12 migration; until that lands this seam owns the translation, because
-# an operator staring at a frozen account cannot wait for a migration.
-_STORED_HOLD_REASON_ALIASES: dict[str, str] = {
-    "UNEXPLAINED_ORDER": "UNEXPLAINED_ORDER_HOLD",
-}
-
-
-def _hold_reason_code(hold_active: bool, raw_reason_code: str | None) -> str:
-    """Map the clerk's stored hold code to the closed HoldReason vocabulary.
-
-    Fails **closed**. An active hold whose stored code this build cannot name
-    renders as ``UNKNOWN_HOLD`` — still an active, entry-blocking hold — never
-    as ``NO_HOLD``. Telling an operator "No hold" while the Clerk is refusing
-    every entry account-wide is the one answer this seam must never give, and
-    it is what an unrecognised code used to produce.
-    """
-    if not hold_active:
-        return "NO_HOLD"
-    code = _STORED_HOLD_REASON_ALIASES.get(raw_reason_code or "", raw_reason_code)
-    if code in HOLD_REASONS and code != "NO_HOLD":
-        return code
-    return "UNKNOWN_HOLD"
 
 
 def compute_revision(
@@ -241,7 +212,7 @@ def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealth
 def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     """Project the account Clerk state shared by panel and roster actions."""
     hold = clerk_status.hold
-    reason_code = _hold_reason_code(hold.active, hold.reason_code)
+    reason_code = hold_reason_for(active=hold.active, stored_code=hold.reason_code)
     reason_copy = copy_for(reason_code)
     reconciliation = clerk_status.latest_reconciliation
     verdict = reconciliation.verdict if reconciliation is not None else None
@@ -249,7 +220,7 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     return ClerkCard(
         account_id=clerk_status.account_id,
         hold_active=hold.active,
-        hold_reason=reason_code,  # type: ignore[arg-type]
+        hold_reason=reason_code,
         hold_reason_label=reason_copy.label,
         hold_reason_explanation=reason_copy.explanation,
         hold_since_ms=hold.since_ms,

@@ -17,12 +17,18 @@ closures that recompute on every call, and an absent provider reports
 ``unknown`` rather than returning a cached reading. There is therefore no
 such thing here as a replayed or out-of-order sample, and this table does
 not carry the machinery to detect one: no observation timestamp on the
-sample, no last-counted timestamp in the state. That machinery existed,
-could never fire, and cost a real property -- keyed on a wall clock it
-would have *suppressed* a legitimate sample across an NTP step backwards.
-If a provider is ever added that can hand back a cached reading, it owes a
-monotonic revision on the sample and this table owes the check back; the
-timestamp it used to carry was never that revision.
+sample, no last-counted timestamp in the state.
+
+That machinery existed and could never fire. The only channels whose
+``observed_at_ms`` ever freezes are the already-broken ones -- a
+disconnected channel reports ``connection_changed_at_ms``, when it *broke*
+-- while a healthy reading always carries a current timestamp. A freshness
+window over it could therefore never prevent a false release, only a true
+raise: an outage simply aged out of being actionable. Keyed on a wall clock
+it would also have *suppressed* a legitimate sample across an NTP step
+backwards. If a provider is ever added that can hand back a cached reading,
+it owes a monotonic revision on the sample and this table owes the check
+back; the timestamp it used to carry was never that revision.
 """
 
 from __future__ import annotations

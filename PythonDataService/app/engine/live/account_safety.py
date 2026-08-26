@@ -300,6 +300,15 @@ def account_safety_entry_admission_lock(artifacts_root: Path, account_id: str) -
     the turnstile, waits for all existing readers, and then has exclusive
     authority. Every marker is created with ``O_EXCL`` on the shared mount,
     which works across the host/VM boundary where ``flock`` is insufficient.
+
+    **Superseded, and awaiting removal by ADR 0048 Decision 4f.** #1285 wired
+    this into the legacy ``AccountClerk``; #1679 removed every call site with
+    that control path, and Alpaca admission is now owned by the SQLite
+    Clerk's ``decide_capability``. It is kept only because deleting the
+    reader half alone would strand ``wait_for_readers`` and ``readers/`` as
+    the next dead machinery: 4f replaces all four marker classes with one
+    fenced single-writer claim, and that is where this goes. Do not re-wire
+    it into an entry path in the meantime.
     """
 
     target, gate, writer, readers = _account_safety_admission_paths(artifacts_root, account_id)
