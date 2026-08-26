@@ -378,8 +378,15 @@ async def deploy_bot(
 async def get_alpaca_paper_deploy_view(
     broker: str,
     account_id: str,
+    symbol: str | None = None,
 ) -> AlpacaPaperDeployView:
-    """Author the closed paper-deployment form and its current launch verdict."""
+    """Author the closed paper-deployment form and its current launch verdict.
+
+    ``symbol`` scopes the channel-health verdict. Omitted, the view reports
+    account-level channel presence and connectivity only; supplied, it
+    evaluates that symbol's own market-data health, warm-up included
+    (#1777, finding S6).
+    """
     account = await resolve_account_snapshot(broker)
     if account.account_id != account_id:
         raise AccountMismatchError(
@@ -399,7 +406,7 @@ async def get_alpaca_paper_deploy_view(
             detail="The service is still starting or has shut down.",
             next_action="Wait for the data plane to become healthy, then refresh.",
         )
-    clerk_status = await _clerk_status()
+    clerk_status = await _clerk_status(symbol=symbol)
     try:
         validation_entries = load_strategy_validation_entries(strategy_registry_seeds())
     except StrategyValidationManifestError as exc:
@@ -408,7 +415,9 @@ async def get_alpaca_paper_deploy_view(
             detail="Deploy remains closed until current validation evidence is readable and hash-valid.",
             next_action="Restore the validation manifest and evidence artifacts, then refresh.",
         ) from exc
-    return build_alpaca_paper_deploy_view(account, clerk_status, validation_entries)
+    return build_alpaca_paper_deploy_view(
+        account, clerk_status, validation_entries, symbol=symbol
+    )
 
 
 async def deploy_alpaca_paper_bot(
@@ -417,7 +426,7 @@ async def deploy_alpaca_paper_bot(
     request: AlpacaPaperDeployRequest,
 ) -> AlpacaPaperDeployReceipt:
     """Execute the production paper deployment command through the runner seam."""
-    view = await get_alpaca_paper_deploy_view(broker, account_id)
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol)
     resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
     if registry is None:  # guarded by the view; retained for type narrowing
@@ -464,7 +473,7 @@ async def preview_alpaca_paper_start_admission(
     request: AlpacaPaperDeployRequest,
 ) -> RunAdmissionDecision:
     """Project the same request-specific Start decision used by execution."""
-    view = await get_alpaca_paper_deploy_view(broker, account_id)
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol)
     resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
     if registry is None:
@@ -705,9 +714,9 @@ async def _get_panel_with_entries_from_authority(
     resume_admission: RunAdmissionDecision | None = None
     if not status.running:
         try:
-            # Resume alone needs a fresh Clerk custody fence. Do not perform a
-            # broker reconciliation every five seconds for a live run where
-            # Resume is inapplicable.
+            # Resume is the only action this projection informs, so skip it
+            # entirely for a live run. The preview itself is a pure read: it
+            # projects the sweep's verdict rather than reconciling (#1776).
             resume_admission = await registry.preview_resume_admission(broker, sid)
         except BotRunnerError as exc:
             resume_admission = exc.admission_decision
@@ -716,28 +725,10 @@ async def _get_panel_with_entries_from_authority(
                     "broker panel Resume admission is unavailable",
                     extra={"broker": broker, "account_id": account_id, "sid": sid, "detail": exc.detail},
                 )
-        # Preview can reconcile and advance Clerk evidence. Read all projection
-        # inputs afterwards so this response is one post-admission evidence cut.
-        try:
-            evidence = await read_sqlite_panel_evidence(
-                broker,
-                authority_account_id,
-                sid,
-                now_ms=captured_now_ms,
-                facade=facade,
-            )
-        except SqlitePanelBotNotFound as exc:
-            raise UnknownBotError(str(exc)) from exc
-        except SqlitePanelEconomicUnavailable as exc:
-            raise PanelUnavailableError(
-                "The activated SQLite panel evidence is unavailable.",
-                detail=str(exc),
-            ) from exc
-        if evidence is None:
-            raise PanelUnavailableError(
-                "The activated SQLite panel authority became unavailable.",
-            )
-        status = _status_in_binding_mode(evidence.status, binding)
+        # No second evidence cut: the preview projects the sweep's last
+        # verdict and mutates nothing (#1776 WP2), so the evidence read above
+        # is already this response's single consistent cut. Re-reading here
+        # doubled the cost of every stopped bot's poll.
     projection = evidence.projection
     session_fills = evidence.economics.session_fills
     entries: list[OrderJournalEntry] = []
@@ -996,6 +987,21 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         await registry.stop(broker, sid, reason=f"Panel stop by {operator}")
         return "Bot stopped. The Clerk cancelled any working entry orders; attributed exposure was left untouched."
 
+    async def _retire(operator: str, reason: str | None) -> str:
+        registry = get_bot_task_registry()
+        if registry is None:
+            raise PanelUnavailableError("The bot runner is not available.")
+        await registry.retire(
+            broker,
+            sid,
+            updated_by=operator,
+            reason=f"Panel retire by {operator}",
+        )
+        return (
+            "Registration retired and taken off the roster. It issues no further "
+            "feed subscriptions and can start no new runs."
+        )
+
     async def _pause(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         if registry is None:
@@ -1071,6 +1077,7 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         "pause": _pause,
         "continue": _continue,
         "stop": _stop,
+        "retire": _retire,
         "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,
     }

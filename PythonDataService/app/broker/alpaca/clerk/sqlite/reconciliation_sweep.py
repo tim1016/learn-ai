@@ -9,12 +9,19 @@ from contextlib import suppress
 
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+from app.broker.alpaca.clerk.sqlite.reconcile import (
+    AccountReconciliationResult,
+    reconcile_account,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
 type Sleep = Callable[[float], Awaitable[None]]
+# Notified with each completed pass's verdict. This is how the reads that
+# project custody learn what the sweep found -- the sweep, not the facade,
+# is the sole automatic reconciler (#1776 WP2).
+type ReconciliationListener = Callable[[AccountReconciliationResult], object]
 # Renew the execution lease three times per TTL. This is a safety-margin
 # choice, not ported math: at 3x cadence a single missed renewal (transient
 # disk stall, scheduler delay) still leaves ~2/3 of the TTL before the lease
@@ -38,8 +45,10 @@ class ReconciliationSweep:
         lease_sleep: Sleep = asyncio.sleep,
         max_passes: int | None = None,
         intake: ReentrantAsyncLock | None = None,
+        on_result: ReconciliationListener | None = None,
     ) -> None:
         self._repo = repo
+        self._on_result = on_result
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._interval_s = interval_s
@@ -134,6 +143,8 @@ class ReconciliationSweep:
                 trigger="AUTOMATIC",
                 intake=self._intake,
             )
+            if self._on_result is not None:
+                self._on_result(result)
             return result.verdict != "stale"
         except asyncio.CancelledError:
             raise
@@ -146,4 +157,4 @@ class ReconciliationSweep:
             return False
 
 
-__all__ = ["ReconciliationSweep"]
+__all__ = ["ReconciliationListener", "ReconciliationSweep"]

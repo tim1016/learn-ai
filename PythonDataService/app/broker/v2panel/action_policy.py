@@ -20,6 +20,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from app.broker.v2panel.vocabulary import ACTION_IDS, ActionId, copy_for
 from app.schemas.broker_v2_panel import PanelAction
@@ -50,6 +51,11 @@ class ActionGuardContext:
     strategy_instance_id: str
     exposure: dict[str, float]
     working_order_count: int
+    # True when this bot's strategy key is no longer in the runtime registry,
+    # so the registration can never run again (dead vocabulary / legacy
+    # registration). Defaults False: a caller that has not resolved the
+    # registry leaves retire disabled rather than offering it speculatively.
+    strategy_runtime_missing: bool = False
 
 
 @dataclass(frozen=True)
@@ -251,8 +257,112 @@ def _guard_flatten_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlo
     return (not blockers), blockers
 
 
+RetirementBlockedCause = Literal[
+    "BOT_STILL_RUNNING",
+    "STRATEGY_STILL_RUNNABLE",
+    "RETIRE_WOULD_STRAND_CUSTODY",
+]
+
+
+@dataclass(frozen=True)
+class RetirementVerdict:
+    """One definition of "may this registration be retired".
+
+    Shared by the panel guard, which answers it against a projected custody
+    snapshot to decide what to present, and by the committing operation in
+    :mod:`app.services.bot_runner`, which answers it again against a freshly
+    reconciled one before it writes. Retirement is irreversible and the
+    presented decision is always older than the click, so the same rule must
+    hold at both moments -- and it must be one rule, or the two drift.
+    """
+
+    eligible: bool
+    cause: RetirementBlockedCause | None = None
+    already_retired: bool = False
+
+
+def evaluate_retirement(
+    *,
+    running: bool,
+    phase: str,
+    strategy_runtime_missing: bool,
+    has_exposure: bool,
+    working_order_count: int,
+) -> RetirementVerdict:
+    """Decide retirement eligibility, nearest obstacle first.
+
+    Ordered so an operator learns the closest thing they can act on, and so
+    the custody guards are the last word: retire must never strand exposure.
+
+    ``strategy_runtime_missing`` is currently the only proof that a
+    registration can never run again. A bot bound to an unresolvable
+    *instrument* is equally dead but is not detectable without a broker-backed
+    security lookup, so it is not yet a cause here.
+    """
+    if phase == "RETIRED":
+        return RetirementVerdict(eligible=False, already_retired=True)
+    if running:
+        return RetirementVerdict(eligible=False, cause="BOT_STILL_RUNNING")
+    if not strategy_runtime_missing:
+        return RetirementVerdict(eligible=False, cause="STRATEGY_STILL_RUNNABLE")
+    if has_exposure or working_order_count:
+        return RetirementVerdict(eligible=False, cause="RETIRE_WOULD_STRAND_CUSTODY")
+    return RetirementVerdict(eligible=True)
+
+
+_RETIRE_BLOCKER_COPY: dict[RetirementBlockedCause, tuple[str, str]] = {
+    "BOT_STILL_RUNNING": (
+        "Stop the bot before retiring it.",
+        "A running bot still evaluates bars and can place orders.",
+    ),
+    "STRATEGY_STILL_RUNNABLE": (
+        "This bot can still run.",
+        "Retire only clears registrations the runtime can no longer honour. "
+        "Stop this bot instead of retiring it.",
+    ),
+    "RETIRE_WOULD_STRAND_CUSTODY": (
+        "This bot still holds custody.",
+        "Flatten attributed exposure and let working orders reach a terminal "
+        "state before retiring the registration.",
+    ),
+}
+
+
 def _guard_retire(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _disabled()
+    """Present the shared retirement rule as operator guidance (S5).
+
+    Retire cleans up a registration the runtime can no longer honour -- the
+    legacy bot bound to a strategy key that no longer exists. It is not "end
+    this bot's life": a healthy stopped bot stays out of scope, because that
+    is a destructive lifecycle action with its own safety story.
+
+    The rule itself lives in :func:`evaluate_retirement` because the
+    committing operation must re-prove it against fresh custody; this guard
+    only turns its verdict into copy.
+    """
+    verdict = evaluate_retirement(
+        running=ctx.running,
+        phase=ctx.phase,
+        strategy_runtime_missing=ctx.strategy_runtime_missing,
+        has_exposure=ctx.has_exposure,
+        working_order_count=ctx.working_order_count,
+    )
+    if verdict.eligible:
+        return True, []
+    if verdict.cause is None:
+        return _disabled()
+    return _disabled(
+        _blocker(
+            verdict.cause,
+            scope="bot",
+            headline=_RETIRE_BLOCKER_COPY[verdict.cause][0],
+            detail=_RETIRE_BLOCKER_COPY[verdict.cause][1],
+            evidence={
+                "strategy_instance_id": ctx.strategy_instance_id,
+                "working_order_count": ctx.working_order_count,
+            },
+        )
+    )
 
 
 def _guard_cancel_order(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
@@ -326,10 +436,16 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
     ),
     "retire": ActionPolicy(
         action_id="retire",
-        supported_brokers=frozenset(),
+        supported_brokers=frozenset({"alpaca"}),
         list_page_only=False,
         guard=_guard_retire,
-        revision_inputs=lambda ctx: (ctx.phase,),
+        revision_inputs=lambda ctx: (
+            ctx.phase,
+            ctx.running,
+            ctx.strategy_runtime_missing,
+            ctx.has_exposure,
+            ctx.working_order_count,
+        ),
     ),
     "cancel_order": ActionPolicy(
         action_id="cancel_order",
@@ -393,6 +509,21 @@ def _confirmation_for_action(
             ),
             confirm_label="Flatten & stop",
             required_token="FLATTEN",
+        )
+    if action_id == "retire":
+        return OperatorConfirmationCopy(
+            title="Retire this registration?",
+            body=(
+                f"This clears {ctx.strategy_instance_id} on account "
+                f"{ctx.account_id} from the roster. Its strategy is no longer "
+                "registered, so the runtime can never honour it again."
+            ),
+            consequence=(
+                "The registration stops issuing feed subscriptions and can "
+                "start no further runs. This cannot be undone."
+            ),
+            confirm_label="Retire registration",
+            required_token="RETIRE",
         )
     return None
 

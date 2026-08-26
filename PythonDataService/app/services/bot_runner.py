@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.v2panel.action_policy import evaluate_retirement
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
@@ -55,6 +56,7 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
 from app.schemas.broker_bots import (
     AlpacaPaperEvidenceOverride,
@@ -178,6 +180,30 @@ _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
 
 
+# Commit-time refusals, keyed by the shared retirement rule's cause. The
+# panel renders its own operator copy from the same causes; this is what an
+# operator sees when the world changed between presentation and click.
+_RETIRE_REFUSAL: dict[str | None, tuple[str, str]] = {
+    "BOT_STILL_RUNNING": (
+        "The bot is still running.",
+        "Stop the bot before retiring its registration.",
+    ),
+    "STRATEGY_STILL_RUNNABLE": (
+        "This bot can still run.",
+        "Retire only clears registrations the runtime can no longer honour.",
+    ),
+    "RETIRE_WOULD_STRAND_CUSTODY": (
+        "The bot still holds custody.",
+        "Retiring now would strand attributed exposure or a working order. "
+        "Flatten and let working orders reach a terminal state first.",
+    ),
+    None: (
+        "This registration cannot be retired.",
+        "Retirement preconditions are no longer satisfied.",
+    ),
+}
+
+
 class BotTaskRegistry:
     """Spawn, track, and reap one supervised asyncio task per bot.
 
@@ -270,6 +296,7 @@ class BotTaskRegistry:
             now_ms=self._now_ms,
             feed_resolver=self._feed_resolver,
             custody_guard=self._start_custody_guard,
+            custody_projection=self._start_custody_projection,
             process_fact=self._resume_process_fact,
             runtime_fact=self._start_runtime_fact,
             checkpoint=self._resume_checkpoint_fact,
@@ -745,6 +772,56 @@ class BotTaskRegistry:
             ),
             explanation="Only the lifecycle summary exists; Resume will convert it into a receipt.",
         )
+
+    async def retire(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str = "operator",
+        reason: str | None = None,
+    ) -> BotStatusView:
+        """Clear a registration the runtime can no longer honour (#1778, S5).
+
+        Retiring takes the bot off the roster, so it stops re-issuing the
+        doomed feed subscriptions that made a dead legacy registration
+        impossible to silence.
+
+        The panel guard authored an enabled Retire against a *projected*
+        custody snapshot, and the operator clicked later. Retirement is
+        irreversible, so this re-answers the same shared rule against a
+        freshly reconciled snapshot before writing: a fill that landed in
+        between must refuse the command, not be stranded by it.
+        """
+        async with self._operation_lock(strategy_instance_id):
+            binding = self._bindings.read(strategy_instance_id)
+            if binding is None:
+                raise BotRunnerError(
+                    f"Bot '{strategy_instance_id}' has no registration to retire.",
+                    detail="The roster has no binding for this instance.",
+                )
+            status = self.status(broker, strategy_instance_id)
+            async with self._start_custody_guard(binding) as custody:
+                verdict = evaluate_retirement(
+                    running=status.running,
+                    phase=status.phase,
+                    strategy_runtime_missing=(
+                        binding.strategy_key not in _STRATEGY_REGISTRY
+                    ),
+                    has_exposure=custody.exposure.state != "zero",
+                    working_order_count=custody.working_orders.count,
+                )
+            if verdict.already_retired:
+                return status
+            if not verdict.eligible:
+                headline, detail = _RETIRE_REFUSAL[verdict.cause]
+                raise BotRunnerError(headline, detail=detail)
+            self._lifecycle_repo(strategy_instance_id).retire(
+                now_ms=self._now_ms(),
+                updated_by=updated_by,
+                reason=reason or f"Panel retire by {updated_by}",
+            )
+            return self.status(broker, strategy_instance_id)
 
     async def stop(
         self,
@@ -1377,6 +1454,12 @@ class BotTaskRegistry:
         binding: BrokerBotBinding,
     ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
         return self._authority_for(binding).start_custody_guard()
+
+    def _start_custody_projection(
+        self,
+        binding: BrokerBotBinding,
+    ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+        return self._authority_for(binding).start_custody_projection()
 
     def _lifecycle_projector_for_instance(self, strategy_instance_id: str) -> AlpacaLifecycleProjector:
         binding = self._bindings.read(strategy_instance_id)

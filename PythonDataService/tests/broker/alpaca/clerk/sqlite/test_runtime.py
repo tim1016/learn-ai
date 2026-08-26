@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource
 from app.broker.alpaca.clerk.sqlite.reconcile import ReconciliationLockOrderError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import (
+    ReentrantAsyncLock,
     SqliteAlpacaClerkFacade,
     StrategyAdmissionStaleError,
 )
@@ -127,6 +128,82 @@ def test_durable_decision_encoding_is_injective_across_reserved_prefix() -> None
     assert encoded_delimiter_id == "encoded-YTpi"
     assert runtime_module._durable_decision_id(encoded_delimiter_id) != encoded_delimiter_id
     assert runtime_module._durable_decision_id("plain-id") == "plain-id"
+
+
+class _CountingBroker(_Broker):
+    """``_Broker`` that records every read-port invocation."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_calls = 0
+
+    async def list_orders(self, **kwargs: Any) -> list[BrokerOrder]:
+        self.read_calls += 1
+        return await super().list_orders(**kwargs)
+
+    async def list_positions(self) -> list:
+        self.read_calls += 1
+        return await super().list_positions()
+
+
+async def test_custody_projection_answers_from_the_last_sweep_without_broker_contact(
+    tmp_path: Path,
+) -> None:
+    """Panel reads must never reconcile (#1776 WP2, finding S12d).
+
+    ``custody_snapshot`` forces a full account reconciliation -- broker REST
+    plus ledger appends -- under the per-account intake lock that panel
+    actions share. A stopped bot's panel GET called it on every poll, so a
+    fully stopped fleet reconciled once per bot per poll: 105-145 s reads and
+    a hot loop at 77% CPU with *zero* bots running. The projection answers the
+    same custody question from the sweep's own last verdict instead.
+
+    Measurements are the observed S12d figures recorded in
+    ``docs/audits/bot-fleet-stress-2026-08-25.md`` (S12 family; latency table).
+    They are cited history explaining why this test exists, not a threshold
+    this test asserts -- what it pins is the invariant: zero broker reads.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+
+    # Stands in for a completed sweep to establish a published verdict. The
+    # real sweep path is covered by
+    # `test_the_real_sweep_publishes_the_verdict_panel_reads_project`.
+    await facade.reconcile_account(trigger="AUTOMATIC")
+    assert broker.read_calls > 0
+    after_sweep = broker.read_calls
+
+    projection = await facade.custody_snapshot_projection("sid-1")
+
+    assert broker.read_calls == after_sweep, "a read reached the broker port"
+    assert projection is not None
+    assert projection.reconciliation_state == "clean"
+    assert projection.reconciled_at_ms > 0
+
+    repo.close()
+
+
+async def test_custody_projection_is_unproven_before_the_first_sweep(tmp_path: Path) -> None:
+    """No sweep yet is not "clean" -- it is the existing `stale` verdict.
+
+    A read must never manufacture a custody proof it did not obtain. Routing
+    the empty case through `stale` means the policy that already refuses on
+    unprovable custody handles it, with no new absence path. The sweep
+    cadence closes this window within one tick of process start.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+
+    projection = await facade.custody_snapshot_projection("sid-1")
+
+    assert projection.reconciliation_state == "stale"
+    assert projection.reconciliation_fresh is False
+    assert projection.reason_code == "CLERK_CUSTODY_UNPROVABLE"
+    assert broker.read_calls == 0
+
+    repo.close()
 
 
 async def test_direct_facade_construction_guards_raw_broker_ports(tmp_path: Path) -> None:
@@ -526,13 +603,13 @@ def _gate(*, market_data_healthy: bool, execution_healthy: bool) -> StreamHealth
     return StreamHealthGate(
         market_data=lambda: ChannelHealth(
             stream="market_data",
-            healthy=market_data_healthy,
+            healthy=market_data_healthy, connected=market_data_healthy,
             reason="" if market_data_healthy else "market_data broke for the test",
             observed_at_ms=1,
         ),
         execution=lambda: ChannelHealth(
             stream="execution",
-            healthy=execution_healthy,
+            healthy=execution_healthy, connected=execution_healthy,
             reason="" if execution_healthy else "execution broke for the test",
             observed_at_ms=1,
         ),
@@ -592,19 +669,19 @@ async def test_execute_for_instance_uses_its_symbols_market_data_health(
     gate = StreamHealthGate(
         market_data=lambda: ChannelHealth(
             stream="market_data",
-            healthy=False,
+            healthy=False, connected=False,
             reason="A sibling symbol is stale",
             observed_at_ms=1,
         ),
         execution=lambda: ChannelHealth(
             stream="execution",
-            healthy=True,
+            healthy=True, connected=True,
             reason="",
             observed_at_ms=1,
         ),
         market_data_for_symbol=lambda symbol: ChannelHealth(
             stream="market_data",
-            healthy=symbol == "SPY",
+            healthy=symbol == "SPY", connected=symbol == "SPY",
             reason="" if symbol == "SPY" else f"{symbol} is stale",
             observed_at_ms=1,
         ),
@@ -877,4 +954,42 @@ async def test_sqlite_trade_update_redelivery_and_regression_are_idempotent(
     assert current is not None
     assert current.broker_state == "accepted"
     assert len(repo.transitions_for_order(order_ref)) == transitions_before
+    repo.close()
+
+
+async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
+    tmp_path: Path,
+) -> None:
+    """The production reconciler must feed the production projection.
+
+    ``ReconciliationSweep`` is what actually runs every 15 s, and it calls
+    ``reconcile_account`` directly rather than through the facade. If it does
+    not publish its verdict, ``custody_snapshot_projection`` answers ``stale``
+    with ``reconciled_at_ms=0`` forever no matter how many sweeps succeed --
+    reads stay pure, but they also stop telling the truth.
+
+    Drives the real sweep, not a facade stand-in, so the wiring is what is
+    under test.
+    """
+    from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    intake = ReentrantAsyncLock()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, intake=intake)
+
+    await ReconciliationSweep(
+        repo=repo,
+        read=broker,
+        trade=broker,
+        intake=intake,
+        max_passes=1,
+        on_result=facade.publish_reconciliation,
+    ).run()
+
+    projection = await facade.custody_snapshot_projection("sid-1")
+
+    assert projection.reconciliation_state == "clean"
+    assert projection.reconciled_at_ms > 0, "the sweep's verdict never reached the projection"
+
     repo.close()

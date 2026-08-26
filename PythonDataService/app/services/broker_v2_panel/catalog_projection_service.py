@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
+from app.broker.v2panel.vocabulary import copy_for, duty_outcome_copy_key
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView
 
@@ -41,11 +42,20 @@ class CatalogEconomicRollup:
 
 
 def status_label_for(status: BotStatusView) -> str:
-    """Map a bot's phase + liveness to the closed status vocabulary (§5)."""
+    """Map a bot's phase + liveness to the closed status vocabulary (§5).
+
+    An unclean terminal outcome overrides "Off duty" (S3b): a crashed run
+    must never read the same as a deliberate stop. The label is the shared
+    vocabulary's own copy for that outcome, so the roster and the health
+    card name a crash identically.
+    """
     if status.phase == "RETIRED":
         return _STATUS_LABEL_RETIRED
     if status.running:
         return _STATUS_LABEL_WORKING
+    outcome = status.duty_outcome
+    if outcome is not None and _lifecycle_needs_attention(status):
+        return copy_for(duty_outcome_copy_key(outcome.kind)).label
     return _STATUS_LABEL_OFF_DUTY
 
 

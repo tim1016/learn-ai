@@ -109,6 +109,18 @@ export class OperatorLensComponent {
   protected readonly primaryAction = computed<PanelAction | null>(() =>
     primaryActionForLens(this.panel(), 'operator'),
   );
+  /**
+   * Retire is presented for every bot but enabled only for a registration
+   * the runtime can no longer honour (#1778, S5). Render it only when it is
+   * actually on offer: a permanently dead button on every healthy bot is
+   * noise, not honesty.
+   */
+  protected readonly retireAction = computed<PanelAction | null>(
+    () =>
+      this.panel().actions.find(
+        (action) => action.action_id === 'retire' && action.enabled,
+      ) ?? null,
+  );
 
   // ── Template handlers ─────────────────────────────────────────────────────
 

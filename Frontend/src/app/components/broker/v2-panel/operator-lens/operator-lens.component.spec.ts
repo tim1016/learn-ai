@@ -353,6 +353,51 @@ describe('OperatorLensComponent', () => {
     expect(screen.getByText('Restore observation and reconcile.')).toBeTruthy();
   });
 
+  // S5: a legacy bot bound to a mistyped symbol re-issues doomed feed
+  // subscriptions forever because nothing can retire it. The backend now
+  // decides eligibility; the lens renders what it is sent, and renders
+  // nothing when retire is not on offer.
+  const retireAction: PanelAction = {
+    action_id: 'retire', label: 'Retire', explanation: 'Clear this registration.',
+    enabled: true, blockers: [], confirmation: null, revision: 1,
+    concurrency_token: 'retire-token',
+  };
+
+  function stoppedPanelWithRetire(enabled: boolean): BotPanelView {
+    return {
+      ...makePanel(),
+      health: {
+        ...makeHealth(), running: false, phase: 'OFF_DUTY' as const,
+        desired_state: 'STOPPED' as const,
+      },
+      actions: [{ ...retireAction, enabled }],
+    };
+  }
+
+  async function renderLens(panel: BotPanelView): Promise<void> {
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel, profile: makeProfile(), actionPending: false,
+        broker: 'alpaca', accountId: 'acc-1', sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: makeFakePanelService() }],
+    });
+  }
+
+  it('offers Retire for a registration the runtime can no longer honour', async () => {
+    await renderLens(stoppedPanelWithRetire(true));
+
+    expect(screen.getByRole('button', { name: /Retire/ })).toBeTruthy();
+  });
+
+  it('renders no Retire control when the backend refuses it', async () => {
+    // The panel presents retire for every bot, so an ineligible one must
+    // render no control at all rather than a permanently dead button.
+    await renderLens(stoppedPanelWithRetire(false));
+
+    expect(screen.queryByRole('button', { name: /Retire/ })).toBeNull();
+  });
+
   it('keeps the promoted lifecycle action out of readiness while retaining its gate', async () => {
     const fakeSvc = makeFakePanelService();
     const resumeAction: PanelAction = {

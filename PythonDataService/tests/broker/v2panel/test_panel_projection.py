@@ -71,11 +71,11 @@ from app.schemas.signal_program_seal import (
 )
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
+from app.services.broker_v2_panel.channel_health import evaluate_channel_health
 from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
-    evaluate_channel_health,
     program_build_view_from_run_evidence,
     select_primary_action_by_lens,
 )
@@ -233,8 +233,8 @@ def _clerk_status(
         outstanding_intents=outstanding_intents,
         observed_at_ms=_NOW,
         channel_healths=[
-            ChannelHealth(stream="market_data", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
-            ChannelHealth(stream="execution", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
+            ChannelHealth(stream="market_data", healthy=healthy, connected=healthy, reason="", observed_at_ms=_NOW - 10),
+            ChannelHealth(stream="execution", healthy=healthy, connected=healthy, reason="", observed_at_ms=_NOW - 10),
         ],
         operator_posture=AccountOperatorPosture(
             condition=None,
@@ -1013,8 +1013,13 @@ def test_sqlite_adapter_preserves_stopped_bot_resume_with_sqlite_recovery_action
     adapted = adapt_sqlite_panel(base, projection)
 
     actions = {action.action_id: action for action in adapted.actions}
-    assert list(actions) == ["resume", "reconcile_now"]
+    # `retire` is a bot-lifecycle action too, so it survives adaptation
+    # alongside Resume (#1778, S5). It is presented for every bot and enabled
+    # only when the runtime can no longer honour the registration; the lens
+    # renders it only when enabled.
+    assert list(actions) == ["resume", "retire", "reconcile_now"]
     assert actions["resume"].enabled is True
+    assert actions["retire"].enabled is False
     assert actions["reconcile_now"].concurrency_token == "sqlite-token"
     assert len(adapted.actions) == len(actions)
 
@@ -1152,6 +1157,7 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     action_ids = {a.action_id for a in panel.actions}
     assert action_ids == {
         "resume",
+        "retire",
         "pause",
         "continue",
         "stop",
@@ -1372,11 +1378,32 @@ def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() 
     assert row.effect_operation_id is None
 
 
+def test_a_registration_with_no_runtime_presents_retire_enabled() -> None:
+    """Wiring guard for #1778 S5.
+
+    The retire policy is tested on its own context, so it stays green even
+    if nobody resolves `strategy_runtime_missing`. This pins the panel
+    actually resolving it: a stopped, flat bot whose strategy key the
+    runtime no longer knows must be offered retire.
+    """
+    panel = _panel(
+        _status(running=False, strategy_key="strategy_that_no_longer_exists"),
+        _clerk_status(),
+        [],
+        exposure={},
+    )
+
+    assert _action(panel, "retire").enabled is True
+
+
 def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -> None:
     panel = _panel(_status(), _clerk_status(), [], exposure={"SPY": 2.0})
     changed_exposure = _panel(_status(), _clerk_status(), [], exposure={"SPY": 3.0})
 
-    assert "retire" not in {action.action_id for action in panel.actions}
+    # retire is now presented (#1778, S5) but stays disabled for a runnable
+    # strategy -- narrow retire is registration cleanup, not "end this bot".
+    retire = _action(panel, "retire")
+    assert retire.enabled is False
     assert "cancel_order" not in {action.action_id for action in panel.actions}
     confirmation = _action(panel, "flatten_stop").confirmation
     assert confirmation is not None
@@ -1493,7 +1520,7 @@ def test_evaluate_channel_health_required_streams_narrows_to_market_data() -> No
     the execution channel, so an unhealthy/absent execution stream must not
     fail a Dry-Run-scoped evaluation."""
     now_ms = 1_700_000_000_000
-    market_data_only = (ChannelHealth(stream="market_data", healthy=True, observed_at_ms=now_ms),)
+    market_data_only = (ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=now_ms),)
 
     full = evaluate_channel_health(market_data_only, now_ms)
     scoped = evaluate_channel_health(market_data_only, now_ms, required_streams=("market_data",))
@@ -1506,7 +1533,7 @@ def test_evaluate_channel_health_required_streams_narrows_to_market_data() -> No
 
 def test_evaluate_channel_health_required_streams_still_catches_unhealthy_market_data() -> None:
     now_ms = 1_700_000_000_000
-    unhealthy = (ChannelHealth(stream="market_data", healthy=False, observed_at_ms=now_ms),)
+    unhealthy = (ChannelHealth(stream="market_data", healthy=False, connected=False, observed_at_ms=now_ms),)
 
     scoped = evaluate_channel_health(unhealthy, now_ms, required_streams=("market_data",))
 
@@ -2296,3 +2323,32 @@ def test_primary_action_by_lens_rejects_dangling_operator_reference() -> None:
 
     with pytest.raises(ValidationError):
         BotPanelView.model_validate(payload)
+
+
+def test_retire_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
+    """Retire must not be stripped on the way to Angular (#1778, S5).
+
+    The adapter replaces the generic policy's actions with SQLite-owned
+    recovery actions, preserving only the bot-lifecycle actions it names.
+    Retire is a bot-lifecycle action -- SQLite owns broker recovery, not the
+    roster -- so omitting it from that set silently deletes the action after
+    the guard, the performer, and the lens have all been wired. The feature
+    would be complete everywhere except where an operator can reach it.
+    """
+    base = _panel(_status(running=False), _clerk_status(), [])
+    retire = PanelAction(
+        action_id="retire",
+        label="Retire",
+        explanation="Clear a registration the runtime can no longer honour.",
+        enabled=True,
+        blockers=[],
+        confirmation=None,
+        revision=1,
+        concurrency_token="generic-token",
+    )
+    base = base.model_copy(update={"actions": [*base.actions, retire]})
+    projection = _rail_projection(orders=())
+
+    adapted = adapt_sqlite_panel(base, projection)
+
+    assert "retire" in [action.action_id for action in adapted.actions]

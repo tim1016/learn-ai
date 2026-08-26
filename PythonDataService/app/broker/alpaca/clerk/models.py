@@ -183,14 +183,38 @@ class ChannelHealth(BaseModel):
 
     ``observed_at_ms`` is mandatory: no health fact is rendered without an
     observation time. ``reason`` is empty when healthy.
+
+    ``connected`` and ``healthy`` are deliberately separate facts. A channel
+    can be connected but not yet usable — a market-data subscription that
+    has not produced its first closed bar is warming up, not down. Submission
+    gates require ``healthy``; account-level surfaces that must not be
+    refused by one symbol's warm-up read ``connected`` (#1777, finding S6).
+    ``healthy`` implies ``connected``.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     stream: Literal["market_data", "execution"]
     healthy: bool
+    connected: bool
     reason: str = ""
     observed_at_ms: int
+
+    @model_validator(mode="after")
+    def _healthy_implies_connected(self) -> ChannelHealth:
+        """Reject the state the docstring forbids.
+
+        A channel cannot be usable over a transport that is down. Leaving the
+        combination merely undocumented lets a generic verdict and a
+        symbol-scoped one contradict each other, and the contradiction would
+        surface as an unexplainable deploy refusal rather than an error here.
+        """
+        if self.healthy and not self.connected:
+            raise ValueError(
+                "ChannelHealth(healthy=True, connected=False) is not a real "
+                "state: a channel cannot be usable while its transport is down."
+            )
+        return self
 
 
 class OrderJournalEntry(BaseModel):

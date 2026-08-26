@@ -521,7 +521,7 @@ async def test_pre_execution_service_failure_is_blocked_not_unknown(
 ) -> None:
     fast_app, registry = deploy_app
 
-    async def unavailable_clerk() -> ClerkStatus:
+    async def unavailable_clerk(*, symbol: str | None = None) -> ClerkStatus:
         raise panel_data_source.PanelUnavailableError(
             "The Clerk is unavailable.",
             detail="No deployment was attempted.",
@@ -637,7 +637,7 @@ async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
         _ALLOW_BODY_STRATEGY,
     )
 
-    async def no_channel_status() -> ClerkStatus:
+    async def no_channel_status(*, symbol: str | None = None) -> ClerkStatus:
         return ClerkStatus(
             broker="alpaca",
             account_id=ACCT,
@@ -665,14 +665,14 @@ async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
     ("channels", "evidence_key", "expected_channel"),
     [
         (
-            [ChannelHealth(stream="market_data", healthy=True, observed_at_ms=now_ms_utc())],
+            [ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=now_ms_utc())],
             "missing_channels",
             "execution",
         ),
         (
             [
-                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=0),
-                ChannelHealth(stream="execution", healthy=True, observed_at_ms=now_ms_utc()),
+                ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=0),
+                ChannelHealth(stream="execution", healthy=True, connected=True, observed_at_ms=now_ms_utc()),
             ],
             "stale_channels",
             "market_data",
@@ -688,7 +688,7 @@ async def test_deploy_requires_both_fresh_clerk_channels(
 ) -> None:
     fast_app, registry = deploy_app
 
-    async def incomplete_channel_status() -> ClerkStatus:
+    async def incomplete_channel_status(*, symbol: str | None = None) -> ClerkStatus:
         return ClerkStatus(
             broker="alpaca",
             account_id=ACCT,
@@ -805,7 +805,7 @@ async def test_clerk_hold_authors_blocked_view_and_submission_remedy(
         _ALLOW_BODY_STRATEGY,
     )
 
-    async def held_status() -> ClerkStatus:
+    async def held_status(*, symbol: str | None = None) -> ClerkStatus:
         return ClerkStatus(
             broker="alpaca",
             account_id=ACCT,
@@ -852,7 +852,7 @@ async def test_account_freeze_category_and_remedy_reach_deploy_unchanged(
         _ALLOW_BODY_STRATEGY,
     )
 
-    async def frozen_status() -> ClerkStatus:
+    async def frozen_status(*, symbol: str | None = None) -> ClerkStatus:
         return ClerkStatus(
             broker="alpaca",
             account_id=ACCT,
@@ -915,7 +915,7 @@ async def test_dry_run_admits_despite_clerk_hold_and_freeze_while_paper_stays_re
     fail-closed under the exact same Clerk facts (regression)."""
     fast_app, registry = deploy_app
 
-    async def frozen_and_held_status() -> ClerkStatus:
+    async def frozen_and_held_status(*, symbol: str | None = None) -> ClerkStatus:
         return ClerkStatus(
             broker="alpaca",
             account_id=ACCT,
@@ -935,7 +935,7 @@ async def test_dry_run_admits_despite_clerk_hold_and_freeze_while_paper_stays_re
             outstanding_intents=3,
             observed_at_ms=now_ms_utc(),
             channel_healths=[
-                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=now_ms_utc()),
+                ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=now_ms_utc()),
             ],
             operator_posture=_HEALTHY_POSTURE,
         )

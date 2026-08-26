@@ -122,6 +122,24 @@ describe('BotsRosterComponent', () => {
     expect(await screen.findByText('Working · +12 SPY · 3 fills')).toBeTruthy();
   });
 
+  it('names a crashed run instead of showing it as an ordinary off-duty row', async () => {
+    // S3b: three bots died during the fleet run and every row read
+    // 'Off duty · Flat'. The backend now labels an unclean exit from the
+    // shared operator vocabulary, so the row has to say so.
+    await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'crashed-bot',
+        status_label: 'Crashed',
+        needs_attention: true,
+        running: false,
+        exposure: {},
+      }),
+    ]);
+
+    expect(await screen.findByText(/^Crashed · /)).toBeTruthy();
+    expect(screen.queryByText(/^Off duty · /)).toBeNull();
+  });
+
   it('orders attention bots ahead of running bots', async () => {
     await renderRail([
       fakeCatalogBot({ strategy_instance_id: 'normal-bot' }),

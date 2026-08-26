@@ -1,6 +1,8 @@
 import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+
+import { firstValueWithinPollTimeout } from '../../../../services/poll-timeout';
 import type { components } from '../../../../api/broker.types';
 import type {
   HistoricalExecutionRecoveryPlan,
@@ -123,7 +125,8 @@ export class BrokerV2PanelService {
   }
 
   getCatalog(broker: string, accountId: string): Promise<BotCatalogView[]> {
-    return firstValueFrom(
+    // Polled every few seconds; a hang here freezes the roster (S7).
+    return firstValueWithinPollTimeout(
       this.http.get<BotCatalogView[]>(`${this.base(broker, accountId)}/bots/catalog`),
     );
   }

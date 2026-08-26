@@ -168,14 +168,23 @@ def test_reconcile_now_is_presented_by_both_the_bot_panel_and_the_recovery_catal
     assert "SQLite Clerk recovery catalog" in surface
 
 
-def test_retire_and_cancel_order_render_as_unsupported_by_any_surface() -> None:
-    """Two documented actions have an empty ``supported_brokers`` and are not
-    recovery actions either — the generator marks them unsupported rather than
-    omitting them, so the documented set stays exactly equal to the enum."""
-    for action_id in ("retire", "cancel_order"):
-        assert ACTION_REGISTRY[action_id].supported_brokers == frozenset()
-        assert action_id not in get_args(RecoveryActionId)
-        assert action_surface(action_id) == "**Nothing — no broker exposes this action.**"
+def test_cancel_order_renders_as_unsupported_by_any_surface() -> None:
+    """A documented action with an empty ``supported_brokers`` that is not a
+    recovery action either — the generator marks it unsupported rather than
+    omitting it, so the documented set stays exactly equal to the enum.
+
+    ``retire`` used to be listed here. It gained an alpaca performer with
+    #1778 (S5), so it is now a supported panel action and documents itself
+    like any other.
+    """
+    assert ACTION_REGISTRY["cancel_order"].supported_brokers == frozenset()
+    assert "cancel_order" not in get_args(RecoveryActionId)
+    assert action_surface("cancel_order") == "**Nothing — no broker exposes this action.**"
+
+
+def test_retire_documents_itself_as_an_alpaca_panel_action() -> None:
+    assert ACTION_REGISTRY["retire"].supported_brokers == frozenset({"alpaca"})
+    assert action_surface("retire") != "**Nothing — no broker exposes this action.**"
 
 
 def test_glossary_renders_emitted_stopped_not_the_synthetic_copy_key() -> None:

@@ -96,6 +96,17 @@ class ActiveAlpacaClerk(Protocol):
         strategy_instance_id: str,
     ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]: ...
 
+    def start_admission_projection(
+        self,
+        strategy_instance_id: str,
+    ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+        """Read-only twin of :meth:`start_admission_snapshot` (#1776 WP2).
+
+        Projects the sweep's last verdict instead of reconciling, so a read
+        contacts no broker and appends nothing to the ledger.
+        """
+        ...
+
     async def cancel_working_entries_for_instance(
         self,
         strategy_instance_id: str,

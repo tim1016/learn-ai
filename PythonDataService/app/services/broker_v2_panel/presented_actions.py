@@ -28,9 +28,20 @@ import path.
 from __future__ import annotations
 
 from app.broker.v2panel.action_policy import ActionGuardContext, build_actions_from_registry
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import ClerkCard, PanelAction
 from app.schemas.run_admission import RunAdmissionDecision
+
+
+def strategy_runtime_missing(strategy_key: str) -> bool:
+    """True when no runtime is registered for this bot's strategy key.
+
+    A registration the runtime no longer knows can never run again -- the
+    legacy bot bound to a mistyped symbol is the standing example -- and
+    retire is its only cure (#1778, S5).
+    """
+    return strategy_key not in _STRATEGY_REGISTRY
 
 
 def build_actions(
@@ -70,6 +81,7 @@ def build_actions(
         strategy_instance_id=status.strategy_instance_id,
         exposure=exposure,
         working_order_count=working_order_count,
+        strategy_runtime_missing=strategy_runtime_missing(status.strategy_key),
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
 

@@ -44,6 +44,7 @@ def market_data_channel_health(
         return ChannelHealth(
             stream="market_data",
             healthy=False,
+            connected=False,
             reason="Shared market-data feed is not installed.",
             observed_at_ms=now_ms,
         )
@@ -51,6 +52,7 @@ def market_data_channel_health(
     return ChannelHealth(
         stream="market_data",
         healthy=healthy,
+        connected=feed_health.connected,
         reason="" if healthy else (feed_health.reason or "Market-data feed is unhealthy."),
         observed_at_ms=feed_health.observed_at_ms,
     )
@@ -72,6 +74,7 @@ def execution_channel_health(
         return ChannelHealth(
             stream="execution",
             healthy=False,
+            connected=False,
             reason="Alpaca trade_updates consumer is not running.",
             observed_at_ms=now_ms,
         )
@@ -79,6 +82,7 @@ def execution_channel_health(
         return ChannelHealth(
             stream="execution",
             healthy=False,
+            connected=False,
             reason="Alpaca trade_updates websocket is disconnected.",
             observed_at_ms=(
                 connection_changed_at_ms
@@ -90,6 +94,8 @@ def execution_channel_health(
         return ChannelHealth(
             stream="execution",
             healthy=False,
+            # The socket is up; the frame it delivered was not usable.
+            connected=True,
             reason="Alpaca trade_updates received an unusable evidence frame.",
             observed_at_ms=(
                 evidence_health.observed_at_ms
@@ -100,6 +106,7 @@ def execution_channel_health(
     return ChannelHealth(
         stream="execution",
         healthy=True,
+        connected=True,
         reason="",
         observed_at_ms=max(
             observed_at_ms

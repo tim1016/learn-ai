@@ -58,8 +58,9 @@ const clerkStatus: ClerkStatus = {
     verdict: 'clean',
   },
   channel_healths: [
-    { stream: 'market_data', healthy: true, observed_at_ms: 1_700_000_000_000 },
-    { stream: 'execution', healthy: false, observed_at_ms: 1_700_000_000_000 },
+    { stream: 'market_data', healthy: true, connected: true, observed_at_ms: 1_700_000_000_000 },
+    // Connected but unusable -- the distinction `connected` exists to carry.
+    { stream: 'execution', healthy: false, connected: true, observed_at_ms: 1_700_000_000_000 },
   ],
   operator_posture: healthyPosture,
 };

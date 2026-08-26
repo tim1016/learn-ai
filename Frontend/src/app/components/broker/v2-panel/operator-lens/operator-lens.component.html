@@ -75,7 +75,7 @@
     <div class="operator-lens__column">
       <app-health-card
         [health]="health()"
-        [retireAction]="null"
+        [retireAction]="retireAction()"
         [actionPending]="actionPending()"
         (actionRequested)="onActionRequested($event)"
       />

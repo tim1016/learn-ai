@@ -9830,8 +9830,17 @@ export interface components {
          *
          *     ``observed_at_ms`` is mandatory: no health fact is rendered without an
          *     observation time. ``reason`` is empty when healthy.
+         *
+         *     ``connected`` and ``healthy`` are deliberately separate facts. A channel
+         *     can be connected but not yet usable — a market-data subscription that
+         *     has not produced its first closed bar is warming up, not down. Submission
+         *     gates require ``healthy``; account-level surfaces that must not be
+         *     refused by one symbol's warm-up read ``connected`` (#1777, finding S6).
+         *     ``healthy`` implies ``connected``.
          */
         ChannelHealth: {
+            /** Connected */
+            connected: boolean;
             /** Healthy */
             healthy: boolean;
             /** Observed At Ms */
@@ -27629,7 +27638,10 @@ export interface operations {
     };
     get_alpaca_paper_deploy_view_api_brokers__broker__accounts__account_id__bots_deploy_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Scope the channel-health verdict to one symbol. Omitted, the view reports account-level channel presence and connectivity only. */
+                symbol?: string | null;
+            };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
             };

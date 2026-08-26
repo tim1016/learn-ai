@@ -98,6 +98,37 @@ def test_status_label_maps_the_closed_vocabulary() -> None:
     assert status_label_for(_status(sid=SID, phase="RETIRED", running=False)) == "Retired"
 
 
+def test_an_unclean_exit_is_labelled_distinctly_from_a_deliberate_stop() -> None:
+    """S3b: three bots died mid-run and the roster read "Off duty . Flat".
+
+    The audit and `known-gaps.md` both record this as `needs_attention=false`.
+    That is wrong -- attention was already true for a crash, and the backend
+    already authored crash-specific `status_explanation`. What actually hid
+    the failure is the label: the roster renders `status_label`, and a crash
+    mapped to the same "Off duty" a clean stop produces.
+
+    The labels come from the shared operator-copy vocabulary rather than new
+    strings invented here.
+    """
+    crashed = _status(sid=SID, running=False, phase="OFF_DUTY", duty_kind="CRASHED")
+    unverified = _status(
+        sid=SID, running=False, phase="OFF_DUTY", duty_kind="EXITED_UNVERIFIED"
+    )
+    stopped = _status(sid=SID, running=False, phase="OFF_DUTY", duty_kind="STOPPED")
+
+    assert status_label_for(crashed) == "Crashed"
+    assert status_label_for(unverified) == "Exited unverified"
+    # A clean stop is still plain "Off duty" -- this must not become alarming.
+    assert status_label_for(stopped) == "Off duty"
+    # A retired bot keeps its terminal label whatever ended the last run.
+    assert (
+        status_label_for(
+            _status(sid=SID, phase="RETIRED", running=False, duty_kind="CRASHED")
+        )
+        == "Retired"
+    )
+
+
 def test_sqlite_catalog_uses_config_identity_and_one_economic_rollup() -> None:
     status = _status(
         sid=SID, strategy_key="opening_range_breakout", mode="trade"
