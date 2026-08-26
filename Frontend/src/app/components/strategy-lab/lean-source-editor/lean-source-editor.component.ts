@@ -79,29 +79,16 @@ export class LeanSourceEditorComponent implements AfterViewInit, OnDestroy {
       const next = this.currentSource() ?? "";
       const view = this.view;
       if (view === null || view.state.doc.toString() === next) return;
-      this.externalEditorWrite = true;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } });
-      this.externalEditorWrite = false;
+      this.installExternalSource(next);
     });
   }
 
   ngAfterViewInit(): void {
-    const extensions: Extension[] = [
-      lineNumbers(),
-      history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
-      python(),
-      syntaxHighlighting(defaultHighlightStyle),
-      EditorView.lineWrapping,
-      EditorView.contentAttributes.of({ "aria-label": "QCAlgorithm source editor" }),
-      this.editability.of(this.editabilityExtension(this.canEdit())),
-      EditorView.updateListener.of((update) => {
-        if (!update.docChanged || this.externalEditorWrite) return;
-        this.customSource.set(update.state.doc.toString());
-      }),
-    ];
     this.view = new EditorView({
-      state: EditorState.create({ doc: this.currentSource() ?? "", extensions }),
+      state: EditorState.create({
+        doc: this.currentSource() ?? "",
+        extensions: this.editorExtensions(),
+      }),
       parent: this.editorHost().nativeElement,
     });
   }
@@ -132,5 +119,35 @@ export class LeanSourceEditorComponent implements AfterViewInit, OnDestroy {
       EditorState.readOnly.of(!editable),
       EditorView.editable.of(editable),
     ];
+  }
+
+  private editorExtensions(): Extension[] {
+    return [
+      lineNumbers(),
+      history(),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      python(),
+      syntaxHighlighting(defaultHighlightStyle),
+      EditorView.lineWrapping,
+      EditorView.contentAttributes.of({ "aria-label": "QCAlgorithm source editor" }),
+      this.editability.of(this.editabilityExtension(this.canEdit())),
+      EditorView.updateListener.of((update) => {
+        if (!update.docChanged || this.externalEditorWrite) return;
+        this.customSource.set(update.state.doc.toString());
+      }),
+    ];
+  }
+
+  private installExternalSource(source: string): void {
+    const view = this.view;
+    if (view === null) return;
+    this.externalEditorWrite = true;
+    try {
+      // A new state intentionally starts with an empty history field, so Undo
+      // cannot cross a strategy switch or reset and resurrect prior source.
+      view.setState(EditorState.create({ doc: source, extensions: this.editorExtensions() }));
+    } finally {
+      this.externalEditorWrite = false;
+    }
   }
 }
