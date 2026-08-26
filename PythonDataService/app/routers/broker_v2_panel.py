@@ -27,6 +27,7 @@ from typing import Literal, NoReturn
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.config import settings
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
@@ -231,8 +232,10 @@ async def get_alpaca_paper_deploy_view(
     account_id: str,
     symbol: str | None = Query(
         None,
-        min_length=1,
-        max_length=12,
+        # The canonical US-equity grammar the broker contract already enforces.
+        # A length bound alone would let a malformed symbol reach the clerk and
+        # fail somewhere less legible than the transport boundary.
+        pattern=US_EQUITY_SYMBOL_PATTERN,
         description=(
             "Scope the channel-health verdict to one symbol. Omitted, the view "
             "reports account-level channel presence and connectivity only."

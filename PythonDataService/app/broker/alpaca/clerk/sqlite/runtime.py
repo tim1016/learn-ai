@@ -12,6 +12,7 @@ import base64
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
@@ -170,6 +171,14 @@ class MissingEntryCustodyError(RuntimeError):
     """An EXIT decision has no SQLite-owned entry identity to target."""
 
 
+@dataclass(frozen=True)
+class _PublishedReconciliation:
+    """A reconciliation verdict bound to the instant it was observed."""
+
+    result: AccountReconciliationResult
+    observed_at_ms: int
+
+
 class SqliteAlpacaClerkFacade:
     """Narrow live-control surface backed by one account repository."""
 
@@ -201,8 +210,11 @@ class SqliteAlpacaClerkFacade:
         # reconciler (#1776). Panel reads project this instead of forcing
         # their own reconciliation. Process-local by design: it is a cache of
         # an observation, not a custody fact, so it never enters the ledger.
-        self._last_reconciliation: AccountReconciliationResult | None = None
-        self._last_reconciled_at_ms = 0
+        #
+        # Verdict and observation time are one value: read separately, a
+        # concurrent reconciliation can replace the timestamp between the two
+        # reads and the snapshot reports one verdict with another pass's time.
+        self._last_published: _PublishedReconciliation | None = None
 
     @property
     def account_id(self) -> str:
@@ -864,7 +876,7 @@ class SqliteAlpacaClerkFacade:
         return _legacy_verdict((await self._reconcile()).verdict)
 
     async def _reconcile(self) -> AccountReconciliationResult:
-        return self._remember_reconciliation(
+        return self.publish_reconciliation(
             await reconcile_sqlite_account(
                 self._repo,
                 read=self._read,
@@ -874,12 +886,20 @@ class SqliteAlpacaClerkFacade:
             )
         )
 
-    def _remember_reconciliation(
+    def publish_reconciliation(
         self, result: AccountReconciliationResult
     ) -> AccountReconciliationResult:
-        """Record the verdict reads project from, with its observation time."""
-        self._last_reconciliation = result
-        self._last_reconciled_at_ms = self._repo.clock()
+        """Record the verdict reads project from, with its observation time.
+
+        Public because the periodic :class:`ReconciliationSweep` -- not this
+        facade -- is what actually reconciles in production. The sweep calls
+        ``reconcile_account`` directly, so without publishing here the
+        projection would answer ``stale`` forever however many sweeps
+        succeeded. Reads would stay pure and stop telling the truth.
+        """
+        self._last_published = _PublishedReconciliation(
+            result=result, observed_at_ms=self._repo.clock()
+        )
         return result
 
     async def reconcile_account(
@@ -888,7 +908,7 @@ class SqliteAlpacaClerkFacade:
         trigger: str,
     ) -> AccountReconciliationResult:
         """Run one full account reconciliation with caller-authored provenance."""
-        return self._remember_reconciliation(
+        return self.publish_reconciliation(
             await reconcile_sqlite_account(
                 self._repo,
                 read=self._read,
@@ -906,9 +926,9 @@ class SqliteAlpacaClerkFacade:
         return self._proof(strategy_instance_id, result)
 
     async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
-        result = await self._reconcile()
+        await self._reconcile()
         return await self._custody_from_result(
-            strategy_instance_id, result, reconciled_at_ms=self._last_reconciled_at_ms
+            strategy_instance_id, *self._published()
         )
 
     async def custody_snapshot_projection(
@@ -927,16 +947,25 @@ class SqliteAlpacaClerkFacade:
         case, and the sweep cadence closes the window.
         """
         return await self._custody_from_result(
-            strategy_instance_id,
-            self._last_reconciliation or AccountReconciliationResult(verdict="stale"),
-            reconciled_at_ms=self._last_reconciled_at_ms,
+            strategy_instance_id, *self._published()
         )
+
+    def _published(self) -> tuple[AccountReconciliationResult, int]:
+        """The last published verdict and its own observation time.
+
+        Read as one value so the two can never come from different passes.
+        Nothing published yet is the existing ``stale`` verdict: custody is
+        unproven until something proves it.
+        """
+        published = self._last_published
+        if published is None:
+            return AccountReconciliationResult(verdict="stale"), 0
+        return published.result, published.observed_at_ms
 
     async def _custody_from_result(
         self,
         strategy_instance_id: str,
         result: AccountReconciliationResult,
-        *,
         reconciled_at_ms: int,
     ) -> ClerkCustodySnapshot:
         """Build the custody snapshot a verdict implies.

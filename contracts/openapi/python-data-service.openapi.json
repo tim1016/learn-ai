@@ -50200,8 +50200,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 12,
-                  "minLength": 1,
+                  "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
                   "type": "string"
                 },
                 {

@@ -214,3 +214,29 @@ def test_migration_gate_requires_an_explicit_nonempty_inventory() -> None:
     assert "verify_database(" in gate
     assert "--inventory" in cli
     assert "--output" in cli
+
+
+def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
+    """A sweep that does not publish makes pure panel reads permanently stale.
+
+    ``ReconciliationSweep`` is the sole automatic reconciler, and it calls
+    ``reconcile_account`` directly rather than through the facade. Panel reads
+    project the facade's last verdict, so a construction site that omits
+    ``on_result`` leaves ``custody_snapshot_projection`` answering ``stale``
+    with ``reconciled_at_ms=0`` however many sweeps succeed (#1776 WP2).
+
+    Structural because the failure is silent: every unit test still passes and
+    the degradation only shows in production.
+    """
+    source = (
+        APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py"
+    ).read_text(encoding="utf-8")
+
+    constructions = source.count("ReconciliationSweep(")
+    publishers = source.count("on_result=facade.publish_reconciliation")
+
+    assert constructions > 0, "no sweep construction found; update this guard"
+    assert publishers == constructions, (
+        f"{constructions} ReconciliationSweep construction(s) but {publishers} "
+        "publish their verdict; every sweep must feed the read projection"
+    )

@@ -200,6 +200,22 @@ class ChannelHealth(BaseModel):
     reason: str = ""
     observed_at_ms: int
 
+    @model_validator(mode="after")
+    def _healthy_implies_connected(self) -> ChannelHealth:
+        """Reject the state the docstring forbids.
+
+        A channel cannot be usable over a transport that is down. Leaving the
+        combination merely undocumented lets a generic verdict and a
+        symbol-scoped one contradict each other, and the contradiction would
+        surface as an unexplainable deploy refusal rather than an error here.
+        """
+        if self.healthy and not self.connected:
+            raise ValueError(
+                "ChannelHealth(healthy=True, connected=False) is not a real "
+                "state: a channel cannot be usable while its transport is down."
+            )
+        return self
+
 
 class OrderJournalEntry(BaseModel):
     """One append-only order-journal line.

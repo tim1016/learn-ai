@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource
 from app.broker.alpaca.clerk.sqlite.reconcile import ReconciliationLockOrderError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import (
+    ReentrantAsyncLock,
     SqliteAlpacaClerkFacade,
     StrategyAdmissionStaleError,
 )
@@ -153,15 +154,22 @@ async def test_custody_projection_answers_from_the_last_sweep_without_broker_con
     ``custody_snapshot`` forces a full account reconciliation -- broker REST
     plus ledger appends -- under the per-account intake lock that panel
     actions share. A stopped bot's panel GET called it on every poll, so a
-    fully stopped fleet reconciled once per bot per poll: 48-145 s reads and
-    a hot loop at 77% CPU with zero bots running. The projection answers the
+    fully stopped fleet reconciled once per bot per poll: 105-145 s reads and
+    a hot loop at 77% CPU with *zero* bots running. The projection answers the
     same custody question from the sweep's own last verdict instead.
+
+    Measurements are the observed S12d figures recorded in
+    ``docs/audits/bot-fleet-stress-2026-08-25.md`` (S12 family; latency table).
+    They are cited history explaining why this test exists, not a threshold
+    this test asserts -- what it pins is the invariant: zero broker reads.
     """
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _CountingBroker()
     facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
 
-    # The sweep is the sole reconciler; it is what pays the broker cost.
+    # Stands in for a completed sweep to establish a published verdict. The
+    # real sweep path is covered by
+    # `test_the_real_sweep_publishes_the_verdict_panel_reads_project`.
     await facade.reconcile_account(trigger="AUTOMATIC")
     assert broker.read_calls > 0
     after_sweep = broker.read_calls
@@ -946,4 +954,42 @@ async def test_sqlite_trade_update_redelivery_and_regression_are_idempotent(
     assert current is not None
     assert current.broker_state == "accepted"
     assert len(repo.transitions_for_order(order_ref)) == transitions_before
+    repo.close()
+
+
+async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
+    tmp_path: Path,
+) -> None:
+    """The production reconciler must feed the production projection.
+
+    ``ReconciliationSweep`` is what actually runs every 15 s, and it calls
+    ``reconcile_account`` directly rather than through the facade. If it does
+    not publish its verdict, ``custody_snapshot_projection`` answers ``stale``
+    with ``reconciled_at_ms=0`` forever no matter how many sweeps succeed --
+    reads stay pure, but they also stop telling the truth.
+
+    Drives the real sweep, not a facade stand-in, so the wiring is what is
+    under test.
+    """
+    from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    intake = ReentrantAsyncLock()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, intake=intake)
+
+    await ReconciliationSweep(
+        repo=repo,
+        read=broker,
+        trade=broker,
+        intake=intake,
+        max_passes=1,
+        on_result=facade.publish_reconciliation,
+    ).run()
+
+    projection = await facade.custody_snapshot_projection("sid-1")
+
+    assert projection.reconciliation_state == "clean"
+    assert projection.reconciled_at_ms > 0, "the sweep's verdict never reached the projection"
+
     repo.close()

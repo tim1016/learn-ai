@@ -1013,8 +1013,13 @@ def test_sqlite_adapter_preserves_stopped_bot_resume_with_sqlite_recovery_action
     adapted = adapt_sqlite_panel(base, projection)
 
     actions = {action.action_id: action for action in adapted.actions}
-    assert list(actions) == ["resume", "reconcile_now"]
+    # `retire` is a bot-lifecycle action too, so it survives adaptation
+    # alongside Resume (#1778, S5). It is presented for every bot and enabled
+    # only when the runtime can no longer honour the registration; the lens
+    # renders it only when enabled.
+    assert list(actions) == ["resume", "retire", "reconcile_now"]
     assert actions["resume"].enabled is True
+    assert actions["retire"].enabled is False
     assert actions["reconcile_now"].concurrency_token == "sqlite-token"
     assert len(adapted.actions) == len(actions)
 
@@ -2318,3 +2323,32 @@ def test_primary_action_by_lens_rejects_dangling_operator_reference() -> None:
 
     with pytest.raises(ValidationError):
         BotPanelView.model_validate(payload)
+
+
+def test_retire_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
+    """Retire must not be stripped on the way to Angular (#1778, S5).
+
+    The adapter replaces the generic policy's actions with SQLite-owned
+    recovery actions, preserving only the bot-lifecycle actions it names.
+    Retire is a bot-lifecycle action -- SQLite owns broker recovery, not the
+    roster -- so omitting it from that set silently deletes the action after
+    the guard, the performer, and the lens have all been wired. The feature
+    would be complete everywhere except where an operator can reach it.
+    """
+    base = _panel(_status(running=False), _clerk_status(), [])
+    retire = PanelAction(
+        action_id="retire",
+        label="Retire",
+        explanation="Clear a registration the runtime can no longer honour.",
+        enabled=True,
+        blockers=[],
+        confirmation=None,
+        revision=1,
+        concurrency_token="generic-token",
+    )
+    base = base.model_copy(update={"actions": [*base.actions, retire]})
+    projection = _rail_projection(orders=())
+
+    adapted = adapt_sqlite_panel(base, projection)
+
+    assert "retire" in [action.action_id for action in adapted.actions]

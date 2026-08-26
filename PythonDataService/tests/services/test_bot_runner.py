@@ -20,7 +20,7 @@ import hashlib
 import json
 import random
 import re
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
@@ -71,6 +71,7 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.schemas.run_admission import StrategyValidationAdmissionFact
+from app.services import bot_runner as bot_runner_module
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
     RunOutcomeConflictError,
@@ -95,6 +96,7 @@ from app.services.bot_runner import (
 )
 from app.services.bot_runner_errors import (
     ActivationFailedCleanupProvenError,
+    BotRunnerError,
     InvalidRunHistoryCursorError,
 )
 from app.services.bot_runtime import PauseAwareFeed
@@ -3997,3 +3999,63 @@ async def test_resume_admission_wiring_persists_legacy_migration_clone_lineage(
     lineage = registry._bindings.read_legacy_migration_lineage(clone_id)
     assert lineage is not None
     assert lineage.migrated_from_strategy_instance_id == _SID
+
+
+class _CustodyThatAcquiresExposure:
+    """Flat while the bot deploys, exposed by the time Retire is clicked.
+
+    Models the race the commit-time re-proof exists for: a fill lands between
+    the panel authoring an enabled Retire and the operator clicking it.
+    """
+
+    def __init__(self) -> None:
+        self.exposed = False
+
+    @asynccontextmanager
+    async def __call__(self, sid: str) -> AsyncIterator[ClerkCustodySnapshot]:
+        flat = _flat_custody_snapshot(sid)
+        if not self.exposed:
+            yield flat
+            return
+        yield flat.model_copy(
+            update={
+                "exposure": CustodyExposureFact(
+                    state="non_zero", positions={"APPL": 3.0}
+                ),
+                "working_orders": CustodyCountFact(state="non_zero", count=1),
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_retire_reproves_custody_and_refuses_to_strand_exposure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retirement is irreversible, so it re-proves its own preconditions.
+
+    The panel's guard refuses exposure and working orders, but that decision
+    is authored at presentation time and the operator clicks later. Between
+    those two moments a fill can land. Re-checking only `running` at the
+    commit would retire a registration that still holds custody -- and there
+    is no undo. The committing operation answers the same shared rule again
+    against a freshly reconciled snapshot (#1778, S5).
+    """
+    feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
+    custody = _CustodyThatAcquiresExposure()
+    registry = _registry(tmp_path, feed, start_custody_guard=custody)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    # The registration outlived its strategy: deployable when created, its key
+    # since removed. That is what makes Retire eligible at all -- so reaching
+    # the custody guard proves the commit-time re-proof, not an earlier
+    # refusal.
+    monkeypatch.setattr(bot_runner_module, "_STRATEGY_REGISTRY", {})
+    custody.exposed = True
+
+    with pytest.raises(BotRunnerError) as blocked:
+        await registry.retire("alpaca", _SID, updated_by="operator")
+
+    assert "custody" in str(blocked.value).lower()
+    assert registry.status("alpaca", _SID).phase != "RETIRED"

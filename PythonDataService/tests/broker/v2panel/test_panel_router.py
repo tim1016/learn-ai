@@ -30,6 +30,7 @@ from app.routers import broker_v2_panel
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotPanelLiveSnapshot, ChartLiveResponse
+from app.schemas.run_admission import RunAdmissionDecision
 from app.services.bot_runner import set_bot_task_registry
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
@@ -71,13 +72,13 @@ class _FakeBrokerPort:
         self.methods.append('list_activities')
         return []
 
-    async def submit(self, *_args, **_kwargs):  # pragma: no cover - not used
+    async def submit(self, *_args: object, **_kwargs: object) -> None:  # pragma: no cover - not used
         raise AssertionError("panel read tests must not submit broker orders")
 
     async def cancel(self, _order_id: str) -> None:  # pragma: no cover - not used
         raise AssertionError("panel read tests must not cancel broker orders")
 
-    async def get_order_by_client_order_id(self, _client_order_id: str):
+    async def get_order_by_client_order_id(self, _client_order_id: str) -> None:
         return None
 
     def capabilities(self) -> None:  # pragma: no cover - registry shape only
@@ -90,7 +91,7 @@ class _FakeRegistry:
         self._running = running
         self.projected_states: list[str] = []
 
-    async def preview_resume_admission(self, broker: str, sid: str):
+    async def preview_resume_admission(self, broker: str, sid: str) -> RunAdmissionDecision:
         """Resolve custody through the real production projection.
 
         Faking this away would make the call-budget gate vacuous: the
@@ -203,7 +204,7 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 
 
 @pytest.fixture()
-def stopped_api(api, tmp_path):
+def stopped_api(api, tmp_path: Path):
     """The worst case: a bot that is not running.
 
     Every panel GET of a stopped bot previously ran a resume-admission

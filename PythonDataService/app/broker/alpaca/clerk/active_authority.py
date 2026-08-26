@@ -297,6 +297,10 @@ async def select_active_clerk_runtime(
             read=guarded_read,
             trade=guarded_trade,
             intake=intake,
+            # The sweep is the sole automatic reconciler; publishing its
+            # verdict is what lets pure panel reads project real custody
+            # instead of answering `stale` forever (#1776 WP2).
+            on_result=facade.publish_reconciliation,
         )
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(
@@ -496,6 +500,10 @@ async def select_synthetic_clerk_runtime(
             read=guarded_read,
             trade=guarded_trade,
             intake=intake,
+            # The sweep is the sole automatic reconciler; publishing its
+            # verdict is what lets pure panel reads project real custody
+            # instead of answering `stale` forever (#1776 WP2).
+            on_result=facade.publish_reconciliation,
         )
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)

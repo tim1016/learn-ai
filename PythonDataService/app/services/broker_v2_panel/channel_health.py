@@ -130,8 +130,24 @@ def evaluate_channel_connectivity(
         channel_healths,
         now_ms,
         required_streams=required_streams,
-        satisfied=lambda health: health.connected,
+        satisfied=_account_scope_satisfied,
     )
+
+
+def _account_scope_satisfied(health: ChannelHealth) -> bool:
+    """Relax *market data only* to connectivity; execution still needs health.
+
+    Warm-up is a market-data concept: a subscription that has not produced its
+    first closed bar is per-symbol and transient, so the account must not be
+    refused for it. Execution has no per-symbol dimension -- a `trade_updates`
+    socket that delivered an unusable evidence frame reports
+    ``connected=True, healthy=False`` and is broken for every symbol. Relaxing
+    it here would let the account view call a broken execution channel ready
+    and describe it as healthy, while every real submission gate rejects it.
+    """
+    if health.stream == "market_data":
+        return health.connected
+    return health.healthy
 
 
 def channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int) -> ChannelState:
