@@ -24,11 +24,18 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.models import ChannelHealth
 from app.broker.v2panel.vocabulary import ChannelState
-from app.services.broker_v2_panel.station_derivation import STALE_THRESHOLD_MS
 
-# A channel-health observation older than this is not "fresh" for the clear-hold
-# gate (§7.3). Reuse the station staleness threshold — one trading day.
-CHANNEL_FRESH_THRESHOLD_MS = STALE_THRESHOLD_MS
+# A channel-health observation older than this is not "fresh" for the
+# clear-hold gate (§7.3). Derived from the hold sync's own cadence (#1777
+# WP4 decision 8) — this used to reuse the station staleness threshold, one
+# trading day, which at a 15 s observation cadence never fired.
+# Three ticks of the clerk's stream-health cadence. Deliberately its own
+# constant rather than an import: this gates a deploy on how recently a
+# channel fact was observed, which is a separate question from how often
+# the hold sync runs, and coupling them made an unrelated cadence change
+# move a safety threshold. The value it replaced was one trading day,
+# which made this gate decorative.
+CHANNEL_FRESH_THRESHOLD_MS = 45_000
 REQUIRED_CLERK_CHANNELS = ("market_data", "execution")
 
 

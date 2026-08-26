@@ -214,6 +214,10 @@ async def lifespan(app: FastAPI):
             alpaca_trade_updates.start()
             set_trade_updates_consumer(alpaca_trade_updates)
             logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
+            # Only now does the stream-health sync have both providers to
+            # sample; starting it earlier reads the not-yet-registered
+            # consumer as an outage (#1777 WP4).
+            alpaca_clerk_runtime.start_hold_sync()
         elif alpaca_clerk_runtime.startup_failure is not None:
             logger.warning(
                 "Alpaca Clerk unavailable after authority selection.",
