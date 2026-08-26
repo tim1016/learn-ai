@@ -6,8 +6,8 @@ import asyncio
 import json
 import logging
 from collections import Counter
-from dataclasses import replace
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -762,8 +762,12 @@ async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(
             "concurrency_token": action["concurrency_token"],
             "idempotency_key": "sqlite-lease-lost",
         }
+        # Patch beneath the translating seam so the translation itself runs.
         monkeypatch.setattr(
-            broker_v2_panel.ds, "run_action", _lease_lost, raising=True
+            broker_v2_panel.ds,
+            "_run_action_under_live_authority",
+            _lease_lost,
+            raising=True,
         )
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request

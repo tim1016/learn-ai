@@ -45,21 +45,14 @@ account-wide amplifier — a separate defect — remains in §1 in its own right
 
 ## 1. Safety-critical
 
-- **The outstanding-intent admission gate is account-wide while the
-  uncertainty it reflects is not.** `unresolved_effect_count()` counts every
-  reconcilable effect on the account
-  (`app/broker/alpaca/clerk/sqlite/runtime.py`), and Start/deploy admission
-  refuses on any nonzero count (`app/services/bot_start_admission.py`), while
-  the underlying `ORDER_OUTCOME_UNKNOWN` episode is scoped to one custody
-  subject. One bot's unresolved intent therefore refuses resume and deploy
-  fleet-wide — the amplifier that turned S15c's single stuck EXIT into a
-  50-bot freeze. **Decided 2026-08-25 (#1775), filed 2026-08-26 as #1793**:
-  gate the owning custody subject, keeping the account-wide refusal only for
-  an unresolved effect that cannot be attributed to a subject. Attribution is
-  already present on every row — `EffectOperationResource.custody_owner`
-  (`models.py:175`) is selected by the query the count discards it from.
-  Supporting evidence: `docs/audits/bot-fleet-stress-2026-08-25.md` S15c and
-  its open-items entry.
+**No known-open items.** The outstanding-intent admission gate — the last
+entry here, and the amplifier that turned a single stuck EXIT into the
+2026-08-25 fleet freeze — was scoped to the owning custody subject on
+2026-08-26 (#1793). A bot is now refused only by its own unresolved intent;
+the filter is total, because `effect_operations.subject_id` is NOT NULL with a
+foreign key, so no account-wide remainder exists. Foreign broker orders never
+reach that table and stay gated by the correctly account-scoped
+`UNEXPLAINED_ORDER` hold.
 
 The two 2026-08-24 safety-critical findings — F18
 (crash-held exposure had no path to flat) and F19 (retryable EXIT refusal
@@ -234,7 +227,13 @@ a defect.
   run re-found this as T1 with a sharper root cause — the guard requires a
   dead *strategy key* while the zombie's dead thing is its *symbol*, so the
   panel simultaneously says "This bot can still run." and "Resume is
-  blocked." Now filed as **#1795**; see §11 T1.
+  blocked." **The contradiction was fixed 2026-08-26**: the blocker now states
+  what the guard checks (the strategy *program* exists) and makes no claim
+  about runnability. **The widening is still open and is now `needs-design`
+  (#1795)** — it needs a durable read-safe proof of symbol validity, and none
+  exists: no admission reason code is structurally permanent
+  (`MARKET_DATA_STALE` is also what a *warming* symbol reports), and a broker
+  security lookup is barred from the read path by #1776.
 - **F17 — `prepare_safe_flatten` enablement vs. its view-action nature
   (low; reduced 2026-08-26).** The executor landed (#1756) and the POST path
   now raises a typed `ActionNotAvailableError` — "This recovery capability is
@@ -379,12 +378,14 @@ is the durable index, the issue is the working brief.
   **their terminal STOP evidence could not commit**, and every subsequent panel
   action returned a raw 500 until a container restart. Fail-closed is correct —
   a holder that lost its lease must not write. Three gaps, split by tractability:
-  the surface honesty fix (**#1794** — author an account-scoped
-  `fix_elsewhere` blocker instead of leaking `account '…' execution lease was
-  lost or expired; this handle can no longer write`) and the two design
-  questions (**#1800** — supervised re-acquisition; where terminal evidence
-  commits when its authority cannot be written). Real-world triggers are
-  ordinary: laptop sleep, VM migration, CPU starvation.
+  the surface honesty fix (**#1794 — FIXED 2026-08-26**: the panel router now
+  translates the condition to a typed `EXECUTION_LEASE_LOST` refusal with
+  authored copy, instead of leaking the internal handle message as a raw 500;
+  the clerk router had translated it since the SQLite cutover, the panel router
+  simply had no handler) and the two design questions (**#1800**, open —
+  supervised re-acquisition; where terminal evidence commits when its authority
+  cannot be written). Real-world triggers are ordinary: laptop sleep, VM
+  migration, CPU starvation.
 - **T2/O4 — read and deploy latency degrade with running-fleet size (high).**
   At 144 rows with 50 trading bots: catalog p50 16.8 s / p95 20.6 s (idle
   baseline 3.3 s / 8.7 s); deploys 0.4 s median for the first ~30 and ~15 s
@@ -400,13 +401,18 @@ is the durable index, the issue is the working brief.
   emergent effect is cohort-scale stranding whose only remedy is N×3 clicks.
   **#1802** (needs design) — a cohort-scoped flatten, the inverse-scoped
   sibling of the Two-Tap account-hold rule.
-- **T1 — narrow retire misses its motivating case (medium).** See §9 F16;
-  filed as **#1795**.
+- **T1 — narrow retire misses its motivating case (medium, partially fixed).**
+  The operator-visible contradiction is gone (2026-08-26); the widening is
+  `needs-design`. See §9 F16 and **#1795**.
 - **T5 — panel reads 503 under write pressure (medium).** An honest
   fail-closed torn-read guard, but one torn read ends the request, so it
   surfaces as flakiness exactly when an operator inspects an active bot.
-  Load-correlated (benches saw 0/96). **#1796** — bounded in-server projection
-  retry; the guard itself stays.
+  Load-correlated (benches saw 0/96). **FIXED 2026-08-26 (#1796)** — though not
+  as the finding framed it: the bounded retry already existed (`range(3)`), but
+  the attempts ran back-to-back and so all sampled the same write burst. They
+  are now spaced, and exhaustion leaves a structured record instead of an
+  indistinguishable 503. The guard itself is unchanged, and the attempt *count*
+  was deliberately not raised — that is a magnitude, and #1801 owns it.
 - **T4 — transient `RECOVERY_UNCERTAIN` during post-outage sweeps (low,
   observation).** A resume read can briefly return `RECOVERY_UNCERTAIN` before
   settling. Honest but unexplained. Note that two distinct branches return this

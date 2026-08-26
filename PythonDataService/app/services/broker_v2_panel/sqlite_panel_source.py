@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.models import ClerkStatus
@@ -81,12 +82,28 @@ class SqlitePanelBotNotFound(ValueError):
 # These bound how many times a seam re-samples before refusing.
 _CATALOG_COHERENCE_ATTEMPTS = 2
 _TORN_READ_ATTEMPTS = 3
-#: Attempts used to run back-to-back, so under a trading fleet's write burst
-#: they all sampled the same instant and all lost to the same burst -- three
-#: retries spread over a few milliseconds are close to one (T5, #1796). The
-#: *count* is deliberately unchanged: picking a larger number is a guess, and
-#: the per-account contention behind these curves wants a profile first (#1801).
 _TORN_READ_BACKOFF_MS = 25
+
+
+def _spaced_attempts(total: int = _TORN_READ_ATTEMPTS) -> Iterator[int]:
+    """Yield attempt indices, spacing each retry so it samples a new moment.
+
+    The attempts used to run back-to-back, so under a trading fleet's write
+    burst they all sampled the same instant and all lost to the same burst --
+    three retries spread over a few milliseconds are close to one (T5, #1796).
+    The whole ladder stays far below the frontend's 15 s poll budget.
+
+    The *count* is deliberately unchanged: picking a larger number is a guess,
+    and the per-account contention behind these curves wants a profile first
+    (#1801).
+
+    Callers run inside ``asyncio.to_thread``, so sleeping here does not block
+    the event loop.
+    """
+    for attempt in range(total):
+        if attempt:
+            time.sleep(_TORN_READ_BACKOFF_MS * attempt / 1000)
+        yield attempt
 
 
 class SqlitePanelEconomicUnavailable(RuntimeError):
@@ -311,11 +328,7 @@ async def read_sqlite_panel_evidence(
     session_window = current_trading_session_window(now_ms)
 
     def read_once() -> SqlitePanelEvidence | None:
-        for attempt in range(_TORN_READ_ATTEMPTS):
-            if attempt:
-                # Spaced so each attempt samples a different moment; the whole
-                # ladder stays far below the frontend's 15 s poll budget.
-                time.sleep(_TORN_READ_BACKOFF_MS * attempt / 1000)
+        for _attempt in _spaced_attempts():
             custody_reader = SqliteClerkProjectionReader.from_repository(facade.repository)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
@@ -436,7 +449,7 @@ async def read_sqlite_chart_evidence(
         raise ValueError("Requested account is not the active SQLite authority")
 
     def read_once() -> SqliteChartEvidence | None:
-        for _attempt in range(_TORN_READ_ATTEMPTS):
+        for _attempt in _spaced_attempts():
             reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
                 fills = reader.bot_fill_window(

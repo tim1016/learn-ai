@@ -36,7 +36,6 @@ from app.schemas.broker_bots import (
     BotControlAuthorityFacts,
 )
 from app.schemas.broker_v2_evidence import EvidencePage
-from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost, RepositoryPoisoned
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelLiveSnapshot,
@@ -62,7 +61,6 @@ from app.services.broker_v2_panel import panel_data_source as ds
 from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
     ActionOutcomeUnknownError,
-    ExecutionAuthorityLostError,
     StaleRevisionError,
 )
 from app.services.broker_v2_panel.chart_projection_service import (
@@ -526,21 +524,6 @@ async def _run_action(broker: str, account_id: str, sid: str, request: PanelActi
         )
         schedule_live_projection_refresh(broker, account_id, sid)
         return result
-    except (ExecutionLeaseLost, RepositoryPoisoned) as error:
-        # T7c (#1794): the account's authority is unwritable. Fail-closed is
-        # correct; a raw 500 leaking the internal handle message is not.
-        logger.warning(
-            "Panel action refused: account execution authority unavailable",
-            extra={
-                "action": "panel_action_execution_authority_lost",
-                "broker": broker,
-                "account_id": account_id,
-                "strategy_instance_id": sid,
-                "action_id": request.action_id,
-                "error": str(error),
-            },
-        )
-        _raise_action_error(ExecutionAuthorityLostError(), request)
     except ds.PanelDataError as error:
         _raise_panel_error(error)
     except ActionExecutionError as error:

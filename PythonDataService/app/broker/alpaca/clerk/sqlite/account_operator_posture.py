@@ -72,6 +72,17 @@ _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE = OperatorMove(
 # panel) always projects as `fix_elsewhere` on fleet_roster (it can only
 # point the operator at the desk) — the same condition, different honest
 # cures, per ADR 0027. `wait`/`terminal` are host-symmetric.
+# ADR 0047: the only condition whose copy the recovery catalog cannot author,
+# because its cure is not a panel action at all. The lens deliberately does not
+# render an `open_runbook` button, so the ceremony must be in the prose too.
+_AUTHORITY_FAILED_HEADLINE = "This account's custody authority has failed."
+_AUTHORITY_FAILED_DETAIL = (
+    "Recovery replaces the authority and cannot run while this process holds "
+    "its execution lease, so it is an offline ceremony: stop the data plane, "
+    "run the Clerk recovery CLI, then restart. No control on this panel can "
+    "perform it."
+)
+
 _HostProjection = tuple[Disposition, OperatorMove | None]
 _CUSTODY_HOST_PROJECTIONS: dict[Disposition, tuple[_HostProjection, _HostProjection]] = {
     "fix_here": (("fix_here", _OPEN_RECOVERY_MOVE), ("fix_elsewhere", _OPEN_OPERATOR_DESK_MOVE)),
@@ -198,6 +209,20 @@ def _posture(
     )
 
 
+def _primary_recovery_action(
+    ctx: AccountOperatorPostureContext,
+) -> RecoveryCapability | None:
+    """The action the catalog would have an operator take, available or not.
+
+    An unavailable one still names the obstacle, which is what turns a
+    condition into `wait` rather than a bare warning.
+    """
+    return next(
+        (action for action in ctx.recovery_actions if action.primary),
+        next((action for action in ctx.recovery_actions if not action.available), None),
+    )
+
+
 def _custody_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPosture | None:
     """Port the prior client-side ``projectionPosture`` branching server-side.
 
@@ -214,43 +239,36 @@ def _custody_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPos
         return None
 
     authority_unhealthy = ctx.authority_health != "healthy"
-    primary = next((action for action in ctx.recovery_actions if action.primary), None)
-    if primary is None:
-        primary = next((action for action in ctx.recovery_actions if not action.available), None)
+
+    # Not merely unread when the authority has failed -- not consulted at all.
+    # A catalog with no cure to offer must not get to shape this verdict.
+    primary = None if authority_unhealthy else _primary_recovery_action(ctx)
+
+    # Guidance authors the copy for every condition except the one below,
+    # which is exactly the one no catalog can describe.
+    headline, detail = ctx.guidance.headline, ctx.guidance.explanation
 
     if authority_unhealthy:
-        # ADR 0047: authority recovery is an offline ceremony. No panel action
-        # can cure a failed authority, so this must be decided before the
-        # catalog is consulted at all -- the failure catalog's one remaining
-        # entry is a timeline *reader*, and letting it drive the disposition
-        # produced either `fix_here` pointing at a view (when readable) or
-        # `wait` with no move at all (when not). Both told the operator to do
-        # something that could never work.
+        # ADR 0047: authority recovery is an offline ceremony. Letting the
+        # catalog drive this produced either `fix_here` pointing at a timeline
+        # *viewer* (when readable) or `wait` with no move at all (when not) --
+        # both naming a cure that could never work.
         disposition: Disposition = "terminal"
         condition_id = f"alpaca_clerk_authority_failure:{ctx.authority_health}"
         severity: Literal["blocking", "warning"] = "blocking"
-        headline = "This account's custody authority has failed."
-        detail = (
-            "Recovery replaces the authority and cannot run while this process "
-            "holds its execution lease, so it is an offline ceremony: stop the "
-            "data plane, run the Clerk recovery CLI, then restart. No control "
-            "on this panel can perform it."
-        )
+        headline, detail = _AUTHORITY_FAILED_HEADLINE, _AUTHORITY_FAILED_DETAIL
     elif primary is not None and primary.available:
         disposition = "fix_here"
         condition_id = f"alpaca_clerk_recovery:{primary.action_id}"
         severity = "blocking"
-        headline, detail = ctx.guidance.headline, ctx.guidance.explanation
     elif primary is not None:
         disposition = "wait"
         condition_id = f"alpaca_clerk_recovery_pending:{primary.action_id}"
         severity = "warning"
-        headline, detail = ctx.guidance.headline, ctx.guidance.explanation
     else:
         disposition = "wait"
         condition_id = "alpaca_clerk_evidence_review"
         severity = "warning"
-        headline, detail = ctx.guidance.headline, ctx.guidance.explanation
 
     account_desk, fleet_roster = _CUSTODY_HOST_PROJECTIONS[disposition]
     return _posture(

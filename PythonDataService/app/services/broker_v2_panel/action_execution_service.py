@@ -81,23 +81,6 @@ class ActionOutcomeUnknownError(ActionExecutionError):
 #: Reason code for a lost/expired account execution lease (T7c, #1794).
 EXECUTION_AUTHORITY_LOST_REASON_CODE = "EXECUTION_LEASE_LOST"
 
-#: Operator-authored copy for that condition. Account-scoped problem,
-#: account-scoped cure -- the Two-Tap rule's own shape. The internal handle
-#: message ("this handle can no longer write") is diagnostic, not operator
-#: copy, and must not reach the surface.
-EXECUTION_AUTHORITY_LOST_MESSAGE = (
-    "This account's execution authority can no longer be written to."
-)
-EXECUTION_AUTHORITY_LOST_WHY = (
-    "The data plane lost this account's execution lease, which happens when the "
-    "process is frozen or starved past the lease timeout. Refusing writes is "
-    "deliberate: a holder that lost its lease must not act on stale authority. "
-    "A restart acquires a fresh lease and reconciles custody on boot."
-)
-EXECUTION_AUTHORITY_LOST_NEXT_ACTION = (
-    "Restart the data plane. No control on this panel can re-acquire the lease."
-)
-
 
 class ExecutionAuthorityLostError(ActionExecutionError):
     """This account's execution lease expired or was reassigned (503).
@@ -111,9 +94,19 @@ class ExecutionAuthorityLostError(ActionExecutionError):
     http_status = 503
 
     def __init__(self) -> None:
+        # Account-scoped problem, account-scoped cure -- the Two-Tap rule's own
+        # shape. The internal handle message ("this handle can no longer
+        # write") is diagnostic, not operator copy, and must not reach here.
         super().__init__(
-            EXECUTION_AUTHORITY_LOST_MESSAGE,
-            detail=f"{EXECUTION_AUTHORITY_LOST_WHY} {EXECUTION_AUTHORITY_LOST_NEXT_ACTION}",
+            "This account's execution authority can no longer be written to.",
+            detail=(
+                "The data plane lost this account's execution lease, which happens "
+                "when the process is frozen or starved past the lease timeout. "
+                "Refusing writes is deliberate: a holder that lost its lease must "
+                "not act on stale authority. Restart the data plane to acquire a "
+                "fresh lease and reconcile custody on boot. No control on this "
+                "panel can re-acquire it."
+            ),
             reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
         )
 

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import logging
-
 import json
+import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
@@ -1048,10 +1047,13 @@ def test_torn_read_attempts_are_spaced_so_they_sample_different_moments() -> Non
     """
     assert sqlite_panel_source._TORN_READ_BACKOFF_MS > 0
 
-    # The whole ladder must stay far below the frontend's 15 s poll budget:
-    # a retry that outlives the client's timeout has made things worse.
-    total_backoff_ms = sum(
-        sqlite_panel_source._TORN_READ_BACKOFF_MS * attempt
-        for attempt in range(sqlite_panel_source._TORN_READ_ATTEMPTS)
-    )
-    assert total_backoff_ms < 1_000
+    started = time.monotonic()
+    attempts = list(sqlite_panel_source._spaced_attempts())
+    elapsed_ms = (time.monotonic() - started) * 1000
+
+    assert attempts == list(range(sqlite_panel_source._TORN_READ_ATTEMPTS))
+    # Genuinely spaced -- not merely a constant that nothing reads.
+    assert elapsed_ms >= sqlite_panel_source._TORN_READ_BACKOFF_MS
+    # And far below the frontend's 15 s poll budget: a retry ladder that
+    # outlives the client's timeout has made things worse, not better.
+    assert elapsed_ms < 1_000
