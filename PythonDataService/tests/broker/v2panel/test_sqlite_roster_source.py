@@ -21,11 +21,18 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ControlMetaSnapshot,
     DecisionReceiptResource,
 )
+from app.engine.live.bot_lifecycle_state import (
+    BotDutyOutcome,
+    BotLifecyclePhase,
+    BotLifecycleStateRecord,
+    stable_bot_lifecycle_state_path,
+)
 from app.lean_sidecar.trading_calendar import SessionWindow
 from app.services.broker_v2_panel import panel_data_source, sqlite_panel_source
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     SqliteCatalogRevisionMismatch,
+    status_label_for,
 )
 
 
@@ -103,6 +110,53 @@ class _Repository:
             config_hash="a" * 64,
             created_at_ms=1_700_000_000_000,
         )
+
+
+def test_sqlite_roster_projects_the_durable_duty_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fleet-stress T6 (2026-08-26): after a SIGKILL the whole roster rendered
+    an innocent "Off duty" because this path hardcoded ``duty_outcome=None``
+    while the lifecycle repo durably held ``EXITED_UNVERIFIED``.
+    """
+
+    class _StoppedRepository(_Repository):
+        def active_run(self, strategy_instance_id: str):
+            return None
+
+    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+    monkeypatch.setattr(sqlite_panel_source, "account_truth_artifacts_root", lambda: tmp_path)
+
+    record_path = stable_bot_lifecycle_state_path(tmp_path, "active-spy")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        BotLifecycleStateRecord(
+            phase=BotLifecyclePhase.OFF_DUTY,
+            active_run_id=None,
+            last_transition_at_ms=1_720_000_100_000,
+            duty_outcome=BotDutyOutcome(
+                kind="EXITED_UNVERIFIED",
+                reason_code="INTERRUPTED_BY_RESTART",
+                recorded_at_ms=1_720_000_100_000,
+                run_id="run-crashed",
+            ),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+
+    assert statuses is not None
+    crashed = statuses[0]
+    assert crashed.strategy_instance_id == "active-spy"
+    assert crashed.duty_outcome is not None
+    assert crashed.duty_outcome.kind == "EXITED_UNVERIFIED"
+    assert crashed.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
+    # The roster label and attention flag must reflect the unclean exit (S3b).
+    assert status_label_for(crashed) == "Exited unverified"
+    # A bot with no lifecycle record (legacy) still projects None, no error.
+    assert statuses[1].duty_outcome is None
 
 
 def test_sqlite_roster_uses_only_activated_repository(monkeypatch: pytest.MonkeyPatch) -> None:

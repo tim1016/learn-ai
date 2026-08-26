@@ -34,6 +34,12 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecycleStateCorruptError,
+    BotLifecycleStateRecord,
+    BotLifecycleStateRepo,
+    stable_bot_lifecycle_state_path,
+)
 from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -43,6 +49,8 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
 )
+from app.services.account_truth_refresh import account_truth_artifacts_root
+from app.services.bot_registry_projection import duty_outcome_view
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
@@ -173,6 +181,23 @@ def _declared_configuration(strategy_instance_id: str, config_json: str) -> _Dec
     )
 
 
+def _bot_lifecycle_record(strategy_instance_id: str) -> BotLifecycleStateRecord | None:
+    """Read the bot's durable lifecycle record for duty-outcome projection.
+
+    An absent record (legacy bots) projects None; a corrupt one refuses the
+    projection loudly, matching this module's incomplete-config contract —
+    silently projecting ``duty_outcome=None`` here is what hid a crashed
+    fleet behind "Off duty" (fleet-stress T6, 2026-08-26).
+    """
+    path = stable_bot_lifecycle_state_path(account_truth_artifacts_root(), strategy_instance_id)
+    try:
+        return BotLifecycleStateRepo(path).read()
+    except BotLifecycleStateCorruptError as exc:
+        raise SqliteCatalogProjectionUnavailable(
+            f"Bot '{strategy_instance_id}' has an unreadable lifecycle projection: {exc}"
+        ) from exc
+
+
 def _sqlite_roster_status(
     broker: str,
     registration: dict[str, object],
@@ -203,6 +228,7 @@ def _sqlite_roster_status(
     active_run = repository.active_run(strategy_instance_id)
     retired_at_ms = registration.get("retired_at_ms")
     running = active_run is not None
+    lifecycle = _bot_lifecycle_record(strategy_instance_id)
     return BotStatusView(
         strategy_instance_id=strategy_instance_id,
         strategy_key=config.strategy_key,
@@ -216,7 +242,7 @@ def _sqlite_roster_status(
         phase=("RETIRED" if retired_at_ms is not None else "ON_DUTY" if running else "OFF_DUTY"),
         desired_state="RUNNING" if running else "STOPPED",
         active_run_id=(str(active_run.lifecycle_run_id) if active_run is not None else None),
-        duty_outcome=None,
+        duty_outcome=duty_outcome_view(lifecycle),
         binding_created_at_ms=int(registration["created_at_ms"]),
         last_transition_at_ms=(
             int(retired_at_ms)
