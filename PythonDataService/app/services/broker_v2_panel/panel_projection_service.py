@@ -14,19 +14,16 @@ lets the idempotency key make double-clicks safe (§11).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
-from app.broker.alpaca.clerk.models import ChannelHealth, ClerkEntryKind, ClerkStatus, OrderJournalEntry
+from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.v2panel.vocabulary import (
     HOLD_REASONS,
     ActionId,
-    ChannelState,
     copy_for,
     duty_outcome_copy_key,
 )
@@ -51,6 +48,11 @@ from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDec
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
+from app.services.broker_v2_panel.channel_health import (
+    ChannelHealthEvaluation,
+    channel_state,
+    evaluate_channel_health,
+)
 from app.services.broker_v2_panel.panel_authority_guard import (
     default_authority_account_id,
     reject_mixed_authority,
@@ -61,21 +63,6 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
-
-# A channel-health observation older than this is not "fresh" for the clear-hold
-# gate (§7.3). Reuse the station staleness threshold — one trading day.
-CHANNEL_FRESH_THRESHOLD_MS = STALE_THRESHOLD_MS
-_REQUIRED_CLERK_CHANNELS = ("market_data", "execution")
-
-
-@dataclass(frozen=True)
-class ChannelHealthEvaluation:
-    """Canonical health/freshness verdict for Clerk submission channels."""
-
-    ready: bool
-    missing: tuple[str, ...]
-    stale: tuple[str, ...]
-    unhealthy: tuple[str, ...]
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -215,17 +202,10 @@ def _build_health_card(
     )
 
 
-def _channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int) -> ChannelState:
-    """Derive the closed channel state from health + freshness (§7.3)."""
-    if now_ms - observed_at_ms > CHANNEL_FRESH_THRESHOLD_MS:
-        return "unknown"
-    return "healthy" if healthy else "unhealthy"
-
-
 def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealthView]:
     views: list[ChannelHealthView] = []
     for health in clerk_status.channel_healths or []:
-        state = _channel_state(healthy=health.healthy, observed_at_ms=health.observed_at_ms, now_ms=now_ms)
+        state = channel_state(healthy=health.healthy, observed_at_ms=health.observed_at_ms, now_ms=now_ms)
         copy = copy_for(state)
         views.append(
             ChannelHealthView(
@@ -271,49 +251,6 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
         outstanding_intents=clerk_status.outstanding_intents,
         channels=_channel_views(clerk_status, now_ms),
     )
-
-
-def evaluate_channel_health(
-    channel_healths: Sequence[ChannelHealth] | None,
-    now_ms: int,
-    *,
-    required_streams: tuple[str, ...] = _REQUIRED_CLERK_CHANNELS,
-) -> ChannelHealthEvaluation:
-    """Evaluate the exact channel set required by every submission gate.
-
-    Takes the raw channel-health facts (not a full ``ClerkStatus``) so
-    callers that are still assembling a ``ClerkStatus`` — e.g. one that must
-    fold this verdict into the same status object (#1664) — can evaluate
-    channel readiness first.
-
-    ``required_streams`` defaults to both Clerk-submission channels. Dry Run
-    admission (#1702) needs only ``market_data`` — it never opens the
-    ``execution`` channel — so it passes a narrower tuple.
-    """
-    by_stream = {health.stream: health for health in channel_healths or []}
-    missing = tuple(stream for stream in required_streams if stream not in by_stream)
-    stale = tuple(
-        stream
-        for stream in required_streams
-        if stream in by_stream
-        and now_ms - by_stream[stream].observed_at_ms > CHANNEL_FRESH_THRESHOLD_MS
-    )
-    unhealthy = tuple(
-        stream
-        for stream in required_streams
-        if stream in by_stream and not by_stream[stream].healthy
-    )
-    return ChannelHealthEvaluation(
-        ready=not missing and not stale and not unhealthy,
-        missing=missing,
-        stale=stale,
-        unhealthy=unhealthy,
-    )
-
-
-def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
-    """True iff market-data and execution health are both healthy and fresh."""
-    return evaluate_channel_health(clerk_status.channel_healths, now_ms).ready
 
 
 _TERMINAL_ORDER_EVENTS = frozenset({"fill", "canceled", "rejected", "expired"})

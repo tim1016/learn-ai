@@ -63,21 +63,21 @@ def _clerk_status(
         outstanding_intents=outstanding_intents,
         observed_at_ms=_NOW,
         channel_healths=[
-            ChannelHealth(stream="market_data", healthy=market_data_healthy, observed_at_ms=_NOW),
+            ChannelHealth(stream="market_data", healthy=market_data_healthy, connected=market_data_healthy, observed_at_ms=_NOW),
         ],
         operator_posture=_HEALTHY_POSTURE,
     )
 
 
 def test_dry_run_eligible_with_runtime_and_healthy_market_data() -> None:
-    verdict = _dry_run_eligibility(_strategies(), _clerk_status(), now_ms=_NOW)
+    verdict = _dry_run_eligibility(_strategies(), _clerk_status(), now_ms=_NOW, symbol="SPY")
 
     assert verdict.eligible is True
     assert verdict.reason_code == "ALPACA_DRY_RUN_READY"
 
 
 def test_dry_run_ineligible_with_no_runtime_backed_strategy() -> None:
-    verdict = _dry_run_eligibility((), _clerk_status(), now_ms=_NOW)
+    verdict = _dry_run_eligibility((), _clerk_status(), now_ms=_NOW, symbol="SPY")
 
     assert verdict.eligible is False
     assert verdict.reason_code == "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY"
@@ -85,7 +85,7 @@ def test_dry_run_ineligible_with_no_runtime_backed_strategy() -> None:
 
 
 def test_dry_run_ineligible_with_unhealthy_market_data() -> None:
-    verdict = _dry_run_eligibility(_strategies(), _clerk_status(market_data_healthy=False), now_ms=_NOW)
+    verdict = _dry_run_eligibility(_strategies(), _clerk_status(market_data_healthy=False), now_ms=_NOW, symbol="SPY")
 
     assert verdict.eligible is False
     assert verdict.reason_code == "CLERK_CHANNEL_UNHEALTHY"
@@ -98,6 +98,7 @@ def test_dry_run_ignores_clerk_hold_freeze_and_outstanding_intents() -> None:
         _strategies(),
         _clerk_status(hold_active=True, freeze_active=True, outstanding_intents=7),
         now_ms=_NOW,
+        symbol="SPY",
     )
 
     assert verdict.eligible is True

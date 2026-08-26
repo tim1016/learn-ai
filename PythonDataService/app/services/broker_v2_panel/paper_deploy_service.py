@@ -26,7 +26,11 @@ from app.schemas.signal_program_seal import ParameterOrigin
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
-from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
+from app.services.broker_v2_panel.channel_health import (
+    ChannelHealthEvaluation,
+    evaluate_channel_connectivity,
+    evaluate_channel_health,
+)
 from app.services.broker_v2_panel.strategy_catalog import compose_strategy_catalog
 from app.utils.timestamps import now_ms_utc
 
@@ -184,12 +188,33 @@ def _strategy_views(
     )
 
 
+def _channel_evaluation(
+    clerk_status: ClerkStatus,
+    now_ms: int,
+    *,
+    symbol: str | None,
+    required_streams: tuple[str, ...] | None = None,
+) -> ChannelHealthEvaluation:
+    """Pick the channel question this view's scope is entitled to ask.
+
+    A symbol-scoped view judges *usability* for that symbol — warm-up
+    included. The account-level view judges only presence and connectivity,
+    because per-symbol warm-up is not an account-level fact and must not
+    refuse every deploy on the account (#1777, finding S6).
+    """
+    kwargs = {} if required_streams is None else {"required_streams": required_streams}
+    if symbol is None:
+        return evaluate_channel_connectivity(clerk_status.channel_healths, now_ms, **kwargs)
+    return evaluate_channel_health(clerk_status.channel_healths, now_ms, **kwargs)
+
+
 def _readiness_checks(
     account: BrokerAccountSnapshot,
     clerk_status: ClerkStatus,
     strategies: tuple[AlpacaPaperDeployStrategy, ...],
     *,
     now_ms: int,
+    symbol: str | None,
 ) -> tuple[AlpacaPaperDeployReadinessCheck, ...]:
     accepted_strategies = tuple(strategy for strategy in strategies if strategy.evidence_status == "accepted")
     override_strategies = tuple(
@@ -206,11 +231,21 @@ def _readiness_checks(
     freeze = clerk_status.freeze
     hold = clerk_status.hold
     channels = clerk_status.channel_healths or []
-    channel_evaluation = evaluate_channel_health(clerk_status.channel_healths, now_ms)
+    channel_evaluation = _channel_evaluation(clerk_status, now_ms, symbol=symbol)
     channel_ready = channel_evaluation.ready
+    failing = channel_evaluation.failing
     channel_summary = (
         ", ".join(
-            f"{channel.stream.replace('_', ' ').title()} is {'healthy' if channel.healthy else 'unhealthy'}"
+            f"{channel.stream.replace('_', ' ').title()} is "
+            # The sample's own reason names the symbol; surfacing it is what
+            # makes a symbol-scoped refusal legible (#1777 decision 4).
+            + (
+                f"unhealthy ({channel.reason})"
+                if channel.stream in failing and channel.reason
+                else "unhealthy"
+                if channel.stream in failing
+                else "healthy"
+            )
             for channel in channels
         )
         or "no channel observations"
@@ -417,6 +452,7 @@ def _dry_run_eligibility(
     clerk_status: ClerkStatus,
     *,
     now_ms: int,
+    symbol: str | None,
 ) -> AlpacaPaperDeployEligibility:
     """Author the Dry Run launch verdict — deliberately narrower than Paper's.
 
@@ -426,8 +462,8 @@ def _dry_run_eligibility(
     none of those are "not applicable" to a mode that makes no broker
     contact and holds no custody.
     """
-    market_data_ready = evaluate_channel_health(
-        clerk_status.channel_healths, now_ms, required_streams=("market_data",)
+    market_data_ready = _channel_evaluation(
+        clerk_status, now_ms, symbol=symbol, required_streams=("market_data",)
     ).ready
     # #1703: a visible catalog row no longer implies a registered runtime —
     # a validated-but-no-runtime row is now composed (not dropped), so
@@ -473,6 +509,8 @@ def build_alpaca_paper_deploy_view(
     account: BrokerAccountSnapshot,
     clerk_status: ClerkStatus,
     validation_entries: list[StrategyValidationEntry],
+    *,
+    symbol: str | None = None,
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict."""
     evaluated_at_ms = now_ms_utc()
@@ -482,9 +520,12 @@ def build_alpaca_paper_deploy_view(
         clerk_status,
         strategies,
         now_ms=evaluated_at_ms,
+        symbol=symbol,
     )
     eligibility = _eligibility(readiness_checks)
-    dry_run_eligibility = _dry_run_eligibility(strategies, clerk_status, now_ms=evaluated_at_ms)
+    dry_run_eligibility = _dry_run_eligibility(
+        strategies, clerk_status, now_ms=evaluated_at_ms, symbol=symbol
+    )
     return AlpacaPaperDeployView(
         broker="alpaca",
         account_id=account.account_id,

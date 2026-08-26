@@ -229,9 +229,18 @@ async def get_catalog_unscoped(broker: str) -> list[BotCatalogView]:
 async def get_alpaca_paper_deploy_view(
     broker: str,
     account_id: str,
+    symbol: str | None = Query(
+        None,
+        min_length=1,
+        max_length=12,
+        description=(
+            "Scope the channel-health verdict to one symbol. Omitted, the view "
+            "reports account-level channel presence and connectivity only."
+        ),
+    ),
 ) -> AlpacaPaperDeployView:
     try:
-        return await ds.get_alpaca_paper_deploy_view(broker, account_id)
+        return await ds.get_alpaca_paper_deploy_view(broker, account_id, symbol)
     except ds.PanelDataError as error:
         _raise_panel_error(error)
 

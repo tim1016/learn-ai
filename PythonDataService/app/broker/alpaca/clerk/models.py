@@ -183,12 +183,20 @@ class ChannelHealth(BaseModel):
 
     ``observed_at_ms`` is mandatory: no health fact is rendered without an
     observation time. ``reason`` is empty when healthy.
+
+    ``connected`` and ``healthy`` are deliberately separate facts. A channel
+    can be connected but not yet usable — a market-data subscription that
+    has not produced its first closed bar is warming up, not down. Submission
+    gates require ``healthy``; account-level surfaces that must not be
+    refused by one symbol's warm-up read ``connected`` (#1777, finding S6).
+    ``healthy`` implies ``connected``.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     stream: Literal["market_data", "execution"]
     healthy: bool
+    connected: bool
     reason: str = ""
     observed_at_ms: int
 

@@ -378,8 +378,15 @@ async def deploy_bot(
 async def get_alpaca_paper_deploy_view(
     broker: str,
     account_id: str,
+    symbol: str | None = None,
 ) -> AlpacaPaperDeployView:
-    """Author the closed paper-deployment form and its current launch verdict."""
+    """Author the closed paper-deployment form and its current launch verdict.
+
+    ``symbol`` scopes the channel-health verdict. Omitted, the view reports
+    account-level channel presence and connectivity only; supplied, it
+    evaluates that symbol's own market-data health, warm-up included
+    (#1777, finding S6).
+    """
     account = await resolve_account_snapshot(broker)
     if account.account_id != account_id:
         raise AccountMismatchError(
@@ -399,7 +406,7 @@ async def get_alpaca_paper_deploy_view(
             detail="The service is still starting or has shut down.",
             next_action="Wait for the data plane to become healthy, then refresh.",
         )
-    clerk_status = await _clerk_status()
+    clerk_status = await _clerk_status(symbol=symbol)
     try:
         validation_entries = load_strategy_validation_entries(strategy_registry_seeds())
     except StrategyValidationManifestError as exc:
@@ -408,7 +415,9 @@ async def get_alpaca_paper_deploy_view(
             detail="Deploy remains closed until current validation evidence is readable and hash-valid.",
             next_action="Restore the validation manifest and evidence artifacts, then refresh.",
         ) from exc
-    return build_alpaca_paper_deploy_view(account, clerk_status, validation_entries)
+    return build_alpaca_paper_deploy_view(
+        account, clerk_status, validation_entries, symbol=symbol
+    )
 
 
 async def deploy_alpaca_paper_bot(
@@ -417,7 +426,7 @@ async def deploy_alpaca_paper_bot(
     request: AlpacaPaperDeployRequest,
 ) -> AlpacaPaperDeployReceipt:
     """Execute the production paper deployment command through the runner seam."""
-    view = await get_alpaca_paper_deploy_view(broker, account_id)
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol)
     resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
     if registry is None:  # guarded by the view; retained for type narrowing
@@ -464,7 +473,7 @@ async def preview_alpaca_paper_start_admission(
     request: AlpacaPaperDeployRequest,
 ) -> RunAdmissionDecision:
     """Project the same request-specific Start decision used by execution."""
-    view = await get_alpaca_paper_deploy_view(broker, account_id)
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol)
     resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
     if registry is None:

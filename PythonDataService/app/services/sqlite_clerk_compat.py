@@ -27,7 +27,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.schemas.clerk_custody import CustodyDiagnosis
-from app.services.broker_v2_panel.panel_projection_service import (
+from app.services.broker_v2_panel.channel_health import (
     ChannelHealthEvaluation,
     evaluate_channel_health,
 )

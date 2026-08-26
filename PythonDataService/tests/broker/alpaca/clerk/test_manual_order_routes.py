@@ -174,13 +174,13 @@ def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         stream_health=StreamHealthGate(
             market_data=lambda: ChannelHealth(
                 stream="market_data",
-                healthy=health["market_data"],
+                healthy=health["market_data"], connected=health["market_data"],
                 reason="" if health["market_data"] else "test market-data outage",
                 observed_at_ms=10,
             ),
             execution=lambda: ChannelHealth(
                 stream="execution",
-                healthy=health["execution"],
+                healthy=health["execution"], connected=health["execution"],
                 reason="" if health["execution"] else "test execution outage",
                 observed_at_ms=11,
             ),

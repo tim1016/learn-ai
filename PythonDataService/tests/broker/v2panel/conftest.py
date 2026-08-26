@@ -159,7 +159,7 @@ def deploy_app(
     registry = _FakeDeployRegistry()
     set_bot_task_registry(registry)  # type: ignore[arg-type]
 
-    async def clerk_status() -> ClerkStatus:
+    async def clerk_status(*, symbol: str | None = None) -> ClerkStatus:
         observed_at_ms = now_ms_utc()
         return ClerkStatus(
             broker="alpaca",
@@ -168,8 +168,8 @@ def deploy_app(
             outstanding_intents=0,
             observed_at_ms=observed_at_ms,
             channel_healths=[
-                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=observed_at_ms),
-                ChannelHealth(stream="execution", healthy=True, observed_at_ms=observed_at_ms),
+                ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=observed_at_ms),
+                ChannelHealth(stream="execution", healthy=True, connected=True, observed_at_ms=observed_at_ms),
             ],
             operator_posture=_HEALTHY_POSTURE,
         )

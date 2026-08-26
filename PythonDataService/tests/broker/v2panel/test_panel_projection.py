@@ -71,14 +71,14 @@ from app.schemas.signal_program_seal import (
 )
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
-from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
+from app.services.broker_v2_panel.channel_health import evaluate_channel_health
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
-    evaluate_channel_health,
     program_build_view_from_run_evidence,
     select_primary_action_by_lens,
 )
+from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
     build_sqlite_catalog,
@@ -233,8 +233,8 @@ def _clerk_status(
         outstanding_intents=outstanding_intents,
         observed_at_ms=_NOW,
         channel_healths=[
-            ChannelHealth(stream="market_data", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
-            ChannelHealth(stream="execution", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
+            ChannelHealth(stream="market_data", healthy=healthy, connected=healthy, reason="", observed_at_ms=_NOW - 10),
+            ChannelHealth(stream="execution", healthy=healthy, connected=healthy, reason="", observed_at_ms=_NOW - 10),
         ],
         operator_posture=AccountOperatorPosture(
             condition=None,
@@ -1493,7 +1493,7 @@ def test_evaluate_channel_health_required_streams_narrows_to_market_data() -> No
     the execution channel, so an unhealthy/absent execution stream must not
     fail a Dry-Run-scoped evaluation."""
     now_ms = 1_700_000_000_000
-    market_data_only = (ChannelHealth(stream="market_data", healthy=True, observed_at_ms=now_ms),)
+    market_data_only = (ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=now_ms),)
 
     full = evaluate_channel_health(market_data_only, now_ms)
     scoped = evaluate_channel_health(market_data_only, now_ms, required_streams=("market_data",))
@@ -1506,7 +1506,7 @@ def test_evaluate_channel_health_required_streams_narrows_to_market_data() -> No
 
 def test_evaluate_channel_health_required_streams_still_catches_unhealthy_market_data() -> None:
     now_ms = 1_700_000_000_000
-    unhealthy = (ChannelHealth(stream="market_data", healthy=False, observed_at_ms=now_ms),)
+    unhealthy = (ChannelHealth(stream="market_data", healthy=False, connected=False, observed_at_ms=now_ms),)
 
     scoped = evaluate_channel_health(unhealthy, now_ms, required_streams=("market_data",))
 

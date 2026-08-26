@@ -77,13 +77,13 @@ def sqlite_desk(tmp_path: Path):
         stream_health=StreamHealthGate(
             market_data=lambda: ChannelHealth(
                 stream="market_data",
-                healthy=True,
+                healthy=True, connected=True,
                 reason="",
                 observed_at_ms=10,
             ),
             execution=lambda: ChannelHealth(
                 stream="execution",
-                healthy=True,
+                healthy=True, connected=True,
                 reason="",
                 observed_at_ms=11,
             ),
@@ -117,12 +117,14 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
         {
             "stream": "market_data",
             "healthy": True,
+            "connected": True,
             "reason": "",
             "observed_at_ms": 10,
         },
         {
             "stream": "execution",
             "healthy": True,
+            "connected": True,
             "reason": "",
             "observed_at_ms": 11,
         },
@@ -241,10 +243,10 @@ def sqlite_desk_clean(tmp_path: Path) -> Iterator[FastAPI]:
         trade=broker,  # type: ignore[arg-type]
         stream_health=StreamHealthGate(
             market_data=lambda: ChannelHealth(
-                stream="market_data", healthy=True, reason="", observed_at_ms=now_ms_utc()
+                stream="market_data", healthy=True, connected=True, reason="", observed_at_ms=now_ms_utc()
             ),
             execution=lambda: ChannelHealth(
-                stream="execution", healthy=True, reason="", observed_at_ms=now_ms_utc()
+                stream="execution", healthy=True, connected=True, reason="", observed_at_ms=now_ms_utc()
             ),
         ),
     )

@@ -526,13 +526,13 @@ def _gate(*, market_data_healthy: bool, execution_healthy: bool) -> StreamHealth
     return StreamHealthGate(
         market_data=lambda: ChannelHealth(
             stream="market_data",
-            healthy=market_data_healthy,
+            healthy=market_data_healthy, connected=market_data_healthy,
             reason="" if market_data_healthy else "market_data broke for the test",
             observed_at_ms=1,
         ),
         execution=lambda: ChannelHealth(
             stream="execution",
-            healthy=execution_healthy,
+            healthy=execution_healthy, connected=execution_healthy,
             reason="" if execution_healthy else "execution broke for the test",
             observed_at_ms=1,
         ),
@@ -592,19 +592,19 @@ async def test_execute_for_instance_uses_its_symbols_market_data_health(
     gate = StreamHealthGate(
         market_data=lambda: ChannelHealth(
             stream="market_data",
-            healthy=False,
+            healthy=False, connected=False,
             reason="A sibling symbol is stale",
             observed_at_ms=1,
         ),
         execution=lambda: ChannelHealth(
             stream="execution",
-            healthy=True,
+            healthy=True, connected=True,
             reason="",
             observed_at_ms=1,
         ),
         market_data_for_symbol=lambda symbol: ChannelHealth(
             stream="market_data",
-            healthy=symbol == "SPY",
+            healthy=symbol == "SPY", connected=symbol == "SPY",
             reason="" if symbol == "SPY" else f"{symbol} is stale",
             observed_at_ms=1,
         ),

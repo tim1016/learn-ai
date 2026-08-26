@@ -10599,8 +10599,12 @@
       },
       "ChannelHealth": {
         "additionalProperties": false,
-        "description": "One submission-affecting stream's health fact, with its age (P7).\n\n``observed_at_ms`` is mandatory: no health fact is rendered without an\nobservation time. ``reason`` is empty when healthy.",
+        "description": "One submission-affecting stream's health fact, with its age (P7).\n\n``observed_at_ms`` is mandatory: no health fact is rendered without an\nobservation time. ``reason`` is empty when healthy.\n\n``connected`` and ``healthy`` are deliberately separate facts. A channel\ncan be connected but not yet usable \u2014 a market-data subscription that\nhas not produced its first closed bar is warming up, not down. Submission\ngates require ``healthy``; account-level surfaces that must not be\nrefused by one symbol's warm-up read ``connected`` (#1777, finding S6).\n``healthy`` implies ``connected``.",
         "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
           "healthy": {
             "title": "Healthy",
             "type": "boolean"
@@ -10626,6 +10630,7 @@
         "required": [
           "stream",
           "healthy",
+          "connected",
           "observed_at_ms"
         ],
         "title": "ChannelHealth",
@@ -50185,6 +50190,26 @@
             "schema": {
               "title": "Account Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Scope the channel-health verdict to one symbol. Omitted, the view reports account-level channel presence and connectivity only.",
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 12,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Scope the channel-health verdict to one symbol. Omitted, the view reports account-level channel presence and connectivity only.",
+              "title": "Symbol"
             }
           },
           {
