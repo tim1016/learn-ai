@@ -98,7 +98,7 @@ public static class JobsApi
         var db = redis.GetDatabase();
         var stateKey = StateKey(jobId);
 
-        var paramsJson = bodyObj.ToJsonString();
+        var paramsJson = SerializeParametersForPersistence(bodyObj);
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
 
         // Pipeline: write state hash + active set + TTL in one round-trip batch.
@@ -386,6 +386,35 @@ public static class JobsApi
     private static string ResultBlobKey(string id) => $"job:{id}:result-blob";
     private static string ResultMetaKey(string id) => $"job:{id}:result-meta";
     private const string ActiveSetKey = "jobs:active";
+
+    /// <summary>
+    /// Produces the shared job-state projection without retaining source code
+    /// that belongs only in the submitting browser, Python dispatch, and the
+    /// dedicated audit workspace. The dispatch object is cloned so Python still
+    /// receives the complete request.
+    /// </summary>
+    internal static string SerializeParametersForPersistence(JsonObject dispatchParameters)
+    {
+        var persistedParameters = dispatchParameters.DeepClone().AsObject();
+        RedactSensitiveParameters(persistedParameters);
+        return persistedParameters.ToJsonString();
+    }
+
+    private static void RedactSensitiveParameters(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                obj.Remove("algorithm_source");
+                foreach (var property in obj)
+                    RedactSensitiveParameters(property.Value);
+                break;
+            case JsonArray array:
+                foreach (var item in array)
+                    RedactSensitiveParameters(item);
+                break;
+        }
+    }
 
     private static async Task MarkRedisFailedAsync(
         IDatabase db,

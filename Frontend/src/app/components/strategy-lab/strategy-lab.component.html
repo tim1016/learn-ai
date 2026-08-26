@@ -71,6 +71,15 @@
                 [engine]="config.engine()"
                 [dataPolicyNote]="config.dataPolicyNote()"
               />
+
+              @if (config.engine() === "lean" && config.selectedStrategyName(); as strategyName) {
+                <app-lean-source-editor
+                  [strategyName]="strategyName"
+                  [launcherStatus]="runs.leanLauncherStatus()"
+                  [customSource]="config.customLeanSource()"
+                  (customSourceChange)="config.customLeanSource.set($event)"
+                />
+              }
             </section>
           </div>
         </p-tabpanel>

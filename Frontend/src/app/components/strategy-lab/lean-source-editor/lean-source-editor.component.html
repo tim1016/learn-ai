@@ -1,0 +1,57 @@
+<section class="lean-source" aria-labelledby="lean-source-title">
+  <header class="lean-source__header">
+    <div>
+      <p class="lean-source__eyebrow">Registered validation twin</p>
+      <h2 id="lean-source-title">QCAlgorithm source</h2>
+    </div>
+    <span
+      class="lean-source__runtime"
+      [class.lean-source__runtime--ready]="launcherStatus() === 'ready'"
+    >{{ runtimeLabel() }}</span>
+  </header>
+
+  <p class="lean-source__notice" role="status">{{ runtimeNotice() }}</p>
+
+  <div class="lean-source__toolbar">
+    <label>
+      <input
+        type="checkbox"
+        [checked]="canEdit()"
+        [disabled]="!sourceResource.hasValue()"
+        (change)="toggleCustomSource($event)"
+      />
+      <span>Use custom source for this LEAN run</span>
+    </label>
+    <div class="lean-source__actions">
+      @if (currentSource(); as source) {
+        <app-copy-button
+          variant="button"
+          [text]="source"
+          label="Copy source"
+          ariaLabel="Copy QCAlgorithm source"
+        />
+      }
+      <button type="button" [disabled]="!canEdit()" (click)="resetSource()">Reset</button>
+    </div>
+  </div>
+
+  @if (canEdit()) {
+    <p class="lean-source__mode-note">
+      Custom source owns the strategy rules for this run; registered strategy parameters are not applied.
+    </p>
+  }
+  @if (sourceResource.isLoading()) {
+    <p class="lean-source__load-state" role="status">Loading registered QCAlgorithm…</p>
+  } @else if (sourceResource.error()) {
+    <p class="lean-source__load-state" role="status">Registered QCAlgorithm source is unavailable.</p>
+  }
+
+  <div class="lean-source__editor" [class.lean-source__editor--editable]="canEdit()" #editorHost></div>
+
+  @if (registeredSource(); as registered) {
+    <footer>
+      <span>{{ registered.template }}</span>
+      <code title="Registered source SHA-256">{{ registered.source_sha256 }}</code>
+    </footer>
+  }
+</section>

@@ -3000,6 +3000,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engine/strategies/{name}/lean-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Strategy Lean Source
+         * @description Return versioned QCAlgorithm source without detecting the LEAN launcher.
+         */
+        get: operations["get_strategy_lean_source_api_engine_strategies__name__lean_source_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/engine/strategies/{name}/pine": {
         parameters: {
             query?: never;
@@ -22424,6 +22444,26 @@ export interface components {
             supported_resolutions?: string[];
         };
         /**
+         * StrategyLeanSourceResponse
+         * @description Launcher-independent QCAlgorithm source exposed to Strategy Lab.
+         */
+        StrategyLeanSourceResponse: {
+            /**
+             * Language
+             * @default python
+             * @constant
+             */
+            language?: "python";
+            /** Source */
+            source: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /** Strategy Name */
+            strategy_name: string;
+            /** Template */
+            template: string;
+        };
+        /**
          * StrategyLeg
          * @description A single option leg in a strategy.
          */
@@ -30050,6 +30090,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StrategyInfo"][];
+                };
+            };
+        };
+    };
+    get_strategy_lean_source_api_engine_strategies__name__lean_source_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyLeanSourceResponse"];
+                };
+            };
+            /** @description Strategy or registered LEAN source not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -22,7 +22,7 @@ The Engine Lab (`/engine`) hosts two numerically-equivalent backtest engines (Py
 3. **Parity is first-class.** Sibling linking via explicit `parity_group_id` + backend-authored parity verdict using the existing `DivergenceCategory` taxonomy. Parity verdicts are frozen evidence.
 4. **Mission-control workbench, no tabs.** Left rail = configure; center stage transforms in place (idle → live phase timeline + log tail → verdict card → "Open full report →"); history below. Run never navigates away.
 5. **Engine Lab = validation factory.** Unified strategy catalog (draft + validated visible in Engine Lab; bots/Strategy Lab see validated only). Parity evidence pinned to run IDs feeds `StrategyValidationEntry`; promotion stays **human-flagged** (ADR-0023) — Engine Lab makes producing evidence one click.
-6. **Strategies are authored in-repo as versioned code.** The LEAN algorithm-source textarea UI is deleted. `algorithm_source` survives only on the sync test endpoint's request model.
+6. **Registered strategies are authored in-repo as versioned code.** Superseded in part on 2026-08-26 by explicit user direction: Strategy Lab now displays the registered QCAlgorithm and permits ephemeral browser edits for an explicit LEAN-only run. Browser edits are retained only with the run's audit workspace; they are not saved as registered strategies or used by the automatic Python-vs-LEAN parity flow. Launcher availability gates execution only, not source viewing or editing.
 7. Free-hand deletions granted: tabs die; Docs moves to `/engine/docs`; Replay relocates under run detail.
 
 **Verified corrections to prior assumptions:** LEAN *does* produce an equity curve (`normalized_parser.py:224` → `NormalizedEquityPoint`); a full cross-engine compare pipeline already exists end-to-end (reuse + refactor, not build); `Program.cs:219` uses `EnsureCreated()` so new migrations need explicit dev application.
@@ -68,13 +68,13 @@ Templates < 80 lines each; no file near the 1k thermo threshold.
 ### 3.3 Deletions (complete list)
 
 - `components/lean-engine/lean-engine.component.{ts,html,scss,spec.ts}` (1435+413 lines — tabs + the UX bug die here)
-- `components/lean-script-editor/` (5 files) + `services/lean-lint.service.ts` (sole consumer is the editor) — textarea authoring deleted
+- `components/lean-script-editor/` (5 files) + `services/lean-lint.service.ts` (sole consumer is the editor) — legacy textarea/linter implementation deleted; the 2026-08-26 restoration is the launcher-independent `strategy-lab/lean-source-editor` boundary described in decision 6
 - `readiness-score.util.ts` (465 lines) — **only after** the golden parity gate (Slice 1) is green; its temporary golden spec goes with it
 - `readiness-score-card.component.ts` grading call (`computeReadiness`) — body replaced by verbatim renderer
 - `components/lean-engine/engine-results/*` — decomposed into run-detail children
 - PrimeNG tabs imports in engine lab; `engine/docs → engine` redirect (replaced by real route)
 - Legacy phase ids `loading_bars`/`simulating`/`computing_stats` — one deploy cycle after Slice 3
-- `LeanAlgorithmMode`/`leanSource`/`useCustomLeanAlgorithm` machinery
+- Legacy `LeanAlgorithmMode`/`leanSource`/`useCustomLeanAlgorithm` machinery (the narrow ephemeral Strategy Lab state from the 2026-08-26 supersession is separate)
 
 ## 4. Schema & DTO design
 
@@ -166,7 +166,7 @@ DataLoaders: none needed for single-run detail; the history list gains denormali
 `equity_downsample.py` + tests; both persist payloads attach equity + insight summary; `POST /api/engine/chart-bars`; .NET `backtestRun(id)` + detail types; FE `/engine/runs/:id` component tree incl. verbatim verdict card; history row click navigates here.
 *Demo:* history click → full report (verdict, equity chart, trades, fees, LEAN stats) rendered 100% from Postgres; pre-migration row renders honest-empty; missing bars → honest-empty + fetch affordance.
 
-**Slice 3 — Workbench shell; delete tabs, textarea, TS grader.**
+**Slice 3 — Workbench shell; delete tabs, legacy textarea, TS grader.**
 `EngineWorkbenchComponent` + rail + stage + `launch-orchestrator.service` + `preflight.service` (OperatorBlocker gates); LEAN terminal path navigates via `strategy_execution_id` from the job result (`lean_sidecar_service.py:249-252`) — closes the "LEAN has no results" gap; Docs → `/engine/docs`; all §3.3 deletions land (TS grader gated on Slice-1 parity green).
 *Demo:* run Python from `/engine` — stage morphs idle → phase timeline → verdict card in place, no tab jump; run LEAN — identical treatment; mid-run refresh → dock reattaches.
 
