@@ -116,6 +116,15 @@ class ActiveClerkRuntime:
             return None
         return self._sqlite_repository
 
+    def start_hold_sync(self) -> None:
+        """Begin sampling stream health, once both providers are installed.
+
+        Separate from selection because the ``trade_updates`` consumer is
+        registered after the selector returns; see the construction site.
+        """
+        if self.hold_sync is not None:
+            self.hold_sync.start()
+
     async def close(self) -> None:
         if self.hold_sync is not None:
             await self.hold_sync.stop()
@@ -309,13 +318,18 @@ async def select_active_clerk_runtime(
         )
         sweep.start_lease_heartbeat()
         # #1777 WP4: the stream-health hold runs on its own fixed cadence,
-        # started here rather than with the reconcile loop in main.py. Its
-        # providers are process-local (feed state, trade-updates consumer),
-        # so it needs no broker I/O and no boot recovery -- and a reconcile
-        # backoff that reaches 300 s on failure, exactly when a channel is
-        # down, must never delay a hold raise or release.
+        # never the reconcile loop's -- a backoff that reaches 300 s on
+        # failure, exactly when a channel is down, must not delay a hold
+        # raise or release.
+        #
+        # Constructed here, but deliberately *not* started: one of its two
+        # providers (the trade_updates consumer) is registered by main.py
+        # only after this function returns, and this function then awaits
+        # startup recovery. Sampling before then reads "consumer is not
+        # running" -- indistinguishable from a real outage -- and would
+        # persist a false account-wide hold on every boot. main.py starts
+        # it via `start_hold_sync()` once the provider exists.
         hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
-        hold_sync.start()
         await asyncio.wait_for(
             facade.recover(),
             timeout=startup_recovery_timeout_s,

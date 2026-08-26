@@ -39,7 +39,6 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.stream_health import (
-    FRESHNESS_WINDOW_TICKS,
     HOLD_SYNC_INTERVAL_S,
     STREAM_HEALTH_REASON_CODE,
     StreamHealthGate,
@@ -85,24 +84,17 @@ class StreamHealthHoldSync:
         self._hold_stands: bool | None = None
         self._task: asyncio.Task[None] | None = None
 
-    @property
-    def freshness_window_ms(self) -> int:
-        return int(self._interval_s * 1000) * FRESHNESS_WINDOW_TICKS
-
     def tick(self) -> HoldSyncAction:
         """Observe once, fold into the debounce, and act on the verdict."""
-        # The account hold is account-scoped, so this reads the unscoped
-        # market-data fact. Sampling `market_data_for_symbol` here would
-        # recreate finding S6 at account scope: one warming symbol
-        # blocking admission for every bot.
+        # Account-scoped, so this reads the unscoped snapshot and judges it
+        # on connectivity alone -- see `account_scope_broken`. Neither the
+        # scoped nor the unscoped *usability* verdict belongs here: both
+        # fold per-symbol warmup, which would freeze every bot on one
+        # symbol (finding S6, at account scope).
         channels = None if self._gate is None else self._gate.snapshot()
         step = advance_hold_debounce(
             self._state,
-            sample_channels(
-                channels,
-                now_ms=self._now_ms(),
-                freshness_window_ms=self.freshness_window_ms,
-            ),
+            sample_channels(channels, now_ms=self._now_ms()),
         )
         self._state = step.state
 

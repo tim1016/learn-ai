@@ -27,12 +27,22 @@ TICK_MS = 15_000
 
 @dataclass
 class _Providers:
-    """Scripted channel health. ``observed_at_ms`` advances only when the
-    provider actually observes -- freezing it models a provider that has
-    stopped reporting without disconnecting."""
+    """Scripted channel health.
+
+    ``connected`` is tracked separately from ``healthy`` because the real
+    :class:`ChannelHealth` distinguishes them and the account hold turns on
+    exactly that distinction: an aggregate feed reports ``healthy=False``
+    while still connected when any one symbol is warming.
+
+    ``observed_at_ms`` freezes unless ``observing``, which models the real
+    unhealthy branches -- a disconnected execution channel reports the
+    instant it *broke* (``connection_changed_at_ms``), not the instant it
+    was asked.
+    """
 
     now_ms: int = 1_000_000
     healthy: bool = True
+    connected: bool | None = None
     reason: str = "execution channel is down"
     observing: bool = True
     _observed_at_ms: int = 1_000_000
@@ -46,7 +56,7 @@ class _Providers:
         return ChannelHealth(
             stream=stream,
             healthy=self.healthy,
-            connected=self.healthy,
+            connected=self.healthy if self.connected is None else self.connected,
             reason="" if self.healthy else self.reason,
             observed_at_ms=self._observed_at_ms,
         )
@@ -180,40 +190,6 @@ def test_a_released_hold_stays_released_without_further_appends(tmp_path: Path) 
     repo.close()
 
 
-def test_a_provider_that_stops_observing_cannot_raise_the_hold(tmp_path: Path) -> None:
-    """Sample identity: replaying one stale reading is not two failures."""
-    repo, providers = _repo(tmp_path), _Providers(healthy=False, observing=False)
-    sync = _sync(repo, providers)
-
-    for _ in range(5):
-        sync.tick()
-        providers.advance()
-
-    assert _hold(repo) is None
-    repo.close()
-
-
-def test_a_stale_provider_cannot_release_a_standing_hold(tmp_path: Path) -> None:
-    """The inverse, and the more dangerous one: a dead provider's last
-    healthy reading must not clear a hold forever."""
-    repo, providers = _repo(tmp_path), _Providers(healthy=False)
-    sync = _sync(repo, providers)
-
-    sync.tick()
-    providers.advance()
-    sync.tick()
-    assert _hold(repo) is not None
-
-    providers.healthy = True
-    providers.observing = False
-    for _ in range(5):
-        providers.advance()
-        sync.tick()
-
-    assert _hold(repo) is not None, "a frozen provider released the hold"
-    repo.close()
-
-
 def test_the_hold_survives_restart_and_releases_on_one_fresh_sample(
     tmp_path: Path,
 ) -> None:
@@ -234,16 +210,6 @@ def test_the_hold_survives_restart_and_releases_on_one_fresh_sample(
     restarted.tick()
 
     assert _hold(repo) is None
-    repo.close()
-
-
-def test_the_freshness_window_derives_from_the_sync_cadence(tmp_path: Path) -> None:
-    """#1777 decision 8: the inert 24-hour threshold is replaced by one
-    derived from the cadence -- otherwise "fresh" means nothing at 15 s."""
-    repo, providers = _repo(tmp_path), _Providers()
-    sync = _sync(repo, providers)
-
-    assert sync.freshness_window_ms == int(INTERVAL_S * 1000) * 3
     repo.close()
 
 
@@ -399,3 +365,97 @@ def test_the_sync_cannot_observe_the_reconciler_at_all(tmp_path: Path) -> None:
         "sleep",
         "max_ticks",
     }, f"the hold sync grew a dependency; check it is not the reconciler: {parameters}"
+
+
+def test_a_warming_symbol_never_raises_the_account_hold(tmp_path: Path) -> None:
+    """Codex review, #1784: the account hold must not fold per-symbol usability.
+
+    ``IbkrMarketDataFeed.health(None)`` aggregates every subscribed symbol
+    and reports ``stale=True`` when any one of them is still warming, so
+    the unscoped fact is *not* the connectivity fact the account scope
+    needs. Sampling ``healthy`` here recreated finding S6 at account
+    scope: one warming symbol freezing entries for every other bot.
+
+    The symbol-scoped refusal at ENTER is what owns per-symbol usability.
+    """
+    repo = _repo(tmp_path)
+    providers = _Providers(healthy=False, connected=True, reason="SPY is warming")
+    sync = _sync(repo, providers)
+
+    for _ in range(4):
+        sync.tick()
+        providers.advance()
+
+    assert _hold(repo) is None
+    assert _appends(repo, "ACCOUNT_HOLD_RAISED") == 0
+    repo.close()
+
+
+def test_a_disconnect_raises_even_once_its_break_timestamp_is_old(
+    tmp_path: Path,
+) -> None:
+    """Codex review, #1784: an outage must not age out of being actionable.
+
+    A disconnected execution channel reports ``connection_changed_at_ms``
+    -- when it *broke*, frozen thereafter. Judging sample freshness on
+    that timestamp meant an outage older than the window sampled
+    ``unknown`` and could never raise the hold: a fail-open, and the exact
+    inverse of the stale-hold bug this work exists to fix.
+    """
+    repo = _repo(tmp_path)
+    providers = _Providers(healthy=False, connected=False, observing=False)
+    # The socket broke well before this process last looked at it.
+    providers.now_ms += 10 * TICK_MS
+    sync = _sync(repo, providers)
+
+    sync.tick()
+    providers.advance()
+    sync.tick()
+
+    assert _hold(repo) is not None
+    assert _appends(repo, "ACCOUNT_HOLD_RAISED") == 1
+    repo.close()
+
+
+def test_evidence_names_the_disconnected_channel_not_the_warming_one(
+    tmp_path: Path,
+) -> None:
+    """Decision and evidence must come from one predicate.
+
+    If the raise turns on connectivity but the record lists every
+    ``healthy=False`` channel, the operator is handed a warming symbol as
+    the reason their whole account is frozen.
+    """
+    repo = _repo(tmp_path)
+    clock = [1_000_000]
+
+    def _channel(stream: str, *, connected: bool, reason: str) -> ChannelHealth:
+        return ChannelHealth(
+            stream=stream,
+            healthy=False,
+            connected=connected,
+            reason=reason,
+            observed_at_ms=clock[0],
+        )
+
+    gate = StreamHealthGate(
+        market_data=lambda: _channel(
+            "market_data", connected=True, reason="SPY is warming"
+        ),
+        execution=lambda: _channel(
+            "execution", connected=False, reason="socket is down"
+        ),
+    )
+    sync = StreamHealthHoldSync(
+        repo=repo, gate=gate, interval_s=INTERVAL_S, now_ms=lambda: clock[0]
+    )
+
+    sync.tick()
+    clock[0] += TICK_MS
+    sync.tick()
+
+    hold = _hold(repo)
+    assert hold is not None
+    assert "socket is down" in str(hold)
+    assert "SPY is warming" not in str(hold)
+    repo.close()

@@ -256,20 +256,53 @@ def test_the_stream_health_hold_sync_is_started_by_the_real_authority() -> None:
     source = (
         APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py"
     ).read_text(encoding="utf-8")
+    main_source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
 
     constructions = source.count("StreamHealthHoldSync(")
-    starts = source.count("hold_sync.start()")
     stops = source.count("await hold_sync.stop()")
 
     assert constructions > 0, "no hold sync construction found; update this guard"
-    assert starts == constructions, (
-        f"{constructions} StreamHealthHoldSync construction(s) but {starts} "
-        "started; an unstarted sync never raises or releases the hold"
+    assert main_source.count("start_hold_sync()") == 1, (
+        "exactly one startup site must start the hold sync; an unstarted "
+        "sync never raises or releases the hold"
     )
     assert stops >= constructions, (
-        "every started hold sync must be stopped on shutdown and on a failed "
-        "startup, or its task outlives the repository it writes to"
+        "every constructed hold sync must be stopped on shutdown and on a "
+        "failed startup, or its task outlives the repository it writes to"
     )
+
+
+def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
+    """Codex review, #1784: sampling before the provider exists persists a
+    false hold on every boot.
+
+    ``main.py`` registers the ``trade_updates`` consumer only *after*
+    ``select_active_clerk_runtime`` returns, and that call awaits startup
+    recovery, which is allowed to run for far longer than two sync
+    intervals. A sync started inside the selector therefore samples
+    "consumer is not running" -- indistinguishable from a genuine outage --
+    and raises an account-wide hold during normal initialization.
+
+    Structural because the bug is an ordering one: both call sites exist
+    and both are correct in isolation.
+    """
+    source = (
+        APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py"
+    ).read_text(encoding="utf-8")
+    main_source = (APPLICATION_ROOT / "main.py").read_text(encoding="utf-8")
+
+    assert source.count("hold_sync.start()") == 1, (
+        "the authority selector must not start the hold sync: it awaits "
+        "startup recovery before its execution provider is installed, so "
+        "the only start call belongs in `start_hold_sync`"
+    )
+    assert source.index("def start_hold_sync") < source.index("hold_sync.start()"), (
+        "the one start call must be the explicit `start_hold_sync` entry "
+        "point, not the selector"
+    )
+    assert main_source.index("set_trade_updates_consumer(alpaca_trade_updates)") < (
+        main_source.index("start_hold_sync()")
+    ), "the hold sync must start after the trade_updates consumer is registered"
 
 
 def test_enter_does_not_write_the_account_scoped_stream_health_hold() -> None:
