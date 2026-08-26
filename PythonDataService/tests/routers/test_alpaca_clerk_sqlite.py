@@ -308,11 +308,11 @@ async def test_failed_activated_authority_exposes_typed_account_recovery_state()
     assert projection["guidance"]["scope"] == "ACCOUNT_CLERK"
     assert projection["guidance"]["may_create_exposure"] is False
     actions = {action["action_id"]: action for action in projection["recovery_actions"]}
-    assert set(actions) == {
-        "open_custody_timeline",
-        "rebuild_from_mirror",
-        "reset_authority",
-    }
+    # ADR 0047 (#1779): `rebuild_from_mirror` and `reset_authority` used to
+    # appear here, permanently unavailable. They are no longer presented at
+    # all -- authority recovery is an offline ceremony, and a surface that
+    # advertises a button no code path can arm is lying about its own state.
+    assert set(actions) == {"open_custody_timeline"}
     assert all(action["available"] is False for action in actions.values())
 
 
