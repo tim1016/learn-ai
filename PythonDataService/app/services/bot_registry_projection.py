@@ -8,7 +8,7 @@ from typing import Literal
 from app.engine.live.bot_lifecycle_state import BotLifecyclePhase, BotLifecycleStateRecord
 from app.engine.live.desired_state import DesiredState
 from app.schemas.broker_bots import BotDutyOutcomeView, BotProcessFact, BotStatusView
-from app.services.bot_binding_repository import BrokerBotBinding
+from app.services.bot_binding_repository import BotRunOutcomeRecord, BrokerBotBinding
 from app.services.bot_dry_run import MAX_DRY_RUN_TAIL, DryRunActivity, DryRunActivityJournal
 from app.services.bot_runtime import ManagedBot
 
@@ -52,6 +52,46 @@ def project_process_fact(
     )
 
 
+def duty_outcome_view(lifecycle: BotLifecycleStateRecord | None) -> BotDutyOutcomeView | None:
+    """Canonical lifecycle-record → roster duty-outcome mapping.
+
+    Every ``BotStatusView`` producer must use this (registry and SQLite
+    catalog paths alike): a producer that hardcodes ``duty_outcome=None``
+    silently erases crash evidence from its surface (fleet-stress T6,
+    2026-08-26).
+    """
+    if lifecycle is None or lifecycle.duty_outcome is None:
+        return None
+    return BotDutyOutcomeView(
+        kind=lifecycle.duty_outcome.kind,
+        reason_code=lifecycle.duty_outcome.reason_code,
+        recorded_at_ms=lifecycle.duty_outcome.recorded_at_ms,
+        run_id=lifecycle.duty_outcome.run_id,
+    )
+
+
+def duty_outcome_view_from_receipt(
+    receipt: BotRunOutcomeRecord | None,
+) -> BotDutyOutcomeView | None:
+    """Canonical terminal-receipt → roster duty-outcome mapping.
+
+    Peer of :func:`duty_outcome_view`. ``run_outcomes/{run_id}.json`` is the
+    create-once terminal authority that the lifecycle projection summarizes
+    (``BotRunEvidenceService.record_terminal`` writes the receipt first, then
+    the projection). A producer that can reach the receipt maps it here
+    rather than reshaping the fields itself, so both roster surfaces keep one
+    shape for one fact.
+    """
+    if receipt is None:
+        return None
+    return BotDutyOutcomeView(
+        kind=receipt.kind,
+        reason_code=receipt.reason_code,
+        recorded_at_ms=receipt.recorded_at_ms,
+        run_id=receipt.run_id,
+    )
+
+
 def project_bot_status(
     binding: BrokerBotBinding,
     lifecycle: BotLifecycleStateRecord | None,
@@ -63,14 +103,7 @@ def project_bot_status(
     checkpoint_matches: bool,
 ) -> BotStatusView:
     """Compose one typed roster row from durable artifacts and task liveness."""
-    duty_outcome = None
-    if lifecycle is not None and lifecycle.duty_outcome is not None:
-        duty_outcome = BotDutyOutcomeView(
-            kind=lifecycle.duty_outcome.kind,
-            reason_code=lifecycle.duty_outcome.reason_code,
-            recorded_at_ms=lifecycle.duty_outcome.recorded_at_ms,
-            run_id=lifecycle.duty_outcome.run_id,
-        )
+    duty_outcome = duty_outcome_view(lifecycle)
     return BotStatusView(
         strategy_instance_id=binding.strategy_instance_id,
         strategy_key=binding.strategy_key,

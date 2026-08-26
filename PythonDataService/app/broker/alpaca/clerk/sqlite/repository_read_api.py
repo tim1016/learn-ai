@@ -67,6 +67,25 @@ class ClerkSqliteRepositoryReadApi:
             ).fetchone()
             return RunResource(**dict(row)) if row is not None else None
 
+    def latest_run(self: ClerkSqliteRepository, strategy_instance_id: str) -> RunResource | None:
+        """Return the instance's newest run, whether it is active or stopped.
+
+        A terminal receipt (``run_outcomes/{run_id}.json``) is keyed by run
+        id. When the lifecycle projection carries no duty outcome there is no
+        run id inside it to key on, so a reader asks SQLite -- the run
+        authority -- which run last ran. Ordered by ``run_id`` as well as
+        ``started_at_ms`` so two runs stamped in the same millisecond still
+        resolve deterministically.
+        """
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
+                "stopped_at_ms FROM runs WHERE strategy_instance_id = ? "
+                "ORDER BY started_at_ms DESC, run_id DESC LIMIT 1",
+                (strategy_instance_id,),
+            ).fetchone()
+            return RunResource(**dict(row)) if row is not None else None
+
     def lifecycle_projection_snapshot(
         self: ClerkSqliteRepository,
         strategy_instance_id: str,
