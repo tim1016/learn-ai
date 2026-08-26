@@ -50,6 +50,11 @@ class ActionGuardContext:
     strategy_instance_id: str
     exposure: dict[str, float]
     working_order_count: int
+    # True when this bot's strategy key is no longer in the runtime registry,
+    # so the registration can never run again (dead vocabulary / legacy
+    # registration). Defaults False: a caller that has not resolved the
+    # registry leaves retire disabled rather than offering it speculatively.
+    strategy_runtime_missing: bool = False
 
 
 @dataclass(frozen=True)
@@ -252,7 +257,60 @@ def _guard_flatten_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlo
 
 
 def _guard_retire(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _disabled()
+    """Retire cleans up a registration that can never run again (S5).
+
+    Deliberately narrow. This is not "end this bot's life" -- a healthy
+    stopped bot stays out of scope, because that is a destructive lifecycle
+    action with its own safety story. It is the cure for a registration the
+    runtime can no longer honour, such as the legacy bot bound to a symbol
+    that does not exist and which re-issues doomed feed subscriptions
+    forever.
+
+    Ordered so the operator learns the nearest obstacle first, and so the
+    custody guards are the last word: retire must never strand exposure.
+    """
+    if ctx.phase == "RETIRED":
+        return _disabled()
+    if ctx.running:
+        return _disabled(
+            _blocker(
+                "BOT_STILL_RUNNING",
+                scope="bot",
+                headline="Stop the bot before retiring it.",
+                detail="A running bot still evaluates bars and can place orders.",
+                evidence={"strategy_instance_id": ctx.strategy_instance_id},
+            )
+        )
+    if not ctx.strategy_runtime_missing:
+        return _disabled(
+            _blocker(
+                "STRATEGY_STILL_RUNNABLE",
+                scope="bot",
+                headline="This bot can still run.",
+                detail=(
+                    "Retire only clears registrations the runtime can no longer "
+                    "honour. Stop this bot instead of retiring it."
+                ),
+                evidence={"strategy_instance_id": ctx.strategy_instance_id},
+            )
+        )
+    if ctx.has_exposure or ctx.working_order_count:
+        return _disabled(
+            _blocker(
+                "RETIRE_WOULD_STRAND_CUSTODY",
+                scope="bot",
+                headline="This bot still holds custody.",
+                detail=(
+                    "Flatten attributed exposure and let working orders reach a "
+                    "terminal state before retiring the registration."
+                ),
+                evidence={
+                    "strategy_instance_id": ctx.strategy_instance_id,
+                    "working_order_count": ctx.working_order_count,
+                },
+            )
+        )
+    return True, []
 
 
 def _guard_cancel_order(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
@@ -326,10 +384,16 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
     ),
     "retire": ActionPolicy(
         action_id="retire",
-        supported_brokers=frozenset(),
+        supported_brokers=frozenset({"alpaca"}),
         list_page_only=False,
         guard=_guard_retire,
-        revision_inputs=lambda ctx: (ctx.phase,),
+        revision_inputs=lambda ctx: (
+            ctx.phase,
+            ctx.running,
+            ctx.strategy_runtime_missing,
+            ctx.has_exposure,
+            ctx.working_order_count,
+        ),
     ),
     "cancel_order": ActionPolicy(
         action_id="cancel_order",

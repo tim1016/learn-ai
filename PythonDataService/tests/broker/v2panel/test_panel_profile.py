@@ -43,9 +43,11 @@ def test_alpaca_profile_advertises_only_actions_with_production_performers() -> 
         "continue",
         "stop",
         "flatten_stop",
+        "retire",
         "reconcile_now",
     ]
-    assert "retire" not in profile.supported_action_ids
+    # retire joined the advertised set when it gained a production performer
+    # (#1778, S5) -- the invariant this test guards is unchanged.
     assert "cancel_order" not in profile.supported_action_ids
 
 

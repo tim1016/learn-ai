@@ -747,6 +747,38 @@ class BotTaskRegistry:
             explanation="Only the lifecycle summary exists; Resume will convert it into a receipt.",
         )
 
+    async def retire(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str = "operator",
+        reason: str | None = None,
+    ) -> BotStatusView:
+        """Clear a registration the runtime can no longer honour (#1778, S5).
+
+        Narrow by construction: the panel's retire guard refuses a running
+        bot, attributed exposure, and working orders before ever presenting
+        the action. Liveness is re-checked here for the reason every command
+        re-checks it -- the presented decision is older than the click.
+
+        Retiring takes the bot off the roster, so it stops re-issuing the
+        doomed feed subscriptions that made a dead legacy registration
+        impossible to silence.
+        """
+        async with self._operation_lock(strategy_instance_id):
+            if self.status(broker, strategy_instance_id).running:
+                raise BotRunnerError(
+                    f"Bot '{strategy_instance_id}' is still running.",
+                    detail="Stop the bot before retiring its registration.",
+                )
+            self._lifecycle_repo(strategy_instance_id).retire(
+                now_ms=self._now_ms(),
+                updated_by=updated_by,
+                reason=reason or f"Panel retire by {updated_by}",
+            )
+            return self.status(broker, strategy_instance_id)
+
     async def stop(
         self,
         broker: str,

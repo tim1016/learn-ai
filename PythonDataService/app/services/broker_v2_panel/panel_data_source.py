@@ -987,6 +987,21 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         await registry.stop(broker, sid, reason=f"Panel stop by {operator}")
         return "Bot stopped. The Clerk cancelled any working entry orders; attributed exposure was left untouched."
 
+    async def _retire(operator: str, reason: str | None) -> str:
+        registry = get_bot_task_registry()
+        if registry is None:
+            raise PanelUnavailableError("The bot runner is not available.")
+        await registry.retire(
+            broker,
+            sid,
+            updated_by=operator,
+            reason=f"Panel retire by {operator}",
+        )
+        return (
+            "Registration retired and taken off the roster. It issues no further "
+            "feed subscriptions and can start no new runs."
+        )
+
     async def _pause(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         if registry is None:
@@ -1062,6 +1077,7 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         "pause": _pause,
         "continue": _continue,
         "stop": _stop,
+        "retire": _retire,
         "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,
     }

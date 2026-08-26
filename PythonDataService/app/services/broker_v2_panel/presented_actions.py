@@ -33,6 +33,19 @@ from app.schemas.broker_v2_panel import ClerkCard, PanelAction
 from app.schemas.run_admission import RunAdmissionDecision
 
 
+def strategy_runtime_missing(strategy_key: str) -> bool:
+    """True when no runtime is registered for this bot's strategy key.
+
+    A registration the runtime no longer knows can never run again -- the
+    legacy bot bound to a mistyped symbol is the standing example -- and
+    retire is its only cure (#1778, S5). Deferred import: the strategy
+    registry pulls in the engine, which must not load to present a panel.
+    """
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+
+    return strategy_key not in _STRATEGY_REGISTRY
+
+
 def build_actions(
     status: BotStatusView,
     clerk: ClerkCard,
@@ -70,6 +83,7 @@ def build_actions(
         strategy_instance_id=status.strategy_instance_id,
         exposure=exposure,
         working_order_count=working_order_count,
+        strategy_runtime_missing=strategy_runtime_missing(status.strategy_key),
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
 

@@ -552,7 +552,7 @@ answers "can this ever appear for me", not "is it enabled right now".
 | `continue` | Continue | Let this paused live run evaluate bars again without changing its run ID. | Bot panel (`alpaca`) |
 | `stop` | Stop | Stop evaluating bars and cancel this bot's working entry orders. Exposure is left untouched. | Bot panel (`alpaca`) |
 | `flatten_stop` | Flatten & stop | Cancel working orders, submit closing orders to flatten exposure, then stop. Use this to exit positions before stopping. | Bot panel (`alpaca`) |
-| `retire` | Retire | Permanently decommission this bot. Its id is never reused. This is irreversible. | **Nothing — no broker exposes this action.** |
+| `retire` | Retire | Permanently decommission this bot. Its id is never reused. This is irreversible. | Bot panel (`alpaca`) |
 | `cancel_order` | Cancel order | Cancel one working order at the broker. The broker may reject the request if the order has already filled. | **Nothing — no broker exposes this action.** |
 | `reconcile_now` | Reconcile now | Run a reconciliation sweep against the broker immediately. Useful after a hold is cleared or after a manual order intervention. | Bot panel (`alpaca`) and SQLite Clerk recovery catalog |
 | `recover_exact_execution_evidence` | Recover exact execution evidence | Read one retained Alpaca paper execution and prepare the Clerk's no-delta coverage proof. | SQLite Clerk recovery catalog |
