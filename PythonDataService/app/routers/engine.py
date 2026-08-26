@@ -76,6 +76,7 @@ from app.research.recency.eligibility import is_recency_supported
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
+from app.schemas.strategy_lean_source import StrategyLeanSourceResponse
 from app.services.engine_bars_service import read_consolidated_bars
 from app.services.engine_chart_service import build_engine_chart
 from app.services.engine_validation_analytics import (
@@ -91,6 +92,10 @@ from app.services.parity_companion import (
     new_parity_group_id,
 )
 from app.services.run_verdict_service import compute_run_verdict
+from app.services.strategy_lean_source_service import (
+    StrategyLeanSourceNotFoundError,
+    resolve_strategy_lean_source,
+)
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
@@ -689,6 +694,25 @@ def list_engine_strategies() -> list[StrategyInfo]:
             )
         )
     return result
+
+
+@router.get(
+    "/strategies/{name}/lean-source",
+    response_model=StrategyLeanSourceResponse,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Strategy or registered LEAN source not found."
+        }
+    },
+)
+async def get_strategy_lean_source(name: str) -> StrategyLeanSourceResponse:
+    """Return versioned QCAlgorithm source without detecting the LEAN launcher."""
+
+    try:
+        source = resolve_strategy_lean_source(name)
+    except StrategyLeanSourceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return StrategyLeanSourceResponse.from_strategy_source(source)
 
 
 @router.post("/strategies/{name}/pine", response_class=PlainTextResponse)
