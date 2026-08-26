@@ -108,6 +108,7 @@ class BotResumeAdmission:
         now_ms: Callable[[], int],
         feed_resolver: Callable[[], MarketDataFeed | None],
         custody_guard: CustodyGuard,
+        custody_projection: CustodyGuard,
         process_fact: ProcessFactResolver,
         runtime_fact: RuntimeFactResolver,
         checkpoint: CheckpointResolver,
@@ -122,6 +123,9 @@ class BotResumeAdmission:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
         self._custody_guard = custody_guard
+        # Reads project the sweep's last verdict; only the Resume action
+        # re-proves custody against the broker (#1776 WP2).
+        self._custody_projection = custody_projection
         self._process_fact = process_fact
         self._runtime_fact = runtime_fact
         self._checkpoint = checkpoint
@@ -149,7 +153,9 @@ class BotResumeAdmission:
     ) -> RunAdmissionDecision:
         """Evaluate Resume without mutation while holding the Clerk fence."""
         proposed = new_run_binding(_request_from(prior), now_ms=self._now_ms())
-        async with self._decision(prior, proposed, status, mutating=False) as (
+        async with self._decision(
+            prior, proposed, status, mutating=False, custody_guard=self._custody_projection
+        ) as (
             _sealed_proposed,
             decision,
             _feed,
@@ -164,7 +170,9 @@ class BotResumeAdmission:
     ) -> AdmittedBotResume:
         """Evaluate and activate a new run inside one Clerk custody cut."""
         proposed = new_run_binding(_request_from(prior), now_ms=self._now_ms())
-        async with self._decision(prior, proposed, status, mutating=True) as (proposed, decision, feed, custody):
+        async with self._decision(
+            prior, proposed, status, mutating=True, custody_guard=self._custody_guard
+        ) as (proposed, decision, feed, custody):
             if not decision.allowed:
                 raise StartAdmissionDenied(decision)
             if feed is None:
@@ -251,9 +259,10 @@ class BotResumeAdmission:
         status: BotStatusView,
         *,
         mutating: bool,
+        custody_guard: CustodyGuard,
     ) -> AsyncIterator[tuple[BrokerBotBinding, RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
-            async with self._custody_guard(prior) as custody:
+            async with custody_guard(prior) as custody:
                 proposed = proposed.model_copy(
                     update={
                         "sealed_account_id": prior.sealed_account_id,

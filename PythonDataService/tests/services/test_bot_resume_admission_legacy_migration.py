@@ -159,6 +159,7 @@ def _admission(repository: BotBindingRepository | None, *, now_values: list[int]
         now_ms=now_ms,
         feed_resolver=lambda: None,
         custody_guard=custody_guard,
+        custody_projection=custody_guard,
         process_fact=process_fact,
         runtime_fact=runtime_fact,
         checkpoint=lambda binding: None,

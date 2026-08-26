@@ -33,7 +33,11 @@ from app.services.bot_lifecycle_projection import (
     AlpacaLifecycleProjector,
     SqliteAlpacaLifecycleAuthority,
 )
-from app.services.bot_start_admission import StartAdmissionUnavailable, default_start_custody_guard
+from app.services.bot_start_admission import (
+    StartAdmissionUnavailable,
+    default_start_custody_guard,
+    default_start_custody_projection,
+)
 from app.services.source_bar_ledger import SourceBarLedger
 
 
@@ -43,6 +47,10 @@ class BindingAuthority:
     account_id: str
 
     def start_custody_guard(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+        raise NotImplementedError
+
+    def start_custody_projection(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+        """Custody for a read: projects the sweep's verdict, never reconciles."""
         raise NotImplementedError
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
@@ -80,6 +88,13 @@ class RealPaperBindingAuthority(BindingAuthority):
             return self.external_start_guard(self.binding.strategy_instance_id)
         return default_start_custody_guard(self.binding)
 
+    def start_custody_projection(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+        # An injected guard is a whole-authority substitution (tests, sim
+        # harnesses); it stands in for reads too.
+        if self.external_start_guard is not None:
+            return self.external_start_guard(self.binding.strategy_instance_id)
+        return default_start_custody_projection(self.binding)
+
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         return self.projector
 
@@ -108,6 +123,9 @@ class SyntheticBindingAuthority(BindingAuthority):
 
     def start_custody_guard(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
         return self._start_custody_guard()
+
+    def start_custody_projection(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+        return self._start_custody_guard(project=True)
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         runtime = get_clerk_runtime(self.account_id)
@@ -172,7 +190,7 @@ class SyntheticBindingAuthority(BindingAuthority):
         )
 
     @asynccontextmanager
-    async def _start_custody_guard(self) -> AsyncIterator[ClerkCustodySnapshot]:
+    async def _start_custody_guard(self, *, project: bool = False) -> AsyncIterator[ClerkCustodySnapshot]:
         runtime = await self._runtime()
         clerk = runtime.clerk
         if clerk is None:
@@ -180,7 +198,10 @@ class SyntheticBindingAuthority(BindingAuthority):
                 "Dry Run synthetic Clerk activation failed.",
                 detail=(runtime.startup_failure.recovery if runtime.startup_failure is not None else "Retry activation."),
             )
-        async with clerk.start_admission_snapshot(self.binding.strategy_instance_id) as snapshot:
+        admission = (
+            clerk.start_admission_projection if project else clerk.start_admission_snapshot
+        )
+        async with admission(self.binding.strategy_instance_id) as snapshot:
             yield snapshot
 
     async def _runtime(self) -> ActiveClerkRuntime:

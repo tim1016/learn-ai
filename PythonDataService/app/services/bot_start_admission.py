@@ -227,9 +227,7 @@ async def resolve_start_runtime_fact(
     )
 
 
-def default_start_custody_guard(
-    binding: BrokerBotBinding,
-) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+def _admission_clerk(binding: BrokerBotBinding):
     """Resolve only the real-paper Clerk; Dry Run supplies its exact sim authority."""
     from app.broker.alpaca.clerk import get_alpaca_clerk
 
@@ -244,7 +242,25 @@ def default_start_custody_guard(
             "Dry Run requires its isolated synthetic Clerk authority.",
             detail="Activate the strategy's sim: account before starting Dry Run.",
         )
-    return clerk.start_admission_snapshot(binding.strategy_instance_id)
+    return clerk
+
+
+def default_start_custody_guard(
+    binding: BrokerBotBinding,
+) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    """Custody for an action: reconciles, so the proof is act-time fresh."""
+    return _admission_clerk(binding).start_admission_snapshot(binding.strategy_instance_id)
+
+
+def default_start_custody_projection(
+    binding: BrokerBotBinding,
+) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    """Custody for a read: projects the sweep's last verdict (#1776 WP2).
+
+    Same resolution and same refusals as the guard; it never reconciles, so
+    a read contacts no broker and appends nothing to the ledger.
+    """
+    return _admission_clerk(binding).start_admission_projection(binding.strategy_instance_id)
 
 
 def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:

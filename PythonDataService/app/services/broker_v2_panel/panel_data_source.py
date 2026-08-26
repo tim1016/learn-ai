@@ -714,9 +714,9 @@ async def _get_panel_with_entries_from_authority(
     resume_admission: RunAdmissionDecision | None = None
     if not status.running:
         try:
-            # Resume alone needs a fresh Clerk custody fence. Do not perform a
-            # broker reconciliation every five seconds for a live run where
-            # Resume is inapplicable.
+            # Resume is the only action this projection informs, so skip it
+            # entirely for a live run. The preview itself is a pure read: it
+            # projects the sweep's verdict rather than reconciling (#1776).
             resume_admission = await registry.preview_resume_admission(broker, sid)
         except BotRunnerError as exc:
             resume_admission = exc.admission_decision
@@ -725,28 +725,10 @@ async def _get_panel_with_entries_from_authority(
                     "broker panel Resume admission is unavailable",
                     extra={"broker": broker, "account_id": account_id, "sid": sid, "detail": exc.detail},
                 )
-        # Preview can reconcile and advance Clerk evidence. Read all projection
-        # inputs afterwards so this response is one post-admission evidence cut.
-        try:
-            evidence = await read_sqlite_panel_evidence(
-                broker,
-                authority_account_id,
-                sid,
-                now_ms=captured_now_ms,
-                facade=facade,
-            )
-        except SqlitePanelBotNotFound as exc:
-            raise UnknownBotError(str(exc)) from exc
-        except SqlitePanelEconomicUnavailable as exc:
-            raise PanelUnavailableError(
-                "The activated SQLite panel evidence is unavailable.",
-                detail=str(exc),
-            ) from exc
-        if evidence is None:
-            raise PanelUnavailableError(
-                "The activated SQLite panel authority became unavailable.",
-            )
-        status = _status_in_binding_mode(evidence.status, binding)
+        # No second evidence cut: the preview projects the sweep's last
+        # verdict and mutates nothing (#1776 WP2), so the evidence read above
+        # is already this response's single consistent cut. Re-reading here
+        # doubled the cost of every stopped bot's poll.
     projection = evidence.projection
     session_fills = evidence.economics.session_fills
     entries: list[OrderJournalEntry] = []

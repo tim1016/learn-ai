@@ -270,6 +270,7 @@ class BotTaskRegistry:
             now_ms=self._now_ms,
             feed_resolver=self._feed_resolver,
             custody_guard=self._start_custody_guard,
+            custody_projection=self._start_custody_projection,
             process_fact=self._resume_process_fact,
             runtime_fact=self._start_runtime_fact,
             checkpoint=self._resume_checkpoint_fact,
@@ -1377,6 +1378,12 @@ class BotTaskRegistry:
         binding: BrokerBotBinding,
     ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
         return self._authority_for(binding).start_custody_guard()
+
+    def _start_custody_projection(
+        self,
+        binding: BrokerBotBinding,
+    ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+        return self._authority_for(binding).start_custody_projection()
 
     def _lifecycle_projector_for_instance(self, strategy_instance_id: str) -> AlpacaLifecycleProjector:
         binding = self._bindings.read(strategy_instance_id)

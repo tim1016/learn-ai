@@ -16,7 +16,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -46,16 +46,29 @@ class _FakeAccount:
 class _FakeBrokerPort:
     broker_id = "alpaca"
 
+    def __init__(self) -> None:
+        # #1776 WP2: reads are pure, so this counter is the acceptance gate.
+        self.calls = 0
+        self.methods: list[str] = []
+
     async def get_account(self) -> _FakeAccount:
+        self.calls += 1
+        self.methods.append('get_account')
         return _FakeAccount()
 
     async def list_positions(self) -> list:
+        self.calls += 1
+        self.methods.append('list_positions')
         return []
 
     async def list_orders(self, **_kwargs) -> list:
+        self.calls += 1
+        self.methods.append('list_orders')
         return []
 
     async def list_activities(self, **_kwargs) -> list:
+        self.calls += 1
+        self.methods.append('list_activities')
         return []
 
     async def submit(self, *_args, **_kwargs):  # pragma: no cover - not used
@@ -72,8 +85,27 @@ class _FakeBrokerPort:
 
 
 class _FakeRegistry:
-    def __init__(self, receipts_root: Path | None = None) -> None:
+    def __init__(self, receipts_root: Path | None = None, *, running: bool = True) -> None:
         self._receipts_root = receipts_root or Path("receipts")
+        self._running = running
+        self.projected_states: list[str] = []
+
+    async def preview_resume_admission(self, broker: str, sid: str):
+        """Resolve custody through the real production projection.
+
+        Faking this away would make the call-budget gate vacuous: the
+        stopped-bot preview is exactly where the per-poll reconciliation
+        used to happen. Only the admission *policy* is out of scope here,
+        so the decision itself is reported as unavailable.
+        """
+        from app.services.bot_runner import BotRunnerError
+        from app.services.bot_start_admission import default_start_custody_projection
+
+        async with default_start_custody_projection(
+            self.binding_for_control(broker, sid)
+        ) as snapshot:
+            self.projected_states.append(snapshot.reconciliation_state)
+        raise BotRunnerError("resume admission policy is not modelled in this harness")
 
     def panel_action_receipt_path(self, sid: str) -> Path:
         return self._receipts_root / f"{sid}-panel-action-receipts.json"
@@ -89,7 +121,7 @@ class _FakeRegistry:
             symbol="SPY",
             mode="trade",
             quantity=1,
-            running=True,
+            running=self._running,
             phase="ON_DUTY",
             desired_state="RUNNING",
             active_run_id="run-1",
@@ -110,6 +142,7 @@ class _FakeRegistry:
             use_rth=True,
             strategy_key="deployment_validation",
             sealed_program=None,
+            mode="trade",
         )
 
     def dry_run_activity(self, broker: str, sid: str) -> list:
@@ -167,6 +200,79 @@ def api(tmp_path: Path):
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.fixture()
+def stopped_api(api, tmp_path):
+    """The worst case: a bot that is not running.
+
+    Every panel GET of a stopped bot previously ran a resume-admission
+    preview whose custody guard performed a full account reconciliation.
+    """
+    app, repo = api
+    # The panel reads `running` from the SQLite projection, not the registry,
+    # so the run has to actually stop for this to be the stopped-bot path.
+    submit_stop_run(
+        repo,
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+    )
+    registry = _FakeRegistry(tmp_path, running=False)
+    set_bot_task_registry(registry)  # type: ignore[arg-type]
+    return app, repo, registry
+
+
+_READ_PATHS = (
+    f"/api/brokers/alpaca/accounts/{ACCT}/bots/catalog",
+    f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel",
+)
+
+
+async def test_reads_of_a_stopped_bot_never_invoke_the_broker_port(stopped_api) -> None:
+    """Call-budget gate (#1776 WP2): reads are pure.
+
+    The 15 s reconciliation sweep is the sole automatic reconciler. A read
+    that reconciles costs 2-4 broker REST calls plus ledger appends under
+    the per-account lock panel actions share -- which is what produced
+    48-145 s reads and a hot loop at 77% CPU with zero bots running.
+    """
+    app, _repo, registry = stopped_api
+    port = get_broker_registry().resolve("alpaca")
+
+    async with _client(app) as client:
+        # One `get_account` resolves the account identity and is cached for the
+        # process. That is a cached identity lookup, not a reconciliation, and
+        # it is the only broker contact any read is permitted.
+        for path in _READ_PATHS:
+            assert (await client.get(path)).status_code == 200, path
+        assert port.methods == ["get_account"], port.methods
+        port.calls, port.methods = 0, []
+
+        for _ in range(10):
+            for path in _READ_PATHS:
+                assert (await client.get(path)).status_code == 200, path
+
+    # Non-vacuity: the stopped-bot custody path really ran on those reads.
+    assert len(registry.projected_states) >= 10, registry.projected_states
+    assert port.calls == 0, f"a read reached the broker port: {port.methods}"
+
+
+async def test_repeated_reads_never_advance_the_control_revision(stopped_api) -> None:
+    """Revision-drift gate (#1776 WP2): no read appends to the custody ledger.
+
+    Reads that append also move the revision panel actions fence against,
+    which is the S16 observer effect.
+    """
+    app, repo, _registry = stopped_api
+    before = repo.control_meta_snapshot().control_revision
+
+    async with _client(app) as client:
+        for _ in range(25):
+            for path in _READ_PATHS:
+                assert (await client.get(path)).status_code == 200
+
+    assert repo.control_meta_snapshot().control_revision - before == 0
 
 
 async def test_panel_profile_endpoint(api) -> None:

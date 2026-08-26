@@ -90,6 +90,110 @@ def _status() -> BotStatusView:
     )
 
 
+def _minimal_admission(**overrides: object) -> BotResumeAdmission:
+    """Smallest admission that reaches the custody boundary."""
+
+    async def runtime_fact(strategy_instance_id: str, observed_at_ms: int) -> StartRuntimeAdmissionFact:
+        del strategy_instance_id
+        return StartRuntimeAdmissionFact(state="READY", observed_at_ms=observed_at_ms, explanation="ready")
+
+    def process_fact(binding: object, observed_at_ms: int) -> RunProcessAdmissionFact:
+        del binding
+        return RunProcessAdmissionFact(
+            state="ABSENT",
+            run_id=None,
+            process_identity=None,
+            registry_generation="registry-1",
+            observed_at_ms=observed_at_ms,
+        )
+
+    def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
+        return StrategyValidationAdmissionFact(
+            state="VERIFIED",
+            strategy_key="deployment_validation",
+            evidence_status="accepted",
+            event_id="validation-event-1",
+            evidence_snapshot_sha256="c" * 64,
+            verified_at_ms=observed_at_ms,
+            explanation="The validation proof is current.",
+        )
+
+    def market_liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
+        return compose_market_liveness(
+            symbol,
+            now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN",
+                source="test.clock",
+                observed_at_ms=observed_at_ms,
+                vendor_timestamp_ms=observed_at_ms,
+            ),
+            connected=True,
+            connection_changed_at_ms=observed_at_ms,
+            symbol_status=None,
+        )
+
+    async def activate(*args: object, **kwargs: object) -> None:
+        raise AssertionError("activate must not be called")
+
+    kwargs: dict[str, object] = {
+        "now_ms": lambda: 1_000,
+        "feed_resolver": lambda: None,
+        "process_fact": process_fact,
+        "runtime_fact": runtime_fact,
+        "checkpoint": lambda binding: None,
+        "terminal_evidence": lambda binding: TerminalEvidenceAdmissionFact(
+            state="SUMMARY_READY",
+            evidence_ref="terminal-evidence:run-prior:absent",
+            explanation="No terminal evidence blocks Resume for the prior run.",
+        ),
+        "validation_fact": validation_fact,
+        "activate": activate,
+        "carryover_account_policy_enabled": False,
+        "session_capability": lambda symbol, account_id: None,
+        "market_liveness": market_liveness,
+    }
+    kwargs.update(overrides)
+    return BotResumeAdmission(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_preview_projects_custody_and_never_reconciles() -> None:
+    """Panel reads must not reconcile (#1776 WP2, finding S12d).
+
+    ``preview`` runs on every panel GET of a stopped bot. Routing it through
+    the reconciling custody guard meant each poll performed a full account
+    reconciliation -- broker REST plus ledger appends -- under the
+    per-account intake lock that panel actions share. With a fully stopped
+    fleet every poll reconciled every bot.
+
+    The Resume *action* is deliberately unaffected: its act-time custody
+    re-proof is load-bearing and stays exactly as it was.
+    """
+    used: list[str] = []
+
+    @asynccontextmanager
+    async def reconciling_guard(strategy_instance_id: str):
+        del strategy_instance_id
+        used.append("reconcile")
+        yield _clerk(observed_at_ms=1_000)
+
+    @asynccontextmanager
+    async def projection_guard(strategy_instance_id: str):
+        del strategy_instance_id
+        used.append("project")
+        yield _clerk(observed_at_ms=1_000)
+
+    admission = _minimal_admission(
+        custody_guard=reconciling_guard,
+        custody_projection=projection_guard,
+    )
+
+    await admission.preview(_prior(), _status())
+
+    assert used == ["project"]
+
+
 @pytest.mark.asyncio
 async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp() -> None:
     """Regression: ``observed_at_ms`` was captured before awaiting the
@@ -158,6 +262,7 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
         now_ms=now_ms,
         feed_resolver=lambda: None,
         custody_guard=custody_guard,
+        custody_projection=custody_guard,
         process_fact=process_fact,
         runtime_fact=runtime_fact,
         checkpoint=lambda binding: None,

@@ -197,6 +197,12 @@ class SqliteAlpacaClerkFacade:
         self._stream_health = stream_health
         self.authority_kind = authority_kind
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
+        # Latest verdict from the reconciliation sweep -- the sole automatic
+        # reconciler (#1776). Panel reads project this instead of forcing
+        # their own reconciliation. Process-local by design: it is a cache of
+        # an observation, not a custody fact, so it never enters the ledger.
+        self._last_reconciliation: AccountReconciliationResult | None = None
+        self._last_reconciled_at_ms = 0
 
     @property
     def account_id(self) -> str:
@@ -858,13 +864,23 @@ class SqliteAlpacaClerkFacade:
         return _legacy_verdict((await self._reconcile()).verdict)
 
     async def _reconcile(self) -> AccountReconciliationResult:
-        return await reconcile_sqlite_account(
-            self._repo,
-            read=self._read,
-            trade=self._trade,
-            trigger="AUTOMATIC",
-            intake=self._intake,
+        return self._remember_reconciliation(
+            await reconcile_sqlite_account(
+                self._repo,
+                read=self._read,
+                trade=self._trade,
+                trigger="AUTOMATIC",
+                intake=self._intake,
+            )
         )
+
+    def _remember_reconciliation(
+        self, result: AccountReconciliationResult
+    ) -> AccountReconciliationResult:
+        """Record the verdict reads project from, with its observation time."""
+        self._last_reconciliation = result
+        self._last_reconciled_at_ms = self._repo.clock()
+        return result
 
     async def reconcile_account(
         self,
@@ -872,12 +888,14 @@ class SqliteAlpacaClerkFacade:
         trigger: str,
     ) -> AccountReconciliationResult:
         """Run one full account reconciliation with caller-authored provenance."""
-        return await reconcile_sqlite_account(
-            self._repo,
-            read=self._read,
-            trade=self._trade,
-            trigger=trigger,
-            intake=self._intake,
+        return self._remember_reconciliation(
+            await reconcile_sqlite_account(
+                self._repo,
+                read=self._read,
+                trade=self._trade,
+                trigger=trigger,
+                intake=self._intake,
+            )
         )
 
     async def unresolved_effect_count(self) -> int:
@@ -889,6 +907,44 @@ class SqliteAlpacaClerkFacade:
 
     async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
         result = await self._reconcile()
+        return await self._custody_from_result(
+            strategy_instance_id, result, reconciled_at_ms=self._last_reconciled_at_ms
+        )
+
+    async def custody_snapshot_projection(
+        self, strategy_instance_id: str
+    ) -> ClerkCustodySnapshot:
+        """Project the sweep's latest verdict without reconciling (#1776).
+
+        Reads are pure: the 15 s sweep is the sole automatic reconciler, so a
+        read answers from its last verdict and carries that verdict's own
+        observation time rather than stamping itself "now".
+
+        Before this process has completed a sweep there is nothing to project,
+        which is exactly the existing ``stale`` verdict -- custody is unproven
+        until something proves it. Saying so routes through the policy that
+        already handles unprovable custody instead of inventing an absence
+        case, and the sweep cadence closes the window.
+        """
+        return await self._custody_from_result(
+            strategy_instance_id,
+            self._last_reconciliation or AccountReconciliationResult(verdict="stale"),
+            reconciled_at_ms=self._last_reconciled_at_ms,
+        )
+
+    async def _custody_from_result(
+        self,
+        strategy_instance_id: str,
+        result: AccountReconciliationResult,
+        *,
+        reconciled_at_ms: int,
+    ) -> ClerkCustodySnapshot:
+        """Build the custody snapshot a verdict implies.
+
+        Shared by the reconciling path and the read projection so the two can
+        never disagree about what a verdict means. Broker contact here would
+        raise ``BrokerCallUnderIntakeError`` by construction.
+        """
         async with self._intake:
             proof = self._proof(strategy_instance_id, result)
             meta = self._repo.control_meta_snapshot()
@@ -908,7 +964,7 @@ class SqliteAlpacaClerkFacade:
                 journal_sequence=meta.control_revision,
                 reconciliation_state=proof.reconciliation_verdict,
                 reconciliation_fresh=proof.reconciliation_verdict != "stale",
-                reconciled_at_ms=proof.observed_at_ms,
+                reconciled_at_ms=reconciled_at_ms,
                 exposure=(
                     CustodyExposureFact(
                         state="non_zero" if exposure else "zero",
@@ -935,6 +991,13 @@ class SqliteAlpacaClerkFacade:
     async def start_admission_snapshot(self, strategy_instance_id: str) -> AsyncIterator[ClerkCustodySnapshot]:
         snapshot = await self.custody_snapshot(strategy_instance_id)
         yield snapshot
+
+    @asynccontextmanager
+    async def start_admission_projection(
+        self, strategy_instance_id: str
+    ) -> AsyncIterator[ClerkCustodySnapshot]:
+        """Read-only twin of :meth:`start_admission_snapshot` (#1776 WP2)."""
+        yield await self.custody_snapshot_projection(strategy_instance_id)
 
     async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple[OrderResource, ...]:
         order_refs = self._working_order_refs(strategy_instance_id)
