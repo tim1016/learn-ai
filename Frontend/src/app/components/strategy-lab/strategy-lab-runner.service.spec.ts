@@ -41,9 +41,14 @@ describe("StrategyLab configuration and runner", () => {
   let runner: StrategyLabRunner;
   let startJob: ReturnType<typeof vi.fn>;
   let nextTradingDayOpen: ReturnType<typeof vi.fn>;
+  let diagnose: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     startJob = vi.fn(async () => "job-1");
+    diagnose = vi.fn(async () => ({
+      overall_status: "pass",
+      checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
+    }));
     nextTradingDayOpen = vi.fn(async (date: string) => ({
       session_open_ms_utc: date === "2026-01-04" ? 1_767_624_600_000 : 1_768_000_000_000,
     }));
@@ -65,10 +70,7 @@ describe("StrategyLab configuration and runner", () => {
         {
           provide: LeanSidecarService,
           useValue: {
-            diagnose: vi.fn(async () => ({
-              overall_status: "pass",
-              checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
-            })),
+            diagnose,
             nextTradingDayOpen,
           },
         },
@@ -201,5 +203,29 @@ describe("StrategyLab configuration and runner", () => {
         }),
       }),
     );
+  });
+
+  it("runs browser-edited QCAlgorithm source without requiring template parameters", async () => {
+    const customSource = "from AlgorithmImports import *\nclass MyAlgorithm(QCAlgorithm):\n    pass\n\n";
+    config.engine.set("lean");
+    config.customLeanSource.set(customSource);
+
+    await runner.run();
+
+    const request = startJob.mock.calls[0]?.[1]?.request;
+    expect(request).toEqual(expect.objectContaining({ algorithm_source: customSource }));
+    expect(request).not.toHaveProperty("template");
+    expect(request).not.toHaveProperty("strategy_parameters");
+  });
+
+  it("rejects an empty custom source before probing the launcher", async () => {
+    config.engine.set("lean");
+    config.customLeanSource.set("  \n");
+
+    await runner.run();
+
+    expect(runner.runError()).toBe("Load or enter a QCAlgorithm before running custom source.");
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(startJob).not.toHaveBeenCalled();
   });
 });

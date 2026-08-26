@@ -38764,6 +38764,40 @@
         "title": "StrategyInfo",
         "type": "object"
       },
+      "StrategyLeanSourceResponse": {
+        "description": "Launcher-independent QCAlgorithm source exposed to Strategy Lab.",
+        "properties": {
+          "language": {
+            "const": "python",
+            "default": "python",
+            "title": "Language"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_sha256": {
+            "title": "Source Sha256",
+            "type": "string"
+          },
+          "strategy_name": {
+            "title": "Strategy Name",
+            "type": "string"
+          },
+          "template": {
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_name",
+          "template",
+          "source",
+          "source_sha256"
+        ],
+        "title": "StrategyLeanSourceResponse",
+        "type": "object"
+      },
       "StrategyLeg": {
         "description": "A single option leg in a strategy.",
         "properties": {
@@ -54711,6 +54745,52 @@
           }
         },
         "summary": "List Engine Strategies",
+        "tags": [
+          "engine"
+        ]
+      }
+    },
+    "/api/engine/strategies/{name}/lean-source": {
+      "get": {
+        "description": "Return versioned QCAlgorithm source without detecting the LEAN launcher.",
+        "operationId": "get_strategy_lean_source_api_engine_strategies__name__lean_source_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyLeanSourceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Strategy or registered LEAN source not found."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Strategy Lean Source",
         "tags": [
           "engine"
         ]

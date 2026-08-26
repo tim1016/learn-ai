@@ -17,6 +17,7 @@ import {
 import { EngineLabRunHistoryComponent } from "../lean-engine/engine-lab-run-history/engine-lab-run-history.component";
 import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
 import { ValidationStagePlaceholderComponent } from "../lean-engine/validation-stage-placeholder/validation-stage-placeholder.component";
+import { LeanSourceEditorComponent } from "./lean-source-editor/lean-source-editor.component";
 import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail/strategy-lab-config-rail.component";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
@@ -38,6 +39,7 @@ import { toStrategyLabConfiguration } from "./strategy-lab.models";
     StrategyLabConfigRailComponent,
     EngineLabRunHistoryComponent,
     ValidationStagePlaceholderComponent,
+    LeanSourceEditorComponent,
     RunDockComponent,
   ],
   templateUrl: "./strategy-lab.component.html",

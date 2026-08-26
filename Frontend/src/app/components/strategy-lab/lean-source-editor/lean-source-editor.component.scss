@@ -1,0 +1,177 @@
+@use '../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.lean-source {
+  overflow: hidden;
+  border: 1px solid $border;
+  border-radius: $radius-lg;
+  background: $bg-surface;
+}
+
+.lean-source__header,
+.lean-source__toolbar,
+.lean-source footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $radius-lg;
+  padding: 0.8rem 1rem;
+}
+
+.lean-source__header {
+  border-bottom: 1px solid $border;
+
+  h2,
+  p {
+    margin: 0;
+  }
+
+  h2 {
+    color: $text-primary;
+    font-size: 1rem;
+  }
+}
+
+.lean-source__eyebrow {
+  margin-bottom: 0.2rem !important;
+  color: $accent-text;
+  font-family: $font-mono;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lean-source__runtime {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid $border-light;
+  border-radius: $radius-pill;
+  color: $text-subtle;
+  font-size: 0.68rem;
+
+  &--ready {
+    border-color: rgba($bull, 0.45);
+    color: $bull;
+  }
+}
+
+.lean-source__notice,
+.lean-source__mode-note,
+.lean-source__load-state {
+  margin: 0;
+  padding: 0.65rem 1rem;
+  color: $text-secondary;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.lean-source__notice {
+  border-bottom: 1px solid $border;
+  background: $bg-elevated;
+}
+
+.lean-source__toolbar {
+  flex-wrap: wrap;
+  border-bottom: 1px solid $border;
+
+  label,
+  .lean-source__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  label {
+    color: $text-secondary;
+    font-size: 0.75rem;
+  }
+
+  button {
+    min-height: 30px;
+    padding: 0.35rem 0.65rem;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    background: $bg-elevated;
+    color: $text-secondary;
+    cursor: pointer;
+
+    &:disabled {
+      color: $text-muted;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.lean-source__mode-note,
+.lean-source__load-state {
+  border-bottom: 1px solid $border;
+  color: $text-subtle;
+}
+
+.lean-source__editor {
+  min-height: 360px;
+  max-height: 620px;
+  overflow: auto;
+  background: $bg-sunken;
+
+  &--editable {
+    box-shadow: inset 3px 0 0 $accent;
+  }
+}
+
+:host ::ng-deep .lean-source__editor .cm-editor {
+  min-height: 360px;
+  color: $text-primary;
+  font-family: $font-mono;
+  font-size: 0.78rem;
+}
+
+:host ::ng-deep .lean-source__editor .cm-gutters {
+  border-right: 1px solid $border;
+  background: $bg-elevated;
+  color: $text-muted;
+}
+
+:host ::ng-deep .lean-source__editor .cm-content {
+  padding-block: 0.5rem;
+  caret-color: $text-primary;
+}
+
+:host ::ng-deep .lean-source__editor .cm-line {
+  padding-inline: 0.6rem;
+}
+
+:host ::ng-deep .lean-source__editor .cm-editor.cm-focused {
+  outline: 2px solid $accent;
+  outline-offset: -2px;
+}
+
+.lean-source footer {
+  border-top: 1px solid $border;
+  color: $text-subtle;
+  font-size: 0.66rem;
+
+  code {
+    max-width: min(65%, 34rem);
+    overflow: hidden;
+    color: $text-muted;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 700px) {
+  .lean-source__header,
+  .lean-source__toolbar,
+  .lean-source footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .lean-source footer code {
+    max-width: 100%;
+  }
+}

@@ -67,6 +67,17 @@ export class StrategyLabRunner {
         );
         return;
       }
+      if (
+        engine === "lean" &&
+        this.config.customLeanSource() !== null &&
+        !this.config.customLeanSource()?.trim()
+      ) {
+        this.fail(
+          "Custom QCAlgorithm source unavailable",
+          "Load or enter a QCAlgorithm before running custom source.",
+        );
+        return;
+      }
       if (!(await this.ensureLeanLauncherReady())) return;
     }
     if (engine === "lean") {
@@ -156,18 +167,27 @@ export class StrategyLabRunner {
         this.leanSidecar.nextTradingDayOpen(previousIsoDate(this.config.startDate())),
         this.leanSidecar.nextTradingDayOpen(this.config.endDate()),
       ]);
-      const strategyParameters = leanStrategyParameters(template, this.config.paramValues());
+      const configuredSource = this.config.customLeanSource();
+      const customSource = configuredSource?.trim() ? configuredSource : null;
+      const strategyParameters = customSource === null
+        ? leanStrategyParameters(template, this.config.paramValues())
+        : undefined;
+      const algorithm = customSource === null
+        ? {
+            template,
+            ...(strategyParameters === undefined ? {} : { strategy_parameters: strategyParameters }),
+          }
+        : { algorithm_source: customSource };
       this.leanJobId.set(
         await this.jobs.startJob("lean_engine_run", {
           request: {
             run_id: this.composeRunId(),
             requested_engine: this.config.engine(),
-            template,
             starting_cash: this.config.initialCash(),
             start_ms_utc: startResolution.session_open_ms_utc,
             end_ms_utc: endResolution.session_open_ms_utc,
             data_policy: this.config.dataPolicy(),
-            ...(strategyParameters === undefined ? {} : { strategy_parameters: strategyParameters }),
+            ...algorithm,
           },
         }),
       );

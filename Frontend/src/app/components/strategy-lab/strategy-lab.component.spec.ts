@@ -3,6 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from "@angular/common
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
+import { within } from "@testing-library/angular";
 import { Apollo } from "apollo-angular";
 import { of } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
@@ -91,6 +92,7 @@ function strategyCatalog() {
 async function createLab(options: { restoreRun?: number; backtestRun?: BacktestRunDetail | null } = {}) {
   const jobs = signal<never[]>([]);
   const navigate = vi.fn(async () => true);
+  const diagnose = vi.fn();
   const params = convertToParamMap(options.restoreRun ? { restoreRun: String(options.restoreRun) } : {});
   await TestBed.configureTestingModule({
     imports: [StrategyLabComponent],
@@ -101,7 +103,7 @@ async function createLab(options: { restoreRun?: number; backtestRun?: BacktestR
       { provide: ActivatedRoute, useValue: { queryParamMap: of(params), snapshot: { queryParamMap: params } } },
       { provide: Router, useValue: { navigate } },
       { provide: JobsService, useValue: { jobs, job: vi.fn(() => null), startJob: vi.fn(), fetchResult: vi.fn(), cancelJob: vi.fn() } },
-      { provide: LeanSidecarService, useValue: { diagnose: vi.fn(), nextTradingDayOpen: vi.fn() } },
+      { provide: LeanSidecarService, useValue: { diagnose, nextTradingDayOpen: vi.fn() } },
       {
         provide: Apollo,
         useValue: {
@@ -116,7 +118,7 @@ async function createLab(options: { restoreRun?: number; backtestRun?: BacktestR
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);
   fixture.detectChanges();
-  return { fixture, http: TestBed.inject(HttpTestingController), navigate };
+  return { fixture, http: TestBed.inject(HttpTestingController), navigate, diagnose };
 }
 
 describe("Strategy Lab Workbench", () => {
@@ -143,6 +145,34 @@ describe("Strategy Lab Workbench", () => {
     fixture.componentInstance.selectHistoryRun("91");
 
     expect(navigate).toHaveBeenCalledWith(["/strategy-lab/runs", 91]);
+    http.verify();
+  });
+
+  it("loads the registered QCAlgorithm in LEAN mode without probing the launcher", async () => {
+    const { fixture, http, diagnose } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+
+    fixture.componentInstance.config.changeEngine("lean");
+    fixture.detectChanges();
+    http.expectOne((request) => request.url.endsWith(
+      "/api/engine/strategies/ema_crossover_signal/lean-source",
+    )).flush({
+      strategy_name: "ema_crossover_signal",
+      template: "ema_crossover_signal",
+      language: "python",
+      source: "from AlgorithmImports import *\nclass MyAlgorithm(QCAlgorithm):\n    pass\n",
+      source_sha256: "a".repeat(64),
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const view = within(fixture.nativeElement);
+    expect(view.getByText("QCAlgorithm source")).toBeDefined();
+    expect(view.getByText("Runtime undetected")).toBeDefined();
+    expect(view.getByLabelText("QCAlgorithm source editor").textContent).toContain("class MyAlgorithm");
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(diagnose).not.toHaveBeenCalled();
     http.verify();
   });
 

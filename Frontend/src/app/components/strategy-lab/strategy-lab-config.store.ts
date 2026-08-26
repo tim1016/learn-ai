@@ -60,6 +60,7 @@ export class StrategyLabConfigStore {
   readonly fillMode = signal<"signal_bar_close" | "next_bar_open">("signal_bar_close");
   readonly initialCash = signal(100000);
   readonly commissionPerOrder = signal(1);
+  readonly customLeanSource = signal<string | null>(null);
   readonly activeTab = signal<StrategyLabTab>("configuration");
   readonly configNavCollapsed = signal(loadNavOverride() === "collapsed");
   readonly configurationWarning = signal<string | null>(null);
@@ -187,6 +188,7 @@ export class StrategyLabConfigStore {
 
   private applyStrategy(name: string): void {
     this.restoredDataPolicy.set(null);
+    this.customLeanSource.set(null);
     this.selectedStrategyName.set(name);
     const schema = this.strategies().find((strategy) => strategy.name === name)?.params_schema;
     const defaults: Record<string, unknown> = {};
@@ -254,6 +256,7 @@ export class StrategyLabConfigStore {
   changeEngine(engine: EngineChoice): void {
     this.retainingHistoricalSelection.set(false);
     this.configurationWarning.set(null);
+    if (engine !== "lean") this.customLeanSource.set(null);
     this.engine.set(engine);
     this.restoredDataPolicy.update((policy) => policy === null ? null : {
       ...policy,
