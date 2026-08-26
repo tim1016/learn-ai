@@ -74,7 +74,7 @@
               >
                 <app-panel-action-button
                   [action]="action"
-                  tone="danger"
+                  [tone]="actionTone(action)"
                   (triggered)="requestRowAction(row.bot, $event)"
                 />
               </div>

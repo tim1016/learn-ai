@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Literal, cast
+from typing import Literal
 
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
+    ClerkScope,
+    ProjectedHold,
+    ProjectionGuidance,
     RecoveryCapability,
     RecoveryConfirmation,
 )
@@ -81,25 +83,66 @@ def _economic_snapshot(*, sid: str, control_revision: int = 42) -> EconomicSnaps
     )
 
 
+def _hold(
+    *,
+    scope: ClerkScope,
+    sid: str | None,
+    hold_id: str = "hold-1",
+    reason_code: str = "EXPOSURE_UNRECONCILED",
+) -> ProjectedHold:
+    """One ACTIVE hold at its real scope.
+
+    ``scope`` is the field the row-command behaviour turns on, so the fake has
+    to be the real frozen dataclass: a bare string cannot distinguish an
+    account-wide problem from a bot-scoped one.
+    """
+    return ProjectedHold(
+        hold_id=hold_id,
+        scope=scope,
+        strategy_instance_id=sid,
+        reason_code=reason_code,
+        opened_at_ms=1_700_000_000_000,
+        evidence_refs=(),
+    )
+
+
 def _projection(
     *,
     sid: str,
     control_revision: int = 42,
-    holds: tuple[object, ...] = (),
+    holds: tuple[ProjectedHold, ...] = (),
     recovery_actions: tuple[RecoveryCapability, ...] = (),
 ) -> ClerkProjection:
-    return cast(
-        ClerkProjection,
-        SimpleNamespace(
-            account_id=ACCT,
-            strategy_instance_id=sid,
-            authority_generation=7,
-            control_revision=control_revision,
-            holds=holds,
-            uncertainties=(),
-            authority_health="healthy",
-            recovery_actions=recovery_actions,
+    return ClerkProjection(
+        account_id=ACCT,
+        strategy_instance_id=sid,
+        authority_generation=7,
+        db_identity_token="db-7",
+        authority_health="healthy",
+        authority_health_reason=None,
+        control_revision=control_revision,
+        custody_owner="ACCOUNT_CLERK",
+        runs=(),
+        commands=(),
+        operations=(),
+        positions=(),
+        holds=holds,
+        uncertainties=(),
+        latest_reconciliation=None,
+        terminal_receipts=(),
+        guidance=ProjectionGuidance(
+            headline="Account Clerk custody is healthy",
+            explanation="SQLite has current custody truth.",
+            scope="CUSTODY_SUBJECT",
+            impact="Normal Clerk-governed controls remain available.",
+            custody_owner="ACCOUNT_CLERK",
+            may_create_exposure=True,
+            available_safety_actions=(),
+            action_required=False,
+            next_step="No recovery action is required.",
         ),
+        recovery_actions=recovery_actions,
+        generated_at_ms=1_700_010_000_000,
     )
 
 
@@ -261,7 +304,7 @@ def test_an_attention_row_carries_its_primary_recovery_command() -> None:
         projections={
             SID: _projection(
                 sid=SID,
-                holds=("exposure-hold",),
+                holds=(_hold(scope="CUSTODY_SUBJECT", sid=SID),),
                 recovery_actions=(_recovery_capability(),),
             )
         },
@@ -287,7 +330,7 @@ def test_an_unavailable_recovery_command_is_offered_with_its_blocker() -> None:
         projections={
             SID: _projection(
                 sid=SID,
-                holds=("exposure-hold",),
+                holds=(_hold(scope="CUSTODY_SUBJECT", sid=SID),),
                 recovery_actions=(_recovery_capability(available=False),),
             )
         },
@@ -326,7 +369,7 @@ def test_an_attention_row_without_a_primary_capability_offers_nothing() -> None:
         projections={
             SID: _projection(
                 sid=SID,
-                holds=("exposure-hold",),
+                holds=(_hold(scope="CUSTODY_SUBJECT", sid=SID),),
                 recovery_actions=(_recovery_capability(primary=False),),
             )
         },
@@ -335,3 +378,76 @@ def test_an_attention_row_without_a_primary_capability_offers_nothing() -> None:
     )
 
     assert catalog[0].row_action is None
+
+
+def test_an_account_scoped_hold_puts_no_per_bot_command_on_any_row() -> None:
+    """An account-scoped problem has an account-scoped cure.
+
+    ``ClerkSqliteProjectionReader._holds`` folds every ``ACCOUNT_CLERK`` row
+    into *each* bot's snapshot, so one account-wide hold marks the whole fleet
+    ``needs_attention``. Deriving the row command from that fold would hand N
+    operators N per-bot mutation buttons for one problem -- the same fan-out
+    defect family as the account-wide entry freeze this PRD removes.
+
+    Attention itself stays: the rows are genuinely affected, and saying so is
+    honest. What must not appear is the button.
+    """
+    account_hold = _hold(scope="ACCOUNT_CLERK", sid=None, hold_id="hold-account")
+    catalog = build_sqlite_catalog(
+        [_status(sid=SID), _status(sid=OTHER_SID, strategy_key="ema_crossover_signal")],
+        projections={
+            SID: _projection(
+                sid=SID,
+                holds=(account_hold,),
+                recovery_actions=(_recovery_capability(),),
+            ),
+            OTHER_SID: _projection(
+                sid=OTHER_SID,
+                holds=(account_hold,),
+                recovery_actions=(_recovery_capability(),),
+            ),
+        },
+        economic_rollups={
+            SID: _economic_snapshot(sid=SID),
+            OTHER_SID: _economic_snapshot(sid=OTHER_SID),
+        },
+        account_id=ACCT,
+    )
+
+    assert len(catalog) == 2
+    assert [row.needs_attention for row in catalog] == [True, True]
+    assert [row.row_action for row in catalog] == [None, None]
+
+
+def test_a_bot_scoped_hold_still_commands_only_its_own_row() -> None:
+    """The other half of the scope contract.
+
+    Narrowing the derivation to ``CUSTODY_SUBJECT`` must not mute the case it
+    exists for: the bot that actually holds the stranded exposure keeps its
+    command, and its unaffected sibling gets none.
+    """
+    catalog = build_sqlite_catalog(
+        [_status(sid=SID), _status(sid=OTHER_SID, strategy_key="ema_crossover_signal")],
+        projections={
+            SID: _projection(
+                sid=SID,
+                holds=(_hold(scope="CUSTODY_SUBJECT", sid=SID),),
+                recovery_actions=(_recovery_capability(),),
+            ),
+            OTHER_SID: _projection(
+                sid=OTHER_SID,
+                recovery_actions=(_recovery_capability(),),
+            ),
+        },
+        economic_rollups={
+            SID: _economic_snapshot(sid=SID),
+            OTHER_SID: _economic_snapshot(sid=OTHER_SID),
+        },
+        account_id=ACCT,
+    )
+
+    held, sibling = catalog
+    assert held.row_action is not None
+    assert held.row_action.action_id == "cancel_verified_working_orders"
+    assert sibling.needs_attention is False
+    assert sibling.row_action is None

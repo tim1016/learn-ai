@@ -1,3 +1,4 @@
+import { Router } from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -299,6 +300,39 @@ describe('PanelActionButtonComponent', () => {
     expect(
       screen.queryByRole('button', { name: 'Reconcile this account now' }),
     ).toBeNull();
+  });
+
+  const navigateMove: OperatorMove = {
+    label: 'Open the custody timeline',
+    action: { kind: 'navigate', route: '/brokers/alpaca', fragment: null },
+    target: null,
+  };
+
+  it('performs a navigate move itself instead of emitting it to the host', async () => {
+    // `navigate` is the one kind this control self-dispatches, and calling it
+    // self-dispatchable is only honest while a Router is guaranteed. Falling
+    // back to `moveRequested` would be a dead click: the roster host — the
+    // very host this control's move gating exists for — does not bind that
+    // output. Rendered here with no `provideRouter` on purpose, because the
+    // root-providable Router is what makes the guarantee hold.
+    const moveRequested = vi.fn();
+    const view = await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({
+          enabled: false,
+          blockers: [staleBlocker({ primary_move: navigateMove })],
+        }),
+      },
+      on: { moveRequested },
+    });
+    const navigate = vi
+      .spyOn(view.fixture.debugElement.injector.get(Router), 'navigate')
+      .mockResolvedValue(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open the custody timeline' }));
+
+    expect(navigate).toHaveBeenCalledWith(['/brokers/alpaca'], { fragment: undefined });
+    expect(moveRequested).not.toHaveBeenCalled();
   });
 
 });

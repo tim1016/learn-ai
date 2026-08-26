@@ -18,9 +18,9 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 export type PanelActionTone = 'primary' | 'neutral' | 'warning' | 'danger';
 
 /**
- * A move this component can dispatch with no host help. `navigate` is the
- * only self-contained kind; everything else names something only the host
- * knows how to perform, so the host must declare support for it.
+ * A move this component performs with no host help. `navigate` is the only
+ * self-contained kind; everything else names something only the host knows how
+ * to perform, so the host must declare support for it.
  */
 function isSelfDispatchable(move: OperatorMove): boolean {
   return move.action.kind === 'navigate';
@@ -38,7 +38,11 @@ function isSelfDispatchable(move: OperatorMove): boolean {
   styleUrl: './panel-action-button.component.scss',
 })
 export class PanelActionButtonComponent {
-  private readonly router = inject(Router, { optional: true });
+  // Not optional. `Router` is root-providable, so `{ optional: true }` never
+  // yielded null — it only bought a fallback branch that emitted
+  // `moveRequested` for a `navigate` move, an output the roster host does not
+  // bind. That branch was unreachable dead weight dressed as a safety net.
+  private readonly router = inject(Router);
 
   readonly action = input.required<PanelAction>();
   readonly pending = input(false);
@@ -97,7 +101,7 @@ export class PanelActionButtonComponent {
   }
 
   protected requestMove(move: OperatorMove): void {
-    if (move.action.kind === 'navigate' && this.router !== null) {
+    if (move.action.kind === 'navigate') {
       void this.router.navigate([move.action.route], {
         fragment: move.action.fragment ?? undefined,
       });
@@ -105,5 +109,4 @@ export class PanelActionButtonComponent {
     }
     this.moveRequested.emit(move);
   }
-
 }

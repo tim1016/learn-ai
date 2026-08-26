@@ -202,10 +202,15 @@ describe('BotsRosterComponent', () => {
     expect(rowActionRequested).toHaveBeenCalledWith({ bot, action: rowAction });
   });
 
-  it('keeps the recovery command off rows that do not need attention', async () => {
-    // A healthy row is not a place to offer a recovery mutation.
+  it('keeps the recovery command off rows the backend authored none for', async () => {
+    // A healthy row is not a place to offer a recovery mutation, and the
+    // backend is where that is decided (`_catalog_row_action`, proven by
+    // `test_a_healthy_row_carries_no_recovery_command`). The rail renders
+    // what arrived rather than re-deriving the gate — an earlier local gate
+    // keyed on the rail's own grouping is what silently threw a retired
+    // bot's authored cure away (#1778).
     await renderRail([
-      fakeCatalogBot({ strategy_instance_id: 'healthy-bot', row_action: rowAction }),
+      fakeCatalogBot({ strategy_instance_id: 'healthy-bot', row_action: null }),
     ]);
 
     await screen.findByText('healthy-bot');
@@ -257,5 +262,97 @@ describe('BotsRosterComponent', () => {
     await screen.findByText('crashed-bot');
     const value = container.querySelector('.rail-row__value');
     expect(value?.getAttribute('data-tone')).toBe('alert');
+  });
+
+  it('offers a retired row its recovery command instead of dropping it', async () => {
+    // A RETIRED bot can still hold stranded exposure. The backend sets
+    // `needs_attention` regardless of phase and authors `row_action` for it;
+    // grouping RETIRED before attention silently threw the cure away and left
+    // the operator at a dead end.
+    const rowActionRequested = vi.fn();
+    const bot = fakeCatalogBot({
+      strategy_instance_id: 'retired-bot',
+      status_label: 'Retired',
+      phase: 'RETIRED',
+      needs_attention: true,
+      running: false,
+      row_action: rowAction,
+    });
+    await render(BotsRosterComponent, {
+      componentInputs: { bots: [bot], selectedSid: null },
+      componentOutputs: { rowActionRequested: { emit: rowActionRequested } as never },
+    });
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Cancel working orders' }),
+    );
+
+    expect(rowActionRequested).toHaveBeenCalledWith({ bot, action: rowAction });
+  });
+
+  it('tones a retired row that needs attention as an alert', async () => {
+    // Same defect as the crashed row: `muted` is the tone that made a bot in
+    // trouble read like a deliberate stop.
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'retired-bot',
+        status_label: 'Retired',
+        phase: 'RETIRED',
+        needs_attention: true,
+        running: false,
+      }),
+    ]);
+
+    await screen.findByText('retired-bot');
+    const value = container.querySelector('.rail-row__value');
+    expect(value?.getAttribute('data-tone')).toBe('alert');
+  });
+
+  it('keeps a retired row that is genuinely quiet muted', async () => {
+    // The other half of the contract: retirement is not by itself alarming.
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'retired-quiet',
+        status_label: 'Retired',
+        phase: 'RETIRED',
+        running: false,
+      }),
+    ]);
+
+    await screen.findByText('retired-quiet');
+    const value = container.querySelector('.rail-row__value');
+    expect(value?.getAttribute('data-tone')).toBe('muted');
+  });
+
+  it('tones the row command from the canonical action map, not a fixed danger', async () => {
+    // `reconcile_now` is a refresh and `open_custody_timeline` is read-only.
+    // Painting whatever the backend picked as primary in destructive red
+    // taught the operator that red means nothing.
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'stale-bot',
+        needs_attention: true,
+        row_action: { ...rowAction, action_id: 'reconcile_now', label: 'Reconcile now' },
+      }),
+    ]);
+
+    await screen.findByRole('button', { name: 'Reconcile now' });
+    const command = container.querySelector('.rail-row__action .panel-action__button');
+    expect(command?.className).toContain('panel-action__button--neutral');
+    expect(command?.className).not.toContain('panel-action__button--danger');
+  });
+
+  it('keeps a genuinely destructive row command toned as danger', async () => {
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'flatten-bot',
+        needs_attention: true,
+        row_action: { ...rowAction, action_id: 'execute_safe_flatten', label: 'Flatten now' },
+      }),
+    ]);
+
+    await screen.findByRole('button', { name: 'Flatten now' });
+    const command = container.querySelector('.rail-row__action .panel-action__button');
+    expect(command?.className).toContain('panel-action__button--danger');
   });
 });
