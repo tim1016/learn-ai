@@ -25,7 +25,7 @@ from app.engine.live.account_safety import (
     AccountSafetyCorruptError,
     AccountSafetyState,
     AccountSafetyVerdict,
-    account_safety_path,
+    account_safety_state_exists,
 )
 from app.schemas.account_directory import AccountServiceStatusResponse
 from app.schemas.account_reconciliation import AccountReconciliationEvidenceRef, AccountReconciliationReceipt
@@ -333,7 +333,7 @@ class AccountSafetySnapshotService:
         account_id: str,
         now_ms: int,
     ) -> tuple[AccountSafetyState | None, AccountSafetySnapshotSource]:
-        if not account_safety_path(self._artifacts_root, account_id).is_file():
+        if not account_safety_state_exists(self._artifacts_root, account_id):
             return None, AccountSafetySnapshotSource(
                 source="account_safety",
                 state="UNAVAILABLE",

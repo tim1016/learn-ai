@@ -10,7 +10,6 @@ epoch reconciliation after the retired custody is gone.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import logging
 import os
@@ -20,7 +19,6 @@ from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
-from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -28,11 +26,19 @@ from app.engine.live.account_artifacts import account_artifact_file_path, read_a
 from app.engine.live.account_clerk_journal import is_economic_terminal_broker_event
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_epoch import AccountEpoch, AccountEpochState
+from app.engine.live.account_safety_admission_claim import (
+    AccountSafetyAdmissionClaim,
+    AccountSafetyAdmissionError,
+    account_safety_admission_claim,
+    open_write_transaction,
+    persist_protected_payload_on_connection,
+    read_protected_payload,
+    validate_claim_on_connection,
+)
 from app.engine.live.live_state_sidecar import _fsync_parent_dir
 from app.schemas.account_truth import AccountTruthResponse
 
 ACCOUNT_SAFETY_FILENAME = "account_safety.json"
-ACCOUNT_SAFETY_ADMISSION_FILENAME = "account_safety_admission"
 _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S = 10.0
 _ACCOUNT_SAFETY_ADMISSION_POLL_S = 0.01
 logger = logging.getLogger(__name__)
@@ -106,10 +112,6 @@ class AccountSafetyEntryBlockedError(RuntimeError):
         self.state = state
 
 
-class AccountSafetyAdmissionError(RuntimeError):
-    """The host/VM-shared account safety permit cannot be acquired."""
-
-
 class AccountSafetyAdmissionTransition(BaseModel):
     """The O_EXCL mutex owner for a durable safety-state transition."""
 
@@ -121,35 +123,36 @@ class AccountSafetyAdmissionTransition(BaseModel):
 
 
 def account_safety_path(artifacts_root: Path, account_id: str) -> Path:
-    """Return the one static durable permission projection for an account."""
+    """Return a stable per-account path anchor.
+
+    Durable state now lives in the ADR 0048 4f admission-claim SQLite store
+    (`account_safety_admission_claim.py`), not at this path going forward —
+    but this path is also the pre-migration location, and any state
+    recorded there before this change must still be seen: see
+    `_read_legacy_json_compat`. `_account_safety_state_transition_path`
+    also derives its sibling marker name from this path; that inner
+    transition lock is unrelated to 4f's four admission-marker classes and
+    is intentionally left untouched here.
+    """
 
     return account_artifact_file_path(artifacts_root, account_id, ACCOUNT_SAFETY_FILENAME)
 
 
-def account_safety_admission_path(artifacts_root: Path, account_id: str) -> Path:
-    """Return the shared admission-coordinator anchor for an account."""
+def account_safety_state_exists(artifacts_root: Path, account_id: str) -> bool:
+    """Return whether durable safety state has ever been recorded.
 
-    return account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_SAFETY_ADMISSION_FILENAME,
-    )
+    `AccountSafetyAuthority.read()` always synthesizes a CLEAN default when
+    absent, so callers that must distinguish "never observed" from "an
+    explicit CLEAN was recorded" (e.g. the account-truth snapshot's
+    ``ACCOUNT_SAFETY_NOT_AVAILABLE`` reason) use this instead. Must agree
+    with `_read_locked`'s legacy-JSON compat fallback: an account whose
+    only recorded state is still the pre-migration JSON file has recorded
+    state, not none.
+    """
 
-
-def _account_safety_admission_paths(
-    artifacts_root: Path,
-    account_id: str,
-) -> tuple[Path, Path, Path, Path]:
-    """Return the gate, writer marker, and reader directory for one account."""
-
-    target = account_safety_admission_path(artifacts_root, account_id)
-    coordinator = target.with_name(f".{target.name}")
-    return (
-        target,
-        coordinator / "gate",
-        coordinator / "writer",
-        coordinator / "readers",
-    )
+    if read_protected_payload(artifacts_root, account_id) is not None:
+        return True
+    return account_safety_path(artifacts_root, account_id).exists()
 
 
 def _account_safety_state_transition_path(artifacts_root: Path, account_id: str) -> Path:
@@ -237,107 +240,29 @@ def _current_clerk_generation(artifacts_root: Path, account_id: str) -> int:
     return generation.generation if generation is not None else 0
 
 
-class _AccountSafetySuspensionReservation:
-    """A writer turnstile held while existing entry readers drain."""
-
-    def __init__(self, *, gate: Path, writer: Path, readers: Path) -> None:
-        self._gate = gate
-        self._writer = writer
-        self._readers = readers
-
-    def wait_for_readers(self) -> None:
-        """Wait for pre-existing entry admissions, never removing stale proof."""
-
-        deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
-        while any(self._readers.iterdir()):
-            if time.monotonic() >= deadline:
-                raise AccountSafetyAdmissionError(
-                    f"account safety entry readers did not drain: {self._readers}"
-                )
-            time.sleep(_ACCOUNT_SAFETY_ADMISSION_POLL_S)
-
-    def close(self) -> None:
-        _remove_marker(self._writer)
-        _remove_marker(self._gate)
-
-
 @contextmanager
-def account_safety_suspension_reservation(
-    artifacts_root: Path,
-    account_id: str,
-) -> Iterator[_AccountSafetySuspensionReservation]:
-    """Reserve the writer turnstile before waiting for entry admissions.
+def account_safety_admission_lock(
+    artifacts_root: Path, account_id: str
+) -> Iterator[AccountSafetyAdmissionClaim]:
+    """Hold the fenced single-writer admission claim for an account.
 
-    The reservation is intentionally split from ``wait_for_readers`` so the
-    caller can close the turnstile before blocking on pre-existing entry work.
-    Clerk callbacks intentionally do not take this writer permit: a broker
-    implementation may wait synchronously for its callback receipt before its
-    own entry permit can drain.
+    ADR 0048 Decision 4f: collapses the four O_EXCL marker classes this used
+    to coordinate (``gate``, ``writer``, ``readers/*``, ``participants/*``)
+    into one liveness-bound, generation-fenced claim
+    (:mod:`app.engine.live.account_safety_admission_claim`). Readers are not
+    part of the protocol any more — the shared entry permit
+    (``account_safety_entry_admission_lock``) and the writer turnstile it
+    drained are retired with it, per the provenance in 4f: the reader half's
+    only caller was the legacy ``AccountClerk`` control path removed by
+    #1679, so ``readers/`` was never populated in production.
+
+    Yields the held :class:`AccountSafetyAdmissionClaim` so a caller
+    performing a protected mutation can validate it immediately before
+    writing (see :meth:`AccountSafetyAdmissionClaim.validate_or_raise`).
     """
 
-    target, gate, writer, readers = _account_safety_admission_paths(artifacts_root, account_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    readers.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
-    _create_exclusive_marker(gate, deadline=deadline)
-    try:
-        _create_exclusive_marker(writer, deadline=deadline)
-    except Exception:
-        _remove_marker(gate)
-        raise
-    reservation = _AccountSafetySuspensionReservation(gate=gate, writer=writer, readers=readers)
-    try:
-        yield reservation
-    finally:
-        reservation.close()
-
-
-@contextmanager
-def account_safety_entry_admission_lock(artifacts_root: Path, account_id: str) -> Iterator[None]:
-    """Hold a shared entry permit through A0, A1, and broker I/O.
-
-    Entries may proceed together. A suspension/retirement reservation closes
-    the turnstile, waits for all existing readers, and then has exclusive
-    authority. Every marker is created with ``O_EXCL`` on the shared mount,
-    which works across the host/VM boundary where ``flock`` is insufficient.
-
-    **Superseded, and awaiting removal by ADR 0048 Decision 4f.** #1285 wired
-    this into the legacy ``AccountClerk``; #1679 removed every call site with
-    that control path, and Alpaca admission is now owned by the SQLite
-    Clerk's ``decide_capability``. It is kept only because deleting the
-    reader half alone would strand ``wait_for_readers`` and ``readers/`` as
-    the next dead machinery: 4f replaces all four marker classes with one
-    fenced single-writer claim, and that is where this goes. Do not re-wire
-    it into an entry path in the meantime.
-    """
-
-    target, gate, writer, readers = _account_safety_admission_paths(artifacts_root, account_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    readers.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + _ACCOUNT_SAFETY_ADMISSION_TIMEOUT_S
-    _create_exclusive_marker(gate, deadline=deadline)
-    reader = readers / uuid4().hex
-    try:
-        if writer.exists():
-            raise AccountSafetyAdmissionError(
-                f"account safety suspension is reserving admission: {writer}"
-            )
-        _create_exclusive_marker(reader, deadline=deadline)
-    finally:
-        _remove_marker(gate)
-    try:
-        yield
-    finally:
-        _remove_marker(reader)
-
-
-@contextmanager
-def account_safety_admission_lock(artifacts_root: Path, account_id: str) -> Iterator[None]:
-    """Hold exclusive suspension/retirement authority for an account."""
-
-    with account_safety_suspension_reservation(artifacts_root, account_id) as reservation:
-        reservation.wait_for_readers()
-        yield
+    with account_safety_admission_claim(artifacts_root, account_id) as claim:
+        yield claim
 
 
 def retired_owner_nonterminal_custody(
@@ -399,17 +324,23 @@ class AccountSafetyAuthority:
         artifacts_root: Path,
         account_id: str,
         now_ms: Callable[[], int],
+        admission_claim: AccountSafetyAdmissionClaim | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
         self._now_ms = now_ms
+        # Held only by a caller inside `account_safety_admission_lock`'s
+        # critical section (ADR 0048 4f). When set, every durable write
+        # validates it and persists in the SAME SQLite transaction (ADR
+        # 0048 4f.3), so a writer paused between the check and the write
+        # cannot complete a stale mutation after the claim was broken.
+        self._admission_claim = admission_claim
 
     def read(self) -> AccountSafetyState:
         """Read the durable state, synthesizing clean only when absent."""
 
-        path = account_safety_path(self._artifacts_root, self._account_id)
         with _account_safety_state_transition_lock(self._artifacts_root, self._account_id):
-            state = self._read_locked(path)
+            state = self._read_locked()
         return state or AccountSafetyState(
             account_id=self._account_id,
             updated_at_ms=self._now_ms(),
@@ -436,10 +367,8 @@ class AccountSafetyAuthority:
             raise ValueError("ACCOUNT_SAFETY_CUSTODY_ACCOUNT_MISMATCH")
         if not retained:
             return self.read()
-        path = account_safety_path(self._artifacts_root, self._account_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
         with _account_safety_state_transition_lock(self._artifacts_root, self._account_id):
-            existing = self._read_locked(path)
+            existing = self._read_locked()
             existing_custody = existing.suspension.custody if existing and existing.suspension else ()
             combined = tuple(
                 sorted(
@@ -474,7 +403,7 @@ class AccountSafetyAuthority:
                 ),
                 updated_at_ms=self._now_ms(),
             )
-            self._write_locked(path, state)
+            self._write_locked(state)
             return state
 
     def mark_broker_clearance_required(self, *, detected_at_ms: int) -> AccountSafetyState:
@@ -486,9 +415,8 @@ class AccountSafetyAuthority:
         Account Truth has observed the retired broker exposure gone.
         """
 
-        path = account_safety_path(self._artifacts_root, self._account_id)
         with _account_safety_state_transition_lock(self._artifacts_root, self._account_id):
-            state = self._read_locked(path)
+            state = self._read_locked()
             if state is None or state.verdict is not AccountSafetyVerdict.SUSPENDED:
                 return state or AccountSafetyState(
                     account_id=self._account_id,
@@ -516,7 +444,7 @@ class AccountSafetyAuthority:
                     "updated_at_ms": self._now_ms(),
                 }
             )
-            self._write_locked(path, updated)
+            self._write_locked(updated)
             return updated
 
     def observe_broker_retired_owner_custody(
@@ -547,10 +475,8 @@ class AccountSafetyAuthority:
             raise ValueError("ACCOUNT_SAFETY_CUSTODY_ACCOUNT_MISMATCH")
         if any(item.evidence_source != "broker" for item in observed):
             raise ValueError("ACCOUNT_SAFETY_BROKER_EVIDENCE_SOURCE_REQUIRED")
-        path = account_safety_path(self._artifacts_root, self._account_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
         with _account_safety_state_transition_lock(self._artifacts_root, self._account_id):
-            existing = self._read_locked(path)
+            existing = self._read_locked()
             if (
                 existing is not None
                 and existing.last_broker_observed_at_ms is not None
@@ -653,7 +579,7 @@ class AccountSafetyAuthority:
                     last_broker_observed_at_ms=observed_at_ms,
                     updated_at_ms=self._now_ms(),
                 )
-            self._write_locked(path, state)
+            self._write_locked(state)
             return state
 
     def bind_reconciliation(self, epoch: AccountEpochState) -> AccountSafetyState:
@@ -661,10 +587,8 @@ class AccountSafetyAuthority:
 
         if epoch.status != "INVALID" or epoch.reconciliation_id is None:
             raise ValueError("ACCOUNT_SAFETY_RECONCILIATION_EPOCH_REQUIRED")
-        path = account_safety_path(self._artifacts_root, self._account_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
         with _account_safety_state_transition_lock(self._artifacts_root, self._account_id):
-            state = self._read_locked(path)
+            state = self._read_locked()
             if state is None or state.verdict is not AccountSafetyVerdict.SUSPENDED:
                 return state or AccountSafetyState(
                     account_id=self._account_id,
@@ -687,7 +611,7 @@ class AccountSafetyAuthority:
                     "updated_at_ms": self._now_ms(),
                 }
             )
-            self._write_locked(path, updated)
+            self._write_locked(updated)
             return updated
 
     def require_entry_admission(self) -> AccountSafetyState:
@@ -707,9 +631,8 @@ class AccountSafetyAuthority:
         """Lift only from the exact successor of a suspension's epoch proof."""
 
         remaining = tuple(retained_custody)
-        path = account_safety_path(self._artifacts_root, self._account_id)
         with _account_safety_state_transition_lock(self._artifacts_root, self._account_id):
-            state = self._read_locked(path)
+            state = self._read_locked()
             if state is None or state.verdict is not AccountSafetyVerdict.SUSPENDED:
                 return state or AccountSafetyState(
                     account_id=self._account_id,
@@ -725,35 +648,73 @@ class AccountSafetyAuthority:
                 last_reconciliation_id=epoch.last_reconciliation_id,
                 updated_at_ms=self._now_ms(),
             )
-            self._write_locked(path, updated)
+            self._write_locked(updated)
             return updated
 
-    def _read_locked(self, path: Path) -> AccountSafetyState | None:
+    def _read_locked(self) -> AccountSafetyState | None:
+        payload_json = read_protected_payload(self._artifacts_root, self._account_id)
+        if payload_json is None:
+            payload_json = self._read_legacy_json_compat()
+            if payload_json is None:
+                return None
+        try:
+            state = AccountSafetyState.model_validate_json(payload_json)
+        except (ValidationError, ValueError) as exc:
+            raise AccountSafetyCorruptError(
+                f"account safety state for {self._account_id!r} is unreadable: {exc}"
+            ) from exc
+        if state.account_id != self._account_id:
+            raise AccountSafetyCorruptError("account safety state account id does not match its store")
+        return state
+
+    def _read_legacy_json_compat(self) -> str | None:
+        """ADR 0048 4f migration compat: the pre-SQLite JSON projection this
+        account's state lived in before this change (Decision 2's "a
+        storage move of durable state is a migration, not a refactor, and
+        the data has to survive the version boundary" applies here too,
+        even though this move is far smaller than the holds->uncertainties
+        migration it names).
+
+        Self-retiring: once *anything* protected writes this account's
+        state again, `_write_locked` persists into SQLite and every
+        subsequent read finds it there, before this fallback is ever
+        consulted -- no migration ceremony, no operator action. Never
+        deletes or rewrites the legacy file: this repo's convention for
+        authority files is to relocate on retirement, never delete, and
+        that is an operator action outside this module's job.
+        """
+
+        path = account_safety_path(self._artifacts_root, self._account_id)
         if not path.exists():
             return None
         try:
-            state = AccountSafetyState.model_validate_json(path.read_text(encoding="utf-8"))
-        except (OSError, ValidationError, ValueError) as exc:
-            raise AccountSafetyCorruptError(f"account safety state at {path} is unreadable: {exc}") from exc
-        if state.account_id != self._account_id:
-            raise AccountSafetyCorruptError("account safety state account id does not match its path")
-        return state
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise AccountSafetyCorruptError(f"legacy account safety state at {path} is unreadable: {exc}") from exc
 
-    @staticmethod
-    def _write_locked(path: Path, state: AccountSafetyState) -> None:
-        temp_path = path.with_suffix(path.suffix + ".tmp")
-        payload = state.model_dump_json().encode("utf-8")
-        with open(temp_path, "wb") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
+    def _write_locked(self, state: AccountSafetyState) -> None:
+        # ADR 0048 4f.3: validate the held admission claim's generation and
+        # persist the payload it protects in ONE SQLite transaction, not a
+        # check followed by a separate durable write. A writer paused
+        # (stopped-world GC, SIGSTOP, a suspended VM) between the two would
+        # otherwise resume and complete a stale mutation after the claim
+        # was broken out from under it — `open_write_transaction`'s
+        # `BEGIN IMMEDIATE` holds the file's write lock across both steps,
+        # so a concurrent break attempt cannot land in between.
+        updated_at_ms = self._now_ms()
+        conn = open_write_transaction(self._artifacts_root, self._account_id)
         try:
-            os.replace(temp_path, path)
+            if self._admission_claim is not None:
+                validate_claim_on_connection(conn, self._admission_claim, now_ms=updated_at_ms)
+            persist_protected_payload_on_connection(
+                conn, payload_json=state.model_dump_json(), updated_at_ms=updated_at_ms
+            )
+            conn.execute("COMMIT")
         except Exception:
-            with contextlib.suppress(OSError):
-                temp_path.unlink()
+            conn.execute("ROLLBACK")
             raise
-        _fsync_parent_dir(path)
+        finally:
+            conn.close()
 
 
 def _custody_is_terminal(entries: Iterable[AccountClerkJournalEntry]) -> bool:
@@ -895,7 +856,6 @@ def account_safety_blocks_current_bot(
 
 
 __all__ = [
-    "ACCOUNT_SAFETY_ADMISSION_FILENAME",
     "ACCOUNT_SAFETY_FILENAME",
     "AccountSafetyAdmissionError",
     "AccountSafetyAuthority",
@@ -906,11 +866,9 @@ __all__ = [
     "AccountSafetyVerdict",
     "RetiredOwnerCustody",
     "account_safety_admission_lock",
-    "account_safety_admission_path",
     "account_safety_blocks_current_bot",
-    "account_safety_entry_admission_lock",
     "account_safety_path",
-    "account_safety_suspension_reservation",
+    "account_safety_state_exists",
     "retired_owner_broker_custody_from_account_truth",
     "retired_owner_nonterminal_custody",
 ]

@@ -380,11 +380,12 @@ class AccountReconciliationService:
         # Account Truth is the canonical broker-attribution projection. Fold
         # its retired-owner evidence into durable entry permission before any
         # promoted observation lease could authorize a new account entry.
-        with account_safety_admission_lock(self._artifacts_root, canonical_account_id):
+        with account_safety_admission_lock(self._artifacts_root, canonical_account_id) as claim:
             AccountSafetyAuthority(
                 artifacts_root=self._artifacts_root,
                 account_id=canonical_account_id,
                 now_ms=lambda: observed_at_ms,
+                admission_claim=claim,
             ).observe_broker_retired_owner_custody(
                 retired_owner_broker_custody_from_account_truth(account_truth),
                 observed_at_ms=account_truth.generated_at_ms,

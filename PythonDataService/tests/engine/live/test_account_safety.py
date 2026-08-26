@@ -21,11 +21,14 @@ from app.engine.live.account_registry import (
 from app.engine.live.account_safety import (
     AccountSafetyAuthority,
     AccountSafetyEntryBlockedError,
+    AccountSafetyState,
+    AccountSafetySuspension,
     AccountSafetyVerdict,
     RetiredOwnerCustody,
     account_safety_admission_lock,
     account_safety_blocks_current_bot,
-    account_safety_entry_admission_lock,
+    account_safety_path,
+    account_safety_state_exists,
     retired_owner_nonterminal_custody,
 )
 
@@ -116,42 +119,101 @@ def test_retired_owner_suspension_never_lifts_while_nonterminal_custody_remains(
         safety.require_entry_admission()
 
 
-def test_shared_entry_permits_drain_before_exclusive_suspension(tmp_path: Path) -> None:
-    """Healthy entries share admission; a suspension waits for both to finish."""
+def test_admission_lock_serializes_concurrent_writers(tmp_path: Path) -> None:
+    """The fenced single-writer claim (ADR 0048 4f) excludes concurrent
+    writers. Readers are no longer part of the protocol -- this replaces the
+    retired reader/writer-turnstile coverage (``account_safety_entry_admission_lock``
+    and the writer reservation it drained, both deleted under 4f)."""
 
-    readers_entered = Event()
-    second_reader_entered = Event()
-    release_readers = Event()
-    suspension_entered = Event()
+    first_holds = Event()
+    release_first = Event()
+    second_entered = Event()
 
-    def reader(entered: Event) -> None:
-        with account_safety_entry_admission_lock(tmp_path, ACCOUNT_ID):
-            entered.set()
-            assert release_readers.wait(timeout=1)
-
-    def suspend() -> None:
+    def hold_first() -> None:
         with account_safety_admission_lock(tmp_path, ACCOUNT_ID):
-            suspension_entered.set()
+            first_holds.set()
+            assert release_first.wait(timeout=1)
 
-    first_reader = Thread(target=reader, args=(readers_entered,))
-    second_reader = Thread(target=reader, args=(second_reader_entered,))
-    first_reader.start()
-    second_reader.start()
-    assert readers_entered.wait(timeout=1)
-    assert second_reader_entered.wait(timeout=1)
+    def acquire_second() -> None:
+        assert first_holds.wait(timeout=1)
+        with account_safety_admission_lock(tmp_path, ACCOUNT_ID):
+            second_entered.set()
 
-    suspension = Thread(target=suspend)
-    suspension.start()
-    assert not suspension_entered.wait(timeout=0.05)
+    first = Thread(target=hold_first)
+    second = Thread(target=acquire_second)
+    first.start()
+    assert first_holds.wait(timeout=1)
+    second.start()
+    assert not second_entered.wait(timeout=0.05)
 
-    release_readers.set()
-    first_reader.join(timeout=1)
-    second_reader.join(timeout=1)
-    suspension.join(timeout=1)
-    assert not first_reader.is_alive()
-    assert not second_reader.is_alive()
-    assert suspension_entered.is_set()
-    assert not suspension.is_alive()
+    release_first.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert second_entered.is_set()
+
+
+def test_read_falls_back_to_legacy_json_state_recorded_before_the_sqlite_migration(tmp_path: Path) -> None:
+    """ADR 0048 4f moved ``AccountSafetyState``'s durable storage into the
+    fenced SQLite claim store. State recorded before that move, in the
+    legacy ``account_safety.json`` projection, must still be seen -- a
+    ``SUSPENDED`` account must not silently become admitting-``CLEAN``
+    just because its record predates the migration, and the
+    broker-observed watermark ``mark_broker_clearance_required`` guards
+    against moving backwards must not reset to zero.
+    """
+
+    custody = RetiredOwnerCustody(
+        account_id=ACCOUNT_ID,
+        strategy_instance_id="retired-legacy",
+        intent_id="intent-legacy-1",
+        order_ref="learn-ai/retired-legacy/v1:intent-legacy-1",
+    )
+    legacy_state = AccountSafetyState(
+        account_id=ACCOUNT_ID,
+        verdict=AccountSafetyVerdict.SUSPENDED,
+        suspension=AccountSafetySuspension(
+            suspension_id="account-suspension:legacy",
+            custody=(custody,),
+            detected_at_ms=NOW_MS,
+        ),
+        last_broker_observed_at_ms=NOW_MS,
+        updated_at_ms=NOW_MS,
+    )
+    legacy_path = account_safety_path(tmp_path, ACCOUNT_ID)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(legacy_state.model_dump_json(), encoding="utf-8")
+
+    # No admission claim and no SQLite write has ever happened for this
+    # account -- exactly the state of every account at the moment this
+    # migration ships.
+    authority = AccountSafetyAuthority(artifacts_root=tmp_path, account_id=ACCOUNT_ID, now_ms=lambda: NOW_MS + 1)
+
+    read_state = authority.read()
+    assert read_state.verdict is AccountSafetyVerdict.SUSPENDED
+    assert read_state.last_broker_observed_at_ms == NOW_MS
+
+    with pytest.raises(AccountSafetyEntryBlockedError):
+        authority.require_entry_admission()
+
+    assert account_safety_state_exists(tmp_path, ACCOUNT_ID) is True
+
+
+def test_account_safety_state_exists_true_for_legacy_json_only(tmp_path: Path) -> None:
+    """``account_safety_state_exists`` is an operator-visible honesty signal
+    -- it distinguishes "never observed" from "an explicit CLEAN was
+    recorded" (``ACCOUNT_SAFETY_NOT_AVAILABLE`` on the account-truth
+    snapshot). An account whose only recorded state is still the
+    pre-migration JSON file has recorded state, not none.
+    """
+
+    legacy_state = AccountSafetyState(account_id=ACCOUNT_ID, updated_at_ms=NOW_MS)
+    legacy_path = account_safety_path(tmp_path, ACCOUNT_ID)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(legacy_state.model_dump_json(), encoding="utf-8")
+
+    assert account_safety_state_exists(tmp_path, ACCOUNT_ID) is True
 
 
 
