@@ -61,16 +61,18 @@
       (moveRequested)="requestMove($event)"
     />
 
-    @if (accountUnavailable()) {
-      <div class="posture-refresh-warning" role="status">
-        Account refresh failed. Showing the last broker observation.
-      </div>
-    }
-    @if (clerkUnavailable()) {
-      <div class="posture-refresh-warning" role="status">
-        Clerk refresh failed. Showing the last Clerk observation.
-      </div>
-    }
+    <div class="refresh-pills" aria-live="polite">
+      @if (accountPillVisible()) {
+        <div class="refresh-pill" role="status">
+          Account refresh failed. Showing the last broker observation.
+        </div>
+      }
+      @if (clerkPillVisible()) {
+        <div class="refresh-pill" role="status">
+          Clerk refresh failed. Showing the last Clerk observation.
+        </div>
+      }
+    </div>
 
     <!-- Custody alerts are never behind the disclosure: they gate order-producing activity. -->
     @if (freezeActive()) {

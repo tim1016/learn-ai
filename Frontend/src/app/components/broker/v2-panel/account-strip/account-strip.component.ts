@@ -1,4 +1,16 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  InjectionToken,
+  computed,
+  effect,
+  inject,
+  input,
+  signal,
+  type Signal,
+  type WritableSignal,
+} from '@angular/core';
 import { Router } from '@angular/router';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
@@ -12,6 +24,11 @@ import type {
   AccountStatusView,
   ChannelPosture,
 } from './account-posture-detail.component';
+
+/** How long a refresh-failure pill stays visible before auto-dismissing. */
+export const REFRESH_PILL_DISMISS_MS = new InjectionToken<number>('REFRESH_PILL_DISMISS_MS', {
+  factory: () => 6000,
+});
 
 
 /**
@@ -48,6 +65,46 @@ export class AccountStripComponent {
 
   protected readonly fmtCurrency = fmtCurrency;
   protected readonly expanded = signal(false);
+
+  private readonly pillDismissMs = inject(REFRESH_PILL_DISMISS_MS);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly pillTimers = new Map<'account' | 'clerk', ReturnType<typeof setTimeout>>();
+
+  /**
+   * Refresh failures surface as transient pills, not standing banners: the
+   * strip keeps rendering the last-good observation (whose timestamp already
+   * conveys staleness), so a failed poll is an event to note, not a state to
+   * dwell on. Each false→true edge of an unavailable input shows its pill
+   * once; a persistently failing poll does not re-nag.
+   */
+  protected readonly accountPillVisible = signal(false);
+  protected readonly clerkPillVisible = signal(false);
+
+  constructor() {
+    this.showPillOnRisingEdge(this.accountUnavailable, 'account', this.accountPillVisible);
+    this.showPillOnRisingEdge(this.clerkUnavailable, 'clerk', this.clerkPillVisible);
+    this.destroyRef.onDestroy(() => this.pillTimers.forEach((timer) => clearTimeout(timer)));
+  }
+
+  private showPillOnRisingEdge(
+    source: Signal<boolean>,
+    key: 'account' | 'clerk',
+    visible: WritableSignal<boolean>,
+  ): void {
+    let previous = false;
+    effect(() => {
+      const unavailable = source();
+      if (unavailable && !previous) {
+        visible.set(true);
+        clearTimeout(this.pillTimers.get(key));
+        this.pillTimers.set(
+          key,
+          setTimeout(() => visible.set(false), this.pillDismissMs),
+        );
+      }
+      previous = unavailable;
+    });
+  }
 
   protected readonly channels = computed<readonly ChannelPosture[]>(() =>
     (this.clerkStatus()?.channel_healths ?? []).map((channel) => ({

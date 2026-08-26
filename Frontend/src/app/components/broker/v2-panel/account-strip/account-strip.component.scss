@@ -1,4 +1,5 @@
 .account-posture {
+  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -75,8 +76,7 @@
 // ── Alerts and non-happy states ────────────────────────────────────────────
 
 .custody-alert,
-.account-posture__unavailable,
-.posture-refresh-warning {
+.account-posture__unavailable {
   display: flex;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
@@ -92,10 +92,37 @@
   }
 }
 
-.posture-refresh-warning {
-  border-color: var(--border);
+// Transient refresh-failure pills: float over content below the strip's right
+// edge (no layout shift), auto-dismissed by the component.
+.refresh-pills {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  pointer-events: none;
+}
+
+.refresh-pill {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
   background: var(--bg-elevated);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  animation: refresh-pill-in 160ms ease-out;
+}
+
+@keyframes refresh-pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
 }
 
 .account-posture__unavailable {
@@ -126,6 +153,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .skeleton-line { animation: none; }
+  .refresh-pill { animation: none; }
 }
 
 @media (max-width: 700px) {

@@ -21,11 +21,27 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ControlMetaSnapshot,
     DecisionReceiptResource,
 )
+from app.engine.live.bot_lifecycle_state import (
+    BotDutyOutcome,
+    BotLifecyclePhase,
+    BotLifecycleStateRecord,
+    stable_bot_lifecycle_state_path,
+)
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.lean_sidecar.trading_calendar import SessionWindow
-from app.services.broker_v2_panel import panel_data_source, sqlite_panel_source
+from app.services.bot_binding_repository import (
+    RUN_OUTCOMES_DIRECTORY,
+    BotRunOutcomeRecord,
+)
+from app.services.broker_v2_panel import (
+    panel_data_source,
+    sqlite_panel_source,
+    sqlite_roster_status,
+)
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     SqliteCatalogRevisionMismatch,
+    status_label_for,
 )
 
 
@@ -78,6 +94,22 @@ class _Repository:
             )
         return None
 
+    def latest_run(self, strategy_instance_id: str):
+        """The newest run, active or stopped — not just the active one.
+
+        Kept distinct from ``active_run`` on purpose: a double that answered
+        both with the same row would erase the very ACTIVE/STOPPED
+        distinction the terminal-receipt lookup keys on.
+        """
+        if strategy_instance_id == "active-spy":
+            return SimpleNamespace(
+                lifecycle_run_id="run-active",
+                state="ACTIVE",
+                started_at_ms=1_720_000_000_000,
+                stopped_at_ms=None,
+            )
+        return None
+
     def bot_config(self, strategy_instance_id: str) -> BotConfigResource | None:
         strategy_key = {
             "active-spy": "opening_range_breakout",
@@ -103,6 +135,217 @@ class _Repository:
             config_hash="a" * 64,
             created_at_ms=1_700_000_000_000,
         )
+
+
+def test_sqlite_roster_projects_the_durable_duty_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fleet-stress T6 (2026-08-26): after a SIGKILL the whole roster rendered
+    an innocent "Off duty" because this path hardcoded ``duty_outcome=None``
+    while the lifecycle repo durably held ``EXITED_UNVERIFIED``.
+    """
+
+    class _StoppedRepository(_Repository):
+        def active_run(self, strategy_instance_id: str):
+            return None
+
+    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+    monkeypatch.setattr(sqlite_roster_status, "account_truth_artifacts_root", lambda: tmp_path)
+
+    record_path = stable_bot_lifecycle_state_path(tmp_path, "active-spy")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        BotLifecycleStateRecord(
+            phase=BotLifecyclePhase.OFF_DUTY,
+            active_run_id=None,
+            last_transition_at_ms=1_720_000_100_000,
+            duty_outcome=BotDutyOutcome(
+                kind="EXITED_UNVERIFIED",
+                reason_code="INTERRUPTED_BY_RESTART",
+                recorded_at_ms=1_720_000_100_000,
+                run_id="run-crashed",
+            ),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+
+    assert statuses is not None
+    crashed = statuses[0]
+    assert crashed.strategy_instance_id == "active-spy"
+    assert crashed.duty_outcome is not None
+    assert crashed.duty_outcome.kind == "EXITED_UNVERIFIED"
+    assert crashed.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
+    # The roster label and attention flag must reflect the unclean exit (S3b).
+    assert status_label_for(crashed) == "Exited unverified"
+    # A bot with no lifecycle record (legacy) still projects None, no error.
+    assert statuses[1].duty_outcome is None
+
+
+def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A proven crash must surface even when its projection never landed.
+
+    ``BotRunEvidenceService.record_terminal`` writes the create-once receipt
+    (``run_outcomes/{run_id}.json``) *before* the lifecycle projection. A
+    projection write that fails after the receipt commits leaves durable
+    proof of a crash with nothing to render it — the roster would show an
+    innocent "Off duty", which is the T6 failure class in a second guise.
+    """
+
+    class _StoppedRepository(_Repository):
+        def active_run(self, strategy_instance_id: str):
+            return None
+
+        def latest_run(self, strategy_instance_id: str):
+            if strategy_instance_id != "active-spy":
+                return None
+            return SimpleNamespace(
+                lifecycle_run_id="run-crashed",
+                state="STOPPED",
+                started_at_ms=1_720_000_000_000,
+                stopped_at_ms=1_720_000_100_000,
+            )
+
+    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+    monkeypatch.setattr(sqlite_roster_status, "account_truth_artifacts_root", lambda: tmp_path)
+
+    # The lifecycle projection exists but carries no duty outcome: exactly
+    # the state a receipt-then-projection write leaves behind when the
+    # second write dies.
+    record_path = stable_bot_lifecycle_state_path(tmp_path, "active-spy")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        BotLifecycleStateRecord(
+            phase=BotLifecyclePhase.OFF_DUTY,
+            active_run_id=None,
+            last_transition_at_ms=1_720_000_100_000,
+            duty_outcome=None,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    outcomes_dir = (
+        strategy_instance_artifact_dir(tmp_path, "live_state", "active-spy")
+        / RUN_OUTCOMES_DIRECTORY
+    )
+    outcomes_dir.mkdir(parents=True, exist_ok=True)
+    (outcomes_dir / "run-crashed.json").write_text(
+        BotRunOutcomeRecord(
+            strategy_instance_id="active-spy",
+            run_id="run-crashed",
+            kind="CRASHED",
+            reason_code="STRATEGY_TASK_FAILED",
+            recorded_at_ms=1_720_000_100_000,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+
+    assert statuses is not None
+    crashed = statuses[0]
+    assert crashed.duty_outcome is not None
+    assert crashed.duty_outcome.kind == "CRASHED"
+    assert crashed.duty_outcome.reason_code == "STRATEGY_TASK_FAILED"
+    assert crashed.duty_outcome.run_id == "run-crashed"
+    assert status_label_for(crashed) == "Crashed"
+    # The legacy row has no SQLite run history, so no receipt is looked for.
+    assert statuses[1].duty_outcome is None
+
+
+def test_sqlite_roster_prefers_the_projection_where_no_receipt_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The boot sweep's terminal outcome has no receipt — and must still show.
+
+    ``bot_boot_recovery`` records ``EXITED_UNVERIFIED`` /
+    ``INTERRUPTED_BY_RESTART`` through the lifecycle projector alone and
+    writes no ``run_outcomes`` receipt at all, and a provisional stop is
+    projected with ``persist_receipt=False``. A roster that treated the
+    receipt as the only source of truth would blank exactly the 54 rows the
+    T6 fix restored, so the projection answers whenever it has an answer.
+    """
+
+    class _StoppedRepository(_Repository):
+        def active_run(self, strategy_instance_id: str):
+            return None
+
+        def latest_run(self, strategy_instance_id: str):
+            if strategy_instance_id != "active-spy":
+                return None
+            return SimpleNamespace(
+                lifecycle_run_id="run-interrupted",
+                state="STOPPED",
+                started_at_ms=1_720_000_000_000,
+                stopped_at_ms=1_720_000_100_000,
+            )
+
+    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+    monkeypatch.setattr(sqlite_roster_status, "account_truth_artifacts_root", lambda: tmp_path)
+
+    record_path = stable_bot_lifecycle_state_path(tmp_path, "active-spy")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        BotLifecycleStateRecord(
+            phase=BotLifecyclePhase.OFF_DUTY,
+            active_run_id=None,
+            last_transition_at_ms=1_720_000_100_000,
+            duty_outcome=BotDutyOutcome(
+                kind="EXITED_UNVERIFIED",
+                reason_code="INTERRUPTED_BY_RESTART",
+                recorded_at_ms=1_720_000_100_000,
+                run_id="run-interrupted",
+            ),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    # Deliberately no run_outcomes/ receipt on disk.
+
+    statuses = sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
+
+    assert statuses is not None
+    assert statuses[0].duty_outcome is not None
+    assert statuses[0].duty_outcome.kind == "EXITED_UNVERIFIED"
+    assert status_label_for(statuses[0]) == "Exited unverified"
+
+
+def test_sqlite_roster_refuses_an_unreadable_terminal_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A corrupt receipt refuses loudly, like every other unreadable authority."""
+
+    class _StoppedRepository(_Repository):
+        def active_run(self, strategy_instance_id: str):
+            return None
+
+        def latest_run(self, strategy_instance_id: str):
+            if strategy_instance_id != "active-spy":
+                return None
+            return SimpleNamespace(
+                lifecycle_run_id="run-crashed",
+                state="STOPPED",
+                started_at_ms=1_720_000_000_000,
+                stopped_at_ms=1_720_000_100_000,
+            )
+
+    facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+    monkeypatch.setattr(sqlite_roster_status, "account_truth_artifacts_root", lambda: tmp_path)
+
+    outcomes_dir = (
+        strategy_instance_artifact_dir(tmp_path, "live_state", "active-spy")
+        / RUN_OUTCOMES_DIRECTORY
+    )
+    outcomes_dir.mkdir(parents=True, exist_ok=True)
+    (outcomes_dir / "run-crashed.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(SqliteCatalogProjectionUnavailable):
+        sqlite_panel_source.read_sqlite_roster_statuses("alpaca")
 
 
 def test_sqlite_roster_uses_only_activated_repository(monkeypatch: pytest.MonkeyPatch) -> None:

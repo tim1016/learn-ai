@@ -1,11 +1,11 @@
-import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import { provideRouter, Router } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import type { AccountOperatorPosture } from '../../../../api/operator-blocker.types';
 import { operatorBlockerFixture } from '../../../../testing/operator-blocker-fixtures';
-import { AccountStripComponent } from './account-strip.component';
+import { AccountStripComponent, REFRESH_PILL_DISMISS_MS } from './account-strip.component';
 
 const account: BrokerAccountSnapshot = {
   broker: 'alpaca',
@@ -225,6 +225,52 @@ describe('AccountStripComponent', () => {
     expect(screen.getByRole('status').textContent).toContain(
       'Showing the last broker observation',
     );
+  });
+
+  it('auto-dismisses the refresh pill and re-shows it on a new failure edge', async () => {
+    const { rerender, fixture } = await render(AccountStripComponent, {
+      componentInputs: { account, clerkStatus, accountUnavailable: true },
+      // Longer than findBy*'s 50ms polling interval, short enough to keep the test fast.
+      providers: [{ provide: REFRESH_PILL_DISMISS_MS, useValue: 150 }],
+    });
+
+    expect(screen.getByText(/Showing the last broker observation/)).toBeTruthy();
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Showing the last broker observation/)).toBeNull(),
+    );
+
+    // A persistently-failing poll is one edge — no pill while it stays true.
+    await rerender({
+      componentInputs: { account, clerkStatus, accountUnavailable: true },
+    });
+    expect(screen.queryByText(/Showing the last broker observation/)).toBeNull();
+
+    // Recovery then a fresh failure is a new edge — the pill returns. The
+    // explicit flush keeps the false state from coalescing away (real polls
+    // are seconds apart; back-to-back rerenders share one effect flush).
+    await rerender({
+      componentInputs: { account, clerkStatus, accountUnavailable: false },
+    });
+    fixture.detectChanges();
+    await rerender({
+      componentInputs: { account, clerkStatus, accountUnavailable: true },
+    });
+    expect(await screen.findByText(/Showing the last broker observation/)).toBeTruthy();
+  });
+
+  it('shows independent pills when both refreshes fail', async () => {
+    await render(AccountStripComponent, {
+      componentInputs: {
+        account,
+        clerkStatus,
+        accountUnavailable: true,
+        clerkUnavailable: true,
+      },
+    });
+
+    expect(screen.getByText(/Showing the last broker observation/)).toBeTruthy();
+    expect(screen.getByText(/Showing the last Clerk observation/)).toBeTruthy();
   });
 
   it('renders account freeze ahead of an active hold', async () => {
