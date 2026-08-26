@@ -16,6 +16,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus, HoldState
+from app.broker.contract.models import BrokerAccountSnapshot
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
@@ -48,19 +49,46 @@ _HEALTHY_POSTURE = AccountOperatorPosture(
 )
 
 
-class _FakeAccount:
-    account_id = ACCT
-    account_mode = "paper"
-    account_status = "ACTIVE"
-    trading_blocked = False
-    account_blocked = False
+def account_snapshot(**overrides: object) -> BrokerAccountSnapshot:
+    """The real contract model, never a duck-typed stand-in.
+
+    A stub carrying only the handful of attributes one consumer happens to
+    touch silently makes every other consumer of the port unreachable — the
+    deploy view 500'd on exactly that, so a read gated for its call budget
+    was never actually exercised. Building the contract model means adding a
+    field to the contract cannot leave a fake quietly behind.
+    """
+    return BrokerAccountSnapshot(
+        broker="alpaca",
+        account_id=ACCT,
+        account_mode="paper",
+        account_status="ACTIVE",
+        currency="USD",
+        cash=100_000.0,
+        equity=100_000.0,
+        buying_power=200_000.0,
+        portfolio_value=100_000.0,
+        long_market_value=0.0,
+        short_market_value=0.0,
+        pattern_day_trader=False,
+        trading_blocked=False,
+        account_blocked=False,
+        created_at_ms=_T0,
+        observed_at_ms=_T0,
+    ).model_copy(update=overrides)
 
 
 class _FakeReadPort:
     broker_id = "alpaca"
 
-    async def get_account(self) -> _FakeAccount:
-        return _FakeAccount()
+    def __init__(self) -> None:
+        # Per-instance and re-pointable so a posture test can swap in a
+        # different snapshot; the snapshot itself is frozen, so a test
+        # substitutes `account_snapshot(...)` rather than mutating a field.
+        self.account = account_snapshot()
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        return self.account
 
     def capabilities(self) -> None:  # pragma: no cover
         raise NotImplementedError
