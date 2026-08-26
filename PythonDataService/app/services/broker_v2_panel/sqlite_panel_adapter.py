@@ -34,8 +34,10 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.operator_blocker import (
     SURFACE_ANCHOR,
+    ConfirmInFormAction,
     OperatorBlocker,
     OperatorConfirmationCopy,
+    OperatorMove,
 )
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
@@ -324,17 +326,40 @@ def _panel_action(capability: RecoveryCapability, revision: int) -> PanelAction:
     )
 
 
+# The bot cockpit's own reconcile control, named the way the account desk
+# names its equivalents. The shared blocker list renders any
+# ``confirm_in_form`` move; the host decides what the anchor opens.
+BOT_COCKPIT_RECONCILE_ANCHOR = "bot-reconciliation-action"
+
+_RECONCILE_MOVE = OperatorMove(
+    label="Reconcile this account now",
+    action=ConfirmInFormAction(
+        kind="confirm_in_form", anchor=BOT_COCKPIT_RECONCILE_ANCHOR
+    ),
+)
+
+
 def _capability_blocker(capability: RecoveryCapability) -> OperatorBlocker:
+    """Author one unavailable recovery capability as operator guidance.
+
+    Disposition follows what the operator can actually do about it. Stale
+    evidence is curable *here* -- reconciling refreshes it -- so it carries
+    the reconcile move. Everything else genuinely is a wait, and `wait`
+    correctly renders no move; authoring stale evidence as `wait` was
+    violating that contract rather than expressing it (S17).
+    """
+    curable_here = capability.freshness == "stale"
     return OperatorBlocker.for_host(
         condition_id=capability.unavailable_reason_code or "RECOVERY_ACTION_UNAVAILABLE",
         scope="bot" if capability.scope == "CUSTODY_SUBJECT" else "account",
         host="bot_cockpit",
         anchor=SURFACE_ANCHOR,
         audience="both",
-        disposition="wait",
+        disposition="fix_here" if curable_here else "wait",
         headline=capability.unavailable_reason or "This recovery action is unavailable.",
         detail=capability.next_step,
         applies_to="run",
+        primary_move=_RECONCILE_MOVE if curable_here else None,
         evidence={
             "freshness": capability.freshness,
             "evidence_count": len(capability.evidence),
