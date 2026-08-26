@@ -21,10 +21,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.hold_debounce import HoldSample
 from app.broker.alpaca.clerk.models import ChannelHealth
 from app.marketdata.feed import FeedHealth
 
 ChannelHealthProvider = Callable[[], ChannelHealth]
+# Same wire value as the legacy Clerk's STREAM_HEALTH_HOLD_CODE (S4, #1262)
+# so evidence surfaces that key off the reason code read identically across
+# both authorities. Lives here because both the entry-time refusal that
+# quotes it and the sync that owns the hold already depend on this module.
+STREAM_HEALTH_REASON_CODE = "STREAM_HEALTH_HOLD"
+# Cadence of the independent stream-health hold sync (#1777 WP4).
+HOLD_SYNC_INTERVAL_S = 15.0
 SymbolChannelHealthProvider = Callable[[str], ChannelHealth]
 
 
@@ -214,3 +222,75 @@ def build_default_stream_health_gate() -> StreamHealthGate:
         execution=_execution,
         market_data_for_symbol=_market_data_for_symbol,
     )
+
+
+def account_scope_broken(
+    channels: tuple[ChannelHealth, ...],
+) -> tuple[ChannelHealth, ...]:
+    """Channels whose connection is down, in the account's own scope.
+
+    ``healthy`` is the wrong fact for an account-scoped hold. The shared
+    feed's unscoped ``health(None)`` folds *every* subscribed symbol
+    together and reports stale while any one of them is still warming, so
+    keying the hold on ``healthy`` freezes entries for every bot on one
+    symbol's warmup -- finding S6, at account scope. ``connected`` is the
+    half of the fact that is genuinely account-wide.
+
+    Per-symbol usability is not lost: the ENTER-time refusal still checks
+    it, symbol-scoped, and still refuses immediately.
+    """
+    return tuple(health for health in channels if not health.connected)
+
+
+def sample_channels(
+    channels: tuple[ChannelHealth, ...] | None,
+    *,
+    now_ms: int,
+) -> HoldSample:
+    """Reduce one snapshot of both channels into a debounce sample.
+
+    Takes the already-taken snapshot rather than the gate so the caller
+    decides and records evidence from the *same* observation -- deciding
+    on one snapshot and journalling another is a race, however small.
+
+    ``observed_at_ms`` is the sync's own clock, because that is honestly
+    when this observation happened: the providers are pull-based closures
+    that recompute on every call, and an absent provider reports unhealthy
+    rather than returning a cached reading. There is no such thing here as
+    a sample that arrived stale.
+
+    A per-channel freshness window used to gate this, on the theory that a
+    provider could stop reporting and leave a stale reading clearing the
+    gate. It could not, and the window was actively harmful: the only
+    channels whose ``observed_at_ms`` ever freezes are the already-broken
+    ones (a disconnected channel reports ``connection_changed_at_ms`` --
+    when it *broke*). A healthy reading always carries a current
+    timestamp, so the window could never prevent a false release, only a
+    true raise. An outage older than the window stopped being actionable.
+    """
+    if not channels:
+        return HoldSample(verdict="unknown")
+
+    return HoldSample(
+        verdict="unhealthy" if account_scope_broken(channels) else "healthy",
+        observed_at_ms=now_ms,
+    )
+
+
+def channel_evidence_refs(channels: tuple[ChannelHealth, ...]) -> list[str]:
+    """Durable evidence identity for the stream-health hold.
+
+    Names the same channels the raise decision turned on
+    (:func:`account_scope_broken`), so an operator is never told their
+    account is frozen by a warming symbol that did not freeze it.
+
+    Deliberately excludes ``observed_at_ms``. The ledger appends only when
+    this identity changes, so a volatile timestamp in here meant every
+    sample of an unchanged outage looked like new evidence and appended a
+    refresh -- the revision churn in #1777 WP4 decision 4. Operator-facing
+    freshness is projected from the provider's live observation time at
+    read time, so nothing is lost by leaving it out of the record.
+    """
+    return [
+        f"{health.stream}: {health.reason}" for health in account_scope_broken(channels)
+    ]
