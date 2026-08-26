@@ -662,31 +662,34 @@ async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("channels", "evidence_key", "expected_channel"),
+    ("present_streams", "evidence_key", "expected_channel"),
     [
-        (
-            [ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=now_ms_utc())],
-            "missing_channels",
-            "execution",
-        ),
-        (
-            [
-                ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=0),
-                ChannelHealth(stream="execution", healthy=True, connected=True, observed_at_ms=now_ms_utc()),
-            ],
-            "stale_channels",
-            "market_data",
-        ),
+        (("market_data",), "missing_channels", "execution"),
+        (("market_data", "execution"), "stale_channels", "market_data"),
     ],
 )
 async def test_deploy_requires_both_fresh_clerk_channels(
     deploy_app,
     monkeypatch,
-    channels: list[ChannelHealth],
+    present_streams: tuple[str, ...],
     evidence_key: str,
     expected_channel: str,
 ) -> None:
     fast_app, registry = deploy_app
+    # Built per-test, not in the parametrize list: those literals are
+    # evaluated once at module import, so a freshness window shorter than
+    # the suite's own runtime (it is now 45 s, derived from the hold-sync
+    # cadence -- #1777 WP4) would age them into staleness mid-run and make
+    # this test order-dependent.
+    channels = [
+        ChannelHealth(
+            stream=stream,
+            healthy=True,
+            connected=True,
+            observed_at_ms=0 if stream == expected_channel else now_ms_utc(),
+        )
+        for stream in present_streams
+    ]
 
     async def incomplete_channel_status(*, symbol: str | None = None) -> ClerkStatus:
         return ClerkStatus(

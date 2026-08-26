@@ -26,6 +26,11 @@ from app.broker.alpaca.clerk.models import ChannelHealth
 from app.marketdata.feed import FeedHealth
 
 ChannelHealthProvider = Callable[[], ChannelHealth]
+# Same wire value as the legacy Clerk's STREAM_HEALTH_HOLD_CODE (S4, #1262)
+# so evidence surfaces that key off the reason code read identically across
+# both authorities. Lives here because both the entry-time refusal that
+# quotes it and the sync that owns the hold already depend on this module.
+STREAM_HEALTH_REASON_CODE = "STREAM_HEALTH_HOLD"
 # Cadence of the independent stream-health hold sync (#1777 WP4), and the
 # window over which one of its observations still counts as current.
 #

@@ -41,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.stream_health import (
     FRESHNESS_WINDOW_TICKS,
     HOLD_SYNC_INTERVAL_S,
+    STREAM_HEALTH_REASON_CODE,
     StreamHealthGate,
     channel_evidence_refs,
     sample_channels,
@@ -52,7 +53,6 @@ logger = logging.getLogger(__name__)
 type Sleep = Callable[[float], Awaitable[None]]
 type Clock = Callable[[], int]
 
-STREAM_HEALTH_REASON_CODE = "STREAM_HEALTH_HOLD"
 
 
 class StreamHealthHoldSync:
@@ -80,6 +80,9 @@ class StreamHealthHoldSync:
         self._sleep = sleep
         self._max_ticks = max_ticks
         self._state = HoldDebounceState()
+        # None = unknown (fresh process, a hold may already stand in the
+        # journal). Anything but False must still reach the ledger.
+        self._hold_stands: bool | None = None
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -105,8 +108,10 @@ class StreamHealthHoldSync:
 
         if step.action == "raise" and channels is not None:
             self._raise(channel_evidence_refs(channels))
-        elif step.action == "release":
+            self._hold_stands = True
+        elif step.action == "release" and self._hold_stands is not False:
             self._release()
+            self._hold_stands = False
         return step.action
 
     def _raise(self, evidence_refs: list[str]) -> None:

@@ -93,15 +93,12 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenResult,
     execute_safe_flatten_plan,
 )
-
-# The hold is owned by `stream_health_sync`; this module's rejected
-# receipts carry its reason code, and importers (run_replay_proof, tests)
-# have long resolved it from here, so it stays re-exported.
-from app.broker.alpaca.clerk.sqlite.stream_health_sync import (
-    STREAM_HEALTH_REASON_CODE,
-)
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
-from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
+from app.broker.alpaca.clerk.stream_health import (
+    STREAM_HEALTH_REASON_CODE,
+    StreamHealthGate,
+    stream_health_refusal,
+)
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -129,9 +126,6 @@ _WORKING_ORDER_STATES = frozenset(
     }
 )
 _ENCODED_DECISION_PREFIX = "encoded-"
-# Same wire value as the legacy Clerk's STREAM_HEALTH_HOLD_CODE (S4, #1262)
-# so evidence surfaces that key off the reason code read identically across
-# both authorities.
 logger = logging.getLogger(__name__)
 
 

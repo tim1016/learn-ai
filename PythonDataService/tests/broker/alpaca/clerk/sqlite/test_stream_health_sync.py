@@ -245,3 +245,103 @@ def test_the_freshness_window_derives_from_the_sync_cadence(tmp_path: Path) -> N
 
     assert sync.freshness_window_ms == int(INTERVAL_S * 1000) * 3
     repo.close()
+
+
+def _count_resolves(repo: ClerkSqliteRepository) -> list[int]:
+    """Spy on the ledger call itself, not just its appends.
+
+    ``resolve_account_hold_if_active`` is a no-op when no hold stands, so
+    transition counts cannot tell us whether we took the clerk's write lock
+    to discover that. On a fleet whose original failure was lock
+    contention, "did we touch the ledger at all" is the question worth
+    asserting.
+    """
+    calls: list[int] = []
+    original = repo.resolve_account_hold_if_active
+
+    def counted(**kwargs):
+        calls.append(1)
+        return original(**kwargs)
+
+    repo.resolve_account_hold_if_active = counted  # type: ignore[method-assign]
+    return calls
+
+
+def test_a_steady_healthy_account_never_touches_the_ledger(tmp_path: Path) -> None:
+    repo, providers = _repo(tmp_path), _Providers()
+    sync = _sync(repo, providers)
+
+    sync.tick()  # first sample proves the release; after that, nothing to do
+    calls = _count_resolves(repo)
+    for _ in range(10):
+        providers.advance()
+        sync.tick()
+
+    assert calls == [], "a healthy account took the write lock on every tick"
+    repo.close()
+
+
+def test_the_first_sample_of_a_fresh_process_still_proves_the_release(
+    tmp_path: Path,
+) -> None:
+    """The counterpart to the test above: a restart cannot assume clear.
+
+    A hold may already stand in the journal, so an unknown belief must
+    still reach the ledger even when the very first sample is healthy.
+    """
+    repo, providers = _repo(tmp_path), _Providers()
+    calls = _count_resolves(repo)
+
+    _sync(repo, providers).tick()
+
+    assert calls == [1]
+    repo.close()
+
+
+async def test_the_loop_survives_a_failing_observation(tmp_path: Path) -> None:
+    """An unattended dead sync is how a hold becomes permanent."""
+    repo = _repo(tmp_path)
+    ticks = {"count": 0}
+
+    def exploding() -> ChannelHealth:
+        ticks["count"] += 1
+        raise RuntimeError("provider blew up")
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    sync = StreamHealthHoldSync(
+        repo=repo,
+        gate=StreamHealthGate(market_data=exploding, execution=exploding),
+        interval_s=INTERVAL_S,
+        sleep=no_wait,
+        max_ticks=3,
+    )
+
+    await sync.run()
+
+    assert ticks["count"] == 3, "the loop stopped at the first failure"
+    repo.close()
+
+
+async def test_the_loop_waits_its_own_cadence_between_ticks(tmp_path: Path) -> None:
+    """Independence from the reconcile pass is the point: this loop's wait
+    is its own fixed interval, never the reconciler's backoff."""
+    repo, providers = _repo(tmp_path), _Providers()
+    waits: list[float] = []
+
+    async def record(seconds: float) -> None:
+        waits.append(seconds)
+
+    sync = StreamHealthHoldSync(
+        repo=repo,
+        gate=providers.gate(),
+        interval_s=INTERVAL_S,
+        sleep=record,
+        max_ticks=3,
+    )
+
+    await sync.run()
+
+    assert waits == [INTERVAL_S, INTERVAL_S, INTERVAL_S]
+    repo.close()
