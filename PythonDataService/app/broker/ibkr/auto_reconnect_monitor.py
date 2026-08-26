@@ -613,9 +613,8 @@ class AutoReconnectMonitor:
 
     def _advance_recovery(self, signal: RecoverySignal) -> None:
         previous = self._recovery_state
-        transition = transition_recovery_state(previous, signal)
-        self._recovery_state = transition.state
-        if transition.state != previous:
+        self._recovery_state = transition_recovery_state(previous, signal)
+        if self._recovery_state != previous:
             self._last_transition_ms = now_ms_utc()
 
     def _mark_hard_down(self, attempts: int) -> None:

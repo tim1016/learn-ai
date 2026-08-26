@@ -7,8 +7,7 @@ receipt wiring share the same transition vocabulary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
 RecoveryState = Literal[
     "HEALTHY",
@@ -36,49 +35,41 @@ RecoverySignal = Literal[
 ]
 
 
-@dataclass(frozen=True)
-class RecoveryTransition:
-    state: RecoveryState
-    should_reconnect: bool = False
-    should_run_recovery: bool = False
-    terminal: bool = False
+# The transition table itself. Every signal names its next state; a signal
+# not listed leaves the state untouched. Nothing consumes side-effect hints
+# -- the monitor decides its own actions from the state it lands in -- so
+# this is a mapping, not a struct.
+#
+# Deliberately permissive for restore/success signals from any state: the
+# monitor observes asynchronous IBKR callbacks and operator actions, so a
+# clean restore should always collapse back to HEALTHY.
+_NEXT_STATE: Final[dict[RecoverySignal, RecoveryState]] = {
+    "link_lost": "LINK_INTERRUPTED",
+    "restored_data_maintained": "HEALTHY",
+    "restored_data_lost": "RESTORING",
+    "socket_down": "SOCKET_DOWN",
+    "wait_expired": "SOCKET_DOWN",
+    "probe_failed": "SOCKET_DOWN",
+    "reconnect_started": "RECONNECTING",
+    "reconnect_succeeded": "RESTORING",
+    "reconnect_failed": "SOCKET_DOWN",
+    # Not terminal: HARD_DOWN is the breaker's OPEN state (ADR 0046). The
+    # fast ladder is spent; the monitor keeps probing on a slow cadence.
+    "reconnect_exhausted": "HARD_DOWN",
+    # A failed slow probe re-asserts HARD_DOWN. Falling back to SOCKET_DOWN
+    # would restart the fast ladder on the very next tick.
+    "open_probe_failed": "HARD_DOWN",
+    "recovery_succeeded": "HEALTHY",
+    "recovery_failed": "SOCKET_DOWN",
+}
 
 
 def transition_recovery_state(
     current: RecoveryState,
     signal: RecoverySignal,
-) -> RecoveryTransition:
-    """Return the next recovery state and side-effect hints.
-
-    The function is deliberately permissive for restore/success signals from
-    any state: the monitor observes asynchronous IBKR callbacks and operator
-    actions, so a clean restore should always collapse back to HEALTHY.
-    """
-    if signal == "link_lost":
-        return RecoveryTransition(state="LINK_INTERRUPTED")
-    if signal == "restored_data_maintained":
-        return RecoveryTransition(state="HEALTHY")
-    if signal == "restored_data_lost":
-        return RecoveryTransition(state="RESTORING", should_run_recovery=True)
-    if signal in {"socket_down", "wait_expired", "probe_failed"}:
-        return RecoveryTransition(state="SOCKET_DOWN", should_reconnect=True)
-    if signal == "reconnect_started":
-        return RecoveryTransition(state="RECONNECTING")
-    if signal == "reconnect_succeeded":
-        return RecoveryTransition(state="RESTORING", should_run_recovery=True)
-    if signal == "reconnect_failed":
-        return RecoveryTransition(state="SOCKET_DOWN", should_reconnect=True)
-    if signal == "reconnect_exhausted":
-        # Not terminal: HARD_DOWN is the breaker's OPEN state. The fast
-        # ladder is spent, but the monitor keeps probing on a slow cadence.
-        return RecoveryTransition(state="HARD_DOWN")
-    if signal == "open_probe_failed":
-        return RecoveryTransition(state="HARD_DOWN")
-    if signal == "recovery_succeeded":
-        return RecoveryTransition(state="HEALTHY")
-    if signal == "recovery_failed":
-        return RecoveryTransition(state="SOCKET_DOWN", should_reconnect=True)
-    return RecoveryTransition(state=current)
+) -> RecoveryState:
+    """Return the recovery state ``signal`` leads to from ``current``."""
+    return _NEXT_STATE.get(signal, current)
 
 
 def recovery_state_from_connection_state(
@@ -103,7 +94,6 @@ def recovery_state_from_connection_state(
 __all__ = [
     "RecoverySignal",
     "RecoveryState",
-    "RecoveryTransition",
     "recovery_state_from_connection_state",
     "transition_recovery_state",
 ]

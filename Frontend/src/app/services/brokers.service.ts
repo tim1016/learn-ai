@@ -2,6 +2,8 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
+import { firstValueWithinPollTimeout } from './poll-timeout';
+
 import type {
   BrokerAccountSnapshot,
   BrokerActivity,
@@ -61,7 +63,9 @@ export class BrokersService {
     const cached = this.accountReads.get(broker);
     if (cached && cached.expiresAtMs > Date.now()) return cached.promise;
 
-    const promise = firstValueFrom(
+    // Polled, and the promise below is cached — a hang would be handed to
+    // every later caller until expiry, not just this one.
+    const promise = firstValueWithinPollTimeout(
       this.http.get<BrokerAccountSnapshot>(`${this.base}/${broker}/account`),
     );
     const entry = {
@@ -250,7 +254,8 @@ export class BrokersService {
    * under `/api/brokers` (the proxy attaches the shared secret for that prefix).
    */
   getClerkStatus(broker = 'alpaca'): Promise<ClerkStatus> {
-    return firstValueFrom(
+    // Shares the roster page's poll guard with getAccount (S7).
+    return firstValueWithinPollTimeout(
       this.http.get<ClerkStatus>(`${this.base}/${broker}/clerk/status`),
     );
   }

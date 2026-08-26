@@ -8,60 +8,44 @@ from app.broker.ibkr.recovery_state_machine import (
 )
 
 
-def test_link_loss_enters_interrupted_without_reconnect_hint() -> None:
-    transition = transition_recovery_state("HEALTHY", "link_lost")
-
-    assert transition.state == "LINK_INTERRUPTED"
-    assert transition.should_reconnect is False
-    assert transition.should_run_recovery is False
-    assert transition.terminal is False
-
-
-def test_data_maintained_restore_fast_paths_to_healthy() -> None:
-    transition = transition_recovery_state(
-        "LINK_INTERRUPTED", "restored_data_maintained"
-    )
-
-    assert transition.state == "HEALTHY"
-    assert transition.should_reconnect is False
-    assert transition.should_run_recovery is False
-
-
-def test_data_lost_restore_requires_recovery_callbacks() -> None:
-    transition = transition_recovery_state("LINK_INTERRUPTED", "restored_data_lost")
-
-    assert transition.state == "RESTORING"
-    assert transition.should_run_recovery is True
-    assert transition.should_reconnect is False
-
-
-def test_wait_expiry_promotes_to_socket_down_reconnect() -> None:
-    transition = transition_recovery_state("LINK_INTERRUPTED", "wait_expired")
-
-    assert transition.state == "SOCKET_DOWN"
-    assert transition.should_reconnect is True
+@pytest.mark.parametrize(
+    "current,signal,expected",
+    [
+        ("HEALTHY", "link_lost", "LINK_INTERRUPTED"),
+        ("LINK_INTERRUPTED", "restored_data_maintained", "HEALTHY"),
+        ("LINK_INTERRUPTED", "restored_data_lost", "RESTORING"),
+        ("LINK_INTERRUPTED", "wait_expired", "SOCKET_DOWN"),
+        ("SOCKET_DOWN", "reconnect_started", "RECONNECTING"),
+        ("RECONNECTING", "reconnect_succeeded", "RESTORING"),
+        ("RECONNECTING", "reconnect_failed", "SOCKET_DOWN"),
+        ("RESTORING", "recovery_succeeded", "HEALTHY"),
+        ("RESTORING", "recovery_failed", "SOCKET_DOWN"),
+    ],
+)
+def test_signal_leads_to_its_recovery_state(
+    current: str, signal: str, expected: str
+) -> None:
+    assert transition_recovery_state(current, signal) == expected  # type: ignore[arg-type]
 
 
 def test_exhausted_reconnect_attempts_open_the_breaker_without_latching() -> None:
-    """HARD_DOWN is the breaker's OPEN state, not a dead end.
+    """HARD_DOWN is the breaker's OPEN state, not a dead end (ADR 0046).
 
-    It used to be marked terminal, which matched a monitor that stopped
+    It used to carry a `terminal` marker, matching a monitor that stopped
     trying once the fast ladder was spent. The monitor now probes the open
     breaker on a slow cadence, so nothing about HARD_DOWN is final.
     """
-    transition = transition_recovery_state("RECONNECTING", "reconnect_exhausted")
-
-    assert transition.state == "HARD_DOWN"
-    assert transition.terminal is False
+    assert transition_recovery_state("RECONNECTING", "reconnect_exhausted") == "HARD_DOWN"
 
 
 def test_failed_open_probe_keeps_the_breaker_open() -> None:
     """A failed slow probe must re-assert HARD_DOWN rather than fall back to
     SOCKET_DOWN, which would restart the fast ladder on the next tick."""
-    transition = transition_recovery_state("RECONNECTING", "open_probe_failed")
+    assert transition_recovery_state("RECONNECTING", "open_probe_failed") == "HARD_DOWN"
 
-    assert transition.state == "HARD_DOWN"
-    assert transition.should_reconnect is False
+
+def test_an_unmapped_signal_leaves_the_state_untouched() -> None:
+    assert transition_recovery_state("RESTORING", "not_a_signal") == "RESTORING"  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

@@ -4,9 +4,10 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokerV2PanelService } from './broker-v2-panel.service';
+import { POLL_REQUEST_TIMEOUT_MS } from '../../../../services/poll-timeout';
 import type { PanelAction } from './broker-v2-panel.types';
 
 describe('BrokerV2PanelService run evidence', () => {
@@ -311,5 +312,38 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
 
     await expect(promise).rejects.toMatchObject({ status: 500 });
     http.expectNone(PANEL_URL);
+  });
+});
+
+describe('BrokerV2PanelService polled reads', () => {
+  let service: BrokerV2PanelService;
+  let http: HttpTestingController;
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    service = TestBed.inject(BrokerV2PanelService);
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  it('rejects a catalog read that never responds, so the poll can recover', async () => {
+    // S7: the roster poll skips every tick while the previous request is
+    // still in flight. HttpClient never times out on its own, so one hung
+    // request across a data-plane restart froze the roster for 9+ minutes
+    // while the footer kept looking fresh. A finite timeout turns the hang
+    // into a rejection the existing error affordance already handles.
+    vi.useFakeTimers();
+    try {
+      const pending = service.getCatalog('alpaca', 'acct-1');
+      const rejection = expect(pending).rejects.toBeTruthy();
+      http.expectOne('/api/brokers/alpaca/accounts/acct-1/bots/catalog');
+
+      await vi.advanceTimersByTimeAsync(POLL_REQUEST_TIMEOUT_MS + 1);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
