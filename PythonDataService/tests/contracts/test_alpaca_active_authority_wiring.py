@@ -240,3 +240,51 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
         f"{constructions} ReconciliationSweep construction(s) but {publishers} "
         "publish their verdict; every sweep must feed the read projection"
     )
+
+
+def test_the_stream_health_hold_sync_is_started_by_the_real_authority() -> None:
+    """An unstarted hold sync is worse than none at all (#1777 WP4).
+
+    ENTER no longer writes the durable stream-health hold -- it only
+    refuses. If nothing starts ``StreamHealthHoldSync``, the account-scoped
+    record is never raised for a genuine outage and never released after
+    one, and no unit test notices: every entry-time refusal still works.
+
+    Structural for the same reason as the sweep guard above: the failure is
+    a missing call, and it is silent.
+    """
+    source = (
+        APPLICATION_ROOT / "broker/alpaca/clerk/active_authority.py"
+    ).read_text(encoding="utf-8")
+
+    constructions = source.count("StreamHealthHoldSync(")
+    starts = source.count("hold_sync.start()")
+    stops = source.count("await hold_sync.stop()")
+
+    assert constructions > 0, "no hold sync construction found; update this guard"
+    assert starts == constructions, (
+        f"{constructions} StreamHealthHoldSync construction(s) but {starts} "
+        "started; an unstarted sync never raises or releases the hold"
+    )
+    assert stops >= constructions, (
+        "every started hold sync must be stopped on shutdown and on a failed "
+        "startup, or its task outlives the repository it writes to"
+    )
+
+
+def test_enter_does_not_write_the_account_scoped_stream_health_hold() -> None:
+    """Finding S10, pinned structurally (#1777 WP4).
+
+    The hold is account-scoped and gates admission for every bot on the
+    account. Raising it from one bot's entry -- on a single sample, with no
+    debounce -- is what froze the whole account on a 5 s blip. The entry
+    path may refuse; only the background sync may write the record.
+    """
+    source = (
+        APPLICATION_ROOT / "broker/alpaca/clerk/sqlite/runtime.py"
+    ).read_text(encoding="utf-8")
+
+    assert "observe_account_hold(" not in source, (
+        "runtime.py raises an account hold again; the stream-health hold "
+        "belongs to StreamHealthHoldSync, not to ENTER (#1777 WP4/S10)"
+    )

@@ -650,9 +650,16 @@ async def test_execute_for_instance_enter_fails_closed_when_execution_stream_unh
     assert receipt.state == EffectOperationState.REJECTED
     assert receipt.child_order_refs == ()
     assert broker.submissions == []
-    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code=runtime_module.STREAM_HEALTH_REASON_CODE)
-    assert hold is not None
-    assert "execution" in hold["evidence_refs_json"]
+    # #1777 WP4/S10: the refusal is the guard. ENTER no longer writes the
+    # account-scoped hold -- that record is account-wide and gates every
+    # bot, so one entry raising it on a single sample froze the account.
+    # `StreamHealthHoldSync` owns it now (test_stream_health_sync.py).
+    assert (
+        repo.active_hold(
+            scope="ACCOUNT_CLERK", reason_code=runtime_module.STREAM_HEALTH_REASON_CODE
+        )
+        is None
+    )
     repo.close()
 
 
@@ -727,18 +734,30 @@ async def test_execute_for_instance_uses_its_symbols_market_data_health(
 
     assert aapl_receipt.state is EffectOperationState.REJECTED
     assert len(broker.submissions) == 1
-    hold = repo.active_hold(
-        scope="ACCOUNT_CLERK",
-        reason_code=runtime_module.STREAM_HEALTH_REASON_CODE,
+    # The sharper form of this test's own premise (#1777 WP4/S6+S10): one
+    # stale symbol refuses its own entry and raises nothing account-wide.
+    # Previously AAPL's stall wrote an ACCOUNT_CLERK hold, which then
+    # blocked SPY too -- the account-wide freeze this pair of findings is
+    # about.
+    assert (
+        repo.active_hold(
+            scope="ACCOUNT_CLERK",
+            reason_code=runtime_module.STREAM_HEALTH_REASON_CODE,
+        )
+        is None
     )
-    assert hold is not None
-    assert "AAPL is stale" in hold["evidence_refs_json"]
     repo.close()
 
 
-async def test_execute_for_instance_enter_resumes_and_resolves_hold_once_streams_recover(
+async def test_execute_for_instance_enter_resumes_once_streams_recover(
     tmp_path: Path,
 ) -> None:
+    """The entry-time guard opens again as soon as its channels are healthy.
+
+    It does not wait for the account hold to clear -- the guard reads live
+    channel health, and the durable hold is resolved on its own cadence by
+    `StreamHealthHoldSync` (#1777 WP4).
+    """
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST",
         artifacts_root=tmp_path,
@@ -761,7 +780,6 @@ async def test_execute_for_instance_enter_resumes_and_resolves_hold_once_streams
         action_plan=binding.action_plan,
         quantity=binding.quantity,
     )
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code=runtime_module.STREAM_HEALTH_REASON_CODE) is not None
 
     recovered_facade = SqliteAlpacaClerkFacade(
         repo=repo,
@@ -780,7 +798,6 @@ async def test_execute_for_instance_enter_resumes_and_resolves_hold_once_streams
 
     assert receipt.state != EffectOperationState.REJECTED
     assert broker.submissions == [receipt.child_order_refs[0]]
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code=runtime_module.STREAM_HEALTH_REASON_CODE) is None
     repo.close()
 
 

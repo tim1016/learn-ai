@@ -21,10 +21,21 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.hold_debounce import HoldSample
 from app.broker.alpaca.clerk.models import ChannelHealth
 from app.marketdata.feed import FeedHealth
 
 ChannelHealthProvider = Callable[[], ChannelHealth]
+# Cadence of the independent stream-health hold sync (#1777 WP4), and the
+# window over which one of its observations still counts as current.
+#
+# The window this replaces was one trading day, inherited from the station
+# staleness threshold. At a 15 s cadence that meant no channel observation
+# was ever judged stale, so "fresh" was decorative: a provider could die and
+# its last reading would keep clearing the gate indefinitely.
+HOLD_SYNC_INTERVAL_S = 15.0
+FRESHNESS_WINDOW_TICKS = 3
+CHANNEL_OBSERVATION_FRESH_MS = int(HOLD_SYNC_INTERVAL_S * 1000) * FRESHNESS_WINDOW_TICKS
 SymbolChannelHealthProvider = Callable[[str], ChannelHealth]
 
 
@@ -214,3 +225,48 @@ def build_default_stream_health_gate() -> StreamHealthGate:
         execution=_execution,
         market_data_for_symbol=_market_data_for_symbol,
     )
+
+
+def sample_channels(
+    channels: tuple[ChannelHealth, ...] | None,
+    *,
+    now_ms: int,
+    freshness_window_ms: int,
+) -> HoldSample:
+    """Reduce one snapshot of both channels into a debounce sample.
+
+    Takes the already-taken snapshot rather than the gate so the caller
+    decides and records evidence from the *same* observation -- deciding
+    on one snapshot and journalling another is a race, however small.
+
+    A channel whose own observation is older than ``freshness_window_ms``
+    makes the whole sample ``unknown``: a provider that has stopped
+    observing can neither raise a hold nor release one.
+    """
+    if not channels:
+        return HoldSample(verdict="unknown")
+
+    observations = [health.observed_at_ms for health in channels]
+    if any(
+        observed_at_ms is None or now_ms - observed_at_ms > freshness_window_ms
+        for observed_at_ms in observations
+    ):
+        return HoldSample(verdict="unknown")
+
+    return HoldSample(
+        verdict="healthy" if all(health.healthy for health in channels) else "unhealthy",
+        observed_at_ms=max(observations),
+    )
+
+
+def channel_evidence_refs(channels: tuple[ChannelHealth, ...]) -> list[str]:
+    """Durable evidence identity for the stream-health hold.
+
+    Deliberately excludes ``observed_at_ms``. The ledger appends only when
+    this identity changes, so a volatile timestamp in here meant every
+    sample of an unchanged outage looked like new evidence and appended a
+    refresh -- the revision churn in #1777 WP4 decision 4. Operator-facing
+    freshness is projected from the provider's live observation time at
+    read time, so nothing is lost by leaving it out of the record.
+    """
+    return [f"{health.stream}: {health.reason}" for health in channels if not health.healthy]

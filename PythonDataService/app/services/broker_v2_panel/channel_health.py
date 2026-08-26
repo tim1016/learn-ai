@@ -23,12 +23,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.models import ChannelHealth
+from app.broker.alpaca.clerk.stream_health import CHANNEL_OBSERVATION_FRESH_MS
 from app.broker.v2panel.vocabulary import ChannelState
-from app.services.broker_v2_panel.station_derivation import STALE_THRESHOLD_MS
 
-# A channel-health observation older than this is not "fresh" for the clear-hold
-# gate (§7.3). Reuse the station staleness threshold — one trading day.
-CHANNEL_FRESH_THRESHOLD_MS = STALE_THRESHOLD_MS
+# A channel-health observation older than this is not "fresh" for the
+# clear-hold gate (§7.3). Derived from the hold sync's own cadence (#1777
+# WP4 decision 8) — this used to reuse the station staleness threshold, one
+# trading day, which at a 15 s observation cadence never fired.
+CHANNEL_FRESH_THRESHOLD_MS = CHANNEL_OBSERVATION_FRESH_MS
 REQUIRED_CLERK_CHANNELS = ("market_data", "execution")
 
 
