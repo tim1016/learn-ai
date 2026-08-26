@@ -36,8 +36,6 @@ const SAFE_FLATTEN_ACTION_IDS: readonly ActionId[] = [
 
 const OVERFLOW_ACTION_IDS: readonly ActionId[] = [
   'retire',
-  'rebuild_from_mirror',
-  'reset_authority',
   ...SAFE_FLATTEN_ACTION_IDS,
 ];
 

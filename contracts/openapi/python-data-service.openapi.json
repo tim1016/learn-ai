@@ -28777,9 +28777,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
@@ -28862,9 +28860,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
@@ -28953,9 +28949,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
@@ -29019,9 +29013,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
@@ -29117,9 +29109,7 @@
                 "prepare_safe_flatten",
                 "execute_safe_flatten",
                 "stop_bot_decisions",
-                "open_custody_timeline",
-                "rebuild_from_mirror",
-                "reset_authority"
+                "open_custody_timeline"
               ],
               "type": "string"
             },
@@ -30212,9 +30202,7 @@
                   "prepare_safe_flatten",
                   "execute_safe_flatten",
                   "stop_bot_decisions",
-                  "open_custody_timeline",
-                  "rebuild_from_mirror",
-                  "reset_authority"
+                  "open_custody_timeline"
                 ],
                 "type": "string"
               },
@@ -30243,9 +30231,7 @@
                   "prepare_safe_flatten",
                   "execute_safe_flatten",
                   "stop_bot_decisions",
-                  "open_custody_timeline",
-                  "rebuild_from_mirror",
-                  "reset_authority"
+                  "open_custody_timeline"
                 ],
                 "type": "string"
               },
@@ -31409,9 +31395,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Operation",
             "type": "string"
@@ -32384,9 +32368,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
@@ -32430,9 +32412,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
@@ -32486,9 +32466,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
@@ -32561,9 +32539,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "stop_bot_decisions",
-              "open_custody_timeline",
-              "rebuild_from_mirror",
-              "reset_authority"
+              "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"

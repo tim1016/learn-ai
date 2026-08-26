@@ -166,10 +166,6 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     explanation:
       'Submit the prepared reduction as recovery EXIT custody with exact attributed quantities.',
   },
-  rebuild_from_mirror: {
-    label: 'Rebuild from mirror',
-    explanation: 'Rebuild a failed authority only from a contiguous verified mirror.',
-  },
   retire: {
     label: 'Retire',
     explanation: 'Permanently decommission this bot. Its id is never reused.',
@@ -186,11 +182,6 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Resume',
     explanation:
       'Create a new run of this unchanged strategy instance after backend admission.',
-  },
-  reset_authority: {
-    label: 'Reset authority',
-    explanation:
-      'Create a new authority generation only after fresh flat and order-free proof.',
   },
   pause: {
     label: 'Pause',

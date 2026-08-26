@@ -228,28 +228,35 @@ def test_historical_exact_evidence_recovery_identifies_every_bot_conflict() -> N
     ]
 
 
-def test_failure_catalog_requires_exact_rebuild_and_reset_prerequisites() -> None:
+def test_failure_catalog_offers_no_authority_recovery_action() -> None:
+    """ADR 0047 (#1779): authority recovery is an offline ceremony.
+
+    This replaces a test that asserted ``rebuild_from_mirror`` and
+    ``reset_authority`` became available once a recovery proof was supplied.
+    It passed only because it fabricated that proof directly: no production
+    code path constructs one, and even with one, recovery refuses while the
+    Clerk holds its execution lease -- and the lease holder is the sweep that
+    would have had to produce the proof. The actions could never fire, so
+    they are no longer presented.
+    """
     failed = _context(
         authority_health="failed",
         authority_health_reason="integrity check failed",
         recovery_proof=AuthorityRecoveryProof(),
     )
+
     blocked = {action.action_id: action for action in build_recovery_catalog(failed)}
 
-    assert set(blocked) == {
-        "open_custody_timeline",
-        "rebuild_from_mirror",
-        "reset_authority",
-    }
-    assert blocked["rebuild_from_mirror"].available is False
-    assert blocked["rebuild_from_mirror"].unavailable_reason_code == (
-        "VERIFIED_MIRROR_REQUIRED"
-    )
-    assert blocked["reset_authority"].available is False
-    assert blocked["reset_authority"].unavailable_reason_code == (
-        "FRESH_FLAT_ORDER_FREE_PROOF_REQUIRED"
+    assert set(blocked) == {"open_custody_timeline"}
+    # The reader is honest about being unusable on a failed authority, and
+    # points at the offline ceremony rather than at another button.
+    assert blocked["open_custody_timeline"].available is False
+    assert blocked["open_custody_timeline"].unavailable_reason_code == (
+        "READABLE_TIMELINE_REQUIRED"
     )
 
+    # A proof cannot resurrect them either -- the ids are gone from the
+    # surface, not merely gated behind evidence.
     proven = replace(
         failed,
         recovery_proof=AuthorityRecoveryProof(
@@ -261,12 +268,9 @@ def test_failure_catalog_requires_exact_rebuild_and_reset_prerequisites() -> Non
             broker_proof_reference="alpaca-proof:flat:42",
         ),
     )
-    available = {
-        action.action_id: action for action in build_recovery_catalog(proven)
+    assert {action.action_id for action in build_recovery_catalog(proven)} == {
+        "open_custody_timeline"
     }
-    assert available["rebuild_from_mirror"].available is True
-    assert available["reset_authority"].available is True
-    assert available["reset_authority"].confirmation is not None
 
 
 def test_action_tokens_ignore_unrelated_revision_but_reject_relevant_change() -> None:

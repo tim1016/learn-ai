@@ -2201,13 +2201,13 @@ def test_select_primary_action_by_lens_recovery_primary_never_becomes_trader_ref
     Operator lens, but can never leak into the Trader lens even when the
     Trader-visible lifecycle action is also presented alongside it."""
     selection = select_primary_action_by_lens(
-        [_stub_action("stop"), _stub_action("rebuild_from_mirror")],
+        [_stub_action("stop"), _stub_action("resolve_execution_coverage")],
         _health(running=True),
-        recovery_primary_action_id="rebuild_from_mirror",
+        recovery_primary_action_id="resolve_execution_coverage",
     )
 
     assert selection.trader == "stop"
-    assert selection.operator == "rebuild_from_mirror"
+    assert selection.operator == "resolve_execution_coverage"
 
 
 def test_select_primary_action_by_lens_dangling_recovery_primary_falls_back() -> None:
@@ -2217,7 +2217,7 @@ def test_select_primary_action_by_lens_dangling_recovery_primary_falls_back() ->
     selection = select_primary_action_by_lens(
         [_stub_action("stop")],
         _health(running=True),
-        recovery_primary_action_id="rebuild_from_mirror",
+        recovery_primary_action_id="resolve_execution_coverage",
     )
 
     assert selection.trader == "stop"
@@ -2276,14 +2276,14 @@ def test_sqlite_adapter_recovery_primary_selects_operator_reference_without_leak
         _rail_projection(orders=()),
         recovery_actions=(
             _recovery_capability("reconcile_now", primary=False),
-            _recovery_capability("rebuild_from_mirror", primary=True),
+            _recovery_capability("resolve_execution_coverage", primary=True),
         ),
     )
 
     adapted = adapt_sqlite_panel(base, projection)
 
     assert adapted.primary_action_by_lens.trader is None
-    assert adapted.primary_action_by_lens.operator == "rebuild_from_mirror"
+    assert adapted.primary_action_by_lens.operator == "resolve_execution_coverage"
     primary_check = next(
         check for check in adapted.readiness_checks if check.evidence.get("primary") is True
     )
@@ -2310,7 +2310,7 @@ def test_primary_action_by_lens_rejects_operator_only_action_as_trader_reference
     Operator-only action, independent of any policy-function test above."""
     base = _panel(_status(running=True), _clerk_status(), [])
     payload = base.model_dump()
-    payload["primary_action_by_lens"] = {"trader": "rebuild_from_mirror", "operator": None}
+    payload["primary_action_by_lens"] = {"trader": "resolve_execution_coverage", "operator": None}
 
     with pytest.raises(ValidationError):
         BotPanelView.model_validate(payload)
@@ -2319,7 +2319,7 @@ def test_primary_action_by_lens_rejects_operator_only_action_as_trader_reference
 def test_primary_action_by_lens_rejects_dangling_operator_reference() -> None:
     base = _panel(_status(running=True), _clerk_status(), [])
     payload = base.model_dump()
-    payload["primary_action_by_lens"] = {"trader": None, "operator": "rebuild_from_mirror"}
+    payload["primary_action_by_lens"] = {"trader": None, "operator": "resolve_execution_coverage"}
 
     with pytest.raises(ValidationError):
         BotPanelView.model_validate(payload)

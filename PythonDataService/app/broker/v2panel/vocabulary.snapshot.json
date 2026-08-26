@@ -38,10 +38,8 @@
     "open_custody_timeline",
     "pause",
     "prepare_safe_flatten",
-    "rebuild_from_mirror",
     "reconcile_now",
     "recover_exact_execution_evidence",
-    "reset_authority",
     "resolve_execution_coverage",
     "resume",
     "retire",
@@ -188,10 +186,6 @@
       "label": "Prepare safe flatten",
       "explanation": "Prepare a fresh reduction plan without submitting an order."
     },
-    "rebuild_from_mirror": {
-      "label": "Rebuild from mirror",
-      "explanation": "Rebuild a failed authority only from a contiguous verified mirror."
-    },
     "reconcile_now": {
       "label": "Reconcile now",
       "explanation": "Run a reconciliation sweep against the broker immediately. Useful after a hold is cleared or after a manual order intervention."
@@ -199,10 +193,6 @@
     "recover_exact_execution_evidence": {
       "label": "Recover exact execution evidence",
       "explanation": "Read one retained Alpaca paper execution and prepare the Clerk's no-delta coverage proof."
-    },
-    "reset_authority": {
-      "label": "Reset authority",
-      "explanation": "Create a new authority generation only after fresh flat and order-free proof."
     },
     "resolve_execution_coverage": {
       "label": "Resolve execution coverage",

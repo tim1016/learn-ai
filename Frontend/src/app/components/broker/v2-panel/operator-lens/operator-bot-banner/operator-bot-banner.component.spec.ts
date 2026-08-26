@@ -43,7 +43,7 @@ const PANEL: BotPanelView = {
   actions: [
     { action_id: 'stop', label: 'Stop', explanation: 'Stop bot.', enabled: true, blockers: [], confirmation: null, revision: 1, concurrency_token: 'stop-token' },
     { action_id: 'retire', label: 'Retire & replace', explanation: 'Retire bot.', enabled: true, blockers: [], confirmation: null, revision: 1, concurrency_token: 'retire-token' },
-    { action_id: 'rebuild_from_mirror', label: 'Rebuild from mirror', explanation: 'Recover custody.', enabled: true, blockers: [], confirmation: null, revision: 1, concurrency_token: 'rebuild-token' },
+    { action_id: 'resolve_execution_coverage', label: 'Resolve execution coverage', explanation: 'Recover custody.', enabled: true, blockers: [], confirmation: null, revision: 1, concurrency_token: 'rebuild-token' },
   ],
   primary_action_by_lens: { trader: 'stop', operator: 'stop' },
   readiness_checks: [], readiness_ready_count: 0, readiness_blocked_count: 0,
@@ -74,13 +74,12 @@ describe('OperatorBotBannerComponent', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'More operator actions' }));
     expect(screen.getByRole('button', { name: 'Retire & replace' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Rebuild from mirror' })).toBeTruthy();
   });
 
   it('renders the backend-selected recovery-primary action instead of the routine lifecycle command (#1665)', async () => {
     const panel: BotPanelView = {
       ...PANEL,
-      primary_action_by_lens: { trader: null, operator: 'rebuild_from_mirror' },
+      primary_action_by_lens: { trader: null, operator: 'resolve_execution_coverage' },
     };
 
     await render(OperatorBotBannerComponent, {
@@ -88,7 +87,7 @@ describe('OperatorBotBannerComponent', () => {
       providers: [provideRouter([])],
     });
 
-    expect(screen.getByRole('button', { name: 'Rebuild from mirror' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Resolve execution coverage' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
   });
 
@@ -104,7 +103,7 @@ describe('OperatorBotBannerComponent', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Rebuild from mirror' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resolve execution coverage' })).toBeNull();
   });
 
   // ── S6 (#1778): safe flatten was reachable only inside a collapsed

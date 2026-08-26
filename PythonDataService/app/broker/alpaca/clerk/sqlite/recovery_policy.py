@@ -50,8 +50,6 @@ RecoveryActionId = Literal[
     "execute_safe_flatten",
     "stop_bot_decisions",
     "open_custody_timeline",
-    "rebuild_from_mirror",
-    "reset_authority",
 ]
 
 FRESH_EVIDENCE_MAX_AGE_MS = 30_000
@@ -232,30 +230,6 @@ _FAILURE_DESCRIPTORS: tuple[_Descriptor, ...] = (
         explanation="Inspect the last readable immutable custody evidence.",
         mutation=False,
         confirmation=None,
-    ),
-    _Descriptor(
-        action_id="rebuild_from_mirror",
-        label="Rebuild from mirror",
-        explanation="Rebuild only from a contiguous, finalized, hash-verified mirror.",
-        mutation=True,
-        confirmation=_confirmation(
-            "Rebuild the authority?",
-            "The failed database is preserved and a verified mirror rebuild is installed.",
-            "Rebuild from mirror",
-        ),
-    ),
-    _Descriptor(
-        action_id="reset_authority",
-        label="Reset authority",
-        explanation=(
-            "Create a new authority generation only after fresh flat and order-free broker proof."
-        ),
-        mutation=True,
-        confirmation=_confirmation(
-            "Reset to a new generation?",
-            "Previous control identities become invalid. The failed database remains preserved.",
-            "Reset authority",
-        ),
     ),
 )
 
@@ -456,7 +430,14 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
             },
         )
     if ctx.authority_health != "healthy":
-        return _failure_decision(ctx, action_id)
+        # ADR 0047: a failed authority is replaced by an offline ceremony, not
+        # by a panel action. The failure catalog therefore offers only the
+        # timeline reader (handled above); anything else asked for here is
+        # refused rather than silently evaluated against healthy-path policy.
+        raise AssertionError(
+            f"failure catalog cannot evaluate {action_id!r}; "
+            "authority recovery is offline-only"
+        )
     if action_id == "recover_exact_execution_evidence":
         return _historical_execution_recovery_decision(ctx)
     if action_id == "resolve_execution_coverage":
@@ -779,73 +760,6 @@ def _build_safe_flatten_plan(
     )
 
 
-def _failure_decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decision:
-    proof = ctx.recovery_proof
-    if action_id == "rebuild_from_mirror":
-        evidence = (
-            RecoveryEvidence(
-                reference=proof.mirror_reference or "mirror:unverified",
-                label="Finalized mirror verification",
-                observed_at_ms=None,
-                age_ms=None,
-                freshness="fresh" if proof.mirror_verified else "unavailable",
-            ),
-        )
-        return _Decision(
-            available=proof.mirror_verified,
-            reason_code=None if proof.mirror_verified else "VERIFIED_MIRROR_REQUIRED",
-            reason=(
-                None
-                if proof.mirror_verified
-                else "No contiguous finalized hash-verified mirror is available."
-            ),
-            freshness="fresh" if proof.mirror_verified else "unavailable",
-            evidence=evidence,
-            next_step=(
-                "Preserve the failed database and rebuild from the verified mirror."
-                if proof.mirror_verified
-                else "Verify the finalized mirror or use the reset prerequisites."
-            ),
-            token_facts=(proof.mirror_verified, proof.mirror_reference),
-        )
-    if action_id == "reset_authority":
-        evidence = _evidence(
-            ctx,
-            reference=proof.broker_proof_reference or "broker-account-proof:missing",
-            label="Flat and order-free Alpaca account proof",
-            observed_at_ms=proof.broker_observed_at_ms,
-            required_fresh=True,
-        )
-        available = (
-            evidence.freshness == "fresh"
-            and proof.broker_account_flat is True
-            and proof.broker_order_free is True
-        )
-        return _Decision(
-            available=available,
-            reason_code=None if available else "FRESH_FLAT_ORDER_FREE_PROOF_REQUIRED",
-            reason=(
-                None
-                if available
-                else "Reset requires fresh proof that this account is flat with no open orders."
-            ),
-            freshness=evidence.freshness,
-            evidence=(evidence,),
-            next_step=(
-                "Confirm the new authority generation."
-                if available
-                else "Refresh Alpaca positions and open orders before reset."
-            ),
-            token_facts=(
-                proof.broker_observed_at_ms,
-                proof.broker_account_flat,
-                proof.broker_order_free,
-                proof.broker_proof_reference,
-            ),
-        )
-    raise AssertionError(f"failure catalog cannot evaluate {action_id!r}")
-
-
 def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapability, ...]:
     """Author the complete capability set for the current authority posture."""
     descriptors = _DESCRIPTORS if ctx.authority_health == "healthy" else _FAILURE_DESCRIPTORS
@@ -896,8 +810,6 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
 
 def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
     priority = (
-        "rebuild_from_mirror",
-        "reset_authority",
         "recover_exact_execution_evidence",
         "resolve_execution_coverage",
         "cancel_verified_working_orders",

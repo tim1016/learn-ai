@@ -119,8 +119,6 @@ ActionId = Literal[
     "execute_safe_flatten",
     "stop_bot_decisions",
     "open_custody_timeline",
-    "rebuild_from_mirror",
-    "reset_authority",
 ]
 ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "deploy",
@@ -139,8 +137,6 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "execute_safe_flatten",
     "stop_bot_decisions",
     "open_custody_timeline",
-    "rebuild_from_mirror",
-    "reset_authority",
 )
 
 # The closed set of action ids the Trader banner may ever reference as its
@@ -353,14 +349,6 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     "open_custody_timeline": OperatorCopy(
         "Open custody timeline",
         "Inspect the immutable operation-first evidence timeline.",
-    ),
-    "rebuild_from_mirror": OperatorCopy(
-        "Rebuild from mirror",
-        "Rebuild a failed authority only from a contiguous verified mirror.",
-    ),
-    "reset_authority": OperatorCopy(
-        "Reset authority",
-        "Create a new authority generation only after fresh flat and order-free proof.",
     ),
 }
 

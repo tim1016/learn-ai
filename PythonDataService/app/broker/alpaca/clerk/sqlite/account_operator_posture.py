@@ -218,29 +218,46 @@ def _custody_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPos
     if primary is None:
         primary = next((action for action in ctx.recovery_actions if not action.available), None)
 
-    if primary is not None and primary.available:
-        disposition: Disposition = "fix_here"
-        condition_id = f"alpaca_clerk_recovery:{primary.action_id}"
+    if authority_unhealthy:
+        # ADR 0047: authority recovery is an offline ceremony. No panel action
+        # can cure a failed authority, so this must be decided before the
+        # catalog is consulted at all -- the failure catalog's one remaining
+        # entry is a timeline *reader*, and letting it drive the disposition
+        # produced either `fix_here` pointing at a view (when readable) or
+        # `wait` with no move at all (when not). Both told the operator to do
+        # something that could never work.
+        disposition: Disposition = "terminal"
+        condition_id = f"alpaca_clerk_authority_failure:{ctx.authority_health}"
         severity: Literal["blocking", "warning"] = "blocking"
+        headline = "This account's custody authority has failed."
+        detail = (
+            "Recovery replaces the authority and cannot run while this process "
+            "holds its execution lease, so it is an offline ceremony: stop the "
+            "data plane, run the Clerk recovery CLI, then restart. No control "
+            "on this panel can perform it."
+        )
+    elif primary is not None and primary.available:
+        disposition = "fix_here"
+        condition_id = f"alpaca_clerk_recovery:{primary.action_id}"
+        severity = "blocking"
+        headline, detail = ctx.guidance.headline, ctx.guidance.explanation
     elif primary is not None:
         disposition = "wait"
         condition_id = f"alpaca_clerk_recovery_pending:{primary.action_id}"
-        severity = "blocking" if authority_unhealthy else "warning"
-    elif authority_unhealthy:
-        disposition = "terminal"
-        condition_id = f"alpaca_clerk_authority_failure:{ctx.authority_health}"
-        severity = "blocking"
+        severity = "warning"
+        headline, detail = ctx.guidance.headline, ctx.guidance.explanation
     else:
         disposition = "wait"
         condition_id = "alpaca_clerk_evidence_review"
         severity = "warning"
+        headline, detail = ctx.guidance.headline, ctx.guidance.explanation
 
     account_desk, fleet_roster = _CUSTODY_HOST_PROJECTIONS[disposition]
     return _posture(
         condition_id=condition_id,
         severity=severity,
-        headline=ctx.guidance.headline,
-        detail=ctx.guidance.explanation,
+        headline=headline,
+        detail=detail,
         account_desk=account_desk,
         fleet_roster=fleet_roster,
         evidence={
