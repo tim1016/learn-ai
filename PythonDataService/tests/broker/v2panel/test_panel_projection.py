@@ -808,6 +808,57 @@ def test_build_sqlite_catalog_omits_sub_epsilon_exposure_and_reports_flat() -> N
     assert catalog[0].status_explanation == "Off duty and flat."
 
 
+def test_build_sqlite_catalog_explains_a_crash_beside_the_crash_label() -> None:
+    """A "Crashed" row must not be explained as a clean, deliberate stop.
+
+    The label is lifecycle-derived and the explanation is clerk-derived, and
+    nothing reconciled them: ``status_explanation_for`` already answers the
+    unclean-exit case, but the SQLite adapter re-authored the explanation and
+    dropped it, so a crashed row read "Off duty and flat." (#1806, T6 sibling).
+    """
+    status = _status(running=False).model_copy(
+        update={
+            "strategy_label": "Deployment Validation",
+            "duty_outcome": BotDutyOutcomeView(
+                kind="CRASHED",
+                reason_code="UNHANDLED_EXCEPTION",
+                recorded_at_ms=_NOW,
+                run_id="r1",
+            )
+        }
+    )
+    projection = replace(_rail_projection(orders=()), runs=(), commands=(), operations=())
+    economics = EconomicSnapshot(
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        authority_generation=4,
+        control_revision=projection.control_revision,
+        session_open_ms=_NOW - 3_600_000,
+        session_close_ms=_NOW + 3_600_000,
+        recent_fills=(),
+        fills_today=0,
+        exposure={},
+        realized_pnl_today=0.0,
+        open_pnl=0.0,
+        marks_complete=True,
+        mark_observed_at_ms={},
+        fee_fidelity="reported",
+        execution_coverage="complete",
+        last_activity_at_ms=_NOW,
+    )
+
+    catalog = build_sqlite_catalog(
+        [status],
+        projections={SID: projection},
+        economic_rollups={SID: economics},
+        account_id=ACCT,
+    )
+
+    assert catalog[0].status_label == "Crashed"
+    assert catalog[0].status_explanation != "Off duty and flat."
+    assert catalog[0].status_explanation == "The previous run ended without verified custody."
+
+
 def test_build_panel_uses_flat_resume_copy_for_sub_epsilon_exposure() -> None:
     panel = _panel(
         _status(running=False),

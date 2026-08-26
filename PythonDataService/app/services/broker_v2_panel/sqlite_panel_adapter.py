@@ -349,18 +349,43 @@ def _require_one_catalog_economic_revision(
         )
 
 
+#: Status labels whose lifecycle already proved an unclean terminal exit.
+#: Read from the shared vocabulary rather than restated, so the labels this
+#: adapter defers to and the labels ``status_label_for`` emits cannot drift.
+_UNCLEAN_EXIT_STATUS_LABELS = frozenset(
+    copy_for(key).label for key in ("CRASHED", "EXITED_UNVERIFIED")
+)
+
+
 def _sqlite_catalog_explanation(
     row: BotCatalogView,
     projection: ClerkProjection,
     *,
     exposure: dict[str, float],
 ) -> str:
+    """Re-author the row explanation with SQLite-clerk evidence.
+
+    ``status_label`` is lifecycle-derived and this explanation is
+    clerk-derived, and nothing used to reconcile them: an unclean terminal
+    exit already carries a canonical explanation from
+    ``status_explanation_for``, which this adapter then overwrote with an
+    ordinary off-duty string. A row labelled "Crashed" read "Off duty and
+    flat." beside it -- two authors, one of them wrong (#1806).
+
+    So the unclean-exit case defers to the incoming explanation rather than
+    restating it here. Both off-duty strings are guarded, not just the flat
+    one: "Off duty with Clerk-attributed exposure." contradicts a crash label
+    exactly as much, and the exposure itself stays visible in ``exposure``
+    and ``needs_attention``.
+    """
     if projection.holds or projection.uncertainties or projection.authority_health != "healthy":
         return "SQLite Account Clerk evidence requires operator attention."
     if row.phase == "RETIRED":
         return "Retired; no further runs can start."
     if row.running:
         return "Running under SQLite Account Clerk custody."
+    if row.status_label in _UNCLEAN_EXIT_STATUS_LABELS:
+        return row.status_explanation
     if any(position_quantity_is_nonzero(quantity) for quantity in exposure.values()):
         return "Off duty with Clerk-attributed exposure."
     return "Off duty and flat."

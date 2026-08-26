@@ -54,7 +54,7 @@
 
   @if (stale()) {
     <div class="fleet-notice fleet-notice--stale" role="status">
-      Live refresh failed. Showing the last successful fleet snapshot.
+      Live refresh failed. Showing the last successful fleet snapshot, from {{ staleAge() }}.
     </div>
   }
 

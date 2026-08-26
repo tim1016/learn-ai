@@ -262,6 +262,31 @@ branch. Every one is a repo-root path the sibling does not expose
 CI mounts the full checkout, where they pass. Read the Python gate as
 "full suite, baselined against base", not as "all green".
 
+**Also performed after the run (state, not code).** Removed the 17
+orphaned `participants/*` account-safety admission markers for
+`DUM284968`, implementing ADR 0048 Decision 4d ([#1803]). Same class as
+the S4 `gate`/`writer` removal recorded in
+`bot-fleet-stress-2026-08-25.md:337-338`: the markers are artifact-tree
+state, and no code path can clear them — PR #1790 deleted the
+`participants` writer and its only reader with the repair path, and the
+deliberately-deleted `repair_account_safety_admission` is never coming
+back. Executed on a stopped data plane; markers removed individually and
+the emptied directory `rmdir`-ed, which is itself the proof nothing else
+was in it. `readers/` was preserved — it is live exclusion machinery
+until D4f ([#1799]) replaces all four marker classes.
+
+The 17 spanned **nine distinct `clerk_generation` values (142–189)**,
+enrolled 2026-08-03 through 2026-08-24 — one orphan per generation that
+enrolled and never un-enrolled, which is the accumulation pattern D4d
+describes rather than a single bad shutdown. Verified after restart:
+`grep -rn participants PythonDataService/app/` returns nothing, and 45s
+of live refresh loops did not recreate the directory, so the writer is
+provably gone rather than merely idle. Data plane healthy, IBKR
+reconnected, zero errors since.
+
+[#1803]: https://github.com/tim1016/learn-ai/issues/1803
+[#1799]: https://github.com/tim1016/learn-ai/issues/1799
+
 ## 7. Ops lore added today
 
 - Running-bot stop action id on the panel surface is `stop_bot_decisions`;
