@@ -222,9 +222,14 @@ a defect.
   (medium).** Guards and performers exist but can never fire:
   `app/services/broker_v2_panel/sqlite_panel_adapter.py:61`
   `SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume"})`.
-- **F16 — `retire` never presented by the SQLite panel source (medium).**
-  Same dead-vocabulary class, same pointer as F2 (study §7). The 2026-08-26
-  run re-found this as T1 with a sharper root cause — the guard requires a
+- **F16 — `retire`'s eligibility guard is narrower than the class it exists
+  to clear (medium).** *Reframed 2026-08-26.* This was filed as dead
+  vocabulary alongside F2, but `retire` **is** presented:
+  `SQLITE_PANEL_LIFECYCLE_ACTION_IDS` is
+  `frozenset({"resume", "retire"})` (`sqlite_panel_adapter.py:69`) and the
+  projection tests confirm it renders, disabled, for a runnable strategy. The
+  defect is the guard, not the adapter — do not follow F2's pointer here. The
+  2026-08-26 run re-found it as T1 with a sharper root cause — the guard requires a
   dead *strategy key* while the zombie's dead thing is its *symbol*, so the
   panel simultaneously says "This bot can still run." and "Resume is
   blocked." **The contradiction was fixed 2026-08-26**: the blocker now states
@@ -300,6 +305,17 @@ a defect.
   (`Frontend/src/app/components/broker/v2-panel/bot-triage-detail/bot-triage-detail.component.ts`;
   study §7; same defect class as the R4 tape fix recorded in
   `docs/superpowers/specs/2026-08-24-bots-triage-trader-lens-design.md` §10).
+- **F13 — panel reads serialize globally (medium; concurrency unmeasured
+  since #1776).** 56 ms alone → 2.6 s each at 10 concurrent; ~21 s/sweep
+  projected at 80 bots (projection path,
+  `app/services/broker_v2_panel/panel_data_source.py`; study §7/§9 proposes a
+  fan-out budget). **Deleted and restored on 2026-08-26**: it was closed
+  against A4, which proved 96 concurrent reads with zero errors and zero
+  revision drift — that is read *purity*, not latency, and F13 is a latency
+  claim. The same day's T2 measured panel p50 rising 0.67 s idle → 2.7 s under
+  fleet load, which is consistent with this being *open*. Its concurrency
+  condition is carried into **#1801**, which must remeasure the 10-concurrent
+  case explicitly; delete this bullet then, not before.
 - **F14 — `gallery/snapshot` unbounded by liveness (low).** 5.6 s / 751 KB /
   25 tiles including retired bots (`app/routers/broker_v2_gallery.py`; study
   §7).
@@ -320,29 +336,19 @@ The live 54-bot campaign is recorded in
 `docs/audits/bot-fleet-stress-2026-08-25.md`. S15c is safety-critical and lives
 in §1; retire is tracked as F16 in §9 rather than duplicated here.
 
-**Pruned 2026-08-26** after the day-two campaign gave each one an explicit live
-acceptance (`docs/audits/bot-fleet-stress-2026-08-26.md` §2). Deleted per this
-file's status convention — git history is the record:
+**Pruned 2026-08-26**, each against an explicit live acceptance in
+`docs/audits/bot-fleet-stress-2026-08-26.md` §2 — the audit and git history
+carry the detail, this index carries only the pointer:
 
-- **S9/S10** (a 5 s stream blip freezing entries account-wide) — closed by the
-  independent fixed-cadence hold sync (#1777/#1784). Accepted as A6 **on
-  natural chaos**: two real Alpaca `trade_updates` drops of ~2 s each raised no
-  account hold, with reconnect and idempotent redelivery absorption surfaced
-  as warnings.
-- **S3b** (crashed bots rendering as innocent off-duty rows) — the projection
-  was fixed by #1788 and its starved production input path by #1791 (T6).
-  Live-verified against a preserved SIGKILL crash state: the catalog flipped
-  from 144× "Off duty" / 0 attention rows to 54× "Exited unverified" + 13×
-  "Crashed" + 67 attention rows.
-- **S7** (roster polling freezing silently across a restart) — bounded poll
-  timeout shipped in #1788; the roster self-recovered after both 2026-08-26
-  outages with no manual refresh. Note the follow-on: that same 15 s timeout
-  now trips on healthy-but-slow catalog reads under fleet load — that is a new
-  and different problem, tracked as T2 in §11.
-- **S17** (safe flatten buried, blocker authored as the wrong disposition) —
-  closed by #1788. Accepted as A11: stale-freshness flatten now shows
-  `RECONCILIATION_EVIDENCE_STALE` with `disposition=fix_here` and a
-  backend-authored "Run Reconcile now" move.
+- **S9/S10** stream-blip entry freeze → A6 (#1777/#1784).
+- **S3b** crashed bots rendering innocent → T6 fix, live-verified (#1788/#1791).
+- **S7** silent roster-poll freeze → #1788. Its follow-on is a *different*
+  problem and is open as T2 in §11: that same 15 s timeout now trips on
+  healthy-but-slow catalog reads under fleet load.
+- **S17** flatten buried, wrong disposition → A11 (#1788).
+
+§9's F13 was pruned in the same pass and has been **restored** — see there for
+why its acceptance did not test it.
 
 The items below remain open.
 
@@ -415,14 +421,16 @@ is the durable index, the issue is the working brief.
   was deliberately not raised — that is a magnitude, and #1801 owns it.
 - **T4 — transient `RECOVERY_UNCERTAIN` during post-outage sweeps (low,
   observation).** A resume read can briefly return `RECOVERY_UNCERTAIN` before
-  settling. Honest but unexplained. Note that two distinct branches return this
-  state with different prose (`bot_start_admission.py:188-212`) — probe failure
-  and outstanding intents. #1793 must not collapse them; "evaluation in
-  progress" prose would close this.
+  settling. Honest but unexplained. **#1806.** Note that two distinct branches
+  return this state with different prose (`bot_start_admission.py:188-212`) —
+  probe failure and outstanding intents. #1793 deliberately did not collapse
+  them, and neither should the copy work.
 - **Copy nit (low).** A "Crashed"-labelled row can carry the explanation "Off
   duty and flat." — a clerk-derived explanation beside a lifecycle-derived
-  label. Cosmetic sibling of T6.
-- **Open question for the operator.** The roster-level "Live refresh failed.
-  Showing the last successful fleet snapshot." banner is a third standing
-  refresh message, not covered by the 2026-08-26 pill directive that converted
-  the account strip's two banners into transient popovers.
+  label. Cosmetic sibling of T6. **#1806.**
+- **Open question for the operator (not a defect).** The roster-level "Live
+  refresh failed. Showing the last successful fleet snapshot." banner is a
+  third standing refresh message, not covered by the 2026-08-26 pill directive
+  that converted the account strip's two banners into transient popovers.
+  Whether it should match is a judgment call, not a bug — carried in **#1806**
+  as a question to answer before any change.

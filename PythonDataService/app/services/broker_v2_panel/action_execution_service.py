@@ -81,6 +81,9 @@ class ActionOutcomeUnknownError(ActionExecutionError):
 #: Reason code for a lost/expired account execution lease (T7c, #1794).
 EXECUTION_AUTHORITY_LOST_REASON_CODE = "EXECUTION_LEASE_LOST"
 
+#: Reason code for an authority fenced by an unconfirmed mirror finalize.
+AUTHORITY_POISONED_REASON_CODE = "AUTHORITY_MIRROR_UNCONFIRMED"
+
 
 class ExecutionAuthorityLostError(ActionExecutionError):
     """This account's execution lease expired or was reassigned (503).
@@ -108,6 +111,34 @@ class ExecutionAuthorityLostError(ActionExecutionError):
                 "panel can re-acquire it."
             ),
             reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
+        )
+
+
+class AuthorityPoisonedError(ActionExecutionError):
+    """A transition committed but its mirror finalize was unconfirmed (503).
+
+    Distinct from :class:`ExecutionAuthorityLostError` on purpose. A lost lease
+    means another process owns this account and a restart re-acquires it; a
+    poisoned repository means *this* authority's own durability is unproven
+    until the exact fence reconciliation re-runs and finds it consistent. The
+    conditions have different cures, so telling an operator to wait out a lease
+    timeout here would send them somewhere the problem is not.
+    """
+
+    http_status = 503
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This account's authority cannot accept writes until its last "
+            "transition is re-verified.",
+            detail=(
+                "A custody transition committed but its mirror copy was not "
+                "confirmed, so the authority fenced itself rather than build on "
+                "a record it cannot prove. Refusing is deliberate. Reconciling "
+                "the fence -- which a data-plane restart does on open -- clears "
+                "it once the record is found consistent."
+            ),
+            reason_code=AUTHORITY_POISONED_REASON_CODE,
         )
 
 

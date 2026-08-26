@@ -8,6 +8,7 @@ import logging
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import NoReturn
 
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
@@ -83,6 +84,35 @@ class SqlitePanelBotNotFound(ValueError):
 _CATALOG_COHERENCE_ATTEMPTS = 2
 _TORN_READ_ATTEMPTS = 3
 _TORN_READ_BACKOFF_MS = 25
+
+
+def _refuse_torn_read(
+    what: str,
+    message: str,
+    *,
+    broker: str,
+    account_id: str,
+    strategy_instance_id: str,
+) -> NoReturn:
+    """Refuse a projection that never settled, and record that it happened.
+
+    Fail-closed either way -- a spliced cut is never served. The record is what
+    distinguishes a load-correlated blip from custody churning faster than the
+    projection can ever settle; without it both produce an identical 503
+    (#1796).
+    """
+    logger.warning(
+        "%s projection did not settle; refusing rather than splicing",
+        what.capitalize(),
+        extra={
+            "action": f"sqlite_{what}_projection_torn_read_exhausted",
+            "broker": broker,
+            "account_id": account_id,
+            "strategy_instance_id": strategy_instance_id,
+            "attempts": _TORN_READ_ATTEMPTS,
+        },
+    )
+    raise SqlitePanelEconomicUnavailable(message)
 
 
 def _spaced_attempts(total: int = _TORN_READ_ATTEMPTS) -> Iterator[int]:
@@ -373,22 +403,12 @@ async def read_sqlite_panel_evidence(
                     projection=projection,
                     economics=economics,
                 )
-        # Exhaustion is still fail-closed -- a spliced view is never served --
-        # but it is no longer silent. Without this there is no way to tell a
-        # load-correlated blip from custody churning faster than the projection
-        # can ever settle (#1796).
-        logger.warning(
-            "Panel projection did not settle; refusing rather than splicing",
-            extra={
-                "action": "sqlite_panel_projection_torn_read_exhausted",
-                "broker": broker,
-                "account_id": account_id,
-                "strategy_instance_id": strategy_instance_id,
-                "attempts": _TORN_READ_ATTEMPTS,
-            },
-        )
-        raise SqlitePanelEconomicUnavailable(
-            "SQLite custody and execution economics changed during panel projection."
+        _refuse_torn_read(
+            "panel",
+            "SQLite custody and execution economics changed during panel projection.",
+            broker=broker,
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
         )
 
     try:
@@ -475,8 +495,12 @@ async def read_sqlite_chart_evidence(
             if status is None:
                 return None
             return SqliteChartEvidence(status=status, fills=fills)
-        raise SqlitePanelEconomicUnavailable(
-            "SQLite history identity and execution folds changed during projection."
+        _refuse_torn_read(
+            "chart",
+            "SQLite history identity and execution folds changed during projection.",
+            broker=broker,
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
         )
 
     try:

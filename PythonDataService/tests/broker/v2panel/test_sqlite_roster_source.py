@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -1057,3 +1058,67 @@ def test_torn_read_attempts_are_spaced_so_they_sample_different_moments() -> Non
     # And far below the frontend's 15 s poll budget: a retry ladder that
     # outlives the client's timeout has made things worse, not better.
     assert elapsed_ms < 1_000
+
+
+@pytest.mark.asyncio
+async def test_exhausted_chart_projection_records_its_refusal_too(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both seams share the retry policy, so they share the record (#1796).
+
+    The chart read used `_spaced_attempts()` while only the panel read logged
+    exhaustion -- a shared name without shared behaviour, which is the smell
+    the shared helper existed to remove.
+    """
+    repository = _Repository()
+    fills = FillWindowProjection(
+        account_id="paper-account",
+        strategy_instance_id="active-spy",
+        authority_generation=7,
+        control_revision=42,
+        fills=(),
+    )
+
+    class _Reader:
+        @classmethod
+        def from_repository(cls, received_repository: _Repository) -> _Reader:
+            assert received_repository is repository
+            return cls()
+
+        def bot_fill_window(self, *_args: object, **_kwargs: object) -> FillWindowProjection:
+            return fills
+
+        def close(self) -> None:
+            return None
+
+    base_meta = repository.control_meta_snapshot()
+    revisions = iter(range(100, 200))
+    monkeypatch.setattr(
+        repository,
+        "control_meta_snapshot",
+        lambda: replace(base_meta, control_revision=next(revisions)),
+    )
+    monkeypatch.setattr(
+        sqlite_panel_source,
+        "active_sqlite_facade",
+        lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
+    )
+    monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _Reader)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(
+        sqlite_panel_source.SqlitePanelEconomicUnavailable
+    ):
+        await sqlite_panel_source.read_sqlite_chart_evidence(
+            "alpaca",
+            "paper-account",
+            "active-spy",
+            from_ms=1_700_000_000_000,
+            to_ms=1_700_086_400_000,
+        )
+
+    assert any(
+        getattr(record, "action", None)
+        == "sqlite_chart_projection_torn_read_exhausted"
+        for record in caplog.records
+    )
