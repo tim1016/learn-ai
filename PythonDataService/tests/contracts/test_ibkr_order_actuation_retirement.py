@@ -1,4 +1,14 @@
-"""Structural contract for #1583's IBKR order-actuation retirement."""
+"""Structural contract for #1583's IBKR order-actuation retirement.
+
+Module *absence* for this retirement is asserted by
+``tests/structural/test_ibkr_feed_boundary.py::EARLIER_RETIRED_MODULES``,
+the single home for "retirement X deleted module M" across all three
+retirement programmes; PR-C of #1813 moved the 47 paths this file used to
+assert by hand there, where they also gain the reference scan no path
+check can make. What stays here is what only this file can assert — route
+registration, the committed OpenAPI and frontend contracts, retired
+frontend files and route literals, and symbol-level shape.
+"""
 
 from __future__ import annotations
 
@@ -16,62 +26,6 @@ APPLICATION_ROOT = REPOSITORY_ROOT / "PythonDataService" / "app"
 FRONTEND_APPLICATION_ROOT = REPOSITORY_ROOT / "Frontend" / "src" / "app"
 OPENAPI_CONTRACT = REPOSITORY_ROOT / "contracts/openapi/python-data-service.openapi.json"
 FRONTEND_CONTRACT = FRONTEND_APPLICATION_ROOT / "api/broker.types.ts"
-
-RETIRED_DIRECT_MUTATION_MODULES = (
-    "broker/ibkr/order_cancel_capability.py",
-    "broker/ibkr/order_cancel_decision.py",
-    "engine/live/bot_event_spine.py",
-    "engine/live/live_context.py",
-    "engine/live/live_engine.py",
-    "engine/live/live_portfolio.py",
-    "engine/live/no_submit_broker_adapter.py",
-    "engine/live/replay_layer.py",
-    "routers/offline_replay.py",
-    "schemas/offline_replay.py",
-    "services/manual_order_submission.py",
-    "services/offline_replay_clock.py",
-    "services/offline_replay_data.py",
-    "services/offline_replay_service.py",
-)
-
-RETIRED_ACCOUNT_MUTATION_MODULES = (
-    "engine/live/account_clerk.py",
-    "engine/live/account_clerk_cursor.py",
-    "engine/live/account_clerk_emergency_sequence.py",
-    "engine/live/account_clerk_lease.py",
-    "engine/live/account_clerk_operations.py",
-    "engine/live/account_clerk_reconciler.py",
-    "engine/live/account_clerk_rpc.py",
-    "engine/live/account_clerk_rpc_protocol.py",
-    "engine/live/account_clerk_supervisor.py",
-    "engine/live/account_effect.py",
-    "engine/live/account_owner_fence.py",
-    "engine/live/daemon_command_idempotency.py",
-    "services/account_start_gate.py",
-    "services/presented_recovery_action_dispatch.py",
-    "services/presented_recovery_actions.py",
-)
-
-RETIRED_EXECUTION_RUNTIME_MODULES = (
-    "engine/live/account_classifier.py",
-    "engine/live/account_custody_projection.py",
-    "engine/live/account_custody_topology.py",
-    "engine/live/account_epoch_observer.py",
-    "engine/live/account_epoch_reconciliation.py",
-    "engine/live/bar_adapter.py",
-    "engine/live/clock_out.py",
-    "engine/live/engine_runtime.py",
-    "engine/live/fleet_reset_baseline.py",
-    "engine/live/ibkr_broker_ownership_query.py",
-    "engine/live/readiness.py",
-    "engine/live/readiness_sidecar.py",
-    "engine/live/reconciliation_orchestrator.py",
-    "engine/live/runtime_producer.py",
-    "engine/live/session_metadata.py",
-    "engine/live/shadow_fill_simulator.py",
-    "engine/live/submit_state_machine.py",
-    "services/mutation_attempt.py",
-)
 
 RETIRED_DATA_PLANE_ROUTES = {
     ("POST", "/api/broker/orders"),
@@ -191,63 +145,17 @@ def _openapi_methods_and_paths() -> set[tuple[str, str]]:
     }
 
 
-def test_direct_ibkr_order_mutation_routes_and_modules_are_absent() -> None:
+def test_direct_ibkr_order_mutation_routes_are_absent() -> None:
     registered = _registered_methods_and_paths()
 
     assert registered.isdisjoint(RETIRED_DATA_PLANE_ROUTES)
     assert registered.isdisjoint(RETIRED_IBKR_READ_ROUTES)
     assert not any(path.startswith(RETIRED_OFFLINE_REPLAY_PREFIX) for _method, path in registered)
     assert registered >= PRESERVED_IBKR_READ_ROUTES
-    for relative_path in RETIRED_DIRECT_MUTATION_MODULES:
-        assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
-
-
-def test_ibkr_order_projection_and_execution_modules_are_absent() -> None:
-    """Successor to the scan that asserted `broker/ibkr/orders.py` defined
-    no place/cancel primitive. PR-B of #1813 (2026-08-27) deleted the module
-    and its whole order/P&L/persistence family, so the guarantee is now the
-    stronger "there is no order module to define a primitive in"."""
-    for relative_path in (
-        "broker/ibkr/orders.py",
-        "broker/ibkr/order_error_stream.py",
-        "broker/ibkr/order_evidence.py",
-        "broker/ibkr/order_history.py",
-        "broker/ibkr/order_previews.py",
-        "broker/ibkr/order_projection.py",
-        "broker/ibkr/pnl.py",
-        "broker/ibkr/persistence.py",
-        "broker/ibkr/diagnostics.py",
-        "broker/ibkr/symbol_search.py",
-        "broker/safety_verdict.py",
-    ):
-        assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
 
 
 def test_production_python_has_no_ibkr_order_actuation_reference() -> None:
     assert _production_python_symbol_references() == {}
-
-
-def test_account_clerk_order_actuation_runtime_is_absent() -> None:
-    for relative_path in (
-        *RETIRED_ACCOUNT_MUTATION_MODULES,
-        *RETIRED_EXECUTION_RUNTIME_MODULES,
-    ):
-        assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
-
-    # This used to assert that `make_live_engine_verdict_provider` was not
-    # among broker/runtime_snapshot.py's functions. PR-C of #1813 (2026-08-27)
-    # deleted that module outright: it was built as the typed boundary for
-    # live_instances.py's safety-verdict and connected-account reads, PR-B
-    # retired both, and its own test was left as its only caller. A file that
-    # does not exist cannot define the function, so this absence assertion
-    # replaces the symbol assertion and is strictly stronger.
-    assert not (APPLICATION_ROOT / "broker/runtime_snapshot.py").exists()
-
-    # The scan for the host bridge's clerk-mutation route literals inside
-    # host_daemon.py is superseded by the bridge's own absence — PR-B of
-    # #1813 (2026-08-27) deleted the file, so no host process can serve
-    # `/accounts/{account_id}/clerk/*` or `/emergency-flatten` at all.
-    assert not (APPLICATION_ROOT / "engine/live/host_daemon.py").exists()
 
 
 def test_historical_ibkr_evidence_modules_expose_no_writer_api() -> None:
@@ -279,9 +187,9 @@ def test_historical_ibkr_evidence_modules_expose_no_writer_api() -> None:
         assert _defined_function_names(live_root / filename).isdisjoint(names), filename
 
     # `intent_wal.py` carried the last of these writers (`append`). PR-B of
-    # #1813 (2026-08-27) retired the module with the host bridge that fed
-    # it, so its writer is absent by the file's absence.
-    assert not (live_root / "intent_wal.py").exists()
+    # #1813 (2026-08-27) retired the module with the host bridge that fed it,
+    # so its writer is absent by the file's absence — pinned as
+    # `app.engine.live.intent_wal` in `RETIRED_MODULES`, not re-asserted here.
 
 
 def test_frontend_has_no_orphaned_ibkr_order_or_recovery_control() -> None:

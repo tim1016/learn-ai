@@ -425,7 +425,7 @@ list, disclosed after the review found the disclosure one name short.
 Contract impact across the whole of PR-C: **1 insertion / 23 deletions** —
 exactly the two narrowed enums. Schema component count unchanged at 592.
 
-### 6.4 Structural retirement guard added
+### 6.4 Structural retirement guard added — then made the only one
 
 `test_ibkr_feed_boundary.py` gained `RETIRED_MODULES` — **100 dotted module
 paths** that must no longer resolve — plus two guards:
@@ -433,11 +433,54 @@ paths** that must no longer resolve — plus two guards:
 `test_no_surviving_module_references_a_retired_module`, each with an explicit
 non-vacuity assertion. `BANNED_PREFIXES` dropped from 29 to 26: three entries
 (`app.broker.ibkr.account_recovery`, `account_truth`, `account_truth_freshness`)
-became redundant once `RETIRED_MODULES` made their absence a pinned fact.
+were removed as redundant — not because `RETIRED_MODULES` pinned them, but
+because `BANNED_PREFIXES` is matched with `str.startswith` and
+`app.broker.ibkr.account` is still in the tuple, so all three were already
+covered before `RETIRED_MODULES` existed. (The first version of this paragraph
+credited the new guard; thermo round 1, minor 5, corrected the attribution.)
 
 Mutation-tested four ways by the independent review. The negative proof worth
 recording: a **nested** import of a deleted module left
 `test_live_chart_window.py` fully green, and the new guard caught it.
+
+**Consolidation (thermo round 1, M-5).** Shipping this guard alongside the
+existing per-path assertions in `tests/contracts/` left the repo with **two**
+retirement mechanisms and **21 modules asserted absent twice, in two
+notations** (22 assertion sites; `app.engine.live.host_daemon` appeared in
+both contract files). Worse, the weaker of the two was the one left guarding
+everything else: `test_ibkr_evaluator_plane_retirement.py::_application_imports`
+recorded only `f"{node.module}.{alias.name}"` for an `ImportFrom` and ignored
+relative imports, so a plain `from app.services.foo import bar` walked straight
+through it.
+
+The AST guard is now the single mechanism. `EARLIER_RETIRED_MODULES` (**81**
+dotted paths, from #1583's order-actuation retirement and ADR 0038's
+evaluator-plane retirement) joins `RETIRED_MODULES` (**100**, #1813) as a
+separate, provenance-tagged tuple — separate so `RETIRED_MODULES` stays exactly
+the set derivable from `git diff --diff-filter=D --name-only 03ce52b6..` and
+nothing else — and both guards run over the union of **181**. The two contract
+files keep only what they alone can assert: route registration, the committed
+OpenAPI and frontend contracts, retired frontend files and route literals,
+symbol-level shape, and the two retired **non**-module artifacts
+(`action_plan_deploy_readiness.snapshot.json`, `scripts/launch_eight_bot_paper_run.py`).
+
+**Coverage was proved not to shrink, by name rather than by count.** The union
+of every module asserted absent by either mechanism before the consolidation is
+**181**; after, it is the same **181** — set-identical, zero lost, zero gained.
+All 81 earlier-retired modules additionally gain the reference scan they never
+had. Re-mutation-tested on one of them: creating
+`app/services/bot_roll_call.py` fails `test_retired_modules_no_longer_resolve`,
+and a function-local `from app.services.bot_roll_call import roll_call` fails
+`test_no_surviving_module_references_a_retired_module` — the precise form the
+retired scanner could not see.
+
+The guard stays in `tests/structural/test_ibkr_feed_boundary.py` rather than
+moving to `tests/contracts/`, against the review's suggestion, for one reason:
+it shares `_module_path`, `_is_package_dir`, `_containing_package` and
+`_resolve_relative_base` with the feed-boundary walk over the same tree, and
+moving it would have replaced one duplicated *assertion list* with duplicated
+*helpers*. The file's docstring now names both guards instead of just the
+boundary.
 
 ### 6.5 Code-judo consolidations (not deletions)
 
