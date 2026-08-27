@@ -4,7 +4,6 @@ import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angul
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
@@ -113,10 +112,10 @@ async function renderDesk(
           snapshot: { queryParamMap },
         },
       },
-      { provide: BrokersService, useValue: brokers },
       {
-        provide: BrokerService,
+        provide: BrokersService,
         useValue: {
+          ...brokers,
           accountTransactions: vi.fn().mockResolvedValue({
             projection_available: true, canonical_fallback_required: false, feed_state: 'live',
             feed_headline: 'Current', feed_detail: 'Current', high_water_journal_seq: 0,

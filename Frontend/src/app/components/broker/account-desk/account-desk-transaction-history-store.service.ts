@@ -5,7 +5,7 @@ import type {
   ClerkTransactionHistoryResponse,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
-import { BrokerService } from '../../../services/broker.service';
+import { BrokersService } from '../../../services/brokers.service';
 import { extractServerMessage } from '../operation-error';
 
 const PAGE_SIZE = 100;
@@ -15,7 +15,7 @@ const MAX_CLIENT_PAGES = MAX_CLIENT_ROWS / PAGE_SIZE;
 /** Loads a bounded server window completely before exposing it for client-side table filters. */
 @Injectable()
 export class AccountDeskTransactionHistoryStore {
-  private readonly broker = inject(BrokerService);
+  private readonly brokers = inject(BrokersService);
   private readonly accountKey = signal<string | null>(null);
   private readonly rowsState = signal<readonly ClerkTransactionSummary[]>([]);
   private readonly feedState = signal<ClerkTransactionHistoryResponse | null>(null);
@@ -90,7 +90,7 @@ export class AccountDeskTransactionHistoryStore {
       const seenCursors = new Set<string>();
 
       do {
-        const page = await this.broker.accountTransactions(
+        const page = await this.brokers.accountTransactions(
           accountId,
           cursor,
           PAGE_SIZE,

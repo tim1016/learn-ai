@@ -6,7 +6,6 @@ import type {
   ClerkTransactionHistoryResponse,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
-import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
 import {
@@ -196,14 +195,14 @@ async function renderHistory(
     providers: [
       { provide: AccountDeskTransactionHistoryStore, useValue: store },
       {
-        provide: BrokerService,
+        provide: BrokersService,
         useValue: {
+          getPortfolioHistory,
           accountTransaction: vi.fn().mockResolvedValue(null),
           acknowledgeExternalOrder: vi.fn(),
           ...brokerOverrides,
         },
       },
-      { provide: BrokersService, useValue: { getPortfolioHistory } },
     ],
   });
 }

@@ -6,7 +6,7 @@ import type {
   ClerkTransactionHistoryResponse,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
-import { BrokerService } from '../../../services/broker.service';
+import { BrokersService } from '../../../services/brokers.service';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
 
 describe('AccountDeskTransactionHistoryStore', () => {
@@ -18,7 +18,7 @@ describe('AccountDeskTransactionHistoryStore', () => {
       providers: [
         provideZonelessChangeDetection(),
         AccountDeskTransactionHistoryStore,
-        { provide: BrokerService, useValue: broker },
+        { provide: BrokersService, useValue: broker },
       ],
     });
   });

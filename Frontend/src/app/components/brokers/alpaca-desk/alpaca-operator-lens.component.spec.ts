@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ClerkStatus, SqliteClerkProjection } from '../../../api/alpaca.types';
 import { ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR, type AccountOperatorPosture } from '../../../api/operator-blocker.types';
-import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { healthyAccountOperatorPostureFixture, operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
@@ -158,13 +157,14 @@ describe('AlpacaOperatorLensComponent', () => {
     await render(AlpacaOperatorLensComponent, {
       providers: [
         lensDataProvider(activeProjection, refreshProjection, clerkStatus(fixHereAccountDeskPosture())),
-        { provide: BrokerService, useValue: { accountTransactions: vi.fn(), accountTransaction: vi.fn() } },
         {
           provide: BrokersService,
           useValue: {
             getSqliteClerkProjection: vi.fn().mockResolvedValue(activeProjection),
             executeSqliteRecoveryAction,
             getPortfolioHistory: getPortfolioHistory(),
+            accountTransactions: vi.fn(),
+            accountTransaction: vi.fn(),
           },
         },
       ],
@@ -187,8 +187,14 @@ describe('AlpacaOperatorLensComponent', () => {
     await render(AlpacaOperatorLensComponent, {
       providers: [
         lensDataProvider(projection(), vi.fn(), clerkStatus(terminalRunbookPosture())),
-        { provide: BrokerService, useValue: { accountTransactions: vi.fn(), accountTransaction: vi.fn() } },
-        { provide: BrokersService, useValue: { getPortfolioHistory: getPortfolioHistory() } },
+        {
+          provide: BrokersService,
+          useValue: {
+            getPortfolioHistory: getPortfolioHistory(),
+            accountTransactions: vi.fn(),
+            accountTransaction: vi.fn(),
+          },
+        },
       ],
     });
 
@@ -230,13 +236,13 @@ describe('AlpacaOperatorLensComponent', () => {
       providers: [
         lensDataProvider(),
         {
-          provide: BrokerService,
+          provide: BrokersService,
           useValue: {
+            getPortfolioHistory: getPortfolioHistory(),
             accountTransactions,
             accountTransaction,
           },
         },
-        { provide: BrokersService, useValue: { getPortfolioHistory: getPortfolioHistory() } },
       ],
     });
 
@@ -264,8 +270,14 @@ describe('AlpacaOperatorLensComponent', () => {
     const { container } = await render(AlpacaOperatorLensComponent, {
       providers: [
         lensDataProvider(),
-        { provide: BrokerService, useValue: { accountTransactions: vi.fn(), accountTransaction: vi.fn() } },
-        { provide: BrokersService, useValue: { getPortfolioHistory: getPortfolioHistory() } },
+        {
+          provide: BrokersService,
+          useValue: {
+            getPortfolioHistory: getPortfolioHistory(),
+            accountTransactions: vi.fn(),
+            accountTransaction: vi.fn(),
+          },
+        },
       ],
     });
 

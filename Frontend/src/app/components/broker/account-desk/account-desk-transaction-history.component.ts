@@ -24,7 +24,6 @@ import type {
   ClerkTransactionOrigin,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
-import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -115,7 +114,6 @@ export function matchesLocalDateMs(value: unknown, filter: unknown): boolean {
 })
 export class AccountDeskTransactionHistoryComponent {
   readonly store = inject(AccountDeskTransactionHistoryStore);
-  private readonly broker = inject(BrokerService);
   private readonly brokers = inject(BrokersService);
   private readonly filterService = inject(FilterService);
 
@@ -251,7 +249,7 @@ export class AccountDeskTransactionHistoryComponent {
     this.acknowledgingExternalOrderId.set(externalOrderId);
     this.acknowledgementError.set(null);
     try {
-      await this.broker.acknowledgeExternalOrder(accountId, externalOrderId, operator);
+      await this.brokers.acknowledgeExternalOrder(accountId, externalOrderId, operator);
       await this.store.load(accountId);
       this.acknowledgementOperator.set('');
       this.onReceiptClosed();
