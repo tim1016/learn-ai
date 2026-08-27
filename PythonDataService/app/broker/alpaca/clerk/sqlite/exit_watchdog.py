@@ -29,22 +29,17 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
+    RedriveThenEscalate,
     raise_uncertainty,
+    reason_age_policy,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    EXIT_STUCK_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
 )
 from app.broker.contract.ports import BrokerTradePort
 
 logger = logging.getLogger(__name__)
-
-# Stuck-EXIT watchdog policy (Direction 1 RQ2): after ~8 sweep cycles a
-# terminal EXIT_NOT_FLAT is re-driven through a fresh recovery EXIT, at most
-# EXIT_NOT_FLAT_MAX_REDRIVES times, then escalated durably as EXIT_STUCK.
-EXIT_NOT_FLAT_REDRIVE_AFTER_MS = 120_000
-EXIT_NOT_FLAT_MAX_REDRIVES = 3
 
 
 async def redrive_or_escalate_stale_exits(
@@ -54,6 +49,11 @@ async def redrive_or_escalate_stale_exits(
     intake: ReentrantAsyncLock,
 ) -> None:
     """Age-gate active EXIT_NOT_FLAT episodes: bounded re-drive, then escalate."""
+    # The single declared age policy (ADR 0048 Decision 1) — replaces the
+    # former EXIT_NOT_FLAT_REDRIVE_AFTER_MS / EXIT_NOT_FLAT_MAX_REDRIVES
+    # module constants; the watchdog keeps its execution logic and loses
+    # its policy.
+    redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
     now_ms = repo.clock()
     for instance in repo.strategy_instances():
         sid = instance["strategy_instance_id"]
@@ -62,7 +62,7 @@ async def redrive_or_escalate_stale_exits(
             reason_code=EXIT_NOT_FLAT_REASON_CODE,
             strategy_instance_id=sid,
         )
-        if episode is None or now_ms - episode["observed_at_ms"] < EXIT_NOT_FLAT_REDRIVE_AFTER_MS:
+        if episode is None or now_ms - episode["observed_at_ms"] < redrive_policy.after_ms:
             continue
         try:
             facts = UncertaintyRaisedFacts.from_facts_json(episode["facts_json"])
@@ -99,12 +99,12 @@ async def redrive_or_escalate_stale_exits(
             is not None
         ):
             redrives += 1
-        if redrives >= EXIT_NOT_FLAT_MAX_REDRIVES:
+        if redrives >= redrive_policy.max_count:
             async with intake:
                 escalated = raise_uncertainty(
                     repo,
                     strategy_instance_id=sid,
-                    reason_code=EXIT_STUCK_REASON_CODE,
+                    reason_code=redrive_policy.escalate_to,
                     headline="A stuck EXIT exhausted automatic re-drives",
                     explanation=(
                         f"{remaining:g} {cause.symbol} remains attributed after "

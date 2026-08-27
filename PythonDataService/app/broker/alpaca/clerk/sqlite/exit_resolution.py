@@ -18,7 +18,6 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
-    UNCERTAIN_SUBMIT_GRACE_MS,
     entry_never_accepted_durably,
     entry_order_symbol,
     fold_entry_never_accepted,
@@ -28,6 +27,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_submit_absence_void,
     fold_uncertain,
     order_never_reached_broker,
+    submit_absence_grace_ms,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -685,7 +685,7 @@ def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
         if created is None:
             raise AssertionError(f"no reducing-order creation transition for {order_ref!r}")
         anchor_ms = created["recorded_at_ms"]
-    return repo.clock() - anchor_ms >= UNCERTAIN_SUBMIT_GRACE_MS
+    return repo.clock() - anchor_ms >= submit_absence_grace_ms()
 
 
 def _deterministic_intent_id(effect_operation_id: str) -> str:

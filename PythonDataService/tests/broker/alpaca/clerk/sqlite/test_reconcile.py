@@ -11,6 +11,7 @@ broker unreachability.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import threading
 from collections.abc import Iterator
@@ -19,7 +20,7 @@ from typing import Any, Literal
 
 import pytest
 
-import app.broker.alpaca.clerk.sqlite.exit_watchdog as watchdog_module
+import app.broker.alpaca.clerk.sqlite.uncertainty as uncertainty_module
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
@@ -52,8 +53,10 @@ from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
+    RedriveThenEscalate,
     admit_new_exposure,
     raise_uncertainty,
+    reason_age_policy,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_STUCK_REASON_CODE,
@@ -74,6 +77,22 @@ ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
 APPROVED_POSITION_QTY_EPSILON = 0.000000001
+
+
+def _exit_not_flat_redrive_policy() -> RedriveThenEscalate:
+    """The declared EXIT_NOT_FLAT age policy (ADR 0048 Decision 1)."""
+    return reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
+
+
+def _set_exit_not_flat_max_redrives(monkeypatch: pytest.MonkeyPatch, max_count: int) -> None:
+    """Override only ``max_count`` on the declared policy, for one test."""
+    policy = uncertainty_module._REASON_POLICIES[EXIT_NOT_FLAT_REASON_CODE]
+    updated_age = dataclasses.replace(policy.age, max_count=max_count)
+    monkeypatch.setitem(
+        uncertainty_module._REASON_POLICIES,
+        EXIT_NOT_FLAT_REASON_CODE,
+        dataclasses.replace(policy, age=updated_age),
+    )
 
 
 @pytest.mark.parametrize(
@@ -2159,7 +2178,7 @@ async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> N
         strategy_instance_id=WATCHDOG_SID,
     )
     assert episode is not None
-    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
     trade = _FakeTrade()
 
     await reconcile_account(
@@ -2183,7 +2202,7 @@ async def test_reconcile_account_does_not_redrive_a_fresh_exit_not_flat(clocked_
         strategy_instance_id=WATCHDOG_SID,
     )
     assert episode is not None
-    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS - 1)
+    clock.advance(_exit_not_flat_redrive_policy().after_ms - 1)
 
     await reconcile_account(
         repo,
@@ -2201,8 +2220,8 @@ async def test_reconcile_account_escalates_exit_stuck_after_redrive_cap(
     repo, clock = clocked_repo
     await _held_position(repo)
     _raise_exit_not_flat(repo, attributed_qty=10.0)
-    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
-    monkeypatch.setattr(watchdog_module, "EXIT_NOT_FLAT_MAX_REDRIVES", 0)
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
+    _set_exit_not_flat_max_redrives(monkeypatch, 0)
 
     await reconcile_account(
         repo,
@@ -2234,7 +2253,7 @@ async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> 
         strategy_instance_id=WATCHDOG_SID,
     )
     assert episode_a is not None
-    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
     await reconcile_account(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
@@ -2308,7 +2327,7 @@ async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> 
     )
     assert episode_b is not None
     assert episode_b["uncertainty_id"] != episode_a["uncertainty_id"]
-    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
     await reconcile_account(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
@@ -2341,10 +2360,10 @@ async def test_watchdog_redrive_count_survives_episode_refresh(
     )
     assert episode is not None
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
-    monkeypatch.setattr(watchdog_module, "EXIT_NOT_FLAT_MAX_REDRIVES", 1)
+    _set_exit_not_flat_max_redrives(monkeypatch, 1)
 
     # Pass 1: one redrive, no escalation yet.
-    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
     await reconcile_account(
         repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=_FakeTrade()
     )
@@ -2371,7 +2390,7 @@ async def test_watchdog_redrive_count_survives_episode_refresh(
     # Pass 2: the one prior redrive is still counted (redrives=1 >= MAX=1), so
     # the watchdog escalates. A time-anchored count would read zero here and
     # never escalate.
-    clock.advance(watchdog_module.EXIT_NOT_FLAT_REDRIVE_AFTER_MS + 1)
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
     await reconcile_account(
         repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=_FakeTrade()
     )

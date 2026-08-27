@@ -39,7 +39,7 @@ _FIXTURE = (
     Path(__file__).resolve().parents[4]
     / "fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30/lean/observations.csv"
 )
-# Same truncation point `tests/services/test_bot_runner.py::_ema_parity_bars_through_first_exit`
+# Same truncation point `tests/_helpers/bot_runner/ema_parity.py::_ema_parity_bars_through_first_exit`
 # already uses -- the pinned window covering exactly one ENTER/EXIT round trip.
 _EMA_FIRST_EXIT_MS = 1_770_393_600_000
 

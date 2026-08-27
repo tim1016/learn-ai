@@ -14,7 +14,8 @@ from app.services.run_replay_proof import (
     RunReplayUnavailableError,
 )
 from app.services.source_bar_ledger import SourceBarLedger
-from tests.services.test_bot_runner import _SID, _ema_parity_bars_through_first_exit
+from tests._helpers.bot_runner.custody import _SID
+from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
 from tests.services.test_candidate_uncaptured_at_crash import _binding
 from tests.services.test_run_replay_fidelity import _record_live_pass
 

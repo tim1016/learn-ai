@@ -10,7 +10,7 @@ restores a crashed bot's process; this proves the evidence trail for one
 specific evaluation that never reached custody.
 
 Reuses the proven LEAN-parity EMA crossover fixture and Clerk test double
-from ``tests/services/test_bot_runner.py`` (``_ema_parity_bars_through_first_exit``,
+from ``tests/_helpers/bot_runner/`` (``_ema_parity_bars_through_first_exit``,
 ``_FakeClerk``, ``_tradable_market_liveness``) instead of re-deriving a
 fresh crossover fixture -- see CLAUDE.md "don't duplicate utility
 functions". Modeled on the crash-simulation idiom in
@@ -33,19 +33,19 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-from tests.services.test_bot_runner import (
+from tests._helpers.bot_runner.custody import _SID
+from tests._helpers.bot_runner.doubles import _FakeClerk
+from tests._helpers.bot_runner.ema_parity import (
     _EMA_FIRST_EXIT_MS,
-    _SID,
     _ema_parity_bars_through_first_exit,
     _ema_signal_evaluation_id,
-    _FakeClerk,
-    _tradable_market_liveness,
 )
+from tests._helpers.bot_runner.market import _tradable_market_liveness
 
 
 @pytest.fixture(autouse=True)
 def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mirror test_bot_runner.py's autouse fixture of the same name.
+    """Mirror ``bot_runner/conftest.py``'s autouse fixture of the same name.
 
     This module calls ``run_trade_bot`` directly rather than through
     ``BotTaskRegistry``, so only the two module-level bindings it actually

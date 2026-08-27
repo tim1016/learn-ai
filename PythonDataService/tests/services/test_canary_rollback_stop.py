@@ -40,16 +40,16 @@ import pytest
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import AccountFreezeState
 from app.schemas.run_admission import ProgramBuildAdmissionFact
+from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
+from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
+from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
-from tests.services.test_bot_runner import (
-    _SID,
-    _T0,
-    _custody_proof,
-    _CustodyClerk,
-    _FakeFeed,
-    _fresh_live_market_liveness,  # noqa: F401 -- autouse fixture, registered by import
-    _registry,
-)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_fresh_live_market_liveness(monkeypatch)
+
 
 _PROGRAM_KEY = "ema_crossover_signal"
 _ACCOUNT_ID = "paper-account"

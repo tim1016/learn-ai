@@ -8,29 +8,42 @@ raise/resolve are idempotent.
 
 from __future__ import annotations
 
+import dataclasses
+import typing
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import app.broker.alpaca.clerk.sqlite.order_evidence as order_evidence
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    _REASON_POLICIES,
     BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+    POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     AdmissionBlockedError,
+    AgePolicy,
     Capability,
+    CauseCleared,
+    ReasonPolicy,
+    RedriveThenEscalate,
     ReductionIntent,
     RefusalClass,
+    VoidAfter,
     admit_new_exposure,
     classify_admission_refusal,
     decide_capability,
     raise_uncertainty,
+    reason_age_policy,
     require_admission,
     resolve_reconciliation_uncertainty,
 )
@@ -458,3 +471,90 @@ def test_exit_stuck_blocks_new_exposure_and_foreign_symbol_reduction(repo) -> No
         reduction_intent=ReductionIntent(symbol="QQQ", side="SELL", quantity=4),
     )
     assert blocked_reduce.allowed is False
+
+
+# ── ADR 0048 Decision 1: per-reason age policy ──────────────────────────────
+
+
+def test_reason_policy_age_field_is_required_with_no_default() -> None:
+    """A reason cannot be registered without naming what ends its episode."""
+    age_field = next(field for field in dataclasses.fields(ReasonPolicy) if field.name == "age")
+    assert age_field.default is dataclasses.MISSING
+    assert age_field.default_factory is dataclasses.MISSING
+
+
+def test_every_registered_reason_declares_a_closed_age_policy() -> None:
+    """Exhaustive over the registry: every entry must be one of the three
+    closed AgePolicy shapes, so a newly-registered reason cannot be added
+    without its author choosing one."""
+    for reason_code, policy in _REASON_POLICIES.items():
+        assert isinstance(policy.age, (CauseCleared, VoidAfter, RedriveThenEscalate)), reason_code
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        POSITION_DRIFT_REASON_CODE,
+        BROKER_SNAPSHOT_STALE_REASON_CODE,
+        RECONCILIATION_INCOMPLETE_REASON_CODE,
+        EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    ],
+)
+def test_reasons_with_no_prior_clock_declare_cause_cleared(reason_code: str) -> None:
+    """ADR 0048 Decision 1 does not add a clock to a code that lacked one."""
+    assert _REASON_POLICIES[reason_code].age == CauseCleared()
+
+
+def test_order_outcome_unknown_declares_the_original_submit_absence_grace() -> None:
+    """Byte-identical replacement of ``UNCERTAIN_SUBMIT_GRACE_MS = 30_000``
+    (former ``order_evidence.py:37``) and its receipt summary code."""
+    assert _REASON_POLICIES[ORDER_OUTCOME_UNKNOWN_REASON_CODE].age == VoidAfter(
+        grace_ms=30_000, summary_code="ORDER_SUBMIT_FAILED_ABSENT"
+    )
+
+
+def test_exit_not_flat_declares_the_original_redrive_then_escalate() -> None:
+    """Byte-identical replacement of ``EXIT_NOT_FLAT_REDRIVE_AFTER_MS = 120_000``
+    and ``EXIT_NOT_FLAT_MAX_REDRIVES = 3`` (former ``exit_watchdog.py:46-47``)."""
+    assert _REASON_POLICIES[EXIT_NOT_FLAT_REASON_CODE].age == RedriveThenEscalate(
+        after_ms=120_000, max_count=3, escalate_to=EXIT_STUCK_REASON_CODE
+    )
+
+
+def test_exit_stuck_never_auto_voids_on_age() -> None:
+    """A durable escalation must not carry a clock: only an attributed-flat
+    proof or an operator may end it. Declaring ``VoidAfter`` here would
+    silently discard the very episode the escalation exists to preserve."""
+    assert _REASON_POLICIES[EXIT_STUCK_REASON_CODE].age == CauseCleared()
+    assert not isinstance(_REASON_POLICIES[EXIT_STUCK_REASON_CODE].age, VoidAfter)
+
+
+def test_age_policy_is_a_closed_three_shape_sum() -> None:
+    """The sum admits exactly CauseCleared / VoidAfter / RedriveThenEscalate —
+    not optional fields on one class (ADR 0048 Decision 1 rationale)."""
+    args = typing.get_args(AgePolicy)
+    assert set(args) == {CauseCleared, VoidAfter, RedriveThenEscalate}
+
+
+def test_reason_age_policy_rejects_a_shape_the_caller_did_not_declare() -> None:
+    """Narrowing happens once, at the accessor, with a named error.
+
+    Each caller reads a shape-specific field, so it is already coupled to
+    one variant. Asserting that at every call site invites a caller to
+    forget and then fail with an ``AttributeError`` several frames from the
+    mis-declaration.
+    """
+    with pytest.raises(TypeError, match="declares CauseCleared, not the VoidAfter"):
+        reason_age_policy(POSITION_DRIFT_REASON_CODE, VoidAfter)
+
+
+def test_submit_absence_receipt_code_is_the_declared_summary_code() -> None:
+    """The receipt code written on the definitive-absence void is the one the
+    policy declares — derived, not a second copy of the same literal.
+
+    A drift guard rather than a regression test: both spellings agreed when
+    this was two literals. The point is that there is now one definition, so
+    they cannot stop agreeing.
+    """
+    declared = reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter)
+    assert declared.summary_code == order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE

@@ -23,10 +23,10 @@ from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
-    UNCERTAIN_SUBMIT_GRACE_MS,
     fold_entry_never_accepted,
     fold_uncertain,
     resolve_order_submission,
+    submit_absence_grace_ms,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerUnavailable
@@ -85,7 +85,7 @@ async def _replay_incident(
         trade=trade,
     )
     assert submission.order_ref is not None
-    repo.clock.advance(UNCERTAIN_SUBMIT_GRACE_MS + 1)  # type: ignore[attr-defined]
+    repo.clock.advance(submit_absence_grace_ms() + 1)  # type: ignore[attr-defined]
     await resolve_order_submission(repo, order_ref=submission.order_ref, trade=trade)
 
     accepted = accept_exit(
@@ -189,7 +189,7 @@ async def _void_lost_entry(repo: ClerkSqliteRepository, *, decision_id: str) -> 
         trade=trade,
     )
     assert submission.order_ref is not None
-    repo.clock.advance(UNCERTAIN_SUBMIT_GRACE_MS + 1)  # type: ignore[attr-defined]
+    repo.clock.advance(submit_absence_grace_ms() + 1)  # type: ignore[attr-defined]
     await resolve_order_submission(repo, order_ref=submission.order_ref, trade=trade)
     return submission.order_ref
 
@@ -388,7 +388,7 @@ async def test_a_durable_fill_outweighs_an_absent_lookup(
         entry_order_ref=submission.order_ref,
     )
     assert accepted.effect_operation_id is not None
-    repo.clock.advance(UNCERTAIN_SUBMIT_GRACE_MS + 1)  # type: ignore[attr-defined]
+    repo.clock.advance(submit_absence_grace_ms() + 1)  # type: ignore[attr-defined]
 
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
 
@@ -431,7 +431,7 @@ async def test_live_absence_also_voids_the_entry_s_own_enter(
         entry_order_ref=submission.order_ref,
     )
     assert accepted.effect_operation_id is not None
-    repo.clock.advance(UNCERTAIN_SUBMIT_GRACE_MS + 1)  # type: ignore[attr-defined]
+    repo.clock.advance(submit_absence_grace_ms() + 1)  # type: ignore[attr-defined]
 
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
 
