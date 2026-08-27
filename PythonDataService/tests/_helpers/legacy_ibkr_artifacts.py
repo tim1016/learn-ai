@@ -32,7 +32,6 @@ from app.engine.live.account_registry import (
     ACCOUNT_INSTANCE_REGISTRY_FILENAME,
     AccountInstanceBinding,
 )
-from app.engine.live.intent_events import IntentEvent
 from app.engine.live.live_state_sidecar import _file_lock
 
 
@@ -127,15 +126,6 @@ def write_historical_clerk_journal(
 
     path = account_clerk_journal_path(artifacts_root, account_id)
     return _write_jsonl(path, entries)
-
-
-def write_historical_intent_wal(
-    path: Path,
-    events: Sequence[IntentEvent],
-) -> Path:
-    """Write an explicit immutable snapshot of historical intent events."""
-
-    return _write_jsonl(path, events)
 
 
 def _write_jsonl(path: Path, rows: Sequence[Any]) -> Path:
