@@ -6,6 +6,17 @@
 
 **Date.** 2026-08-17
 
+> **Superseded in part — 2026-08-27.** This census is pinned to commit
+> `e7325d2f` and its body is left verbatim as the record of that tree. Two of
+> its eight implementations no longer exist. **Implementation 4**
+> (`journal_exposure.py::fold_execution_exposure`) was retired by PR-C of
+> #1813. **Implementation 5** and the "vendor adapter to implementation 4"
+> row (`broker/alpaca/clerk/exposure.py`) were deleted earlier, by #1679 on
+> 2026-08-19 — which is also why row 4's cited parity test,
+> `test_alpaca_projection_uses_canonical_execution_fold`, no longer resolves
+> anywhere in the repo. Read rows 4 and 5 as history, not as a live canonical
+> registration; the current register is `docs/math-sources-of-truth.md`.
+
 **Answer.** Counting answer-producing implementation units rather than call sites, transports, SQL readers, validators, or display predicates, the pinned tree has **eight backend implementations** in the Alpaca scope: three P&L implementations (the shared FIFO lot engine, Gallery's null-safe day-P&L aggregate, and C3 broker-versus-local reconciliation) and five exposure/position implementations (the normalized execution fold, the legacy JSONL account projection/delta pipeline, the legacy incremental rollup mirror, the SQLite attributed-position fold, and SQLite broker-minus-attributed reconciliation). The apparent FIFO proliferation is mostly refuted: SQLite economics, panel/catalog services, routers, and Angular delegate or pass values through. The surviving authority defect is instead the meaning of *flat*: the registered SQLite rule treats `abs(qty) >= 1e-9` as exposure, while the rollup removes exactly `1e-9`, active SQLite panel/catalog reads surface every nonzero residue, and Angular's deploy guard uses exact zero. The rollup calls the canonical FIFO primitives for P&L but independently folds exposure, and its cited tests do not compare that mirror with the named canonical at the boundary. Confidence is **high** for the static call graph and formulas at the pinned SHA, and **medium-high** for runtime reachability because activation selects mutually exclusive JSONL and SQLite paths and this audit did not exercise a live broker account.
 
 This is a point-in-time audit and therefore supporting evidence, not an implementation authority. That register follows [`docs/doc-authority.md`](https://github.com/tim1016/learn-ai/blob/e7325d2ff0a122ffde3418cac94aa2f872f10ffa/docs/doc-authority.md#L13-L17): `docs/math-sources-of-truth.md`, the engine map, ADRs, code, and focused tests retain their existing roles.

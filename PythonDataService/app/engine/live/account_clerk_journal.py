@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from pathlib import Path
 from typing import overload
 
 from pydantic import ValidationError
 
-from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live import durable_append_log
 from app.engine.live.account_artifacts import (
     account_artifact_file_path,
@@ -371,17 +370,6 @@ def _append_jsonl(path: Path, entry: AccountClerkInboxEntry | AccountClerkJourna
     )
 
 
-def normalize_broker_event(
-    event: IbkrOrderEvent | Mapping[str, object],
-) -> IbkrOrderEvent | None:
-    """Validate the one broker-event model consumed by journal and drain paths."""
-
-    try:
-        return IbkrOrderEvent.model_validate(event)
-    except (TypeError, ValidationError, ValueError):
-        return None
-
-
 def _next_seq(entries: list[AccountClerkJournalEntry]) -> int:
     return entries[-1].seq + 1 if entries else 1
 
@@ -606,7 +594,6 @@ __all__ = [
     "account_clerk_journal_path",
     "fold_account_clerk_custody_statuses",
     "is_economic_terminal_broker_event",
-    "normalize_broker_event",
     "read_account_clerk_durability_spine",
     "read_account_clerk_durability_spine_locked",
     "read_account_clerk_inbox",
