@@ -9,8 +9,8 @@ import {
  * Reactive wrapper over an SSE ``EventSource`` for the IBKR broker
  * streams.
  *
- * Each broker SSE endpoint emits a named event (``chain``, ``pnl``,
- * ``order``) plus an ``error`` event for server-side BrokerError. This
+ * Each broker SSE endpoint emits a named event (``chain``,
+ * ``surface``) plus an ``error`` event for server-side BrokerError. This
  * helper:
  *
  * * Subscribes to the named event and accumulates payloads into a
@@ -21,7 +21,7 @@ import {
  *   underlying transport ``error`` (browser auto-reconnect).
  * * Closes the underlying ``EventSource`` on the calling injection
  *   context's ``DestroyRef`` — this is what triggers the IBKR-side
- *   ``cancelMktData`` / ``cancelPnL`` cleanup.
+ *   ``cancelMktData`` cleanup.
  *
  * Must be called from within an injection context (component
  * constructor or factory) for the destroy hook to fire.
