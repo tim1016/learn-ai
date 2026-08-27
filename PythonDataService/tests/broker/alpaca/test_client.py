@@ -261,7 +261,12 @@ async def test_timed_out_submit_stays_uncertain_until_order_becomes_visible(
 
     fake.post = delayed_post  # type: ignore[method-assign]
     fake.get_order_by_client_id = lookup_after_visibility  # type: ignore[method-assign]
-    client = AlpacaTradingClient(client_factory=lambda: fake, timeout_s=0.001)
+    # One client serves both halves of this test, so the budget has to satisfy
+    # both. The timeout assertion is insensitive to it — `delayed_post` parks on
+    # `release.wait()` until the `finally` — but the success assertion at the end
+    # is not: a sub-millisecond budget is shorter than a thread hop on a busy
+    # CPU, so the visible-order lookup timed out instead of returning.
+    client = AlpacaTradingClient(client_factory=lambda: fake, timeout_s=0.25)
     order = {
         "symbol": "SPY",
         "qty": "1",

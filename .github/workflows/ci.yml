@@ -359,11 +359,18 @@ jobs:
           echo "extra=${extra}" >> "$GITHUB_OUTPUT"
           echo "Extra change-driven test paths: ${extra:-<none>}"
 
+      # `-n auto` fans the run out over the runner's cores. This job is the
+      # only thing gating CI wall-clock time — every other job finishes inside
+      # 5 minutes while this one ran ~16 minutes single-process. Default
+      # `--dist load` is deliberate: no conftest in `tests/` declares a
+      # session- or module-scoped fixture, so per-test round-robin is safe,
+      # and it measured faster than `--dist loadfile` (94s vs 127s on a local
+      # 4-worker reproduction of the same 5,815-test baseline).
       - name: Run fast baseline + change-driven tests
         run: |
           read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
           extra="${{ steps.changed.outputs.extra }}"
-          python -m pytest "${baseline_dirs[@]}" $extra -v -m "not slow" --tb=short
+          python -m pytest "${baseline_dirs[@]}" $extra -n auto -v -m "not slow" --tb=short
 
   alpaca-sqlite-qualification-smoke:
     name: Alpaca SQLite Qualification Smoke
