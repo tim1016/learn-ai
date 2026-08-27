@@ -13,7 +13,7 @@ import { PageHeaderComponent } from '../../../shared/page-header/page-header.com
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
-import { BrokerService } from '../../../services/broker.service';
+import { MarketDataFeedService } from '../../../services/market-data-feed.service';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { brokerSse, type SseStatus, type SseStream } from '../../../services/broker-sse';
 import { QuantLibService } from '../../../services/quantlib.service';
@@ -88,7 +88,7 @@ interface ExpirationOption {
   templateUrl: './broker-options-chain.component.html',
 })
 export class BrokerOptionsChainComponent {
-  private readonly broker = inject(BrokerService);
+  private readonly broker = inject(MarketDataFeedService);
   private readonly health = inject(BrokerHealthService);
   readonly bannerState = this.health.bannerState;
   private readonly quantlib = inject(QuantLibService);

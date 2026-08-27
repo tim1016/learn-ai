@@ -1,6 +1,6 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import type { IbkrConnectionHealth } from '../api/broker-models';
-import { BrokerService } from './broker.service';
+import { MarketDataFeedService } from './market-data-feed.service';
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -21,7 +21,7 @@ export type LifecycleAction = 'connect' | 'disconnect' | 'reconnect';
  */
 @Injectable({ providedIn: 'root' })
 export class BrokerHealthService {
-  private readonly broker = inject(BrokerService);
+  private readonly broker = inject(MarketDataFeedService);
   private readonly destroyRef = inject(DestroyRef);
 
   readonly health = signal<IbkrConnectionHealth | null>(null);

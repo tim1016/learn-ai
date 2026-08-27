@@ -23,7 +23,7 @@ import type {
  * each component owns the EventSource lifetime explicitly.
  */
 @Injectable({ providedIn: 'root' })
-export class BrokerService {
+export class MarketDataFeedService {
   private readonly http = inject(HttpClient);
   private readonly base = '/api/broker';
 

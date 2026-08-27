@@ -3,17 +3,17 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { provideHttpClient } from '@angular/common/http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { BrokerService } from './broker.service';
+import { MarketDataFeedService } from './market-data-feed.service';
 
-describe('BrokerService diagnostics endpoints', () => {
-  let service: BrokerService;
+describe('MarketDataFeedService diagnostics endpoints', () => {
+  let service: MarketDataFeedService;
   let http: HttpTestingController;
 
   beforeEach(() => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],
     });
-    service = TestBed.inject(BrokerService);
+    service = TestBed.inject(MarketDataFeedService);
     http = TestBed.inject(HttpTestingController);
   });
 

@@ -15,7 +15,7 @@ import { FormsModule } from '@angular/forms';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
-import { BrokerService } from '../../../services/broker.service';
+import { MarketDataFeedService } from '../../../services/market-data-feed.service';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { brokerSse, type SseStatus, type SseStream } from '../../../services/broker-sse';
 import type {
@@ -90,7 +90,7 @@ const Z_METRICS: readonly ZMetricOption[] = [
   templateUrl: './broker-options-surface.component.html',
 })
 export class BrokerOptionsSurfaceComponent {
-  private readonly broker = inject(BrokerService);
+  private readonly broker = inject(MarketDataFeedService);
   private readonly health = inject(BrokerHealthService);
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
