@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -769,13 +768,3 @@ def test_artifact_drift_still_fails_closed_whatever_the_toggle_says(
     )
 
     assert proof.state == "UNPROVEN"
-
-
-def test_a_contract_cannot_hash_the_same_file_in_both_halves() -> None:
-    """Overlap would make a drift attributable to both halves at once, which
-    is the ambiguity the split exists to remove."""
-    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
-    assert contract is not None
-
-    with pytest.raises(ValueError, match="overlap"):
-        replace(contract, wiring_artifact_paths=contract.artifact_paths[:1])

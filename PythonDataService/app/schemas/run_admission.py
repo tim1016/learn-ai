@@ -151,6 +151,10 @@ class ProgramBuildAdmissionFact(BaseModel):
             raise ValueError(f"a PROVEN program-build fact requires {', '.join(missing)}")
         if not self.evidence_refs:
             raise ValueError("a PROVEN program-build fact requires non-empty evidence_refs")
+        if self.wiring == "DRIFTED" and self.next_step is None:
+            # A warning an operator cannot act on is worse than no warning: it
+            # reports a drift and leaves them to guess the remedy.
+            raise ValueError("a PROVEN fact reporting wiring drift requires a next_step")
         return self
 
 

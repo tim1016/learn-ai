@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import csv
 import json
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -182,3 +183,36 @@ def test_exclusions_and_artifact_paths_are_disjoint(key: str) -> None:
 def test_every_exclusion_carries_a_non_trivial_reason(key: str) -> None:
     thin = [path for path, reason in _CLOSURE_EXCLUSIONS_BY_PROGRAM[key].items() if len(reason.strip()) < 40]
     assert not thin, f"'{key}' has exclusions with no substantive reason: {thin!r}"
+
+
+@pytest.mark.parametrize("key", _SEALED_PROGRAMS)
+def test_each_program_hashes_its_own_wiring_and_not_another_programs(key: str) -> None:
+    """The wiring half must name *this* program's module (issue #1735).
+
+    Two failure modes this catches that nothing else does. An empty list
+    hashes to a constant, so its receipt would match forever and the program
+    would silently opt out of the coverage -- the closure assertion above
+    compares a union, and an empty list changes neither side of it. And a
+    copy-pasted contract pointing at a sibling's module would hash real bytes,
+    look entirely healthy, and never notice this program's own wiring change.
+    """
+    contract = _contract(key)
+
+    assert f"app/engine/strategy/programs/{key}.py" in contract.wiring_artifact_paths
+    assert not set(contract.wiring_artifact_paths) & set(contract.artifact_paths)
+
+
+def test_a_contract_cannot_declare_an_empty_wiring_set() -> None:
+    contract = _contract("ema_crossover_signal")
+
+    with pytest.raises(ValueError, match="empty set hashes to a constant"):
+        replace(contract, wiring_artifact_paths=())
+
+
+def test_a_contract_cannot_hash_the_same_file_in_both_halves() -> None:
+    """Overlap would make a drift attributable to both halves at once, which
+    is the ambiguity the split exists to remove."""
+    contract = _contract("ema_crossover_signal")
+
+    with pytest.raises(ValueError, match="overlap"):
+        replace(contract, wiring_artifact_paths=contract.artifact_paths[:1])

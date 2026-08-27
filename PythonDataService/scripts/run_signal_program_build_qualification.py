@@ -394,6 +394,19 @@ _QUALIFIED_IDENTITY_FIELDS = (
 )
 
 
+def _qualified_identity(**fields: str) -> tuple[str, ...]:
+    """Order the identity fields one way, for both the index and the lookup.
+
+    Both sides used to build this tuple positionally, so reordering
+    ``_QUALIFIED_IDENTITY_FIELDS`` would not have failed -- it would have
+    stopped every lookup matching and silently re-dated all seven receipts.
+    """
+    missing = set(_QUALIFIED_IDENTITY_FIELDS) ^ set(fields)
+    if missing:
+        raise ValueError(f"qualified identity needs exactly {_QUALIFIED_IDENTITY_FIELDS}; got {sorted(fields)}")
+    return tuple(fields[name] for name in _QUALIFIED_IDENTITY_FIELDS)
+
+
 def _prior_qualified_at_ms(path: Path) -> dict[tuple[str, ...], int]:
     """Map each already-qualified identity to the timestamp it earned.
 
@@ -414,11 +427,11 @@ def _prior_qualified_at_ms(path: Path) -> dict[tuple[str, ...], int]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     index: dict[tuple[str, ...], int] = {}
     for receipt in payload.get("receipts", ()):
-        identity = tuple(receipt.get(field) for field in _QUALIFIED_IDENTITY_FIELDS)
+        values = {field: receipt.get(field) for field in _QUALIFIED_IDENTITY_FIELDS}
         stamp = receipt.get("qualified_at_ms")
-        if any(part is None for part in identity) or not isinstance(stamp, int):
+        if any(value is None for value in values.values()) or not isinstance(stamp, int):
             continue
-        index[identity] = stamp
+        index[_qualified_identity(**values)] = stamp
     return index
 
 
@@ -445,12 +458,12 @@ def qualify_signal_program_builds(
             )
         qualification_suite = _QUALIFICATION_SUITES[program_key]
         _run_qualification_suite(qualification_suite)
-        identity = (
-            program_key,
-            contract.program_version,
-            contract.golden_trace_root,
-            running_artifact_digest(contract),
-            qualification_suite,
+        identity = _qualified_identity(
+            program_key=program_key,
+            program_version=contract.program_version,
+            golden_trace_root=contract.golden_trace_root,
+            artifact_digest=running_artifact_digest(contract),
+            qualification_suite=qualification_suite,
         )
         qualified_at_ms = prior_qualified_at_ms.get(identity, fresh_qualified_at_ms)
         receipts.append(

@@ -301,6 +301,14 @@ class SignalProgramContract:
     wiring_artifact_paths: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        # An empty wiring list is the dangerous shape, not a harmless one: it
+        # hashes to a fixed digest over zero files, so its receipt matches
+        # forever and the program silently opts out of the coverage this field
+        # exists to provide. Nothing else catches it -- the closure test
+        # compares a union, and an empty list contributes nothing to either
+        # side of it.
+        if not self.wiring_artifact_paths:
+            raise ValueError("wiring_artifact_paths must name the program's wiring; an empty set hashes to a constant")
         # Overlap would make a drift attributable to both halves at once,
         # which is exactly the ambiguity the split exists to remove.
         overlap = set(self.artifact_paths) & set(self.wiring_artifact_paths)
