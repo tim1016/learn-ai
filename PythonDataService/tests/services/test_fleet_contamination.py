@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -237,94 +236,6 @@ def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:
     assert compute_fleet_contamination({"SPY": 2}, explained)["verdict"] == "clean"
     assert compute_fleet_contamination({"SPY": 1}, explained)["summary"].startswith("Managed bot artifacts overstate")
     assert compute_fleet_contamination({"SPY": 3}, explained)["summary"].startswith("Unmanaged broker position")
-
-
-def test_account_fleet_computation_scopes_journal_reads_to_requested_account(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    seen: list[str | None] = []
-
-    async def positions() -> dict[str, int]:
-        return {}
-
-    def explanations(_root: Path, *, account_id: str | None = None) -> dict[str, dict[str, int]]:
-        seen.append(account_id)
-        return {}
-
-    monkeypatch.setattr(fleet_contamination, "collect_fleet_position_explanations", explanations)
-
-    asyncio.run(
-        fleet_contamination.compute_account_fleet_contamination(
-            tmp_path / "live_runs",
-            positions,
-            account_id="DU-A",
-        )
-    )
-
-    assert seen == ["DU-A"]
-
-
-def test_account_scoped_journals_cannot_cross_net_offsetting_exposure(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    def explanations(_root: Path, *, account_id: str | None = None) -> dict[str, dict[str, int]]:
-        assert account_id is not None
-        return {
-            "DU-A": {"bot-a": {"SPY": 3}},
-            "DU-B": {"bot-b": {"SPY": -3}},
-        }[account_id]
-
-    monkeypatch.setattr(fleet_contamination, "collect_fleet_position_explanations", explanations)
-
-    async def long_account_positions() -> dict[str, int]:
-        return {"SPY": 3}
-
-    async def short_account_positions() -> dict[str, int]:
-        return {"SPY": -3}
-
-    long_account = asyncio.run(
-        fleet_contamination.compute_account_fleet_contamination(
-            tmp_path / "live_runs",
-            long_account_positions,
-            account_id="DU-A",
-        )
-    )
-    short_account = asyncio.run(
-        fleet_contamination.compute_account_fleet_contamination(
-            tmp_path / "live_runs",
-            short_account_positions,
-            account_id="DU-B",
-        )
-    )
-
-    assert long_account.verdict == "clean"
-    assert short_account.verdict == "clean"
-    assert long_account.explained_total == {"SPY": 3}
-    assert short_account.explained_total == {"SPY": -3}
-
-
-def test_broker_fetch_failure_is_an_account_scoped_start_blocker(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        fleet_contamination,
-        "collect_fleet_position_explanations",
-        lambda _root, *, account_id=None: {},
-    )
-
-    async def unavailable_positions() -> None:
-        return None
-
-    result = asyncio.run(
-        fleet_contamination.compute_account_fleet_contamination(
-            tmp_path / "live_runs",
-            unavailable_positions,
-            account_id="DU-A",
-        )
-    )
-
-    assert result.verdict == "unknown"
-    assert result.policy_blocks_starts is True
 
 
 def test_shadow_drift_keeps_legacy_authoritative_and_emits_alarm(tmp_path: Path, monkeypatch) -> None:

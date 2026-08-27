@@ -10,7 +10,6 @@ from pathlib import Path
 
 from app.engine.live.account_clerk_journal import read_account_clerk_journal
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
-from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.live_state_sidecar import (
     LiveStateEnvelope,
@@ -19,7 +18,7 @@ from app.engine.live.live_state_sidecar import (
     stable_live_state_path,
 )
 from app.engine.live.run_lookup import account_id_from_run_ledger
-from app.schemas.live_runs import FleetContamination, InstanceBrokerView
+from app.schemas.live_runs import InstanceBrokerView
 from app.services.account_journal_authority import (
     account_journal_authority_is_active,
     observe_account_journal_parity,
@@ -320,51 +319,3 @@ def _account_id_for_run(live_runs_root: Path, run_id: str) -> str | None:
         return None
 
 
-async def fetch_net_positions(account_id: str | None = None) -> dict[str, int] | None:
-    """Best-effort net position only when the broker proves the account id."""
-
-    try:
-        from app.broker.ibkr import account as ibkr_account
-        from app.routers.broker_dependencies import require_connected_client
-
-        client = require_connected_client()
-        snapshot = await ibkr_account.fetch_positions(client)
-    except Exception as exc:
-        logger.info("fleet net-position fetch unavailable: %s", exc)
-        return None
-    if account_id is not None and snapshot.account_id.upper() != account_id.upper():
-        logger.warning(
-            "fleet net-position account mismatch",
-            extra={"requested_account_id": account_id, "broker_account_id": snapshot.account_id},
-        )
-        raise BrokerAccountMismatchError(
-            f"BROKER_ACCOUNT_MISMATCH:{account_id}:{snapshot.account_id}"
-        )
-    net: dict[str, int] = {}
-    for pos in snapshot.positions:
-        symbol = str(pos.symbol).upper()
-        net[symbol] = net.get(symbol, 0) + int(pos.quantity)
-    return net
-
-
-async def compute_account_fleet_contamination(
-    root: Path,
-    fetch_positions: NetPositionFetcher | None = None,
-    *,
-    account_id: str | None = None,
-) -> FleetContamination:
-    resolve_net_positions = fetch_positions or (lambda: fetch_net_positions(account_id))
-    explanations = collect_fleet_position_explanations(root, account_id=account_id)
-    try:
-        net_positions = await resolve_net_positions()
-    except BrokerAccountMismatchError:
-        result = compute_fleet_contamination(None, explanations, policy_blocks_starts=True)
-        result["policy_blocks_starts"] = True
-        result["summary"] = "Connected broker account mismatches the requested account; starts are blocked."
-    else:
-        result = compute_fleet_contamination(
-            net_positions,
-            explanations,
-            policy_blocks_starts=True,
-        )
-    return FleetContamination(**result)

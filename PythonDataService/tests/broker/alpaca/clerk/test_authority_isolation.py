@@ -6,14 +6,14 @@ modules that adapt it to HTTP) statically import a JSONL custody reader,
 the Postgres Clerk projection store, or an in-memory rollup-of-JSONL
 reader.
 
-The prior "Runtime" proof here (killing the SQLite read must never fall
-back to the Postgres Clerk projection store) tested the explicit
-``broker=ibkr`` compatibility branch in ``clerk_transactions.py``. That
-branch, ``get_clerk_transaction_store()``, and the Postgres store itself
-were retired with the rest of IBKR account authority (PR-A of #1813) —
-the router now only ever reaches the active-SQLite path, so the fallback
-this proved against is no longer constructible, not merely proven absent
-at runtime.
+**Runtime** — a broken active-SQLite read surfaces as backend-authored
+``projection_unavailable``, never a crash or silent empty-success response.
+The prior version of this proof also poisoned a Postgres Clerk projection
+store to show the router never fell back to it; that branch,
+``get_clerk_transaction_store()``, and the store itself were retired with
+the rest of IBKR account authority (PR-A of #1813) — there is no legacy
+store left to fall back to, so only the SQLite-degraded-mode half of the
+original proof still applies and is restored below (renamed to match).
 """
 
 from __future__ import annotations
@@ -22,6 +22,15 @@ import ast
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+
+import app.routers.clerk_transactions as clerk_transactions_router
+from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.routers.clerk_transactions import router
+from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 
 # The active-SQLite product surface: the sqlite/ package is sole-authority by
 # definition, plus the two product-facing modules that adapt it to HTTP.
@@ -87,3 +96,53 @@ def test_sole_authority_module_never_imports_a_legacy_reader_at_module_scope(
     assert not banned_modules_found, (
         f"{module_path} imports legacy reader module(s) {banned_modules_found} at module scope."
     )
+
+
+async def test_killed_sqlite_read_surfaces_as_projection_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken active-SQLite read must surface as unavailable, not silent success.
+
+    Renamed from test_killing_the_active_sqlite_read_returns_unavailable_never_legacy_data
+    (PR-A of #1813) — the Postgres poisoned-store half of that proof no longer
+    applies (there is no legacy store left to fall back to), but nothing else
+    in the suite exercises this SQLite-degraded-mode contract.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id="PA-KILL", artifacts_root=tmp_path)
+
+    class _UnreachableBroker:
+        broker_id = "alpaca"
+
+        async def list_orders(self, **_kwargs: object) -> list:
+            return []
+
+        async def list_positions(self) -> list:
+            return []
+
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_UnreachableBroker(),  # type: ignore[arg-type]
+        trade=_UnreachableBroker(),  # type: ignore[arg-type]
+    )
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+
+    def killed_sqlite_read(**_kwargs: object) -> None:
+        raise ClerkTransactionProjectionUnavailable("SQLite authority is unreachable (simulated kill).")
+
+    monkeypatch.setattr(clerk_transactions_router, "sqlite_transaction_history", killed_sqlite_read)
+
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/PA-KILL/transactions")
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["projection_available"] is False
+    assert body["feed_state"] == "projection_unavailable"
+    assert body["rows"] == []

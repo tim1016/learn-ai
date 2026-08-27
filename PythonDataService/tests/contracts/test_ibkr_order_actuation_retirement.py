@@ -292,16 +292,19 @@ def test_generated_contracts_retire_mutations_and_preserve_ibkr_reads() -> None:
 
 
 def test_presented_action_contract_is_reconciliation_only() -> None:
+    """The presented-action contract itself retired with account_safety_snapshot.py
+    and app/schemas/presented_operator_action.py (PR-A of #1813, 2026-08-26) —
+    there is no presented-action surface left that could carry an order
+    effect, so the invariant this test names now holds by the schemas'
+    absence rather than by inspecting their shape.
+    """
     schemas = json.loads(OPENAPI_CONTRACT.read_text(encoding="utf-8"))["components"]["schemas"]
-    invocation = schemas["PresentedOperatorActionInvocation"]
-    target = schemas["PresentedOperatorActionTarget"]
-    result = schemas["PresentedOperatorActionResult"]
-    action = schemas["PresentedOperatorAction"]
 
-    assert invocation["properties"]["action_id"]["const"] == "reconcile_now"
-    assert set(target["properties"]) == {"account_id"}
-    assert target["required"] == ["account_id"]
-    assert "confirmation_token" not in invocation["properties"]
-    assert "effect_receipt" not in result["properties"]
-    assert action["properties"]["effect_class"]["const"] == "EVIDENCE_REFRESH"
-    assert "PresentedOperatorActionEffectReceipt" not in schemas
+    for retired_schema in (
+        "PresentedOperatorActionInvocation",
+        "PresentedOperatorActionTarget",
+        "PresentedOperatorActionResult",
+        "PresentedOperatorAction",
+        "PresentedOperatorActionEffectReceipt",
+    ):
+        assert retired_schema not in schemas

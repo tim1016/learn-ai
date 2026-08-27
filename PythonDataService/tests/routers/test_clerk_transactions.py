@@ -43,6 +43,45 @@ async def test_history_endpoint_rejects_timestamp_beyond_int64() -> None:
     assert response.status_code == 422
 
 
+async def test_transaction_history_surfaces_unavailable_without_active_authority() -> None:
+    """No active SQLite authority must surface as unavailable, not silent success.
+
+    Renamed from test_missing_alpaca_activation_never_reads_ibkr_projection
+    (PR-A of #1813) — the poisoned-IBKR-store half of that proof no longer
+    applies (there is no legacy store left for the router to reach for), but
+    nothing else in the suite exercises the "no active authority" degraded
+    response for GET /transactions.
+    """
+    set_active_clerk_runtime(None)
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions")
+
+    assert response.status_code == 200
+    assert response.json()["feed_state"] == "projection_unavailable"
+    assert response.json()["rows"] == []
+
+
+async def test_transaction_detail_surfaces_unavailable_without_active_authority() -> None:
+    """No active SQLite authority must surface as unavailable, not silent success.
+
+    Renamed from test_missing_alpaca_activation_never_reads_ibkr_transaction_detail
+    (PR-A of #1813) — same reasoning as the history test above, for
+    GET /transactions/{transaction_id}.
+    """
+    set_active_clerk_runtime(None)
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions/legacy-row")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Clerk transaction projection unavailable."
+
+
 async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
