@@ -30,7 +30,7 @@ from app.services.bot_runner import AdmittedBotStart, set_bot_task_registry
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
-from app.services.broker_v2_panel import panel_data_source
+from app.services.broker_v2_panel import panel_data_source, panel_deploy
 from app.services.strategy_validation_manifest import (
     append_strategy_validation_flag_event,
     load_strategy_validation_entries,
@@ -177,7 +177,7 @@ def deploy_app(
         }
     ]
     monkeypatch.setattr(
-        panel_data_source,
+        panel_deploy,
         "load_strategy_validation_entries",
         lambda _registry: validation_entries,
     )
@@ -202,7 +202,8 @@ def deploy_app(
             operator_posture=_HEALTHY_POSTURE,
         )
 
-    monkeypatch.setattr(panel_data_source, "_clerk_status", clerk_status)
+    monkeypatch.setattr(panel_deploy, "clerk_status", clerk_status)
+    monkeypatch.setattr(panel_data_source, "clerk_status", clerk_status)
 
     fast_app = FastAPI()
     fast_app.include_router(router)

@@ -35,7 +35,7 @@ from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
-from app.services.broker_v2_panel.panel_data_source import resolve_account_id
+from app.services.broker_v2_panel.panel_scope import resolve_account_id
 
 
 @pytest.fixture(autouse=True)
