@@ -18,7 +18,7 @@ def require_connected_client() -> IbkrClient:
     if is_broker_disabled():
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "IBKR broker is disabled (IBKR_BROKER_ENABLED=false). Use /api/live-runs for paper-run status.",
+            "IBKR broker is disabled (IBKR_BROKER_ENABLED=false); this data plane holds no IBKR connection.",
         )
     try:
         client = get_client()

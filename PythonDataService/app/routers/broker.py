@@ -151,7 +151,7 @@ async def broker_health() -> IbkrConnectionHealth:
         return synthetic_disconnected_health(
             state="disabled",
             disabled=True,
-            reason="IBKR_BROKER_ENABLED=false — host-venv runner owns the IBKR session",
+            reason="IBKR_BROKER_ENABLED=false — the data-plane IBKR client is switched off",
         )
     try:
         client = get_client()
