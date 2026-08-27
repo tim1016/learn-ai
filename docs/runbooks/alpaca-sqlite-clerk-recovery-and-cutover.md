@@ -80,6 +80,10 @@ visible on the host. Native non-container deployments may use the direct
 and every SQLite connection runs on that same host. Never alternate host and
 container SQLite clients against one WAL authority.
 
+The `.venv/bin/python` in those examples is `PythonDataService/.venv`. Provision it
+with `./bootstrap-host-venv.sh` from the repo root; it installs the same
+heavy + light + dev requirement set CI does.
+
 ## Stop boundary
 
 Online backup is the only ceremony allowed while the Clerk is running. Before restore,

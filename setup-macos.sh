@@ -272,5 +272,9 @@ else
   echo "   GraphQL      http://localhost:5000/graphql"
   echo "   Python API   http://localhost:8000/health"
   echo "   Postgres     localhost:5432"
+  echo ""
+  echo " The full Python test suite runs from a HOST venv, not the container."
+  echo " Provision it once with:"
+  echo "   ./bootstrap-host-venv.sh"
   echo "============================================================"
 fi

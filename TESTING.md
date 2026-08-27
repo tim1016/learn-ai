@@ -17,8 +17,9 @@ cd Backend.Tests && dotnet test
 BACKEND_TEST_POSTGRES_CONNECTION_STRING='Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=<password>' \
   dotnet test --filter "Category=PostgresIntegration"
 
-# Python
-cd PythonDataService && python -m pytest tests/ -v
+# Python — the host venv is the real gate (see below); provision it once
+# from the repo root with ./bootstrap-host-venv.sh
+cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytest tests -n auto -q -m "not slow"
 ```
 
 ---
@@ -276,8 +277,25 @@ PythonDataService/tests/
 
 ### Running
 
+The **host venv** at `PythonDataService/.venv` is the project's real test gate.
+Run it from the repo root once to provision that interpreter:
+
+```bash
+./bootstrap-host-venv.sh
+```
+
+It installs the same `requirements-heavy.txt` + `-light.txt` + `-dev.txt` set CI
+installs. Prefer it over the `polygon-data-service` container for any full-suite
+run: the container resolves `FRONTEND_ROOT` differently and silently
+`pytest.skip()`s tests that genuinely fail on the host, and large suites hit its
+cgroup memory cap. Prefix `DATA_PLANE_CONTROL_SECRET=""` or roughly 33 router
+tests return 403 against a developer's real secret.
+
 ```bash
 cd PythonDataService
+
+# The gate — full suite, as CI runs it
+DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytest tests -n auto -q -m "not slow"
 
 # Run all tests
 python -m pytest tests/ -v
@@ -303,7 +321,8 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | Apollo service `done()` called multiple times | `watchQuery().valueChanges` is a `BehaviorSubject` | Use `take(1)` for empty-result tests |
 | PrimeNG p-table re-sorts component data | `[sortField]` mutates the backing array | Assert data presence, not specific order |
 | Random parallel failures on Windows | Jest/Vitest worker contention | `maxWorkers: '50%'` in config |
-| Python tests need local deps | Normally runs in Podman container | `pip install fastapi pydantic pandas-ta httpx pytest pytest-asyncio scipy numpy` |
+| Python tests need local deps | The host venv is the gate, and it is not created by `setup-macos.sh` | `./bootstrap-host-venv.sh` from the repo root |
+| Full suite passes in the container but fails on the host | The container resolves `FRONTEND_ROOT` differently and `pytest.skip()`s tests that genuinely fail | Treat only the host-venv run as authoritative |
 | LstmService `num_folds` branching | Polymorphic JSON deserialization | Tested via FakeHttpMessageHandler in LstmServiceTests |
 
 ---
