@@ -40,7 +40,6 @@ REPOSITORY_MUTATION_METHODS = frozenset(
     {
         "append_transition",
         "append_execution_slice_if_absent",
-        "observe_account_hold",
         "register_strategy_instance",
     }
 )
@@ -78,13 +77,6 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
         call="fold_order_evidence",
         classification=RepositoryWriterClassification.FACADE_WORKFLOW,
         rationale="Cumulative recovery is admitted only by the bounded evidence-ingress segment.",
-    ),
-    ExternalRepositoryWriter(
-        path="app/broker/alpaca/clerk/trade_evidence.py",
-        owner="SqliteTradeUpdateEvidenceSink.record_lifecycle_event",
-        call="observe_account_hold",
-        classification=RepositoryWriterClassification.FACADE_WORKFLOW,
-        rationale="The missing-evidence hold is a local branch of the bounded evidence-ingress segment.",
     ),
     ExternalRepositoryWriter(
         path="app/broker/alpaca/clerk/trade_evidence.py",

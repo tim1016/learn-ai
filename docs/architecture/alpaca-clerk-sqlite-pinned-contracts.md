@@ -1040,6 +1040,26 @@ BEFORE UPDATE OF ticket_id, leg_id, sequence_index, subject_id, instruction_hash
 BEGIN
     SELECT RAISE(ABORT, 'manual_order_legs identity is immutable');
 END;
+
+
+DROP TRIGGER IF EXISTS trg_holds_subject_compatible_insert;
+DROP TRIGGER IF EXISTS trg_holds_subject_compatible_update;
+DROP INDEX IF EXISTS ux_holds_one_active_cause;
+DROP INDEX IF EXISTS ix_holds_active_strategy_opened_at;
+DROP TABLE holds;
+CREATE VIEW holds AS
+SELECT
+    uncertainty_id                                              AS hold_id,
+    scope                                                       AS scope,
+    subject_id                                                  AS subject_id,
+    strategy_instance_id                                        AS strategy_instance_id,
+    reason_code                                                 AS reason_code,
+    CASE WHEN resolved_at_ms IS NULL THEN 'ACTIVE' ELSE 'RESOLVED' END AS state,
+    observed_at_ms                                              AS opened_at_ms,
+    resolved_at_ms                                              AS resolved_at_ms,
+    evidence_refs_json                                          AS evidence_refs_json
+FROM uncertainties
+WHERE reason_code IN ('STREAM_HEALTH_HOLD', 'UNEXPLAINED_ORDER_HOLD');
 ```
 
 Five `custody_transitions` foreign keys (`strategy_instance_id`, `run_id`,

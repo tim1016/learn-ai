@@ -31,13 +31,11 @@ from app.broker.alpaca.clerk.hold_debounce import (
     HoldSyncAction,
     advance_hold_debounce,
 )
-from app.broker.alpaca.clerk.sqlite.facts import (
-    AccountHoldRaisedFacts,
-    AccountHoldResolvedFacts,
-)
-from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    raise_account_hold,
+    resolve_account_hold,
+)
 from app.broker.alpaca.clerk.stream_health import (
     HOLD_SYNC_INTERVAL_S,
     STREAM_HEALTH_REASON_CODE,
@@ -100,30 +98,13 @@ class StreamHealthHoldSync:
         return step.action
 
     def _raise(self, evidence_refs: list[str]) -> None:
-        facts = AccountHoldRaisedFacts(
+        # `raise_account_hold` inherits the uncertainty path's
+        # append-on-change-only gate: an unchanged envelope appends nothing,
+        # so a persisting outage costs one append, not one per sample.
+        outcome = raise_account_hold(
+            self._repo,
             reason_code=STREAM_HEALTH_REASON_CODE,
             evidence_refs=evidence_refs,
-        )
-
-        def transition(kind: str) -> TransitionInput:
-            return TransitionInput(
-                transition_kind=kind,
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="succeeded",
-                clerk_observed_at_ms=self._repo.clock(),
-                summary_code=kind,
-                facts_json=facts.to_facts_json(),
-            )
-
-        # `observe_account_hold` is the append-on-change-only gate: it
-        # returns "unchanged" when the evidence identity matches, so a
-        # persisting outage costs nothing after the first append.
-        outcome = self._repo.observe_account_hold(
-            reason_code=STREAM_HEALTH_REASON_CODE,
-            evidence_refs_json=canonicalize(evidence_refs),
-            build_raise=lambda: transition("ACCOUNT_HOLD_RAISED"),
-            build_refresh=lambda: transition("ACCOUNT_HOLD_REFRESHED"),
         )
         if outcome != "unchanged":
             logger.warning(
@@ -136,23 +117,12 @@ class StreamHealthHoldSync:
             )
 
     def _release(self) -> None:
-        facts = AccountHoldResolvedFacts(
-            reason_code=STREAM_HEALTH_REASON_CODE,
-            evidence_refs=[],
-        )
-        # Idempotent: a no-op while no hold is active, so repeated healthy
+        # Idempotent: a no-op while no episode is active, so repeated healthy
         # samples append nothing.
-        released = self._repo.resolve_account_hold_if_active(
+        released = resolve_account_hold(
+            self._repo,
             reason_code=STREAM_HEALTH_REASON_CODE,
-            build_transition=lambda: TransitionInput(
-                transition_kind="ACCOUNT_HOLD_RESOLVED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="succeeded",
-                clerk_observed_at_ms=self._repo.clock(),
-                summary_code="ACCOUNT_HOLD_RESOLVED_BY_STREAM_RECOVERY",
-                facts_json=facts.to_facts_json(),
-            ),
+            summary_code="ACCOUNT_HOLD_RESOLVED_BY_STREAM_RECOVERY",
         )
         if released:
             logger.info(

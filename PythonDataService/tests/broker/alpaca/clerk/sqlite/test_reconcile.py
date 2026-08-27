@@ -60,6 +60,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_STUCK_REASON_CODE,
+    STREAM_HEALTH_HOLD_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
 )
@@ -713,7 +714,7 @@ async def test_reconcile_account_raises_an_account_clerk_hold_for_a_foreign_orde
     read = _FakeRead(orders=[foreign])
     result = await reconcile_account(repo, read=read, trade=_FakeTrade())
     assert result.verdict == "unexplained_order"
-    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
     assert hold is not None and hold["state"] == "ACTIVE"
 
 
@@ -768,7 +769,7 @@ async def test_acknowledging_one_external_order_keeps_another_external_cause_hel
     assert acknowledged.acknowledgement_sequence is not None
     assert acknowledged.observation_recorded_at_ms is not None
     assert acknowledged.acknowledgement_recorded_at_ms is not None
-    active = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    active = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
     assert active is not None
     assert active["evidence_refs_json"] == '["external-2"]'
     assert repo.external_order("external-2").acknowledged_at_ms is None  # type: ignore[union-attr]
@@ -780,7 +781,7 @@ async def test_acknowledging_external_order_resolves_only_its_hold_and_keeps_aud
 ) -> None:
     foreign = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
     await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade())
-    repo.append_transition(_hold_transition(reason_code="STREAM_HEALTH", evidence_refs=["stream"]))
+    repo.append_transition(_hold_transition(reason_code="STREAM_HEALTH_HOLD", evidence_refs=["stream"]))
 
     acknowledged = acknowledge_external_order(
         repo,
@@ -789,8 +790,8 @@ async def test_acknowledging_external_order_resolves_only_its_hold_and_keeps_aud
     )
 
     assert acknowledged.acknowledged_at_ms is not None
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="STREAM_HEALTH") is not None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="STREAM_HEALTH_HOLD") is not None
     assert [row["transition_kind"] for row in repo.custody_transitions()].count(
         "EXTERNAL_ORDER_ACKNOWLEDGED"
     ) == 1
@@ -904,12 +905,12 @@ async def test_acknowledgement_does_not_reactivate_stale_external_observations(
         trade=_FakeTrade(),
     )
     await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
     await reconcile_account(repo, read=_FakeRead(orders=[current]), trade=_FakeTrade())
 
     acknowledge_external_order(repo, external_order_id="external-current", operator="operator-1")
 
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
 
 
 async def test_reconcile_account_raises_an_account_clerk_uncertainty_for_position_drift(
@@ -1252,14 +1253,14 @@ async def test_reconcile_refreshes_changed_hold_evidence_then_resolves_it(
         read=_FakeRead(orders=[_broker_order("manual/two", order_id="bo-2")]),
         trade=_FakeTrade(),
     )
-    active = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    active = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
     assert active is not None and "bo-2" in active["evidence_refs_json"]
-    assert any(transition["transition_kind"] == "ACCOUNT_HOLD_REFRESHED" for transition in repo.custody_transitions())
+    assert any(transition["transition_kind"] == "UNCERTAINTY_REFRESHED" for transition in repo.custody_transitions())
 
     clean = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
     assert clean.verdict == "clean"
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
-    assert any(transition["transition_kind"] == "ACCOUNT_HOLD_RESOLVED" for transition in repo.custody_transitions())
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
+    assert any(transition["transition_kind"] == "UNCERTAINTY_RESOLVED" for transition in repo.custody_transitions())
 
 
 async def test_overlapping_reconciliation_passes_apply_verdicts_in_snapshot_order(
@@ -1294,7 +1295,7 @@ async def test_overlapping_reconciliation_passes_apply_verdicts_in_snapshot_orde
     clean_result, foreign_result = await asyncio.gather(clean_task, foreign_task)
     assert clean_result.verdict == "clean"
     assert foreign_result.verdict == "unexplained_order"
-    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
     assert hold is not None and "bo-newer" in hold["evidence_refs_json"]
 
 
@@ -1320,10 +1321,10 @@ async def test_clean_reconciliation_resolves_position_drift_uncertainty(
     )
 
 
-def test_raise_hold_if_none_active_serializes_two_concurrent_callers(
+def test_raise_uncertainty_if_none_active_serializes_two_concurrent_callers(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """``raise_hold_if_none_active``'s check-then-append must be one
+    """``raise_uncertainty_if_none_active``'s check-then-append must be one
     continuous critical section, not two separately-lockable steps — else
     two genuinely concurrent callers (an automatic sweep pass and an
     operator's "Reconcile now" landing at the same instant) could both
@@ -1336,7 +1337,7 @@ def test_raise_hold_if_none_active_serializes_two_concurrent_callers(
     (thread B can never reach the barrier while genuinely excluded by the
     lock). Proving mutual exclusion instead: pause thread A *after* its
     append (still inside the lock, since ``append_transition`` hasn't
-    returned to ``raise_hold_if_none_active`` yet) and confirm thread B —
+    returned to ``raise_uncertainty_if_none_active`` yet) and confirm thread B —
     attempting the identical call concurrently — is genuinely blocked
     (hasn't returned) for as long as thread A holds the lock, then only
     proceeds once released, at which point it must see A's hold and no-op.
@@ -1354,22 +1355,28 @@ def test_raise_hold_if_none_active_serializes_two_concurrent_callers(
         return result
 
     def build_transition() -> TransitionInput:
-        return _hold_transition(reason_code="RACE_TEST")
+        return _hold_transition(reason_code=STREAM_HEALTH_HOLD_REASON_CODE)
 
     result_a: list[bool] = []
     result_b: list[bool] = []
 
     def worker_a() -> None:
         result_a.append(
-            repo.raise_hold_if_none_active(
-                scope="ACCOUNT_CLERK", reason_code="RACE_TEST", build_transition=build_transition
+            repo.raise_uncertainty_if_none_active(
+                scope="ACCOUNT_CLERK",
+                reason_code=STREAM_HEALTH_HOLD_REASON_CODE,
+                strategy_instance_id=None,
+                build_transition=build_transition,
             )
         )
 
     def worker_b() -> None:
         result_b.append(
-            repo.raise_hold_if_none_active(
-                scope="ACCOUNT_CLERK", reason_code="RACE_TEST", build_transition=build_transition
+            repo.raise_uncertainty_if_none_active(
+                scope="ACCOUNT_CLERK",
+                reason_code=STREAM_HEALTH_HOLD_REASON_CODE,
+                strategy_instance_id=None,
+                build_transition=build_transition,
             )
         )
 

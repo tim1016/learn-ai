@@ -355,7 +355,7 @@ def test_unknown_cause_blocks_reduction_account_wide(repo: ClerkSqliteRepository
 def test_admit_new_exposure_blocked_by_an_active_hold(repo: ClerkSqliteRepository) -> None:
     """Admission folds the #1378 hold mechanism behind the same surface —
     a caller must be blocked by either, with no separate check needed."""
-    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER", evidence_refs=["bo-1"])
+    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER_HOLD", evidence_refs=["bo-1"])
     repo.append_transition(
         TransitionInput(
             transition_kind="ACCOUNT_HOLD_RAISED",
@@ -369,14 +369,14 @@ def test_admit_new_exposure_blocked_by_an_active_hold(repo: ClerkSqliteRepositor
     )
     decision = admit_new_exposure(repo, strategy_instance_id=SID)
     assert decision.allowed is False
-    assert decision.reason_code == "UNEXPLAINED_ORDER"
+    assert decision.reason_code == "UNEXPLAINED_ORDER_HOLD"
 
 
 @pytest.mark.parametrize("capability", [Capability.CANCEL, Capability.RECONCILE])
 def test_safety_capabilities_remain_allowed_under_active_hold(
     repo: ClerkSqliteRepository, capability: Capability
 ) -> None:
-    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER", evidence_refs=["bo-1"])
+    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER_HOLD", evidence_refs=["bo-1"])
     repo.append_transition(
         TransitionInput(
             transition_kind="ACCOUNT_HOLD_RAISED",

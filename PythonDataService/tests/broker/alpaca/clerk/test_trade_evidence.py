@@ -303,7 +303,7 @@ async def test_sqlite_unexplained_trade_update_records_external_order_without_a_
 
         assert kind == "unexplained_order"
         assert repo.external_orders()[0]["broker_order_id"] == "external-order-1"
-        assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is not None
+        assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is not None
         assert repo.attributed_positions_by_symbol() == {}
         assert repo.fills_for_order("external-order-1") == []
     finally:

@@ -16,7 +16,11 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+    STREAM_HEALTH_HOLD_REASON_CODE,
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     OrderOutcomeUnknownCause,
+    StreamHealthHoldCause,
+    UnexplainedOrderCause,
     UnknownOrderIdentity,
 )
 
@@ -42,6 +46,60 @@ def _unknown_outcome_envelope(*, cause: OrderOutcomeUnknownCause, why: str) -> U
         next_step="Reconcile now; cancellation and exact-identity lookup remain available.",
         evidence_refs=[identity.order_ref for identity in cause.identities],
         cause_facts=cause.to_mapping(),
+    )
+
+
+def account_hold_envelope(
+    *, reason_code: str, evidence_refs: list[str]
+) -> UncertaintyRaisedFacts:
+    """The R5 envelope for one former ``holds`` cause (ADR 0048 Decision 2).
+
+    A hold carried no envelope — only a reason code and evidence refs — so
+    the copy that describes it has to be authored somewhere, and this is the
+    one place. The wording deliberately matches the panel's closed operator
+    vocabulary for the same two codes; the panel keeps rendering its own
+    copy, so the two are peers, not a chain, and neither layer imports the
+    other. Every hold blocks entries account-wide and authorizes no
+    reduction, which is exactly what the registered policy declares.
+
+    Raises ``KeyError`` for any other reason code: a hold cause reaching here
+    unregistered would otherwise be described as a generic uncertainty and
+    lose the account-wide fence it exists to hold.
+    """
+    cause: dict[str, Any]
+    if reason_code == UNEXPLAINED_ORDER_HOLD_REASON_CODE:
+        cause = UnexplainedOrderCause(broker_order_ids=tuple(evidence_refs)).to_mapping()
+        headline = "An order this account did not submit is unreviewed"
+        explanation = (
+            "One or more broker orders were seen that this account's journal cannot "
+            "explain. Until each is reviewed, the Clerk cannot prove that new exposure "
+            "would be attributable."
+        )
+        operator_impact = "New submits are paused account-wide."
+        next_step = "Review each unexplained order, then acknowledge it to release the hold."
+    elif reason_code == STREAM_HEALTH_HOLD_REASON_CODE:
+        cause = StreamHealthHoldCause(channels=tuple(evidence_refs)).to_mapping()
+        headline = "A Clerk channel is unhealthy"
+        explanation = (
+            "A market-data or execution channel this account depends on is not "
+            "delivering. The Clerk cannot prove it would see the outcome of a new "
+            "order, so it does not authorize one."
+        )
+        operator_impact = "New submits are paused account-wide."
+        next_step = "Restore the named channel; the hold releases on its own once it recovers."
+    else:
+        raise KeyError(f"{reason_code!r} is not a registered account-hold cause")
+    return UncertaintyRaisedFacts(
+        severity="error",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        reason_code=reason_code,
+        headline=headline,
+        explanation=explanation,
+        operator_impact=operator_impact,
+        next_step=next_step,
+        evidence_refs=sorted(evidence_refs),
+        cause_facts=cause,
     )
 
 

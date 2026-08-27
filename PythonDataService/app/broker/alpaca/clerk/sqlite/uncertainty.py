@@ -25,18 +25,40 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    HOLD_REASON_CODES,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
+    STREAM_HEALTH_HOLD_REASON_CODE,
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
     PositionDriftCause,
+    StreamHealthHoldCause,
+    UnexplainedOrderCause,
     broker_snapshot_stale_cause_is_valid,
     reconciliation_incomplete_cause_is_valid,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import account_hold_envelope
 
 DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS = 30_000
+
+
+@dataclass(frozen=True)
+class TransitionProvenance:
+    """Optional broker provenance for the transition an episode appends.
+
+    The trade-update evidence ingress is the one raiser that knows which
+    broker order and which stream event it was reacting to. Carrying those
+    onto the appended transition is what lets an auditor join the episode
+    back to the frame that caused it; the sweep and the stream-health sync
+    have no such single event and leave all three unset.
+    """
+
+    broker_order_id: str | None = None
+    proof_reference: str | None = None
+    source_event_at_ms: int | None = None
 
 
 def _has_attributed_exposure(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> bool:
@@ -144,6 +166,22 @@ def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _unexplained_order_cause_is_valid(value: Any) -> bool:
+    try:
+        UnexplainedOrderCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _stream_health_hold_cause_is_valid(value: Any) -> bool:
+    try:
+        StreamHealthHoldCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 _REASON_POLICIES: dict[str, ReasonPolicy] = {
     POSITION_DRIFT_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -205,6 +243,30 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         cause_is_valid=_execution_coverage_conflict_cause_is_valid,
         age=CauseCleared(),
     ),
+    # The two former ``holds`` causes (ADR 0048 Decision 2). A hold was
+    # always an uncertainty whose policy had nowhere to live: account-wide,
+    # entry-blocking, reduction-forbidding, and ended only by proof its cause
+    # is gone. Registering them here is what retires the separate table.
+    #
+    # Neither takes a clock. An unreviewed foreign order and an unhealthy
+    # channel are both conditions, not deadlines — a grace window would
+    # release an account-wide entry fence on a timer, with the cause still
+    # standing. Adding age behaviour to either is a separate decision with
+    # its own evidence, not a migration detail.
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        cause_is_valid=_unexplained_order_cause_is_valid,
+        age=CauseCleared(),
+    ),
+    STREAM_HEALTH_HOLD_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        cause_is_valid=_stream_health_hold_cause_is_valid,
+        age=CauseCleared(),
+    ),
 }
 
 
@@ -261,6 +323,46 @@ def raise_uncertainty(
     refresh_unchanged: bool = False,
 ) -> bool:
     """Raise or refresh one typed episode; unknown causes fail closed account-wide."""
+    return (
+        observe_uncertainty_episode(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            reason_code=reason_code,
+            headline=headline,
+            explanation=explanation,
+            operator_impact=operator_impact,
+            next_step=next_step,
+            evidence_refs=evidence_refs,
+            cause_facts=cause_facts,
+            severity=severity,
+            refresh_unchanged=refresh_unchanged,
+        )
+        != "unchanged"
+    )
+
+
+def observe_uncertainty_episode(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str | None,
+    reason_code: str,
+    headline: str,
+    explanation: str,
+    operator_impact: str,
+    next_step: str,
+    evidence_refs: tuple[str, ...] = (),
+    cause_facts: dict[str, Any] | None = None,
+    severity: str = "warning",
+    refresh_unchanged: bool = False,
+    provenance: TransitionProvenance = TransitionProvenance(),
+) -> str:
+    """:func:`raise_uncertainty`, but naming *which* of raise/refresh/unchanged.
+
+    Two callers need the distinction rather than the boolean: the stream-health
+    sync logs "raised" and "refreshed" under different structured action codes,
+    and collapsing them would erase an operator's only signal for whether an
+    outage is new or ongoing.
+    """
     policy, scope, effective_strategy_instance_id = _effective_identity(
         reason_code=reason_code, strategy_instance_id=strategy_instance_id
     )
@@ -291,6 +393,9 @@ def raise_uncertainty(
             summary_code=transition_kind,
             facts_schema_version=FACTS_SCHEMA_VERSION,
             facts_json=facts_json,
+            broker_order_id=provenance.broker_order_id,
+            proof_reference=provenance.proof_reference,
+            source_event_at_ms=provenance.source_event_at_ms,
         )
 
     outcome = repo.observe_uncertainty(
@@ -302,7 +407,63 @@ def raise_uncertainty(
         build_refresh=lambda: build_transition("UNCERTAINTY_REFRESHED"),
         refresh_unchanged=refresh_unchanged,
     )
-    return outcome != "unchanged"
+    return outcome
+
+
+def raise_account_hold(
+    repo: ClerkSqliteRepository,
+    *,
+    reason_code: str,
+    evidence_refs: list[str],
+    provenance: TransitionProvenance = TransitionProvenance(),
+) -> str:
+    """Raise or refresh one account-hold episode (ADR 0048 Decision 2).
+
+    The two former ``holds`` causes now travel the ordinary uncertainty path:
+    same table, same append-on-change-only gate, same atomic check-then-append
+    under one write lock. What this adds over calling :func:`raise_uncertainty`
+    directly is that the caller supplies only its cause and evidence — the
+    operator envelope comes from :func:`account_hold_envelope`, so the two
+    producers cannot drift into describing the same hold differently.
+
+    ``blocks_new_exposure`` and ``allows_reduction`` are deliberately *not*
+    taken from the envelope: :func:`raise_uncertainty` reads them from the
+    registered policy, which is the authority on what an episode permits.
+    """
+    envelope = account_hold_envelope(reason_code=reason_code, evidence_refs=evidence_refs)
+    return observe_uncertainty_episode(
+        repo,
+        strategy_instance_id=None,
+        reason_code=envelope.reason_code,
+        headline=envelope.headline,
+        explanation=envelope.explanation,
+        operator_impact=envelope.operator_impact,
+        next_step=envelope.next_step,
+        evidence_refs=tuple(envelope.evidence_refs),
+        cause_facts=envelope.cause_facts,
+        severity=envelope.severity,
+        provenance=provenance,
+    )
+
+
+def resolve_account_hold(
+    repo: ClerkSqliteRepository, *, reason_code: str, summary_code: str
+) -> bool:
+    """Close one account-hold episode once its cause is proven gone.
+
+    ``summary_code`` stays the caller's, because it names *which* proof ended
+    the episode — a completed reconciliation and a recovered stream are
+    different receipts, and both were visible to operators before v12.
+    """
+    if reason_code not in HOLD_REASON_CODES:
+        raise ValueError(f"{reason_code!r} is not an account-hold cause")
+    return _resolve_account_uncertainty(
+        repo,
+        reason_code=reason_code,
+        resolution_kind="CAUSE_CLEARED",
+        summary_code=summary_code,
+        evidence_refs=(),
+    )
 
 
 _CLEAN_BROKER_RESOLVABLE_REASONS = frozenset(

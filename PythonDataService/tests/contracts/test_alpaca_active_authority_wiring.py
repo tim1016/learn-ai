@@ -320,7 +320,10 @@ def test_enter_does_not_write_the_account_scoped_stream_health_hold() -> None:
         APPLICATION_ROOT / "broker/alpaca/clerk/sqlite/runtime.py"
     ).read_text(encoding="utf-8")
 
-    assert "observe_account_hold(" not in source, (
+    # Named for the *current* writer. ADR 0048 Decision 2 deleted
+    # ``observe_account_hold``, so asserting its absence would now pass
+    # vacuously — a guard that can no longer fail is not a guard.
+    assert "raise_account_hold(" not in source, (
         "runtime.py raises an account hold again; the stream-health hold "
         "belongs to StreamHealthHoldSync, not to ENTER (#1777 WP4/S10)"
     )

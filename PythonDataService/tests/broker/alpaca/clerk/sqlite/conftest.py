@@ -36,9 +36,15 @@ def _clock_at(start_ms: int) -> _TestClock:
 
 def _hold_transition(
     *,
-    reason_code: str = "UNEXPLAINED_ORDER",
+    reason_code: str = "UNEXPLAINED_ORDER_HOLD",
     evidence_refs: list[str] | None = None,
 ) -> TransitionInput:
+    """One pre-v12 ``ACCOUNT_HOLD_RAISED`` transition.
+
+    The kind is retired as a *writer* (ADR 0048 Decision 2) but is still
+    replayed from any mirror recorded before v12, so this helper now builds
+    the legacy shape deliberately: it is how the replay folds are exercised.
+    """
     facts = AccountHoldRaisedFacts(
         reason_code=reason_code,
         evidence_refs=evidence_refs or ["bo-1"],

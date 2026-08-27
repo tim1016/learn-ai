@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.external_order_folds import (
     fold_external_order_observed as _fold_external_order_observed,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
+    FACTS_SCHEMA_VERSION,
     AccountHoldRaisedFacts,
     AccountHoldResolvedFacts,
     CommandRejectedFacts,
@@ -66,6 +67,10 @@ from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
     pause_manual_ticket_for_unknown_cancellation,
     rederive_manual_ticket_state_for_order,
     sync_manual_ticket_effect_state,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import normalized_hold_reason_code
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    account_hold_envelope,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     fold_uncertainty_raised as _fold_uncertainty_raised,
@@ -1290,38 +1295,86 @@ def _fold_reconciliation_attempted(conn: sqlite3.Connection, payload: dict[str, 
     )
 
 
+# ── Legacy account-hold folds (replay only, ADR 0048 Decision 2) ─────────────
+# ``ACCOUNT_HOLD_RAISED``/``_REFRESHED``/``_RESOLVED`` are retired as *write*
+# kinds: nothing appends them any more, and their producers now append the
+# ``UNCERTAINTY_*`` kinds. They stay registered because a mirror recorded
+# before v12 still contains them, and deleting the folds would make every such
+# mirror unreplayable — precisely the condition ``MirrorChainBroken`` exists to
+# make loud.
+#
+# Replaying one now writes an ``uncertainties`` row, because that is where the
+# episode lives after v12. The minted id keeps the ``hold:`` prefix the
+# original fold used, so replaying a pre-v12 mirror and migrating the v11 file
+# it was folded from produce byte-identical rows — the equivalence the upgrade
+# ceremony checks.
 def _fold_account_hold_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Open one database-unique account hold episode for a typed cause."""
-    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
-    hold_id = f"hold:{_this_transition_sequence(conn)}"
+    """Replay one pre-v12 account-hold raise into its uncertainty episode."""
+    legacy = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    facts = account_hold_envelope(
+        reason_code=normalized_hold_reason_code(legacy.reason_code),
+        evidence_refs=legacy.evidence_refs,
+    )
     conn.execute(
-        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
-        "opened_at_ms, resolved_at_ms, evidence_refs_json) "
-        "VALUES (?, 'ACCOUNT_CLERK', NULL, ?, 'ACTIVE', ?, NULL, ?)",
+        "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
+        "allows_reduction, custody_owner, subject_id, strategy_instance_id, reason_code, "
+        "headline, explanation, operator_impact, next_step, observed_at_ms, resolved_at_ms, "
+        "evidence_refs_json, facts_schema_version, facts_json) "
+        "VALUES (?, 'ACCOUNT_CLERK', ?, ?, ?, 'ACCOUNT_CLERK', NULL, NULL, ?, ?, ?, ?, ?, ?, "
+        "NULL, ?, ?, ?)",
         (
-            hold_id,
+            f"hold:{_this_transition_sequence(conn)}",
+            facts.severity,
+            1 if facts.blocks_new_exposure else 0,
+            1 if facts.allows_reduction else 0,
             facts.reason_code,
+            facts.headline,
+            facts.explanation,
+            facts.operator_impact,
+            facts.next_step,
             payload["recorded_at_ms"],
             canonicalize(facts.evidence_refs),
+            FACTS_SCHEMA_VERSION,
+            facts.to_facts_json(),
         ),
     )
 
 
 def _fold_account_hold_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    """Replay one pre-v12 account-hold refresh onto its uncertainty episode."""
+    legacy = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    facts = account_hold_envelope(
+        reason_code=normalized_hold_reason_code(legacy.reason_code),
+        evidence_refs=legacy.evidence_refs,
+    )
     conn.execute(
-        "UPDATE holds SET evidence_refs_json = ? WHERE scope = 'ACCOUNT_CLERK' "
-        "AND reason_code = ? AND state = 'ACTIVE'",
-        (canonicalize(facts.evidence_refs), facts.reason_code),
+        "UPDATE uncertainties SET evidence_refs_json = ?, facts_json = ?, observed_at_ms = ? "
+        "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND resolved_at_ms IS NULL",
+        (
+            canonicalize(facts.evidence_refs),
+            facts.to_facts_json(),
+            payload["recorded_at_ms"],
+            facts.reason_code,
+        ),
     )
 
 
 def _fold_account_hold_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    facts = AccountHoldResolvedFacts.from_facts_json(payload["facts_json"])
+    """Replay one pre-v12 account-hold resolution onto its uncertainty episode."""
+    legacy = AccountHoldResolvedFacts.from_facts_json(payload["facts_json"])
+    facts = account_hold_envelope(
+        reason_code=normalized_hold_reason_code(legacy.reason_code),
+        evidence_refs=legacy.evidence_refs,
+    )
     conn.execute(
-        "UPDATE holds SET state = 'RESOLVED', resolved_at_ms = ?, evidence_refs_json = ? "
-        "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND state = 'ACTIVE'",
-        (payload["recorded_at_ms"], canonicalize(facts.evidence_refs), facts.reason_code),
+        "UPDATE uncertainties SET resolved_at_ms = ?, evidence_refs_json = ?, facts_json = ? "
+        "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND resolved_at_ms IS NULL",
+        (
+            payload["recorded_at_ms"],
+            canonicalize(facts.evidence_refs),
+            facts.to_facts_json(),
+            facts.reason_code,
+        ),
     )
 
 
