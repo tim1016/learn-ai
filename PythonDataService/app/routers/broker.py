@@ -86,7 +86,7 @@ def _ibkr_api_evidence_to_sse(event: IbkrApiEvidenceEvent) -> str:
     return f"event: ibkr_api\ndata: {event.model_dump_json()}\n\n"
 
 
-def reset_broker_search_state_for_testing() -> None:
+def reset_option_contracts_cache_for_testing() -> None:
     """Test-only hook — flush the TTL cache so an earlier test cannot leak
     a cached response into the next assertion."""
     global _OPTION_CONTRACTS_CACHE

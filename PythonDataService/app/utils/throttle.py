@@ -1,4 +1,4 @@
-"""In-process TTL cache used by Slice 1F's broker search endpoints.
+"""In-process TTL cache used by the broker option-contracts endpoint.
 
 ``TtlCache`` short-circuits a repeated option-contract drill-down within
 its TTL so the router never re-qualifies the same contract.

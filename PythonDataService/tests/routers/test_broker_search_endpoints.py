@@ -47,11 +47,11 @@ def _connected_broker(monkeypatch):
     monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
     # Reset the in-process throttle / cache between tests so token state
     # from a previous test does not bleed into the next assertion.
-    broker_router.reset_broker_search_state_for_testing()
+    broker_router.reset_option_contracts_cache_for_testing()
     yield fake
     ibkr_client_module.set_client(None)
     ibkr_config.reset_settings_for_testing()
-    broker_router.reset_broker_search_state_for_testing()
+    broker_router.reset_option_contracts_cache_for_testing()
 
 
 def _spy_call_match() -> OptionContractMatch:

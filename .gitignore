@@ -87,7 +87,7 @@ PythonDataService/tests/fixtures/golden/cross-engine-studies/.failed/
 # Local Polygon captures used during fixture/debug work.
 PythonDataService/tests/fixtures/polygon_capture/
 
-# host_daemon / launcher runtime artifacts (PID file + rotating launch log).
+# Launcher runtime artifacts (PID file + rotating launch log).
 # Recreated on every launcher start; should never be committed.
 PythonDataService/.launcher.log
 PythonDataService/.launcher.pid
