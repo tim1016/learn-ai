@@ -234,8 +234,14 @@ def test_account_clerk_order_actuation_runtime_is_absent() -> None:
     ):
         assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
 
-    runtime_snapshot_functions = _defined_function_names(APPLICATION_ROOT / "broker/runtime_snapshot.py")
-    assert "make_live_engine_verdict_provider" not in runtime_snapshot_functions
+    # This used to assert that `make_live_engine_verdict_provider` was not
+    # among broker/runtime_snapshot.py's functions. PR-C of #1813 (2026-08-27)
+    # deleted that module outright: it was built as the typed boundary for
+    # live_instances.py's safety-verdict and connected-account reads, PR-B
+    # retired both, and its own test was left as its only caller. A file that
+    # does not exist cannot define the function, so this absence assertion
+    # replaces the symbol assertion and is strictly stronger.
+    assert not (APPLICATION_ROOT / "broker/runtime_snapshot.py").exists()
 
     # The scan for the host bridge's clerk-mutation route literals inside
     # host_daemon.py is superseded by the bridge's own absence — PR-B of

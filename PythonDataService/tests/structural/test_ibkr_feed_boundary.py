@@ -122,6 +122,7 @@ RETIRED_MODULES = (
     "app.broker.ibkr.persistence",
     "app.broker.ibkr.pnl",
     "app.broker.ibkr.symbol_search",
+    "app.broker.runtime_snapshot",
     "app.broker.safety_verdict",
     "app.engine.live.account_identity",
     "app.engine.live.account_observation_lease",
