@@ -36,16 +36,21 @@ remains Alpaca's sole position, attribution and FIFO authority.
 
 ### Scoreboard
 
-| | Slice-0 master `03ce52b6` | after PR-A | after PR-B | after PR-C `9b491b1a` |
+| | Slice-0 master `03ce52b6` | after PR-A | after PR-B | after PR-C, branch tip |
 |---|---|---|---|---|
 | `_ALLOWED_EXCEPTIONS` | 3 | 3 | **0** | **0** |
 | OpenAPI routes | 261 | 239 | 211 | 211 |
 | OpenAPI schema components | 730 | 659 | 592 | 592 |
 | Control-surface manifest prefixes | 13 | 13 | 9 | 9 |
 | `BANNED_PREFIXES` in the boundary test | 29 | 29 | 29 | 26 |
-| `RETIRED_MODULES` guard | — | — | — | **100** |
-| Python suite (passed) | 8545 | 8165 | 7297 | **7294** |
+| Retired-module guard (`RETIRED_MODULES` + `EARLIER_RETIRED_MODULES`) | — | — | — | **100 + 81 = 181** |
+| `app/schemas/live_runs.py` top-level symbols | 57 | 57 | 57 | **9** |
+| Python suite (passed) | 8545 | 8165 | 7297 | **7271** |
 | Frontend suite (passed) | 1899 | 1899 | 1855 | **1854** |
+
+The last column is measured at the branch tip **after** the thermo fix round,
+not at the SHA the first draft of this receipt cited. Every figure in it was
+re-derived on that tree rather than carried forward.
 
 ---
 
@@ -60,10 +65,18 @@ would have made each child re-present its parent's changes as new.
 |---|---|---|---|---|
 | **#1818** — PR-A, account authority | `decommission/pr-a-account-authority` | `03ce52b6..540af359` | 12 | master `428ff558` |
 | **#1819** — PR-B, session & execution | `decommission/pr-b-session-execution` | `540af359..ac908f28` | 26 | master `dcf456b4`, CI green |
-| **PR-C** — consolidation & close-out | `decommission/pr-c-consolidation` | `ac908f28..9b491b1a` | 16 | this PR |
+| **PR-C** — consolidation & close-out | `decommission/pr-c-consolidation` | `ac908f28..`&nbsp;branch tip | 23 | this PR |
 
-PR-C against master: **54 files changed, 840 insertions, 2 743 deletions.**
-Across all three: 267 file removals at full-range resolution (264 deletions
+PR-C against its base `ac908f28`: **61 files changed, 1 999 insertions, 3 067
+deletions**, measured with `git diff --shortstat ac908f28` on the tree this
+commit produces — generated artifacts included. The tip SHA is this commit's
+own and is recorded by the merge; it is deliberately not written here, because
+a receipt cannot cite a hash it is itself about to change.
+(This row read `ac908f28..9b491b1a` / 16 commits / 54 files / 840 insertions /
+2 743 deletions until thermo round 1, M-4: the receipt excluded itself, the
+router-freeze commit that followed it, and — necessarily — the fix round that
+answered the review. Recomputed from the final tip.)
+Across all three PRs: 267 file removals at full-range resolution (264 deletions
 plus 3 renames), and the machine-generated OpenAPI contract and
 `broker.types.ts` regenerated from them.
 
@@ -461,8 +474,9 @@ the set derivable from `git diff --diff-filter=D --name-only 03ce52b6..` and
 nothing else — and both guards run over the union of **181**. The two contract
 files keep only what they alone can assert: route registration, the committed
 OpenAPI and frontend contracts, retired frontend files and route literals,
-symbol-level shape, and the two retired **non**-module artifacts
-(`action_plan_deploy_readiness.snapshot.json`, `scripts/launch_eight_bot_paper_run.py`).
+symbol-level shape, and the two retired **non**-module artifacts (the
+`action_plan_deploy_readiness.snapshot.json` fixture inside `app/`, and the
+retired eight-bot launcher script outside it).
 
 **Coverage was proved not to shrink, by name rather than by count.** The union
 of every module asserted absent by either mechanism before the consolidation is
@@ -484,7 +498,18 @@ boundary.
 
 ### 6.5 Code-judo consolidations (not deletions)
 
-- `BarSessionPhase` collapsed to one definition in the neutral `feed.py`.
+- `BarSessionPhase` collapsed to one definition in the neutral `feed.py`. The
+  first attempt collapsed 2 of 5 copies and shipped the docstring claim
+  "Single definition repo-wide" anyway; thermo round 1 (M-2) found the other
+  three — `session_authority.TradingSessionPhase`, an inline return type on
+  `bars._session_phase_for_ms`, and an inline field type on
+  `run_admission.MarketDataAdmissionFact.scheduled_phase`. All three now import
+  the canonical object; `TradingSessionPhase` survives as an alias so session
+  code keeps its own noun, and `TradingSessionPhase is BarSessionPhase` is what
+  makes that honest. Verified by object identity at every site, not by reading:
+  `grep` for the six-member literal now returns one line, the definition. The
+  `run_admission` retype is contract-neutral (`--check` exit 0), because a
+  plain-assignment alias is transparent to `typing.get_type_hints`.
 - `JsonlWal`'s **four** inline copies of the CodeQL path sanitizer
   (`realpath` + `startswith(root_prefix)`) collapsed into one property. The
   8 new WAL tests were run against the **pre-refactor** code first, to prove
@@ -716,12 +741,19 @@ one.
 `/option-surface/{symbol}` · `/expirations/{symbol}` · `/strikes/{symbol}` ·
 `/api/market-data-feed/health`
 
-`RETAINED_FEED_MODULES` in the boundary test now has 16 entries and carries an
-explicit note that **every module it names has been deleted** — the list is now
-entirely forward-looking. It does not describe code that is here and must stay
-out of the feed's reach; it describes code that is gone and must not come back
-through the feed. A prefix guard costs nothing and is the cheapest way to make
-a resurrection fail loudly.
+Two lists in the boundary test describe this surface, and they mean opposite
+things — an earlier draft of this paragraph swapped them (thermo round 1, M-4).
+
+- **`RETAINED_FEED_MODULES` — 16 entries, every one of which *exists*.** It
+  names the feed-side modules whose transitive import graph must stay clear of
+  the account/order/session bucket, and
+  `test_retained_feed_modules_transitive_import_graph_has_no_unlisted_account_order_session_import`
+  asserts each one resolves to a real file before walking it.
+- **`BANNED_PREFIXES` — 26 entries, every one of which names a module that has
+  been deleted.** *That* list is the forward-looking one: it does not describe
+  code that is here and must stay out of the feed's reach, it describes code
+  that is gone and must not come back through the feed. A prefix guard costs
+  nothing and is the cheapest way to make a resurrection fail loudly.
 
 ### 11.2 Symbol groups deliberately retained, with the decision recorded
 
@@ -858,14 +890,14 @@ first-hand rather than accepted from a report.
 
 | Gate | Result |
 |---|---|
-| Python full suite (host venv) | **7294 passed / 44 skipped / 5 xpassed / 0 failed** |
+| Python full suite (host venv) | **7271 passed / 44 skipped / 5 xpassed / 0 failed** |
 | `ruff check PythonDataService/app/ PythonDataService/tests/` | clean |
 | Frontend `ng test` | **224 files / 1854 passed / 0 failed** |
 | `eslint --max-warnings 0`, `tsc --noEmit`, `ng build` | clean |
-| `codegen:check` | exit 0, reproducible (identical md5 twice) |
-| `test:guards` (`verify-proxy-control-guard.cjs`) | `proxy control guard ok`, exit 0 |
-| `export_openapi_contract.py --check` | exit 0 twice (idempotent), `git status -- contracts/` empty |
-| Feed-boundary structural test | 4 passed; `_ALLOWED_EXCEPTIONS` literally `set()` |
+| `codegen:check` | exit 0, no diff to `broker.types.ts` |
+| `test:guards` (`verify-frontend-guards.cjs`) | `proxy control guard ok`, `chart timestamp guard ok`, exit 0 |
+| `export_openapi_contract.py --check` | exit 0, contract byte-identical across the fix round |
+| Feed-boundary + retirement structural tests | 4 passed; `_ALLOWED_EXCEPTIONS` literally `set()` |
 | `scripts/check_documentation_contract.py` | exit 0 (before and after this receipt) |
 
 **Test-count trajectory, reconciled by name at every step:**
@@ -875,7 +907,8 @@ first-hand rather than accepted from a report.
 | Slice 0 baseline (`03ce52b6`) | 8545 / 52 skipped / 5 xpassed / 0 failed | 1899 |
 | PR-A (#1818) | 8165 / 45 / 5 / 0 | 1899 |
 | PR-B (#1819) | 7297 / 44 / 5 / 0 | 1855 |
-| **PR-C (`9b491b1a`)** | **7294 / 44 / 5 / 0** | **1854** |
+| PR-C at review (`aed7e8eb`) | 7294 / 44 / 5 / 0 | 1854 |
+| **PR-C after the thermo fix round** | **7271 / 44 / 5 / 0** | **1854** |
 
 Notes on the reconciliations, because two of them look like false greens:
 
@@ -895,14 +928,43 @@ Notes on the reconciliations, because two of them look like false greens:
   round; the schema file itself went 915 → 219 lines) left the suite
   **unchanged at 7294** — the shape of a false green. Affirmative evidence was
   supplied instead: nothing could import the 44 symbols, so there was no test
-  to keep alive and **no fabricated test double was needed**; the file went
-  915 → 219 lines; and the OpenAPI contract came out byte-identical. The
-  by-name reconciliation was re-derived at **both** revisions, showing renames
-  on both sides rather than netting them to zero (−16 / +13, net −3).
+  to keep alive and **no fabricated test double was needed**; and the OpenAPI
+  contract came out byte-identical. The by-name reconciliation was re-derived
+  at **both** revisions, showing renames on both sides rather than netting them
+  to zero (−16 / +13, net −3).
+- The thermo fix round's **−23** (7294 → 7271) is likewise reconciled by node
+  id, **−26 / +3**, with the two renames shown on both sides rather than
+  netted:
+  - **−20**, all in `tests/engine/live/test_run_status.py`:
+    `test_exit_reason_has_nine_values`, the 9 `test_exit_reason_literal_valid`
+    cases, the 9 `test_run_status_sidecar_round_trip` cases, and
+    `test_run_status_sidecar_active_run_round_trip` — the whole
+    `ExitReason` / `RunStatusSidecar` half of the file, deleted with the models
+    (§6.2). The file's three `_atomic_write_json` tests stay. **Narrowed, not
+    faked** — the alternative was a hand-built double for a model with no
+    production consumer, which is exactly the thing this project bans.
+  - **−4**, four whole tests that asserted nothing but module absence, now
+    covered by the consolidated guard (§6.4):
+    `test_ibkr_order_projection_and_execution_modules_are_absent`,
+    `test_account_clerk_order_actuation_runtime_is_absent`,
+    `test_evaluator_authority_modules_and_imports_are_absent`,
+    `test_account_capability_host_and_its_runtime_are_absent`.
+  - **−2 / +2 renames**:
+    `test_direct_ibkr_order_mutation_routes_and_modules_are_absent` →
+    `test_direct_ibkr_order_mutation_routes_are_absent` (lost its module loop),
+    and `test_retired_eight_bot_launcher_is_absent` →
+    `test_retired_evaluator_plane_non_module_artifacts_are_absent` (gained the
+    retired JSON snapshot).
+  - **+1**: `test_every_entry_point_refuses_a_path_outside_the_trusted_root[read_tail]`,
+    closing the gap between that file's docstring and its parametrize list.
+- The Frontend's **1854 → 1854** across the fix round is a true zero, not an
+  unmeasured one: the four deleted mirror types had no spec of their own, no
+  spec imported them, and `tsc --noEmit` over the whole project is what proves
+  nothing referenced them. Node-id delta on the Frontend: 0 removed, 0 added.
 
 **The acceptance criterion is live on `origin/master`:**
 `_ALLOWED_EXCEPTIONS: set[tuple[str, str]] = set()` at
-[`PythonDataService/tests/structural/test_ibkr_feed_boundary.py:89`](../../PythonDataService/tests/structural/test_ibkr_feed_boundary.py).
+[`PythonDataService/tests/structural/test_ibkr_feed_boundary.py:112`](../../PythonDataService/tests/structural/test_ibkr_feed_boundary.py).
 
 ---
 
