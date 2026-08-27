@@ -94,6 +94,14 @@ RETIRED_DATA_PLANE_ROUTES = {
     ("POST", "/api/live-instances/runs/{run_id}/stop"),
     ("GET", "/api/live-instances/daemon-diagnose"),
     ("GET", "/api/live-instances/{strategy_instance_id}/daemon-diagnose"),
+    # PR-B of #1813 (2026-08-27) retired the last four survivors of the
+    # ``/api/live-instances`` prefix along with the host bridge and the
+    # broker-activity publisher. The prefix is now empty; the assertion
+    # below pins that rather than pinning a shrinking allow-list.
+    ("GET", "/api/live-instances/daemon-health"),
+    ("POST", "/api/live-instances/daemon-health/renew-lease"),
+    ("GET", "/api/live-instances/{strategy_instance_id}/broker-activity"),
+    ("GET", "/api/live-instances/{strategy_instance_id}/broker-activity/stream"),
     ("GET", "/api/accounts/{account_id}/presented-lifecycle-actions/{action_id}"),
     ("POST", "/api/accounts/{account_id}/bindings/retire"),
     ("POST", "/api/accounts/{account_id}/legacy-stale-claims/candidates"),
@@ -105,12 +113,13 @@ PRESERVED_ROUTES = {
     ("POST", "/api/brokers/{broker}/accounts/{account_id}/bots"),
     ("POST", "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions"),
     ("GET", "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/panel"),
-    # IBKR remains a read-only market-data/order/capability source.
+    # IBKR remains a read-only market-data/capability source.
     # `/api/broker/account`, `/api/broker/positions`, and
     # `/api/broker/orders/completed` (account authority / Account Truth
-    # evidence) were retired by PR-A of #1813 (2026-08-26).
+    # evidence) were retired by PR-A of #1813 (2026-08-26);
+    # `/api/broker/orders/open` (the open-order projection) was retired by
+    # PR-B of #1813 (2026-08-27) with `app/broker/ibkr/orders.py`.
     ("GET", "/api/broker/capability"),
-    ("GET", "/api/broker/orders/open"),
     ("GET", "/api/broker/bars/snapshot"),
 }
 
@@ -155,13 +164,8 @@ def test_ibkr_bot_control_routes_are_unregistered() -> None:
     registered = _registered_methods_and_paths()
 
     assert registered.isdisjoint(RETIRED_DATA_PLANE_ROUTES)
-    assert {
+    assert not {
         item for item in registered if item[1].startswith("/api/live-instances")
-    } == {
-        ("GET", "/api/live-instances/daemon-health"),
-        ("POST", "/api/live-instances/daemon-health/renew-lease"),
-        ("GET", "/api/live-instances/{strategy_instance_id}/broker-activity"),
-        ("GET", "/api/live-instances/{strategy_instance_id}/broker-activity/stream"),
     }
 
 
@@ -178,17 +182,25 @@ def test_legacy_ledger_parser_is_replaced_by_a_read_only_identity_reader() -> No
     assert "def compute_run_id" not in source
 
 
-def test_account_capability_host_has_no_bot_runner_or_native_time_queue_reachability() -> None:
-    source = (APPLICATION_ROOT / "engine/live/host_daemon.py").read_text(encoding="utf-8")
-
-    assert "app.engine.live.live_engine" not in source
-    assert "app.engine.live.live_portfolio" not in source
-    assert "app.engine.execution.order" not in source
-    assert '"/runs/' not in source
-    assert '"/instances' not in source
-    assert '"/deploy"' not in source
-    assert not (APPLICATION_ROOT / "engine/live/live_engine.py").exists()
-    assert not (APPLICATION_ROOT / "engine/live/live_portfolio.py").exists()
+def test_account_capability_host_and_its_runtime_are_absent() -> None:
+    """Successor to the source-scan that asserted the host bridge could not
+    reach the bot runner. PR-B of #1813 (2026-08-27) deleted the bridge
+    itself, so the guarantee is now the strictly stronger "no host bridge
+    exists at all" — there is no source left to scan for a `/runs/` or
+    `/deploy` route literal."""
+    for relative_path in (
+        "engine/live/host_daemon.py",
+        "engine/live/host_daemon_client.py",
+        "engine/live/daemon_auth.py",
+        "engine/live/daemon_transport.py",
+        "engine/live/host_runner_policy.py",
+        "engine/live/control_plane.py",
+        "engine/live/command_channel.py",
+        "engine/live/live_engine.py",
+        "engine/live/live_portfolio.py",
+        "services/host_capability.py",
+    ):
+        assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
 
 
 def test_alpaca_control_and_ibkr_read_evidence_routes_remain_registered() -> None:
@@ -206,12 +218,7 @@ def test_committed_openapi_contract_excludes_evaluator_control_plane() -> None:
         for method in path_item
     }
 
-    assert live_instance_operations == {
-        ("GET", "/api/live-instances/daemon-health"),
-        ("POST", "/api/live-instances/daemon-health/renew-lease"),
-        ("GET", "/api/live-instances/{strategy_instance_id}/broker-activity"),
-        ("GET", "/api/live-instances/{strategy_instance_id}/broker-activity/stream"),
-    }
+    assert live_instance_operations == set()
     schemas = contract["components"]["schemas"]
     assert schemas.keys().isdisjoint(
         {

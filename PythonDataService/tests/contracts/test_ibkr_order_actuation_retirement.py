@@ -87,17 +87,6 @@ RETIRED_DATA_PLANE_ROUTES = {
     ("POST", "/api/accounts/{account_id}/registry/backfill-false-crashes"),
 }
 
-RETIRED_HOST_MUTATION_PATHS = {
-    "/accounts/{account_id}/clerk/ensure",
-    "/accounts/{account_id}/clerk/operator-adjustment",
-    "/accounts/{account_id}/clerk/operator-recovery-flatten",
-    "/accounts/{account_id}/clerk/operator-pending-cancel",
-    "/accounts/{account_id}/clerk/operator-exact-cancel",
-    "/accounts/{account_id}/clerk/authorize-emergency-flatten",
-    "/accounts/{account_id}/clerk/release",
-    "/accounts/{account_id}/emergency-flatten",
-}
-
 RETIRED_OFFLINE_REPLAY_PREFIX = "/api/offline-replay"
 
 # `/api/broker/account`, `/api/broker/positions`, `/api/broker/account-truth`,
@@ -111,15 +100,27 @@ PRESERVED_IBKR_READ_ROUTES = {
     ("GET", "/api/broker/health"),
     ("GET", "/api/broker/capability"),
     ("POST", "/api/broker/capability/probe"),
-    ("GET", "/api/broker/orders/open"),
-    ("GET", "/api/broker/orders/stream"),
     ("GET", "/api/broker/ibkr/evidence"),
     ("GET", "/api/broker/ibkr/evidence/stream"),
     ("GET", "/api/broker/bars/snapshot"),
     ("GET", "/api/broker/bars-5s/snapshot"),
+    ("GET", "/api/accounts/{account_id}/transactions"),
+}
+
+# Read surfaces PR-B of #1813 (2026-08-27) retired outright: the open-order
+# projection and order-event stream (with `broker/ibkr/orders.py`) and the
+# broker session mirror (with `services/broker_session_mirror.py`). They
+# moved out of PRESERVED_IBKR_READ_ROUTES into an absence assertion — a
+# route that cannot be served cannot leak evidence.
+RETIRED_IBKR_READ_ROUTES = {
+    ("GET", "/api/broker/orders/open"),
+    ("GET", "/api/broker/orders/stream"),
     ("GET", "/api/broker/session-mirror"),
     ("GET", "/api/broker/session-mirror/history"),
-    ("GET", "/api/accounts/{account_id}/transactions"),
+    ("GET", "/api/broker/diagnose"),
+    ("GET", "/api/broker/symbols/search"),
+    ("GET", "/api/broker/pnl/stream"),
+    ("GET", "/api/broker/pnl/positions/stream"),
 }
 
 RETIRED_FRONTEND_MODULES = (
@@ -194,16 +195,32 @@ def test_direct_ibkr_order_mutation_routes_and_modules_are_absent() -> None:
     registered = _registered_methods_and_paths()
 
     assert registered.isdisjoint(RETIRED_DATA_PLANE_ROUTES)
+    assert registered.isdisjoint(RETIRED_IBKR_READ_ROUTES)
     assert not any(path.startswith(RETIRED_OFFLINE_REPLAY_PREFIX) for _method, path in registered)
     assert registered >= PRESERVED_IBKR_READ_ROUTES
     for relative_path in RETIRED_DIRECT_MUTATION_MODULES:
         assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
 
 
-def test_ibkr_order_projection_has_no_place_or_cancel_primitive() -> None:
-    defined_names = _defined_function_names(APPLICATION_ROOT / "broker/ibkr/orders.py")
-
-    assert defined_names.isdisjoint({"place_paper_order", "cancel_paper_order"})
+def test_ibkr_order_projection_and_execution_modules_are_absent() -> None:
+    """Successor to the scan that asserted `broker/ibkr/orders.py` defined
+    no place/cancel primitive. PR-B of #1813 (2026-08-27) deleted the module
+    and its whole order/P&L/persistence family, so the guarantee is now the
+    stronger "there is no order module to define a primitive in"."""
+    for relative_path in (
+        "broker/ibkr/orders.py",
+        "broker/ibkr/order_error_stream.py",
+        "broker/ibkr/order_evidence.py",
+        "broker/ibkr/order_history.py",
+        "broker/ibkr/order_previews.py",
+        "broker/ibkr/order_projection.py",
+        "broker/ibkr/pnl.py",
+        "broker/ibkr/persistence.py",
+        "broker/ibkr/diagnostics.py",
+        "broker/ibkr/symbol_search.py",
+        "broker/safety_verdict.py",
+    ):
+        assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
 
 
 def test_production_python_has_no_ibkr_order_actuation_reference() -> None:
@@ -220,9 +237,11 @@ def test_account_clerk_order_actuation_runtime_is_absent() -> None:
     runtime_snapshot_functions = _defined_function_names(APPLICATION_ROOT / "broker/runtime_snapshot.py")
     assert "make_live_engine_verdict_provider" not in runtime_snapshot_functions
 
-    host_source = (APPLICATION_ROOT / "engine/live/host_daemon.py").read_text(encoding="utf-8")
-    for route_path in RETIRED_HOST_MUTATION_PATHS:
-        assert route_path not in host_source, route_path
+    # The scan for the host bridge's clerk-mutation route literals inside
+    # host_daemon.py is superseded by the bridge's own absence — PR-B of
+    # #1813 (2026-08-27) deleted the file, so no host process can serve
+    # `/accounts/{account_id}/clerk/*` or `/emergency-flatten` at all.
+    assert not (APPLICATION_ROOT / "engine/live/host_daemon.py").exists()
 
 
 def test_historical_ibkr_evidence_modules_expose_no_writer_api() -> None:
@@ -248,11 +267,15 @@ def test_historical_ibkr_evidence_modules_expose_no_writer_api() -> None:
             "retire_unmanaged_active_bindings_on_daemon_boot",
             "write_account_instance_binding",
         },
-        "intent_wal.py": {"append"},
         "run_status.py": {"write_run_status"},
     }
     for filename, names in retired_writers.items():
         assert _defined_function_names(live_root / filename).isdisjoint(names), filename
+
+    # `intent_wal.py` carried the last of these writers (`append`). PR-B of
+    # #1813 (2026-08-27) retired the module with the host bridge that fed
+    # it, so its writer is absent by the file's absence.
+    assert not (live_root / "intent_wal.py").exists()
 
 
 def test_frontend_has_no_orphaned_ibkr_order_or_recovery_control() -> None:
@@ -282,6 +305,7 @@ def test_generated_contracts_retire_mutations_and_preserve_ibkr_reads() -> None:
     frontend_contract = FRONTEND_CONTRACT.read_text(encoding="utf-8")
 
     assert openapi_methods_and_paths.isdisjoint(RETIRED_DATA_PLANE_ROUTES)
+    assert openapi_methods_and_paths.isdisjoint(RETIRED_IBKR_READ_ROUTES)
     assert not any(path.startswith(RETIRED_OFFLINE_REPLAY_PREFIX) for _method, path in openapi_methods_and_paths)
     assert openapi_methods_and_paths >= PRESERVED_IBKR_READ_ROUTES
     for _method, path in RETIRED_DATA_PLANE_ROUTES:
