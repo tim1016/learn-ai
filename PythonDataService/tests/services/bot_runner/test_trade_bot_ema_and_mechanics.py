@@ -14,25 +14,24 @@ import pytest
 
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
+from tests._helpers.bot_runner.custody import _SID, _T0, _registry
+from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
+from tests._helpers.bot_runner.ema_parity import (
+    _EMA_FIRST_EXIT_MS,
+    _ema_parity_bars_through_first_exit,
+    _ema_signal_evaluation_id,
+)
 from tests._helpers.canary_admission import admit_canary_pairing
 
-from .conftest import (
+from ._support import (
     _EMA_FIRST_ENTER_MS,
-    _EMA_FIRST_EXIT_MS,
     _SESSION_OPEN_MS,
-    _SID,
-    _T0,
     _WIN_END_MS,
     _WIN_START_MS,
     _bar,
-    _ema_parity_bars_through_first_exit,
-    _ema_signal_evaluation_id,
-    _FakeClerk,
-    _FakeFeed,
     _green_bar,
     _install_fake_clerk,
     _red_bar,
-    _registry,
     _strategy_instance_json,
     _wait_for,
 )

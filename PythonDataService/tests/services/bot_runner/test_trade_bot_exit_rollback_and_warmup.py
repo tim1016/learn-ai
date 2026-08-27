@@ -19,19 +19,16 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.marketdata.feed import MarketDataBar
+from tests._helpers.bot_runner.custody import _SID, _registry
+from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeEffectResult, _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
 
-from .conftest import (
+from ._support import (
     _SESSION_CLOSE_MS,
     _SESSION_OPEN_MS,
-    _SID,
     _WIN_START_MS,
-    _FakeClerk,
-    _FakeEffectResult,
-    _FakeFeed,
     _green_bar,
     _red_bar,
-    _registry,
     _trade_bar,
     _wait_for,
 )

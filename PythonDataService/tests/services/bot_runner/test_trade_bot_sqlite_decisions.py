@@ -22,21 +22,11 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, Settlement
+from tests._helpers.bot_runner.custody import _SID, _registry
+from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.canary_admission import admit_canary_pairing
 
-from .conftest import (
-    _RTH_MS,
-    _SID,
-    _WIN_START_MS,
-    _bar,
-    _FakeClerk,
-    _FakeFeed,
-    _green_bar,
-    _red_bar,
-    _registry,
-    _SqliteRuntimeBroker,
-    _wait_for,
-)
+from ._support import _RTH_MS, _WIN_START_MS, _bar, _green_bar, _red_bar, _wait_for
 
 
 @pytest.mark.asyncio

@@ -39,19 +39,17 @@ from app.services.bot_runner_errors import (
     InvalidRunHistoryCursorError,
 )
 from app.utils.timestamps import now_ms_utc
-
-from .conftest import (
+from tests._helpers.bot_runner.custody import (
     _SID,
     _T0,
-    _current_run_json,
     _custody_proof,
-    _CustodyClerk,
-    _FakeFeed,
     _flat_custody_snapshot,
     _lifecycle_json,
-    _OrderingClerk,
     _registry,
 )
+from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
+
+from ._support import _current_run_json, _OrderingClerk
 
 
 @asynccontextmanager

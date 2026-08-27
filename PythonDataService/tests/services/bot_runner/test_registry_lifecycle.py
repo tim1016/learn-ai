@@ -7,6 +7,7 @@ Split from ``tests/services/test_bot_runner.py`` (issue #1737).
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -39,24 +40,29 @@ from app.services.bot_runner import (
 from app.services.bot_runner_errors import (
     BotRunnerError,
 )
-
-from .conftest import (
-    _CLOSED_MS,
-    _RTH_MS,
+from tests._helpers.bot_runner.custody import (
     _SID,
     _T0,
-    _bar,
-    _current_run_json,
-    _desired_json,
-    _FakeFeed,
     _flat_custody_snapshot,
     _flat_start_guard,
     _lifecycle_json,
     _registry,
-    _run_json,
-    _strategy_instance_json,
-    _wait_for,
 )
+from tests._helpers.bot_runner.doubles import _FakeFeed
+
+from ._support import _RTH_MS, _bar, _current_run_json, _strategy_instance_json, _wait_for
+
+_CLOSED_MS = 1_700_096_400_000
+
+
+def _desired_json(tmp_path: Path, sid: str = _SID) -> dict:
+    path = tmp_path / "live_state" / sid / "desired_state.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _run_json(tmp_path: Path, run_id: str, sid: str = _SID) -> dict:
+    path = tmp_path / "live_state" / sid / "runs" / f"{run_id}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 class _StaleFeed(_FakeFeed):

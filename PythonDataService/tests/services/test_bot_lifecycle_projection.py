@@ -27,12 +27,14 @@ from app.services.bot_lifecycle_projection import (
 )
 from app.services.bot_runner import BotTaskRegistry
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
+from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
-from tests.services.bot_runner.conftest import (  # noqa: F401 -- _fresh_live_market_liveness is an autouse fixture, registered by import
-    _FakeFeed,
-    _fresh_live_market_liveness,
-    _SqliteRuntimeBroker,
-)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_fresh_live_market_liveness(monkeypatch)
 
 
 def _registered_repo(tmp_path: Path) -> ClerkSqliteRepository:

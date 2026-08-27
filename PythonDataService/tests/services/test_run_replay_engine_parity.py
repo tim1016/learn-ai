@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.services.run_replay_proof import engine_parity_over_bars, to_trade_bar
 from app.services.source_bar_ledger import RetainedSourceBar
-from tests.services.bot_runner.conftest import _ema_parity_bars_through_first_exit
+from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
 
 
 def _fixture_trade_bars() -> list:

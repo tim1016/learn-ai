@@ -46,18 +46,17 @@ from app.services.bot_runner import (
     BootRecoveryIncompleteError,
     BotTaskRegistry,
 )
-from tests.services.bot_runner.conftest import (
-    _custody_proof,
-    _CustodyClerk,
-    _FakeFeed,
-    _flat_start_guard,
-    _fresh_live_market_liveness,  # noqa: F401 -- autouse fixture, registered by import
-    _lifecycle_json,
-    _SqliteRuntimeBroker,
-)
+from tests._helpers.bot_runner.custody import _custody_proof, _flat_start_guard, _lifecycle_json
+from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed, _SqliteRuntimeBroker
+from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 
 _SID = "alpaca-drill-bot"
 _T0 = 1_700_000_000_000
+
+
+@pytest.fixture(autouse=True)
+def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_fresh_live_market_liveness(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

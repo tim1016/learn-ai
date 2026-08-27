@@ -13,18 +13,11 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
+from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
 
-from .conftest import (
-    _SID,
-    _T0,
-    _bar,
-    _custody_proof,
-    _FakeFeed,
-    _OrderingClerk,
-    _registry,
-    _wait_for,
-)
+from ._support import _bar, _OrderingClerk, _wait_for
 
 
 class _StopOrderingFeed(_FakeFeed):

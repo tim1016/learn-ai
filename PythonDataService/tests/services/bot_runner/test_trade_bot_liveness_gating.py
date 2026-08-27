@@ -24,20 +24,12 @@ from app.services.bot_binding_repository import (
     alpaca_v1_action_plan,
 )
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
+from tests._helpers.bot_runner.custody import _SID, _T0, _registry
+from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
+from tests._helpers.bot_runner.market import _tradable_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
 
-from .conftest import (
-    _SID,
-    _T0,
-    _WIN_START_MS,
-    _FakeClerk,
-    _FakeFeed,
-    _green_bar,
-    _red_bar,
-    _registry,
-    _tradable_market_liveness,
-    _wait_for,
-)
+from ._support import _WIN_START_MS, _green_bar, _red_bar, _wait_for
 
 
 @pytest.mark.asyncio

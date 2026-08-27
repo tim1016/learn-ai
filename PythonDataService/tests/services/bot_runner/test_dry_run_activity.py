@@ -16,17 +16,11 @@ from app.services.bot_binding_repository import (
 )
 from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
 from app.services.bot_registry_projection import read_dry_run_activity
+from tests._helpers.bot_runner.custody import _SID, _T0, _registry
+from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
+from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
 
-from .conftest import (
-    _SID,
-    _T0,
-    _ema_parity_bars_through_first_exit,
-    _FakeClerk,
-    _FakeFeed,
-    _install_fake_clerk,
-    _registry,
-    _wait_for,
-)
+from ._support import _install_fake_clerk, _wait_for
 
 
 @pytest.fixture

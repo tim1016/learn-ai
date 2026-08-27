@@ -16,11 +16,9 @@ from app.marketdata.feed import MarketDataBar
 from app.services.bot_runtime import PauseAwareFeed, execute_bot_run
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed, run_trade_bot
 from app.services.source_bar_ledger import SourceBarLedger
-from tests.services.bot_runner.conftest import (
-    _SID,
-    _ema_parity_bars_through_first_exit,
-    _FakeClerk,
-)
+from tests._helpers.bot_runner.custody import _SID
+from tests._helpers.bot_runner.doubles import _FakeClerk
+from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
 from tests.services.test_candidate_uncaptured_at_crash import (  # noqa: F401 -- autouse fixture
     _binding,
     _fresh_live_market_liveness,

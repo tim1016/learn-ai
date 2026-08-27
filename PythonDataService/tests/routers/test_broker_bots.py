@@ -25,15 +25,17 @@ from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.routers.broker_bots import router
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.utils.timestamps import now_ms_utc
-from tests.services.bot_runner.conftest import (  # noqa: F401 -- _fresh_live_market_liveness is an autouse fixture, registered by import
-    _custody_proof,
-    _CustodyClerk,
-    _flat_start_guard,
-    _fresh_live_market_liveness,
-)
+from tests._helpers.bot_runner.custody import _custody_proof, _flat_start_guard
+from tests._helpers.bot_runner.doubles import _CustodyClerk
+from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 
 _SID = "alpaca-api-bot-1"
 _T0 = 1_700_000_000_000
+
+
+@pytest.fixture(autouse=True)
+def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_fresh_live_market_liveness(monkeypatch)
 
 
 class _FakeReadPort:
