@@ -11,10 +11,9 @@ import asyncio
 import json
 import logging
 import math
-import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr import contracts as ibkr_contracts
@@ -34,9 +33,7 @@ from app.broker.ibkr.client import (
     get_client_lifecycle_lock,
     set_client,
 )
-from app.broker.ibkr.config import get_settings
 from app.broker.ibkr.contracts import search_option_contracts
-from app.broker.ibkr.diagnostics import run_diagnostics
 from app.broker.ibkr.health import (
     build_broker_health,
     synthetic_disconnected_health,
@@ -44,28 +41,10 @@ from app.broker.ibkr.health import (
 from app.broker.ibkr.market_data import stream_option_chain
 from app.broker.ibkr.models import (
     DataPlaneHealth,
-    DiagnosticReport,
-    DiagnosticReportDisabled,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
-    IbkrOpenOrder,
-    IbkrOrderEvent,
-    IbkrPnLTick,
     IbkrStrikeList,
     IbkrSurfaceSnapshot,
-)
-from app.broker.ibkr.orders import (
-    list_open_orders,
-    stream_order_events,
-)
-from app.broker.ibkr.persistence import (
-    make_pnl_writer,
-    make_writer,
-)
-from app.broker.ibkr.pnl import (
-    DEFAULT_PNL_DEBOUNCE_S,
-    stream_account_pnl,
-    stream_position_pnl,
 )
 from app.broker.ibkr.surface import (
     DEFAULT_MAX_LINES as SURFACE_DEFAULT_MAX_LINES,
@@ -73,22 +52,14 @@ from app.broker.ibkr.surface import (
 from app.broker.ibkr.surface import (
     stream_option_surface,
 )
-from app.broker.ibkr.symbol_search import search_symbols
 from app.routers.broker_dependencies import is_broker_disabled, require_connected_client
-from app.schemas.broker_search import OptionContractMatch, SymbolMatch
-from app.security.data_plane_control import require_data_plane_control_secret_always
+from app.schemas.broker_search import OptionContractMatch
 from app.services.data_plane_health import data_plane_health
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-from app.services.sse_keepalive import stream_sse_with_keepalive
-from app.utils.throttle import TokenBucket, TtlCache
+from app.utils.throttle import TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
-
-# Computed once at module import — stable for the lifetime of the process.
-# Used by DiagnosticReportDisabled.since_ms so each request doesn't generate
-# a fresh timestamp that shifts on every poll.
-_BROKER_DISABLED_SINCE_MS: int = int(time.time() * 1000)
 
 # Serialises POST /connect | /disconnect | /reconnect against two concurrent
 # operator clicks AND against the AutoReconnectMonitor's reconnect attempts.
@@ -103,17 +74,9 @@ _lifecycle_lock = get_client_lifecycle_lock()
 _ibkr_client_factory: type[IbkrClient] = IbkrClient
 
 
-# Slice 1F — broker search throttle + 60s response cache. Token bucket
-# is at the IBKR-published ``reqMatchingSymbols`` cadence (~1 req / 5s)
-# with a burst of 1 so a single typo does not waste the operator's
-# allowance. Cache keys are ``(pattern, sec_type)`` for the symbol
-# search and ``(symbol, expiry_ms, strike, right)`` for the option
-# drill-down (drill-down qualification is heavy but not rate-limited
-# upstream).
-_SYMBOL_SEARCH_BUCKET: TokenBucket = TokenBucket(rate_per_second=0.2, capacity=1)
-_SYMBOL_SEARCH_CACHE: TtlCache[tuple[str, str | None], list[SymbolMatch]] = TtlCache(
-    ttl_seconds=60.0, max_size=256
-)
+# Slice 1F — option-contracts drill-down 300s response cache. Cache key is
+# ``(symbol, expiry_ms, strike, right)`` (qualification is heavy but not
+# rate-limited upstream, unlike the retired symbol-search proxy).
 _OPTION_CONTRACTS_CACHE: TtlCache[
     tuple[str, int, float, str], list[OptionContractMatch]
 ] = TtlCache(ttl_seconds=300.0, max_size=512)
@@ -123,12 +86,10 @@ def _ibkr_api_evidence_to_sse(event: IbkrApiEvidenceEvent) -> str:
     return f"event: ibkr_api\ndata: {event.model_dump_json()}\n\n"
 
 
-def reset_broker_search_state_for_testing() -> None:
-    """Test-only hook — flush the throttle bucket and TTL cache so an
-    earlier test cannot starve the next one of tokens."""
-    global _SYMBOL_SEARCH_BUCKET, _SYMBOL_SEARCH_CACHE, _OPTION_CONTRACTS_CACHE
-    _SYMBOL_SEARCH_BUCKET = TokenBucket(rate_per_second=0.2, capacity=1)
-    _SYMBOL_SEARCH_CACHE = TtlCache(ttl_seconds=60.0, max_size=256)
+def reset_option_contracts_cache_for_testing() -> None:
+    """Test-only hook — flush the TTL cache so an earlier test cannot leak
+    a cached response into the next assertion."""
+    global _OPTION_CONTRACTS_CACHE
     _OPTION_CONTRACTS_CACHE = TtlCache(ttl_seconds=300.0, max_size=512)
 
 
@@ -186,69 +147,17 @@ async def data_plane_health_endpoint() -> DataPlaneHealth:
 @router.get("/health", response_model=IbkrConnectionHealth)
 async def broker_health() -> IbkrConnectionHealth:
     """Connection diagnostic. Never raises on disconnect."""
-    from app.broker.safety_verdict import derive_broker_safety_verdict
-
-    s = get_settings()
-    # Safety verdict is re-derived on every call so it reflects the latest
-    # connection state. ADR 0011 §3 — no connect-time cache.
     if is_broker_disabled():
         return synthetic_disconnected_health(
             state="disabled",
             disabled=True,
-            reason="IBKR_BROKER_ENABLED=false — host-venv runner owns the IBKR session",
-            safety_verdict=derive_broker_safety_verdict(
-                configured_mode=s.mode,
-                readonly_flag=None,
-                port=s.port,
-                connected_account=None,
-            ),
+            reason="IBKR_BROKER_ENABLED=false — the data-plane IBKR client is switched off",
         )
     try:
         client = get_client()
     except NotConnectedError:
-        return synthetic_disconnected_health(
-            safety_verdict=derive_broker_safety_verdict(
-                configured_mode=s.mode,
-                readonly_flag=None,
-                port=s.port,
-                connected_account=None,
-            ),
-        )
-    return build_broker_health(
-        client,
-        get_monitor(),
-        safety_verdict=derive_broker_safety_verdict(
-            configured_mode=client.settings.mode,
-            readonly_flag=None,
-            port=client.settings.port,
-            connected_account=client.connected_account,
-        ),
-    )
-
-
-# ── /diagnose ──────────────────────────────────────────────────────────
-
-
-@router.get("/diagnose", response_model=DiagnosticReport)
-async def broker_diagnose() -> DiagnosticReport:
-    """Run a layered self-test of the broker connection.
-
-    Used by the Broker Status page's "Diagnose" button. Walks settings,
-    host resolution, TCP reachability, the FastAPI lifespan client, and
-    the account sentinel; returns one row per check with a remediation
-    hint when something is not passing. Read-only — does not call
-    ``connect()`` and does not place orders.
-
-    When the broker is disabled (``IBKR_BROKER_ENABLED=false``) returns a
-    :class:`DiagnosticReportDisabled` sentinel immediately without probing.
-    """
-    if is_broker_disabled():
-        return DiagnosticReportDisabled(
-            disabled=True,
-            reason="IBKR_BROKER_ENABLED=false — host-venv runner owns the IBKR session",
-            since_ms=_BROKER_DISABLED_SINCE_MS,
-        )
-    return await run_diagnostics()
+        return synthetic_disconnected_health()
+    return build_broker_health(client, get_monitor())
 
 
 # ── /connect | /disconnect | /reconnect ────────────────────────────────
@@ -406,57 +315,6 @@ async def list_strikes_endpoint(
     )
 
 
-# ── /symbols/search ────────────────────────────────────────────────────
-
-
-@router.get("/symbols/search")
-async def symbols_search_endpoint(
-    q: Annotated[str, Query(min_length=1, max_length=32, description="Symbol pattern.")],
-    sec_type: Annotated[
-        str | None,
-        Query(description="Optional secType filter: STK, OPT, FUT, FOP, IND, CASH, etc."),
-    ] = None,
-) -> dict:
-    """Slice 1F — IBKR ``reqMatchingSymbols`` proxy for the cockpit's
-    leg picker. Token-bucket rate-limited per ``(q, sec_type)`` at the
-    IBKR-published ~1 req/5s ceiling; 60s TTL cache short-circuits
-    repeated patterns without consulting the bucket.
-    """
-    # Canonicalize before keying so " SPY " and "SPY" share one cache /
-    # throttle slot, and treat an empty ``sec_type`` query string as
-    # "no filter" (FastAPI will otherwise pass it through to the
-    # wrapper as an empty literal that drops every row).
-    client = require_connected_client()
-    q_norm = q.strip()
-    sec_type_norm = sec_type if sec_type else None
-    key = (q_norm, sec_type_norm)
-    cached = _SYMBOL_SEARCH_CACHE.get(key)
-    if cached is not None:
-        return {"matches": [m.model_dump() for m in cached]}
-
-    # Single global key — IBKR's ``reqMatchingSymbols`` ceiling is per
-    # connection, not per pattern. Per-pattern keys would let a fast
-    # typist drain N quotas while still tripping the upstream limit.
-    retry_after = _SYMBOL_SEARCH_BUCKET.try_acquire("ibkr")
-    if retry_after > 0.0:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Symbol search rate limit exceeded; retry shortly.",
-            headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
-        )
-
-    try:
-        matches = await search_symbols(client, q_norm, sec_type=sec_type_norm)
-    except NotConnectedError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "IBKR client not connected.",
-        ) from exc
-
-    _SYMBOL_SEARCH_CACHE.set(key, matches)
-    return {"matches": [m.model_dump() for m in matches]}
-
-
 # ── /option-contracts/{symbol} ─────────────────────────────────────────
 
 
@@ -537,16 +395,11 @@ async def option_chain_stream(
     sym = symbol.upper()
     band = sorted(set(float(k) for k in strikes))
 
-    writer = make_writer(
-        persist=client.settings.persist_ticks,
-        persist_dir=client.settings.persist_dir,
-    )
     debounce_seconds = debounce_ms / 1000.0
 
     async def event_source():
         try:
             async for snapshot in stream_option_chain(client, sym, expiry_ms, band, debounce_seconds=debounce_seconds):
-                await writer.write(snapshot)
                 payload = _snapshot_to_json(snapshot)
                 yield f"event: chain\ndata: {payload}\n\n"
         except asyncio.CancelledError:
@@ -566,8 +419,6 @@ async def option_chain_stream(
             yield _sse_error_frame(
                 "The option-chain request could not be qualified. Check the symbol, expiry, strike, and right."
             )
-        finally:
-            await writer.close()
 
     return StreamingResponse(
         event_source(),
@@ -685,7 +536,7 @@ async def option_surface_stream(
     )
 
 
-# ── /pnl/stream and /pnl/positions/stream (Phase 2b + 2c) ──────────────
+# ── shared SSE error framing ────────────────────────────────────────────
 
 
 def _sse_error_frame(message: str) -> str:
@@ -698,136 +549,6 @@ def _sse_error_frame(message: str) -> str:
     nothing the service log does not already hold.
     """
     return f"event: error\ndata: {json.dumps({'error': message})}\n\n"
-
-
-def _pnl_tick_to_sse(tick: IbkrPnLTick) -> str:
-    return f"event: pnl\ndata: {tick.model_dump_json()}\n\n"
-
-
-@router.get("/pnl/stream")
-async def pnl_account_stream(
-    debounce_ms: Annotated[int, Query(ge=200, le=10_000)] = int(DEFAULT_PNL_DEBOUNCE_S * 1000),
-) -> StreamingResponse:
-    """Account-level P&L SSE stream."""
-    client = require_connected_client()
-    debounce_seconds = debounce_ms / 1000.0
-    pnl_writer = make_pnl_writer(persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir)
-
-    async def event_source():
-        try:
-            async for tick in stream_account_pnl(client, debounce_seconds=debounce_seconds):
-                await pnl_writer.write(tick)
-                yield _pnl_tick_to_sse(tick)
-        except asyncio.CancelledError:
-            raise
-        except BrokerError as exc:
-            logger.error("Broker error in account-pnl stream: %s", exc)
-            yield _sse_error_frame(
-                "The account P&L stream stopped: the broker connection reported an error. The broker's reason is in the "
-                "service log."
-            )
-        finally:
-            await pnl_writer.close()
-
-    return StreamingResponse(
-        event_source(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.get("/pnl/positions/stream")
-async def pnl_positions_stream(
-    con_ids: Annotated[list[int] | None, Query()] = None,
-    debounce_ms: Annotated[int, Query(ge=200, le=10_000)] = int(DEFAULT_PNL_DEBOUNCE_S * 1000),
-) -> StreamingResponse:
-    """Per-position P&L SSE stream.
-
-    ``con_ids`` is a repeated query parameter. We accept it as optional
-    and reject missingness explicitly with 422 — declaring it required
-    via ``Query()`` triggers a known FastAPI 0.104 / Pydantic 2 encoder
-    bug where the missing-value validation error contains
-    ``PydanticUndefined`` and fails JSON serialisation, surfacing as a
-    500 instead of the documented 422.
-    """
-    if not con_ids:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "con_ids must be non-empty.")
-
-    client = require_connected_client()
-    debounce_seconds = debounce_ms / 1000.0
-    pnl_writer = make_pnl_writer(persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir)
-
-    async def event_source():
-        try:
-            async for tick in stream_position_pnl(client, con_ids, debounce_seconds=debounce_seconds):
-                await pnl_writer.write(tick)
-                yield _pnl_tick_to_sse(tick)
-        except asyncio.CancelledError:
-            raise
-        except BrokerError as exc:
-            logger.error("Broker error in positions-pnl stream: %s", exc)
-            yield _sse_error_frame(
-                "The positions P&L stream stopped: the broker connection reported an error. The broker's reason is in "
-                "the service log."
-            )
-        finally:
-            await pnl_writer.close()
-
-    return StreamingResponse(
-        event_source(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-# ── Read-only order projections ────────────────────────────────────────
-
-
-@router.get("/orders/open", response_model=list[IbkrOpenOrder])
-async def list_open_orders_endpoint() -> list[IbkrOpenOrder]:
-    """All open orders IBKR currently reports for the connected account."""
-    client = require_connected_client()
-    try:
-        return await list_open_orders(client)
-    except BrokerError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-
-def _order_event_to_sse(event: IbkrOrderEvent) -> str:
-    return f"event: order\ndata: {event.model_dump_json()}\n\n"
-
-
-@router.get("/orders/stream")
-async def order_events_stream_endpoint(
-    poll_ms: Annotated[int, Query(ge=100, le=5000)] = 500,
-    _: None = Depends(require_data_plane_control_secret_always),
-) -> StreamingResponse:
-    """SSE stream of order lifecycle events: status, fill, cancel, error."""
-    client = require_connected_client()
-    poll_seconds = poll_ms / 1000.0
-
-    async def event_source():
-        try:
-            async def order_frames():
-                async for event in stream_order_events(client, poll_seconds=poll_seconds):
-                    yield _order_event_to_sse(event)
-
-            async for frame in stream_sse_with_keepalive(order_frames()):
-                yield frame
-        except asyncio.CancelledError:
-            raise
-        except BrokerError as exc:
-            logger.error("Broker error in order-event stream: %s", exc)
-            yield _sse_error_frame(
-                "The order-event stream stopped: the broker connection reported an error. The broker's reason is in the "
-                "service log."
-            )
-
-    return StreamingResponse(
-        event_source(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 @router.get("/bars/snapshot", response_model=IbkrBarsSnapshot)

@@ -9,35 +9,32 @@ import type {
 } from '../api/clerk-transaction-history.types';
 import type {
   DataPlaneHealth,
-  DiagnosticReport,
   ExpirationsResponse,
   BrokerCapabilityResponse,
   IbkrApiEvidenceEvent,
   IbkrConnectionHealth,
   IbkrStrikeList,
   OptionContractsResponse,
-  SymbolSearchResponse,
 } from '../api/broker-models';
 
 /**
- * REST client for the Phase 1-3 IBKR broker endpoints.
+ * REST client spanning two unrelated surfaces.
  *
- * SSE endpoints (option-chain, pnl/stream, pnl/positions/stream,
- * orders/stream) do **not** route through this service — use the
- * ``brokerSse()`` helper in ``broker-sse.ts`` so each component owns
- * the EventSource lifetime explicitly.
+ * ``/api/broker`` — the retained IBKR endpoints: feed session lifecycle
+ * (``connect`` / ``disconnect`` / ``reconnect``), connection and data-plane
+ * health, capability probes, the option-chain market-data reads
+ * (``expirations`` / ``strikes`` / ``searchOptionContracts``), and the
+ * ``ibkrApiEvidence`` audit read.
+ *
+ * ``/api/accounts`` — the Alpaca Clerk transaction-history surface
+ * (``accountTransactions`` / ``accountTransaction`` /
+ * ``acknowledgeExternalOrder``). Not IBKR, and outside the IBKR
+ * decommission.
+ *
+ * SSE endpoints (option-chain, option-surface) do **not** route through
+ * this service — use the ``brokerSse()`` helper in ``broker-sse.ts`` so
+ * each component owns the EventSource lifetime explicitly.
  */
-export type SymbolSearchSecType =
-  | 'STK'
-  | 'OPT'
-  | 'FUT'
-  | 'FOP'
-  | 'IND'
-  | 'CASH'
-  | 'BOND'
-  | 'CFD'
-  | 'CMDTY';
-
 @Injectable({ providedIn: 'root' })
 export class BrokerService {
   private readonly http = inject(HttpClient);
@@ -52,10 +49,6 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<DataPlaneHealth>(`${this.base}/data-plane/health`),
     );
-  }
-
-  diagnose(): Promise<DiagnosticReport> {
-    return firstValueFrom(this.http.get<DiagnosticReport>(`${this.base}/diagnose`));
   }
 
   ibkrApiEvidence(afterSeq = 0, limit = 250): Promise<IbkrApiEvidenceEvent[]> {
@@ -158,19 +151,6 @@ export class BrokerService {
         `${this.base}/strikes/${encodeURIComponent(symbol)}`,
         { params: { expiry_ms: expiryMs } },
       ),
-    );
-  }
-
-  /**
-   * Slice 1F — proxy to IBKR ``reqMatchingSymbols``. Returns matching
-   * contracts for the typed pattern; the cockpit's leg picker debounces
-   * before calling so a single keystroke does not draw an IBKR token.
-   */
-  searchSymbols(q: string, secType?: SymbolSearchSecType): Promise<SymbolSearchResponse> {
-    const params: Record<string, string> = { q };
-    if (secType !== undefined) params['sec_type'] = secType;
-    return firstValueFrom(
-      this.http.get<SymbolSearchResponse>(`${this.base}/symbols/search`, { params }),
     );
   }
 

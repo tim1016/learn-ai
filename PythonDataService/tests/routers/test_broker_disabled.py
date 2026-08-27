@@ -2,8 +2,10 @@
 
 When IBKR_BROKER_ENABLED=false:
   - GET /api/broker/health → HTTP 200, disabled=True, connected=False, reason set
-  - GET /api/broker/diagnose → discriminated union with disabled=True (DiagnosticReportDisabled)
   - get_client() raises NotConnectedError (client was never set)
+
+``GET /api/broker/diagnose`` retired with ``app/broker/ibkr/diagnostics.py``
+(PR-B of #1813, 2026-08-27); its 4 tests were removed with it.
 
 Uses httpx.AsyncClient + ASGITransport per repo testing rules.
 """
@@ -66,48 +68,6 @@ async def test_health_reason_field_set():
     data = response.json()
     assert data.get("reason") is not None
     assert len(data["reason"]) > 0
-
-
-# ---------------------------------------------------------------------------
-# /diagnose — discriminated union: disabled=True variant
-# ---------------------------------------------------------------------------
-
-
-async def test_diagnose_disabled_true():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/diagnose")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["disabled"] is True
-
-
-async def test_diagnose_disabled_has_reason():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/diagnose")
-
-    data = response.json()
-    assert "reason" in data
-    assert data["reason"]
-
-
-async def test_diagnose_disabled_has_since_ms():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/diagnose")
-
-    data = response.json()
-    assert "since_ms" in data
-    assert isinstance(data["since_ms"], int)
-    assert data["since_ms"] > 0
-
-
-async def test_diagnose_no_checks_field():
-    """Disabled mode returns DiagnosticReportDisabled which has no 'checks' field."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/diagnose")
-
-    data = response.json()
-    assert "checks" not in data
 
 
 # ---------------------------------------------------------------------------

@@ -2,10 +2,12 @@
 
 Issue #1813 (IBKR control-plane decommission), Slice 0. Walks the
 retained feed-side modules' import statements and asserts none of them
-reach into the account/order/session bucket, except three named,
-temporary exceptions — each with a second live consumer outside this
-slice's scope, tracked to close in a later slice. See
-``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
+reach into the account/order/session bucket. Slice 0 tracked three
+named, temporary exceptions, each with a second live consumer outside
+its scope; PR-B of #1813 (2026-08-27) retired all three consumers
+(``order_error_stream.py``, ``broker_session_events`` emission, and
+``app/broker/safety_verdict.py``), so the exception list is now empty.
+See ``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
 
 This is deliberately a source-level import scan (``ast``), not a
 runtime ``sys.modules`` inspection — it catches an import statement
@@ -40,7 +42,6 @@ RETAINED_FEED_MODULES = [
     "app.broker.ibkr.contracts",
     "app.broker.ibkr.market_data",
     "app.broker.ibkr.surface",
-    "app.broker.ibkr.symbol_search",
     "app.services.market_data_capability_service",
 ]
 
@@ -81,11 +82,11 @@ BANNED_PREFIXES = (
 
 # (importing_module, banned_import) pairs allowed to remain, each with
 # the slice that closes it. Remove the tuple when that slice lands.
-_ALLOWED_EXCEPTIONS = {
-    ("app.broker.ibkr.client", "app.broker.ibkr.order_error_stream"),  # closes in Slice 4
-    ("app.broker.ibkr.client", "app.services.broker_session_events"),  # closes in Slice 4
-    ("app.broker.ibkr.models", "app.broker.safety_verdict"),  # closes in Slice 3
-}
+#
+# Empty as of PR-B of #1813 (2026-08-27) — all three Slice-0 exceptions
+# closed by retiring their blocking consumer, per this repo's rule that
+# exceptions close only by retirement, never by widening the allow-list.
+_ALLOWED_EXCEPTIONS: set[tuple[str, str]] = set()
 
 
 def _module_path(dotted: str) -> Path:

@@ -1,14 +1,13 @@
 """Slice 1F (issue #605) — broker-coupled leg picker DTOs.
 
-`SymbolMatch` is the wire shape for ``/api/broker/symbols/search`` (one
-matching contract per row from IBKR ``reqMatchingSymbols``).
 `OptionContractMatch` is the wire shape for
 ``/api/broker/option-contracts/{symbol}`` (one qualified option per row
-from IBKR ``reqContractDetails``).
+from IBKR ``reqContractDetails``). The `SymbolMatch` cases retired with
+``/api/broker/symbols/search`` (PR-B of #1813, 2026-08-27).
 
-Both DTOs are response-only; they never travel back over the wire as
-input, so the strict-schema invariants here protect the cockpit from
-silently consuming a malformed broker payload.
+The DTO is response-only; it never travels back over the wire as input,
+so the strict-schema invariants here protect the cockpit from silently
+consuming a malformed broker payload.
 """
 
 from __future__ import annotations
@@ -16,51 +15,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.broker_search import OptionContractMatch, SymbolMatch
-
-
-def test_symbol_match_round_trips() -> None:
-    raw = {
-        "symbol": "SPY",
-        "name": "SPDR S&P 500 ETF Trust",
-        "exchange": "ARCA",
-        "currency": "USD",
-        "sec_type": "STK",
-        "derivative_sec_types": ["OPT", "FOP"],
-    }
-
-    parsed = SymbolMatch.model_validate(raw)
-
-    assert parsed.model_dump() == raw
-
-
-def test_symbol_match_rejects_unknown_keys() -> None:
-    """Strict schema — IBKR payload drift should surface, not silently round-trip."""
-
-    raw = {
-        "symbol": "SPY",
-        "name": "SPDR S&P 500 ETF Trust",
-        "exchange": "ARCA",
-        "currency": "USD",
-        "sec_type": "STK",
-        "derivative_sec_types": [],
-        "marketName": "SPDR",  # unexpected camelCase key
-    }
-    with pytest.raises(ValidationError, match=r"marketName"):
-        SymbolMatch.model_validate(raw)
-
-
-def test_symbol_match_blank_symbol_rejected() -> None:
-    raw = {
-        "symbol": "",
-        "name": "x",
-        "exchange": "ARCA",
-        "currency": "USD",
-        "sec_type": "STK",
-        "derivative_sec_types": [],
-    }
-    with pytest.raises(ValidationError, match=r"symbol"):
-        SymbolMatch.model_validate(raw)
+from app.schemas.broker_search import OptionContractMatch
 
 
 def test_option_contract_match_round_trips() -> None:

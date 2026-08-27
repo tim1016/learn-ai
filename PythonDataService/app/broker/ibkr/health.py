@@ -24,7 +24,6 @@ from app.broker.ibkr.config import get_settings
 from app.broker.ibkr.models import (
     BrokerConnectionState,
     BrokerHealthCondition,
-    BrokerSafetyVerdict,
     IbkrConnectionHealth,
 )
 from app.broker.ibkr.recovery_state_machine import recovery_state_from_connection_state
@@ -38,8 +37,6 @@ if TYPE_CHECKING:
 def build_broker_health(
     client: IbkrClient,
     monitor: AutoReconnectMonitor | None,
-    *,
-    safety_verdict: BrokerSafetyVerdict | None = None,
 ) -> IbkrConnectionHealth:
     """Compose the client's view with the monitor's overlay.
 
@@ -57,10 +54,7 @@ def build_broker_health(
         getattr(client, "desired_connected", True) is False and base.connection_state == "disconnected"
     )
     if monitor is None:
-        return _with_condition(
-            base.model_copy(update={"safety_verdict": safety_verdict}),
-            operator_disconnected=operator_disconnected,
-        )
+        return _with_condition(base, operator_disconnected=operator_disconnected)
 
     if getattr(monitor, "is_hard_down", False) is True and not operator_disconnected:
         state: BrokerConnectionState = "hard_down"
@@ -86,7 +80,6 @@ def build_broker_health(
                 "reconnect_attempt": monitor.current_attempt or None,
                 "successful_reconnect_count": monitor.successful_reconnect_count,
                 "last_transition_ms": max(base.last_transition_ms, monitor.last_transition_ms),
-                "safety_verdict": safety_verdict,
             }
         ),
         operator_disconnected=operator_disconnected,
@@ -98,7 +91,6 @@ def synthetic_disconnected_health(
     state: BrokerConnectionState = "disconnected",
     disabled: bool = False,
     reason: str | None = None,
-    safety_verdict: BrokerSafetyVerdict | None = None,
 ) -> IbkrConnectionHealth:
     """Wire-level health snapshot when no client exists yet (broker
     disabled, or operator hasn't called ``/connect`` yet).
@@ -123,7 +115,6 @@ def synthetic_disconnected_health(
             is_paper=None,
             server_version=None,
             fetched_at_ms=now_ms,
-            safety_verdict=safety_verdict,
             connection_state=state,
             recovery_state=recovery_state_from_connection_state(state),
             last_transition_ms=now_ms,
@@ -200,8 +191,8 @@ def _broker_health_condition(
         return BrokerHealthCondition(
             code="DATA_PLANE_BROKER_RECOVERING",
             severity="warning",
-            title="Data-plane broker recovering evidence",
-            summary="The data-plane broker link is back, but stream and account-evidence recovery is still running.",
+            title="Data-plane broker recovering streams",
+            summary="The data-plane broker link is back, but market-data stream resubscription is still running.",
             remediation="Wait for recovery to complete before relying on streamed market data.",
         )
     if state == "hard_down":

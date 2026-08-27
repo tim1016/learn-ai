@@ -3,9 +3,9 @@
 Walks the layers an operator would hit when ``/api/lean-sidecar/*``
 fails with ``LauncherUnreachable``: env config, URL parseability,
 shared-secret token resolution, a live HTTP probe of the launcher's
-``/healthz``, and the launcher's exact pinned-image readiness. Modelled on
-:mod:`app.broker.ibkr.diagnostics` so the operator UX is consistent
-across the two host-process integrations.
+``/healthz``, and the launcher's exact pinned-image readiness. The
+layer-by-layer shape was modelled on the IBKR diagnostics module, which was
+deleted with the IBKR control plane; this is now the only such self-test.
 
 Important non-side-effects:
 

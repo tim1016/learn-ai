@@ -1,23 +1,20 @@
 """Tests for app.utils.throttle (Slice 1F).
 
-``TokenBucket`` gates rapid-repeat calls to IBKR ``reqMatchingSymbols``
-(the upstream limit is ~1 request per 5s per pattern).
-``TtlCache`` softens the same surface — a cached pattern doesn't even
-draw a token. Both are tested with an injected ``now()`` clock so the
-suite does not rely on wall-clock time.
+``TtlCache`` short-circuits a repeated option-contract drill-down within
+its TTL. Its former companion ``TokenBucket`` retired with
+``/api/broker/symbols/search`` (PR-B of #1813, 2026-08-27); its tests
+went with it. Driven by an injected ``now()`` clock so the suite does not
+rely on wall-clock time.
 """
 
 from __future__ import annotations
 
-import pytest
-
-from app.utils.throttle import TokenBucket, TtlCache
+from app.utils.throttle import TtlCache
 
 
 class _Clock:
     """Drop-in for ``time.monotonic`` whose value advances only when
-    ``advance`` is called. Lets the test pin tokenbucket fill timing
-    without sleeping."""
+    ``advance`` is called. Lets the test pin TTL expiry without sleeping."""
 
     def __init__(self, t0: float = 0.0) -> None:
         self._t = t0
@@ -27,50 +24,6 @@ class _Clock:
 
     def advance(self, dt: float) -> None:
         self._t += dt
-
-
-def test_token_bucket_admits_until_capacity_exhausted() -> None:
-    clock = _Clock()
-    bucket = TokenBucket(rate_per_second=0.2, capacity=2, now=clock)
-
-    assert bucket.try_acquire("k") == 0.0
-    assert bucket.try_acquire("k") == 0.0
-    retry = bucket.try_acquire("k")
-    assert retry > 0.0
-
-
-def test_token_bucket_refills_over_time() -> None:
-    clock = _Clock()
-    bucket = TokenBucket(rate_per_second=0.2, capacity=1, now=clock)
-
-    assert bucket.try_acquire("k") == 0.0  # drain
-    assert bucket.try_acquire("k") > 0.0  # immediately denied
-
-    clock.advance(5.0)  # one token / 5s @ 0.2 Hz
-    assert bucket.try_acquire("k") == 0.0
-
-
-def test_token_bucket_keys_are_independent() -> None:
-    """Two operators searching different patterns should not throttle
-    each other — the bucket keys by ``(pattern, sec_type)``."""
-
-    clock = _Clock()
-    bucket = TokenBucket(rate_per_second=0.2, capacity=1, now=clock)
-
-    assert bucket.try_acquire("SPY") == 0.0
-    assert bucket.try_acquire("QQQ") == 0.0
-    assert bucket.try_acquire("SPY") > 0.0
-
-
-def test_token_bucket_retry_after_is_seconds_until_one_token() -> None:
-    clock = _Clock()
-    bucket = TokenBucket(rate_per_second=0.5, capacity=1, now=clock)
-
-    bucket.try_acquire("k")
-    retry = bucket.try_acquire("k")
-
-    # One token refills every 1/rate = 2s.
-    assert retry == pytest.approx(2.0)
 
 
 def test_ttl_cache_returns_value_within_ttl() -> None:

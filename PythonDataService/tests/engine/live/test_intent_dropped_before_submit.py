@@ -1,32 +1,27 @@
-"""PR 3 — INTENT_DROPPED_BEFORE_SUBMIT WAL event tests.
+"""PR 3 — INTENT_DROPPED_BEFORE_SUBMIT event tests.
 
 Covers:
 - IntentEvent model validator rejects mismatched drop_reason / event_type combos.
-- WAL append round-trips drop_reason through model_dump_json / model_validate_json.
 - Fold-side legacy classification (legacy_sizing_only_dropped) when
   SIZING_RESOLVED-only event is before the cutoff.
 - Post-cutoff SIZING_RESOLVED-only is not classified (publisher handles it).
 
-The former engine emission tests retired with LiveEngine in #1583; retained
-tests cover durable historical-WAL parsing and fold semantics.
+The former engine emission tests retired with LiveEngine in #1583; the WAL
+round-trip test retired with IntentWal / the host-bridge daemon (PR-B of
+#1813, 2026-08-27) — retained tests cover event-validator and fold semantics
+directly, independent of the WAL reader.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_ledger import LedgerProjection, fold
-from app.engine.live.intent_wal import IntentWal
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
     build_order_ref,
     mint_intent_id,
-)
-from tests._helpers.legacy_ibkr_artifacts import (
-    write_historical_intent_wal,
 )
 
 NS = build_bot_order_namespace("testbot")
@@ -110,33 +105,6 @@ def test_intent_dropped_accepts_valid_drop_reason() -> None:
     restored = IntentEvent.model_validate_json(json_str)
     assert restored.drop_reason == "operator_paused"
     assert restored.event_type is IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT
-
-
-# ─── WAL append tests ────────────────────────────────────────────────────────
-
-
-def test_historical_drop_event_round_trips(tmp_path: Path) -> None:
-    """A retained drop event remains readable with its typed reason."""
-    path = tmp_path / "intent_events.jsonl"
-    iid = mint_intent_id()
-    write_historical_intent_wal(
-        path,
-        [
-            IntentEvent(
-                seq=1,
-                event_type=IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
-                intent_id=iid,
-                bot_order_namespace=NS,
-                order_ref=build_order_ref(NS, iid),
-                drop_reason="max_orders_per_day",
-                ts_ms=1_700_000_000_000,
-            )
-        ],
-    )
-    events = IntentWal(path).read_tail()
-    assert len(events) == 1
-    assert events[0].event_type is IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT
-    assert events[0].drop_reason == "max_orders_per_day"
 
 
 # ─── fold-side legacy classification tests ──────────────────────────────────

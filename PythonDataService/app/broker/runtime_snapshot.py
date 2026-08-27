@@ -1,8 +1,9 @@
 """PRD #619-A — typed boundary between live-instance callers and
 ``IbkrClient``.
 
-``live_instances._resolve_safety_verdict_final`` and
-``_fetch_broker_connected_account`` historically read attributes that do
+The former ``routers/live_instances.py``'s ``_resolve_safety_verdict_final``
+and ``_fetch_broker_connected_account`` (both retired along with that
+router, PR-B of #1813, 2026-08-27) historically read attributes that did
 not exist on the real client (``client.config.port``,
 ``client.account_id``, ``client.config.read_only_api``) and then swallowed
 the resulting ``AttributeError`` under a bare ``except Exception``. The

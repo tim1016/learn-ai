@@ -12,22 +12,14 @@ def test_legacy_strategy_service_package_is_retired() -> None:
 
 
 def test_legacy_live_instance_control_projection_is_retired() -> None:
-    router = (
-        Path(__file__).resolve().parents[2] / "app" / "routers" / "live_instances.py"
-    ).read_text(encoding="utf-8")
+    """Was a scan of `routers/live_instances.py` for the control-projection
+    route literals it must no longer declare. PR-B of #1813 (2026-08-27)
+    retired the router itself, so the guarantee is now the stronger "no
+    live-instance router exists to declare them"."""
+    routers = Path(__file__).resolve().parents[2] / "app" / "routers"
 
-    for fragment in (
-        '"/catalog"',
-        '"/catalog/page"',
-        '"/roll-call"',
-        '"/{strategy_instance_id}/status"',
-        '"/{strategy_instance_id}/operator-surface/stream"',
-        '"/{strategy_instance_id}/desired-state"',
-        '"/{strategy_instance_id}/commands"',
-        '"/{strategy_instance_id}/activity"',
-        '"/{strategy_instance_id}/chart-snapshot"',
-    ):
-        assert fragment not in router
+    for filename in ("live_instances.py", "live_runs.py", "bot_events.py"):
+        assert not (routers / filename).exists(), filename
 
 
 def test_legacy_live_instance_surface_assembler_is_retired() -> None:
@@ -41,20 +33,18 @@ def test_legacy_live_instance_surface_assembler_is_retired() -> None:
     assert not service.exists()
 
 
-def test_run_evidence_api_has_no_mutation_routes() -> None:
+def test_run_evidence_api_is_retired() -> None:
+    """Was a pin that the two surviving `/api/live-runs` routes were
+    read-only. PR-B of #1813 (2026-08-27) retired the whole run-evidence
+    surface (`routers/live_runs.py`, `routers/bot_events.py`), so the
+    guarantee is now "no `/api/live-runs` route is registered at all" —
+    a route that does not exist cannot grow a mutation verb."""
     from app.main import app
 
-    methods_by_path = {
-        route.path: route.methods
+    live_run_paths = {
+        route.path
         for route in app.routes
-        if route.path
-        in {
-            "/api/live-runs/{run_id}/commands",
-            "/api/live-runs/{run_id}/desired-state",
-        }
+        if getattr(route, "path", "").startswith("/api/live-runs")
     }
 
-    assert methods_by_path == {
-        "/api/live-runs/{run_id}/commands": {"GET"},
-        "/api/live-runs/{run_id}/desired-state": {"GET"},
-    }
+    assert live_run_paths == set()

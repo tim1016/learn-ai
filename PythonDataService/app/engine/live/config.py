@@ -1,7 +1,9 @@
 """Live-runtime configuration.
 
 Phase 1 intentionally keeps this module small. Broker-mode safety stays in
-``app.broker.ibkr.config`` and order safety stays in ``app.broker.ibkr.orders``.
+``app.broker.ibkr.config``. The order-safety module this docstring used to
+name, ``app.broker.ibkr.orders``, was deleted with the IBKR order-actuation
+path; no order safety is configured here.
 """
 
 from __future__ import annotations

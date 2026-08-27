@@ -55,7 +55,6 @@ End-to-end IBKR paper-trading runtime with safety-first design. Three coordinate
 - **Indicator-state persistence** — EMA/RSI hydrate across runs (skip the ~3 h 45 m warmup) with policy tri-state (`require` / `optional` / `disabled`); per-run hydration receipt
 - **Recovery flatten** — force-flat at 15:55 ET; canonical first-checkpoint write; graceful-shutdown finally with a "newer state wins" check
 - **Run ledger** with pre-flight halt rules; artifact writers pinned to reconcile schemas; per-bar DecisionSnapshot publishing
-- **Host runner daemon** (`host_daemon.py`) — local FastAPI control plane for start/stop of paper runs from the operator UI. Loopback-only bind, no auth (intentional design — local operator bridge, not a remotely exposed service)
 
 **Parity reconciliation** (`PythonDataService/app/research/parity/`) — QC trade-level parity:
 

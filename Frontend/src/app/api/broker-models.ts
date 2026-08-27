@@ -19,25 +19,7 @@ import type { components } from './broker.types';
 export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth'];
 export type PanelActionErrorResponse = components['schemas']['PanelActionErrorResponse'];
 
-export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
-  IbkrOrderEvidenceFields &
-  IbkrOrderRefFields;
-
 export type OptionRight = 'C' | 'P';
-export type OrderAction = 'BUY' | 'SELL';
-export type OrderType = 'MKT' | 'LMT';
-export type OrderTimeInForce = 'DAY' | 'GTC' | 'IOC' | 'OPG';
-export type OrderStatus =
-  | 'PendingSubmit'
-  | 'PendingCancel'
-  | 'PreSubmitted'
-  | 'Submitted'
-  | 'ApiPending'
-  | 'ApiCancelled'
-  | 'Cancelled'
-  | 'Filled'
-  | 'Inactive'
-  | 'Unknown';
 export type SecType =
   | 'STK'
   | 'OPT'
@@ -50,7 +32,6 @@ export type SecType =
   | 'IND'
   | 'BAG';
 export type GreeksSource = 'model' | 'bid' | 'ask' | 'last' | 'none';
-export type OrderEventType = 'status' | 'fill' | 'cancel' | 'error';
 export type IbkrApiRequestName =
   | 'accountSummaryAsync'
   | 'cancelMktData'
@@ -96,11 +77,6 @@ export type IbkrEvidenceValue =
   | IbkrEvidenceValue[]
   | { [key: string]: IbkrEvidenceValue };
 
-export interface IbkrObjectSnapshot {
-  object_type: string;
-  fields: Record<string, IbkrEvidenceValue>;
-}
-
 export interface IbkrApiRequestEvidence {
   call: IbkrApiRequestName;
   params: Record<string, IbkrEvidenceValue>;
@@ -117,28 +93,6 @@ export interface IbkrApiResponseEvidence {
   serializer_warnings: IbkrSerializerWarning[];
 }
 
-export interface IbkrTradeSnapshot {
-  trade: IbkrObjectSnapshot | null;
-  contract: IbkrObjectSnapshot | null;
-  order: IbkrObjectSnapshot | null;
-  order_status: IbkrObjectSnapshot | null;
-  fills: IbkrObjectSnapshot[];
-  log: IbkrObjectSnapshot[];
-  advanced_error: string | null;
-}
-
-export interface IbkrTradeEvidence {
-  request: IbkrApiRequestEvidence | null;
-  response: IbkrApiResponseEvidence | null;
-  contract: IbkrObjectSnapshot | null;
-  order: IbkrObjectSnapshot | null;
-  order_status: IbkrObjectSnapshot | null;
-  trade: IbkrTradeSnapshot | null;
-  fill: IbkrObjectSnapshot | null;
-  execution: IbkrObjectSnapshot | null;
-  commission_report: IbkrObjectSnapshot | null;
-}
-
 export interface IbkrApiEvidenceEvent {
   seq: number;
   ts_ms: number;
@@ -149,29 +103,6 @@ export interface IbkrApiEvidenceEvent {
   request: IbkrApiRequestEvidence;
   response: IbkrApiResponseEvidence | null;
   error: string | null;
-}
-
-export interface IbkrOrderEvidenceFields {
-  ibkr_evidence?: IbkrTradeEvidence | null;
-}
-
-export interface IbkrOrderRefFields {
-  order_ref?: string | null;
-}
-
-export interface IbkrOrderWhatIfPreview extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
-  account_id: string;
-  is_paper: boolean;
-  symbol: string;
-  action: OrderAction;
-  quantity: number;
-  order_type: OrderType;
-  init_margin_change: number | null;
-  maint_margin_change: number | null;
-  equity_with_loan_change: number | null;
-  commission: number | null;
-  warning_text: string | null;
-  previewed_at_ms: number;
 }
 
 export type DataPlaneHealth = components['schemas']['DataPlaneHealth'];
@@ -254,73 +185,6 @@ export interface IbkrSurfaceSnapshot {
   as_of_ms: number;
 }
 
-export interface IbkrPnLTick {
-  account_id: string;
-  con_id: number | null;
-  daily_pnl: number | null;
-  unrealized_pnl: number | null;
-  realized_pnl: number | null;
-  market_value: number | null;
-  position: number | null;
-  ts_ms: number;
-}
-
-export interface IbkrOrderEvent {
-  account_id: string;
-  order_id: number;
-  perm_id: number | null;
-  con_id: number | null;
-  event_type: OrderEventType;
-  status: OrderStatus | null;
-  order_ref: string | null;
-  symbol: string | null;
-  side: OrderAction | null;
-  order_type: OrderType | null;
-  exec_id: string | null;
-  client_id: number | null;
-  fill_quantity: number | null;
-  avg_fill_price: number | null;
-  cumulative_filled: number | null;
-  remaining: number | null;
-  last_fill_price: number | null;
-  exec_time_ms: number | null;
-  fee: number | null;
-  error_code: number | null;
-  error_message: string | null;
-  ibkr_evidence: IbkrTradeEvidence | null;
-  ts_ms: number;
-}
-
-// ── REST shape: /api/broker/diagnose ─────────────────────────────────
-// Hand-mirrored from app.broker.ibkr.models.DiagnosticCheck /
-// DiagnosticReport. Regenerate broker.types.ts when this file is next
-// regenerated to retire the hand mirror.
-
-export type DiagnosticStatus = 'pass' | 'warn' | 'fail' | 'skip';
-
-export interface DiagnosticCheck {
-  name: string;
-  label: string;
-  status: DiagnosticStatus;
-  detail: string;
-  fix: string | null;
-}
-
-export interface DiagnosticReportActive {
-  disabled: false;
-  overall_status: 'pass' | 'warn' | 'fail';
-  checks: DiagnosticCheck[];
-  fetched_at_ms: number;
-}
-
-export interface DiagnosticReportDisabled {
-  disabled: true;
-  reason: string;
-  since_ms: number;
-}
-
-export type DiagnosticReport = DiagnosticReportActive | DiagnosticReportDisabled;
-
 // ── REST shape: /api/broker/expirations/{symbol} ─────────────────────
 
 export interface ExpirationsResponse {
@@ -335,21 +199,6 @@ export interface IbkrStrikeList {
   expiry_ms: number;
   strikes: number[];
   fetched_at_ms: number;
-}
-
-// ── REST shape: /api/broker/symbols/search (Slice 1F) ────────────────
-
-export interface SymbolMatch {
-  symbol: string;
-  name: string;
-  exchange: string;
-  currency: string;
-  sec_type: 'STK' | 'OPT' | 'FUT' | 'FOP' | 'IND' | 'CASH' | 'BOND' | 'CFD' | 'CMDTY';
-  derivative_sec_types: string[];
-}
-
-export interface SymbolSearchResponse {
-  matches: SymbolMatch[];
 }
 
 // ── REST shape: /api/broker/option-contracts/{symbol} (Slice 1F) ─────

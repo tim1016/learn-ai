@@ -88,25 +88,6 @@ class IbkrSettings(BaseSettings):
     # read-only at the upstream client as well as at the application surface.
     readonly: bool = True
 
-    # Tick stream → Parquet archive. Default OFF; flip to True once the
-    # archive directory has been chosen and the writer is in place
-    # (Phase 1.5 follow-up — see persistence.py).
-    persist_ticks: bool = False
-
-    # Account snapshot persistence (Phase 2c). Same pattern as ticks: the
-    # writer is in place, default OFF, flip when forensic queries become
-    # necessary. One file per UTC date, ``account.parquet``.
-    persist_account: bool = False
-
-    # P&L tick persistence (Phase 2c). Default OFF. One file per
-    # (UTC date, account_id), ``pnl.parquet`` with both account-level
-    # (con_id NULL) and per-position rows.
-    persist_pnl: bool = False
-
-    # Where Parquet partitions land when any persist flag is True.
-    # Created lazily under ``{persist_dir}/{date}/{topic}.parquet``.
-    persist_dir: str = "/data/ibkr-ticks"
-
     # Enable/disable the read-only IBKR data-plane client entirely.
     broker_enabled: bool = True
 
@@ -121,11 +102,6 @@ class IbkrSettings(BaseSettings):
     # parameterise it. Container default: /app/artifacts/live_runs.
     live_runs_root: str = "/app/artifacts/live_runs"
 
-    # Bounded rolling window for broker-session diagnostic callback events.
-    # These rows feed the read-only mirror and purge controls; they are not the
-    # trading audit trail and never replace WAL/receipt/fill retention.
-    broker_session_event_retention_count: int = Field(default=5_000, ge=1)
-
     # Persistent JSONL + Parquet root for live bars (Slice 4). The
     # ``LiveBarAggregator`` writes every emitted bar here and replays
     # today's bars from here on subscribe so a restart hands the chart
@@ -138,13 +114,6 @@ class IbkrSettings(BaseSettings):
     # this are removed by the periodic retention sweep; quarantined files
     # are kept regardless as forensic evidence (see BarPersistence).
     live_bars_retention_days: int = 30
-
-    # Host-side live-run daemon (ADR 0004). The instance-status endpoint queries
-    # it for the authoritative live strategy_instance_id -> run_id binding —
-    # "live" is a process fact only the registry can prove. The container reaches
-    # the host daemon via host.containers.internal (same pattern as
-    # LEAN_LAUNCHER_URL); the daemon defaults to port 8765.
-    live_runner_daemon_url: str = "http://host.containers.internal:8765"
 
     # ADR-0028 Stage 3C — one fleet owner polls the daemon's batched
     # ``/instances`` snapshot. Per-bot hubs consume its stamped observation;

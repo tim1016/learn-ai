@@ -205,8 +205,10 @@ class FailureRecord(BaseModel):
     ``raw_ts`` is the verbatim timestamp string from the log (UTC, since
     the engine logger's ``_StepFormatter`` pins ``time.gmtime``);
     ``ts_ms`` is the same instant as canonical ``int64`` ms since Unix
-    epoch UTC. See :mod:`app.services.live_log_failures` for the parser
-    contract.
+    epoch UTC. The parser that produced these rows,
+    ``app/services/live_log_failures.py``, retired with the
+    ``/api/live-runs`` surface (PR-B of #1813, 2026-08-27); this DTO
+    remains as the wire shape for historical rows only.
     """
 
     ts_ms: int
@@ -223,9 +225,10 @@ class IncidentRecord(BaseModel):
     map on plus an ``incident_source`` for the evidence view's BROKER / APP /
     INFRA / OPERATOR badge + filter (codex 2026-06-24 D2 / D8).
 
-    Mirrors :class:`app.services.live_log_failures.IncidentRow` as the wire
-    DTO. The ``incident_category`` enum is the single source of truth for
-    classification — the frontend never re-derives meaning from the raw
+    Mirrored ``app/services/live_log_failures.py``'s ``IncidentRow`` as the
+    wire DTO; that classifier retired with the ``/api/live-runs`` surface
+    (PR-B of #1813, 2026-08-27). The ``incident_category`` enum is the
+    single source of truth for classification — the frontend never re-derives meaning from the raw
     log text. A missing or unrecognised category is rendered as
     ``unknown`` on the frontend for rollout safety.
 

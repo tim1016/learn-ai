@@ -6,9 +6,20 @@ Asserts:
   surfaces touched).
 - A ``None`` client and a ``NotConnectedError`` from ``is_connected`` both
   reduce to ``client_available=False`` without raising.
-The pure-derivation Cartesian matrix lives in
-``tests/broker/test_safety_verdict.py``; this file covers the snapshot
-boundary.
+
+``app/broker/safety_verdict.py`` (the pure-derivation consumer whose
+Cartesian matrix used to live in ``tests/broker/test_safety_verdict.py``)
+retired with the rest of ``GET /api/broker/health``'s ``safety_verdict``
+field — PR-B of #1813, 2026-08-27. This file continues to cover the
+snapshot boundary on its own.
+
+Honest note, not a claim of live wiring: ``build_broker_runtime_snapshot``
+has no production caller and has not had one since before #1813 — it was
+already caller-less on master (03ce52b6), so PR-B did not orphan it and
+deliberately did not delete it either. Its disposition belongs to PR-C's
+feed-surface consolidation. (``"runtime_snapshot"`` in
+``app/research/documentation/analytical_metric_catalog*.py`` is an
+unrelated Strategy Lab metric category string, not a caller.)
 """
 
 from __future__ import annotations
