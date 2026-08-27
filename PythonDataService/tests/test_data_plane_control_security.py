@@ -33,6 +33,12 @@ _CONTROL_SURFACE_SCHEMA = _CONTROL_SURFACE_MANIFEST.with_suffix(".schema.json")
 _CONTROL_SURFACE_MANIFEST_PAYLOAD = json.loads(_CONTROL_SURFACE_MANIFEST.read_text())
 _CONTROL_SURFACE_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["control_prefixes"])
 _PROTECTED_READ_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["protected_read_prefixes"])
+# The interceptor's safe-method set (``data-plane-control-intent.interceptor.ts``
+# and ``proxy.conf.js`` both use exactly these two). Kept here rather than
+# imported because ``app.security.data_plane_control`` only names the unsafe
+# set it guards on.
+SAFE_READ_HTTP_METHODS = frozenset({"GET", "HEAD"})
+
 _MUTATION_PATH = "/api/broker/disconnect"
 _READ_PATH = "/api/broker/health"
 _BROKERS_READ_PATH = "/api/brokers/alpaca/account"
@@ -72,6 +78,14 @@ def _control_routes() -> list[APIRoute]:
 
 def _unsafe_methods(route: APIRoute) -> set[str]:
     return {method for method in route.methods or set() if method in UNSAFE_HTTP_METHODS}
+
+
+def _safe_read_methods(route: APIRoute) -> set[str]:
+    return {method for method in route.methods or set() if method in SAFE_READ_HTTP_METHODS}
+
+
+def _path_is_manifest_protected_read(path: str) -> bool:
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _PROTECTED_READ_PREFIXES)
 
 
 def _has_control_guard(route: APIRoute) -> bool:
@@ -136,6 +150,40 @@ def test_guarded_control_routes_are_declared_in_shared_manifest() -> None:
 
     assert guarded_unsafe_routes
     assert missing_from_manifest == []
+
+
+def test_always_guarded_reads_are_declared_in_shared_manifest() -> None:
+    """Companion to the unsafe-method assertion above, for the other half of
+    the manifest.
+
+    The Frontend interceptor and ``proxy.conf.js`` decide whether to attach
+    the control secret by matching the request path against
+    ``control_prefixes`` for unsafe methods and ``protected_read_prefixes``
+    for safe ones. A route that carries the always-on guard but sits under
+    no ``protected_read_prefixes`` entry therefore 403s from the browser as
+    soon as ``DATA_PLANE_CONTROL_SECRET`` is configured, while every
+    server-side test still passes.
+
+    That is exactly how ``GET /api/market-data-feed/health`` shipped with
+    PR-A of #1813: guarded, undeclared, and invisible to
+    ``test_guarded_control_routes_are_declared_in_shared_manifest``, which
+    only inspects unsafe-method routes. Fixed in PR-B of #1813 (2026-08-27)
+    by declaring ``/api/market-data-feed``; this assertion is what stops the
+    next one.
+    """
+    guarded_reads = [
+        (route.path, sorted(_safe_read_methods(route)))
+        for route in _api_routes()
+        if _safe_read_methods(route) and _has_always_control_guard(route)
+    ]
+    undeclared = [
+        (path, methods)
+        for path, methods in guarded_reads
+        if not _path_is_manifest_protected_read(path)
+    ]
+
+    assert guarded_reads
+    assert undeclared == []
 
 
 @pytest.mark.asyncio

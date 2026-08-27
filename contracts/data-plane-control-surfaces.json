@@ -9,6 +9,7 @@
   "protected_read_prefixes": [
     "/api/accounts",
     "/api/alpaca-clerk-sqlite",
-    "/api/brokers"
+    "/api/brokers",
+    "/api/market-data-feed"
   ]
 }
