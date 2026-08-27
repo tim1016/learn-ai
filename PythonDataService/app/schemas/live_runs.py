@@ -807,63 +807,6 @@ class ChartOverlayNotice(BaseModel):
     source: Literal["polygon"] = "polygon"
 
 
-class ActivityEvidenceRef(BaseModel):
-    """Reference to a captured IBKR API request/callback observation.
-
-    The Activity projection is operator-facing and normalized, but every
-    row that comes from broker evidence can link back to the raw request /
-    response snapshot captured by the full broker API diagnostics recorder.
-    """
-
-    source: str
-    seq: int
-    ts_ms: int
-    request_call: str
-    response_callback: str | None = None
-    order_ref: str | None = None
-    order_id: int | None = None
-    perm_id: int | None = None
-    exec_id: str | None = None
-    symbol: str | None = None
-
-
-class ActivityBrokerEventRow(BaseModel):
-    """Normalized broker event ledger row for the selected session date."""
-
-    id: str
-    visible_row_id: str | None = None
-    ts_ms: int
-    row_type: str
-    display_type: str | None = None
-    source: str
-    source_label: str | None = None
-    symbol: str | None = None
-    side: Literal["BUY", "SELL"] | None = None
-    quantity: float | None = None
-    price: float | None = None
-    status: str | None = None
-    summary: str
-    verdict: str
-    replay_count: int = 1
-    fold_key: str | None = None
-    fold_count: int = Field(default=1, ge=1)
-    cluster_key: str | None = None
-    cluster_label: str | None = None
-    child_evidence_ids: list[str] = Field(default_factory=list)
-    constituent_fill_ids: list[str] = Field(default_factory=list)
-    evidence: list[ActivityEvidenceRef] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _default_visible_contract(self) -> ActivityBrokerEventRow:
-        if not self.visible_row_id:
-            self.visible_row_id = self.id
-        if self.display_type is None:
-            self.display_type = self.row_type.replace("_", " ").title()
-        if self.source_label is None:
-            self.source_label = self.source.replace("_", " ").title()
-        return self
-
-
 class FleetExplainedBucket(BaseModel):
     """One instance's contribution to the account's explained position (#399)."""
 
