@@ -1,17 +1,14 @@
-"""In-process token bucket + TTL cache used by Slice 1F's broker search
-endpoints (``/api/broker/symbols/search`` and friends).
+"""In-process TTL cache used by Slice 1F's broker search endpoints.
 
-The two pieces compose to honor IBKR's ``reqMatchingSymbols`` ceiling
-(~1 request per 5s) without paging tickets onto a remote queue:
+``TtlCache`` short-circuits a repeated option-contract drill-down within
+its TTL so the router never re-qualifies the same contract.
 
-* ``TtlCache`` short-circuits a repeated pattern within 60s — the
-  request never even consults the bucket.
-* ``TokenBucket`` rate-limits the slow path. On exhaustion it returns
-  the retry-after (seconds) so the router can render a clean
-  ``Retry-After`` header instead of slamming IBKR.
+The companion ``TokenBucket`` retired with ``/api/broker/symbols/search``
+(PR-B of #1813, 2026-08-27) — the option-contract path it guarded is not
+rate-limited upstream, so nothing was left to pace.
 
-Both accept a ``now`` callable so the suite can drive them with a fake
-clock; defaults to ``time.monotonic``.
+Accepts a ``now`` callable so the suite can drive it with a fake clock;
+defaults to ``time.monotonic``.
 """
 
 from __future__ import annotations
@@ -19,46 +16,6 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Hashable
-
-
-class TokenBucket:
-    """Classic token bucket, keyed.
-
-    A separate bucket is maintained per ``key`` so independent search
-    patterns don't throttle each other (one operator typing ``SPY``
-    must not block another typing ``QQQ``).
-
-    ``rate_per_second`` is the steady-state issuance rate; ``capacity``
-    is the burst. ``try_acquire`` returns ``0.0`` on success and the
-    seconds-until-one-token on denial.
-    """
-
-    def __init__(
-        self,
-        rate_per_second: float,
-        capacity: int,
-        *,
-        now: Callable[[], float] = time.monotonic,
-    ) -> None:
-        if rate_per_second <= 0:
-            raise ValueError("rate_per_second must be > 0")
-        if capacity < 1:
-            raise ValueError("capacity must be >= 1")
-        self._rate = rate_per_second
-        self._capacity = capacity
-        self._now = now
-        self._state: dict[Hashable, tuple[float, float]] = {}
-
-    def try_acquire(self, key: Hashable) -> float:
-        now = self._now()
-        tokens, last = self._state.get(key, (float(self._capacity), now))
-        elapsed = max(0.0, now - last)
-        tokens = min(float(self._capacity), tokens + elapsed * self._rate)
-        if tokens >= 1.0:
-            self._state[key] = (tokens - 1.0, now)
-            return 0.0
-        self._state[key] = (tokens, now)
-        return (1.0 - tokens) / self._rate
 
 
 class TtlCache[K: Hashable, V]:

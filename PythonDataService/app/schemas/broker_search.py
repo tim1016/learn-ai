@@ -1,13 +1,14 @@
 """Broker search response DTOs — Slice 1F (issue #605).
 
-`SymbolMatch` wraps one ``ContractDescription`` from
-``IB.reqMatchingSymbolsAsync(pattern)``. `OptionContractMatch` wraps one
-qualified option from ``IB.reqContractDetailsAsync(Option(...))``.
+`OptionContractMatch` wraps one qualified option from
+``IB.reqContractDetailsAsync(Option(...))``. Its sibling `SymbolMatch`
+retired with ``/api/broker/symbols/search`` and
+``app/broker/ibkr/symbol_search.py`` (PR-B of #1813, 2026-08-27).
 
-Both are response-only — the cockpit consumes them, never echoes them
-back. Strict (``extra='forbid'``) so an IBKR payload drift surfaces as a
-422 response on the proxy boundary rather than silently round-tripping a
-mystery field into the picker dropdown.
+Response-only — the cockpit consumes it, never echoes it back. Strict
+(``extra='forbid'``) so an IBKR payload drift surfaces as a 422 response
+on the proxy boundary rather than silently round-tripping a mystery
+field into the picker dropdown.
 
 Wire-format note: ``expiry_ms`` is ``int64`` ms UTC per the repo's
 timestamp policy. IBKR ``Contract.lastTradeDateOrContractMonth`` is
@@ -19,19 +20,6 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-class SymbolMatch(BaseModel):
-    """One row from ``/api/broker/symbols/search``."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    symbol: str = Field(min_length=1)
-    name: str
-    exchange: str
-    currency: str
-    sec_type: Literal["STK", "OPT", "FUT", "FOP", "IND", "CASH", "BOND", "CFD", "CMDTY"]
-    derivative_sec_types: list[str] = Field(default_factory=list)
 
 
 class OptionContractMatch(BaseModel):
