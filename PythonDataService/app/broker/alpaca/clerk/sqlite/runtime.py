@@ -104,7 +104,7 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
-from app.services.broker_capability_service import extended_phase_proven_at_ms
+from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 
 if TYPE_CHECKING:

@@ -18,6 +18,7 @@ settings module does not ripple into the safety boundary.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -214,6 +215,19 @@ def get_settings() -> IbkrSettings:
     if _settings is None:
         _settings = IbkrSettings()
     return _settings
+
+
+def live_artifacts_root() -> Path:
+    """Return the shared ``live_runs`` artifacts root used by bot
+    lifecycle state and binding-evidence readers.
+
+    Identical to ``account_truth_refresh.account_truth_artifacts_root()``
+    — same underlying setting, same resolved directory — but lives in
+    this already-retained feed config module so its callers don't
+    import an account-bucket module for a path lookup. See
+    ``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
+    """
+    return Path(get_settings().live_runs_root).parent
 
 
 def reset_settings_for_testing() -> None:

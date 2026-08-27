@@ -529,7 +529,7 @@ def test_aggregator_bars_to_chart_bars_maps_fields_and_decimals() -> None:
     """Extracted helper (shared with GalleryHub): exact field/decimal mapping."""
     from decimal import Decimal
 
-    from app.broker.ibkr.models import IbkrMinuteBar
+    from app.broker.ibkr.bar_models import IbkrMinuteBar
 
     bar = IbkrMinuteBar(
         symbol="SPY",
@@ -565,7 +565,7 @@ def test_aggregator_bars_to_chart_bars_empty_input_returns_empty_list() -> None:
 def test_live_chart_tags_source_and_markers() -> None:
     from decimal import Decimal
 
-    from app.broker.ibkr.models import IbkrMinuteBar
+    from app.broker.ibkr.bar_models import IbkrMinuteBar
 
     bar = IbkrMinuteBar(
         symbol="SPY",

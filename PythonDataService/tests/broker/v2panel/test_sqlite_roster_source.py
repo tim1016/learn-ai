@@ -153,7 +153,7 @@ def test_sqlite_roster_projects_the_durable_duty_outcome(
 
     facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
-    monkeypatch.setattr(sqlite_roster_status, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
     record_path = stable_bot_lifecycle_state_path(tmp_path, "active-spy")
     record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,7 +214,7 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
 
     facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
-    monkeypatch.setattr(sqlite_roster_status, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
     # The lifecycle projection exists but carries no duty outcome: exactly
     # the state a receipt-then-projection write leaves behind when the
@@ -288,7 +288,7 @@ def test_sqlite_roster_prefers_the_projection_where_no_receipt_exists(
 
     facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
-    monkeypatch.setattr(sqlite_roster_status, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
     record_path = stable_bot_lifecycle_state_path(tmp_path, "active-spy")
     record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -337,7 +337,7 @@ def test_sqlite_roster_refuses_an_unreadable_terminal_receipt(
 
     facade = SimpleNamespace(account_id="paper-account", repository=_StoppedRepository())
     monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
-    monkeypatch.setattr(sqlite_roster_status, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
 
     outcomes_dir = (
         strategy_instance_artifact_dir(tmp_path, "live_state", "active-spy")

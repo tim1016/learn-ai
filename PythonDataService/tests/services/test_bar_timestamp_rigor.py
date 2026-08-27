@@ -24,7 +24,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.broker.ibkr.models import IbkrMinuteBar
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.services.bar_persistence import BarPersistence
 
 RESOLUTIONS = [("1m", 60_000), ("5s", 5_000)]

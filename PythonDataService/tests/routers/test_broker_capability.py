@@ -9,9 +9,9 @@ from httpx import ASGITransport, AsyncClient
 
 from app.routers import broker_capability
 from app.schemas.broker_capability import SessionCapability, SessionDataCapability
-from app.services.broker_capability_service import (
-    BrokerCapabilityService,
-    get_broker_capability_service,
+from app.services.market_data_capability_service import (
+    MarketDataCapabilityService,
+    get_market_data_capability_service,
 )
 
 
@@ -57,7 +57,7 @@ class _FakeCapabilityService:
 def _app(service: _FakeCapabilityService) -> FastAPI:
     app = FastAPI()
     app.include_router(broker_capability.router)
-    app.dependency_overrides[get_broker_capability_service] = lambda: service
+    app.dependency_overrides[get_market_data_capability_service] = lambda: service
     return app
 
 
@@ -92,7 +92,7 @@ async def test_read_endpoint_returns_persisted_snapshots() -> None:
 
 
 def test_capability_service_persists_latest_and_timestamped_snapshot(tmp_path: Path) -> None:
-    service = BrokerCapabilityService(root=tmp_path)
+    service = MarketDataCapabilityService(root=tmp_path)
 
     service.persist(_snapshot("QQQ"))
 
@@ -104,7 +104,7 @@ def test_capability_service_persists_latest_and_timestamped_snapshot(tmp_path: P
 
 
 def test_capability_service_reads_only_the_newest_matching_scope(tmp_path: Path) -> None:
-    service = BrokerCapabilityService(root=tmp_path)
+    service = MarketDataCapabilityService(root=tmp_path)
     older = _snapshot("SPY")
     newer = older.model_copy(update={"probed_at_ms": older.probed_at_ms + 1})
     service.persist(newer)
@@ -120,7 +120,7 @@ def test_capability_service_reads_only_the_newest_matching_scope(tmp_path: Path)
 
 
 def test_capability_lookup_isolated_from_unrelated_corrupt_snapshot(tmp_path: Path) -> None:
-    service = BrokerCapabilityService(root=tmp_path)
+    service = MarketDataCapabilityService(root=tmp_path)
     expected = _snapshot("SPY")
     service.persist(expected)
     corrupt = tmp_path / "unrelated-account" / "QQQ" / "latest.json"

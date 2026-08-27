@@ -47,9 +47,9 @@ from app.broker.ibkr.api_evidence import (
     evidence_response,
     get_ibkr_api_evidence_recorder,
 )
+from app.broker.ibkr.bar_models import BarProvenance, IbkrMinuteBar
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
-from app.broker.ibkr.models import BarProvenance, IbkrMinuteBar
 from app.services.session_authority import session_state_at_ms
 from app.utils.timestamps import now_ms_utc
 

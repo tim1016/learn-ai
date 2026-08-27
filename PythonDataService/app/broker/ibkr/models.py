@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import math
 import sys
-from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, computed_field
@@ -455,51 +454,6 @@ class IbkrSurfaceSnapshot(BaseModel):
         ),
     )
     as_of_ms: int
-
-
-BarProvenance = Literal["ibkr_realtime", "ibkr_historical", "polygon_historical", "mixed"]
-BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
-
-
-class IbkrMinuteBar(BaseModel):
-    """One closed 1-minute TRADES bar from IBKR real-time bars.
-
-    IBKR delivers 5-second bars via ``reqRealTimeBars``. The broker
-    boundary aggregates those into closed 1-minute bars and stores all
-    boundary timestamps as ``int64`` ms UTC.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    symbol: str
-    start_ms: int = Field(..., description="UTC milliseconds since epoch, inclusive.")
-    end_ms: int = Field(..., description="UTC milliseconds since epoch, exclusive.")
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume: int
-    fetched_at_ms: int
-    source: Literal["ibkr", "polygon", "mixed"] = "ibkr"
-    provenance: BarProvenance = "ibkr_realtime"
-    venue: str | None = None
-    session_phase: BarSessionPhase = "UNKNOWN"
-    use_rth: bool | None = None
-
-
-class IbkrBarsSnapshot(BaseModel):
-    """A snapshot of the live 1-min OHLCV ring buffer for one symbol.
-
-    ``status`` reports the aggregator's subscription health so the UI can
-    show "Subscribing…" / "Streaming" / "Error: …" instead of an
-    inscrutable empty chart.
-    """
-
-    symbol: str
-    status: Literal["idle", "subscribing", "streaming", "errored", "resubscribing"]
-    last_error: str | None = None
-    last_bar_ms: int | None = None
-    bars: list[IbkrMinuteBar] = Field(default_factory=list)
 
 
 OrderAction = Literal["BUY", "SELL"]
@@ -1006,7 +960,6 @@ __all__ = [
     "IbkrApiResponseEvidence",
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
-    "IbkrMinuteBar",
     "IbkrObjectSnapshot",
     "IbkrOpenOrder",
     "IbkrOptionQuote",

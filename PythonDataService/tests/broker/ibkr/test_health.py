@@ -82,6 +82,7 @@ def test_build_broker_health_without_monitor_preserves_client_state() -> None:
     assert out.condition is not None
     assert out.condition.code == "DATA_PLANE_BROKER_CONNECTED"
     assert out.condition.title == "Data-plane paper session connected"
+    assert "Market data can stream for this session." in out.condition.summary
 
 
 def test_build_broker_health_overlays_reconnecting_when_monitor_is_attempting() -> None:
@@ -103,6 +104,8 @@ def test_build_broker_health_overlays_reconnecting_when_monitor_is_attempting() 
     assert out.recovery_state == "RECONNECTING"
     assert out.reconnect_attempt == 3
     assert out.successful_reconnect_count == 2
+    assert out.condition is not None
+    assert out.condition.remediation == "Wait for reconnect to complete before trusting streamed market data."
 
 
 def test_build_broker_health_preserves_client_state_when_monitor_idle() -> None:
@@ -148,6 +151,8 @@ def test_build_broker_health_overlays_recovering_after_reconnect() -> None:
 
     assert out.connection_state == "recovering"
     assert out.recovery_state == "RESTORING"
+    assert out.condition is not None
+    assert out.condition.remediation == "Wait for recovery to complete before relying on streamed market data."
 
 
 def test_build_broker_health_overlays_hard_down_after_attempts_exhaust() -> None:
@@ -168,6 +173,7 @@ def test_build_broker_health_overlays_hard_down_after_attempts_exhaust() -> None
     assert out.condition.title == "Data-plane broker session down"
     assert "IB Gateway/TWS may be logged in" in out.condition.summary
     assert "FastAPI data-plane IBKR client is not connected" in out.condition.summary
+    assert "Market data cannot stream and reconnect status cannot refresh." in out.condition.summary
 
 
 def test_build_broker_health_suppresses_hard_down_after_operator_disconnect() -> None:
@@ -196,6 +202,30 @@ def test_build_broker_health_suppresses_hard_down_after_operator_disconnect() ->
     assert out.condition.code == "DATA_PLANE_BROKER_DISCONNECTED"
     assert out.condition.severity == "info"
     assert "operator request" in out.condition.summary
+
+
+def test_build_broker_health_plain_disconnect_reports_market_data_cannot_stream() -> None:
+    """The plain default ``disconnected`` branch — no operator-disconnect
+    request, no monitor overlay — must still tell the cockpit market data
+    cannot stream, distinct from the operator-suppressed copy."""
+    client = _fake_client(
+        _fake_client_health(
+            connected=False,
+            account_id=None,
+            is_paper=None,
+            server_version=None,
+            connection_state="disconnected",
+            recovery_state="SOCKET_DOWN",
+        )
+    )
+
+    out = build_broker_health(client, monitor=None)
+
+    assert out.connection_state == "disconnected"
+    assert out.condition is not None
+    assert out.condition.code == "DATA_PLANE_BROKER_DISCONNECTED"
+    assert out.condition.severity == "warning"
+    assert "but market data cannot stream until this app session connects." in out.condition.summary
 
 
 def test_build_broker_health_last_transition_is_max_of_both_sides() -> None:

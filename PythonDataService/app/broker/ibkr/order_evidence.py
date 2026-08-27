@@ -8,17 +8,7 @@ the ib_async object kinds the order path currently captures.
 
 from __future__ import annotations
 
-import logging
-import math
-from collections.abc import Mapping, Sequence
-from dataclasses import fields, is_dataclass
-from datetime import datetime
-from decimal import Decimal
-from enum import Enum
-from types import SimpleNamespace
-
-from pydantic import JsonValue
-
+from app.broker.ibkr.api_evidence import _object_snapshot
 from app.broker.ibkr.models import (
     IbkrApiCallbackName,
     IbkrApiRequestEvidence,
@@ -27,8 +17,6 @@ from app.broker.ibkr.models import (
     IbkrTradeEvidence,
     IbkrTradeSnapshot,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def build_open_order_evidence(
@@ -95,10 +83,6 @@ def all_open_orders_request_evidence() -> IbkrApiRequestEvidence:
     return IbkrApiRequestEvidence(call="reqAllOpenOrders", params={})
 
 
-def snapshot_ibkr_object(obj: object | None) -> IbkrObjectSnapshot | None:
-    return _object_snapshot(obj)
-
-
 def snapshot_contract(contract: object | None) -> IbkrObjectSnapshot | None:
     return _object_snapshot(contract)
 
@@ -146,88 +130,3 @@ def snapshot_trade(trade: object | None) -> IbkrTradeSnapshot | None:
         log=logs_out,
         advanced_error=str(advanced_error) if advanced_error else None,
     )
-
-
-def _object_snapshot(obj: object | None) -> IbkrObjectSnapshot | None:
-    if obj is None:
-        return None
-    object_type = _object_type(obj)
-    try:
-        return IbkrObjectSnapshot(object_type=object_type, fields=_snapshot_fields(obj))
-    except (TypeError, ValueError, OSError, OverflowError) as exc:
-        logger.warning(
-            "IBKR evidence serializer emitted placeholder for unsupported object: %s",
-            exc,
-            extra={"object_type": object_type, "serializer_error": str(exc)},
-        )
-        return IbkrObjectSnapshot(
-            object_type=object_type,
-            fields={"serializer_error": str(exc)},
-            serializer_error=str(exc),
-        )
-
-
-def _snapshot_fields(obj: object) -> dict[str, JsonValue]:
-    return {
-        key: _json_value(value)
-        for key, value in _typed_fields(obj).items()
-    }
-
-
-def _typed_fields(obj: object) -> Mapping[str, object]:
-    if is_dataclass(obj) and not isinstance(obj, type):
-        return {field.name: getattr(obj, field.name) for field in fields(obj)}
-    if isinstance(obj, SimpleNamespace):
-        return vars(obj)
-    if isinstance(obj, tuple) and hasattr(obj, "_asdict"):
-        return obj._asdict()
-    if hasattr(obj, "__dict__"):
-        return {
-            key: value
-            for key, value in vars(obj).items()
-            if not key.startswith("_")
-        }
-    raise TypeError(
-        f"Cannot snapshot unsupported IBKR evidence object {type(obj).__qualname__}"
-    )
-
-
-def _json_value(value: object) -> JsonValue:
-    if value is None or isinstance(value, str | int | bool):
-        return value
-    if isinstance(value, float):
-        if math.isnan(value):
-            return "NaN"
-        if math.isinf(value):
-            return "Infinity" if value > 0 else "-Infinity"
-        return value
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, datetime):
-        return int(value.timestamp() * 1000)
-    if isinstance(value, Enum):
-        return _json_value(value.value)
-    if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _json_value(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, tuple) and hasattr(value, "_asdict"):
-        return {str(key): _json_value(item) for key, item in value._asdict().items()}
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [_json_value(item) for item in value]
-    if isinstance(value, SimpleNamespace):
-        return {key: _json_value(item) for key, item in vars(value).items()}
-    if hasattr(value, "__dict__"):
-        return {
-            key: _json_value(item)
-            for key, item in vars(value).items()
-            if not key.startswith("_")
-        }
-    raise TypeError(
-        f"Cannot convert unsupported IBKR evidence value {type(value).__qualname__}"
-    )
-
-
-def _object_type(obj: object) -> str:
-    cls = obj.__class__
-    return f"{cls.__module__}.{cls.__qualname__}"

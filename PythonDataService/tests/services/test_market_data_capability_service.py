@@ -1,11 +1,11 @@
-"""Unit coverage for app.services.broker_capability_service.extended_phase_proven_at_ms (#1671)."""
+"""Unit coverage for app.services.market_data_capability_service.extended_phase_proven_at_ms (#1671)."""
 
 from __future__ import annotations
 
 import pytest
 
-import app.services.broker_capability_service as broker_capability_service
-from app.services.broker_capability_service import extended_phase_proven_at_ms
+import app.services.market_data_capability_service as market_data_capability_service
+from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.session_authority import SessionAuthorityState
 
 _NOW = 1_700_000_000_000
@@ -31,7 +31,7 @@ def _session(
 @pytest.mark.parametrize("phase", ["PRE", "POST", "OVERNIGHT"])
 def test_proven_extended_phase_returns_true(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
     monkeypatch.setattr(
-        broker_capability_service,
+        market_data_capability_service,
         "session_state_at_ms",
         lambda **_kwargs: _session(phase=phase, extended_phase_proven=True),
     )
@@ -48,7 +48,7 @@ def test_provenance_true_but_phase_closed_does_not_count_as_extended(
     provenance flag alone must never be read as "extended hours proven," or
     a running use_rth=False bot could override genuinely CLOSED evidence."""
     monkeypatch.setattr(
-        broker_capability_service,
+        market_data_capability_service,
         "session_state_at_ms",
         lambda **_kwargs: _session(phase="CLOSED", extended_phase_proven=True),
     )
@@ -60,7 +60,7 @@ def test_provenance_true_but_phase_rth_does_not_count_as_extended(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        broker_capability_service,
+        market_data_capability_service,
         "session_state_at_ms",
         lambda **_kwargs: _session(phase="RTH", extended_phase_proven=True),
     )
@@ -80,7 +80,7 @@ def test_no_account_id_returns_false_without_a_capability_lookup(
     def _fail(**_kwargs: object) -> SessionAuthorityState:
         raise AssertionError("session_state_at_ms must not be called without an account_id")
 
-    monkeypatch.setattr(broker_capability_service, "session_state_at_ms", _fail)
+    monkeypatch.setattr(market_data_capability_service, "session_state_at_ms", _fail)
 
     assert extended_phase_proven_at_ms(now_ms=_NOW, symbol="SPY", account_id=None) is False
 
@@ -91,7 +91,7 @@ def test_unproven_extended_phase_returns_false(monkeypatch: pytest.MonkeyPatch) 
     provenance flag stays False and this must not treat the calendar alone
     as sufficient proof of extended-session availability."""
     monkeypatch.setattr(
-        broker_capability_service,
+        market_data_capability_service,
         "session_state_at_ms",
         lambda **_kwargs: _session(phase="PRE", extended_phase_proven=False),
     )

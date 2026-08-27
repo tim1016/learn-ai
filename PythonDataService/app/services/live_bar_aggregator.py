@@ -40,9 +40,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import stream_minute_bars, stream_raw_5s_bars
 from app.broker.ibkr.client import IbkrClient, NotConnectedError, get_client
-from app.broker.ibkr.models import IbkrMinuteBar
 from app.services.bar_persistence import (
     BarPersistence,
     BarPersistenceRegressionError,

@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
-from app.broker.ibkr.models import IbkrMinuteBar
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.data_lake.polygon_fetcher import PolygonBar
 from app.lean_sidecar.trading_calendar import (
     current_trading_session_window,

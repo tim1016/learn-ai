@@ -10,9 +10,9 @@ from app.schemas.broker_capability import (
     BrokerCapabilityProbeResponse,
     BrokerCapabilityReadResponse,
 )
-from app.services.broker_capability_service import (
-    BrokerCapabilityService,
-    get_broker_capability_service,
+from app.services.market_data_capability_service import (
+    MarketDataCapabilityService,
+    get_market_data_capability_service,
 )
 
 router = APIRouter(prefix="/api/broker/capability", tags=["broker-capability"])
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/broker/capability", tags=["broker-capability"])
 @router.post("/probe", response_model=BrokerCapabilityProbeResponse)
 async def probe_broker_capability(
     symbols: Annotated[str, Query(min_length=1, max_length=128)] = "SPY,QQQ",
-    service: BrokerCapabilityService = Depends(get_broker_capability_service),
+    service: MarketDataCapabilityService = Depends(get_market_data_capability_service),
 ) -> BrokerCapabilityProbeResponse:
     client = require_connected_client()
     parsed = _parse_symbols(symbols)
@@ -36,7 +36,7 @@ async def probe_broker_capability(
 
 @router.get("", response_model=BrokerCapabilityReadResponse)
 async def read_broker_capability(
-    service: BrokerCapabilityService = Depends(get_broker_capability_service),
+    service: MarketDataCapabilityService = Depends(get_market_data_capability_service),
 ) -> BrokerCapabilityReadResponse:
     return BrokerCapabilityReadResponse(snapshots=service.read_latest())
 

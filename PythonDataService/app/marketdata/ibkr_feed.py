@@ -36,6 +36,7 @@ import logging
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import (
     IBKRBarStreamError,
     IBKRBarSubscriptionStalled,
@@ -43,7 +44,6 @@ from app.broker.ibkr.bars import (
     stream_minute_bars,
 )
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
-from app.broker.ibkr.models import IbkrMinuteBar
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.utils.timestamps import now_ms_utc
 

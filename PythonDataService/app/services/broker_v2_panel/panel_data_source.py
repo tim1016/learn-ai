@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.ibkr.config import live_artifacts_root
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
@@ -52,7 +53,6 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
-from app.services.account_truth_refresh import account_truth_artifacts_root
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -65,7 +65,6 @@ from app.services.bot_runner import (
 )
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
-from app.services.broker_capability_service import get_broker_capability_service
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionPerformer,
@@ -105,6 +104,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
 )
+from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.signal_program_admission import prove_running_program_build
 from app.services.sqlite_clerk_compat import active_sqlite_facade
 from app.services.strategy_validation_manifest import (
@@ -209,10 +209,10 @@ async def _panel_authority_for_binding(
 def _run_evidence_repository() -> BotBindingRepository:
     """Bind the shared ``live_state`` repository factory to this service's
     artifacts root — the same root ``main.py`` wires ``BotTaskRegistry``
-    from (``account_truth_artifacts_root()``), so a read here never drifts
+    from (``live_artifacts_root()``), so a read here never drifts
     from the in-container bot runner's own view.
     """
-    return live_state_binding_repository(account_truth_artifacts_root())
+    return live_state_binding_repository(live_artifacts_root())
 
 
 def _program_build_for_display(
@@ -797,7 +797,7 @@ async def _get_panel_with_entries_from_authority(
             symbol=binding.symbol,
             account_id=capability_account_id,
             capability=(
-                get_broker_capability_service().read_latest_for(
+                get_market_data_capability_service().read_latest_for(
                     symbol=binding.symbol,
                     account_id=capability_account_id,
                 )

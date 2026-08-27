@@ -161,7 +161,7 @@ def _broker_health_condition(
             title=f"Data-plane {account_kind} session connected",
             summary=(
                 f"The FastAPI data-plane IBKR client is connected to {account}. "
-                "This proves account-level broker evidence can refresh; per-bot proof still requires a live runtime."
+                "Market data can stream for this session."
             ),
         )
     if state == "soft_lost":
@@ -194,7 +194,7 @@ def _broker_health_condition(
             severity="warning",
             title="Data-plane broker reconnecting",
             summary="The FastAPI data-plane client is reconnecting to IBKR.",
-            remediation="Wait for reconnect to complete before trusting refreshed account evidence.",
+            remediation="Wait for reconnect to complete before trusting streamed market data.",
         )
     if state == "recovering":
         return BrokerHealthCondition(
@@ -202,7 +202,7 @@ def _broker_health_condition(
             severity="warning",
             title="Data-plane broker recovering evidence",
             summary="The data-plane broker link is back, but stream and account-evidence recovery is still running.",
-            remediation="Wait for recovery to complete before submitting or reconciling.",
+            remediation="Wait for recovery to complete before relying on streamed market data.",
         )
     if state == "hard_down":
         return BrokerHealthCondition(
@@ -211,7 +211,7 @@ def _broker_health_condition(
             title="Data-plane broker session down",
             summary=(
                 "IB Gateway/TWS may be logged in, but the FastAPI data-plane IBKR client is not connected. "
-                "Account positions, connected-account identity, and reconciliation evidence cannot refresh. "
+                "Market data cannot stream and reconnect status cannot refresh. "
                 "The monitor keeps retrying on a slow cadence and reconnects on its own once the gateway accepts connections."
             ),
             remediation=(
@@ -235,7 +235,7 @@ def _broker_health_condition(
             if operator_disconnected
             else (
                 "The FastAPI data-plane IBKR client is disconnected. IB Gateway/TWS may still be logged in, "
-                "but account evidence cannot refresh until this app session connects."
+                "but market data cannot stream until this app session connects."
             )
         ),
         remediation=(

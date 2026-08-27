@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.ibkr.config import live_artifacts_root
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
     BotLifecycleStateRecord,
@@ -29,7 +30,6 @@ from app.engine.live.bot_lifecycle_state import (
     stable_bot_lifecycle_state_path,
 )
 from app.schemas.broker_bots import BotDutyOutcomeView, BotStatusView
-from app.services.account_truth_refresh import account_truth_artifacts_root
 from app.services.bot_binding_repository import live_state_binding_repository
 from app.services.bot_registry_projection import (
     duty_outcome_view,
@@ -84,7 +84,7 @@ def lifecycle_record(strategy_instance_id: str) -> BotLifecycleStateRecord | Non
     silently projecting ``duty_outcome=None`` here is what hid a crashed
     fleet behind "Off duty" (fleet-stress T6, 2026-08-26).
     """
-    path = stable_bot_lifecycle_state_path(account_truth_artifacts_root(), strategy_instance_id)
+    path = stable_bot_lifecycle_state_path(live_artifacts_root(), strategy_instance_id)
     try:
         return BotLifecycleStateRepo(path).read()
     except BotLifecycleStateCorruptError as exc:
@@ -138,7 +138,7 @@ def terminal_duty_outcome(
     if latest is None or latest.state == "ACTIVE":
         return None
     try:
-        receipt = live_state_binding_repository(account_truth_artifacts_root()).read_outcome(
+        receipt = live_state_binding_repository(live_artifacts_root()).read_outcome(
             strategy_instance_id, latest.lifecycle_run_id
         )
     except (OSError, ValueError) as exc:
