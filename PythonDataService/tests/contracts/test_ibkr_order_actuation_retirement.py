@@ -291,7 +291,7 @@ def test_generated_contracts_retire_mutations_and_preserve_ibkr_reads() -> None:
         assert f'"{path}"' in frontend_contract, path
 
 
-def test_presented_action_contract_is_reconciliation_only() -> None:
+def test_presented_action_contract_is_retired() -> None:
     """The presented-action contract itself retired with account_safety_snapshot.py
     and app/schemas/presented_operator_action.py (PR-A of #1813, 2026-08-26) —
     there is no presented-action surface left that could carry an order

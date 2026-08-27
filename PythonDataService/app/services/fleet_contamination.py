@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.engine.live.account_clerk_journal import read_account_clerk_journal
@@ -26,15 +25,10 @@ from app.services.account_journal_authority import (
 from app.services.legacy_stale_claim_retirement import retired_legacy_claim_keys
 
 logger = logging.getLogger(__name__)
-NetPositionFetcher = Callable[[], Awaitable[dict[str, int] | None]]
 
 
 class AccountJournalScopeRequiredError(ValueError):
     """Raised rather than allowing two account journals to net in one verdict."""
-
-
-class BrokerAccountMismatchError(ValueError):
-    """The connected broker proved it is serving a different account."""
 
 
 def scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
@@ -134,7 +128,15 @@ def collect_fleet_position_explanations(
 
     Formula: residual[symbol] = broker_net[symbol] - Σ journal_namespace_exposure[symbol]
     Reference: ADR 0030 account-rooted journal; issue #1024.
-    Canonical implementation: this function and ``compute_fleet_contamination``.
+    Canonical implementation: this function supplies the Σ term;
+    ``app.engine.live.fleet.compute_fleet_contamination`` computes the full
+    residual when given a ``broker_net`` mapping. As of PR-A of #1813
+    (2026-08-27, fix round 2) nothing in production composes the two —
+    fleet_contamination.py's IBKR broker-net fetcher was retired, leaving
+    this pairing retained but unwired pending PR-B's disposition. See
+    docs/math-sources-of-truth.md, "Historical IBKR account contamination
+    residual", and docs/architecture/engine-authority-map.md, "Historical
+    IBKR account contamination verdict".
     Validated against: tests/services/test_fleet_contamination.py::test_journal_exposure_is_canonical.
     """
 
@@ -317,5 +319,3 @@ def _account_id_for_run(live_runs_root: Path, run_id: str) -> str | None:
         return normalize_account_id(raw_account_id)
     except InvalidAccountIdError:
         return None
-
-
