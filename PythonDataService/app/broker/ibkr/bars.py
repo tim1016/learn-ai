@@ -50,6 +50,7 @@ from app.broker.ibkr.api_evidence import (
 from app.broker.ibkr.bar_models import BarProvenance, IbkrMinuteBar
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
+from app.marketdata.feed import BarSessionPhase
 from app.services.session_authority import session_state_at_ms
 from app.utils.timestamps import now_ms_utc
 
@@ -440,7 +441,7 @@ def _minute_start_ms(ts_ms: int) -> int:
     return ts_ms - (ts_ms % 60_000)
 
 
-def _session_phase_for_ms(ts_ms: int) -> Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]:
+def _session_phase_for_ms(ts_ms: int) -> BarSessionPhase:
     """Classify one instant through the canonical session authority."""
     return session_state_at_ms(now_ms=ts_ms).phase
 

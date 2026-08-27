@@ -37,8 +37,13 @@ class MarketDataFeedError(Exception):
 
 
 BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
-"""Canonical session-phase label for a bar. Single definition repo-wide —
-``app.broker.ibkr.bar_models`` imports this one rather than restating it."""
+"""Canonical session-phase label. Single definition repo-wide: every other site
+imports this object instead of restating the six members —
+``app.broker.ibkr.bar_models``, ``app.broker.ibkr.bars``,
+``app.schemas.run_admission``, ``app.services.live_chart_window``, and
+``app.services.session_authority``, which aliases it as ``TradingSessionPhase``
+so session code reads in session vocabulary (``TradingSessionPhase is
+BarSessionPhase``)."""
 
 
 class MarketDataBar(BaseModel):
