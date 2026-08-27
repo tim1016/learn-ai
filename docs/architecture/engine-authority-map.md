@@ -148,18 +148,33 @@ disclosed rather than swept there) with the two `live_runs.py` DTOs it
 anchored, and `account_clerk_journal.py::normalize_broker_event` as its own
 cascade.
 
-`app/schemas/live_runs.py` was **narrowed from 55 top-level symbols to 11**: the
-44 that nothing imports were deleted, having gone dead when PR-A/PR-B retired
-the `/api/live-runs` surface and the host-runner control plane. The surviving
-boundary is exact rather than estimated — six names (`BotDutyOutcomeView`,
-`GateResult`, `ReconciliationReceipt`, `MutationRungReceipt`, `ExitReason`,
-`RunStatusSidecar`) are imported by five production modules
+`app/schemas/live_runs.py` was **narrowed from 57 top-level symbols to 9**: 48
+were deleted, having gone dead when PR-A/PR-B retired the `/api/live-runs`
+surface and the host-runner control plane and PR-C retired
+`routers/live_runs.py` and `services/live_run_state.py` outright. (57 = the 56
+public names the file declared plus the private validator
+`_validate_bare_ibkr_host`. The receipt's §6.2 "46 removed / 11 retained" was
+measured before PR-C's thermo fix round deleted `ExitReason` and
+`RunStatusSidecar`; that brings the removed total to 48 and the retained to 9.)
+The surviving boundary is exact rather than estimated — **four** names
+(`BotDutyOutcomeView`, `GateResult`, `ReconciliationReceipt`,
+`MutationRungReceipt`) are imported by five production modules
 (`app/schemas/broker_bots.py`, `app/engine/live/account_artifacts.py`,
 `app/engine/live/account_registry.py`,
 `app/engine/live/reconciliation_receipt.py`,
-`app/services/mutation_rung_receipts.py`), closing to 11 with their intra-file
+`app/services/mutation_rung_receipts.py`), closing to 9 with their intra-file
 dependencies (`GateResultStatus`, `ReceiptStatus`, `ReceiptOutcome`,
-`MutationRungReceiptCode`, `MutationBlockageStageId`). The file has no
+`MutationRungReceiptCode`, `MutationBlockageStageId`). An earlier draft of this
+sentence counted `ExitReason` and `RunStatusSidecar` as a fifth and sixth
+imported name; neither appeared in any of those five modules, and PR-C's fix
+round deleted both — their only production importers were
+`routers/live_runs.py` and `services/live_run_state.py`, which this
+decommission retired, so they are its own cascade rather than inherited debt.
+Two of the four survivors are read only by modules that were themselves already
+importer-less at #1813's slice-0 base `03ce52b6`
+(`app/engine/live/reconciliation_receipt.py`,
+`app/services/mutation_rung_receipts.py`): pre-existing debt this decommission
+did not create and, by its own rule, does not clear. The file has no
 `__all__`, no `from app.schemas import live_runs` attribute access, and no
 router reference, so no deleted name was reachable dynamically. The deletion is
 contract-neutral, re-proved rather than inherited: `export_openapi_contract.py

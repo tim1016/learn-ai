@@ -292,7 +292,23 @@ Mutation-tested: pulling the entry reds that assertion and only that one.
 
 ### 6.2 `app/schemas/live_runs.py` — 44 unreachable symbols DELETED, not recorded
 
-**915 → 219 lines.** 46 module-level names removed, 11 retained.
+**915 → 180 lines.** 48 module-level names removed, 9 retained.
+
+> **Amended by PR-C's thermo fix round.** The narrative below records the
+> measurement as it stood when it was written: 46 removed, 11 retained. The
+> review then found that two of the 11 — `ExitReason` and `RunStatusSidecar` —
+> had no production consumer at all. Their only importers were
+> `routers/live_runs.py` and `services/live_run_state.py`, both retired by
+> *this* decommission, which left one test file as their sole referrer
+> repo-wide. Re-measured by AST at symbol level over `app/`: this file exports
+> exactly **four** names that `app/` imports — `GateResult`,
+> `BotDutyOutcomeView`, `ReconciliationReceipt`, `MutationRungReceipt` — across
+> **five** production modules. Both dead names were deleted along with the
+> model-only half of `tests/engine/live/test_run_status.py`; that file's three
+> `_atomic_write_json` tests remain, because `app.engine.live.run_status` has
+> two live importers. The headline totals above are post-amendment; the "6
+> externally imported symbols" figure and the "Retained" list below are
+> annotated where they stand.
 
 PR-B's thermo round had cleared this file's orphaned DTOs as "genuinely
 PR-C-sized, not a deletion cascade" — correctly, at the time: the 915-line
@@ -305,6 +321,11 @@ externally imported symbols (by **5** production files, not 6), 11 reachable,
 therefore **44 unreachable, not 39** — the five intra-file names had been
 double-counted. And the row listed no names, so nothing was actually pinned. A
 follow-up driven by that row would have deleted the wrong set.
+
+**That 6 was itself two too many** (thermo round 1, M-1). It counted
+`ExitReason` and `RunStatusSidecar`, whose only referrer was a test file. The
+externally imported figure, re-measured by AST over `app/`, is **4** — by the
+same 5 production files.
 
 **Ruled: delete the 44, keep the 11, replace the residue row with a short
 accurate retirement statement.** Reasoning:
@@ -323,12 +344,18 @@ exceptions kept. Contract neutrality was **re-proved, not inherited**: the
 OpenAPI contract came out byte-identical, `export_openapi_contract.py --check`
 exit 0 twice.
 
-The find that justifies insisting on AST over grep: **six same-name production
-hits turned out to be separate definitions** (`ChartOverlayNotice`,
-`BrokerConnectionState`, `HydratePolicy`, `TradingSessionPhase`,
-`OpenRunbookAction`) — the exact case where grep says "live" and AST says
-"dead". The contract's `OpenRunbookAction` is `operator_blocker.py`'s model,
-not `live_runs.py`'s.
+The find that justifies insisting on AST over grep: **five same-name production
+hits turned out to be separate definitions** — `ChartOverlayNotice`
+(`app/services/live_chart_window.py`), `BrokerConnectionState`
+(`app/broker/ibkr/models.py`), `HydratePolicy`
+(`app/engine/live/indicator_state.py`), `TradingSessionPhase`
+(`app/services/session_authority.py`) and `OpenRunbookAction`
+(`app/schemas/operator_blocker.py`) — the exact case where grep says "live" and
+AST says "dead". The contract's `OpenRunbookAction` is `operator_blocker.py`'s
+model, not `live_runs.py`'s. (This sentence said "six" against a list of five
+until PR-C's thermo fix round re-counted it: an AST census of the 46 removed
+names against every top-level definition under `app/` returns exactly these
+five. The count in the prose was wrong; the list was right.)
 
 **Removed (46):** `RunState`, `LiveRunSummary`, `DecisionsSummary`,
 `ExecutionsSummary`, `TradesSummary`, `FlagsSummary`, `ArtifactFile`,
@@ -348,10 +375,29 @@ not `live_runs.py`'s.
 `ActivityBrokerEventRow`, `FleetExplainedBucket`, `FleetContamination`,
 `FleetAccountSummary`.
 
-**Retained (11):** `ExitReason`, `RunStatusSidecar`, `MutationBlockageStageId`,
-`MutationRungReceiptCode`, `MutationRungReceipt`, `GateResultStatus`,
-`GateResult`, `ReceiptStatus`, `ReceiptOutcome`, `ReconciliationReceipt`,
-`BotDutyOutcomeView`.
+**Retained (9):** `MutationBlockageStageId`, `MutationRungReceiptCode`,
+`MutationRungReceipt`, `GateResultStatus`, `GateResult`, `ReceiptStatus`,
+`ReceiptOutcome`, `ReconciliationReceipt`, `BotDutyOutcomeView`.
+
+**Removed by the thermo fix round (2 more, bringing the total to 48):**
+`ExitReason`, `RunStatusSidecar`. Both were listed as retained above until
+thermo round 1 (M-1) showed they had no production consumer: `git grep` at
+slice-0 base `03ce52b6` puts their importers in `routers/live_runs.py` and
+`services/live_run_state.py`, two modules this PR's own `RETIRED_MODULES` list
+names as deleted. That makes them #1813's own cascade, not inherited debt, so
+the same rule that deleted the 46 deletes them. `RunStatusSidecar.exit_reason`
+was `ExitReason`'s only user, so the two go together. The production reader of
+the artifact they described,
+`app/engine/live/exit_taxonomy.py::read_run_exit_evidence`, hand-parses
+`run_status.json` with a bare `str` and never touched either model.
+
+Two of the nine retained are read only by modules that were themselves already
+importer-less at `03ce52b6` — `app/engine/live/reconciliation_receipt.py`
+(`ReconciliationReceipt`) and `app/services/mutation_rung_receipts.py`
+(`MutationRungReceipt`). Verified by AST module-importer scan over `app/` and
+`tests/` at that base and at HEAD: zero either side. They are pre-existing debt
+this decommission did not create, and the rule stated in [§9](#9-frontend-mirror-types--the-rule-that-settled-it)
+keeps them out of its scope.
 
 > **Reconciling 44 with 46.** The classification counted **55** top-level
 > schema symbols; the file actually declares **56** public names plus one
@@ -496,34 +542,53 @@ The class went 36 methods at Slice 0 → 11 today. No Alpaca route moved: the
 
 ## 9. Frontend mirror types — the rule that settled it
 
-PR-C deleted hand-written mirrors of Python models the backend no longer has,
-then **restored four** it had also deleted: `ExitReason`,
-`MutationRungReceipt`, `MutationRungReceiptCode`, `MutationRungReceiptStageId`.
+PR-C deleted hand-written mirrors of Python models the backend no longer has.
+Four of them — `ExitReason`, `MutationRungReceipt`, `MutationRungReceiptCode`,
+`MutationRungReceiptStageId` — were deleted, then **restored** into a new file,
+then **deleted again** by the thermo fix round. The restore was wrong; this
+section records why, because the reasoning is the useful part.
 
-**The rule: this PR deletes what #1813 orphaned, and does not delete what was
-already dead before it.**
+**The rule, unchanged: this PR deletes what #1813 orphaned — including what its
+own deletions orphaned — and does not delete what was already dead before it.**
 
-The four are structurally identical to `OperatorIncident`, which the same task
-*retained*: each is a mirror of a **live, non-IBKR** backend model, with zero
-frontend consumers **already at master `03ce52b6`**, absent from the OpenAPI
-contract, and not orphaned by #1813 — C-1 deliberately **kept** their Python
-models (`class ExitReason`, `class MutationRungReceipt` are among the 11
-retained in `live_runs.py`). Deleting them would have been unrelated cleanup
-billed to this PR, and four deletions plus one retention would have forced this
-receipt to state two contradictory rules for the same situation.
+The restore rested on a premise that turned out to be false: that C-1 had
+deliberately kept the four types' Python models as *live*. Two of them,
+`ExitReason` and `RunStatusSidecar`, had in fact been orphaned by **this PR's
+own kills** (`routers/live_runs.py`, `services/live_run_state.py`) and are now
+deleted on the Python side too — see [§6.2](#62-appschemaslive_runspy--44-unreachable-symbols-deleted-not-recorded).
+The other premise fails on a different point: once PR-C had deleted the host
+files, "leave it alone" was no longer available. Re-authoring four unreferenced
+types into a **new** file is an addition, not a retention, and this repo's rules
+point the other way ("don't create new files when editing an existing one
+works"). Measured at the time of the fix round: zero type references anywhere in
+`Frontend/`, `Backend/` or `contracts/` outside the file's own definitions —
+`models/operator-notice.ts` re-exports eight names and none of these four — and
+zero occurrences in `contracts/openapi/python-data-service.openapi.json`.
+
+The restored copy was also **drifted from its cited source on the commit that
+created it**: TS `ExitReason` listed 8 members where the Python enum had 9,
+missing `poisoned`. No gate could have caught it — `codegen:check` watches
+nothing under `Frontend/src/app/api/` (see [§12](#12-found-and-deliberately-not-fixed)).
+A hand-written mirror with no consumer and no gate is a liability with no
+counterweight.
+
+What survives in
+[`Frontend/src/app/api/operator-notice.types.ts`](../../Frontend/src/app/api/operator-notice.types.ts)
+is the `OperatorNotice*` / `OperatorIncident` half, which **is** consumed —
+`models/operator-notice.ts` re-exports it and
+`api/operator-notice-codes.snapshot.spec.ts` pins `OperatorNoticeCode` against
+the Python source. `OperatorIncident` remains the retained case the four were
+argued to resemble, and the resemblance is what failed: it has consumers.
 
 The apparent counter-precedent was examined and rejected: `runtime_snapshot.py`
 was also a pre-existing orphan, but it lives under `app/**broker**/` — an IBKR
 module, squarely #1813's own residue. Different act, different rule.
 
-The four now live in
-[`Frontend/src/app/api/operator-notice.types.ts`](../../Frontend/src/app/api/operator-notice.types.ts)
-under a five-line provenance comment. Restoring them *silently* would have made
-the file header newly false — it says its contents mirror
-`operator/notices/schema.py`, and these four mirror `schemas/live_runs.py`.
-The comment also records a naming divergence worth knowing about: **Python
-names the union `MutationBlockageStageId`; the frontend mirror calls it
-`MutationRungReceiptStageId`.**
+One casualty worth recording: the naming divergence the restore comment
+documented — **Python names the union `MutationBlockageStageId`; the frontend
+mirror called it `MutationRungReceiptStageId`** — no longer has a frontend side.
+It is preserved here rather than in code, because there is no code left to
+carry it.
 
 ---
 

@@ -1,19 +1,33 @@
 """Pydantic v2 schemas surviving the retired live-runs API.
 
 The ``/api/live-runs`` HTTP surface and the host-runner control plane retired
-with PR-A/PR-B of #1813; the 44 request/response/daemon-envelope models that
-served them were deleted in PR-C. What remains are the durable-artifact and
-receipt schemas still imported by live modules: the run-status sidecar, the
-lifecycle gate result, the mutation-rung receipt, the cold-start
-reconciliation receipt, and the terminal duty-outcome view.
+with PR-A/PR-B of #1813; the request/response/daemon-envelope models that
+served them were deleted in PR-C. **Nine** top-level names remain, of which
+``app/`` imports exactly **four**, from **five** production modules:
+
+* ``GateResult`` — ``app/engine/live/account_artifacts.py``,
+  ``app/engine/live/account_registry.py``
+* ``BotDutyOutcomeView`` — ``app/schemas/broker_bots.py``
+* ``ReconciliationReceipt`` — ``app/engine/live/reconciliation_receipt.py``
+* ``MutationRungReceipt`` — ``app/services/mutation_rung_receipts.py``
+
+The other five (``GateResultStatus``, ``ReceiptStatus``, ``ReceiptOutcome``,
+``MutationBlockageStageId``, ``MutationRungReceiptCode``) are intra-file
+aliases those four are built from. ``ExitReason`` and ``RunStatusSidecar``
+were here too until PR-C: their only importers were ``routers/live_runs.py``
+and ``services/live_run_state.py``, both retired by this decommission, so
+they went with them.
+
+``reconciliation_receipt.py`` and ``mutation_rung_receipts.py`` were already
+importer-less at #1813's slice-0 base (``03ce52b6``) — pre-existing debt this
+decommission did not create and does not clear.
 
 All timestamps are int64 milliseconds UTC.
 """
 
 from __future__ import annotations
 
-from enum import StrEnum
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -25,59 +39,6 @@ from app.operator.notices.schema import (
     validate_actionability_action_pairing,
 )
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
-
-
-class ExitReason(StrEnum):
-    """Reason why a live run exited."""
-
-    normal = "normal"
-    force_flat_complete = "force_flat_complete"
-    keyboard_interrupt = "keyboard_interrupt"
-    signal = "signal"
-    max_orders_exceeded = "max_orders_exceeded"
-    fatal_halt = "fatal_halt"
-    recovery_flatten = "recovery_flatten"
-    exception = "exception"
-    # A start was refused because the run is poisoned (poisoned.flag present, or
-    # corrupted). Distinct from fatal_halt (the live engine's intra-day trip):
-    # this is the cold-start refusal, recorded so the console explains "fresh
-    # run_id required" instead of a blank "ended unexpectedly".
-    poisoned = "poisoned"
-
-
-class RunStatusSidecar(BaseModel):
-    """Sidecar process metadata for a live run.
-
-    Created and maintained by the observer sidecar process, containing
-    lifecycle timestamps and process metadata.
-
-    PRD #619-A adds ``submit_mode_at_start`` and ``readonly_at_start``
-    as durable child/run evidence the Resume gate consults for the
-    submission_capability check (ADR-0011 amendment: identity and
-    capability are independent facts). Both are captured at child
-    boot and never mutated after. A legacy 1.x sidecar without either
-    field reads as ``None`` and Resume treats capability as UNKNOWN.
-    """
-
-    schema_version: int = 2
-    run_id: str
-    started_at_ms: int
-    last_update_ms: int
-    ended_at_ms: int | None = None
-    exit_code: int | None = None
-    exit_reason: ExitReason | None = None
-    host_pid: int
-    # PRD #619-A — capability evidence.
-    submit_mode_at_start: Literal["live_paper", "shadow"] | None = None
-    readonly_at_start: bool | None = None
-    # Startup/runtime failure evidence. ``exit_reason=exception`` is too coarse
-    # for clients to present a useful remedy; typed fields let the operator
-    # surface say e.g. "IBKR client ID is already in use" instead of collapsing
-    # into a generic reconcile prompt.
-    exit_error_code: str | None = None
-    exit_error_message: str | None = None
-    exit_error_detail: dict[str, Any] = Field(default_factory=dict)
-
 
 MutationBlockageStageId = Literal[
     "control_plane",
