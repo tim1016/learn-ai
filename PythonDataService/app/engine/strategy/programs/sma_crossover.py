@@ -40,25 +40,24 @@ class SmaCrossoverParams(StrategyParamsBase):
         return self
 
 
-_SMA_SIGNAL_PROGRAM_KEY = "sma_crossover"
-_SMA_SIGNAL_PROGRAM_VERSION = "sma-crossover/v1"
+SMA_SIGNAL_PROGRAM_KEY = "sma_crossover"
+SMA_SIGNAL_PROGRAM_VERSION = "sma-crossover/v1"
 
 
-def _build_sma_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
+def build_sma_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
     """Construct the sole broker-neutral SMA Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, SmaCrossoverParams)
+    assert isinstance(params, SmaCrossoverParams)
     strategy = SmaCrossoverAlgorithm(
-        symbol=typed.symbol,
-        short_window=typed.short_window,
-        long_window=typed.long_window,
-        resolution_minutes=typed.resolution_minutes,
+        symbol=params.symbol,
+        short_window=params.short_window,
+        long_window=params.long_window,
+        resolution_minutes=params.resolution_minutes,
     )
     program = SignalProgram.create(
         strategy,
-        program_key=_SMA_SIGNAL_PROGRAM_KEY,
-        program_version=_SMA_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+        program_key=SMA_SIGNAL_PROGRAM_KEY,
+        program_version=SMA_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(params, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program

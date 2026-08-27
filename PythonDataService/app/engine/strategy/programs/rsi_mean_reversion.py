@@ -41,26 +41,25 @@ class RsiMeanReversionParams(StrategyParamsBase):
         return self
 
 
-_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY = "rsi_mean_reversion"
-_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION = "rsi-mean-reversion/v1"
+RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY = "rsi_mean_reversion"
+RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION = "rsi-mean-reversion/v1"
 
 
-def _build_rsi_mean_reversion_signal_program(params: StrategyParamsBase) -> SignalProgram:
+def build_rsi_mean_reversion_signal_program(params: StrategyParamsBase) -> SignalProgram:
     """Construct the sole broker-neutral RSI Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, RsiMeanReversionParams)
+    assert isinstance(params, RsiMeanReversionParams)
     strategy = RsiMeanReversionAlgorithm(
-        symbol=typed.symbol,
-        window=typed.window,
-        oversold=typed.oversold,
-        overbought=typed.overbought,
-        resolution_minutes=typed.resolution_minutes,
+        symbol=params.symbol,
+        window=params.window,
+        oversold=params.oversold,
+        overbought=params.overbought,
+        resolution_minutes=params.resolution_minutes,
     )
     program = SignalProgram.create(
         strategy,
-        program_key=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY,
-        program_version=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+        program_key=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY,
+        program_version=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(params, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program

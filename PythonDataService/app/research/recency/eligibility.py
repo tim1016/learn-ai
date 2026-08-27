@@ -16,7 +16,7 @@ Validated against: tests/research/recency/test_eligibility.py.
 
 from __future__ import annotations
 
-from app.engine.strategy.registry import StrategyParamsBase
+from app.engine.strategy.params import StrategyParamsBase
 
 _NUMERIC_TYPES = (int, float)
 

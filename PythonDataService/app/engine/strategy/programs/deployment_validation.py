@@ -47,22 +47,21 @@ class DeploymentValidationParams(StrategyParamsBase):
         return self
 
 
-_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_KEY = "deployment_validation"
-_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION = "deployment-validation/v1"
+DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_KEY = "deployment_validation"
+DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION = "deployment-validation/v1"
 
 
-def _build_deployment_validation_signal_program(params: StrategyParamsBase) -> SignalProgram:
+def build_deployment_validation_signal_program(params: StrategyParamsBase) -> SignalProgram:
     """Construct the sole broker-neutral Deployment Validation Signal Program."""
-    typed = params
-    assert isinstance(typed, DeploymentValidationParams)
+    assert isinstance(params, DeploymentValidationParams)
     strategy = DeploymentValidationConsecutiveGreen(
-        symbol=typed.symbol,
-        trade_symbol=typed.trade_symbol,
+        symbol=params.symbol,
+        trade_symbol=params.trade_symbol,
     )
     program = SignalProgram.create(
         strategy,
-        program_key=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_KEY,
-        program_version=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
+        program_key=DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_KEY,
+        program_version=DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
         # This program's decision clock IS the raw minute bar -- there is no
         # consolidator/resolution parameter to derive it from (unlike
         # sma_crossover's own configurable timeframe_ms above).

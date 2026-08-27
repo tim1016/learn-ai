@@ -63,24 +63,23 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
         return self
 
 
-_EMA_SIGNAL_PROGRAM_KEY = "ema_crossover_signal"
-_EMA_SIGNAL_PROGRAM_VERSION = "ema-crossover-signal/v1"
+EMA_SIGNAL_PROGRAM_KEY = "ema_crossover_signal"
+EMA_SIGNAL_PROGRAM_VERSION = "ema-crossover-signal/v1"
 
 
-def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
+def build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
     """Construct the sole broker-neutral EMA Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, EmaCrossoverSignalParams)
+    assert isinstance(params, EmaCrossoverSignalParams)
     strategy = EmaCrossoverSignalAlgorithm(
-        symbol=typed.symbol,
-        gap=typed.gap,
-        rsi_min=typed.rsi_min,
-        rsi_max=typed.rsi_max,
+        symbol=params.symbol,
+        gap=params.gap,
+        rsi_min=params.rsi_min,
+        rsi_max=params.rsi_max,
     )
     program = SignalProgram.create(
         strategy,
-        program_key=_EMA_SIGNAL_PROGRAM_KEY,
-        program_version=_EMA_SIGNAL_PROGRAM_VERSION,
+        program_key=EMA_SIGNAL_PROGRAM_KEY,
+        program_version=EMA_SIGNAL_PROGRAM_VERSION,
         # Fixed cadence: this program exposes no resolution parameter, and
         # its registration declares StrategyBarCadence("minute", 15).
         timeframe_ms=15 * 60_000,

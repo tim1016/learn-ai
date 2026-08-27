@@ -18,11 +18,9 @@ from app.engine.pine_generators import (
     generate_strategy_b_pine,
     generate_strategy_c_pine,
 )
-from app.engine.strategy.registry import (
-    RsiRangeStrategyAParams,
-    RsiRangeStrategyBParams,
-    RsiRangeStrategyCParams,
-)
+from app.engine.strategy.programs.spy_strategy_a import RsiRangeStrategyAParams
+from app.engine.strategy.programs.spy_strategy_b import RsiRangeStrategyBParams
+from app.engine.strategy.programs.spy_strategy_c import RsiRangeStrategyCParams
 from app.main import app
 
 

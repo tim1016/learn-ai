@@ -27,7 +27,8 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from app.engine.strategy.base import StrategyContext
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyParamsBase
+from app.engine.strategy.params import StrategyParamsBase
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import SignalProgram
 from tests._helpers.signal_program import RecordingExecutor, bind_strategy_context
 

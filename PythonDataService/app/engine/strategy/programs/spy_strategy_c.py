@@ -58,29 +58,28 @@ class RsiRangeStrategyCParams(StrategyParamsBase):
         return self
 
 
-_SPY_C_SIGNAL_PROGRAM_KEY = "spy_strategy_c"
-_SPY_C_SIGNAL_PROGRAM_VERSION = "spy-strategy-c/v1"
+SPY_C_SIGNAL_PROGRAM_KEY = "spy_strategy_c"
+SPY_C_SIGNAL_PROGRAM_VERSION = "spy-strategy-c/v1"
 
 
-def _build_spy_strategy_c_signal_program(params: StrategyParamsBase) -> SignalProgram:
+def build_spy_strategy_c_signal_program(params: StrategyParamsBase) -> SignalProgram:
     """Construct the sole broker-neutral Strategy C Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, RsiRangeStrategyCParams)
+    assert isinstance(params, RsiRangeStrategyCParams)
     strategy = SpyStrategyCAlgorithm(
-        symbol=typed.symbol,
-        adx_entry_threshold=typed.adx_entry_threshold,
-        rsi_period=typed.rsi_period,
-        rsi_low_gate=typed.rsi_low_gate,
-        rsi_high_gate=typed.rsi_high_gate,
-        adx_period=typed.adx_period,
-        adx_exit_threshold=typed.adx_exit_threshold,
-        resolution_minutes=typed.resolution_minutes,
+        symbol=params.symbol,
+        adx_entry_threshold=params.adx_entry_threshold,
+        rsi_period=params.rsi_period,
+        rsi_low_gate=params.rsi_low_gate,
+        rsi_high_gate=params.rsi_high_gate,
+        adx_period=params.adx_period,
+        adx_exit_threshold=params.adx_exit_threshold,
+        resolution_minutes=params.resolution_minutes,
     )
     program = SignalProgram.create(
         strategy,
-        program_key=_SPY_C_SIGNAL_PROGRAM_KEY,
-        program_version=_SPY_C_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+        program_key=SPY_C_SIGNAL_PROGRAM_KEY,
+        program_version=SPY_C_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(params, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program

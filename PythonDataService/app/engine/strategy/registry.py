@@ -37,40 +37,40 @@ from app.engine.strategy.params import (
     StrategyParamsBase,
 )
 from app.engine.strategy.programs.deployment_validation import (
-    _DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
+    DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
     DeploymentValidationParams,
-    _build_deployment_validation_signal_program,
+    build_deployment_validation_signal_program,
 )
 from app.engine.strategy.programs.ema_crossover_signal import (
-    _EMA_SIGNAL_PROGRAM_KEY,
-    _EMA_SIGNAL_PROGRAM_VERSION,
+    EMA_SIGNAL_PROGRAM_KEY,
+    EMA_SIGNAL_PROGRAM_VERSION,
     EmaCrossoverSignalParams,
-    _build_ema_crossover_signal_program,
+    build_ema_crossover_signal_program,
 )
 from app.engine.strategy.programs.rsi_mean_reversion import (
-    _RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
+    RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
     RsiMeanReversionParams,
-    _build_rsi_mean_reversion_signal_program,
+    build_rsi_mean_reversion_signal_program,
 )
 from app.engine.strategy.programs.sma_crossover import (
-    _SMA_SIGNAL_PROGRAM_VERSION,
+    SMA_SIGNAL_PROGRAM_VERSION,
     SmaCrossoverParams,
-    _build_sma_crossover_signal_program,
+    build_sma_crossover_signal_program,
 )
 from app.engine.strategy.programs.spy_strategy_a import (
-    _SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
+    SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
     RsiRangeStrategyAParams,
-    _build_spy_strategy_a_signal_program,
+    build_spy_strategy_a_signal_program,
 )
 from app.engine.strategy.programs.spy_strategy_b import (
-    _SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
+    SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
     RsiRangeStrategyBParams,
-    _build_spy_strategy_b_signal_program,
+    build_spy_strategy_b_signal_program,
 )
 from app.engine.strategy.programs.spy_strategy_c import (
-    _SPY_C_SIGNAL_PROGRAM_VERSION,
+    SPY_C_SIGNAL_PROGRAM_VERSION,
     RsiRangeStrategyCParams,
-    _build_spy_strategy_c_signal_program,
+    build_spy_strategy_c_signal_program,
 )
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.engine.strategy.signal_program import (
@@ -427,11 +427,11 @@ def hidden_params_present(
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    _EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
+    EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
         class_name="EmaCrossoverSignalAlgorithm",
         signal_program_contract=SignalProgramContract(
-            program_version=_EMA_SIGNAL_PROGRAM_VERSION,
+            program_version=EMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
@@ -655,8 +655,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("rsi", {"length": 14}),
         ),
         strategy_bars=StrategyBarCadence("minute", 15),
-        build=lambda p: _build_ema_crossover_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=_build_ema_crossover_signal_program,
+        build=lambda p: build_ema_crossover_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=build_ema_crossover_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -666,7 +666,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         display_name="SMA Crossover",
         class_name="SmaCrossoverAlgorithm",
         signal_program_contract=SignalProgramContract(
-            program_version=_SMA_SIGNAL_PROGRAM_VERSION,
+            program_version=SMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=SmaCrossoverParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
@@ -844,8 +844,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        build=lambda p: _build_sma_crossover_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=_build_sma_crossover_signal_program,
+        build=lambda p: build_sma_crossover_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=build_sma_crossover_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -932,7 +932,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         display_name="RSI Mean Reversion",
         class_name="RsiMeanReversionAlgorithm",
         signal_program_contract=SignalProgramContract(
-            program_version=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
+            program_version=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiMeanReversionParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="46d0b13b5e3307d983b4d5b4a1a21ba790db5e5644d164364a787bb2a12acde7",
@@ -1099,8 +1099,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         param_schema=RsiMeanReversionParams,
         chart_indicators=(StrategyChartIndicator("rsi", {"length": ChartParamRef("window")}),),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        build=lambda p: _build_rsi_mean_reversion_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=_build_rsi_mean_reversion_signal_program,
+        build=lambda p: build_rsi_mean_reversion_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=build_rsi_mean_reversion_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -1208,7 +1208,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         class_name="DeploymentValidationConsecutiveGreen",
         strategy_category="operational_validation_harness",
         signal_program_contract=SignalProgramContract(
-            program_version=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
+            program_version=DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=DeploymentValidationParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8",
@@ -1396,8 +1396,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", 1),
         hidden_params={"trade_symbol"},
         action_plan_contract="single_long_stock",
-        build=lambda p: _build_deployment_validation_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=_build_deployment_validation_signal_program,
+        build=lambda p: build_deployment_validation_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=build_deployment_validation_signal_program,
     ),
     "spy_ema_crossover_options": StrategyRegistration(
         display_name="EMA Crossover Options",
@@ -1555,7 +1555,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
         class_name="SpyStrategyAAlgorithm",
         signal_program_contract=SignalProgramContract(
-            program_version=_SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
+            program_version=SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyAParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="7ee88013046505a9df88fa9c83b94e1f5f4c4de92718dd874ca157b5eea25f5f",
@@ -1790,8 +1790,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_a_pine,
-        build=lambda p: _build_spy_strategy_a_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=_build_spy_strategy_a_signal_program,
+        build=lambda p: build_spy_strategy_a_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=build_spy_strategy_a_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -1800,7 +1800,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
         class_name="SpyStrategyBAlgorithm",
         signal_program_contract=SignalProgramContract(
-            program_version=_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
+            program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyBParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="775a5dfd4a98090111c4aa0f643f647b4b14cf27c9334ac266ebc9565b7485b4",
@@ -2040,8 +2040,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_b_pine,
-        build=lambda p: _build_spy_strategy_b_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=_build_spy_strategy_b_signal_program,
+        build=lambda p: build_spy_strategy_b_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=build_spy_strategy_b_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -2050,7 +2050,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         display_name="Strategy C — ADX-rising + RSI-range",
         class_name="SpyStrategyCAlgorithm",
         signal_program_contract=SignalProgramContract(
-            program_version=_SPY_C_SIGNAL_PROGRAM_VERSION,
+            program_version=SPY_C_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=RsiRangeStrategyCParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="9efc77718f0028e78ad6ea7d56ffda19a510cbba7f5ea3b5a6d5cccade6a75c6",
@@ -2248,8 +2248,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_c_pine,
-        build=lambda p: _build_spy_strategy_c_signal_program(p).strategy,  # type: ignore[return-value]
-        signal_program_factory=_build_spy_strategy_c_signal_program,
+        build=lambda p: build_spy_strategy_c_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=build_spy_strategy_c_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
@@ -2294,7 +2294,7 @@ _STRATEGY_REGISTRY["ema_crossover_2_bps"] = replace(
     # never been through its own golden qualification. Left inherited, both
     # bots on this key falsely claimed EMA's golden_trace_root as proof of
     # their own build, AND signal_program_factory would hand
-    # _build_ema_crossover_signal_program a params instance it isn't typed
+    # build_ema_crossover_signal_program a params instance it isn't typed
     # for. Clearing both routes admission's prove_running_program_build to
     # its NOT_APPLICABLE state (no registered Signal Program), which
     # run_admission.py does not gate on, keeping this strategy's existing

@@ -65,34 +65,33 @@ class RsiRangeStrategyBParams(StrategyParamsBase):
         return self
 
 
-_SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY = "spy_strategy_b"
-_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION = "spy-strategy-b/v1"
+SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY = "spy_strategy_b"
+SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION = "spy-strategy-b/v1"
 
 
-def _build_spy_strategy_b_signal_program(params: StrategyParamsBase) -> SignalProgram:
+def build_spy_strategy_b_signal_program(params: StrategyParamsBase) -> SignalProgram:
     """Construct the sole broker-neutral Strategy B Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, RsiRangeStrategyBParams)
+    assert isinstance(params, RsiRangeStrategyBParams)
     strategy = SpyStrategyBAlgorithm(
-        symbol=typed.symbol,
-        supertrend_atr_period=typed.supertrend_atr_period,
-        supertrend_multiplier=typed.supertrend_multiplier,
-        adx_entry_threshold=typed.adx_entry_threshold,
-        macd_fast=typed.macd_fast,
-        macd_slow=typed.macd_slow,
-        macd_signal=typed.macd_signal,
-        rsi_period=typed.rsi_period,
-        rsi_low_gate=typed.rsi_low_gate,
-        rsi_high_gate=typed.rsi_high_gate,
-        adx_period=typed.adx_period,
-        adx_exit_threshold=typed.adx_exit_threshold,
-        resolution_minutes=typed.resolution_minutes,
+        symbol=params.symbol,
+        supertrend_atr_period=params.supertrend_atr_period,
+        supertrend_multiplier=params.supertrend_multiplier,
+        adx_entry_threshold=params.adx_entry_threshold,
+        macd_fast=params.macd_fast,
+        macd_slow=params.macd_slow,
+        macd_signal=params.macd_signal,
+        rsi_period=params.rsi_period,
+        rsi_low_gate=params.rsi_low_gate,
+        rsi_high_gate=params.rsi_high_gate,
+        adx_period=params.adx_period,
+        adx_exit_threshold=params.adx_exit_threshold,
+        resolution_minutes=params.resolution_minutes,
     )
     program = SignalProgram.create(
         strategy,
-        program_key=_SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY,
-        program_version=_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+        program_key=SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY,
+        program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
+        timeframe_ms=decision_timeframe_ms_for(params, qualified_ms=15 * 60_000),
     )
     strategy.signal_program = program
     return program
