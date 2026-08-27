@@ -2,7 +2,7 @@
 
 Issue #1813 (IBKR control-plane decommission), Slice 0. Walks the
 retained feed-side modules' import statements and asserts none of them
-reach into the account/order/session bucket, except two named,
+reach into the account/order/session bucket, except three named,
 temporary exceptions — each with a second live consumer outside this
 slice's scope, tracked to close in a later slice. See
 ``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
@@ -69,6 +69,7 @@ BANNED_PREFIXES = (
     "app.services.broker_activity_publisher",
     "app.services.broker_activity_reconciler",
     "app.services.broker_activity_reconstruction",
+    "app.services.broker_session_events",
     "app.services.broker_session_history",
     "app.services.broker_session_mirror",
     "app.services.broker_session_reconciler",
@@ -82,6 +83,7 @@ BANNED_PREFIXES = (
 # the slice that closes it. Remove the tuple when that slice lands.
 _ALLOWED_EXCEPTIONS = {
     ("app.broker.ibkr.client", "app.broker.ibkr.order_error_stream"),  # closes in Slice 4
+    ("app.broker.ibkr.client", "app.services.broker_session_events"),  # closes in Slice 4
     ("app.broker.ibkr.models", "app.broker.safety_verdict"),  # closes in Slice 3
 }
 
@@ -90,14 +92,62 @@ def _module_path(dotted: str) -> Path:
     return APP_ROOT.joinpath(*dotted.split(".")[1:]).with_suffix(".py")
 
 
+def _is_package_dir(dotted: str) -> bool:
+    return APP_ROOT.joinpath(*dotted.split(".")[1:]).is_dir()
+
+
+def _containing_package(source_path: Path) -> str:
+    """Dotted package containing ``source_path`` — everything but the filename."""
+    parts = source_path.relative_to(APP_ROOT.parent).with_suffix("").parts
+    return ".".join(parts[:-1])
+
+
+def _resolve_relative_base(source_path: Path, level: int) -> str | None:
+    """Resolve a relative import's dot-count against the importing file's own package."""
+    package_parts = _containing_package(source_path).split(".")
+    climbed = len(package_parts) - (level - 1)
+    if climbed < 0:
+        return None
+    trimmed = package_parts[:climbed]
+    return ".".join(trimmed) if trimmed else None
+
+
 def _imported_modules(source_path: Path) -> set[str]:
+    """Every ``app.*`` module this file's imports could plausibly reference.
+
+    Beyond plain ``import a.b`` and ``from a.b import c`` (absolute, level 0),
+    this also resolves two forms a flat ``node.module`` read would miss:
+
+    - ``from app.broker.ibkr import account`` — ``account`` here may be a
+      *submodule* of the ``app.broker.ibkr`` package, not a symbol defined
+      inside it. When ``node.module`` resolves to a real package directory,
+      each imported name is also checked as ``{node.module}.{name}`` and
+      recorded if that resolves to a real module or package.
+    - ``from . import account`` / ``from .. import x`` — relative imports
+      (``node.level > 0``) are resolved against the importing file's own
+      containing package before the same submodule check is applied.
+    """
     tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             found.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            found.add(node.module)
+            continue
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level == 0:
+            base = node.module
+        else:
+            relative_base = _resolve_relative_base(source_path, node.level)
+            base = f"{relative_base}.{node.module}" if relative_base and node.module else relative_base
+        if base is None:
+            continue
+        found.add(base)
+        if _is_package_dir(base):
+            for alias in node.names:
+                candidate = f"{base}.{alias.name}"
+                if _module_path(candidate).exists() or _is_package_dir(candidate):
+                    found.add(candidate)
     return found
 
 

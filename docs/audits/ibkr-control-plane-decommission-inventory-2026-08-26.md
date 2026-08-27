@@ -412,11 +412,19 @@ Required handling:
 - Rehome feed capability and generic artifact-root settings.
 - Split connection/feed health, reconnect, keepalive, and feed event codes from
   account/order/session concerns.
-- Remove order-error and broker-session-event coupling from `IbkrClient`.
+- ~~Remove order-error and broker-session-event coupling from `IbkrClient`.~~
+  **Deferred to Slice 4, not removed in Slice 0.** Both couplings turned out to
+  have a second live consumer outside Slice 0's scope (`orders.py:689` for
+  order-error buffering; `broker_session_mirror.py`/`broker_session_history.py`/
+  `routers/broker_session.py` for `broker_session_events`) — removing either
+  now would break a still-registered endpoint. Both are named, tracked
+  exceptions in the Slice 0 structural test
+  (`tests/structural/test_ibkr_feed_boundary.py`), not silently dropped.
 
-Acceptance: the retained feed imports no account/order/session module; Alpaca
-Start/Resume, panel chart, gallery, global health banner, reconnect, and chosen
-options pages work through the new seam.
+Acceptance: the retained feed imports no account/order/session module (modulo
+the two tracked, Slice-4-closing exceptions above); Alpaca Start/Resume, panel
+chart, gallery, global health banner, reconnect, and chosen options pages work
+through the new seam.
 
 ### Slice 1 — orphaned account-safety UI and projection
 
@@ -447,6 +455,14 @@ no Account Truth task starts; archived authority files are untouched.
 
 - Remove session mirror/history/reconciler, broker activity publisher/routes,
   host capability/live-instances routes, and legacy run/bot-event readers.
+- Once `broker_session_mirror.py` is gone, remove the `safety_verdict` field
+  from `IbkrConnectionHealth` (`app.broker.safety_verdict.BrokerSafetyVerdict`)
+  — deferred out of Slice 0 because that mirror was its second live caller.
+  Reword the `health.py` "recovering" branch's title/summary too (Slice 0 only
+  reworded its `remediation` line, since the title/summary's "account-evidence
+  recovery" language was still true while this field existed). Delete the
+  corresponding `_ALLOWED_EXCEPTIONS` entry in
+  `tests/structural/test_ibkr_feed_boundary.py`.
 - Stop/uninstall the running host daemon and remove compatibility lease/config/
   installer wiring.
 - Preserve historical run, callback, event, and log evidence.
@@ -463,6 +479,13 @@ operational cutover.
   projection/evidence, and persistence paths not selected as feed features.
 - Remove account/order endpoints from the mixed broker router.
 - Trim models/config/event codes/API evidence to the proven feed envelope.
+- Remove `IbkrClient`'s order-error buffering (`order_error_stream.OrderErrorEvent`)
+  and its `broker_session_events` emission — both deferred out of Slice 0
+  because each had a second live consumer there. Delete the corresponding
+  `_ALLOWED_EXCEPTIONS` entries in `tests/structural/test_ibkr_feed_boundary.py`
+  once removed; the test should still pass with two fewer exceptions.
+- Retire tick persistence (`persistence.py`) entirely — operator decision,
+  no archival intent stated.
 
 Acceptance: an import-closure test pins the intended feed module boundary and
 proves no IBKR order mutation/account authority remains.

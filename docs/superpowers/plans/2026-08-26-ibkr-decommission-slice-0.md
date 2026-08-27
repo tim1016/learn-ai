@@ -14,7 +14,7 @@
 
 - No new abstractions beyond what the spec calls for — no new `ChartBar`-style translation type, no new protocol for the options routes. This is a "simple clean up operation" per explicit operator instruction.
 - No file in the account/order/session bucket is deleted or has its behavior changed in this plan. Where a mechanical import-path fix is unavoidable in a retiring-bucket file (e.g. a test file that monkeypatches a symbol being moved), make only that one-line fix — nothing else in that file.
-- The structural test (Task 5) must encode exactly two named exceptions and no more: `client.py` → `order_error_stream.OrderErrorEvent` (closes in Slice 4) and `models.py` → `app.broker.safety_verdict.BrokerSafetyVerdict` (closes in Slice 3). Any other account/order/session import from a retained module is a real regression, not a third exception to add.
+- The structural test (Task 5) must encode exactly two named exceptions and no more: `client.py` → `order_error_stream.OrderErrorEvent` (closes in Slice 4) and `models.py` → `app.broker.safety_verdict.BrokerSafetyVerdict` (closes in Slice 3). Any other account/order/session import from a retained module is a real regression, not a third exception to add. **Superseded post-merge**: PR review found a real third coupling (`client.py` → `app.services.broker_session_events`, also closing in Slice 4) this plan's authors never enumerated — see the design spec's addendum for the full account. The shipped test now encodes three exceptions; this line is kept as-written for the historical record of what the plan originally required.
 - Any storage-root or artifact-path change must resolve to the byte-identical directory as before, or it doesn't happen in this slice — durable on-disk state is never silently moved or orphaned (the `#1811` lesson).
 - Run before every commit that touches Python: `ruff check PythonDataService/app/ PythonDataService/tests/` (project scope, not per-file).
 - Run before push (Task 6, not per-task): full suite `cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytest tests -q`, both linters, `thermo-nuclear-code-quality-review` skill, OpenAPI regeneration check.
@@ -35,6 +35,7 @@
 - Modify: `PythonDataService/app/services/live_chart_window.py:18`
 - Modify: `PythonDataService/app/services/broker_v2_panel/chart_projection_service.py:29`
 - Modify: `PythonDataService/app/routers/broker.py` (the `IbkrBarsSnapshot` import)
+- Modify: `PythonDataService/app/marketdata/ibkr_feed.py` — **found during execution, not by this plan.** This plan's original file list omitted it; Task 1's own Step 1 re-grep caught the omission and the implementer repointed it per that step's explicit escape hatch ("if the importer list doesn't match, update it and proceed"). Listed here now so the plan reads accurately as a historical record — the actual PR did the right thing regardless.
 - Modify tests: `PythonDataService/tests/test_live_bar_aggregator.py`, `tests/broker/v2panel/test_chart_projection.py`, `tests/marketdata/test_feed.py`, `tests/services/test_bar_persistence.py`, `tests/services/test_live_chart_window.py`, `tests/services/test_bar_timestamp_rigor.py`
 
 **Interfaces:**

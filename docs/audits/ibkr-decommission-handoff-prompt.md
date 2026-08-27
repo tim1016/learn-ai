@@ -32,12 +32,12 @@ The audit overturns the obvious reading of that decision. Internalise these befo
 **Do not delete anything in your first PR.** The audit is explicit that Slice 0 — establishing and naming the data-feed seam — must precede deletion. Deleting first and refactoring after would break the live chart, the gallery, Alpaca admission, and the global health banner.
 
 Slice 0, from the audit:
-- Decide the options-chain/surface question **with the operator** before anything else — it changes the keep-list.
+- ~~Decide the options-chain/surface question **with the operator** before anything else — it changes the keep-list.~~ **Resolved during Slice 0 brainstorming**: the options-chain and options-surface pages are retained, migrated to the market-data feed boundary rather than retired. This is no longer a blocking decision for any later slice — see `docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md`'s decision log. What's left for those pages is import-boundary pinning (already done — `contracts.py`/`market_data.py`/`surface.py`/`symbol_search.py` pass the Slice 0 structural test) and Slice 6's physical relocation, organizational only, no new protocol.
 - Add broker-neutral bar/chart types. Note the design gap the audit found: `MarketDataFeed` exposes minute bars, but the panel requests **five-second** bars (`panel_chart_data_source.py:72-75`). That needs a neutral five-second stream or a deliberate feed-local chart seam.
 - Repoint chart projection, live chart window, live bar aggregator, bar persistence, gallery, and panel at the shared seam.
 - Rehome feed capability as **market-data capability** (not broker-control capability) and extract a generic artifact root from `account_truth_artifacts_root()`.
 - Split connection/feed health, reconnect, keepalive, and feed event codes away from account/order/session concerns.
-- Remove order-error buffering and broker-session-event emission from `IbkrClient` — that is control-plane residue, not a feed requirement.
+- Remove order-error buffering and broker-session-event emission from `IbkrClient` — that is control-plane residue, not a feed requirement. **Deferred, not removed, in Slice 0**: both couplings have a second live consumer outside Slice 0's scope (`orders.py:689` for order-error buffering; `broker_session_mirror.py`/`broker_session_history.py`/`routers/broker_session.py` for `broker_session_events`), so removing either now would break a still-registered endpoint. Both are named, tracked exceptions in `tests/structural/test_ibkr_feed_boundary.py`'s `_ALLOWED_EXCEPTIONS`, closing in **Slice 4**.
 
 **Slice 0 acceptance:** the retained feed imports no account/order/session module, and Alpaca Start/Resume, the panel chart, the gallery, the global health banner, reconnect, and any retained options pages all still work through the new seam.
 
@@ -49,7 +49,7 @@ Slice 0, from the audit:
 
 ## Open questions to put to the operator, not to guess
 
-1. Do the live options chain/surface pages stay? (Blocks Slice 0.)
+1. ~~Do the live options chain/surface pages stay? (Blocks Slice 0.)~~ **Resolved**: yes, retained and migrated to the feed boundary — see the note under "Slice 0, from the audit" above.
 2. Tick persistence (`persistence.py`) — archival intent before deletion?
 3. Historical IBKR custody/exposure folds are still named canonical in `docs/math-sources-of-truth.md:92-93` and `docs/architecture/engine-authority-map.md:46-48`. Preserve as forensic math, or retire explicitly? Do not silently remove a registered canonical path.
 4. The audit's bounded 3.5-hour local log window cannot rule out an external client for `/api/live-runs`, `/bot-events`, `/live-instances`, symbol search, or Diagnose. Check longer proxy retention or operator scripts before retiring those.
