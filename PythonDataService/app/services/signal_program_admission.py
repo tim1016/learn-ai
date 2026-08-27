@@ -20,7 +20,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract, decision_timeframe_ms_for
+from app.engine.strategy.params import decision_timeframe_ms_for
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.schemas.run_admission import ProgramBuildAdmissionFact, StrategyValidationAdmissionFact
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,

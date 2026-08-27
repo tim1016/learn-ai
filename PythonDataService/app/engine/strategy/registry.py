@@ -11,26 +11,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
 from app.engine.pine_generators import (
     generate_strategy_a_pine,
     generate_strategy_b_pine,
     generate_strategy_c_pine,
 )
-from app.engine.strategy.algorithms.deployment_validation import (
-    DeploymentValidationConsecutiveGreen,
-)
 from app.engine.strategy.algorithms.ema_crossover_2_bps import (
     EmaCrossover2BpsAlgorithm,
-)
-from app.engine.strategy.algorithms.ema_crossover_signal import (
-    EmaCrossoverSignalAlgorithm,
-)
-from app.engine.strategy.algorithms.rsi_mean_reversion import (
-    RsiMeanReversionAlgorithm,
 )
 from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
 from app.engine.strategy.algorithms.spy_ema_crossover import (
@@ -40,10 +31,47 @@ from app.engine.strategy.algorithms.spy_ema_crossover_options import (
     SpyEmaCrossoverOptionsAlgorithm,
 )
 from app.engine.strategy.algorithms.spy_orb import SpyOpeningRangeBreakout
-from app.engine.strategy.algorithms.spy_strategy_a import SpyStrategyAAlgorithm
-from app.engine.strategy.algorithms.spy_strategy_b import SpyStrategyBAlgorithm
-from app.engine.strategy.algorithms.spy_strategy_c import SpyStrategyCAlgorithm
 from app.engine.strategy.base import Strategy
+from app.engine.strategy.params import (
+    EmaCrossoverParams,
+    StrategyParamsBase,
+)
+from app.engine.strategy.programs.deployment_validation import (
+    _DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
+    DeploymentValidationParams,
+    _build_deployment_validation_signal_program,
+)
+from app.engine.strategy.programs.ema_crossover_signal import (
+    _EMA_SIGNAL_PROGRAM_KEY,
+    _EMA_SIGNAL_PROGRAM_VERSION,
+    EmaCrossoverSignalParams,
+    _build_ema_crossover_signal_program,
+)
+from app.engine.strategy.programs.rsi_mean_reversion import (
+    _RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
+    RsiMeanReversionParams,
+    _build_rsi_mean_reversion_signal_program,
+)
+from app.engine.strategy.programs.sma_crossover import (
+    _SMA_SIGNAL_PROGRAM_VERSION,
+    SmaCrossoverParams,
+    _build_sma_crossover_signal_program,
+)
+from app.engine.strategy.programs.spy_strategy_a import (
+    _SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
+    RsiRangeStrategyAParams,
+    _build_spy_strategy_a_signal_program,
+)
+from app.engine.strategy.programs.spy_strategy_b import (
+    _SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
+    RsiRangeStrategyBParams,
+    _build_spy_strategy_b_signal_program,
+)
+from app.engine.strategy.programs.spy_strategy_c import (
+    _SPY_C_SIGNAL_PROGRAM_VERSION,
+    RsiRangeStrategyCParams,
+    _build_spy_strategy_c_signal_program,
+)
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.engine.strategy.signal_program import (
     SignalProgram,
@@ -56,107 +84,6 @@ from app.schemas.signal_program_seal import (
     SignalSeriesContract,
 )
 from app.schemas.strategy_validation import StrategyCategory
-
-
-class StrategyParamsBase(BaseModel):
-    """Base for every strategy's parameter model.
-
-    Subclasses declare the strategy's own fields. A strategy with no
-    parameters can simply reuse this class directly.
-    """
-
-    model_config = {"extra": "forbid"}
-
-
-_DECISION_CLOCK_FIELD = "resolution_minutes"
-
-
-def decision_timeframe_ms_for(params: StrategyParamsBase, *, qualified_ms: int) -> int:
-    """The decision clock one resolved parameter set implies.
-
-    A program is deploy-configurable exactly when its parameter model
-    declares ``resolution_minutes``; one that does not runs the cadence its
-    contract was qualified at. The parameter model is the declaration, so
-    this reads the declaration rather than keeping a second list of which
-    programs are tunable.
-
-    Both the registry factories and
-    ``app.services.signal_program_admission.build_start_program_seal`` call
-    this. That matters: the seal hashes the cadence it claims the bot will
-    run, so a second copy of this arithmetic anywhere is precisely the drift
-    the seal exists to detect. Five factories previously each computed
-    ``resolution_minutes * 60_000`` inline, and admission built an entire
-    strategy object graph purely to read the result back off the session.
-    """
-    if _DECISION_CLOCK_FIELD not in type(params).model_fields:
-        return qualified_ms
-    return int(getattr(params, _DECISION_CLOCK_FIELD)) * 60_000
-
-
-class EmaCrossoverParams(StrategyParamsBase):
-    """EMA crossover signal parameters.
-
-    Shares the exact indicator / gap / RSI logic as the LEAN-parity SPY
-    reference run, but lets the user pick the *signal stream* at request time.
-    Defaults to SPY so the out-of-the-box run matches the bit-exact
-    reference fixture; other symbols (QQQ, IWM, etc.) can be substituted
-    without touching the strategy. A live Action Plan independently selects
-    the stock to trade; Engine Lab backtests bind the one loaded price stream
-    to both roles.
-    """
-
-    symbol: str = Field(
-        "SPY",
-        min_length=1,
-        max_length=20,
-        description="Signal-stream ticker. The live Action Plan selects the traded stock separately.",
-    )
-
-
-class EmaCrossoverSignalParams(EmaCrossoverParams):
-    """EMA-crossover *signal* strategy gates, exposed as parameters.
-
-    Defaults preserve the validated LEAN-parity point exactly (absolute gap
-    0.20, RSI band 50–70); the Recency Chart sweeps them.
-    """
-
-    # FR-002: versions this schema's own legal type/unit/range contract —
-    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
-    # future change to the ``ge``/``le`` bounds below is a provable identity
-    # change without duplicating every bound into the seal itself. A
-    # ``ClassVar`` is invisible to Pydantic's field machinery, so it never
-    # becomes part of the JSON schema or a constructor argument.
-    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "ema-crossover-signal-params/v1"
-
-    gap: float = Field(
-        0.20,
-        ge=0.0,
-        allow_inf_nan=False,
-        title="Crossover gap",
-        description="Minimum EMA(5) − EMA(10) gap, in absolute price, required for entry.",
-    )
-    rsi_min: float = Field(
-        50.0,
-        ge=0.0,
-        le=100.0,
-        allow_inf_nan=False,
-        title="RSI lower gate",
-        description="Inclusive lower RSI(14) value allowed for entry.",
-    )
-    rsi_max: float = Field(
-        70.0,
-        ge=0.0,
-        le=100.0,
-        allow_inf_nan=False,
-        title="RSI upper gate",
-        description="Inclusive upper RSI(14) value allowed for entry.",
-    )
-
-    @model_validator(mode="after")
-    def _validate_rsi_band(self) -> EmaCrossoverSignalParams:
-        if self.rsi_min >= self.rsi_max:
-            raise ValueError("rsi_min must be less than rsi_max")
-        return self
 
 
 class EmaCrossover2BpsParams(EmaCrossoverParams):
@@ -194,27 +121,6 @@ class EmaCrossover2BpsParams(EmaCrossoverParams):
         return self
 
 
-class SmaCrossoverParams(StrategyParamsBase):
-    # FR-002: versions this schema's own legal type/unit/range contract —
-    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
-    # future change to the ``ge``/``le`` bounds below is a provable identity
-    # change without duplicating every bound into the seal itself. Mirrors
-    # ``EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION``'s pattern.
-    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "sma-crossover-params/v1"
-
-    symbol: str = Field("SPY", min_length=1, max_length=20)
-    short_window: int = Field(10, ge=2, le=500)
-    long_window: int = Field(30, ge=3, le=1000)
-    resolution_minutes: int = Field(15, ge=1, le=1440)
-
-    @model_validator(mode="after")
-    def _validate_window_order(self) -> SmaCrossoverParams:
-        # Mirrors SmaCrossoverAlgorithm.__init__'s own guard: a schema-valid
-        # payload that violates this would otherwise pass admission and
-        # persist immutably before crashing at strategy construction.
-        if self.long_window <= self.short_window:
-            raise ValueError("long_window must be strictly greater than short_window")
-        return self
 
 
 class DailySmaCrossoverParams(StrategyParamsBase):
@@ -238,28 +144,6 @@ class DailySmaCrossoverParams(StrategyParamsBase):
         return self
 
 
-class RsiMeanReversionParams(StrategyParamsBase):
-    # FR-002: versions this schema's own legal type/unit/range contract —
-    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
-    # future change to the ``ge``/``le`` bounds below is a provable identity
-    # change without duplicating every bound into the seal itself. Mirrors
-    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
-    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "rsi-mean-reversion-params/v1"
-
-    symbol: str = Field("SPY", min_length=1, max_length=20)
-    window: int = Field(14, ge=2, le=500)
-    oversold: float = Field(30.0, gt=0, lt=100)
-    overbought: float = Field(70.0, gt=0, lt=100)
-    resolution_minutes: int = Field(15, ge=1, le=1440)
-
-    @model_validator(mode="after")
-    def _validate_threshold_order(self) -> RsiMeanReversionParams:
-        # Mirrors RsiMeanReversionAlgorithm.__init__'s own guard: a
-        # schema-valid payload that violates this would otherwise pass
-        # admission and persist immutably before crashing at construction.
-        if not self.oversold < self.overbought:
-            raise ValueError("oversold must be strictly less than overbought")
-        return self
 
 
 class OrbParams(StrategyParamsBase):
@@ -286,34 +170,6 @@ class OrbParams(StrategyParamsBase):
     max_range_pct: float = Field(1.50, ge=0.1, le=20.0)
 
 
-class DeploymentValidationParams(StrategyParamsBase):
-    """Deployment-validation strategy with configurable signal/trade tickers."""
-
-    # FR-002: versions this schema's own legal type/unit/range contract —
-    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
-    # future change to this schema's fields is a provable identity change
-    # without duplicating every bound into the seal itself. Mirrors
-    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
-    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "deployment-validation-params/v1"
-
-    symbol: str = Field("SPY", min_length=1, max_length=20)
-    trade_symbol: str | None = Field(None, min_length=1, max_length=20)
-
-    @model_validator(mode="after")
-    def _default_trade_symbol_to_signal_symbol(self) -> DeploymentValidationParams:
-        # Mirrors DeploymentValidationConsecutiveGreen.__init__'s own
-        # ``(trade_symbol or symbol)`` fallback. Signal Program admission
-        # (app/services/signal_program_admission.py::build_start_program_seal)
-        # resolves and seals every field of this model, including a hidden
-        # one left at its default -- ResolvedSignalParameter.value has no
-        # legal ``None`` variant (str | int | float | bool only), so an
-        # unresolved ``None`` here would crash seal construction with a
-        # Pydantic ValidationError the instant this became a registered
-        # Signal Program. Resolving the real fallback value here, once,
-        # keeps the sealed identity honest instead of sealing a sentinel.
-        if self.trade_symbol is None:
-            self.trade_symbol = self.symbol
-        return self
 
 
 class EmaCrossoverOptionsParams(StrategyParamsBase):
@@ -364,158 +220,10 @@ class EmaCrossoverOptionsParams(StrategyParamsBase):
     half_spread_pct: float = Field(0.01, ge=0, le=0.5)
 
 
-class RsiRangeStrategyAParams(StrategyParamsBase):
-    """Strategy A — EMA-gap + MACD + RSI-range, ADX-exit.
-
-    All thresholds and indicator periods are configurable. Entry requires
-    RSI to sit inside the ``[rsi_low_gate, rsi_high_gate]`` range AND the
-    EMA gap to exceed ``ema_gap_threshold`` AND MACD line > 0, all at the
-    same bar while flat. Pyramiding=1 prevents re-entry while holding.
-    """
-
-    # FR-002: versions this schema's own legal type/unit/range contract —
-    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
-    # future change to the ``ge``/``le`` bounds below is a provable identity
-    # change without duplicating every bound into the seal itself. Mirrors
-    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
-    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "rsi-range-strategy-a-params/v1"
-
-    symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
-    ema_fast_period: int = Field(20, ge=2, le=500, description="Fast EMA period.")
-    ema_slow_period: int = Field(50, ge=3, le=1000, description="Slow EMA period.")
-    ema_gap_threshold: float = Field(
-        0.5,
-        ge=0,
-        description=(
-            "Minimum absolute gap between fast and slow EMAs "
-            "(EMA_fast − EMA_slow > threshold). Default 0.5 is a reasonable "
-            "SPY 15-minute trend-confirmation threshold. Other tickers scale "
-            "with price — tune accordingly."
-        ),
-    )
-    macd_fast: int = Field(12, ge=2, le=200, description="MACD fast EMA period.")
-    macd_slow: int = Field(26, ge=3, le=500, description="MACD slow EMA period.")
-    macd_signal: int = Field(9, ge=2, le=200, description="MACD signal-line EMA period.")
-    rsi_period: int = Field(14, ge=2, le=200, description="RSI period (Wilders smoothing).")
-    rsi_low_gate: float = Field(
-        38.0,
-        ge=0,
-        lt=100,
-        description="Lower bound of the RSI entry range — RSI must be ≥ this to enter.",
-    )
-    rsi_high_gate: float = Field(
-        70.0,
-        gt=0,
-        le=100,
-        description="Upper bound of the RSI entry range — RSI must be ≤ this to enter.",
-    )
-    adx_period: int = Field(14, ge=2, le=200, description="ADX period (Wilders smoothing).")
-    adx_exit_threshold: float = Field(
-        15.0,
-        ge=0,
-        le=100,
-        description="Exit when ADX drops below this threshold. Default 15 for Strategy A.",
-    )
-    resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution. Default 15 minutes.")
-
-    @model_validator(mode="after")
-    def _validate_rsi_gate_order(self) -> RsiRangeStrategyAParams:
-        # Mirrors RsiRangeStrategy.__init__'s own guard (the shared A/B/C
-        # base class): a schema-valid payload that violates this would
-        # otherwise pass admission and persist immutably before crashing
-        # at construction.
-        if self.rsi_low_gate >= self.rsi_high_gate:
-            raise ValueError("rsi_low_gate must be strictly less than rsi_high_gate")
-        return self
 
 
-class RsiRangeStrategyBParams(StrategyParamsBase):
-    """Strategy B — Supertrend + ADX-entry + MACD + RSI-range, ADX-exit."""
-
-    # FR-002: versions this schema's own legal type/unit/range contract —
-    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
-    # future change to the ``ge``/``le`` bounds below is a provable identity
-    # change without duplicating every bound into the seal itself. Mirrors
-    # ``EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION`` /
-    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
-    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "spy-strategy-b-params/v1"
-
-    symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
-    supertrend_atr_period: int = Field(
-        10, ge=2, le=200, description="ATR period for Supertrend. Default 10 (Pine default)."
-    )
-    supertrend_multiplier: float = Field(
-        3.0,
-        gt=0,
-        description="Supertrend ATR multiplier. Default 3 (Pine default).",
-    )
-    adx_entry_threshold: float = Field(
-        20.0,
-        ge=0,
-        le=100,
-        description="Require ADX > this threshold at entry. Default 20.",
-    )
-    macd_fast: int = Field(12, ge=2, le=200, description="MACD fast EMA period.")
-    macd_slow: int = Field(26, ge=3, le=500, description="MACD slow EMA period.")
-    macd_signal: int = Field(9, ge=2, le=200, description="MACD signal-line EMA period.")
-    rsi_period: int = Field(14, ge=2, le=200, description="RSI period (Wilders smoothing).")
-    rsi_low_gate: float = Field(38.0, ge=0, lt=100, description="Lower bound of RSI entry range.")
-    rsi_high_gate: float = Field(70.0, gt=0, le=100, description="Upper bound of RSI entry range.")
-    adx_period: int = Field(14, ge=2, le=200, description="ADX period.")
-    adx_exit_threshold: float = Field(
-        20.0,
-        ge=0,
-        le=100,
-        description="Exit when ADX drops below this threshold. Default 20 for Strategy B.",
-    )
-    resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution.")
-
-    @model_validator(mode="after")
-    def _validate_rsi_gate_order(self) -> RsiRangeStrategyBParams:
-        if self.rsi_low_gate >= self.rsi_high_gate:
-            raise ValueError("rsi_low_gate must be strictly less than rsi_high_gate")
-        return self
 
 
-class RsiRangeStrategyCParams(StrategyParamsBase):
-    """Strategy C — ADX-entry + ADX-rising + RSI-range, ADX-exit.
-
-    No MACD, no Supertrend — the simplest of the three. Entry requires
-    RSI inside the range filter, ADX above a threshold, AND ADX rising
-    bar-over-bar.
-    """
-
-    # FR-002: versions this schema's own legal type/unit/range contract —
-    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
-    # future change to the ``ge``/``le`` bounds below is a provable identity
-    # change without duplicating every bound into the seal itself. Mirrors
-    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
-    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "spy-strategy-c-params/v1"
-
-    symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
-    adx_entry_threshold: float = Field(
-        20.0,
-        ge=0,
-        le=100,
-        description="Require ADX > this threshold at entry. Default 20.",
-    )
-    rsi_period: int = Field(14, ge=2, le=200, description="RSI period (Wilders smoothing).")
-    rsi_low_gate: float = Field(38.0, ge=0, lt=100, description="Lower bound of RSI entry range.")
-    rsi_high_gate: float = Field(70.0, gt=0, le=100, description="Upper bound of RSI entry range.")
-    adx_period: int = Field(14, ge=2, le=200, description="ADX period.")
-    adx_exit_threshold: float = Field(
-        15.0,
-        ge=0,
-        le=100,
-        description="Exit when ADX drops below this threshold. Default 15 (same as Strategy A).",
-    )
-    resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution.")
-
-    @model_validator(mode="after")
-    def _validate_rsi_gate_order(self) -> RsiRangeStrategyCParams:
-        if self.rsi_low_gate >= self.rsi_high_gate:
-            raise ValueError("rsi_low_gate must be strictly less than rsi_high_gate")
-        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -716,227 +424,6 @@ def hidden_params_present(
     hidden = reg.hidden_params | extra_hidden
     return sorted(hidden.intersection(params))
 
-
-# One declaration of this program's sealed identity, referenced by both its
-# construction seam (below, where it becomes the evaluation_id hash input)
-# and its registry contract (where it becomes the build-proof admission
-# identity). Declared once rather than restated as a literal in each place:
-# a factory whose program_version drifts from its contract's would produce
-# a bot whose evaluation traces claim a different program than its seal,
-# and neither hash would look wrong on its own.
-# test_registry_signal_program_identity.py enforces the relationship for
-# every registered program, so a new program that restates a literal here
-# instead of following this pattern fails loudly rather than silently.
-_EMA_SIGNAL_PROGRAM_KEY = "ema_crossover_signal"
-_EMA_SIGNAL_PROGRAM_VERSION = "ema-crossover-signal/v1"
-
-
-def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
-    """Construct the sole broker-neutral EMA Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, EmaCrossoverSignalParams)
-    strategy = EmaCrossoverSignalAlgorithm(
-        symbol=typed.symbol,
-        gap=typed.gap,
-        rsi_min=typed.rsi_min,
-        rsi_max=typed.rsi_max,
-    )
-    program = SignalProgram.create(
-        strategy,
-        program_key=_EMA_SIGNAL_PROGRAM_KEY,
-        program_version=_EMA_SIGNAL_PROGRAM_VERSION,
-        # Fixed cadence: this program exposes no resolution parameter, and
-        # its registration declares StrategyBarCadence("minute", 15).
-        timeframe_ms=15 * 60_000,
-    )
-    strategy.signal_program = program
-    return program
-
-
-# Same pattern as the EMA identity above (issue #1730 Slice 5, first
-# additional promotion): declared once here, referenced by both the
-# construction seam and the registry contract below.
-_SMA_SIGNAL_PROGRAM_KEY = "sma_crossover"
-_SMA_SIGNAL_PROGRAM_VERSION = "sma-crossover/v1"
-
-
-def _build_sma_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
-    """Construct the sole broker-neutral SMA Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, SmaCrossoverParams)
-    strategy = SmaCrossoverAlgorithm(
-        symbol=typed.symbol,
-        short_window=typed.short_window,
-        long_window=typed.long_window,
-        resolution_minutes=typed.resolution_minutes,
-    )
-    program = SignalProgram.create(
-        strategy,
-        program_key=_SMA_SIGNAL_PROGRAM_KEY,
-        program_version=_SMA_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
-    )
-    strategy.signal_program = program
-    return program
-
-
-# Same pattern as the EMA/SMA identities above (issue #1730 Slice 5, second
-# additional promotion): declared once here, referenced by both the
-# construction seam and the registry contract below.
-_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY = "rsi_mean_reversion"
-_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION = "rsi-mean-reversion/v1"
-
-
-def _build_rsi_mean_reversion_signal_program(params: StrategyParamsBase) -> SignalProgram:
-    """Construct the sole broker-neutral RSI Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, RsiMeanReversionParams)
-    strategy = RsiMeanReversionAlgorithm(
-        symbol=typed.symbol,
-        window=typed.window,
-        oversold=typed.oversold,
-        overbought=typed.overbought,
-        resolution_minutes=typed.resolution_minutes,
-    )
-    program = SignalProgram.create(
-        strategy,
-        program_key=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_KEY,
-        program_version=_RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
-    )
-    strategy.signal_program = program
-    return program
-
-
-# Same pattern as the identities above (issue #1730 Slice 5): declared once
-# here, referenced by both the construction seam and the registry contract.
-_SPY_STRATEGY_A_SIGNAL_PROGRAM_KEY = "spy_strategy_a"
-_SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION = "spy-strategy-a/v1"
-
-
-def _build_spy_strategy_a_signal_program(params: StrategyParamsBase) -> SignalProgram:
-    """Construct the sole broker-neutral Strategy A Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, RsiRangeStrategyAParams)
-    strategy = SpyStrategyAAlgorithm(
-        symbol=typed.symbol,
-        ema_fast_period=typed.ema_fast_period,
-        ema_slow_period=typed.ema_slow_period,
-        ema_gap_threshold=typed.ema_gap_threshold,
-        macd_fast=typed.macd_fast,
-        macd_slow=typed.macd_slow,
-        macd_signal=typed.macd_signal,
-        rsi_period=typed.rsi_period,
-        rsi_low_gate=typed.rsi_low_gate,
-        rsi_high_gate=typed.rsi_high_gate,
-        adx_period=typed.adx_period,
-        adx_exit_threshold=typed.adx_exit_threshold,
-        resolution_minutes=typed.resolution_minutes,
-    )
-    program = SignalProgram.create(
-        strategy,
-        program_key=_SPY_STRATEGY_A_SIGNAL_PROGRAM_KEY,
-        program_version=_SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
-    )
-    strategy.signal_program = program
-    return program
-
-
-# Same pattern as the EMA/SMA identities above (issue #1730 Slice 5, second
-# additional promotion, first out of the RSI-range family A/B/C): declared
-# once here, referenced by both the construction seam and the registry
-# contract below.
-_SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY = "spy_strategy_b"
-_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION = "spy-strategy-b/v1"
-
-
-def _build_spy_strategy_b_signal_program(params: StrategyParamsBase) -> SignalProgram:
-    """Construct the sole broker-neutral Strategy B Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, RsiRangeStrategyBParams)
-    strategy = SpyStrategyBAlgorithm(
-        symbol=typed.symbol,
-        supertrend_atr_period=typed.supertrend_atr_period,
-        supertrend_multiplier=typed.supertrend_multiplier,
-        adx_entry_threshold=typed.adx_entry_threshold,
-        macd_fast=typed.macd_fast,
-        macd_slow=typed.macd_slow,
-        macd_signal=typed.macd_signal,
-        rsi_period=typed.rsi_period,
-        rsi_low_gate=typed.rsi_low_gate,
-        rsi_high_gate=typed.rsi_high_gate,
-        adx_period=typed.adx_period,
-        adx_exit_threshold=typed.adx_exit_threshold,
-        resolution_minutes=typed.resolution_minutes,
-    )
-    program = SignalProgram.create(
-        strategy,
-        program_key=_SPY_STRATEGY_B_SIGNAL_PROGRAM_KEY,
-        program_version=_SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
-    )
-    strategy.signal_program = program
-    return program
-
-
-# Same pattern as the EMA/SMA identities above (issue #1730 Slice 5, second
-# additional promotion): declared once here, referenced by both the
-# construction seam and the registry contract below.
-_SPY_C_SIGNAL_PROGRAM_KEY = "spy_strategy_c"
-_SPY_C_SIGNAL_PROGRAM_VERSION = "spy-strategy-c/v1"
-
-
-def _build_spy_strategy_c_signal_program(params: StrategyParamsBase) -> SignalProgram:
-    """Construct the sole broker-neutral Strategy C Signal Program from registry params."""
-    typed = params
-    assert isinstance(typed, RsiRangeStrategyCParams)
-    strategy = SpyStrategyCAlgorithm(
-        symbol=typed.symbol,
-        adx_entry_threshold=typed.adx_entry_threshold,
-        rsi_period=typed.rsi_period,
-        rsi_low_gate=typed.rsi_low_gate,
-        rsi_high_gate=typed.rsi_high_gate,
-        adx_period=typed.adx_period,
-        adx_exit_threshold=typed.adx_exit_threshold,
-        resolution_minutes=typed.resolution_minutes,
-    )
-    program = SignalProgram.create(
-        strategy,
-        program_key=_SPY_C_SIGNAL_PROGRAM_KEY,
-        program_version=_SPY_C_SIGNAL_PROGRAM_VERSION,
-        timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
-    )
-    strategy.signal_program = program
-    return program
-
-
-# Same pattern as the identities above (issue #1730 Slice 5, last promotion):
-# declared once here, referenced by both the construction seam and the
-# registry contract below.
-_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_KEY = "deployment_validation"
-_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION = "deployment-validation/v1"
-
-
-def _build_deployment_validation_signal_program(params: StrategyParamsBase) -> SignalProgram:
-    """Construct the sole broker-neutral Deployment Validation Signal Program."""
-    typed = params
-    assert isinstance(typed, DeploymentValidationParams)
-    strategy = DeploymentValidationConsecutiveGreen(
-        symbol=typed.symbol,
-        trade_symbol=typed.trade_symbol,
-    )
-    program = SignalProgram.create(
-        strategy,
-        program_key=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_KEY,
-        program_version=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
-        # This program's decision clock IS the raw minute bar -- there is no
-        # consolidator/resolution parameter to derive it from (unlike
-        # sma_crossover's own configurable timeframe_ms above).
-        timeframe_ms=60_000,
-    )
-    strategy.signal_program = program
-    return program
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
