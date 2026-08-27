@@ -10,6 +10,7 @@ of one particular copy of the check.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -38,20 +39,20 @@ def _wal(path: Path, trusted_root: Path) -> JsonlWal[_Record]:
     )
 
 
-
 @pytest.mark.parametrize(
     "call",
     [
         pytest.param(lambda wal: wal.path, id="path"),
         pytest.param(lambda wal: wal.append(_Record(seq=1, value="x")), id="append"),
         pytest.param(lambda wal: wal.read_all(), id="read_all"),
+        pytest.param(lambda wal: wal.read_tail(limit=1), id="read_tail"),
         pytest.param(lambda wal: wal.read_from(after_seq=0), id="read_from"),
         pytest.param(lambda wal: wal.last_seq(), id="last_seq"),
         pytest.param(lambda wal: wal.allocate_seq(), id="allocate_seq"),
     ],
 )
 def test_every_entry_point_refuses_a_path_outside_the_trusted_root(
-    tmp_path: Path, call
+    tmp_path: Path, call: Callable[[JsonlWal[_Record]], object]
 ) -> None:
     root = tmp_path / "root"
     root.mkdir()
