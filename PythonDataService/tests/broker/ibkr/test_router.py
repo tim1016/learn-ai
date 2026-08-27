@@ -12,9 +12,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.client import set_client
-from app.broker.ibkr.models import IbkrOrderEvent
 from app.main import app
-from app.routers import broker as broker_router
 
 # ── Phase 1 endpoints ──────────────────────────────────────────────────
 
@@ -139,100 +137,6 @@ async def test_strikes_endpoint_rejects_missing_expiry_ms() -> None:
         resp = await ac.get("/api/broker/strikes/SPY")
 
     assert resp.status_code == 422
-
-
-# ── Phase 2b endpoints ─────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_pnl_account_stream_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/pnl/stream")
-
-    assert resp.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_pnl_positions_stream_returns_422_when_no_con_ids() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/pnl/positions/stream")
-
-    # FastAPI rejects missing required query before the handler runs.
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_pnl_positions_stream_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/pnl/positions/stream?con_ids=700001&con_ids=700002"
-        )
-
-    assert resp.status_code == 503
-
-
-# ── Read-only order endpoints ─────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_order_event_stream_sends_ready_before_the_first_order_event(monkeypatch) -> None:
-    """A quiet stream is healthy once its server-side subscription is ready."""
-
-    event = IbkrOrderEvent(
-        account_id="DU1234567",
-        order_id=42,
-        event_type="status",
-        status="Submitted",
-        order_ref="manual/operator/v1:intent-1",
-        symbol="SPY",
-        side="BUY",
-        order_type="MKT",
-        cumulative_filled=0,
-        remaining=1,
-        ts_ms=1_800_000_000_000,
-    )
-
-    async def fake_order_events(_client, *, poll_seconds: float):
-        assert poll_seconds == 0.5
-        yield event
-
-    monkeypatch.setattr(broker_router, "require_connected_client", lambda: object())
-    monkeypatch.setattr(broker_router, "stream_order_events", fake_order_events)
-
-    response = await broker_router.order_events_stream_endpoint()
-    stream = response.body_iterator
-    ready = await anext(stream)
-    order = await anext(stream)
-    await stream.aclose()
-
-    assert ready.startswith("event: ready\n")
-    assert order == f"event: order\ndata: {event.model_dump_json()}\n\n"
-
-
-@pytest.mark.asyncio
-async def test_get_open_orders_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/orders/open")
-
-    assert resp.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_order_event_stream_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/orders/stream")
-
-    assert resp.status_code == 503
 
 
 # ── /option-surface boundary checks ────────────────────────────────────

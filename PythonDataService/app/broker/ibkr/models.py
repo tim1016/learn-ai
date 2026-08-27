@@ -19,12 +19,11 @@ from __future__ import annotations
 
 import math
 import sys
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, computed_field
 
 from app.broker.ibkr.recovery_state_machine import RecoveryState
-from app.broker.safety_verdict import BrokerSafetyVerdict
 
 OptionRight = Literal["C", "P"]
 
@@ -633,44 +632,6 @@ class IbkrOrderEvent(BaseModel):
     ts_ms: int
 
 
-class IbkrOpenOrder(BaseModel):
-    """One open order as IBKR currently sees it.
-
-    Returned by ``GET /api/broker/orders/open``; mirrors the in-flight
-    state of a previously-placed order (status, partial fills, remaining
-    quantity).
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    account_id: str
-    order_id: int
-    perm_id: int | None = None
-    client_id: int
-    con_id: int
-    symbol: str
-    sec_type: SecType
-    action: OrderAction
-    quantity: float
-    order_type: OrderType
-    limit_price: float | None = None
-    time_in_force: OrderTimeInForce
-    status: OrderStatus
-    cumulative_filled: float = 0.0
-    remaining: float = 0.0
-    avg_fill_price: float | None = None
-    # ADR 0008 / Phase 5A — broker-echoed deterministic
-    # ``{bot_order_namespace}:{intent_id}`` token. Set whenever the
-    # underlying ``Trade.order.orderRef`` is non-empty; ``None`` for orders
-    # we never stamped (placed by a different client, manual TWS click, or
-    # by this client before Phase 5A shipped). The cold-start reconciliation
-    # orchestrator joins this back to the WAL to prove ownership without
-    # trusting per-client ``order_id`` alone.
-    order_ref: str | None = None
-    ibkr_evidence: IbkrTradeEvidence | None = None
-    fetched_at_ms: int
-
-
 class IbkrOrderAck(BaseModel):
     """Historical acknowledgement schema retained for durable journal rows."""
 
@@ -691,102 +652,6 @@ class IbkrOrderAck(BaseModel):
     order_ref: str | None = None
     ibkr_evidence: IbkrTradeEvidence | None = None
     placed_at_ms: int
-
-
-class IbkrOrderWhatIfPreview(BaseModel):
-    """Non-submitting IBKR what-if preview for a paper order request."""
-
-    model_config = ConfigDict(frozen=True)
-
-    account_id: str
-    is_paper: bool
-    symbol: str
-    action: OrderAction
-    quantity: float
-    order_type: OrderType
-    init_margin_change: float | None = None
-    maint_margin_change: float | None = None
-    equity_with_loan_change: float | None = None
-    commission: float | None = None
-    warning_text: str | None = None
-    order_ref: str | None = None
-    ibkr_evidence: IbkrTradeEvidence | None = None
-    previewed_at_ms: int
-
-
-class IbkrPnLTick(BaseModel):
-    """One P&L update from IBKR (account-level or per-position).
-
-    Account-level ticks have ``con_id=None`` and ``position=None``. Per-
-    position ticks carry the contract id and signed quantity. ``daily_pnl``
-    is the day-rolled change; ``unrealized_pnl`` and ``realized_pnl`` are
-    cumulative since position open.
-
-    All P&L numbers are in the account's base currency. Phase 2 is USD-
-    only; multi-currency is a separate ticket.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    account_id: str
-    con_id: int | None = Field(
-        default=None,
-        description="None for account-level ticks; contract id for per-position.",
-    )
-    daily_pnl: float | None = None
-    unrealized_pnl: float | None = None
-    realized_pnl: float | None = None
-    market_value: float | None = None
-    position: float | None = None
-    ts_ms: int
-
-
-DiagnosticStatus = Literal["pass", "warn", "fail", "skip"]
-
-
-class DiagnosticCheck(BaseModel):
-    """One step in the broker connection self-test.
-
-    The ``status`` is the operator-facing verdict; ``detail`` reports what
-    we observed; ``fix`` carries a remediation hint when the check is not
-    passing. ``fix`` is ``None`` for ``pass`` (nothing to do) and may be
-    ``None`` for ``warn`` when the warning is informational only.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    name: str = Field(..., description="Stable identifier for the check (e.g. 'tcp_reachable').")
-    label: str = Field(..., description="Human-readable check name shown to operators.")
-    status: DiagnosticStatus
-    detail: str
-    fix: str | None = None
-
-
-class DiagnosticReportActive(BaseModel):
-    """Active broker diagnostic report (broker connection is enabled)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    disabled: Literal[False] = False
-    overall_status: Literal["pass", "warn", "fail"]
-    checks: list[DiagnosticCheck]
-    fetched_at_ms: int
-
-
-class DiagnosticReportDisabled(BaseModel):
-    """Broker disabled diagnostic report (IBKR_BROKER_ENABLED=false)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    disabled: Literal[True]
-    reason: str
-    since_ms: int
-
-
-DiagnosticReport = Annotated[
-    DiagnosticReportActive | DiagnosticReportDisabled,
-    Field(discriminator="disabled"),
-]
 
 
 ClientConnectionState = Literal[
@@ -852,10 +717,12 @@ class IbkrConnectionHealth(BaseModel):
     ``connected=False`` so the UI can render the disconnected state and
     surface a reconnect button.
 
-    Phase 7A / VCR-0010 / ADR 0011 — ``safety_verdict`` is the structured
-    paper-mode safety verdict the cockpit hero binds to. Derivation is
-    fail-closed: the hero never claims ``paper-only`` unless every gate
-    positively confirms it.
+    The Phase 7A / VCR-0010 / ADR 0011 ``safety_verdict`` field (a
+    paper-mode safety verdict tied to the retired account-order-actuation
+    cockpit hero) was dropped from this response — PR-B of #1813,
+    2026-08-27 — along with ``app/broker/safety_verdict.py``, its sole
+    producer. No live consumer read it (verified against Frontend before
+    removal).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -871,7 +738,6 @@ class IbkrConnectionHealth(BaseModel):
     is_paper: bool | None = None
     server_version: int | None = None
     fetched_at_ms: int
-    safety_verdict: BrokerSafetyVerdict | None = None
     condition: BrokerHealthCondition | None = None
     """Backend-authored operator copy for this data-plane broker session.
     Frontend surfaces should render this text rather than inventing their
@@ -930,15 +796,6 @@ class IbkrConnectionHealth(BaseModel):
     recovery_error: str | None = None
     """Most recent post-reconnect recovery failure, cleared on recovery
     success."""
-    broker_event_log_write_failed_count: int = 0
-    """Cumulative count of broker-event-log JSONL write failures this run.
-    Only the *first* failure logs WARNING (codex D5 rate-limit); the
-    counter keeps incrementing so the cockpit runtime banner can still
-    render "evidence integrity degraded" on recurrences."""
-    last_broker_event_log_write_failed_at_ms: int | None = None
-    """Wall-clock timestamp (int64 ms UTC) of the most recent broker-
-    event-log write failure. Paired with the counter so an operator can
-    see both 'how often' and 'how recently'."""
 
 
 __all__ = [
@@ -948,11 +805,6 @@ __all__ = [
     "ClientConnectionState",
     "DataPlaneHealth",
     "DataPlaneReloadMode",
-    "DiagnosticCheck",
-    "DiagnosticReport",
-    "DiagnosticReportActive",
-    "DiagnosticReportDisabled",
-    "DiagnosticStatus",
     "IbkrAccountSummary",
     "IbkrApiCallbackName",
     "IbkrApiRequestEvidence",
@@ -961,13 +813,10 @@ __all__ = [
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
     "IbkrObjectSnapshot",
-    "IbkrOpenOrder",
     "IbkrOptionQuote",
     "IbkrOrderAck",
     "IbkrOrderEvent",
     "IbkrOrderSpec",
-    "IbkrOrderWhatIfPreview",
-    "IbkrPnLTick",
     "IbkrPosition",
     "IbkrPositionsSnapshot",
     "IbkrSerializerWarning",

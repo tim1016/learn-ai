@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import deque
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings, get_settings
@@ -38,21 +37,15 @@ from app.broker.ibkr.event_codes import (
     DATA_FARM_OK_CODES as _DATA_FARM_OK_CODES,
 )
 from app.broker.ibkr.event_codes import (
-    ORDER_REJECTION_CODES as _ORDER_REJECTION_CODES,
-)
-from app.broker.ibkr.event_codes import (
     SUBSCRIPTIONS_STALE_CODES as _SUBSCRIPTIONS_STALE_CODES,
 )
 from app.broker.ibkr.keepalive import apply_tcp_keepalive
 from app.broker.ibkr.models import ClientConnectionState, IbkrConnectionHealth
-from app.broker.ibkr.order_error_stream import OrderErrorEvent
 from app.broker.ibkr.recovery_state_machine import recovery_state_from_connection_state
-from app.services.broker_session_events import BrokerSessionEventService
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-_ORDER_ERROR_BUFFER_LIMIT = 512
 # Conservative headroom below IBKR's default 50 requests/second connection
 # pace. Pin the ib_async transport explicitly so a dependency-default change
 # cannot silently turn startup fan-out into broker error 100/disconnect risk.
@@ -237,12 +230,6 @@ def _is_paper_account(account_id: str) -> bool:
     return account_id.upper().startswith("DU")
 
 
-def _is_order_rejection_error(req_id: int, error_code: int) -> bool:
-    """True for IBKR order-rejection callbacks that can join by reqId."""
-
-    return req_id >= 0 and error_code in _ORDER_REJECTION_CODES
-
-
 class IbkrClient:
     """Lifecycle wrapper around ``ib_async.IB``.
 
@@ -285,15 +272,6 @@ class IbkrClient:
         self._last_probe_error: str | None = None
         self._last_recovery_ms: int | None = None
         self._recovery_error: str | None = None
-        # Broker-event-log filesystem-write failure counter + last
-        # timestamp. The emit site logs the FIRST failure per run at
-        # WARNING and suppresses subsequent ones (codex D5) so a recurring
-        # read-only mount can't spam the Incidents panel. Both fields are
-        # surfaced via ``health()`` so the cockpit runtime banner can
-        # render "evidence integrity degraded" even when trading
-        # continues.
-        self._broker_event_log_write_failed_count: int = 0
-        self._last_broker_event_log_write_failed_at_ms: int | None = None
         # Wall-clock when the client's own observable connection state last
         # changed — set by ``connect`` / ``disconnect`` / 1100 / 1101.
         # ``health()`` returns this verbatim; the cockpit overlay composer
@@ -301,8 +279,6 @@ class IbkrClient:
         # timestamp so the wire-level ``last_transition_ms`` is the most
         # recent of either side.
         self._last_event_ms: int = now_ms_utc()
-        self._order_error_events: deque[OrderErrorEvent] = deque()
-        self._next_order_error_seq: int = 1
         # Operator-intended connection state. The AutoReconnectMonitor only
         # acts on observed drops when this is True; ``POST /disconnect`` sets
         # it False so the operator's "off" sticks, and a startup with
@@ -310,53 +286,6 @@ class IbkrClient:
         # operator clicks Connect. Codex P1 fix on PR #563.
         self._desired_connected: bool = False
         self._ib.errorEvent += self._on_ib_error
-
-    def _record_broker_event(self, event_type: str, **fields: object) -> None:
-        """Append a broker lifecycle event to the diagnostics JSONL log."""
-        path = (
-            Path(self._settings.live_runs_root)
-            / "_broker"
-            / "connection_events.jsonl"
-        )
-        payload = {
-            "event_type": event_type,
-            "ts_ms_utc": now_ms_utc(),
-            "mode": self._settings.mode,
-            "host": self._settings.host,
-            "port": self._settings.port,
-            "client_id": self._settings.client_id,
-            "connected_account": self._connected_account,
-            **fields,
-        }
-        try:
-            BrokerSessionEventService(
-                path=path,
-                max_events=self._settings.broker_session_event_retention_count,
-            ).append_event(payload)
-        except OSError as exc:
-            # Rate-limit per codex D5: first failure per run logs WARNING
-            # (and the classifier catches it as
-            # BROKER_EVENT_LOG_WRITE_FAILED → INFRA); subsequent failures
-            # increment the counter + stamp the timestamp without
-            # re-emitting the line. The counter + last-failure stamp
-            # surface through ``health()`` so the cockpit runtime banner
-            # can still render "evidence integrity degraded".
-            self._broker_event_log_write_failed_count += 1
-            self._last_broker_event_log_write_failed_at_ms = now_ms_utc()
-            if self._broker_event_log_write_failed_count == 1:
-                logger.warning(
-                    "Could not append IBKR broker event log: %s",
-                    exc,
-                    extra={"action": "broker_event_log_write_failed"},
-                )
-
-    def record_recovery_event(self, event_type: str, **fields: object) -> None:
-        """Append a monitor-owned recovery event to the diagnostics JSONL log."""
-        self._record_broker_event(
-            event_type,
-            connection_state=self.connection_state,
-            **fields,
-        )
 
     def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
         """ib_async errorEvent handler.
@@ -379,15 +308,6 @@ class IbkrClient:
         """
         self._last_ibkr_code = errorCode
         self._last_ibkr_message = errorString
-        self._record_broker_event(
-            "IBKR_CODE",
-            ibkr_code=errorCode,
-            ibkr_req_id=reqId,
-            message=errorString,
-            connection_state=self.connection_state,
-        )
-        if _is_order_rejection_error(reqId, errorCode):
-            self._buffer_order_error(reqId, errorCode, errorString)
         if errorCode == 326:
             self._client_id_in_use_seen = True
             return
@@ -466,34 +386,6 @@ class IbkrClient:
                     "action": "connection_restored",
                 },
             )
-
-    def _buffer_order_error(self, req_id: int, error_code: int, error_message: str) -> None:
-        if len(self._order_error_events) >= _ORDER_ERROR_BUFFER_LIMIT:
-            dropped = self._order_error_events.popleft()
-            logger.warning(
-                "IBKR order-error replay buffer full; dropping oldest callback",
-                extra={
-                    "dropped_order_error_seq": dropped.seq,
-                    "dropped_req_id": dropped.req_id,
-                },
-            )
-        self._order_error_events.append(
-            OrderErrorEvent(
-                seq=self._next_order_error_seq,
-                req_id=req_id,
-                error_code=error_code,
-                error_message=error_message,
-                ts_ms=now_ms_utc(),
-            )
-        )
-        self._next_order_error_seq += 1
-
-    def order_errors_after(self, seq: int) -> list[OrderErrorEvent]:
-        """Return buffered order-scoped IBKR errors after ``seq`` without clearing."""
-
-        if seq < 0:
-            raise ValueError(f"order error cursor must be >= 0; got {seq}")
-        return [event for event in self._order_error_events if event.seq > seq]
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
@@ -631,28 +523,18 @@ class IbkrClient:
             await asyncio.wait_for(self._ib.reqCurrentTimeAsync(), timeout=timeout_s)
         except Exception as exc:
             self._last_probe_error = f"{type(exc).__name__}: {exc}"
-            self._record_broker_event(
-                "BROKER_PROBE_FAILED", probe_error=self._last_probe_error
-            )
             raise
         self._last_probe_ms = now_ms_utc()
         self._last_probe_error = None
-        self._record_broker_event("BROKER_PROBE_OK", probe_ts_ms=self._last_probe_ms)
 
     def mark_recovery_succeeded(self) -> None:
         self._subscriptions_stale = False
         self._last_recovery_ms = now_ms_utc()
         self._recovery_error = None
-        self._record_broker_event(
-            "BROKER_RECOVERY_OK", recovery_ts_ms=self._last_recovery_ms
-        )
 
     def mark_recovery_failed(self, exc: Exception) -> None:
         self._recovery_error = f"{type(exc).__name__}: {exc}"
         self._last_event_ms = now_ms_utc()
-        self._record_broker_event(
-            "BROKER_RECOVERY_FAILED", recovery_error=self._recovery_error
-        )
 
     # ── accessors ───────────────────────────────────────────────────────
 
@@ -758,8 +640,6 @@ class IbkrClient:
             last_recovery_ms=self._last_recovery_ms,
             recovery_error=self._recovery_error,
             last_transition_ms=self._last_event_ms,
-            broker_event_log_write_failed_count=self._broker_event_log_write_failed_count,
-            last_broker_event_log_write_failed_at_ms=self._last_broker_event_log_write_failed_at_ms,
         )
 
     @property
