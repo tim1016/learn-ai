@@ -76,6 +76,16 @@ needs a regression test that fails before and passes after, per `CLAUDE.md`.
    per `numerical-rigor.md`, regenerating a fixture to make a test pass is an
    anti-pattern.
 
+   *Superseded 2026-08-27 by PR-C of #1813.* This consequence is no longer
+   satisfiable as written: `app/engine/live/journal_exposure.py` was retired
+   with the IBKR control plane, taking `fold_execution_exposure` and its
+   `journal-exposure-projection` golden fixture with it — deleted alongside the
+   code they proved, not regenerated. The flatness primitive that survives is
+   `app/broker/alpaca/clerk/sqlite/folds.py::position_quantity_is_nonzero`,
+   registered in `docs/math-sources-of-truth.md`; the conformance obligation
+   this consequence created now attaches there. The original text above is left
+   unedited as the historical record.
+
 4. **`broker-deploy-form.component.ts:609` must stop testing the number.** It
    uses `Number(own.quantity) === 0` on broker-reported positions, which Alpaca
    may report fractionally, and blocks a Reference-parity deploy on any residue

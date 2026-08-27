@@ -94,6 +94,8 @@ def test_evidence_response_snapshots_namedtuple_account_value() -> None:
         currency="USD",
     )
 
+    # The callback name is an inert label here — serialization is keyed on the object, not the
+    # callback — so it carries no claim that a tick snapshot conveys an account value.
     response = evidence_response(
         "tickSnapshot",
         fields={"row_count": 1},
@@ -148,6 +150,7 @@ def test_evidence_response_snapshots_ibkr_object_matrix() -> None:
         currency="USD",
     )
 
+    # Inert label, as above: the exec-details matrix below is what is under test, not the callback.
     response = evidence_response(
         "tickSnapshot",
         objects=[
@@ -175,6 +178,7 @@ def test_evidence_response_unknown_object_is_placeholder_not_crash(caplog) -> No
         def __init__(self) -> None:
             self.value = "opaque"
 
+    # Inert label, as above: the unsupported object is what is under test, not the callback.
     response = evidence_response(
         "tickSnapshot",
         fields={"row_count": 1},
@@ -200,6 +204,7 @@ def test_evidence_response_conversion_error_is_placeholder_not_crash(caplog) -> 
         def timestamp(self) -> float:
             raise ValueError("timestamp outside supported range")
 
+    # Inert label, as above: the exploding datetime is what is under test, not the callback.
     response = evidence_response(
         "tickSnapshot",
         objects=[
