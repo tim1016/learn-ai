@@ -13,45 +13,15 @@
  */
 
 import type { components } from './broker.types';
-import type { OperatorBlocker } from './operator-blocker.types';
 
 // ── REST-shaped models (sourced from OpenAPI) ─────────────────────────
 
-export type IbkrAccountSummary = components['schemas']['IbkrAccountSummary'];
-export type AccountSafetySnapshot = components['schemas']['AccountSafetySnapshot'];
-export type PresentedOperatorAction = components['schemas']['PresentedOperatorAction'];
-export type PresentedOperatorActionInvocation = components['schemas']['PresentedOperatorActionInvocation'];
-export type PresentedOperatorActionRejection = components['schemas']['PresentedOperatorActionRejection'];
-export type PresentedOperatorActionResult = components['schemas']['PresentedOperatorActionResult'];
 export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth'];
 export type PanelActionErrorResponse = components['schemas']['PanelActionErrorResponse'];
 
-/** Keep browser mutations to the exact fields the server signed and verifies. */
-export function presentedActionInvocation(
-  action: PresentedOperatorAction,
-): PresentedOperatorActionInvocation {
-  if (!action.presentation_token) {
-    throw new Error('Backend action presentation is unavailable; refusing the operation.');
-  }
-  return {
-    action_id: action.action_id,
-    target: action.target,
-    snapshot_id: action.snapshot_id,
-    snapshot_version: action.snapshot_version,
-    idempotency_key: action.idempotency_key,
-    issued_at_ms: action.issued_at_ms,
-    expires_at_ms: action.expires_at_ms,
-    presentation_token: action.presentation_token,
-  };
-}
 export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
   IbkrOrderEvidenceFields &
   IbkrOrderRefFields;
-export type IbkrOrderSpec = components['schemas']['IbkrOrderSpec'] &
-  IbkrOrderRefFields &
-  IbkrManualOrderFields;
-export type IbkrPosition = components['schemas']['IbkrPosition'];
-export type IbkrPositionsSnapshot = components['schemas']['IbkrPositionsSnapshot'];
 
 export type OptionRight = 'C' | 'P';
 export type OrderAction = 'BUY' | 'SELL';
@@ -187,10 +157,6 @@ export interface IbkrOrderEvidenceFields {
 
 export interface IbkrOrderRefFields {
   order_ref?: string | null;
-}
-
-export interface IbkrManualOrderFields {
-  manual_order?: boolean;
 }
 
 export interface IbkrOrderWhatIfPreview extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
@@ -403,199 +369,4 @@ export interface OptionContractMatch {
 
 export interface OptionContractsResponse {
   matches: OptionContractMatch[];
-}
-
-// ── REST shape: /api/broker/account-truth ────────────────────────────
-
-export type AccountTruthFinalVerdict = 'clean' | 'not_proven';
-export type AccountTruthSeverity = 'ok' | 'info' | 'warning' | 'critical';
-export type AccountTruthInvariantStatus = 'pass' | 'warn' | 'fail' | 'not_applicable';
-export type AccountTruthOwnerClass =
-  | 'bot'
-  | 'manual'
-  | 'mixed_known'
-  | 'foreign_or_unclaimed';
-export type AccountTruthEvidenceTier =
-  | 'bot_order_ref'
-  | 'app_minted_manual'
-  | 'adopted_manual'
-  | 'mixed_known'
-  | 'foreign_or_unclaimed';
-export type AccountTruthOwnerBindingState = 'DEPLOYED' | 'ACTIVE' | 'RETIRED' | 'UNKNOWN';
-export type AccountTruthLifecycle =
-  | 'submitted'
-  | 'acknowledged'
-  | 'filled'
-  | 'cancelled'
-  | 'rejected'
-  | 'limbo';
-export type AccountTruthSourceName =
-  | 'broker_connection'
-  | 'account_summary'
-  | 'positions'
-  | 'open_orders'
-  | 'completed_orders'
-  | 'executions';
-export type AccountTruthSourceFreshnessStatus = 'fresh' | 'stale' | 'missing';
-
-export interface AccountTruthMessage {
-  code: string;
-  severity: AccountTruthSeverity;
-  title: string;
-  message: string;
-  forensic_facts: Record<string, IbkrEvidenceValue>;
-}
-
-export interface AccountTruthInvariant {
-  key: string;
-  label: string;
-  status: AccountTruthInvariantStatus;
-  severity: AccountTruthSeverity;
-  headline: string;
-  narrative: string;
-  checked_at_ms: number;
-  evidence_count: number;
-}
-
-export interface AccountTruthOwnerSummary {
-  owner_class: AccountTruthOwnerClass;
-  owner_key: string;
-  owner_label: string;
-  evidence_tier: AccountTruthEvidenceTier;
-  evidence_label: string;
-  owner_binding_state: AccountTruthOwnerBindingState;
-  open_order_count: number;
-  execution_count: number;
-  position_count: number;
-  gross_position_quantity: number;
-}
-
-export interface AccountTruthSymbolExposure {
-  symbol: string;
-  owner_class: AccountTruthOwnerClass;
-  owner_key: string;
-  owner_label: string;
-  quantity: number;
-  con_id: number | null;
-}
-
-export interface AccountTruthFactOwner {
-  owner_class: AccountTruthOwnerClass;
-  owner_key: string;
-  owner_label: string;
-  evidence_tier: AccountTruthEvidenceTier;
-  evidence_label: string;
-  owner_binding_state: AccountTruthOwnerBindingState;
-  severity: AccountTruthSeverity;
-}
-
-export type AccountTruthExecutionUncertaintyCode =
-  | 'missing_order_ref'
-  | 'observed_time_only'
-  | 'commission_pending'
-  | 'missing_quantity'
-  | 'missing_price';
-
-export interface AccountTruthOrderRow extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
-  fact_kind: 'open_order' | 'completed_order';
-  lifecycle_id: string;
-  lifecycle: AccountTruthLifecycle;
-  account_id: string;
-  order_id: number;
-  perm_id: number | null;
-  client_id: number;
-  con_id: number;
-  symbol: string;
-  sec_type: SecType;
-  action: OrderAction;
-  quantity: number;
-  order_type: OrderType;
-  limit_price: number | null;
-  status: OrderStatus;
-  cumulative_filled: number;
-  remaining: number;
-  avg_fill_price: number | null;
-  owner: AccountTruthFactOwner;
-  headline: string;
-  detail: string;
-  fetched_at_ms: number;
-}
-
-export interface AccountTruthExecutionRow extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
-  fact_kind: 'execution';
-  account_id: string;
-  exec_id: string;
-  order_id: number;
-  perm_id: number | null;
-  client_id: number | null;
-  con_id: number | null;
-  symbol: string | null;
-  side: OrderAction | null;
-  order_type: string | null;
-  quantity: number | null;
-  price: number | null;
-  fee: number | null;
-  exec_time_ms: number | null;
-  observed_at_ms: number;
-  owner: AccountTruthFactOwner;
-  headline: string;
-  detail: string;
-  uncertainty_codes: AccountTruthExecutionUncertaintyCode[];
-}
-
-export interface AccountTruthPositionRow {
-  fact_kind: 'position';
-  account_id: string;
-  con_id: number;
-  symbol: string;
-  sec_type: SecType;
-  quantity: number;
-  avg_cost: number;
-  market_value: number | null;
-  owner: AccountTruthFactOwner;
-  headline: string;
-  detail: string;
-  fetched_at_ms: number;
-}
-
-export interface AccountTruthEvidenceGap {
-  source: string;
-  severity: AccountTruthSeverity;
-  message: string;
-}
-
-export interface AccountTruthSourceFreshness {
-  source: AccountTruthSourceName;
-  label: string;
-  status: AccountTruthSourceFreshnessStatus;
-  severity: AccountTruthSeverity;
-  fetched_at_ms: number | null;
-  age_ms: number | null;
-  hard_ttl_ms: number;
-  reason_code: string | null;
-  message: string;
-}
-
-export interface AccountTruthResponse {
-  account_id: string | null;
-  final_verdict: AccountTruthFinalVerdict;
-  final_severity: AccountTruthSeverity;
-  status_label: string;
-  status_detail: string;
-  generated_at_ms: number;
-  health: IbkrConnectionHealth;
-  account: IbkrAccountSummary | null;
-  known_bot_namespaces: string[];
-  manual_namespaces_observed: string[];
-  invariants: AccountTruthInvariant[];
-  blockers: AccountTruthMessage[];
-  operator_blockers: OperatorBlocker[];
-  caveats: AccountTruthMessage[];
-  owner_summaries: AccountTruthOwnerSummary[];
-  symbol_exposures: AccountTruthSymbolExposure[];
-  orders: AccountTruthOrderRow[];
-  executions: AccountTruthExecutionRow[];
-  positions: AccountTruthPositionRow[];
-  evidence_gaps: AccountTruthEvidenceGap[];
-  source_freshness: AccountTruthSourceFreshness[];
 }

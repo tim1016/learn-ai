@@ -1,28 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
-import { presentedActionInvocation } from '../api/broker-models';
-import type {
-  AccountAcceptExposureOverrideRequest,
-  AccountAcceptExposureOverrideResponse,
-  AccountClearFreezeRequest,
-  AccountClearFreezeResponse,
-  AccountEventSequenceRepairReceipt,
-  LegacyStaleClaimCandidatesResponse,
-  LegacyStaleClaimRetireRequest,
-  LegacyStaleClaimRetirementReceipt,
-  AccountReconciliationAutomationPolicy,
-  AccountReconciliationAutomationPolicyUpdate,
-  AccountReconciliationReceipt,
-  AccountTriageResponse,
-} from '../api/account-reconciliation.types';
-import type { AccountsRosterResponse, AccountServiceStatusResponse } from '../api/account-directory.types';
-import type {
-  AccountCockpitResponse,
-  JournalRecoveryReceipt,
-  JournalRecoveryRequest,
-} from '../api/account-cockpit.types';
-import type { AccountEventsRequest, AccountEventsResponse, TraderAccountEventsResponse } from '../api/account-events.types';
 import type {
   ClerkTransactionDetail,
   ClerkTransactionFilters,
@@ -30,17 +8,12 @@ import type {
   ExternalOrderAcknowledgement,
 } from '../api/clerk-transaction-history.types';
 import type {
-  AccountSafetySnapshot,
-  PresentedOperatorAction,
-  PresentedOperatorActionResult,
   DataPlaneHealth,
   DiagnosticReport,
   ExpirationsResponse,
   BrokerCapabilityResponse,
   IbkrApiEvidenceEvent,
-  IbkrAccountSummary,
   IbkrConnectionHealth,
-  IbkrPositionsSnapshot,
   IbkrStrikeList,
   OptionContractsResponse,
   SymbolSearchResponse,
@@ -127,116 +100,6 @@ export class BrokerService {
     );
   }
 
-  account(): Promise<IbkrAccountSummary> {
-    return firstValueFrom(this.http.get<IbkrAccountSummary>(`${this.base}/account`));
-  }
-
-  positions(): Promise<IbkrPositionsSnapshot> {
-    return firstValueFrom(this.http.get<IbkrPositionsSnapshot>(`${this.base}/positions`));
-  }
-
-  accountSafetySnapshot(accountId: string): Promise<AccountSafetySnapshot> {
-    return firstValueFrom(
-      this.http.get<AccountSafetySnapshot>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/safety-snapshot`,
-      ),
-    );
-  }
-
-  presentLifecycleAction(
-    accountId: string,
-    actionId: 'pause' | 'stop' | 'end_day' | 'resume' | 'start' | 'deploy',
-    strategyInstanceId: string,
-    runId?: string,
-  ): Promise<PresentedOperatorAction> {
-    const params: Record<string, string> = { strategy_instance_id: strategyInstanceId };
-    if (runId !== undefined) params['run_id'] = runId;
-    return firstValueFrom(
-      this.http.get<PresentedOperatorAction>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-lifecycle-actions/${encodeURIComponent(actionId)}`,
-        { params },
-      ),
-    );
-  }
-
-  executePresentedReconcileNow(
-    accountId: string,
-    action: PresentedOperatorAction,
-  ): Promise<PresentedOperatorActionResult> {
-    return firstValueFrom(
-      this.http.post<PresentedOperatorActionResult>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-actions/reconcile-now`,
-        presentedActionInvocation(action),
-      ),
-    );
-  }
-
-  reconcileAccount(accountId: string): Promise<AccountReconciliationReceipt> {
-    return firstValueFrom(
-      this.http.post<AccountReconciliationReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation`,
-        {},
-      ),
-    );
-  }
-
-  repairAccountEventSequence(accountId: string): Promise<AccountEventSequenceRepairReceipt> {
-    return firstValueFrom(
-      this.http.post<AccountEventSequenceRepairReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/events/repair-sequence`,
-        {},
-      ),
-    );
-  }
-
-  latestAccountReconciliation(accountId: string): Promise<AccountReconciliationReceipt> {
-    return firstValueFrom(
-      this.http.get<AccountReconciliationReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation/latest`,
-      ),
-    );
-  }
-
-  updateAccountReconciliationAutomation(
-    accountId: string,
-    payload: AccountReconciliationAutomationPolicyUpdate,
-  ): Promise<AccountReconciliationAutomationPolicy> {
-    return firstValueFrom(
-      this.http.put<AccountReconciliationAutomationPolicy>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation/automation`,
-        payload,
-      ),
-    );
-  }
-
-  accountTriage(accountId: string): Promise<AccountTriageResponse> {
-    return firstValueFrom(
-      this.http.get<AccountTriageResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/triage`,
-      ),
-    );
-  }
-
-  accounts(): Promise<AccountsRosterResponse> {
-    return firstValueFrom(this.http.get<AccountsRosterResponse>(this.accountsBase));
-  }
-
-  accountServiceStatus(accountId: string): Promise<AccountServiceStatusResponse> {
-    return firstValueFrom(
-      this.http.get<AccountServiceStatusResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk`,
-      ),
-    );
-  }
-
-  accountCockpit(accountId: string): Promise<AccountCockpitResponse> {
-    return firstValueFrom(
-      this.http.get<AccountCockpitResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/cockpit`,
-      ),
-    );
-  }
-
   accountTransactions(
     accountId: string,
     cursor: string | null = null,
@@ -244,7 +107,6 @@ export class BrokerService {
     filters: ClerkTransactionFilters = {},
   ): Promise<ClerkTransactionHistoryResponse> {
     const params: Record<string, string | number> = { limit };
-    if (filters.broker === 'ibkr') params['broker'] = 'ibkr';
     if (cursor !== null) params['cursor'] = cursor;
     if (filters.origin) params['origin'] = filters.origin;
     if (filters.lifecycleState) params['lifecycle_state'] = filters.lifecycleState;
@@ -280,88 +142,6 @@ export class BrokerService {
       this.http.post<ExternalOrderAcknowledgement>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions/external-orders/${encodeURIComponent(externalOrderId)}/acknowledge`,
         { operator },
-      ),
-    );
-  }
-
-  recoverAccountJournal(
-    accountId: string,
-    step: 'quarantine' | 'rebaseline',
-    payload: JournalRecoveryRequest,
-  ): Promise<JournalRecoveryReceipt> {
-    return firstValueFrom(
-      this.http.post<JournalRecoveryReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-recovery/${step}`,
-        payload,
-      ),
-    );
-  }
-
-  accountEvents(accountId: string, request: AccountEventsRequest): Promise<AccountEventsResponse> {
-    const params: Record<string, string | number | readonly (string | number | boolean)[]> = {
-      view: request.view,
-      limit: request.limit ?? 50,
-    };
-    if (request.kinds?.length) params['kinds'] = request.kinds;
-    if (request.beforeSeq !== undefined) params['before_seq'] = request.beforeSeq;
-    if (request.afterSeq !== undefined) params['after_seq'] = request.afterSeq;
-    return firstValueFrom(
-      this.http.get<AccountEventsResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/events`,
-        { params },
-      ),
-    );
-  }
-
-  traderAccountEvents(accountId: string, limit = 100): Promise<TraderAccountEventsResponse> {
-    return firstValueFrom(
-      this.http.get<TraderAccountEventsResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/events/trader`,
-        { params: { limit } },
-      ),
-    );
-  }
-
-  legacyStaleClaimCandidates(accountId: string): Promise<LegacyStaleClaimCandidatesResponse> {
-    return firstValueFrom(
-      this.http.get<LegacyStaleClaimCandidatesResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/legacy-stale-claims/candidates`,
-      ),
-    );
-  }
-
-  retireLegacyStaleClaim(
-    accountId: string,
-    payload: LegacyStaleClaimRetireRequest,
-  ): Promise<LegacyStaleClaimRetirementReceipt> {
-    return firstValueFrom(
-      this.http.post<LegacyStaleClaimRetirementReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/legacy-stale-claims/retire`,
-        payload,
-      ),
-    );
-  }
-
-  clearAccountFreeze(
-    accountId: string,
-    payload: AccountClearFreezeRequest = {},
-  ): Promise<AccountClearFreezeResponse> {
-    return firstValueFrom(
-      this.http.post<AccountClearFreezeResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/freeze/clear`,
-        payload,
-      ),
-    );
-  }
-
-  acceptExposureOverride(
-    accountId: string,
-    payload: AccountAcceptExposureOverrideRequest,
-  ): Promise<AccountAcceptExposureOverrideResponse> {
-    return firstValueFrom(
-      this.http.post<AccountAcceptExposureOverrideResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/freeze/accept-exposure-override`,
-        payload,
       ),
     );
   }

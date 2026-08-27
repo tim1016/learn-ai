@@ -33,7 +33,7 @@ _CONTROL_SURFACE_SCHEMA = _CONTROL_SURFACE_MANIFEST.with_suffix(".schema.json")
 _CONTROL_SURFACE_MANIFEST_PAYLOAD = json.loads(_CONTROL_SURFACE_MANIFEST.read_text())
 _CONTROL_SURFACE_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["control_prefixes"])
 _PROTECTED_READ_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["protected_read_prefixes"])
-_MUTATION_PATH = "/api/broker/orders/what-if"
+_MUTATION_PATH = "/api/broker/disconnect"
 _READ_PATH = "/api/broker/health"
 _ORDER_STREAM_READ_PATH = "/api/broker/orders/stream"
 _MIRROR_READ_PATH = "/api/broker/session-mirror"
@@ -103,7 +103,11 @@ def test_unsafe_control_routes_declare_data_plane_guard_dependency() -> None:
 
     assert unsafe_routes
     assert ("/api/broker/connect", ["POST"], True) in unsafe_routes
-    assert ("/api/accounts/{account_id}/reconciliation", ["POST"], True) in unsafe_routes
+    assert (
+        "/api/accounts/{account_id}/transactions/external-orders/{external_order_id}/acknowledge",
+        ["POST"],
+        True,
+    ) in unsafe_routes
     assert all(has_guard for _path, _methods, has_guard in unsafe_routes)
 
 

@@ -3,8 +3,6 @@
 When IBKR_BROKER_ENABLED=false:
   - GET /api/broker/health → HTTP 200, disabled=True, connected=False, reason set
   - GET /api/broker/diagnose → discriminated union with disabled=True (DiagnosticReportDisabled)
-  - GET /api/broker/account → HTTP 503
-  - GET /api/broker/positions → HTTP 503
   - get_client() raises NotConnectedError (client was never set)
 
 Uses httpx.AsyncClient + ASGITransport per repo testing rules.
@@ -110,64 +108,6 @@ async def test_diagnose_no_checks_field():
 
     data = response.json()
     assert "checks" not in data
-
-
-# ---------------------------------------------------------------------------
-# /account — must return 503 when disabled
-# ---------------------------------------------------------------------------
-
-
-async def test_account_returns_503_when_disabled():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/account")
-
-    assert response.status_code == 503
-
-
-# ---------------------------------------------------------------------------
-# /positions — must return 503 when disabled
-# ---------------------------------------------------------------------------
-
-
-async def test_positions_returns_503_when_disabled():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/positions")
-
-    assert response.status_code == 503
-
-
-async def test_account_truth_returns_canonical_503_when_disabled():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/account-truth")
-
-    assert response.status_code == 503
-    assert "IBKR_BROKER_ENABLED=false" in response.text
-
-
-async def test_completed_orders_returns_canonical_503_when_disabled():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/orders/completed")
-
-    assert response.status_code == 503
-    assert "IBKR_BROKER_ENABLED=false" in response.text
-
-
-async def test_order_what_if_returns_canonical_503_when_disabled():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/broker/orders/what-if",
-            json={
-                "symbol": "SPY",
-                "sec_type": "STK",
-                "action": "BUY",
-                "quantity": 1,
-                "order_type": "MKT",
-                "confirm_paper": True,
-            },
-        )
-
-    assert response.status_code == 503
-    assert "IBKR_BROKER_ENABLED=false" in response.text
 
 
 # ---------------------------------------------------------------------------

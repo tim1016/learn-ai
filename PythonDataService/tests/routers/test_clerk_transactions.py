@@ -15,192 +15,8 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder
 from app.routers.account_pnl_attribution import router as account_pnl_attribution_router
 from app.routers.clerk_transactions import router
-from app.schemas.clerk_transaction_projection import (
-    ClerkTransactionRow,
-    ClerkTransactionSummaryRow,
-)
-from app.services.clerk_transaction_projection import (
-    ClerkTransactionProjectionUnavailable,
-    _encode_cursor,
-    custody_window_summary,
-    fold_lifecycle_state,
-)
 
 pytestmark = pytest.mark.asyncio
-
-
-def _summary(*, transaction_id: str, lifecycle_state: str) -> ClerkTransactionSummaryRow:
-    return ClerkTransactionSummaryRow(
-        transaction_id=transaction_id,
-        account_id="DU1219",
-        journal_seq=12,
-        recorded_at_ms=1_700_000_000_000,
-        transaction_kind="strategy_submission",
-        strategy_instance_id="bot-1",
-        run_id="run-1",
-        intent_id=f"intent:{transaction_id}",
-        order_ref=f"learn-ai/bot-1:{transaction_id}",
-        lifecycle_state=lifecycle_state,
-        event_count=1,
-    )
-
-
-class _NoIoStore:
-    async def history_page(
-        self,
-        *,
-        account_id: str,
-        limit: int,
-        after,
-        origin=None,
-        lifecycle_state=None,
-        strategy_instance_id=None,
-        run_id=None,
-        from_ms=None,
-        to_ms=None,
-    ):
-        assert account_id == "DU1219"
-        assert limit == 25
-        assert after is None
-        assert (origin, lifecycle_state, strategy_instance_id, run_id) == (None, None, None, None)
-        return [], 12, 0
-
-    async def feed_status(self, account_id: str) -> tuple[str, str, str, int | None, int | None, bool]:
-        return "live", "Live", "Durable Clerk callback projection is current.", 12, 0, False
-
-    async def transaction_detail(self, *, account_id: str, transaction_id: str) -> ClerkTransactionRow | None:
-        assert account_id == "DU1219"
-        assert transaction_id == "ctxn_opaque"
-        return ClerkTransactionRow(
-            transaction_id=transaction_id, account_id=account_id, journal_seq=12,
-            recorded_at_ms=1_700_000_000_000, transaction_kind="manual_ibkr_acknowledgement",
-            strategy_instance_id="manual", run_id="manual", intent_id="intent:opaque",
-            order_ref="manual/v1:opaque", lifecycle_state="submitted",
-            receipt={"order_ref": "manual/v1:opaque"}, events=[],
-        )
-
-
-class _UnavailableStore:
-    async def history_page(self, **kwargs):
-        raise ClerkTransactionProjectionUnavailable("disabled")
-
-    async def transaction_detail(self, **kwargs):
-        raise ClerkTransactionProjectionUnavailable("disabled")
-
-
-async def test_history_endpoint_is_bounded_projection_read_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = FastAPI()
-    app.include_router(router)
-    monkeypatch.setattr(
-        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/accounts/DU1219/transactions?broker=ibkr&limit=25"
-        )
-    assert response.status_code == 200
-    assert response.json() == {
-        "projection_available": True, "canonical_fallback_required": False,
-        "feed_state": "live", "feed_headline": "Live", "feed_detail": "Durable Clerk callback projection is current.",
-        "high_water_journal_seq": 12, "lag_records": 0, "lag_is_lower_bound": False,
-        "custody_summary": {
-            "record_count": 0, "a0_custody_accepted_count": 0, "a1_broker_write_started_count": 0,
-            "a2_broker_known_count": 0, "a3_economic_terminal_count": 0, "uncertain_count": 0,
-        },
-        "rows": [], "next_cursor": None,
-    }
-
-
-async def test_history_endpoint_passes_typed_filters_to_the_projection_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _FilteredStore(_NoIoStore):
-        async def history_page(
-            self,
-            *,
-            account_id: str,
-            limit: int,
-            after,
-            origin=None,
-            lifecycle_state=None,
-            strategy_instance_id=None,
-            run_id=None,
-            from_ms=None,
-            to_ms=None,
-        ):
-            assert account_id == "DU1219"
-            assert limit == 25
-            assert after is None
-            assert (origin, lifecycle_state, strategy_instance_id, run_id) == (
-                "strategy",
-                "submitted",
-                "bot-1",
-                "run-1",
-            )
-            return [], 12, 0
-
-    app = FastAPI()
-    app.include_router(router)
-    monkeypatch.setattr(
-        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _FilteredStore()
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/accounts/DU1219/transactions",
-            params={
-                "broker": "ibkr",
-                "limit": 25,
-                "origin": "strategy",
-                "lifecycle_state": "submitted",
-                "strategy_instance_id": "bot-1",
-                "run_id": "run-1",
-            },
-        )
-    assert response.status_code == 200
-
-
-async def test_history_endpoint_passes_an_inclusive_ms_window_to_the_projection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _WindowedStore(_NoIoStore):
-        async def history_page(
-            self,
-            *,
-            account_id: str,
-            limit: int,
-            after,
-            origin=None,
-            lifecycle_state=None,
-            strategy_instance_id=None,
-            run_id=None,
-            from_ms=None,
-            to_ms=None,
-        ):
-            assert account_id == "DU1219"
-            assert limit == 25
-            assert after is None
-            assert (origin, lifecycle_state, strategy_instance_id, run_id) == (None, None, None, None)
-            assert (from_ms, to_ms) == (1_700_000_000_000, 1_700_086_400_000)
-            return [], 12, 0
-
-    app = FastAPI()
-    app.include_router(router)
-    monkeypatch.setattr(
-        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _WindowedStore()
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/accounts/DU1219/transactions",
-            params={
-                "broker": "ibkr",
-                "limit": 25,
-                "from_ms": 1_700_000_000_000,
-                "to_ms": 1_700_086_400_000,
-            },
-        )
-    assert response.status_code == 200
 
 
 async def test_history_endpoint_rejects_an_inverted_ms_window() -> None:
@@ -225,6 +41,45 @@ async def test_history_endpoint_rejects_timestamp_beyond_int64() -> None:
         )
 
     assert response.status_code == 422
+
+
+async def test_transaction_history_surfaces_unavailable_without_active_authority() -> None:
+    """No active SQLite authority must surface as unavailable, not silent success.
+
+    Renamed from test_missing_alpaca_activation_never_reads_ibkr_projection
+    (PR-A of #1813) — the poisoned-IBKR-store half of that proof no longer
+    applies (there is no legacy store left for the router to reach for), but
+    nothing else in the suite exercises the "no active authority" degraded
+    response for GET /transactions.
+    """
+    set_active_clerk_runtime(None)
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions")
+
+    assert response.status_code == 200
+    assert response.json()["feed_state"] == "projection_unavailable"
+    assert response.json()["rows"] == []
+
+
+async def test_transaction_detail_surfaces_unavailable_without_active_authority() -> None:
+    """No active SQLite authority must surface as unavailable, not silent success.
+
+    Renamed from test_missing_alpaca_activation_never_reads_ibkr_transaction_detail
+    (PR-A of #1813) — same reasoning as the history test above, for
+    GET /transactions/{transaction_id}.
+    """
+    set_active_clerk_runtime(None)
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions/legacy-row")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Clerk transaction projection unavailable."
 
 
 async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
@@ -264,115 +119,6 @@ async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
     assert response.status_code == 200
     assert response.json()["realized_pnl_total"] == 12.5
     assert response.json()["mark_observed_at_ms"] == {}
-
-
-async def test_history_endpoint_reports_unavailable_without_fallback_scan(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = FastAPI()
-    app.include_router(router)
-    monkeypatch.setattr(
-        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _UnavailableStore()
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/accounts/DU1219/transactions", params={"broker": "ibkr"}
-        )
-    assert response.status_code == 200
-    assert response.json()["feed_state"] == "projection_unavailable"
-    assert response.json()["canonical_fallback_required"] is True
-
-
-async def test_missing_alpaca_activation_never_reads_ibkr_projection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _PoisonedIbkrStore:
-        async def history_page(self, **_kwargs: object) -> None:
-            raise AssertionError("default Alpaca history must not read IBKR projection rows")
-
-    monkeypatch.setattr(
-        "app.routers.clerk_transactions.get_clerk_transaction_store",
-        lambda: _PoisonedIbkrStore(),
-    )
-    set_active_clerk_runtime(None)
-    app = FastAPI()
-    app.include_router(router)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions")
-
-    assert response.status_code == 200
-    assert response.json()["feed_state"] == "projection_unavailable"
-    assert response.json()["rows"] == []
-
-
-@pytest.mark.parametrize(
-    "cursor",
-    [
-        _encode_cursor((True, 1, "ctxn_opaque")),
-        _encode_cursor((-1, 1, "ctxn_opaque")),
-        _encode_cursor((1, 0, "ctxn_opaque")),
-        _encode_cursor((1, 2**63, "ctxn_opaque")),
-    ],
-)
-async def test_history_endpoint_rejects_non_postgres_cursor_coordinates(
-    cursor: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = FastAPI()
-    app.include_router(router)
-    monkeypatch.setattr(
-        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/accounts/DU1219/transactions",
-            params={"broker": "ibkr", "cursor": cursor},
-        )
-
-    assert response.status_code == 422
-    assert response.json()["detail"] == "invalid transaction history cursor"
-
-
-async def test_selected_transaction_endpoint_reads_only_the_requested_projection_row(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = FastAPI()
-    app.include_router(router)
-    monkeypatch.setattr(
-        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/accounts/DU1219/transactions/ctxn_opaque",
-            params={"broker": "ibkr"},
-        )
-    assert response.status_code == 200
-    assert response.json()["receipt"] == {"order_ref": "manual/v1:opaque"}
-
-
-async def test_missing_alpaca_activation_never_reads_ibkr_transaction_detail(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _PoisonedIbkrStore:
-        async def transaction_detail(self, **_kwargs: object) -> None:
-            raise AssertionError("default Alpaca detail must not read an IBKR projection row")
-
-    monkeypatch.setattr(
-        "app.routers.clerk_transactions.get_clerk_transaction_store",
-        lambda: _PoisonedIbkrStore(),
-    )
-    set_active_clerk_runtime(None)
-    app = FastAPI()
-    app.include_router(router)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/api/accounts/PA-NO-ACTIVATION/transactions/legacy-row"
-        )
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Clerk transaction projection unavailable."
 
 
 async def test_external_order_acknowledgement_endpoint_delegates_only_to_active_sqlite(
@@ -504,29 +250,3 @@ async def test_external_order_acknowledgement_endpoint_durably_releases_only_ext
         assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
     finally:
         repo.close()
-
-
-async def test_custody_window_summary_preserves_server_folded_terminal_state_after_reordered_callbacks() -> None:
-    lifecycle = fold_lifecycle_state("filled", "acknowledged")
-
-    summary = custody_window_summary(
-        [
-            _summary(transaction_id="recorded", lifecycle_state="recorded"),
-            _summary(transaction_id="submitting", lifecycle_state="submitting"),
-            _summary(transaction_id="broker-known", lifecycle_state="submitted"),
-            _summary(transaction_id="partial", lifecycle_state="partial_fill"),
-            _summary(transaction_id="terminal", lifecycle_state=lifecycle),
-            _summary(transaction_id="error", lifecycle_state="error"),
-            _summary(transaction_id="uncertain", lifecycle_state="limbo"),
-        ]
-    )
-
-    assert lifecycle == "filled"
-    assert summary.model_dump() == {
-        "record_count": 7,
-        "a0_custody_accepted_count": 1,
-        "a1_broker_write_started_count": 1,
-        "a2_broker_known_count": 2,
-        "a3_economic_terminal_count": 1,
-        "uncertain_count": 2,
-    }

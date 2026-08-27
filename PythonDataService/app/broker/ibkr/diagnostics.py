@@ -10,8 +10,11 @@ Important non-side-effects:
 
 * Does **not** call ``IbkrClient.connect``. If the connection is down,
   reconnecting is the operator's job — we report what we observe.
-* Does not write to disk and does not place orders; the account-fetch
-  check is read-only.
+* Does not write to disk and does not place orders.
+
+The account-fetch check was removed with ``app.broker.ibkr.account``
+(IBKR account decommission, PR-A of #1813) — it had no other purpose
+than probing that retired capability.
 """
 
 from __future__ import annotations
@@ -21,10 +24,8 @@ import contextlib
 import logging
 import socket
 
-from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr.client import (
     _PREFERRED_HOST_ALIASES,
-    BrokerError,
     NotConnectedError,
     _resolve_host,
     get_client,
@@ -313,56 +314,6 @@ def _check_account_sentinel() -> DiagnosticCheck:
     )
 
 
-async def _check_account_fetch() -> DiagnosticCheck:
-    try:
-        client = get_client()
-    except NotConnectedError:
-        return DiagnosticCheck(
-            name="account_fetch",
-            label="fetch_account_summary",
-            status="skip",
-            detail="skipped because the IbkrClient is not initialized",
-        )
-    if not client.is_connected():
-        return DiagnosticCheck(
-            name="account_fetch",
-            label="fetch_account_summary",
-            status="skip",
-            detail="skipped because the ib_async session is closed",
-        )
-    try:
-        snapshot = await ibkr_account.fetch_account_summary(client)
-    except BrokerError as exc:
-        return DiagnosticCheck(
-            name="account_fetch",
-            label="fetch_account_summary",
-            status="fail",
-            detail=f"BrokerError: {exc}",
-            fix=(
-                "Account summary requires the connection to be established and the "
-                "account to have been resolved. If TCP reachability passes but this "
-                "fails, the issue is likely on the Gateway side — check API > "
-                "Settings > 'Master API client ID' and 'Trusted IPs'."
-            ),
-        )
-    except Exception as exc:
-        return DiagnosticCheck(
-            name="account_fetch",
-            label="fetch_account_summary",
-            status="fail",
-            detail=f"{type(exc).__name__}: {exc}",
-        )
-    return DiagnosticCheck(
-        name="account_fetch",
-        label="fetch_account_summary",
-        status="pass",
-        detail=(
-            f"account={snapshot.account_id} is_paper={snapshot.is_paper} "
-            f"cash={snapshot.cash_balance} nlv={snapshot.net_liquidation}"
-        ),
-    )
-
-
 def _aggregate_status(checks: list[DiagnosticCheck]) -> str:
     if any(c.status == "fail" for c in checks):
         return "fail"
@@ -377,8 +328,7 @@ async def run_diagnostics() -> DiagnosticReportActive:
     Each check captures its own exception so the report always renders;
     a check that itself fails to run shows up as a ``fail`` row whose
     ``detail`` carries the exception text. Synchronous checks run inline;
-    the only async checks are TCP probe and the account fetch, both of
-    which are bounded with timeouts.
+    the only async check is the TCP probe, which is bounded with a timeout.
     """
     checks: list[DiagnosticCheck] = []
     s = get_settings()
@@ -391,7 +341,6 @@ async def run_diagnostics() -> DiagnosticReportActive:
     checks.append(_check_client_initialized())
     checks.append(_check_client_connected())
     checks.append(_check_account_sentinel())
-    checks.append(await _check_account_fetch())
 
     return DiagnosticReportActive(
         overall_status=_aggregate_status(checks),  # type: ignore[arg-type]

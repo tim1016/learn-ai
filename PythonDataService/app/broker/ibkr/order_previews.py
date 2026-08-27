@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-from app.broker.ibkr.account import _coerce_float_or_none
 from app.broker.ibkr.api_evidence import (
     get_ibkr_api_evidence_recorder,
 )
@@ -15,6 +14,7 @@ from app.broker.ibkr.models import (
     IbkrOrderSpec,
     IbkrOrderWhatIfPreview,
     IbkrTradeEvidence,
+    _coerce_optional_float,
 )
 from app.broker.ibkr.order_evidence import snapshot_contract, snapshot_order
 from app.broker.ibkr.orders import (
@@ -25,6 +25,22 @@ from app.broker.ibkr.orders import (
 from app.utils.timestamps import now_ms_utc
 
 _WHAT_IF_TIMEOUT_S = 15.0
+
+
+def _coerce_float_or_none(value: str | float | None) -> float | None:
+    """IBKR returns what-if margin/commission deltas as strings; coerce safely.
+
+    Empty strings and non-numeric markers like ``""`` or ``"BASE"`` become
+    ``None``. We never raise from here — bad numbers shouldn't take down
+    a preview. Relocated from the retired ``app.broker.ibkr.account`` (IBKR
+    account decommission, PR-A of #1813) — this was its only surviving caller.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return _coerce_optional_float(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 async def preview_paper_order(

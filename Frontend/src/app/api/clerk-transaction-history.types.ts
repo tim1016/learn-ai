@@ -27,8 +27,6 @@ export interface ClerkOrderInstruction {
 }
 
 export interface ClerkTransactionFilters {
-  /** Explicit compatibility lineage; omission selects the Alpaca SQLite authority. */
-  readonly broker?: 'alpaca' | 'ibkr';
   readonly origin?: ClerkTransactionOrigin | null;
   readonly lifecycleState?: string | null;
   readonly strategyInstanceId?: string | null;

@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.engine.live.account_clerk_journal import read_account_clerk_journal
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
-from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.live_state_sidecar import (
     LiveStateEnvelope,
@@ -19,7 +17,7 @@ from app.engine.live.live_state_sidecar import (
     stable_live_state_path,
 )
 from app.engine.live.run_lookup import account_id_from_run_ledger
-from app.schemas.live_runs import FleetContamination, InstanceBrokerView
+from app.schemas.live_runs import InstanceBrokerView
 from app.services.account_journal_authority import (
     account_journal_authority_is_active,
     observe_account_journal_parity,
@@ -27,15 +25,10 @@ from app.services.account_journal_authority import (
 from app.services.legacy_stale_claim_retirement import retired_legacy_claim_keys
 
 logger = logging.getLogger(__name__)
-NetPositionFetcher = Callable[[], Awaitable[dict[str, int] | None]]
 
 
 class AccountJournalScopeRequiredError(ValueError):
     """Raised rather than allowing two account journals to net in one verdict."""
-
-
-class BrokerAccountMismatchError(ValueError):
-    """The connected broker proved it is serving a different account."""
 
 
 def scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
@@ -135,7 +128,15 @@ def collect_fleet_position_explanations(
 
     Formula: residual[symbol] = broker_net[symbol] - Σ journal_namespace_exposure[symbol]
     Reference: ADR 0030 account-rooted journal; issue #1024.
-    Canonical implementation: this function and ``compute_fleet_contamination``.
+    Canonical implementation: this function supplies the Σ term;
+    ``app.engine.live.fleet.compute_fleet_contamination`` computes the full
+    residual when given a ``broker_net`` mapping. As of PR-A of #1813
+    (2026-08-27, fix round 2) nothing in production composes the two —
+    fleet_contamination.py's IBKR broker-net fetcher was retired, leaving
+    this pairing retained but unwired pending PR-B's disposition. See
+    docs/math-sources-of-truth.md, "Historical IBKR account contamination
+    residual", and docs/architecture/engine-authority-map.md, "Historical
+    IBKR account contamination verdict".
     Validated against: tests/services/test_fleet_contamination.py::test_journal_exposure_is_canonical.
     """
 
@@ -318,53 +319,3 @@ def _account_id_for_run(live_runs_root: Path, run_id: str) -> str | None:
         return normalize_account_id(raw_account_id)
     except InvalidAccountIdError:
         return None
-
-
-async def fetch_net_positions(account_id: str | None = None) -> dict[str, int] | None:
-    """Best-effort net position only when the broker proves the account id."""
-
-    try:
-        from app.broker.ibkr import account as ibkr_account
-        from app.routers.broker_dependencies import require_connected_client
-
-        client = require_connected_client()
-        snapshot = await ibkr_account.fetch_positions(client)
-    except Exception as exc:
-        logger.info("fleet net-position fetch unavailable: %s", exc)
-        return None
-    if account_id is not None and snapshot.account_id.upper() != account_id.upper():
-        logger.warning(
-            "fleet net-position account mismatch",
-            extra={"requested_account_id": account_id, "broker_account_id": snapshot.account_id},
-        )
-        raise BrokerAccountMismatchError(
-            f"BROKER_ACCOUNT_MISMATCH:{account_id}:{snapshot.account_id}"
-        )
-    net: dict[str, int] = {}
-    for pos in snapshot.positions:
-        symbol = str(pos.symbol).upper()
-        net[symbol] = net.get(symbol, 0) + int(pos.quantity)
-    return net
-
-
-async def compute_account_fleet_contamination(
-    root: Path,
-    fetch_positions: NetPositionFetcher | None = None,
-    *,
-    account_id: str | None = None,
-) -> FleetContamination:
-    resolve_net_positions = fetch_positions or (lambda: fetch_net_positions(account_id))
-    explanations = collect_fleet_position_explanations(root, account_id=account_id)
-    try:
-        net_positions = await resolve_net_positions()
-    except BrokerAccountMismatchError:
-        result = compute_fleet_contamination(None, explanations, policy_blocks_starts=True)
-        result["policy_blocks_starts"] = True
-        result["summary"] = "Connected broker account mismatches the requested account; starts are blocked."
-    else:
-        result = compute_fleet_contamination(
-            net_positions,
-            explanations,
-            policy_blocks_starts=True,
-        )
-    return FleetContamination(**result)
