@@ -38,24 +38,27 @@ def _hold_transition(
     *,
     reason_code: str = "UNEXPLAINED_ORDER_HOLD",
     evidence_refs: list[str] | None = None,
+    transition_kind: str = "ACCOUNT_HOLD_RAISED",
 ) -> TransitionInput:
-    """One pre-v12 ``ACCOUNT_HOLD_RAISED`` transition.
+    """One pre-v12 ``ACCOUNT_HOLD_RAISED``/``_REFRESHED`` transition.
 
     The kind is retired as a *writer* (ADR 0048 Decision 2) but is still
     replayed from any mirror recorded before v12, so this helper now builds
     the legacy shape deliberately: it is how the replay folds are exercised.
+    ``ACCOUNT_HOLD_REFRESHED`` carries the same ``AccountHoldRaisedFacts``
+    envelope, so one builder covers both.
     """
     facts = AccountHoldRaisedFacts(
         reason_code=reason_code,
         evidence_refs=evidence_refs or ["bo-1"],
     )
     return TransitionInput(
-        transition_kind="ACCOUNT_HOLD_RAISED",
+        transition_kind=transition_kind,
         custody_owner="ACCOUNT_CLERK",
         execution_authority="ACCOUNT_CLERK",
         operation_state="succeeded",
         clerk_observed_at_ms=1,
-        summary_code="ACCOUNT_HOLD_RAISED",
+        summary_code=transition_kind,
         facts_json=facts.to_facts_json(),
     )
 

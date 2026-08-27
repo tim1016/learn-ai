@@ -461,3 +461,57 @@ def test_replayed_and_migrated_episodes_agree_on_identity(tmp_path: Path) -> Non
     migrated = dict(conn.execute("SELECT * FROM holds").fetchone())
 
     assert migrated == replayed
+
+
+def test_replayed_and_migrated_refreshed_episodes_agree_on_the_open_instant(
+    tmp_path: Path,
+) -> None:
+    """A refresh restates the evidence; it does not reopen the episode.
+
+    The pre-v12 refresh fold rewrote ``evidence_refs_json`` and nothing else —
+    ``holds.opened_at_ms`` stayed at the raise, and the backfill carries that
+    instant across verbatim. A replay fold that advanced it to the refresh
+    would make one history describe two different accounts depending on which
+    route it took into v12, and would move the ``since_ms`` an operator reads
+    off the hold. The prior identity test only appended a raise, so it could
+    not see this.
+    """
+    from tests.broker.alpaca.clerk.sqlite.conftest import _hold_transition
+
+    clock = _clock()
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
+    )
+    try:
+        repo.append_transition(
+            _hold_transition(reason_code="UNEXPLAINED_ORDER", evidence_refs=["bo-a"])
+        )
+        raised = dict(repo._conn.execute("SELECT * FROM holds").fetchone())
+        sequence = repo.custody_transitions()[-1]["sequence"]
+        repo.append_transition(
+            _hold_transition(
+                transition_kind="ACCOUNT_HOLD_REFRESHED",
+                reason_code="UNEXPLAINED_ORDER",
+                evidence_refs=["bo-a", "bo-b"],
+            )
+        )
+        replayed = dict(repo._conn.execute("SELECT * FROM holds").fetchone())
+    finally:
+        repo.close()
+
+    # The v11 row the same two transitions left behind: refreshed evidence,
+    # untouched opened_at_ms.
+    conn = _v11_authority()
+    _insert_hold(
+        conn,
+        hold_id=f"hold:{sequence}",
+        reason_code="UNEXPLAINED_ORDER",
+        opened_at_ms=raised["opened_at_ms"],
+        evidence_refs=["bo-a", "bo-b"],
+    )
+    schema.migrate_schema(conn, from_version=11)
+    migrated = dict(conn.execute("SELECT * FROM holds").fetchone())
+
+    assert json.loads(replayed["evidence_refs_json"]) == ["bo-a", "bo-b"]
+    assert replayed["opened_at_ms"] == raised["opened_at_ms"]
+    assert migrated == replayed

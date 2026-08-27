@@ -1322,19 +1322,29 @@ def _fold_account_hold_raised(conn: sqlite3.Connection, payload: dict[str, Any])
 
 
 def _fold_account_hold_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Replay one pre-v12 account-hold refresh onto its uncertainty episode."""
+    """Replay one pre-v12 account-hold refresh onto its uncertainty episode.
+
+    ``observed_at_ms`` is deliberately *not* advanced. The v11 fold this one
+    stands in for restated ``evidence_refs_json`` and nothing else, so
+    ``holds.opened_at_ms`` stayed at the raise — and the v11-to-v12 backfill
+    carries that instant across verbatim. Advancing it here would make one
+    history describe two different accounts depending on whether it arrived by
+    migration or by mirror replay, and would move the operator-visible
+    ``since_ms`` of a hold every time its evidence changed. The modern
+    ``UNCERTAINTY_REFRESHED`` fold does advance the stamp; that divergence is
+    the point — this fold reproduces retired semantics, not current ones.
+    """
     legacy = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
     facts = account_hold_envelope(
         reason_code=normalized_hold_reason_code(legacy.reason_code),
         evidence_refs=legacy.evidence_refs,
     )
     conn.execute(
-        "UPDATE uncertainties SET evidence_refs_json = ?, facts_json = ?, observed_at_ms = ? "
+        "UPDATE uncertainties SET evidence_refs_json = ?, facts_json = ? "
         "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND resolved_at_ms IS NULL",
         (
             canonicalize(facts.evidence_refs),
             facts.to_facts_json(),
-            payload["recorded_at_ms"],
             facts.reason_code,
         ),
     )
