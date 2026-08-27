@@ -88,3 +88,50 @@ export interface OperatorIncident {
   resolved_at_ms: number | null;
   evidence: Record<string, unknown>;
 }
+
+// Run-schema mirrors that reuse the notice vocabulary above. Their source is
+// PythonDataService/app/schemas/live_runs.py, not notices/schema.py:
+// `ExitReason` (:30), `MutationRungReceiptCode` (:94), `MutationRungReceipt`
+// (:101), and the `rung_id` union, which the Python side names
+// `MutationBlockageStageId` (:82). Same hand-written, ungated status as above.
+
+export type ExitReason =
+  | 'normal'
+  | 'force_flat_complete'
+  | 'keyboard_interrupt'
+  | 'signal'
+  | 'max_orders_exceeded'
+  | 'fatal_halt'
+  | 'recovery_flatten'
+  | 'exception';
+
+export type MutationRungReceiptCode =
+  | 'mutation.next_blocking_rung'
+  | 'mutation.scoped_all_clear'
+  | 'mutation.observational_warning';
+
+export type MutationRungReceiptStageId =
+  | 'control_plane'
+  | 'host_process'
+  | 'broker'
+  | 'account_safety'
+  | 'account_clerk'
+  | 'reconciliation'
+  | 'preflight'
+  | 'trading_session'
+  | 'runtime_freshness';
+
+export interface MutationRungReceipt {
+  code: MutationRungReceiptCode;
+  tier: OperatorNoticeTier;
+  title: string;
+  message: string;
+  rung_id: MutationRungReceiptStageId | null;
+  source_codes: string[];
+  forensic_facts: Record<string, string | number | boolean | null>;
+  actionability: OperatorNoticeActionability;
+  resolution: string;
+  remedy_status: OperatorNoticeRemedyStatus | null;
+  action: OperatorNoticeAction;
+  occurred_at_ms: number;
+}
