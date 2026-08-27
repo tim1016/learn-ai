@@ -24,13 +24,13 @@ from app.services.broker_v2_panel.chart_projection_service import (
     history_fill_window,
     live_window,
 )
-from app.services.broker_v2_panel.panel_data_source import (
+from app.services.broker_v2_panel.panel_data_source import get_panel_with_chart_fills
+from app.services.broker_v2_panel.panel_errors import (
     PanelDataError,
     PanelUnavailableError,
     UnknownBotError,
-    get_panel_with_chart_fills,
-    validate_panel_account_scope,
 )
+from app.services.broker_v2_panel.panel_scope import validate_account
 from app.services.broker_v2_panel.sqlite_panel_source import (
     SqlitePanelBotNotFound,
     SqlitePanelEconomicUnavailable,
@@ -112,7 +112,7 @@ async def resolve_symbol_and_fills(
     re-deriving it, keeping the wall and the single-bot detail chart from ever
     diverging on fill provenance (CLAUDE.md single-source-of-truth rule).
     """
-    resolved = await validate_panel_account_scope(broker, account_id)
+    resolved = await validate_account(broker, account_id)
     try:
         evidence = await read_sqlite_panel_evidence(
             broker,
@@ -192,7 +192,7 @@ async def get_history_chart(
     timeframe: ChartHistoryTimeframe,
 ) -> ChartHistoryResponse:
     """Build bounded history from SQLite facts."""
-    resolved = await validate_panel_account_scope(broker, account_id)
+    resolved = await validate_account(broker, account_id)
     observed_at_ms = now_ms_utc()
     from_ms, to_ms = history_fill_window(timeframe, observed_at_ms)
     try:

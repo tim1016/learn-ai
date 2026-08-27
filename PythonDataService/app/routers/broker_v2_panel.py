@@ -58,6 +58,7 @@ from app.schemas.canary_admission import (
 )
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import panel_data_source as ds
+from app.services.broker_v2_panel import panel_deploy, panel_errors, panel_scope
 from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
     ActionOutcomeUnknownError,
@@ -91,7 +92,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/brokers", tags=["broker-v2-panel"])
 
 
-def _raise_panel_error(error: ds.PanelDataError) -> NoReturn:
+def _raise_panel_error(error: panel_errors.PanelDataError) -> NoReturn:
     raise HTTPException(
         status_code=error.http_status,
         detail={
@@ -102,7 +103,7 @@ def _raise_panel_error(error: ds.PanelDataError) -> NoReturn:
     )
 
 
-def _raise_alpaca_deploy_error(error: ds.PanelDataError) -> NoReturn:
+def _raise_alpaca_deploy_error(error: panel_errors.PanelDataError) -> NoReturn:
     """Typed-conflict body shared by admission preview and actual deploy.
 
     Both endpoints preflight through the same
@@ -111,7 +112,7 @@ def _raise_alpaca_deploy_error(error: ds.PanelDataError) -> NoReturn:
     shape. No receipt exists on any error path, so ``receipt_id`` is always
     ``None`` here.
     """
-    operation_attempted = isinstance(error, ds.PanelRunnerError) and error.operation_attempted
+    operation_attempted = isinstance(error, panel_errors.PanelRunnerError) and error.operation_attempted
     outcome = (
         "conflict"
         if error.http_status == 409
@@ -128,7 +129,7 @@ def _raise_alpaca_deploy_error(error: ds.PanelDataError) -> NoReturn:
             "next_action": error.next_action,
             "admission": (
                 error.admission_decision.model_dump(mode="json")
-                if isinstance(error, ds.PanelRunnerError) and error.admission_decision is not None
+                if isinstance(error, panel_errors.PanelRunnerError) and error.admission_decision is not None
                 else None
             ),
         },
@@ -196,7 +197,7 @@ async def get_panel_profile(broker: str) -> PanelProfile:
 async def _catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     try:
         return await ds.get_catalog(broker, account_id)
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 
 
@@ -243,8 +244,8 @@ async def get_alpaca_paper_deploy_view(
     ),
 ) -> AlpacaPaperDeployView:
     try:
-        return await ds.get_alpaca_paper_deploy_view(broker, account_id, symbol)
-    except ds.PanelDataError as error:
+        return await panel_deploy.get_alpaca_paper_deploy_view(broker, account_id, symbol)
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 
 
@@ -267,7 +268,7 @@ async def prepare_strategy_paper_access(
             actor=settings.PANEL_OPERATOR_IDENTITY,
             reason=request.reason,
         )
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
     except (CanaryActivationRefused, CanaryAdmissionLedgerError) as error:
         _raise_paper_access_error(error)
@@ -293,7 +294,7 @@ async def confirm_strategy_paper_access(
             plan=request.plan,
             confirmation_token=request.confirmation_token,
         )
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
     except (CanaryActivationRefused, CanaryAdmissionLedgerError) as error:
         _raise_paper_access_error(error)
@@ -310,12 +311,12 @@ async def preview_bot_start_admission_scoped(
     request: AlpacaPaperDeployRequest,
 ) -> RunAdmissionDecision:
     try:
-        return await ds.preview_alpaca_paper_start_admission(
+        return await panel_deploy.preview_alpaca_paper_start_admission(
             broker,
             account_id,
             request,
         )
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
 
 
@@ -331,8 +332,8 @@ async def deploy_bot_scoped(
     request: AlpacaPaperDeployRequest,
 ) -> AlpacaPaperDeployReceipt:
     try:
-        return await ds.deploy_alpaca_paper_bot(broker, account_id, request)
-    except ds.PanelDataError as error:
+        return await panel_deploy.deploy_alpaca_paper_bot(broker, account_id, request)
+    except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
 
 
@@ -351,14 +352,14 @@ async def get_authority_facts_scoped(
 ) -> BotControlAuthorityFacts:
     try:
         return await ds.get_authority_facts(broker, account_id, sid)
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 
 
 async def _panel(broker: str, account_id: str, sid: str, transaction_ref: str | None) -> BotPanelView:
     try:
         return await ds.get_panel(broker, account_id, sid, transaction_ref=transaction_ref)
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 
 
@@ -397,7 +398,7 @@ async def _live_snapshot(
     resolution: Literal["5s", "1m"],
 ) -> BotPanelLiveSnapshot:
     try:
-        await ds.validate_account_scope(broker, account_id, sid)
+        await panel_scope.validate_account_scope(broker, account_id, sid)
         hub = await get_or_start_live_projection_hub(
             broker,
             account_id,
@@ -405,7 +406,7 @@ async def _live_snapshot(
             resolution=resolution,
         )
         return await hub.snapshot()
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
     except SnapshotUnavailableError as error:
         raise HTTPException(
@@ -524,7 +525,7 @@ async def _run_action(broker: str, account_id: str, sid: str, request: PanelActi
         )
         schedule_live_projection_refresh(broker, account_id, sid)
         return result
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
     except ActionExecutionError as error:
         _raise_action_error(error, request)
@@ -579,7 +580,7 @@ async def _live_chart(
             sid,
             resolution=resolution,
         )
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 
 
@@ -625,7 +626,7 @@ async def _history_chart(
         raise HTTPException(status_code=422, detail={"message": str(exc), "why": None}) from None
     try:
         return await ds.get_history_chart(broker, account_id, sid, coerced)
-    except ds.PanelDataError as error:
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 
 
@@ -670,8 +671,8 @@ async def _read_evidence(
     client_hint: str | None,
 ) -> EvidencePage:
     try:
-        await ds.validate_account_scope(broker, account_id, sid)
-    except ds.PanelDataError as error:
+        await panel_scope.validate_account_scope(broker, account_id, sid)
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
     # read_evidence_page is outside the try/except: it raises only OSError
     # (audit log write failure, which is logged-and-swallowed inside) and does
@@ -731,8 +732,8 @@ async def _resolve_default_account(broker: str) -> str:
     real account and then delegate to the same validated path.
     """
     try:
-        return await ds.resolve_account_id(broker)
-    except ds.PanelDataError as error:
+        return await panel_scope.resolve_account_id(broker)
+    except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 
 

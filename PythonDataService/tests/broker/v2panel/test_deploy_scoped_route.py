@@ -25,7 +25,7 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
 from app.services.bot_runner import AdmittedBotStart, BotRunnerError
-from app.services.broker_v2_panel import panel_data_source
+from app.services.broker_v2_panel import panel_deploy, panel_errors
 from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE, _T0, account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
@@ -317,7 +317,7 @@ async def test_deploy_requires_current_accepted_validation_provenance(
     monkeypatch,
 ) -> None:
     fast_app, registry = deploy_app
-    monkeypatch.setattr(panel_data_source, "load_strategy_validation_entries", lambda _registry: [])
+    monkeypatch.setattr(panel_deploy, "load_strategy_validation_entries", lambda _registry: [])
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         view_response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
@@ -523,12 +523,12 @@ async def test_pre_execution_service_failure_is_blocked_not_unknown(
     fast_app, registry = deploy_app
 
     async def unavailable_clerk(*, symbol: str | None = None) -> ClerkStatus:
-        raise panel_data_source.PanelUnavailableError(
+        raise panel_errors.PanelUnavailableError(
             "The Clerk is unavailable.",
             detail="No deployment was attempted.",
         )
 
-    monkeypatch.setattr(panel_data_source, "_clerk_status", unavailable_clerk)
+    monkeypatch.setattr(panel_deploy, "clerk_status", unavailable_clerk)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=fast_app),
@@ -649,7 +649,7 @@ async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
             operator_posture=_HEALTHY_POSTURE,
         )
 
-    monkeypatch.setattr(panel_data_source, "_clerk_status", no_channel_status)
+    monkeypatch.setattr(panel_deploy, "clerk_status", no_channel_status)
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
 
@@ -703,7 +703,7 @@ async def test_deploy_requires_both_fresh_clerk_channels(
             operator_posture=_HEALTHY_POSTURE,
         )
 
-    monkeypatch.setattr(panel_data_source, "_clerk_status", incomplete_channel_status)
+    monkeypatch.setattr(panel_deploy, "clerk_status", incomplete_channel_status)
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
 
@@ -824,7 +824,7 @@ async def test_clerk_hold_authors_blocked_view_and_submission_remedy(
             operator_posture=_HEALTHY_POSTURE,
         )
 
-    monkeypatch.setattr(panel_data_source, "_clerk_status", held_status)
+    monkeypatch.setattr(panel_deploy, "clerk_status", held_status)
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         view_response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
         deploy_response = await client.post(
@@ -873,7 +873,7 @@ async def test_account_freeze_category_and_remedy_reach_deploy_unchanged(
             operator_posture=_HEALTHY_POSTURE,
         )
 
-    monkeypatch.setattr(panel_data_source, "_clerk_status", frozen_status)
+    monkeypatch.setattr(panel_deploy, "clerk_status", frozen_status)
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
 
@@ -948,7 +948,7 @@ async def test_dry_run_admits_despite_clerk_hold_and_freeze_while_paper_stays_re
             operator_posture=_HEALTHY_POSTURE,
         )
 
-    monkeypatch.setattr(panel_data_source, "_clerk_status", frozen_and_held_status)
+    monkeypatch.setattr(panel_deploy, "clerk_status", frozen_and_held_status)
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         dry_run_response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",

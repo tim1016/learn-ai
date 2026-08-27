@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
-from app.services.broker_v2_panel import panel_data_source, strategy_catalog
+from app.services.broker_v2_panel import panel_deploy, strategy_catalog
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
 from app.services.strategy_validation_manifest import (
     append_strategy_validation_flag_event,
@@ -258,7 +258,7 @@ async def test_deploy_view_shows_blocked_strategy_but_stays_eligible_when_anothe
     fast_app, _registry = deploy_app
     admit_canary_pairing(monkeypatch, "ema_crossover_signal", ACCT)
     monkeypatch.setattr(
-        panel_data_source,
+        panel_deploy,
         "load_strategy_validation_entries",
         lambda _registry: [_accepted_deploy_entry(), _synthetic_blocked_entry("deployment_validation")],
     )
@@ -283,7 +283,7 @@ async def test_deploy_refuses_non_selectable_strategy_with_typed_conflict(
 ) -> None:
     fast_app, registry = deploy_app
     monkeypatch.setattr(
-        panel_data_source,
+        panel_deploy,
         "load_strategy_validation_entries",
         lambda _registry: [_accepted_deploy_entry(), _synthetic_blocked_entry("deployment_validation")],
     )
@@ -315,7 +315,7 @@ async def test_deploy_admits_blocked_strategy_for_dry_run_but_refuses_paper(
     typed conflict as the Paper-refusal test above)."""
     fast_app, registry = deploy_app
     monkeypatch.setattr(
-        panel_data_source,
+        panel_deploy,
         "load_strategy_validation_entries",
         lambda _registry: [_accepted_deploy_entry(), _synthetic_blocked_entry("deployment_validation")],
     )
@@ -339,7 +339,7 @@ async def test_admission_preview_refuses_non_selectable_strategy_with_the_same_t
 ) -> None:
     fast_app, _registry = deploy_app
     monkeypatch.setattr(
-        panel_data_source,
+        panel_deploy,
         "load_strategy_validation_entries",
         lambda _registry: [_accepted_deploy_entry(), _synthetic_blocked_entry("deployment_validation")],
     )
@@ -369,7 +369,7 @@ async def test_deploy_reports_not_eligible_when_every_strategy_is_blocked(
 ) -> None:
     fast_app, _registry = deploy_app
     monkeypatch.setattr(
-        panel_data_source,
+        panel_deploy,
         "load_strategy_validation_entries",
         lambda _registry: [_synthetic_blocked_entry("deployment_validation")],
     )
@@ -396,7 +396,7 @@ async def test_no_runtime_only_catalog_reports_runtime_specific_recovery(
     """A missing runtime cannot be repaired by re-validating evidence."""
     fast_app, registry = deploy_app
     monkeypatch.setattr(
-        panel_data_source,
+        panel_deploy,
         "load_strategy_validation_entries",
         lambda _registry: [_accepted_deploy_entry()],
     )
@@ -446,7 +446,7 @@ async def test_deploy_names_the_blocked_strategy_reason_even_when_every_strategy
     fast_app, registry = deploy_app
     blocked = _synthetic_blocked_entry("deployment_validation")
     monkeypatch.setattr(
-        panel_data_source,
+        panel_deploy,
         "load_strategy_validation_entries",
         lambda _registry: [blocked],
     )

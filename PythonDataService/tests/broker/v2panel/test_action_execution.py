@@ -638,10 +638,10 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
 
     status = SimpleNamespace(running=True)
     sentinel = SimpleNamespace()
-    monkeypatch.setattr(panel_data_source, "_validate_account", _account)
+    monkeypatch.setattr(panel_data_source, "validate_account", _account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
     monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
-    monkeypatch.setattr(panel_data_source, "_clerk_status", _clerk)
+    monkeypatch.setattr(panel_data_source, "clerk_status", _clerk)
     monkeypatch.setattr(
         panel_data_source,
         "read_sqlite_decision_receipts",
