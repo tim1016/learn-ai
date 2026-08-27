@@ -155,14 +155,13 @@ def test_generated_contract_preserves_sqlite_custody_routes() -> None:
         assert method in paths[path], (method, path)
 
 
-def test_ibkr_history_and_strict_historical_identity_reads_are_preserved() -> None:
-    transaction_projection = (
-        APPLICATION_ROOT / "services/clerk_transaction_projection.py"
-    ).read_text(encoding="utf-8")
-    assert "AccountClerkJournalEntry" in transaction_projection
-    assert "ACCOUNT_CLERK_JOURNAL_FILENAME" in transaction_projection
-    assert "project_alpaca" not in transaction_projection
-
+def test_strict_historical_identity_reads_are_preserved() -> None:
+    """The IBKR transaction-projection half of this guard retired with
+    PR-A of #1813 (2026-08-26) — clerk_transaction_projection.py no longer
+    reads AccountClerkJournalEntry/ACCOUNT_CLERK_JOURNAL_FILENAME at all; it
+    holds only the shared ClerkTransactionProjectionUnavailable exception.
+    The strict-historical-identity guard below is unrelated and unaffected.
+    """
     strict_reader_path = APPLICATION_ROOT / "engine/live/historical_run_identity.py"
     strict_reader = strict_reader_path.read_text(encoding="utf-8")
     assert "read_historical_strategy_instance_id" in strict_reader
@@ -193,8 +192,12 @@ def test_alpaca_models_and_reads_have_no_legacy_custody_fallback() -> None:
         "OrderCancelResult",
     ):
         assert retired_symbol not in models
-    assert 'if broker == "ibkr":' in transaction_router
-    assert 'Literal["alpaca", "ibkr"]' in transaction_router
+    # The explicit broker="ibkr" compatibility branch (and its Postgres
+    # projection fallback) was removed by PR-A of #1813 (2026-08-26) — there
+    # is no longer a legacy branch to isolate, only the Alpaca/SQLite path.
+    assert 'if broker == "ibkr":' not in transaction_router
+    assert 'Literal["alpaca", "ibkr"]' not in transaction_router
+    assert 'Literal["alpaca"]' in transaction_router
     assert "Activated SQLite Clerk transaction history is unavailable" in transaction_router
     assert "Activated SQLite Clerk transaction detail is unavailable" in transaction_router
 

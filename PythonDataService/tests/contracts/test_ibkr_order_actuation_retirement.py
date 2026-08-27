@@ -100,16 +100,18 @@ RETIRED_HOST_MUTATION_PATHS = {
 
 RETIRED_OFFLINE_REPLAY_PREFIX = "/api/offline-replay"
 
+# `/api/broker/account`, `/api/broker/positions`, `/api/broker/account-truth`,
+# `/api/broker/orders/what-if`, `/api/broker/orders/completed`,
+# `/api/accounts/{account_id}/reconciliation/latest`, and
+# `/api/accounts/{account_id}/events` (IBKR account authority / Account
+# Truth / reconciliation evidence) were retired by PR-A of #1813
+# (2026-08-26) — see PRD #1817. They are intentionally absent from this set;
+# do not re-add them.
 PRESERVED_IBKR_READ_ROUTES = {
     ("GET", "/api/broker/health"),
     ("GET", "/api/broker/capability"),
     ("POST", "/api/broker/capability/probe"),
-    ("GET", "/api/broker/account"),
-    ("GET", "/api/broker/positions"),
-    ("GET", "/api/broker/account-truth"),
-    ("POST", "/api/broker/orders/what-if"),
     ("GET", "/api/broker/orders/open"),
-    ("GET", "/api/broker/orders/completed"),
     ("GET", "/api/broker/orders/stream"),
     ("GET", "/api/broker/ibkr/evidence"),
     ("GET", "/api/broker/ibkr/evidence/stream"),
@@ -117,8 +119,6 @@ PRESERVED_IBKR_READ_ROUTES = {
     ("GET", "/api/broker/bars-5s/snapshot"),
     ("GET", "/api/broker/session-mirror"),
     ("GET", "/api/broker/session-mirror/history"),
-    ("GET", "/api/accounts/{account_id}/reconciliation/latest"),
-    ("GET", "/api/accounts/{account_id}/events"),
     ("GET", "/api/accounts/{account_id}/transactions"),
 }
 

@@ -105,12 +105,12 @@ PRESERVED_ROUTES = {
     ("POST", "/api/brokers/{broker}/accounts/{account_id}/bots"),
     ("POST", "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions"),
     ("GET", "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/panel"),
-    # IBKR remains a read-only market-data/account/order/capability source.
+    # IBKR remains a read-only market-data/order/capability source.
+    # `/api/broker/account`, `/api/broker/positions`, and
+    # `/api/broker/orders/completed` (account authority / Account Truth
+    # evidence) were retired by PR-A of #1813 (2026-08-26).
     ("GET", "/api/broker/capability"),
-    ("GET", "/api/broker/account"),
-    ("GET", "/api/broker/positions"),
     ("GET", "/api/broker/orders/open"),
-    ("GET", "/api/broker/orders/completed"),
     ("GET", "/api/broker/bars/snapshot"),
 }
 

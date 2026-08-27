@@ -26,12 +26,6 @@ RETIRED_RUNTIME_IMPORTS = (
 )
 
 
-def _function_source(source: str, function_name: str, next_function_name: str) -> str:
-    start = source.index(f"async def {function_name}(")
-    end = source.index(f"async def {next_function_name}(", start)
-    return source[start:end]
-
-
 def test_legacy_lifecycle_projection_runtime_and_contract_are_retired() -> None:
     for relative_path in RETIRED_RUNTIME_PATHS:
         assert not (REPOSITORY_ROOT / relative_path).exists(), relative_path
@@ -70,24 +64,17 @@ def test_legacy_lifecycle_projection_runtime_and_contract_are_retired() -> None:
 
 
 def test_transaction_history_read_path_remains_bounded_and_projection_only() -> None:
+    """The IBKR/Postgres projection half of this guard (transaction_history /
+    transaction_detail in clerk_transaction_projection.py) retired with PR-A
+    of #1813 (2026-08-26) — that file now holds only the shared
+    ClerkTransactionProjectionUnavailable exception. The router-level bounded/
+    projection-only invariants below still hold for the Alpaca/SQLite path.
+    """
     router_source = (
         REPOSITORY_ROOT / "PythonDataService/app/routers/clerk_transactions.py"
-    ).read_text(encoding="utf-8")
-    service_source = (
-        REPOSITORY_ROOT / "PythonDataService/app/services/clerk_transaction_projection.py"
     ).read_text(encoding="utf-8")
 
     assert "Query(default=50, ge=1, le=100)" in router_source
     assert "app.services.lifecycle_projection" not in router_source
     assert "app.broker." not in router_source
     assert "account_truth" not in router_source.lower()
-
-    history_source = _function_source(service_source, "transaction_history", "transaction_detail")
-    assert "store.history_page(" in history_source
-    assert "store.feed_status(" in history_source
-    assert "read_appended" not in history_source
-    assert ".open(" not in history_source
-    assert "account_truth" not in history_source.lower()
-    # Audit-stage field names may describe broker custody. The invariant is that
-    # this read path does not reach into the broker integration itself.
-    assert "app.broker" not in history_source
