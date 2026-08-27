@@ -11,11 +11,9 @@ from typing import Literal, Protocol
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
-    AccountHoldRaisedFacts,
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
 )
-from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
@@ -24,14 +22,21 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    TransitionProvenance,
+    raise_account_hold,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
 from app.broker.contract.ports import BrokerReadPort
 
-UNEXPLAINED_TRADE_UPDATE_REASON_CODE = "UNEXPLAINED_ORDER"
+# The v12 registry spelling; this module used to carry its own copy of the
+# pre-normalisation string (ADR 0048 Decision 2).
+UNEXPLAINED_TRADE_UPDATE_REASON_CODE = UNEXPLAINED_ORDER_HOLD_REASON_CODE
 TradeUpdateDisposition = Literal["order_event", "unexplained_order"]
 
 
@@ -122,30 +127,17 @@ class SqliteTradeUpdateEvidenceSink:
                     )
                     if ref is not None
                 )
-                facts = AccountHoldRaisedFacts(
+                raise_account_hold(
+                    self._repo,
                     reason_code=UNEXPLAINED_TRADE_UPDATE_REASON_CODE,
                     evidence_refs=list(evidence_refs),
-                )
-
-                def _transition(kind: str) -> TransitionInput:
-                    return TransitionInput(
-                        transition_kind=kind,
-                        custody_owner="ACCOUNT_CLERK",
-                        execution_authority="ACCOUNT_CLERK",
-                        operation_state="succeeded",
+                    provenance=TransitionProvenance(
                         broker_order_id=(order.order_id if order is not None else None),
                         proof_reference=event_key,
-                        source_event_at_ms=(order.updated_at_ms if order is not None else None),
-                        clerk_observed_at_ms=self._repo.clock(),
-                        summary_code=kind,
-                        facts_json=facts.to_facts_json(),
-                    )
-
-                self._repo.observe_account_hold(
-                    reason_code=UNEXPLAINED_TRADE_UPDATE_REASON_CODE,
-                    evidence_refs_json=canonicalize(evidence_refs),
-                    build_raise=lambda: _transition("ACCOUNT_HOLD_RAISED"),
-                    build_refresh=lambda: _transition("ACCOUNT_HOLD_REFRESHED"),
+                        source_event_at_ms=(
+                            order.updated_at_ms if order is not None else None
+                        ),
+                    ),
                 )
                 return "unexplained_order"
 

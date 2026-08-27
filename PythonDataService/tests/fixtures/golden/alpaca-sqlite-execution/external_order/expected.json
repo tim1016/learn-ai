@@ -19,7 +19,7 @@
     "active_holds": [
       {
         "scope": "ACCOUNT_CLERK",
-        "reason_code": "UNEXPLAINED_ORDER",
+        "reason_code": "UNEXPLAINED_ORDER_HOLD",
         "state": "ACTIVE",
         "evidence_refs": [
           "external-order-1"

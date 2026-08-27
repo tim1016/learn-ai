@@ -60,15 +60,15 @@ HOLD_REASONS: Final[frozenset[str]] = frozenset(
 # so that adding a cause is one edit: a code absent from here is, by
 # definition, one this build cannot name.
 #
-# ``UNEXPLAINED_ORDER`` is what ``sqlite/reconcile.py``,
-# ``sqlite/trade_evidence.py`` and ``sqlite/external_order_folds.py`` actually
-# write; ``UNEXPLAINED_ORDER_HOLD`` is the wire spelling of the same cause.
-# ADR 0048 Decision 2 normalises the stored row itself in the v12 migration,
-# which retires that row of this table — an operator staring at a frozen
-# account cannot wait for a migration.
+# The interim ``"UNEXPLAINED_ORDER" -> "UNEXPLAINED_ORDER_HOLD"`` row that
+# PR #1790 added here is gone: schema v12 normalises the stored code itself
+# (ADR 0048 Decision 2), so every writer now stores the wire spelling and the
+# table is pure identity. It is kept rather than inlined because it is still
+# the closed statement of which stored codes this build can name — a code
+# absent from here renders as ``UNKNOWN_HOLD``, which is the fail-closed
+# answer, not a silent ``NO_HOLD``.
 HOLD_REASON_BY_STORED_CODE: Final[dict[str, HoldReason]] = {
     "UNEXPLAINED_ORDER_HOLD": "UNEXPLAINED_ORDER_HOLD",
-    "UNEXPLAINED_ORDER": "UNEXPLAINED_ORDER_HOLD",
     "STREAM_HEALTH_HOLD": "STREAM_HEALTH_HOLD",
 }
 

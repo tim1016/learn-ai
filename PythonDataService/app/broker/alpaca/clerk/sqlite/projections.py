@@ -62,6 +62,8 @@ from app.broker.alpaca.clerk.sqlite.timeline_query import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    HOLD_REASON_CODE_SQL_PARAMS,
+    HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     ExecutionCoverageConflictCause,
 )
 from app.utils.timestamps import Clock, now_ms_utc
@@ -677,11 +679,19 @@ class SqliteClerkProjectionReader:
         strategy_instance_id: str | None,
         now_ms: int,
     ) -> tuple[ProjectedUncertainty, ...]:
-        where = "resolved_at_ms IS NULL"
-        params: tuple[object, ...] = ()
+        # The hold causes live in this table too since v12, but they project
+        # as ``holds``. Excluding them here is what keeps the two projections
+        # disjoint — every consumer reads `(*holds, *uncertainties)` as a
+        # union, so a row in both would be counted twice and would inflate
+        # `ClerkStatus.uncertainty_count` the moment an account was held.
+        where = (
+            "resolved_at_ms IS NULL "
+            f"AND reason_code NOT IN ({HOLD_REASON_CODE_SQL_PLACEHOLDERS})"
+        )
+        params: tuple[object, ...] = HOLD_REASON_CODE_SQL_PARAMS
         if strategy_instance_id is not None:
             where += " AND (scope = 'ACCOUNT_CLERK' OR strategy_instance_id = ?)"
-            params = (strategy_instance_id,)
+            params = (*params, strategy_instance_id)
         rows = self._conn.execute(
             "SELECT uncertainty_id, scope, severity, blocks_new_exposure, allows_reduction, "
             "custody_owner, strategy_instance_id, reason_code, headline, explanation, "

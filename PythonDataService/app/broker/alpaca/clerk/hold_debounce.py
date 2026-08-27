@@ -73,8 +73,8 @@ def advance_hold_debounce(
 
     ``raise``/``release`` are *assertions*, not deltas: a persisting
     outage re-asserts ``raise`` on every sample. Suppressing the duplicate
-    write is the ledger's job (``observe_account_hold`` appends only when
-    the evidence identity changes), which keeps this table from having to
+    write is the ledger's job (``raise_account_hold`` appends only when
+    the envelope changes), which keeps this table from having to
     know what was already written.
     """
     if verdict == "unknown":

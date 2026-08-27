@@ -290,7 +290,7 @@ def test_timeline_uncertainty_filter_includes_refreshed_episode(tmp_path: Path) 
             operator_impact="New exposure remains blocked.",
             next_step="Review the exact retained evidence.",
             cause_facts=cause,
-        )
+        ) != "unchanged"
         active = repo.active_uncertainty(
             scope="CUSTODY_SUBJECT",
             reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
@@ -308,7 +308,7 @@ def test_timeline_uncertainty_filter_includes_refreshed_episode(tmp_path: Path) 
             operator_impact="New exposure remains blocked.",
             next_step="Review the exact retained evidence.",
             cause_facts=cause,
-        )
+        ) != "unchanged"
         reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
         try:
             page = reader.timeline_page(uncertainty_id=uncertainty_id)

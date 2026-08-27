@@ -1,13 +1,18 @@
-"""Typed uncertainty causes and one backend capability policy.
+"""Recording uncertainty episodes, and deciding what one still authorizes.
+
+Two halves over the same registry: the write path raises, refreshes, and
+resolves episodes, and the capability path answers what an operator or
+strategy may still do while they stand. The declarative table both consult
+lives in ``uncertainty_policies``; the cause payload types live in
+``uncertainty_causes``.
 
 The stored R5 envelope is descriptive evidence. Authorization is granted only
-when this module recognizes the reason, facts schema, and capability. Unknown
+when the registry recognizes the reason, facts schema, and capability. Unknown
 causes are account-wide and fail closed; no generic clear primitive exists.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -25,18 +30,48 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    HOLD_REASON_CODES,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
-    ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
     PositionDriftCause,
-    broker_snapshot_stale_cause_is_valid,
-    reconciliation_incomplete_cause_is_valid,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import account_hold_envelope
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
+    _REASON_POLICIES,
+    Capability,
+    ReasonPolicy,
 )
 
 DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS = 30_000
+
+
+@dataclass(frozen=True)
+class TransitionProvenance:
+    """Optional broker provenance for the transition an episode appends.
+
+    The trade-update evidence ingress is the one raiser that knows which
+    broker order and which stream event it was reacting to. Carrying those
+    onto the appended transition is what lets an auditor join the episode
+    back to the frame that caused it; the sweep and the stream-health sync
+    have no such single event and leave all three unset.
+
+    ``proof_reference`` survives on a *raise* only. On a refresh,
+    ``ClerkSqliteRepository.observe_uncertainty`` substitutes the active
+    episode's ``uncertainty_id``, because that column is a refresh's only
+    join back to its own episode — ``timeline_query`` matches an episode's
+    transitions by sequence for the raise, by facts for the resolution, and
+    by ``proof_reference`` for the refresh. Nothing is lost by the
+    substitution: the causing event is in the same append's
+    ``facts_json.evidence_refs``, so a refresh row carries strictly more than
+    the pre-v12 ``observe_account_hold`` path wrote (ADR 0048 Decision 2).
+    """
+
+    broker_order_id: str | None = None
+    proof_reference: str | None = None
+    source_event_at_ms: int | None = None
 
 
 def _has_attributed_exposure(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> bool:
@@ -51,188 +86,6 @@ def _has_attributed_exposure(repo: ClerkSqliteRepository, *, strategy_instance_i
         position_quantity_is_nonzero(quantity)
         for quantity in repo.attributed_positions_for_strategy(strategy_instance_id).values()
     )
-
-
-class Capability(StrEnum):
-    NEW_EXPOSURE = "NEW_EXPOSURE"
-    CANCEL = "CANCEL"
-    REDUCE = "REDUCE"
-    RECONCILE = "RECONCILE"
-
-
-@dataclass(frozen=True)
-class CauseCleared:
-    """The episode ends when, and only when, its cause is proven gone.
-
-    No clock at all. This is the honest declaration for an episode this ADR
-    does not add age behaviour to (ADR 0048 Decision 1).
-    """
-
-
-@dataclass(frozen=True)
-class VoidAfter:
-    """Auto-close the episode once its cause has stood unresolved for
-    ``grace_ms``, with a receipt whose ``summary_code`` names the age rule
-    that closed it."""
-
-    grace_ms: int
-    summary_code: str
-
-
-@dataclass(frozen=True)
-class RedriveThenEscalate:
-    """Retry the resolution every ``after_ms``, at most ``max_count`` times,
-    then open the ``escalate_to`` successor episode."""
-
-    after_ms: int
-    max_count: int
-    escalate_to: str
-
-
-# A closed sum of exactly three shapes (ADR 0048 Decision 1). Deliberately
-# not three optional fields on ReasonPolicy: independent fields admit
-# combinations with no meaning (e.g. a grace window racing a redrive clock
-# for the same episode). The sum makes those combinations unrepresentable.
-AgePolicy = CauseCleared | VoidAfter | RedriveThenEscalate
-
-
-@dataclass(frozen=True)
-class ReasonPolicy:
-    scope: str
-    blocks_new_exposure: bool
-    allows_reduction: bool
-    cause_is_valid: Callable[[Any], bool]
-    age: AgePolicy
-    facts_schema_version: int = FACTS_SCHEMA_VERSION
-
-
-def _position_drift_cause_is_valid(value: Any) -> bool:
-    try:
-        PositionDriftCause.from_mapping(value)
-    except ValueError:
-        return False
-    return True
-
-
-def _order_outcome_unknown_cause_is_valid(value: Any) -> bool:
-    # An unknown broker outcome is never reduction-authorizing.  Its strict
-    # decoder lives with the atomic fold that opens and closes the episode.
-    return isinstance(value, dict)
-
-
-def _exit_not_flat_cause_is_valid(value: Any) -> bool:
-    try:
-        ExitNotFlatCause.from_mapping(value)
-    except ValueError:
-        return False
-    return True
-
-
-def _exit_stuck_cause_is_valid(value: Any) -> bool:
-    try:
-        ExitStuckCause.from_mapping(value)
-    except ValueError:
-        return False
-    return True
-
-
-def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
-    try:
-        ExecutionCoverageConflictCause.from_mapping(value)
-    except ValueError:
-        return False
-    return True
-
-
-_REASON_POLICIES: dict[str, ReasonPolicy] = {
-    POSITION_DRIFT_REASON_CODE: ReasonPolicy(
-        scope="ACCOUNT_CLERK",
-        blocks_new_exposure=True,
-        allows_reduction=True,
-        cause_is_valid=_position_drift_cause_is_valid,
-        age=CauseCleared(),
-    ),
-    BROKER_SNAPSHOT_STALE_REASON_CODE: ReasonPolicy(
-        scope="ACCOUNT_CLERK",
-        blocks_new_exposure=True,
-        allows_reduction=False,
-        cause_is_valid=broker_snapshot_stale_cause_is_valid,
-        age=CauseCleared(),
-    ),
-    RECONCILIATION_INCOMPLETE_REASON_CODE: ReasonPolicy(
-        scope="ACCOUNT_CLERK",
-        blocks_new_exposure=True,
-        allows_reduction=False,
-        cause_is_valid=reconciliation_incomplete_cause_is_valid,
-        age=CauseCleared(),
-    ),
-    ORDER_OUTCOME_UNKNOWN_REASON_CODE: ReasonPolicy(
-        scope="CUSTODY_SUBJECT",
-        blocks_new_exposure=True,
-        allows_reduction=False,
-        cause_is_valid=_order_outcome_unknown_cause_is_valid,
-        # Byte-identical replacement of the former UNCERTAIN_SUBMIT_GRACE_MS
-        # = 30_000 module constant in order_evidence.py. summary_code is the
-        # sole definition of the definitive-absence receipt code;
-        # order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE derives from it.
-        age=VoidAfter(grace_ms=30_000, summary_code="ORDER_SUBMIT_FAILED_ABSENT"),
-    ),
-    EXIT_NOT_FLAT_REASON_CODE: ReasonPolicy(
-        scope="CUSTODY_SUBJECT",
-        blocks_new_exposure=True,
-        allows_reduction=True,
-        cause_is_valid=_exit_not_flat_cause_is_valid,
-        # Byte-identical replacement of the former
-        # EXIT_NOT_FLAT_REDRIVE_AFTER_MS = 120_000 / EXIT_NOT_FLAT_MAX_REDRIVES
-        # = 3 module constants in exit_watchdog.py.
-        age=RedriveThenEscalate(after_ms=120_000, max_count=3, escalate_to=EXIT_STUCK_REASON_CODE),
-    ),
-    EXIT_STUCK_REASON_CODE: ReasonPolicy(
-        scope="CUSTODY_SUBJECT",
-        blocks_new_exposure=True,
-        allows_reduction=True,
-        cause_is_valid=_exit_stuck_cause_is_valid,
-        # A durable escalation must not carry a clock: only an
-        # attributed-flat proof or an operator may end it. VoidAfter here
-        # would silently discard the episode the escalation exists to
-        # preserve (ADR 0048 Decision 1).
-        age=CauseCleared(),
-    ),
-    EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
-        scope="CUSTODY_SUBJECT",
-        blocks_new_exposure=True,
-        allows_reduction=False,
-        cause_is_valid=_execution_coverage_conflict_cause_is_valid,
-        age=CauseCleared(),
-    ),
-}
-
-
-def reason_age_policy[AgePolicyT: (CauseCleared, VoidAfter, RedriveThenEscalate)](
-    reason_code: str, expect: type[AgePolicyT]
-) -> AgePolicyT:
-    """The declared age policy for one registered reason code, narrowed.
-
-    The single place an episode's life is specified (ADR 0048 Decision 1).
-
-    ``expect`` is required rather than optional because every caller reads a
-    shape-specific field (``grace_ms``, ``after_ms``) and so is already
-    coupled to one variant. Narrowing here instead of at each call site
-    keeps that check in one place and turns a mis-declared reason into a
-    named ``TypeError`` rather than an ``AttributeError`` several frames
-    later.
-
-    Raises ``KeyError`` for an unregistered code: every caller passes a
-    known reason-code constant, so a miss here is a programming error, not
-    a runtime condition to absorb.
-    """
-    policy = _REASON_POLICIES[reason_code].age
-    if not isinstance(policy, expect):
-        raise TypeError(
-            f"reason code {reason_code!r} declares {type(policy).__name__}, "
-            f"not the {expect.__name__} this caller requires"
-        )
-    return policy
 
 
 def _effective_identity(
@@ -259,8 +112,16 @@ def raise_uncertainty(
     cause_facts: dict[str, Any] | None = None,
     severity: str = "warning",
     refresh_unchanged: bool = False,
-) -> bool:
-    """Raise or refresh one typed episode; unknown causes fail closed account-wide."""
+    provenance: TransitionProvenance = TransitionProvenance(),
+) -> str:
+    """Raise or refresh one typed episode; unknown causes fail closed account-wide.
+
+    Returns which of ``"raised"`` / ``"refreshed"`` / ``"unchanged"`` happened,
+    rather than a bool. The stream-health sync logs raised and refreshed under
+    different structured action codes, and collapsing them would erase an
+    operator's only signal for whether an outage is new or ongoing. Callers
+    that only care whether anything was recorded compare to ``"unchanged"``.
+    """
     policy, scope, effective_strategy_instance_id = _effective_identity(
         reason_code=reason_code, strategy_instance_id=strategy_instance_id
     )
@@ -291,6 +152,9 @@ def raise_uncertainty(
             summary_code=transition_kind,
             facts_schema_version=FACTS_SCHEMA_VERSION,
             facts_json=facts_json,
+            broker_order_id=provenance.broker_order_id,
+            proof_reference=provenance.proof_reference,
+            source_event_at_ms=provenance.source_event_at_ms,
         )
 
     outcome = repo.observe_uncertainty(
@@ -302,7 +166,63 @@ def raise_uncertainty(
         build_refresh=lambda: build_transition("UNCERTAINTY_REFRESHED"),
         refresh_unchanged=refresh_unchanged,
     )
-    return outcome != "unchanged"
+    return outcome
+
+
+def raise_account_hold(
+    repo: ClerkSqliteRepository,
+    *,
+    reason_code: str,
+    evidence_refs: list[str],
+    provenance: TransitionProvenance = TransitionProvenance(),
+) -> str:
+    """Raise or refresh one account-hold episode (ADR 0048 Decision 2).
+
+    The two former ``holds`` causes now travel the ordinary uncertainty path:
+    same table, same append-on-change-only gate, same atomic check-then-append
+    under one write lock. What this adds over calling :func:`raise_uncertainty`
+    directly is that the caller supplies only its cause and evidence — the
+    operator envelope comes from :func:`account_hold_envelope`, so the two
+    producers cannot drift into describing the same hold differently.
+
+    ``blocks_new_exposure`` and ``allows_reduction`` are deliberately *not*
+    taken from the envelope: :func:`raise_uncertainty` reads them from the
+    registered policy, which is the authority on what an episode permits.
+    """
+    envelope = account_hold_envelope(reason_code=reason_code, evidence_refs=evidence_refs)
+    return raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=envelope.reason_code,
+        headline=envelope.headline,
+        explanation=envelope.explanation,
+        operator_impact=envelope.operator_impact,
+        next_step=envelope.next_step,
+        evidence_refs=tuple(envelope.evidence_refs),
+        cause_facts=envelope.cause_facts,
+        severity=envelope.severity,
+        provenance=provenance,
+    )
+
+
+def resolve_account_hold(
+    repo: ClerkSqliteRepository, *, reason_code: str, summary_code: str
+) -> bool:
+    """Close one account-hold episode once its cause is proven gone.
+
+    ``summary_code`` stays the caller's, because it names *which* proof ended
+    the episode — a completed reconciliation and a recovered stream are
+    different receipts, and both were visible to operators before v12.
+    """
+    if reason_code not in HOLD_REASON_CODES:
+        raise ValueError(f"{reason_code!r} is not an account-hold cause")
+    return _resolve_account_uncertainty(
+        repo,
+        reason_code=reason_code,
+        resolution_kind="CAUSE_CLEARED",
+        summary_code=summary_code,
+        evidence_refs=(),
+    )
 
 
 _CLEAN_BROKER_RESOLVABLE_REASONS = frozenset(

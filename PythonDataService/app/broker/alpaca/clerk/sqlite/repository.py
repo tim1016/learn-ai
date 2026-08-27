@@ -1255,61 +1255,13 @@ class ClerkSqliteRepository(
             )
             return active
 
-    def raise_hold_if_none_active(
-        self, *, scope: str, reason_code: str, build_transition: Callable[[], TransitionInput]
-    ) -> bool:
-        """Atomic check-then-raise for a hold (#1378): the ``active_hold``
-        check and the ``ACCOUNT_HOLD_RAISED`` append happen under one
-        continuous hold of the write lock, so two genuinely concurrent
-        callers (an automatic sweep pass and an operator's "Reconcile now"
-        landing at the same instant) can never both observe "no active
-        hold" and both append one — the same class of TOCTOU gap
-        :meth:`commit_first_transition` closes for commands, applied here
-        for holds. Returns ``True`` if a new hold was appended, ``False`` if
-        one was already ``ACTIVE`` (idempotent no-op, matching the bounded
-        growth policy the pre-SQLite Alpaca clerk's ``reconcile.py`` used).
-        """
-        with self._write_lock:
-            if reads.active_hold(self._conn, scope=scope, reason_code=reason_code) is not None:
-                return False
-            self.append_transition(build_transition())
-            return True
-
-    def observe_account_hold(
-        self,
-        *,
-        reason_code: str,
-        evidence_refs_json: str,
-        build_raise: Callable[[], TransitionInput],
-        build_refresh: Callable[[], TransitionInput],
-    ) -> str:
-        """Atomically raise, refresh, or leave one account-hold episode."""
-        with self._write_lock:
-            active = reads.active_hold(
-                self._conn, scope="ACCOUNT_CLERK", reason_code=reason_code
-            )
-            if active is None:
-                self.append_transition(build_raise())
-                return "raised"
-            if active["evidence_refs_json"] == evidence_refs_json:
-                return "unchanged"
-            self.append_transition(build_refresh())
-            return "refreshed"
-
-    def resolve_account_hold_if_active(
-        self, *, reason_code: str, build_transition: Callable[[], TransitionInput]
-    ) -> bool:
-        """Append a typed resolution only while the hold episode is active."""
-        with self._write_lock:
-            if (
-                reads.active_hold(
-                    self._conn, scope="ACCOUNT_CLERK", reason_code=reason_code
-                )
-                is None
-            ):
-                return False
-            self.append_transition(build_transition())
-            return True
+    # ``observe_account_hold`` and ``resolve_account_hold_if_active`` were
+    # deleted by ADR 0048 Decision 2. They were character-for-character
+    # ``observe_uncertainty`` and ``resolve_uncertainty_if_active`` with a
+    # different read and a different identity column — which is the concrete
+    # form of the ADR's claim that a hold was always an uncertainty. Callers
+    # reach the same episodes through ``uncertainty.raise_account_hold`` and
+    # ``uncertainty.resolve_account_hold``.
 
     def raise_uncertainty_if_none_active(
         self,
@@ -1321,13 +1273,13 @@ class ClerkSqliteRepository(
     ) -> bool:
         """Atomic check-then-raise for an uncertainty (#1380) — the same
         check-then-append-under-one-lock shape
-        :meth:`raise_hold_if_none_active` already uses for holds, applied
-        here so two genuinely concurrent callers can never both observe "no
-        active uncertainty" for the same ``(scope, reason_code,
+        :meth:`commit_first_transition` uses for commands, applied here so
+        two genuinely concurrent callers can never both observe "no active
+        uncertainty" for the same ``(scope, reason_code,
         strategy_instance_id)`` and both append one. Returns ``True`` if a
         new uncertainty was appended, ``False`` if one was already
-        ``ACTIVE`` (idempotent no-op — bounded growth, matching
-        :meth:`raise_hold_if_none_active`'s policy).
+        ``ACTIVE`` (idempotent no-op — bounded growth, the policy the
+        pre-SQLite Alpaca clerk's ``reconcile.py`` used).
         """
         with self._write_lock:
             if (
@@ -1354,7 +1306,17 @@ class ClerkSqliteRepository(
         build_refresh: Callable[[], TransitionInput],
         refresh_unchanged: bool = False,
     ) -> str:
-        """Atomically raise, refresh, or leave one uncertainty episode."""
+        """Atomically raise, refresh, or leave one uncertainty episode.
+
+        A refresh's ``proof_reference`` is the active episode's
+        ``uncertainty_id``, replacing whatever the caller built. It is not a
+        discard: a raise is joined to its episode by sequence and a resolution
+        by its facts, so this column is the *only* thing that puts a refresh on
+        its own timeline (``timeline_query._append_uncertainty_filter``). A
+        caller's source-event reference reaches the same row through the
+        append's ``facts_json`` evidence refs, which is where an auditor finds
+        the frame that caused this particular refresh.
+        """
         with self._write_lock:
             active = reads.active_uncertainty(
                 self._conn,

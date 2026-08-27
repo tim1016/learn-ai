@@ -745,7 +745,7 @@ def test_account_hold_raised_fold_creates_an_active_account_clerk_hold(tmp_path:
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     repo.append_transition(_hold_transition(evidence_refs=["bo-1", "bo-2"]))
 
-    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
     assert hold is not None
     assert hold["state"] == "ACTIVE"
     assert hold["strategy_instance_id"] is None
@@ -755,7 +755,7 @@ def test_account_hold_raised_fold_creates_an_active_account_clerk_hold(tmp_path:
 
 def test_active_hold_returns_none_when_no_hold_of_that_reason_exists(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
     repo.close()
 
 
@@ -765,11 +765,11 @@ def test_two_hold_transitions_each_mint_a_distinct_hold_id(tmp_path: Path) -> No
     id is minted from the transition's own globally-unique sequence, not
     from content or a timestamp that a fast test clock could repeat."""
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    repo.append_transition(_hold_transition(reason_code="UNEXPLAINED_ORDER"))
-    repo.append_transition(_hold_transition(reason_code="OTHER_REASON"))
+    repo.append_transition(_hold_transition(reason_code="UNEXPLAINED_ORDER_HOLD"))
+    repo.append_transition(_hold_transition(reason_code="STREAM_HEALTH_HOLD"))
 
-    first = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
-    second = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="OTHER_REASON")
+    first = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
+    second = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="STREAM_HEALTH_HOLD")
     assert first is not None and second is not None
     assert first["hold_id"] != second["hold_id"]
     repo.close()

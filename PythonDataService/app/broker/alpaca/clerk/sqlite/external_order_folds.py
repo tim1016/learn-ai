@@ -13,6 +13,13 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExternalOrderObservedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    account_hold_envelope,
+    insert_account_hold_episode,
+)
 
 
 def _transition_sequence(conn: sqlite3.Connection) -> int:
@@ -83,26 +90,23 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
     assert observed is not None
     if observed.acknowledged_at_ms is not None:
         return
-    active = reads.active_hold(conn, scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    active = reads.active_hold(
+        conn, scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE
+    )
     if active is None:
-        conn.execute(
-            "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
-            "opened_at_ms, resolved_at_ms, evidence_refs_json) "
-            "VALUES (?, 'ACCOUNT_CLERK', NULL, 'UNEXPLAINED_ORDER', 'ACTIVE', ?, NULL, ?)",
-            (
-                f"hold:{_transition_sequence(conn)}",
-                payload["recorded_at_ms"],
-                canonicalize([facts.broker_order_id]),
-            ),
+        insert_account_hold_episode(
+            conn,
+            uncertainty_id=f"hold:{_transition_sequence(conn)}",
+            reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+            evidence_refs=[facts.broker_order_id],
+            observed_at_ms=payload["recorded_at_ms"],
+            resolved_at_ms=None,
         )
         return
     current_refs = _hold_evidence_refs(active["evidence_refs_json"])
     merged = sorted({*current_refs, facts.broker_order_id})
     if merged != current_refs:
-        conn.execute(
-            "UPDATE holds SET evidence_refs_json = ? WHERE hold_id = ?",
-            (canonicalize(merged), active["hold_id"]),
-        )
+        _update_unexplained_order_hold(conn, hold_id=active["hold_id"], evidence_refs=merged)
 
 
 def fold_external_order_acknowledged(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -119,7 +123,9 @@ def fold_external_order_acknowledged(conn: sqlite3.Connection, payload: dict[str
         return
     acknowledged = reads.external_order(conn, facts.external_order_id)
     assert acknowledged is not None
-    active = reads.active_hold(conn, scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    active = reads.active_hold(
+        conn, scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE
+    )
     if active is None:
         return
     current_refs = _hold_evidence_refs(active["evidence_refs_json"])
@@ -127,15 +133,51 @@ def fold_external_order_acknowledged(conn: sqlite3.Connection, payload: dict[str
     # active causes. The live hold's evidence is the authoritative scope.
     remaining = sorted(set(current_refs) - {acknowledged.broker_order_id})
     if remaining:
-        conn.execute(
-            "UPDATE holds SET evidence_refs_json = ? WHERE hold_id = ?",
-            (canonicalize(remaining), active["hold_id"]),
-        )
+        _update_unexplained_order_hold(conn, hold_id=active["hold_id"], evidence_refs=remaining)
         return
+    _resolve_unexplained_order_hold(
+        conn, hold_id=active["hold_id"], recorded_at_ms=payload["recorded_at_ms"]
+    )
+
+
+# ── The unexplained-order hold, as an uncertainty episode (ADR 0048 D2) ──────
+# These folds maintain the hold *inside the same atomic transition* that makes
+# a foreign order durable, which is why they write the row directly rather
+# than going through ``uncertainty.raise_account_hold``: that path appends its
+# own transition, and a fold may not append while it is being folded. The
+# envelope still comes from ``account_hold_envelope``, so this hold reads
+# identically to one the reconciliation sweep raises.
+
+
+def _update_unexplained_order_hold(
+    conn: sqlite3.Connection, *, hold_id: str, evidence_refs: list[str]
+) -> None:
+    """Re-state the episode's evidence without moving ``observed_at_ms``.
+
+    The set of unreviewed orders changed; when the hold was first observed did
+    not. Advancing the observation stamp here would make an unchanged outage
+    look freshly detected on every acknowledgement.
+    """
+    facts = account_hold_envelope(
+        reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE, evidence_refs=evidence_refs
+    )
     conn.execute(
-        "UPDATE holds SET state = 'RESOLVED', resolved_at_ms = ?, evidence_refs_json = ? "
-        "WHERE hold_id = ? AND state = 'ACTIVE'",
-        (payload["recorded_at_ms"], canonicalize([]), active["hold_id"]),
+        "UPDATE uncertainties SET evidence_refs_json = ?, facts_json = ? "
+        "WHERE uncertainty_id = ?",
+        (canonicalize(facts.evidence_refs), facts.to_facts_json(), hold_id),
+    )
+
+
+def _resolve_unexplained_order_hold(
+    conn: sqlite3.Connection, *, hold_id: str, recorded_at_ms: int
+) -> None:
+    facts = account_hold_envelope(
+        reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE, evidence_refs=[]
+    )
+    conn.execute(
+        "UPDATE uncertainties SET resolved_at_ms = ?, evidence_refs_json = ?, facts_json = ? "
+        "WHERE uncertainty_id = ? AND resolved_at_ms IS NULL",
+        (recorded_at_ms, canonicalize(facts.evidence_refs), facts.to_facts_json(), hold_id),
     )
 
 

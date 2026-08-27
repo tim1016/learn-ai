@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
@@ -303,7 +305,7 @@ async def test_sqlite_unexplained_trade_update_records_external_order_without_a_
 
         assert kind == "unexplained_order"
         assert repo.external_orders()[0]["broker_order_id"] == "external-order-1"
-        assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is not None
+        assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is not None
         assert repo.attributed_positions_by_symbol() == {}
         assert repo.fills_for_order("external-order-1") == []
     finally:
@@ -678,3 +680,78 @@ async def test_reconnect_reconciles_selected_sink_before_connection_reopens() ->
 
 async def _no_backoff() -> None:
     return
+
+
+async def test_unexplained_hold_refresh_retains_its_broker_event_and_names_its_episode(
+    tmp_path: Path,
+) -> None:
+    """A hold refresh keeps the causing event *and* gains its episode id.
+
+    ``observe_uncertainty`` replaces the caller's ``proof_reference`` on the
+    refresh branch with the active uncertainty id. That looks like the broker
+    event key being dropped, and it is worth pinning why it is not: the key is
+    on the same row in ``facts_json.evidence_refs``, put there by this caller,
+    so the refresh row carries strictly more than the pre-v12
+    ``observe_account_hold`` path wrote (ADR 0048 Decision 2).
+
+    The substitution is load-bearing in the other direction — a refresh's only
+    join back to its episode is ``proof_reference = uncertainty_id`` (see
+    ``timeline_query._append_uncertainty_filter`` and
+    ``test_timeline_uncertainty_filter_includes_refreshed_episode``). Restoring
+    the event key here would silently drop every hold refresh out of its
+    episode timeline.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        sink = _sqlite_sink(repo)
+        for event_key in ("broker-evt-1", "broker-evt-2"):
+            # ``order=None`` is the trade update the Clerk cannot explain at
+            # all: no local order and no broker snapshot to file separately.
+            assert (
+                await sink.record_lifecycle_event(
+                    client_order_id=f"coid-{event_key}",
+                    event=BrokerOrderEvent(
+                        event_type="new",
+                        occurred_at_ms=1_700_000_000_000,
+                        price=None,
+                        quantity=None,
+                    ),
+                    event_key=event_key,
+                    order=None,
+                    recovery_source=None,
+                    recovery_window_limit=None,
+                )
+                == "unexplained_order"
+            )
+
+        rows = [
+            dict(row)
+            for row in repo._conn.execute(
+                "SELECT transition_kind, proof_reference, facts_json FROM custody_transitions "
+                "WHERE transition_kind IN ('UNCERTAINTY_RAISED', 'UNCERTAINTY_REFRESHED') "
+                "ORDER BY sequence"
+            )
+        ]
+        active = repo.active_hold(
+            scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE
+        )
+    finally:
+        repo.close()
+
+    assert [row["transition_kind"] for row in rows] == [
+        "UNCERTAINTY_RAISED",
+        "UNCERTAINTY_REFRESHED",
+    ]
+    raised, refreshed = rows
+
+    # The raise carries the event key on the column; the refresh yields it to
+    # the episode id, which is what joins it to its own timeline.
+    assert raised["proof_reference"] == "broker-evt-1"
+    assert active is not None
+    assert refreshed["proof_reference"] == active["hold_id"]
+
+    # Nothing is lost: the event that caused each append is in that append's
+    # own evidence, and the episode's evidence is the latest one.
+    assert "broker-evt-1" in json.loads(raised["facts_json"])["evidence_refs"]
+    assert "broker-evt-2" in json.loads(refreshed["facts_json"])["evidence_refs"]
+    assert "broker-evt-2" in json.loads(active["evidence_refs_json"])

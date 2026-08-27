@@ -59,7 +59,13 @@ def test_schema_ddl_matches_pinned_contracts_doc() -> None:
     assert pinned == schema.SCHEMA_DDL
 
 
-def test_schema_creates_all_twenty_two_pinned_tables() -> None:
+def test_schema_creates_all_twenty_one_pinned_tables() -> None:
+    """``holds`` is absent on purpose: v12 retired the table (ADR 0048 D2).
+
+    Its name survives as a read-only view over ``uncertainties``, asserted
+    separately by
+    :func:`test_holds_is_a_read_only_view_over_the_two_hold_causes`.
+    """
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_schema(conn)
@@ -81,7 +87,6 @@ def test_schema_creates_all_twenty_two_pinned_tables() -> None:
         "bot_config",
         "decision_receipts",
         "positions",
-        "holds",
         "uncertainties",
         "manual_order_tickets",
         "manual_order_legs",
@@ -133,7 +138,7 @@ def test_v9_execution_provenance_and_custody_subject_schema() -> None:
     assert effect_columns["strategy_instance_id"][3] == 0
 
 
-def test_v9_authority_migrates_the_manual_cancellation_resource_and_leg_order_to_v11() -> None:
+def test_v9_authority_migrates_the_manual_cancellation_resource_and_leg_order_to_current() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_v9_schema(conn)
@@ -154,7 +159,10 @@ def test_v9_authority_migrates_the_manual_cancellation_resource_and_leg_order_to
 
     schema.migrate_schema(conn, from_version=9)
 
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 11
+    assert (
+        conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0]
+        == schema.SCHEMA_VERSION
+    )
     assert (
         conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
@@ -256,11 +264,6 @@ def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows
         conn.execute(
             "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
             "VALUES ('manual-operator:operator-a', 'spy', 'SPY', 1, 1)"
-        )
-    with pytest.raises(sqlite3.IntegrityError, match="hold subject"):
-        conn.execute(
-            "INSERT INTO holds (hold_id, scope, subject_id, strategy_instance_id, reason_code, state, opened_at_ms) "
-            "VALUES ('cross-hold', 'CUSTODY_SUBJECT', 'manual-operator:operator-a', 'spy', 'X', 'ACTIVE', 1)"
         )
     with pytest.raises(sqlite3.IntegrityError, match="uncertainty subject"):
         conn.execute(
@@ -461,21 +464,11 @@ def test_partial_unique_indexes_allow_only_one_active_safety_cause() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_schema(conn)
-    conn.execute(
-        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
-        "opened_at_ms) VALUES ('h1', 'ACCOUNT_CLERK', NULL, 'FOREIGN', 'ACTIVE', 1)"
-    )
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
-            "opened_at_ms) VALUES ('h2', 'ACCOUNT_CLERK', NULL, 'FOREIGN', 'ACTIVE', 2)"
-        )
-    conn.execute("UPDATE holds SET state = 'RESOLVED', resolved_at_ms = 3 WHERE hold_id = 'h1'")
-    conn.execute(
-        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
-        "opened_at_ms) VALUES ('h2', 'ACCOUNT_CLERK', NULL, 'FOREIGN', 'ACTIVE', 4)"
-    )
-
+    # The former ``ux_holds_one_active_cause`` half of this test is gone with
+    # the table (ADR 0048 D2). ``ux_uncertainties_one_active_cause`` below is
+    # the surviving fence and now covers hold causes too, which is asserted
+    # against the compatibility view in
+    # ``test_holds_view_shows_one_active_episode_per_hold_cause``.
     conn.execute(
         "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
         "allows_reduction, strategy_instance_id, reason_code, headline, explanation, "
