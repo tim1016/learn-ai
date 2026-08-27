@@ -1306,7 +1306,17 @@ class ClerkSqliteRepository(
         build_refresh: Callable[[], TransitionInput],
         refresh_unchanged: bool = False,
     ) -> str:
-        """Atomically raise, refresh, or leave one uncertainty episode."""
+        """Atomically raise, refresh, or leave one uncertainty episode.
+
+        A refresh's ``proof_reference`` is the active episode's
+        ``uncertainty_id``, replacing whatever the caller built. It is not a
+        discard: a raise is joined to its episode by sequence and a resolution
+        by its facts, so this column is the *only* thing that puts a refresh on
+        its own timeline (``timeline_query._append_uncertainty_filter``). A
+        caller's source-event reference reaches the same row through the
+        append's ``facts_json`` evidence refs, which is where an auditor finds
+        the frame that caused this particular refresh.
+        """
         with self._write_lock:
             active = reads.active_uncertainty(
                 self._conn,

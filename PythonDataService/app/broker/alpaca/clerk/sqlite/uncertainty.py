@@ -57,6 +57,16 @@ class TransitionProvenance:
     onto the appended transition is what lets an auditor join the episode
     back to the frame that caused it; the sweep and the stream-health sync
     have no such single event and leave all three unset.
+
+    ``proof_reference`` survives on a *raise* only. On a refresh,
+    ``ClerkSqliteRepository.observe_uncertainty`` substitutes the active
+    episode's ``uncertainty_id``, because that column is a refresh's only
+    join back to its own episode — ``timeline_query`` matches an episode's
+    transitions by sequence for the raise, by facts for the resolution, and
+    by ``proof_reference`` for the refresh. Nothing is lost by the
+    substitution: the causing event is in the same append's
+    ``facts_json.evidence_refs``, so a refresh row carries strictly more than
+    the pre-v12 ``observe_account_hold`` path wrote (ADR 0048 Decision 2).
     """
 
     broker_order_id: str | None = None
