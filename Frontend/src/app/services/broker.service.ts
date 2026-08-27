@@ -18,7 +18,18 @@ import type {
 } from '../api/broker-models';
 
 /**
- * REST client for the retained IBKR market-data endpoints.
+ * REST client spanning two unrelated surfaces.
+ *
+ * ``/api/broker`` — the retained IBKR endpoints: feed session lifecycle
+ * (``connect`` / ``disconnect`` / ``reconnect``), connection and data-plane
+ * health, capability probes, the option-chain market-data reads
+ * (``expirations`` / ``strikes`` / ``searchOptionContracts``), and the
+ * ``ibkrApiEvidence`` audit read.
+ *
+ * ``/api/accounts`` — the Alpaca Clerk transaction-history surface
+ * (``accountTransactions`` / ``accountTransaction`` /
+ * ``acknowledgeExternalOrder``). Not IBKR, and outside the IBKR
+ * decommission.
  *
  * SSE endpoints (option-chain, option-surface) do **not** route through
  * this service — use the ``brokerSse()`` helper in ``broker-sse.ts`` so

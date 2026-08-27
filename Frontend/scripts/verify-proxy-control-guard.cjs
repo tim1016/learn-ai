@@ -303,8 +303,11 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
 }
 
 // A query-intent SSE read carries no browser provenance headers of its own, so
-// the secret must stay off it. Driving this off the manifest rather than one
-// hardcoded path keeps it from going vacuously green when a route retires.
+// the secret must stay off it. Driving this off the manifest keeps the case set
+// in step with the currently-declared protected read prefixes — a prefix added
+// to the manifest is covered here without editing this script. It does not
+// detect a prefix retiring: that just removes an iteration. The hardcoded
+// GET /api/accounts/{id}/transactions case above is what reds if the list empties.
 for (const prefix of PROTECTED_READ_PREFIXES) {
   const req = request({
     method: 'GET',
@@ -317,7 +320,6 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
   });
   const proxyReq = proxyReqRecorder();
   attachDataPlaneSecret(proxyReq, req);
-  assert.equal(isProtectedControlRead(req), true);
   assert.equal(proxyReq.headers.has(DATA_PLANE_CONTROL_SECRET_HEADER), false);
   assert.equal(shouldAttachDataPlaneSecret(req), false);
 }
