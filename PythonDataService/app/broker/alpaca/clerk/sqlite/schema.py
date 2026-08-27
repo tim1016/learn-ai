@@ -14,7 +14,6 @@ keeps them from drifting.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 
@@ -33,13 +32,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     POSITION_SUBJECT_COMPATIBILITY_DDL,
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
-from app.broker.alpaca.clerk.sqlite.facts import FACTS_SCHEMA_VERSION
-from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    HOLD_REASON_CODE_SQL_PARAMS,
-    HOLD_REASON_CODE_SQL_PLACEHOLDERS,
-    normalized_hold_reason_code,
-)
+from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_uncertainties
 
 OFFLINE_V9_SCHEMA_VERSION = 9
 SCHEMA_VERSION = 12
@@ -812,132 +805,6 @@ _V6_TO_V7_STATEMENTS: tuple[str, ...] = (
 
 
 
-class HoldMigrationBlocked(ValueError):
-    """A v11 ``holds`` row cannot be carried into ``uncertainties`` truthfully."""
-
-
-def _backfill_holds_into_uncertainties(conn: sqlite3.Connection) -> None:
-    """Move every ``holds`` row into ``uncertainties`` (ADR 0048 Decision 2).
-
-    Deterministic and idempotent: ``uncertainty_id`` *is* the row's original
-    ``hold_id``, so re-running inserts nothing new and the id an operator saw
-    before the upgrade is the id they see after it. The two id namespaces
-    cannot collide — a hold fold minted ``hold:<sequence>``, an uncertainty
-    fold ``uncertainty:<sequence>`` — and the collision assertion below proves
-    that per file rather than trusting the argument.
-
-    Resolved holds migrate too. They are the timeline evidence behind
-    ``custody_transitions``; dropping them would silently rewrite history to
-    say the account was never held.
-
-    Raises :class:`HoldMigrationBlocked` rather than guessing whenever a row
-    cannot be carried truthfully. A blocked migration rolls back whole (the
-    caller runs it inside one transaction) and leaves a readable v11 file,
-    which is a far better outcome than an authority whose entry fence was
-    reconstructed from an assumption.
-    """
-    from app.broker.alpaca.clerk.sqlite.uncertainty_folds import account_hold_envelope
-
-    # Positional, not by name: ``migrate_schema`` runs on whatever connection
-    # the caller opened, and only some of them set ``row_factory``.
-    rows = conn.execute(
-        "SELECT hold_id, scope, reason_code, state, opened_at_ms, resolved_at_ms, "
-        "evidence_refs_json FROM holds ORDER BY hold_id"
-    ).fetchall()
-    for (
-        hold_id,
-        scope,
-        stored_reason_code,
-        state,
-        opened_at_ms,
-        resolved_at_ms,
-        evidence_refs_json,
-    ) in rows:
-        try:
-            reason_code = normalized_hold_reason_code(stored_reason_code)
-        except KeyError as exc:
-            raise HoldMigrationBlocked(
-                f"hold {hold_id!r} carries unregistered reason code "
-                f"{stored_reason_code!r}; register its policy before upgrading to v12"
-            ) from exc
-        if scope != "ACCOUNT_CLERK":
-            # Both registered causes are account-scoped and the pre-v12 table
-            # CHECK already forbade a subject-scoped row for them. A row that
-            # reaches here anyway would need a subject-scoped policy this
-            # migration has not declared.
-            raise HoldMigrationBlocked(
-                f"hold {hold_id!r} is {scope}-scoped; only ACCOUNT_CLERK holds "
-                "have a registered v12 policy"
-            )
-        if state == "RESOLVED" and resolved_at_ms is None:
-            # Never observed, but the pre-v12 table did not constrain the pair.
-            # Falling back to opened_at_ms keeps the episode resolved; treating
-            # it as active would resurrect a closed account-wide entry fence.
-            resolved_at_ms = opened_at_ms
-        elif state == "ACTIVE" and resolved_at_ms is not None:
-            raise HoldMigrationBlocked(
-                f"hold {hold_id!r} is ACTIVE with a resolution timestamp; "
-                "its state cannot be expressed as one uncertainty episode"
-            )
-        evidence_refs = json.loads(evidence_refs_json or "[]")
-        if not isinstance(evidence_refs, list) or not all(
-            isinstance(ref, str) for ref in evidence_refs
-        ):
-            raise HoldMigrationBlocked(
-                f"hold {hold_id!r} has an unreadable evidence_refs_json"
-            )
-        facts = account_hold_envelope(reason_code=reason_code, evidence_refs=evidence_refs)
-        conn.execute(
-            "INSERT OR IGNORE INTO uncertainties (uncertainty_id, scope, severity, "
-            "blocks_new_exposure, allows_reduction, custody_owner, subject_id, "
-            "strategy_instance_id, reason_code, headline, explanation, operator_impact, "
-            "next_step, observed_at_ms, resolved_at_ms, evidence_refs_json, "
-            "facts_schema_version, facts_json) "
-            "VALUES (?, 'ACCOUNT_CLERK', ?, ?, ?, 'ACCOUNT_CLERK', NULL, NULL, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?)",
-            (
-                hold_id,
-                facts.severity,
-                1 if facts.blocks_new_exposure else 0,
-                1 if facts.allows_reduction else 0,
-                reason_code,
-                facts.headline,
-                facts.explanation,
-                facts.operator_impact,
-                facts.next_step,
-                opened_at_ms,
-                resolved_at_ms,
-                canonicalize(facts.evidence_refs),
-                FACTS_SCHEMA_VERSION,
-                facts.to_facts_json(),
-            ),
-        )
-    _assert_no_hold_migration_collisions(conn, expected=len(rows))
-
-
-def _assert_no_hold_migration_collisions(conn: sqlite3.Connection, *, expected: int) -> None:
-    """Prove every hold row landed, and that none displaced an existing episode.
-
-    ``ux_uncertainties_one_active_cause`` keys on
-    ``(scope, reason_code, COALESCE(subject_id, ''))`` while active. Both
-    incoming codes are new strings at ``ACCOUNT_CLERK`` with a NULL
-    ``subject_id``, so a collision is impossible by construction — which is
-    exactly why it is worth asserting. A v12 that silently dropped a blocking
-    episode would remove an account-wide entry fence, and ``INSERT OR IGNORE``
-    is precisely the statement that would do it without a word.
-    """
-    landed = conn.execute(
-        "SELECT COUNT(*) FROM uncertainties WHERE reason_code IN "
-        f"({HOLD_REASON_CODE_SQL_PLACEHOLDERS})",
-        HOLD_REASON_CODE_SQL_PARAMS,
-    ).fetchone()[0]
-    if landed != expected:
-        raise HoldMigrationBlocked(
-            f"v12 backfill expected {expected} migrated hold episode(s), found {landed}; "
-            "an id collision silently discarded at least one"
-        )
-
-
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     4: (
         "CREATE INDEX IF NOT EXISTS ix_runs_started_at ON runs(started_at_ms DESC)",
@@ -1015,7 +882,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # (ADR 0048 Decision 2). Every row moves into ``uncertainties`` under the
     # wire spelling of its cause, and the table is replaced by a read-only
     # view of the same shape so no reader changes. The rows are carried across
-    # by ``_backfill_holds_into_uncertainties`` immediately before these
+    # by ``backfill_holds_into_uncertainties`` immediately before these
     # statements run — the envelope each migrated row needs is authored in
     # Python, not restatable as SQL without duplicating operator copy.
     11: _V11_TO_V12_STATEMENTS,
@@ -1076,7 +943,7 @@ def migrate_schema(conn: sqlite3.Connection, *, from_version: int) -> None:
                 _require_empty_v6_authority(conn)
             if version == 11:
                 # Must precede the statements: they drop the table it reads.
-                _backfill_holds_into_uncertainties(conn)
+                backfill_holds_into_uncertainties(conn)
             for statement in statements:
                 conn.execute(statement)
             version += 1

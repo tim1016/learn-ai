@@ -53,16 +53,18 @@ from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
-    RedriveThenEscalate,
     admit_new_exposure,
     raise_uncertainty,
-    reason_age_policy,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_STUCK_REASON_CODE,
     STREAM_HEALTH_HOLD_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
+    RedriveThenEscalate,
+    reason_age_policy,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerUnavailable

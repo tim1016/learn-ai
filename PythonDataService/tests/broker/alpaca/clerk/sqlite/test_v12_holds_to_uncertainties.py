@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import reads, schema
+from app.broker.alpaca.clerk.sqlite import hold_migration, reads, schema
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     HOLD_REASON_CODES,
@@ -178,11 +178,11 @@ def test_a_resolved_hold_with_no_resolution_stamp_stays_resolved() -> None:
     assert row["resolved_at_ms"] == 1_700_000_000_042
 
 
-def test_the_backfill_is_deterministic_and_idempotent() -> None:
-    """Same input, same rows — and re-running the backfill adds nothing.
+def test_the_backfill_is_deterministic() -> None:
+    """Two upgrades of the same v11 input produce byte-identical rows.
 
-    ``uncertainty_id`` is derived from ``hold_id`` rather than minted, which
-    is what makes a re-run a no-op instead of a duplicate episode.
+    ``uncertainty_id`` is derived from ``hold_id`` rather than minted, so
+    nothing in a migrated episode depends on when the upgrade ran.
     """
     def migrated_rows() -> list[tuple]:
         conn = _v11_authority()
@@ -210,7 +210,7 @@ def test_an_unregistered_hold_cause_blocks_the_upgrade_instead_of_guessing() -> 
     conn = _v11_authority()
     _insert_hold(conn, hold_id="hold:9", reason_code="SOME_FUTURE_CAUSE")
 
-    with pytest.raises(schema.HoldMigrationBlocked, match="SOME_FUTURE_CAUSE"):
+    with pytest.raises(hold_migration.HoldMigrationBlocked, match="SOME_FUTURE_CAUSE"):
         schema.migrate_schema(conn, from_version=11)
 
 
@@ -218,7 +218,7 @@ def test_a_blocked_upgrade_leaves_the_v11_authority_untouched() -> None:
     conn = _v11_authority()
     _insert_hold(conn, hold_id="hold:9", reason_code="SOME_FUTURE_CAUSE")
 
-    with pytest.raises(schema.HoldMigrationBlocked):
+    with pytest.raises(hold_migration.HoldMigrationBlocked):
         schema.migrate_schema(conn, from_version=11)
 
     assert conn.execute(
@@ -231,8 +231,8 @@ def test_a_blocked_upgrade_leaves_the_v11_authority_untouched() -> None:
 
 
 def test_every_migrated_episode_lands_and_none_is_silently_discarded() -> None:
-    """``INSERT OR IGNORE`` is exactly the statement that could drop a
-    blocking episode without a word, so the count is asserted, not assumed."""
+    """A v12 that dropped a blocking episode would remove an account-wide
+    entry fence, so the count is asserted rather than assumed."""
     conn = _v11_authority()
     _insert_hold(conn, hold_id="hold:1", reason_code="UNEXPLAINED_ORDER",
                  evidence_refs=["bo-a"])

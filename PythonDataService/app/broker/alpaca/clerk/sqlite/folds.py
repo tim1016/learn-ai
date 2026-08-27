@@ -36,7 +36,6 @@ from app.broker.alpaca.clerk.sqlite.external_order_folds import (
     fold_external_order_observed as _fold_external_order_observed,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
-    FACTS_SCHEMA_VERSION,
     AccountHoldRaisedFacts,
     AccountHoldResolvedFacts,
     CommandRejectedFacts,
@@ -71,6 +70,7 @@ from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import normalized_hold_reason_code
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     account_hold_envelope,
+    insert_account_hold_episode,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     fold_uncertainty_raised as _fold_uncertainty_raised,
@@ -1311,32 +1311,13 @@ def _fold_reconciliation_attempted(conn: sqlite3.Connection, payload: dict[str, 
 def _fold_account_hold_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Replay one pre-v12 account-hold raise into its uncertainty episode."""
     legacy = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
-    facts = account_hold_envelope(
+    insert_account_hold_episode(
+        conn,
+        uncertainty_id=f"hold:{_this_transition_sequence(conn)}",
         reason_code=normalized_hold_reason_code(legacy.reason_code),
         evidence_refs=legacy.evidence_refs,
-    )
-    conn.execute(
-        "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
-        "allows_reduction, custody_owner, subject_id, strategy_instance_id, reason_code, "
-        "headline, explanation, operator_impact, next_step, observed_at_ms, resolved_at_ms, "
-        "evidence_refs_json, facts_schema_version, facts_json) "
-        "VALUES (?, 'ACCOUNT_CLERK', ?, ?, ?, 'ACCOUNT_CLERK', NULL, NULL, ?, ?, ?, ?, ?, ?, "
-        "NULL, ?, ?, ?)",
-        (
-            f"hold:{_this_transition_sequence(conn)}",
-            facts.severity,
-            1 if facts.blocks_new_exposure else 0,
-            1 if facts.allows_reduction else 0,
-            facts.reason_code,
-            facts.headline,
-            facts.explanation,
-            facts.operator_impact,
-            facts.next_step,
-            payload["recorded_at_ms"],
-            canonicalize(facts.evidence_refs),
-            FACTS_SCHEMA_VERSION,
-            facts.to_facts_json(),
-        ),
+        observed_at_ms=payload["recorded_at_ms"],
+        resolved_at_ms=None,
     )
 
 

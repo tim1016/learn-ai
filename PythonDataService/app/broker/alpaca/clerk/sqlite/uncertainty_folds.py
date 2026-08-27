@@ -103,6 +103,61 @@ def account_hold_envelope(
     )
 
 
+ACCOUNT_HOLD_EPISODE_INSERT = (
+    "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
+    "allows_reduction, custody_owner, subject_id, strategy_instance_id, reason_code, "
+    "headline, explanation, operator_impact, next_step, observed_at_ms, resolved_at_ms, "
+    "evidence_refs_json, facts_schema_version, facts_json) "
+    "VALUES (?, 'ACCOUNT_CLERK', ?, ?, ?, 'ACCOUNT_CLERK', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, "
+    "?, ?, ?)"
+)
+
+
+def insert_account_hold_episode(
+    conn: sqlite3.Connection,
+    *,
+    uncertainty_id: str,
+    reason_code: str,
+    evidence_refs: list[str],
+    observed_at_ms: int,
+    resolved_at_ms: int | None,
+) -> None:
+    """Write one account-hold episode row (ADR 0048 Decision 2).
+
+    The single INSERT behind all three ways an episode reaches
+    ``uncertainties``: opened inside the fold of a foreign order, replayed
+    from a pre-v12 mirror, or carried across by the v11-to-v12 backfill.
+    Those three differ only in identity and stamps, so the column list —
+    which has to stay in lockstep with the schema — is written once rather
+    than three times, where a later column could be added to two of them.
+
+    A duplicate ``uncertainty_id`` raises rather than being absorbed. Every
+    caller either mints an id from the transition sequence or carries one
+    that was already unique, so a collision is a bug, and the unique
+    constraint names the offending row at the statement that caused it.
+    """
+    facts = account_hold_envelope(reason_code=reason_code, evidence_refs=evidence_refs)
+    conn.execute(
+        ACCOUNT_HOLD_EPISODE_INSERT,
+        (
+            uncertainty_id,
+            facts.severity,
+            1 if facts.blocks_new_exposure else 0,
+            1 if facts.allows_reduction else 0,
+            facts.reason_code,
+            facts.headline,
+            facts.explanation,
+            facts.operator_impact,
+            facts.next_step,
+            observed_at_ms,
+            resolved_at_ms,
+            canonicalize(facts.evidence_refs),
+            FACTS_SCHEMA_VERSION,
+            facts.to_facts_json(),
+        ),
+    )
+
+
 def _log_unreadable_active_uncertainty(*, active: sqlite3.Row, subject_id: str, reason: str) -> None:
     logger.warning(
         "active broker-outcome uncertainty has an unreadable facts envelope",

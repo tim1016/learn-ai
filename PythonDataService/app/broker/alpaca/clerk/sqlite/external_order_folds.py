@@ -9,7 +9,6 @@ from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.facts import (
-    FACTS_SCHEMA_VERSION,
     ExternalOrderAcknowledgedFacts,
     ExternalOrderObservedFacts,
 )
@@ -17,7 +16,10 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty_folds import account_hold_envelope
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    account_hold_envelope,
+    insert_account_hold_episode,
+)
 
 
 def _transition_sequence(conn: sqlite3.Connection) -> int:
@@ -92,10 +94,13 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
         conn, scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE
     )
     if active is None:
-        _insert_unexplained_order_hold(
+        insert_account_hold_episode(
             conn,
+            uncertainty_id=f"hold:{_transition_sequence(conn)}",
+            reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE,
             evidence_refs=[facts.broker_order_id],
-            recorded_at_ms=payload["recorded_at_ms"],
+            observed_at_ms=payload["recorded_at_ms"],
+            resolved_at_ms=None,
         )
         return
     current_refs = _hold_evidence_refs(active["evidence_refs_json"])
@@ -142,35 +147,6 @@ def fold_external_order_acknowledged(conn: sqlite3.Connection, payload: dict[str
 # own transition, and a fold may not append while it is being folded. The
 # envelope still comes from ``account_hold_envelope``, so this hold reads
 # identically to one the reconciliation sweep raises.
-
-
-def _insert_unexplained_order_hold(
-    conn: sqlite3.Connection, *, evidence_refs: list[str], recorded_at_ms: int
-) -> None:
-    facts = account_hold_envelope(
-        reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE, evidence_refs=evidence_refs
-    )
-    conn.execute(
-        "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
-        "allows_reduction, custody_owner, subject_id, strategy_instance_id, reason_code, "
-        "headline, explanation, operator_impact, next_step, observed_at_ms, resolved_at_ms, "
-        "evidence_refs_json, facts_schema_version, facts_json) "
-        "VALUES (?, 'ACCOUNT_CLERK', ?, 1, 0, 'ACCOUNT_CLERK', NULL, NULL, ?, ?, ?, ?, ?, ?, "
-        "NULL, ?, ?, ?)",
-        (
-            f"hold:{_transition_sequence(conn)}",
-            facts.severity,
-            facts.reason_code,
-            facts.headline,
-            facts.explanation,
-            facts.operator_impact,
-            facts.next_step,
-            recorded_at_ms,
-            canonicalize(facts.evidence_refs),
-            FACTS_SCHEMA_VERSION,
-            facts.to_facts_json(),
-        ),
-    )
 
 
 def _update_unexplained_order_hold(

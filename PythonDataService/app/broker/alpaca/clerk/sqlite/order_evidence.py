@@ -28,8 +28,8 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_order_completion import manual_order_has_exact_terminal_coverage
 from app.broker.alpaca.clerk.sqlite.models import OrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import VoidAfter, reason_age_policy
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder
 
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 def submit_absence_grace_ms() -> int:
     """The declared ``VoidAfter`` grace window for ``ORDER_OUTCOME_UNKNOWN``.
 
-    Sourced from the reason-policy registry (``uncertainty._REASON_POLICIES``,
+    Sourced from the reason-policy registry (``uncertainty_policies._REASON_POLICIES``,
     ADR 0048 Decision 1) rather than a locally hardcoded constant, so the
     R4 submit-absence age rule has exactly one declaration.
     """

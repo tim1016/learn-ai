@@ -184,7 +184,7 @@ def _seed_production_v8(tmp_path: Path) -> tuple[_Clock, Path]:
         next_step="Reconcile the exact broker order.",
         evidence_refs=(accepted.order_ref,),
         cause_facts={"order_ref": accepted.order_ref},
-    )
+    ) != "unchanged"
     repo.close()
 
     account_dir = tmp_path / "accounts" / "alpaca" / safe_path_component(ACCOUNT_ID, "account_id")

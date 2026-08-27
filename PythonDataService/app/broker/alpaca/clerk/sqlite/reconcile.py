@@ -44,7 +44,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
-    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     AdmissionBlockedError,
     raise_account_hold,
     raise_uncertainty,
@@ -55,6 +54,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     resolve_reconciliation_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     PositionDriftCause,
     PositionDriftObservation,
 )
