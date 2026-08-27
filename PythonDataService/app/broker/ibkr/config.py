@@ -217,9 +217,9 @@ def get_settings() -> IbkrSettings:
     return _settings
 
 
-def market_data_artifacts_root() -> Path:
-    """Return the artifacts root shared by market-data capability
-    snapshots and bot lifecycle/binding evidence readers.
+def live_artifacts_root() -> Path:
+    """Return the shared ``live_runs`` artifacts root used by bot
+    lifecycle state and binding-evidence readers.
 
     Identical to ``account_truth_refresh.account_truth_artifacts_root()``
     — same underlying setting, same resolved directory — but lives in

@@ -32,7 +32,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.broker.ibkr.config import market_data_artifacts_root
+from app.broker.ibkr.config import live_artifacts_root
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
@@ -209,10 +209,10 @@ async def _panel_authority_for_binding(
 def _run_evidence_repository() -> BotBindingRepository:
     """Bind the shared ``live_state`` repository factory to this service's
     artifacts root — the same root ``main.py`` wires ``BotTaskRegistry``
-    from (``market_data_artifacts_root()``), so a read here never drifts
+    from (``live_artifacts_root()``), so a read here never drifts
     from the in-container bot runner's own view.
     """
-    return live_state_binding_repository(market_data_artifacts_root())
+    return live_state_binding_repository(live_artifacts_root())
 
 
 def _program_build_for_display(

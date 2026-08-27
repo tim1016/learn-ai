@@ -15,9 +15,9 @@ even in a code path that isn't exercised by the rest of the test suite.
 from __future__ import annotations
 
 import ast
+from collections import deque
+from collections.abc import Iterable
 from pathlib import Path
-
-import pytest
 
 APP_ROOT = Path(__file__).resolve().parents[2] / "app"
 
@@ -101,35 +101,80 @@ def _imported_modules(source_path: Path) -> set[str]:
     return found
 
 
-@pytest.mark.parametrize("dotted_module", RETAINED_FEED_MODULES)
-def test_retained_feed_module_has_no_unlisted_account_order_session_import(dotted_module: str) -> None:
-    source_path = _module_path(dotted_module)
-    assert source_path.exists(), f"{dotted_module} does not resolve to {source_path}"
-    imported = _imported_modules(source_path)
-    violations = []
-    for imported_module in imported:
-        if not imported_module.startswith(BANNED_PREFIXES):
+def _walk_app_import_graph(seeds: Iterable[str]) -> tuple[set[str], list[tuple[str, str]]]:
+    """Breadth-first walk of the ``app.*`` import graph starting at ``seeds``.
+
+    Returns ``(visited, banned_edges)``:
+
+    - ``visited`` is every module reached by the walk (seeds included),
+      resolved to a real file under ``app/``.
+    - ``banned_edges`` is every ``(importing_module, imported_module)`` pair
+      found anywhere in the walk where ``imported_module`` matches
+      ``BANNED_PREFIXES`` — allowed (tracked-exception) hits and violations
+      alike. A banned edge is a dead end for the walk: it is recorded but
+      not itself recursed into, since the bucket's internals are out of
+      scope once one of its modules is reached at all.
+    """
+    visited: set[str] = set()
+    banned_edges: list[tuple[str, str]] = []
+    queue: deque[str] = deque(seeds)
+    while queue:
+        module = queue.popleft()
+        if module in visited:
             continue
-        if (dotted_module, imported_module) in _ALLOWED_EXCEPTIONS:
+        visited.add(module)
+        source_path = _module_path(module)
+        if not source_path.exists():
             continue
-        violations.append(imported_module)
+        for imported_module in sorted(_imported_modules(source_path)):
+            if not imported_module.startswith("app."):
+                continue
+            if imported_module.startswith(BANNED_PREFIXES):
+                banned_edges.append((module, imported_module))
+                continue
+            if imported_module in visited:
+                continue
+            if not _module_path(imported_module).exists():
+                continue
+            queue.append(imported_module)
+    return visited, banned_edges
+
+
+def test_retained_feed_modules_transitive_import_graph_has_no_unlisted_account_order_session_import() -> None:
+    for dotted_module in RETAINED_FEED_MODULES:
+        assert _module_path(dotted_module).exists(), (
+            f"{dotted_module} does not resolve to {_module_path(dotted_module)}"
+        )
+
+    _visited, banned_edges = _walk_app_import_graph(RETAINED_FEED_MODULES)
+    violations = [
+        (importing_module, imported_module)
+        for importing_module, imported_module in banned_edges
+        if (importing_module, imported_module) not in _ALLOWED_EXCEPTIONS
+    ]
     assert not violations, (
-        f"{dotted_module} imports account/order/session-bucket module(s) {violations} "
-        "with no tracked exception — see _ALLOWED_EXCEPTIONS in this test."
+        "Walking the transitive app.* import graph from RETAINED_FEED_MODULES reaches "
+        f"account/order/session-bucket import(s) with no tracked exception: {violations} "
+        "— see _ALLOWED_EXCEPTIONS in this test."
     )
 
 
 def test_no_stale_allowed_exceptions() -> None:
-    """Every entry in _ALLOWED_EXCEPTIONS must reflect a real, current import.
+    """Every entry in _ALLOWED_EXCEPTIONS must reflect a real, current, reachable import.
 
     Prevents the exception list from silently outliving the code it was
-    written for — if Slice 3 or 4 removes the import another way, this
+    written for — if Slice 3 or 4 removes the import another way, or the
+    importing module itself falls out of the retained-feed walk, this
     fails loudly instead of leaving a permissive dead entry.
     """
+    visited, banned_edges = _walk_app_import_graph(RETAINED_FEED_MODULES)
+    banned_edge_set = set(banned_edges)
     for dotted_module, banned_import in _ALLOWED_EXCEPTIONS:
-        source_path = _module_path(dotted_module)
-        imported = _imported_modules(source_path)
-        assert banned_import in imported, (
+        assert dotted_module in visited, (
+            f"_ALLOWED_EXCEPTIONS names importer {dotted_module!r} but it is no longer "
+            "reachable from RETAINED_FEED_MODULES — delete this stale exception."
+        )
+        assert (dotted_module, banned_import) in banned_edge_set, (
             f"_ALLOWED_EXCEPTIONS names ({dotted_module!r}, {banned_import!r}) but {dotted_module} "
             "no longer imports it — delete this stale exception."
         )
