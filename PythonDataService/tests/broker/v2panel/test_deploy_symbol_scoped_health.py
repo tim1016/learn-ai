@@ -26,7 +26,7 @@ from app.broker.alpaca.clerk.models import (
     ClerkStatus,
     HoldState,
 )
-from app.services.broker_v2_panel import panel_data_source
+from app.services.broker_v2_panel import panel_deploy
 from app.services.broker_v2_panel.channel_health import evaluate_channels_at_account_scope
 from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE
@@ -77,7 +77,7 @@ def _install_warming_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
             operator_posture=_HEALTHY_POSTURE,
         )
 
-    monkeypatch.setattr(panel_data_source, "_clerk_status", clerk_status)
+    monkeypatch.setattr(panel_deploy, "clerk_status", clerk_status)
 
 
 def _channel_gate(body: dict) -> dict:

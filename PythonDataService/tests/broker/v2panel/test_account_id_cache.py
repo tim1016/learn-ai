@@ -21,7 +21,7 @@ from app.broker.contract.registry import (
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
-from app.services.broker_v2_panel import panel_data_source as ds
+from app.services.broker_v2_panel import panel_scope as ds
 
 
 class _CountingPort:

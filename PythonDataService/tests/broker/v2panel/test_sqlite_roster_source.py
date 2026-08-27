@@ -387,7 +387,7 @@ def test_sqlite_roster_uses_only_activated_repository(monkeypatch: pytest.Monkey
 async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(panel_data_source, "_validate_account", _resolved_account)
+    monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
     assert not hasattr(panel_data_source, "_bot_statuses")
     assert not hasattr(panel_data_source, "_latest_decision")
     assert not hasattr(panel_data_source, "get_or_create_owner")
@@ -446,7 +446,7 @@ async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
         assert received_facade is facade
         return [_CatalogRow()]
 
-    monkeypatch.setattr(panel_data_source, "_validate_account", _resolved_account)
+    monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
     monkeypatch.setattr(panel_data_source, "SqliteAlpacaClerkFacade", _SyntheticFacade)
     monkeypatch.setattr(panel_data_source, "read_sqlite_catalog", real_catalog)
@@ -470,7 +470,7 @@ async def test_activated_catalog_never_scans_large_legacy_set(
     for index in range(200):
         (legacy_root / f"disposable-{index:05d}").mkdir()
 
-    monkeypatch.setattr(panel_data_source, "_validate_account", _resolved_account)
+    monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
     assert not hasattr(panel_data_source, "_bot_statuses")
     monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
     monkeypatch.setattr(

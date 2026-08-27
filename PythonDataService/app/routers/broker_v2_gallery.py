@@ -57,7 +57,7 @@ from app.services.broker_v2_panel.gallery_hub import (
     GalleryHub,
     GalleryPrimaryActionSource,
 )
-from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError, UnknownBotError
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
 logger = logging.getLogger(__name__)

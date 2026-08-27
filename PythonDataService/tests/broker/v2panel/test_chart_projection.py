@@ -785,7 +785,7 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
 
     monkeypatch.setattr(
         panel_chart_data_source,
-        "validate_panel_account_scope",
+        "validate_account",
         validate_account,
     )
     monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
