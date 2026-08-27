@@ -14,25 +14,6 @@ from app.engine.live.live_state_sidecar import _fsync_parent_dir
 RecordT = TypeVar("RecordT", bound=BaseModel)
 
 
-def confined_wal_path(root: Path, filename: str) -> Path:
-    """Return ``root/filename`` after proving it stays below ``root``.
-
-    ``root`` is a service-owned directory selected by a caller that already
-    validated the enclosing run or instance id. ``filename`` is a trusted
-    literal. Rebuilding with ``realpath`` + a root-prefix check keeps the
-    filesystem sink visibly confined for CodeQL and catches symlink escapes at
-    runtime.
-    """
-    if not filename or filename != Path(filename).name:
-        raise ValueError(f"WAL filename must be one path segment: {filename!r}")
-    root_real = os.path.realpath(root)
-    candidate = os.path.realpath(os.path.join(root_real, filename))
-    root_prefix = root_real.rstrip(os.sep) + os.sep
-    if candidate != root_real and not candidate.startswith(root_prefix):
-        raise ValueError(f"WAL path {candidate} escapes root {root_real}")
-    return Path(candidate)
-
-
 class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 needs 3.12.
     """Canonical append/read discipline for sequenced JSONL WAL files."""
 

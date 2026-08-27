@@ -1,34 +1,10 @@
 """Shared IBKR event-code vocabulary.
 
-The live client, recovery logic, and broker session mirror all import these
-sets so code meanings do not drift between safety behavior and observability.
+``app/broker/ibkr/client.py`` imports these sets so its connectivity and
+data-farm handling reacts to a single shared definition of each code.
 """
 
 from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Literal
-
-BrokerSessionEventCategory = Literal[
-    "client_lifecycle",
-    "link_connectivity",
-    "recovery_reconnect",
-    "data_farm",
-    "auth_session",
-    "order_execution",
-    "pacing_throttling",
-    "fault_client_error",
-    "unclassified",
-]
-BrokerSessionEventSeverity = Literal["info", "warning", "critical"]
-
-
-@dataclass(frozen=True)
-class IbkrCodeMeaning:
-    category: BrokerSessionEventCategory
-    severity: BrokerSessionEventSeverity
-    label: str
-
 
 # TWS/IB connectivity error codes that the ``errorEvent`` handler reacts to.
 # 1100 = "Connectivity between IB and TWS has been lost"; 504 = "Not
@@ -41,91 +17,3 @@ CONNECTIVITY_RESTORED_CODES = frozenset({1101, 1102})
 SUBSCRIPTIONS_STALE_CODES = frozenset({1101})
 DATA_FARM_DEGRADED_CODES = frozenset({2103, 2105})
 DATA_FARM_OK_CODES = frozenset({2104, 2106})
-
-IBKR_CODE_MEANINGS: dict[int, IbkrCodeMeaning] = {
-    100: IbkrCodeMeaning(
-        category="pacing_throttling",
-        severity="warning",
-        label="IBKR message rate exceeded",
-    ),
-    101: IbkrCodeMeaning(
-        category="pacing_throttling",
-        severity="warning",
-        label="IBKR market data line cap reached",
-    ),
-    201: IbkrCodeMeaning(
-        category="order_execution",
-        severity="critical",
-        label="IBKR order rejected",
-    ),
-    202: IbkrCodeMeaning(
-        category="order_execution",
-        severity="info",
-        label="IBKR order cancelled",
-    ),
-    326: IbkrCodeMeaning(
-        category="auth_session",
-        severity="critical",
-        label="IBKR client id already in use",
-    ),
-    507: IbkrCodeMeaning(
-        category="link_connectivity",
-        severity="warning",
-        label="IBKR socket message framing error",
-    ),
-    1100: IbkrCodeMeaning(
-        category="link_connectivity",
-        severity="warning",
-        label="IBKR link interrupted",
-    ),
-    1101: IbkrCodeMeaning(
-        category="link_connectivity",
-        severity="info",
-        label="IBKR link restored; subscriptions stale",
-    ),
-    1102: IbkrCodeMeaning(
-        category="link_connectivity",
-        severity="info",
-        label="IBKR link restored",
-    ),
-    1300: IbkrCodeMeaning(
-        category="link_connectivity",
-        severity="warning",
-        label="IBKR socket port reset",
-    ),
-    2110: IbkrCodeMeaning(
-        category="link_connectivity",
-        severity="warning",
-        label="IBKR server link interrupted",
-    ),
-    504: IbkrCodeMeaning(
-        category="link_connectivity",
-        severity="warning",
-        label="IBKR API client not connected",
-    ),
-    2103: IbkrCodeMeaning(
-        category="data_farm",
-        severity="warning",
-        label="Market data farm degraded",
-    ),
-    2104: IbkrCodeMeaning(
-        category="data_farm",
-        severity="info",
-        label="Market data farm restored",
-    ),
-    2105: IbkrCodeMeaning(
-        category="data_farm",
-        severity="warning",
-        label="Historical data farm degraded",
-    ),
-    2106: IbkrCodeMeaning(
-        category="data_farm",
-        severity="info",
-        label="Historical data farm restored",
-    ),
-    2102: IbkrCodeMeaning(
-        category="order_execution",
-        severity="warning",
-        label="IBKR order still being processed",
-    ),
-}

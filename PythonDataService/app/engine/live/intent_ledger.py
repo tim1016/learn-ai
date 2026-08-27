@@ -54,12 +54,18 @@ class SizingResolution:
 class SubmittedOrderView:
     """One intent's folded state, keyed by ``intent_id`` in the ledger.
 
-    ``order_spec`` is the order's IbkrOrderSpec.model_dump() captured at
-    PENDING_INTENT emit time (Phase 5A). Phase 5E reads ``order_spec["symbol"]``
-    and ``order_spec["action"]`` / ``order_spec["quantity"]`` to reconstruct
-    historical fill evidence when only the broker's ``perm_id`` survives a
-    restart. ``None`` for events that pre-date Phase 5A or that fold
-    SIZING_RESOLVED before the PENDING_INTENT lands.
+    ``order_spec`` is the flat, JSON-serialisable order specification captured
+    at PENDING_INTENT emit time (Phase 5A). Every key is present on a durable
+    row: ``symbol``, ``sec_type``, ``action``, ``quantity``, ``order_type``,
+    ``time_in_force``, ``outside_rth``, ``multiplier`` and ``confirm_paper``
+    always carry a value; ``con_id``, ``limit_price``, ``client_order_id``,
+    ``order_ref`` and the option-only ``expiry_ms`` / ``strike`` / ``right``
+    are null when they did not apply, and ``manual_order`` is a bool. Phase 5E
+    reads ``order_spec["symbol"]`` and ``order_spec["action"]`` /
+    ``order_spec["quantity"]`` to reconstruct historical fill evidence when only
+    the broker's ``perm_id`` survives a restart. ``None`` for events that
+    pre-date Phase 5A or that fold SIZING_RESOLVED before the PENDING_INTENT
+    lands.
     """
 
     intent_id: str

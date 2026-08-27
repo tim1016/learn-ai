@@ -227,45 +227,6 @@ class IbkrTradeEvidence(BaseModel):
     commission_report: IbkrObjectSnapshot | None = None
 
 
-class IbkrAccountSummary(BaseModel):
-    """Snapshot of an IBKR account.
-
-    The ``account_id`` is what the paper-vs-live sentinel runs against;
-    paper account IDs begin with ``DU``.
-
-    Margin and P&L fields are populated from the ``reqAccountSummary``
-    tags listed in the Phase 2a doc. Any field IBKR doesn't return for
-    the account type (cash accounts have no margin numbers, for example)
-    is left ``None``.
-    """
-
-    model_config = ConfigDict(populate_by_name=True, frozen=True)
-
-    account_id: str
-    is_paper: bool = Field(
-        ...,
-        description="True iff account_id starts with 'DU'.",
-    )
-    base_currency: str = "USD"
-    cash_balance: float | None = None
-    net_liquidation: float | None = None
-
-    # ── Margin and buying power (Phase 2a additions) ──────────────────
-    buying_power: float | None = None
-    init_margin: float | None = None
-    maint_margin: float | None = None
-    excess_liquidity: float | None = None
-    equity_with_loan_value: float | None = None
-    available_funds: float | None = None
-
-    # ── Account-level P&L (Phase 2a additions; pnl.py adds streaming) ─
-    day_pnl: float | None = None
-    unrealized_pnl: float | None = None
-    realized_pnl: float | None = None
-
-    fetched_at_ms: int = Field(..., description="UTC milliseconds since epoch.")
-
-
 class IbkrPosition(BaseModel):
     """One held position. Stocks and options share the same model.
 
@@ -470,82 +431,6 @@ OrderStatus = Literal[
     "Inactive",
     "Unknown",
 ]
-
-
-class IbkrOrderSpec(BaseModel):
-    """Non-transmitting what-if order specification.
-
-    MKT and LMT previews are supported for stocks and US equity options.
-    The historical confirmation and client-order fields remain wire-compatible
-    with stored evidence but do not authorize IBKR order actuation.
-
-    Option fields (``expiry_ms``, ``strike``, ``right``) are required
-    when ``sec_type="OPT"`` and ignored when ``sec_type="STK"``.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    symbol: str
-    sec_type: SecType
-    con_id: int | None = Field(
-        default=None,
-        ge=1,
-        description=(
-            "Optional IBKR contract identifier used to qualify an exact "
-            "contract for the non-transmitting what-if request."
-        ),
-    )
-    action: OrderAction
-    quantity: float = Field(..., gt=0, description="Always positive; 'action' encodes side.")
-    order_type: OrderType
-    limit_price: float | None = Field(
-        default=None,
-        gt=0,
-        description="Required when order_type='LMT'.",
-    )
-    time_in_force: OrderTimeInForce = "DAY"
-    outside_rth: bool = Field(
-        default=False,
-        description="When true, stamp IBKR Order.outsideRth for explicit extended-hours eligibility.",
-    )
-
-    # Option-only fields
-    expiry_ms: int | None = None
-    strike: float | None = None
-    right: OptionRight | None = None
-    multiplier: int = 100
-
-    confirm_paper: bool = Field(
-        ...,
-        description=("Required True. Defense-in-depth on top of IBKR_MODE and the DU account-id sentinel."),
-    )
-
-    client_order_id: str | None = Field(
-        default=None,
-        description=(
-            "Historical submit identifier retained for journal compatibility. "
-            "Ignored as authorization by the non-transmitting what-if route."
-        ),
-        max_length=64,
-    )
-
-    # Historical ``{namespace}:{intent_id}`` token retained so what-if evidence
-    # and durable journal rows use the same shape. It cannot reach a submit path.
-    order_ref: str | None = Field(
-        default=None,
-        description=(
-            "Optional historical ``{bot_order_namespace}:{intent_id}`` used "
-            "to correlate what-if evidence with retained order history."
-        ),
-        max_length=120,
-    )
-    manual_order: bool = Field(
-        default=False,
-        description=(
-            "Historical manual-order marker retained for journal compatibility. "
-            "The current IBKR API exposes no manual submit route."
-        ),
-    )
 
 
 OrderEventType = Literal["status", "fill", "cancel", "error"]
@@ -805,7 +690,6 @@ __all__ = [
     "ClientConnectionState",
     "DataPlaneHealth",
     "DataPlaneReloadMode",
-    "IbkrAccountSummary",
     "IbkrApiCallbackName",
     "IbkrApiRequestEvidence",
     "IbkrApiRequestName",
@@ -816,7 +700,6 @@ __all__ = [
     "IbkrOptionQuote",
     "IbkrOrderAck",
     "IbkrOrderEvent",
-    "IbkrOrderSpec",
     "IbkrPosition",
     "IbkrPositionsSnapshot",
     "IbkrSerializerWarning",
