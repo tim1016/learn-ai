@@ -20,17 +20,6 @@ export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth']
 export type PanelActionErrorResponse = components['schemas']['PanelActionErrorResponse'];
 
 export type OptionRight = 'C' | 'P';
-export type SecType =
-  | 'STK'
-  | 'OPT'
-  | 'FUT'
-  | 'FOP'
-  | 'CASH'
-  | 'BOND'
-  | 'CFD'
-  | 'WAR'
-  | 'IND'
-  | 'BAG';
 export type GreeksSource = 'model' | 'bid' | 'ask' | 'last' | 'none';
 // Mirrors ``app.broker.ibkr.models``'s IbkrApiRequestName / IbkrApiCallbackName.
 // Narrowed to the calls the service can still make by PR-C of #1813
