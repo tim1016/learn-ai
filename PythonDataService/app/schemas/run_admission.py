@@ -124,6 +124,13 @@ class ProgramBuildAdmissionFact(BaseModel):
     # per-run record instead, and says so rather than leaving a stale
     # ``verified_at_ms`` as the only clue that no re-proof happened.
     verification: Literal["live_reproof", "frozen_run_evidence"] = "live_reproof"
+    # Issue #1735. Whether the strategy *wiring* half of the build still
+    # matches its receipt. ``DRIFTED`` alongside ``state="PROVEN"`` is the
+    # warning-only posture: the coverage is new, so until
+    # ``SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED`` is turned on a wiring drift is
+    # reported rather than blocking. A drift in the already-covered artifacts
+    # is not representable here -- it fails closed as UNPROVEN, unchanged.
+    wiring: Literal["MATCHED", "DRIFTED", "NOT_CHECKED"] = "NOT_CHECKED"
 
     @model_validator(mode="after")
     def _proven_carries_its_full_proof(self) -> ProgramBuildAdmissionFact:

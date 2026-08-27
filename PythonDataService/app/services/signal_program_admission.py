@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from app.config import settings
 from app.engine.strategy.params import decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.schemas.run_admission import ProgramBuildAdmissionFact, StrategyValidationAdmissionFact
@@ -44,11 +45,15 @@ class ProgramBuildQualificationReceipt(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     program_key: str
     program_version: str
     golden_trace_root: str = Field(pattern=r"^[0-9a-f]{64}$")
     artifact_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Issue #1735. Separate from ``artifact_digest`` so a mismatch says which
+    # half moved; the receipt hash covers both, so neither can be edited in
+    # isolation.
+    wiring_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     qualification_suite: str
     qualified_at_ms: int = Field(ge=0)
     receipt_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -65,7 +70,7 @@ class ProgramBuildQualificationManifest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     receipts: tuple[ProgramBuildQualificationReceipt, ...]
 
 
@@ -410,6 +415,19 @@ def prove_running_program_build(
             verified_at_ms,
             explanation="The running artifact digest has no compatible golden-qualification receipt.",
         )
+    # The wiring half is checked separately, and *after* the receipt lookup, so
+    # the two drifts can never be confused. A drift in the artifacts above has
+    # already failed closed by this point regardless of the toggle -- that is
+    # the admission control this PRD was built around, and issue #1735's scope
+    # note keeps it blocking. Only this newly-covered half is toggle-governed.
+    running_wiring = running_wiring_digest(contract)
+    wiring_matches = receipt.wiring_digest == running_wiring
+    if not wiring_matches and settings.SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED:
+        return _unproven(
+            binding.strategy_key,
+            verified_at_ms,
+            explanation="The running strategy wiring does not match its golden-qualification receipt.",
+        )
     return ProgramBuildAdmissionFact(
         state="PROVEN",
         program_key=binding.strategy_key,
@@ -418,24 +436,56 @@ def prove_running_program_build(
         running_artifact_digest=running_digest,
         qualification_receipt_hash=receipt.receipt_hash,
         verified_at_ms=verified_at_ms,
+        wiring="MATCHED" if wiring_matches else "DRIFTED",
         evidence_refs=(
             f"signal-program-seal:{seal.bot_configuration_hash}",
             f"program-build-receipt:{receipt.receipt_hash}",
             f"program-build-digest:{running_digest}",
+            f"program-wiring-digest:{running_wiring}",
         ),
-        explanation="The running Signal Program build matches its golden qualification receipt.",
+        explanation=(
+            "The running Signal Program build matches its golden qualification receipt."
+            if wiring_matches
+            else (
+                "The running Signal Program math matches its golden qualification receipt, but "
+                "the strategy wiring has changed since that receipt was minted."
+            )
+        ),
+        next_step=(
+            None
+            if wiring_matches
+            else "Re-run golden qualification for this program so its receipt covers the current wiring."
+        ),
     )
 
 
-def running_artifact_digest(contract: SignalProgramContract) -> str:
-    """Hash the closed executable artifact set named by the registry contract."""
+def _digest_paths(paths: tuple[str, ...]) -> str:
+    """Hash a closed, ordered set of service-relative source files."""
     entries: list[dict[str, str]] = []
-    for relative in contract.artifact_paths:
+    for relative in paths:
         candidate = (_SERVICE_ROOT / relative).resolve()
         if _SERVICE_ROOT not in candidate.parents or not candidate.is_file():
             raise ValueError(f"invalid Signal Program artifact path: {relative}")
         entries.append({"path": relative, "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()})
     return semantic_payload_hash(entries)
+
+
+def running_artifact_digest(contract: SignalProgramContract) -> str:
+    """Hash the closed executable artifact set named by the registry contract."""
+    return _digest_paths(contract.artifact_paths)
+
+
+def running_wiring_digest(contract: SignalProgramContract) -> str:
+    """Hash the code that wires this program's parameters to its math.
+
+    Hashed apart from :func:`running_artifact_digest` rather than folded into
+    it, so a mismatch is attributable to one half or the other. That is what
+    lets ``SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED`` warn about wiring drift
+    while a drift in the already-covered artifacts keeps failing closed
+    (issue #1735). Keeping the two apart also leaves every receipt minted
+    before this existed byte-stable in its ``artifact_digest``.
+    """
+    return _digest_paths(contract.wiring_artifact_paths)
 
 
 def qualification_receipt_payload(
@@ -447,11 +497,12 @@ def qualification_receipt_payload(
 ) -> dict[str, Any]:
     """Return generator output for the committed qualification manifest."""
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "program_key": program_key,
         "program_version": contract.program_version,
         "golden_trace_root": contract.golden_trace_root,
         "artifact_digest": running_artifact_digest(contract),
+        "wiring_digest": running_wiring_digest(contract),
         "qualification_suite": qualification_suite,
         "qualified_at_ms": qualified_at_ms,
     }
@@ -627,4 +678,5 @@ __all__ = [
     "qualification_receipt_payload",
     "reconstruct_legacy_program_seal",
     "running_artifact_digest",
+    "running_wiring_digest",
 ]

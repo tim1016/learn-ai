@@ -382,45 +382,49 @@ def _run_qualification_suite(test_ref: str) -> None:
         )
 
 
-def _existing_manifest(path: Path) -> ProgramBuildQualificationManifest | None:
-    if not path.is_file():
-        return None
-    return ProgramBuildQualificationManifest.model_validate_json(path.read_text(encoding="utf-8"))
+# The identity a receipt's timestamp is earned against. Changing any of these
+# is what mints a fresh ``qualified_at_ms``; everything else about a receipt
+# can be reshaped without re-dating it.
+_QUALIFIED_IDENTITY_FIELDS = (
+    "program_key",
+    "program_version",
+    "golden_trace_root",
+    "artifact_digest",
+    "qualification_suite",
+)
 
 
-def _reused_or_fresh_qualified_at_ms(
-    *,
-    program_key: str,
-    program_version: str,
-    golden_trace_root: str,
-    artifact_digest: str,
-    qualification_suite: str,
-    existing: ProgramBuildQualificationManifest | None,
-    fresh_qualified_at_ms: int,
-) -> int:
-    """Preserve the prior receipt's timestamp when nothing qualification-relevant changed.
+def _prior_qualified_at_ms(path: Path) -> dict[tuple[str, ...], int]:
+    """Map each already-qualified identity to the timestamp it earned.
 
-    Re-qualifying an unchanged program must be a byte-for-byte no-op, matching
-    the golden-fixture lifecycle rule ("regenerated only with justification").
-    A new timestamp is minted only when the qualified identity actually
-    changed — new program version, new trace root, or new artifact bytes.
+    Reads the committed manifest as raw JSON rather than through
+    ``ProgramBuildQualificationManifest``. The only thing wanted here is the
+    prior timestamp for an unchanged identity, and parsing through the model
+    would couple timestamp reuse to the *current* receipt schema — so a schema
+    bump would re-date every receipt, which is exactly the churn the reuse
+    rule exists to prevent (issue #1735 bumps it to v2). A receipt missing any
+    identity field simply does not match, and mints a fresh timestamp.
+
+    A corrupt manifest still raises: silently re-dating every receipt because
+    the file could not be parsed is the failure this whole job exists to
+    prevent.
     """
-    if existing is not None:
-        for receipt in existing.receipts:
-            if (
-                receipt.program_key == program_key
-                and receipt.program_version == program_version
-                and receipt.golden_trace_root == golden_trace_root
-                and receipt.artifact_digest == artifact_digest
-                and receipt.qualification_suite == qualification_suite
-            ):
-                return receipt.qualified_at_ms
-    return fresh_qualified_at_ms
+    if not path.is_file():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    index: dict[tuple[str, ...], int] = {}
+    for receipt in payload.get("receipts", ()):
+        identity = tuple(receipt.get(field) for field in _QUALIFIED_IDENTITY_FIELDS)
+        stamp = receipt.get("qualified_at_ms")
+        if any(part is None for part in identity) or not isinstance(stamp, int):
+            continue
+        index[identity] = stamp
+    return index
 
 
 def qualify_signal_program_builds(
     *,
-    existing_manifest: ProgramBuildQualificationManifest | None,
+    prior_qualified_at_ms: dict[tuple[str, ...], int],
     fresh_qualified_at_ms: int,
 ) -> dict[str, Any]:
     """Run every registered qualification suite and assemble the build-receipt manifest.
@@ -441,16 +445,14 @@ def qualify_signal_program_builds(
             )
         qualification_suite = _QUALIFICATION_SUITES[program_key]
         _run_qualification_suite(qualification_suite)
-        artifact_digest = running_artifact_digest(contract)
-        qualified_at_ms = _reused_or_fresh_qualified_at_ms(
-            program_key=program_key,
-            program_version=contract.program_version,
-            golden_trace_root=contract.golden_trace_root,
-            artifact_digest=artifact_digest,
-            qualification_suite=qualification_suite,
-            existing=existing_manifest,
-            fresh_qualified_at_ms=fresh_qualified_at_ms,
+        identity = (
+            program_key,
+            contract.program_version,
+            contract.golden_trace_root,
+            running_artifact_digest(contract),
+            qualification_suite,
         )
+        qualified_at_ms = prior_qualified_at_ms.get(identity, fresh_qualified_at_ms)
         receipts.append(
             qualification_receipt_payload(
                 program_key=program_key,
@@ -459,7 +461,7 @@ def qualify_signal_program_builds(
                 qualification_suite=qualification_suite,
             )
         )
-    return {"schema_version": 1, "receipts": receipts}
+    return {"schema_version": 2, "receipts": receipts}
 
 
 def _manifest_text(manifest: dict[str, Any]) -> str:
@@ -470,14 +472,14 @@ def _manifest_text(manifest: dict[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    existing_manifest = _existing_manifest(args.manifest_path)
+    prior_qualified_at_ms = _prior_qualified_at_ms(args.manifest_path)
     fresh_qualified_at_ms = (
         args.qualified_at_ms if args.qualified_at_ms is not None else now_ms_utc()
     )
 
     try:
         manifest = qualify_signal_program_builds(
-            existing_manifest=existing_manifest,
+            prior_qualified_at_ms=prior_qualified_at_ms,
             fresh_qualified_at_ms=fresh_qualified_at_ms,
         )
     except QualificationFailedError as exc:

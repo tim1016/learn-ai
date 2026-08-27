@@ -416,8 +416,9 @@ def program_build_view_from_run_evidence(
     evidence this reads from is only ever written by
     ``BotBindingRepository._ensure_program_build_evidence`` after the same
     canonical ``prove_running_program_build`` closed ``state="PROVEN"``, so
-    reconstructing that state here is a lossless replay of that verdict, not
-    a new proof.
+    reconstructing that state here replays that verdict rather than making a
+    new proof. One field does not survive the round trip: the run evidence
+    records no wiring digest, so ``wiring`` replays as ``NOT_CHECKED``.
     """
     return ProgramBuildAdmissionFact(
         state="PROVEN",
@@ -427,6 +428,12 @@ def program_build_view_from_run_evidence(
         running_artifact_digest=evidence.running_artifact_digest,
         qualification_receipt_hash=evidence.qualification_receipt_hash,
         verified_at_ms=evidence.verified_at_ms,
+        # The durable run evidence predates the wiring half (#1735) and does
+        # not record it, so this replay cannot claim one either way. Stated
+        # explicitly rather than left to the field default: a frozen replay
+        # silently reporting MATCHED would be the exact false assurance the
+        # split was added to prevent. Recording it at Start is the follow-up.
+        wiring="NOT_CHECKED",
         evidence_refs=(
             f"signal-program-seal:{evidence.sealed_program_hash}",
             f"program-build-receipt:{evidence.qualification_receipt_hash}",

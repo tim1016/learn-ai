@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     # separate read model from lifecycle projection tables and can fail
     # without changing Clerk acknowledgement durability.
     CLERK_TRANSACTION_PROJECTION_ENABLED: bool = False
+    # Issue #1735 step 3. Off, a strategy-wiring digest that no longer matches
+    # its golden-qualification receipt is reported and Start/Resume proceed;
+    # on, it fails closed like any other build drift. Deliberately default-off:
+    # the coverage is new, and every existing bot would otherwise be blocked by
+    # a mismatch nobody has had a chance to re-qualify yet. Drift in the
+    # *already-covered* artifacts keeps blocking either way -- this toggle
+    # governs only the newly-added wiring half.
+    SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED: bool = False
     # Data lake writer root (Slice 1b). Container-side path of the RW mount.
     # The writer creates lake/ and staging/ subdirectories under this path.
     # Must be on a single filesystem so POSIX atomic rename(2) is valid.

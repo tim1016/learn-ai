@@ -118,6 +118,31 @@ example EMA Crossover 2 bps or the legacy EMA Crossover compatibility key)
 reports `NOT_APPLICABLE` rather than `PROGRAM_BUILD_UNPROVEN` and is not
 gated by this proof; it runs on its existing, non-sealed execution path.
 
+### The wiring half of the proof
+
+The hashed bytes come in two halves, hashed separately so a mismatch says
+which one moved. The **artifact** half is the program's decision math and its
+import closure; drift there has always refused the run as
+`PROGRAM_BUILD_UNPROVEN`, and still does. The **wiring** half — the module
+under `app/engine/strategy/programs/` that binds a program's parameters to
+that math, plus the shared parameter/decision-clock leaf — was not covered at
+all until issue #1735: an edit to a program's factory moved no digest, so a
+stale receipt still read `PROVEN`.
+
+Wiring coverage is new, so it starts in a reporting posture. With
+`SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED` off (the default), a program whose
+wiring no longer matches its receipt still starts, and the build fact reports
+`wiring: DRIFTED` with a `next_step` naming the re-qualification. Turning the
+variable on makes that drift refuse the run like any other. Turn it on only
+once every deployed program has been re-qualified against its current wiring —
+otherwise every bot is blocked at once by a mismatch nobody has had the chance
+to clear. The same `run_signal_program_build_qualification` command above
+mints receipts covering both halves.
+
+This toggle governs *only* the wiring half. Drift in the artifact half is the
+admission control this proof was built around and keeps refusing runs in both
+toggle positions.
+
 A strategy instance deployed before this seal existed has no v2 seal on file.
 Its first Resume after this feature attempts migration, and migration
 succeeds only when the v1 configuration is *exactly* reconstructible — never

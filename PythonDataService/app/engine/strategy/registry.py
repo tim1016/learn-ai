@@ -291,6 +291,21 @@ class SignalProgramContract:
     validated_settings: dict[str, str | int | float | bool]
     validated_symbols: tuple[str, ...]
     artifact_paths: tuple[str, ...]
+    # The code that wires this program's parameters to that math: its own
+    # module under ``programs/`` plus the shared parameter/decision-clock
+    # leaf. Deliberately NOT folded into ``artifact_paths``: the two are
+    # hashed separately so a mismatch stays attributable, which is what lets
+    # ``SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED`` distinguish a legacy-artifact
+    # drift (always fails closed) from a wiring-only drift (warns while the
+    # toggle is off). Issue #1735.
+    wiring_artifact_paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        # Overlap would make a drift attributable to both halves at once,
+        # which is exactly the ambiguity the split exists to remove.
+        overlap = set(self.artifact_paths) & set(self.wiring_artifact_paths)
+        if overlap:
+            raise ValueError(f"artifact_paths and wiring_artifact_paths overlap: {sorted(overlap)}")
 
 
 @dataclass
@@ -551,6 +566,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "app/lean_sidecar/trading_calendar.py",
                 "app/utils/timestamps.py",
             ),
+            wiring_artifact_paths=(
+                "app/engine/strategy/programs/ema_crossover_signal.py",
+                "app/engine/strategy/params.py",
+            ),
         ),
         description=(
             "Long-only intraday EMA signal generator. Bit-exact against the "
@@ -777,6 +796,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "app/engine/live/indicator_state.py",
                 "app/lean_sidecar/trading_calendar.py",
                 "app/utils/timestamps.py",
+            ),
+            wiring_artifact_paths=(
+                "app/engine/strategy/programs/sma_crossover.py",
+                "app/engine/strategy/params.py",
             ),
         ),
         description=(
@@ -1040,6 +1063,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "app/engine/live/indicator_state.py",
                 "app/lean_sidecar/trading_calendar.py",
                 "app/utils/timestamps.py",
+            ),
+            wiring_artifact_paths=(
+                "app/engine/strategy/programs/rsi_mean_reversion.py",
+                "app/engine/strategy/params.py",
             ),
         ),
         description=(
@@ -1335,6 +1362,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "app/engine/live/indicator_state.py",
                 "app/lean_sidecar/trading_calendar.py",
                 "app/utils/timestamps.py",
+            ),
+            wiring_artifact_paths=(
+                "app/engine/strategy/programs/deployment_validation.py",
+                "app/engine/strategy/params.py",
             ),
         ),
         description=(
@@ -1716,6 +1747,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "app/lean_sidecar/trading_calendar.py",
                 "app/utils/timestamps.py",
             ),
+            wiring_artifact_paths=(
+                "app/engine/strategy/programs/spy_strategy_a.py",
+                "app/engine/strategy/params.py",
+            ),
         ),
         description=(
             "Long-only 15-minute trend-follower. On each bar while flat, enters "
@@ -1958,6 +1993,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "app/lean_sidecar/trading_calendar.py",
                 "app/utils/timestamps.py",
             ),
+            wiring_artifact_paths=(
+                "app/engine/strategy/programs/spy_strategy_b.py",
+                "app/engine/strategy/params.py",
+            ),
         ),
         description=(
             "Long-only 15-minute momentum strategy. Same RSI-range filter as "
@@ -2193,6 +2232,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "app/engine/live/indicator_state.py",
                 "app/lean_sidecar/trading_calendar.py",
                 "app/utils/timestamps.py",
+            ),
+            wiring_artifact_paths=(
+                "app/engine/strategy/programs/spy_strategy_c.py",
+                "app/engine/strategy/params.py",
             ),
         ),
         description=(

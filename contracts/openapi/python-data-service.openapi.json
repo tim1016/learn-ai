@@ -21772,6 +21772,16 @@
             "minimum": 0.0,
             "title": "Verified At Ms",
             "type": "integer"
+          },
+          "wiring": {
+            "default": "NOT_CHECKED",
+            "enum": [
+              "MATCHED",
+              "DRIFTED",
+              "NOT_CHECKED"
+            ],
+            "title": "Wiring",
+            "type": "string"
           }
         },
         "required": [
