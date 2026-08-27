@@ -89,9 +89,9 @@ def _copy_as_production_v8(*, v9_path: Path, v8_path: Path) -> None:
                 )
             if table == "holds":
                 # v8 stored the spelling its fold was handed; the wire name
-                # arrived with the v12 merge. Both rewrites here restate a
-                # frozen historical fact about the v8 file, which is what
-                # makes this stand-in a stand-in.
+                # arrived with the v12 merge. This rewrite and the scope one
+                # above each restate a frozen historical fact about the v8
+                # file, which is what makes this stand-in a stand-in.
                 select_columns = select_columns.replace(
                     '"reason_code"',
                     "CASE reason_code WHEN 'UNEXPLAINED_ORDER_HOLD' THEN 'UNEXPLAINED_ORDER' "
