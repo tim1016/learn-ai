@@ -65,7 +65,6 @@ from app.services.bot_runner import (
 )
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
-from app.services.broker_capability_service import get_broker_capability_service
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionPerformer,
@@ -105,6 +104,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
 )
+from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.signal_program_admission import prove_running_program_build
 from app.services.sqlite_clerk_compat import active_sqlite_facade
 from app.services.strategy_validation_manifest import (
@@ -797,7 +797,7 @@ async def _get_panel_with_entries_from_authority(
             symbol=binding.symbol,
             account_id=capability_account_id,
             capability=(
-                get_broker_capability_service().read_latest_for(
+                get_market_data_capability_service().read_latest_for(
                     symbol=binding.symbol,
                     account_id=capability_account_id,
                 )

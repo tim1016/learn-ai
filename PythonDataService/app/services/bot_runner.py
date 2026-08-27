@@ -151,8 +151,8 @@ from app.services.bot_start_admission import (
     resolve_start_runtime_fact,
 )
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
-from app.services.broker_capability_service import get_broker_capability_service
 from app.services.canary_admission import canary_gate_applies, evaluate_canary_rollback
+from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_replay_proof import RunReplayProofService, RunReplayUnavailableError
 from app.services.strategy_validation_admission import current_strategy_validation_fact
@@ -291,7 +291,7 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             validation_fact=current_strategy_validation_fact,
             activate=self._activate_start_binding,
-            session_capability=get_broker_capability_service().read_latest_for,
+            session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
         )
         self._resume_admission = BotResumeAdmission(
@@ -306,7 +306,7 @@ class BotTaskRegistry:
             validation_fact=current_strategy_validation_fact,
             activate=self._activate_resume_binding,
             carryover_account_policy_enabled=self._carryover_allowed,
-            session_capability=get_broker_capability_service().read_latest_for,
+            session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
             legacy_migration_repository=self._bindings,
         )

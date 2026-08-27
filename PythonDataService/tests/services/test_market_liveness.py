@@ -103,7 +103,7 @@ def test_halted_symbol_status_overrides_a_closed_market_clock() -> None:
     """Regression: Alpaca's market clock is RTH-only and reports CLOSED
     through every extended session, so callers reconcile a CLOSED liveness
     fact against a proven extended-hours capability to allow non-RTH entries
-    (see broker_capability_service.extended_phase_proven_at_ms). Once that
+    (see market_data_capability_service.extended_phase_proven_at_ms). Once that
     reconciliation actually works, this HALTED symbol status must still be
     the one that decides the outcome — if the CLOSED branch returned first
     without ever inspecting it, a proven-extended-hours caller would see a

@@ -15,7 +15,7 @@ from app.services.session_authority import session_state_at_ms
 logger = logging.getLogger(__name__)
 
 
-class BrokerCapabilityService:
+class MarketDataCapabilityService:
     def __init__(self, *, root: Path | None = None) -> None:
         settings = get_settings()
         self._root = root or Path(settings.live_runs_root) / "_broker" / "session_capabilities"
@@ -103,10 +103,10 @@ def _sanitize_path_part(value: str) -> str:
     return cleaned.strip("._") or "unknown"
 
 
-_SERVICE = BrokerCapabilityService()
+_SERVICE = MarketDataCapabilityService()
 
 
-def get_broker_capability_service() -> BrokerCapabilityService:
+def get_market_data_capability_service() -> MarketDataCapabilityService:
     return _SERVICE
 
 
@@ -148,7 +148,7 @@ def extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str | N
     """
     if account_id is None:
         return False
-    capability = get_broker_capability_service().read_latest_for(symbol=symbol, account_id=account_id)
+    capability = get_market_data_capability_service().read_latest_for(symbol=symbol, account_id=account_id)
     session = session_state_at_ms(
         now_ms=now_ms,
         capability=capability,
