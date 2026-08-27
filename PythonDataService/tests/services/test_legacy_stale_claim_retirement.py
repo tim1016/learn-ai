@@ -8,9 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.ibkr.account_recovery import AccountRecoveryState
-from app.broker.ibkr.account_truth import compose_account_truth
-from app.broker.ibkr.models import IbkrAccountSummary, IbkrConnectionHealth, IbkrPositionsSnapshot
+from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.live.account_artifacts import ACCOUNT_EVENTS_FILENAME, read_account_events
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
@@ -19,6 +17,7 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.schemas.account_reconciliation import LegacyStaleClaimRetirementReceipt
+from app.schemas.account_truth import AccountTruthResponse, AccountTruthSourceFreshness
 from app.schemas.live_runs import HostRunnerProcessStatus
 from app.services.fleet_contamination import collect_fleet_position_explanations
 from app.services.legacy_stale_claim_retirement import (
@@ -40,8 +39,22 @@ _NAMESPACE = "learn-ai/legacy-spy/v1"
 _NOW_MS = 1_780_000_002_000
 
 
-def _truth() -> object:
-    return compose_account_truth(
+def _truth() -> AccountTruthResponse:
+    """A clean, positions-empty, freshly-verified Account Truth fixture.
+
+    Constructed directly against the schema rather than via the retired
+    ``app.broker.ibkr.account_truth.compose_account_truth`` (IBKR account
+    decommission, PR-A of #1813) — every test in this file only exercises
+    ``_validate_account_truth``'s account-id and positions-freshness checks,
+    never the verdict/blocker composition that function used to own.
+    """
+    return AccountTruthResponse(
+        account_id=_ACCOUNT_ID,
+        final_verdict="clean",
+        final_severity="ok",
+        status_label="Clean",
+        status_detail="No blockers.",
+        generated_at_ms=_NOW_MS,
         health=IbkrConnectionHealth(
             mode="paper",
             host="127.0.0.1",
@@ -54,24 +67,19 @@ def _truth() -> object:
             connection_state="connected",
             last_transition_ms=_NOW_MS,
         ),
-        account_instance_bindings=[],
-        account_recovery_state=AccountRecoveryState.clear(_ACCOUNT_ID),
-        account=IbkrAccountSummary(
-            account_id=_ACCOUNT_ID,
-            is_paper=True,
-            base_currency="USD",
-            fetched_at_ms=_NOW_MS,
-        ),
-        positions_snapshot=IbkrPositionsSnapshot(
-            account_id=_ACCOUNT_ID,
-            is_paper=True,
-            positions=[],
-            fetched_at_ms=_NOW_MS,
-        ),
-        open_orders=[],
-        completed_orders=[],
-        executions=[],
-        generated_at_ms=_NOW_MS,
+        invariants=[],
+        positions=[],
+        source_freshness=[
+            AccountTruthSourceFreshness(
+                source="positions",
+                label="Positions",
+                status="fresh",
+                severity="ok",
+                fetched_at_ms=_NOW_MS,
+                hard_ttl_ms=60_000,
+                message="Positions evidence is fresh.",
+            ),
+        ],
     )
 
 

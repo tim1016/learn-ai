@@ -3,9 +3,6 @@
 This is the *only* place outside ``app.broker.*`` that touches IBKR.
 The .NET backend and Angular frontend reach IBKR via these endpoints —
 no tight coupling to ``ib_async`` types crosses this boundary.
-
-Additional Account Truth and broker-ledger endpoints under the same
-``/api/broker`` prefix live in ``app.routers.broker_account_truth``.
 """
 
 from __future__ import annotations
@@ -20,7 +17,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr import contracts as ibkr_contracts
 from app.broker.ibkr.api_evidence import (
     IbkrApiEvidenceEvent,
@@ -50,13 +46,11 @@ from app.broker.ibkr.models import (
     DataPlaneHealth,
     DiagnosticReport,
     DiagnosticReportDisabled,
-    IbkrAccountSummary,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
     IbkrOpenOrder,
     IbkrOrderEvent,
     IbkrPnLTick,
-    IbkrPositionsSnapshot,
     IbkrStrikeList,
     IbkrSurfaceSnapshot,
 )
@@ -65,7 +59,6 @@ from app.broker.ibkr.orders import (
     stream_order_events,
 )
 from app.broker.ibkr.persistence import (
-    make_account_writer,
     make_pnl_writer,
     make_writer,
 )
@@ -91,7 +84,6 @@ from app.utils.throttle import TokenBucket, TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
-_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S = 5.0
 
 # Computed once at module import — stable for the lifetime of the process.
 # Used by DiagnosticReportDisabled.since_ms so each request doesn't generate
@@ -277,9 +269,7 @@ async def connect_endpoint() -> IbkrConnectionHealth:
         # SHOULD auto-recover from any future drop.
         client.set_desired_connected(True)
         if client.is_connected():
-            health = build_broker_health(client, get_monitor())
-            await _warm_account_evidence_after_connect(client, client.health())
-            return health
+            return build_broker_health(client, get_monitor())
         return await _connect_and_install(client)
 
 
@@ -351,64 +341,8 @@ async def _connect_and_install(client: IbkrClient) -> IbkrConnectionHealth:
             f"Could not reach IB Gateway: {exc}",
         ) from exc
     set_client(client)
-    health = build_broker_health(client, get_monitor())
-    await _warm_account_evidence_after_connect(client, client.health())
-    return health
+    return build_broker_health(client, get_monitor())
 
-
-async def _warm_account_evidence_after_connect(
-    client: IbkrClient,
-    health: IbkrConnectionHealth,
-) -> None:
-    """Refresh account-scoped evidence immediately after a broker connect.
-
-    The background Account Truth loop also refreshes periodically, but a manual
-    Connect should clear stale/blind account evidence before the operator has
-    to infer what happened from unrelated screens.
-    """
-    if not health.connected or health.account_id is None:
-        return
-    from app.services.account_reconciliation import AccountReconciliationService
-    from app.services.account_truth_refresh import (
-        account_truth_artifacts_root,
-        account_truth_refresh_session_unavailable,
-        refresh_account_truth_now,
-    )
-
-    if account_truth_refresh_session_unavailable(health):
-        return
-    reconciliation_service = AccountReconciliationService(
-        artifacts_root=account_truth_artifacts_root()
-    )
-
-    async def initialize_account_evidence() -> None:
-        reconciliation_service.ensure_automatic_reconciliation(account_id=health.account_id)
-        await refresh_account_truth_now(
-            client,
-            context="broker connect initialization",
-            health=health,
-            account_truth_observer=reconciliation_service.observe_account_truth,
-            account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
-        )
-
-    try:
-        await asyncio.wait_for(
-            initialize_account_evidence(),
-            timeout=_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S,
-        )
-    except (
-        BrokerError,
-        OSError,
-        TimeoutError,
-    ) as exc:
-        logger.warning(
-            "broker connect account-evidence warm-up failed",
-            extra={
-                "account_id": health.account_id,
-                "connection_state": health.connection_state,
-                "exception": repr(exc),
-            },
-        )
 
 async def _disconnect_with_error_mapping(client: IbkrClient) -> None:
     """Call ``client.disconnect()``, translating socket / broker errors to 502.
@@ -425,47 +359,6 @@ async def _disconnect_with_error_mapping(client: IbkrClient) -> None:
     except NotConnectedError:
         return
     except (BrokerError, OSError) as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-
-# ── /account (Phase 2a) ────────────────────────────────────────────────
-
-
-@router.get("/account", response_model=IbkrAccountSummary)
-async def account_summary_endpoint() -> IbkrAccountSummary:
-    """One-shot account summary: cash, NLV, margin, account-level P&L.
-
-    Phase 2c — every snapshot is offered to the configured account
-    writer (no-op unless ``IBKR_PERSIST_ACCOUNT=true``).
-    """
-    client = require_connected_client()
-    try:
-        snapshot = await ibkr_account.fetch_account_summary(client)
-    except BrokerError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-    writer = make_account_writer(
-        persist=client.settings.persist_account,
-        persist_dir=client.settings.persist_dir,
-    )
-    try:
-        await writer.write(snapshot)
-        await writer.flush()
-    finally:
-        await writer.close()
-    return snapshot
-
-
-# ── /positions (Phase 2a) ──────────────────────────────────────────────
-
-
-@router.get("/positions", response_model=IbkrPositionsSnapshot)
-async def positions_endpoint() -> IbkrPositionsSnapshot:
-    """All open positions for the connected account."""
-    client = require_connected_client()
-    try:
-        return await ibkr_account.fetch_positions(client, allow_cache_fallback=True)
-    except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 

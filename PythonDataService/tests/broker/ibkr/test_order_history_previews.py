@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,7 +13,7 @@ from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.config import IbkrSettings
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.broker.ibkr.order_history import list_completed_orders
-from app.broker.ibkr.order_previews import preview_paper_order
+from app.broker.ibkr.order_previews import _coerce_float_or_none, preview_paper_order
 
 
 def _spec(**overrides) -> IbkrOrderSpec:
@@ -203,3 +204,19 @@ async def test_preview_paper_order_uses_non_submitting_what_if_path() -> None:
     assert preview.ibkr_evidence is not None
     assert preview.ibkr_evidence.request is not None
     assert preview.ibkr_evidence.request.call == "whatIfOrderAsync"
+
+
+# ── _coerce_float_or_none ────────────────────────────────────────────────
+# Relocated from tests/broker/ibkr/test_account.py — the helper moved here
+# with its only surviving caller when app.broker.ibkr.account was retired
+# (IBKR account decommission, PR-A of #1813).
+
+
+def test_coerce_float_or_none_handles_strings_and_empties() -> None:
+    assert _coerce_float_or_none("100000.5") == 100000.5
+    assert _coerce_float_or_none(0.0) == 0.0
+    assert _coerce_float_or_none(None) is None
+    assert _coerce_float_or_none("") is None
+    assert _coerce_float_or_none("BASE") is None
+    assert _coerce_float_or_none("not-a-number") is None
+    assert _coerce_float_or_none(str(sys.float_info.max)) is None

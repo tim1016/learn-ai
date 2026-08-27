@@ -265,30 +265,6 @@ def test_account_fleet_computation_scopes_journal_reads_to_requested_account(
     assert seen == ["DU-A"]
 
 
-def test_account_net_fetch_mismatch_blocks_account_fleet_starts(monkeypatch, tmp_path: Path) -> None:
-    class _Snapshot:
-        account_id = "DU-OTHER"
-        positions = []
-
-    class _Account:
-        async def fetch_positions(self, _client):
-            return _Snapshot()
-
-    monkeypatch.setattr("app.broker.ibkr.account.fetch_positions", _Account().fetch_positions)
-    monkeypatch.setattr("app.routers.broker_dependencies.require_connected_client", lambda: object())
-
-    contamination = asyncio.run(
-        fleet_contamination.compute_account_fleet_contamination(
-            tmp_path / "live_runs",
-            account_id="DU-EXPECTED",
-        )
-    )
-
-    assert contamination.verdict == "unknown"
-    assert contamination.policy_blocks_starts is True
-    assert "mismatches" in contamination.summary
-
-
 def test_account_scoped_journals_cannot_cross_net_offsetting_exposure(
     tmp_path: Path,
     monkeypatch,

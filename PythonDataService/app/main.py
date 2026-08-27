@@ -20,14 +20,12 @@ from app.broker.ibkr.client import (
 from app.config import settings
 from app.routers import (
     account_pnl_attribution,
-    account_reconciliation,
     aggregates,
     alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
     baselines,
     bot_events,
     broker,
-    broker_account_truth,
     broker_bots,
     broker_capability,
     broker_session,
@@ -81,9 +79,6 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
 )
-from app.services.account_reconciliation import AccountReconciliationService
-from app.services.account_truth_refresh import AccountTruthRefreshLoop, account_truth_artifacts_root
-from app.services.fleet_contamination import record_account_journal_parity_observation
 from app.utils.error_handlers import (
     polygon_exception_handler,
     request_validation_exception_handler,
@@ -258,7 +253,6 @@ async def lifespan(app: FastAPI):
     )
 
     monitor: AutoReconnectMonitor | None = None
-    account_truth_refresh_loop = None
 
     if ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
@@ -323,22 +317,6 @@ async def lifespan(app: FastAPI):
         )
         monitor.start()
         set_monitor(monitor)
-
-        artifacts_root = account_truth_artifacts_root(ibkr_settings)
-        live_runs_root = Path(ibkr_settings.live_runs_root)
-        reconciliation_service = AccountReconciliationService(artifacts_root=artifacts_root)
-
-        account_truth_refresh_loop = AccountTruthRefreshLoop(
-            client=ibkr_client,
-            artifacts_root=artifacts_root,
-            account_truth_observer=reconciliation_service.observe_account_truth,
-            account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
-            account_journal_observer=lambda account_id: record_account_journal_parity_observation(
-                live_runs_root,
-                account_id=account_id,
-            ),
-        )
-        account_truth_refresh_loop.start()
 
         # Shared MarketDataFeed — installed after the IBKR client is created
         # so it references the same process-local client the rest of the broker
@@ -456,8 +434,6 @@ async def lifespan(app: FastAPI):
 
         await stop_live_projection_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
-        if account_truth_refresh_loop is not None:
-            await account_truth_refresh_loop.stop()
         # ADR 0014 — stop every broker-activity publisher before tearing
         # down the broker connection so each publisher's WAL append +
         # subscriber drain completes cleanly. Safe to call even when no
@@ -601,10 +577,6 @@ app.include_router(
 app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # IBKR account/session capability probe (issue #1005 Slice 0).
 app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
-# Account Truth and account-wide broker ledger endpoints.
-app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
-# Account-scoped reconciliation and recovery triage endpoints.
-app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker session mirror — read-only roster/SSE observatory with sensitive runtime data.
 app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Broker System v2 read surface (/api/brokers/{broker}/...). Broker account,
