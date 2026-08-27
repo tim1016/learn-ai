@@ -77,11 +77,6 @@ export type IbkrEvidenceValue =
   | IbkrEvidenceValue[]
   | { [key: string]: IbkrEvidenceValue };
 
-export interface IbkrObjectSnapshot {
-  object_type: string;
-  fields: Record<string, IbkrEvidenceValue>;
-}
-
 export interface IbkrApiRequestEvidence {
   call: IbkrApiRequestName;
   params: Record<string, IbkrEvidenceValue>;
