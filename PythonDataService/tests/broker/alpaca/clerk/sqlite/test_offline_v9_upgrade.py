@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ManualTicketReservedFacts,
     ManualTicketStateFacts,
 )
+from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY, V9_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.offline_v9_upgrade import (
     OfflineV9UpgradeRefused,
@@ -29,8 +30,13 @@ from app.broker.alpaca.clerk.sqlite.offline_v9_upgrade import (
 from app.broker.alpaca.clerk.sqlite.recovery import ProcessStopProof
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    HOLD_REASON_CODE_SQL_PARAMS,
+    HOLD_REASON_CODE_SQL_PLACEHOLDERS,
+)
 from app.broker.alpaca.paths import safe_path_component
 from app.broker.contract.models import BrokerOrderLeg
+from tests.broker.alpaca.clerk.sqlite.conftest import _hold_transition
 
 ACCOUNT_ID = "PA-V9-UPGRADE"
 STRATEGY_ID = "spy-upgrade"
@@ -75,14 +81,35 @@ def _copy_as_production_v8(*, v9_path: Path, v8_path: Path) -> None:
             columns = [column for column in destination_columns if column in source_columns]
             quoted_columns = ", ".join(f'"{column}"' for column in columns)
             select_columns = quoted_columns
+            where_clause = ""
             if table in {"holds", "uncertainties"}:
                 select_columns = select_columns.replace(
                     '"scope"',
                     "CASE scope WHEN 'CUSTODY_SUBJECT' THEN 'BOT' ELSE scope END",
                 )
+            if table == "holds":
+                # v8 stored the spelling its fold was handed; the wire name
+                # arrived with the v12 merge. Both rewrites here restate a
+                # frozen historical fact about the v8 file, which is what
+                # makes this stand-in a stand-in.
+                select_columns = select_columns.replace(
+                    '"reason_code"',
+                    "CASE reason_code WHEN 'UNEXPLAINED_ORDER_HOLD' THEN 'UNEXPLAINED_ORDER' "
+                    "ELSE reason_code END",
+                )
+            if table == "uncertainties":
+                # In a real v8 file a hold-shaped cause lived in ``holds`` and
+                # only there. Post-v12 it lives in ``uncertainties`` and is
+                # *republished* through the ``holds`` view, so copying both
+                # tables verbatim would give the v8 stand-in the same episode
+                # twice — a shape v8 never had.
+                where_clause = (
+                    f" WHERE reason_code NOT IN ({HOLD_REASON_CODE_SQL_PLACEHOLDERS})"
+                )
             destination.execute(
                 f'INSERT INTO "{table}" ({quoted_columns}) '
-                f'SELECT {select_columns} FROM v9."{table}"'
+                f'SELECT {select_columns} FROM v9."{table}"{where_clause}',
+                HOLD_REASON_CODE_SQL_PARAMS if where_clause else (),
             )
         destination.execute("UPDATE control_meta SET schema_version = 8 WHERE id = 1")
         destination.commit()
@@ -185,6 +212,13 @@ def _seed_production_v8(tmp_path: Path) -> tuple[_Clock, Path]:
         evidence_refs=(accepted.order_ref,),
         cause_facts={"order_ref": accepted.order_ref},
     ) != "unchanged"
+    # An account-wide hold. ``ACCOUNT_HOLD_RAISED`` was a live write kind for
+    # the whole v8 era (three producers: reconcile, stream health, unexplained
+    # trade updates), so a v8 mirror routinely carries one and the ceremony
+    # has to replay it into the v9 shape it was recorded against.
+    repo.append_transition(
+        _hold_transition(reason_code="UNEXPLAINED_ORDER", evidence_refs=["bo-upgrade"])
+    )
     repo.close()
 
     account_dir = tmp_path / "accounts" / "alpaca" / safe_path_component(ACCOUNT_ID, "account_id")
@@ -227,6 +261,9 @@ def test_offline_upgrade_replays_a_production_shaped_v8_authority_and_is_idempot
         assert source.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
         assert source.execute("SELECT COUNT(*) FROM positions").fetchone()[0] == 1
         assert source.execute("SELECT COUNT(*) FROM uncertainties").fetchone()[0] == 1
+        assert source.execute(
+            "SELECT reason_code, state FROM holds"
+        ).fetchall() == [("UNEXPLAINED_ORDER", "ACTIVE")]
         assert source.execute("SELECT COUNT(*) FROM fills").fetchone()[0] == 2
     finally:
         source.close()
@@ -251,6 +288,12 @@ def test_offline_upgrade_replays_a_production_shaped_v8_authority_and_is_idempot
         assert upgraded.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
         assert upgraded.execute("SELECT COUNT(*) FROM positions").fetchone()[0] == 1
         assert upgraded.execute("SELECT COUNT(*) FROM uncertainties").fetchone()[0] == 1
+        # The staged authority is a *v9* file: the hold belongs in the v9
+        # ``holds`` table, exactly where the source kept it, or the parity
+        # proof this ceremony rests on is comparing two different shapes.
+        assert upgraded.execute(
+            "SELECT reason_code, state FROM holds"
+        ).fetchall() == [("UNEXPLAINED_ORDER", "ACTIVE")]
         assert upgraded.execute("SELECT COUNT(*) FROM fills").fetchone()[0] == 2
     finally:
         upgraded.close()
@@ -615,3 +658,18 @@ def test_offline_upgrade_refuses_an_active_execution_lease_without_mutating_v8(t
         assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 8
     finally:
         conn.close()
+
+
+def test_the_v9_replay_registry_stays_in_step_with_the_current_one() -> None:
+    """The ceremony must replay every kind, not a frozen subset of them.
+
+    ``V9_FOLD_REGISTRY`` is *derived* from the default so a transition kind
+    added later is replayed by the ceremony without anyone remembering to
+    extend a second list — a kind the ceremony could not fold would abort
+    every upgrade of an authority that recorded one. Only the kinds whose
+    projection target moved at v12 are overridden.
+    """
+    assert V9_FOLD_REGISTRY.registered_kinds == DEFAULT_FOLD_REGISTRY.registered_kinds
+
+    with pytest.raises(ValueError, match="unregistered transition_kind"):
+        DEFAULT_FOLD_REGISTRY.replacing({"NOT_A_KIND": lambda _conn, _payload: None})

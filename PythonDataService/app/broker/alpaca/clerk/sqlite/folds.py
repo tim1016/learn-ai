@@ -16,7 +16,7 @@ rather than growing an if/elif chain here or in the repository.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
@@ -110,6 +110,27 @@ class FoldRegistry:
     def registered_kinds(self) -> frozenset[str]:
         """Expose the closed transition vocabulary for projection-copy checks."""
         return frozenset(self._folds)
+
+    def replacing(self, overrides: Mapping[str, FoldFn]) -> FoldRegistry:
+        """A copy of this registry that folds some kinds a different way.
+
+        The offline v8-to-v9 ceremony rebuilds a *historical* v9 database, so
+        it needs the folds that were current at v9, not the ones current now.
+        Deriving that registry from this one keeps the two in step by
+        construction: a kind added later is replayed by the ceremony without a
+        second list needing an edit, and only the handful of kinds whose
+        projection shape actually changed are named here.
+
+        Every overridden kind must already be registered — an override for an
+        unknown kind is a typo or a rename that would otherwise silently do
+        nothing.
+        """
+        unknown = sorted(set(overrides) - set(self._folds))
+        if unknown:
+            raise ValueError(f"cannot replace unregistered transition_kind(s): {unknown}")
+        derived = FoldRegistry()
+        derived._folds = {**self._folds, **overrides}
+        return derived
 
     def apply(self, conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
         """Look up and run the fold for ``payload['transition_kind']``.
@@ -1369,6 +1390,55 @@ def _fold_account_hold_resolved(conn: sqlite3.Connection, payload: dict[str, Any
     )
 
 
+# ── Historical v9 account-hold folds (offline v8-to-v9 ceremony only) ────────
+# ``offline_v9_upgrade`` rebuilds a *v9* database from a v8 mirror and then
+# proves it projection-for-projection against the v8 source. A v9 file keeps a
+# hold in the ``holds`` table under the spelling the transition carried, so the
+# replay that builds it has to write what v9 wrote — the folds below are the
+# pre-v12 bodies, restored verbatim, not the v12 ones aimed at
+# ``uncertainties``. Replaying the current folds into the stage puts the
+# episode in a different table under a normalised code and fails the parity
+# proof, refusing an upgrade that is in fact sound.
+#
+# They cannot be expressed by parameterising the v12 folds: v9 stored the
+# reason code unnormalised and the evidence refs in arrival order, whereas the
+# v12 envelope normalises the code and sorts the refs. That divergence is the
+# whole point of keeping two bodies rather than one with a flag.
+def _fold_account_hold_raised_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Open one database-unique account hold episode for a typed cause (v9)."""
+    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    hold_id = f"hold:{_this_transition_sequence(conn)}"
+    conn.execute(
+        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
+        "opened_at_ms, resolved_at_ms, evidence_refs_json) "
+        "VALUES (?, 'ACCOUNT_CLERK', NULL, ?, 'ACTIVE', ?, NULL, ?)",
+        (
+            hold_id,
+            facts.reason_code,
+            payload["recorded_at_ms"],
+            canonicalize(facts.evidence_refs),
+        ),
+    )
+
+
+def _fold_account_hold_refreshed_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    conn.execute(
+        "UPDATE holds SET evidence_refs_json = ? WHERE scope = 'ACCOUNT_CLERK' "
+        "AND reason_code = ? AND state = 'ACTIVE'",
+        (canonicalize(facts.evidence_refs), facts.reason_code),
+    )
+
+
+def _fold_account_hold_resolved_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    facts = AccountHoldResolvedFacts.from_facts_json(payload["facts_json"])
+    conn.execute(
+        "UPDATE holds SET state = 'RESOLVED', resolved_at_ms = ?, evidence_refs_json = ? "
+        "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND state = 'ACTIVE'",
+        (payload["recorded_at_ms"], canonicalize(facts.evidence_refs), facts.reason_code),
+    )
+
+
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered)
 DEFAULT_FOLD_REGISTRY.register("RUN_STARTED", _fold_run_started)
@@ -1419,3 +1489,14 @@ DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RESOLVED", _fold_uncertainty_resolve
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
+
+# The registry the offline v8-to-v9 ceremony replays with. Identical to the
+# default except for the three kinds whose projection target moved at v12; see
+# the historical-fold block above.
+V9_FOLD_REGISTRY = DEFAULT_FOLD_REGISTRY.replacing(
+    {
+        "ACCOUNT_HOLD_RAISED": _fold_account_hold_raised_v9,
+        "ACCOUNT_HOLD_REFRESHED": _fold_account_hold_refreshed_v9,
+        "ACCOUNT_HOLD_RESOLVED": _fold_account_hold_resolved_v9,
+    }
+)

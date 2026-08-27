@@ -22,7 +22,7 @@ from app.broker.alpaca.clerk.sqlite.database_verification import (
     DatabaseVerification,
     verify_database,
 )
-from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY, FoldRegistry
+from app.broker.alpaca.clerk.sqlite.folds import V9_FOLD_REGISTRY, FoldRegistry
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, MirrorIdentity
 from app.broker.alpaca.clerk.sqlite.operational_files import (
     atomic_write_json,
@@ -72,7 +72,7 @@ def upgrade_v8_authority_offline(
     artifacts_root: Path,
     process_stop_proof: ProcessStopProof,
     clock: Clock = now_ms_utc,
-    fold_registry: FoldRegistry = DEFAULT_FOLD_REGISTRY,
+    fold_registry: FoldRegistry = V9_FOLD_REGISTRY,
     max_process_stop_proof_age_ms: int = PROCESS_STOP_PROOF_MAX_AGE_MS,
     before_swap: Callable[[Path], None] | None = None,
     after_swap: Callable[[Path], None] | None = None,
@@ -335,7 +335,14 @@ def _rebuild_stage_from_finalized_mirror(
     source_control: sqlite3.Row,
     fold_registry: FoldRegistry,
 ) -> None:
-    """Build the stage exclusively from finalized mirror facts and v9 folds."""
+    """Build the stage exclusively from finalized mirror facts and v9 folds.
+
+    ``fold_registry`` defaults to ``V9_FOLD_REGISTRY`` rather than the current
+    one for the same reason ``apply_v9_schema`` exists: the stage is a
+    historical v9 file, proved against a v8 source, and a fold whose projection
+    target moved in a later version would build a shape neither version ever
+    had — and then be refused by ``_assert_projection_parity``.
+    """
     rows = MirrorFile(
         mirror_path,
         expected_identity=MirrorIdentity(
