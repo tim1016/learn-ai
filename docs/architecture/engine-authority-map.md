@@ -148,13 +148,36 @@ disclosed rather than swept there) with the two `live_runs.py` DTOs it
 anchored, and `account_clerk_journal.py::normalize_broker_event` as its own
 cascade.
 
+`app/schemas/live_runs.py` was **narrowed from 55 top-level symbols to 11**: the
+44 that nothing imports were deleted, having gone dead when PR-A/PR-B retired
+the `/api/live-runs` surface and the host-runner control plane. The surviving
+boundary is exact rather than estimated — six names (`BotDutyOutcomeView`,
+`GateResult`, `ReconciliationReceipt`, `MutationRungReceipt`, `ExitReason`,
+`RunStatusSidecar`) are imported by five production modules
+(`app/schemas/broker_bots.py`, `app/engine/live/account_artifacts.py`,
+`app/engine/live/account_registry.py`,
+`app/engine/live/reconciliation_receipt.py`,
+`app/services/mutation_rung_receipts.py`), closing to 11 with their intra-file
+dependencies (`GateResultStatus`, `ReceiptStatus`, `ReceiptOutcome`,
+`MutationRungReceiptCode`, `MutationBlockageStageId`). The file has no
+`__all__`, no `from app.schemas import live_runs` attribute access, and no
+router reference, so no deleted name was reachable dynamically. The deletion is
+contract-neutral, re-proved rather than inherited: `export_openapi_contract.py
+--check` leaves the contract byte-identical (its `OpenRunbookAction` is
+`app/schemas/operator_blocker.py`'s identically-named model, never this file's).
+Two consequences worth recording — the deleted set included `FailureRecord` and
+`IncidentRecord`, whose docstrings an earlier PR-C commit had rewritten to
+describe their retained-residue status, so the deletion supersedes that wording
+fix; and `app/services/sqlite_clerk_compat.py::active_sqlite_facade` cited
+`HostRunnerHealth.clerks` in prose, so its docstring now records that inventory
+as retired while keeping the rule it motivated.
+
 Everything below is **deliberately retained by PR-C**, not missed. Each entry
 names the follow-up that would clear it, so "kept" stays distinguishable from
 "overlooked" — and so a later reader does not have to re-derive the analysis.
 
 | Retained | Measured state at PR-C | Why PR-C kept it |
 |---|---|---|
-| `app/schemas/live_runs.py` — 39 of 55 top-level symbols | Transitively unreachable: 11 symbols are referenced outside the file, 16 including their intra-file dependencies; the other 39 are reachable from nothing. Verified by AST reachability, not grep. None appears in the OpenAPI contract, so removing them is contract-neutral. | Out of PR-C's charter, which scoped this file to a two-docstring wording fix. It is a shared-schema refactor in a 915-line file with six live importers, not a deletion cascade — PR-B called it "the single largest piece of residue this PR creates" and it is still that. A clean, separable follow-up: the 39 names are pinned above by the method that found them. |
 | `app/engine/live/live_artifact_io.py` (276 lines) | Production surface is `artifact_sha256` alone (`app/engine/live/reconcile.py:102`). `artifact_mtime_signature`, `read_parquet_rows`, `read_parquet_tail`, `list_run_artifacts` are test-only; `artifact_exists`, `parquet_row_count`, `artifact_size_bytes`, `artifact_mtime_ms`, `LiveArtifactMetadata`, `LiveArtifactReadError` are reachable only through those four. | These are read paths onto durable run artifacts that still exist on disk. Deleting a *reader* of data the repo still stores is a different and higher-stakes call than deleting a control-plane surface, and it is not what a feed-consolidation PR is for. |
 | Six files whose production callers PR-B retired: `account_artifacts.py` (`read_account_freeze`, `write_account_freeze`, `read_legacy_account_events`, `AccountFreezeEvidence`), `intent_ledger.py` (`LedgerProjection`, `projection_from_envelope`), `live_state_sidecar.py` (`LiveStateSidecarCorruptError`), `account_clerk_journal.py` (`read_account_clerk_journal`), `schemas/artifact_io.py` (`read_pydantic_artifact`), `indicator_state.py` (`IndicatorStateRepo`) | Retained symbols with tests but no production caller. | Same reason as the row above: each is the read side of a durable artifact the repo still holds. |
 | `account_clerk_journal.py::fold_account_clerk_custody_statuses` | **Newly identified by PR-C**, and it is this decommission's cascade rather than pre-existing debt: at master `03ce52b6` its sole production consumer was `app/services/account_safety_snapshot.py`, which PR-A/PR-B deleted. Now referenced only by its own `__all__` entry. Deleting it cascades three levels — it takes the 134-line private helper `_custody_status_for_entries` with it, which in turn is the only constructor of `AccountClerkCustodyStatus`, leaving that type a re-export. | The cascade reaches into a shared model type inside a file PR-B deliberately retained, and arrived late in a twelve-item task with no room to verify a three-level deletion properly. Recorded with the chain fully mapped so the follow-up is mechanical rather than exploratory. |
