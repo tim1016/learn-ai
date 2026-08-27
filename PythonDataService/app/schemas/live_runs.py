@@ -207,8 +207,14 @@ class FailureRecord(BaseModel):
     ``ts_ms`` is the same instant as canonical ``int64`` ms since Unix
     epoch UTC. The parser that produced these rows,
     ``app/services/live_log_failures.py``, retired with the
-    ``/api/live-runs`` surface (PR-B of #1813, 2026-08-27); this DTO
-    remains as the wire shape for historical rows only.
+    ``/api/live-runs`` surface (PR-B of #1813, 2026-08-27).
+
+    Not a wire shape. Nothing constructs this model, no route serves it,
+    and it has no entry in the OpenAPI contract — an earlier revision of
+    this docstring said it "remains as the wire shape for historical rows
+    only", which overstated it. It is unreferenced residue of that
+    retirement; see the ``live_runs.py`` residue row in
+    ``docs/architecture/engine-authority-map.md`` for its disposition.
     """
 
     ts_ms: int
@@ -225,9 +231,13 @@ class IncidentRecord(BaseModel):
     map on plus an ``incident_source`` for the evidence view's BROKER / APP /
     INFRA / OPERATOR badge + filter (codex 2026-06-24 D2 / D8).
 
-    Mirrored ``app/services/live_log_failures.py``'s ``IncidentRow`` as the
-    wire DTO; that classifier retired with the ``/api/live-runs`` surface
-    (PR-B of #1813, 2026-08-27). The ``incident_category`` enum is the
+    Mirrored ``app/services/live_log_failures.py``'s ``IncidentRow``; that
+    classifier retired with the ``/api/live-runs`` surface (PR-B of #1813,
+    2026-08-27). Like :class:`FailureRecord`, this is no longer a wire
+    shape — nothing constructs it, no route serves it, and it has no entry
+    in the OpenAPI contract. It is unreferenced residue of that
+    retirement. The paragraphs below describe the contract it carried while
+    that surface existed. The ``incident_category`` enum is the
     single source of truth for classification — the frontend never re-derives meaning from the raw
     log text. A missing or unrecognised category is rendered as
     ``unknown`` on the frontend for rollout safety.
