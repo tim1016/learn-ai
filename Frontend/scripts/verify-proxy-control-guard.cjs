@@ -205,7 +205,7 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
 {
   const req = request({
     method: 'GET',
-    url: '/api/live-instances/fleet/stream',
+    url: '/api/brokers/alpaca/accounts/DU1234567/gallery/stream',
     intent: null,
     queryIntent: DATA_PLANE_CONTROL_INTENT_VALUE,
   });
@@ -232,7 +232,7 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
 }
 
 {
-  const req = request({ url: '/api/live-instances/runs/run-abc/start' });
+  const req = request({ url: '/api/brokers/alpaca/accounts/DU1234567/bots/sid-abc/actions' });
   const proxy = proxyEmitterRecorder();
   const proxyReq = proxyReqRecorder();
   assert.equal(proxyConfig['/api'].onProxyReq, undefined);
@@ -302,10 +302,13 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
   assert.equal(requiresDataPlaneControlSecret(req), false);
 }
 
-{
+// A query-intent SSE read carries no browser provenance headers of its own, so
+// the secret must stay off it. Driving this off the manifest rather than one
+// hardcoded path keeps it from going vacuously green when a route retires.
+for (const prefix of PROTECTED_READ_PREFIXES) {
   const req = request({
     method: 'GET',
-    url: '/api/broker/session-mirror',
+    url: `${prefix}/stream`,
     intent: null,
     queryIntent: DATA_PLANE_CONTROL_INTENT_VALUE,
     origin: null,
@@ -314,6 +317,7 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
   });
   const proxyReq = proxyReqRecorder();
   attachDataPlaneSecret(proxyReq, req);
+  assert.equal(isProtectedControlRead(req), true);
   assert.equal(proxyReq.headers.has(DATA_PLANE_CONTROL_SECRET_HEADER), false);
   assert.equal(shouldAttachDataPlaneSecret(req), false);
 }
