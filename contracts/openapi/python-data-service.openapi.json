@@ -13868,23 +13868,12 @@
         "properties": {
           "call": {
             "enum": [
-              "accountSummaryAsync",
-              "cancelOrder",
-              "placeOrder",
               "cancelMktData",
               "qualifyContractsAsync",
-              "reqAllOpenOrders",
-              "reqCompletedOrdersAsync",
               "reqContractDetailsAsync",
-              "reqCurrentTimeAsync",
-              "reqExecutionsAsync",
               "reqHistoricalDataAsync",
-              "reqMatchingSymbolsAsync",
-              "reqMktData",
               "reqMarketDataType",
-              "reqPnL",
-              "reqPnLSingle",
-              "reqPositionsAsync",
+              "reqMktData",
               "reqRealTimeBars",
               "reqSecDefOptParamsAsync",
               "whatIfOrderAsync"
@@ -13911,23 +13900,12 @@
         "properties": {
           "callback": {
             "enum": [
-              "accountSummary",
               "contractDetails",
-              "completedOrder",
-              "currentTime",
-              "error",
-              "openOrder",
-              "orderStatus",
-              "execDetails",
               "historicalData",
               "marketDataType",
-              "pnl",
-              "pnlSingle",
-              "position",
               "realTimeBar",
               "realTimeBarList",
               "securityDefinitionOptionParameter",
-              "symbolSamples",
               "tickSnapshot",
               "whatIfOrder"
             ],

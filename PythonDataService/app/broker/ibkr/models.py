@@ -84,46 +84,39 @@ def _coerce_quote(value: float | None) -> float | None:
 
 
 SecType = Literal["STK", "OPT", "FUT", "FOP", "CASH", "BOND", "CFD", "WAR", "IND", "BAG"]
+# These two unions enumerate exactly the IBKR calls this service can still
+# make and the callbacks it can still observe — nothing wider. Both cross the
+# wire: they are emitted into ``contracts/openapi/python-data-service.openapi.json``
+# as enums and regenerated into ``Frontend/src/app/api/broker.types.ts``, so a
+# value here that the service cannot produce is a dead value in the browser's
+# type contract. Adding a name means regenerating both artifacts in the same
+# change.
+#
+# Narrowed by PR-C of #1813 (2026-08-27) from 20 request / 19 callback names to
+# the 9 / 8 that a production ``evidence_request`` / ``evidence_response`` call
+# site actually passes, verified by AST scan rather than grep (there are no
+# non-literal call sites, so the scan is exhaustive). Safe to narrow because
+# ``api_evidence.py::_RECORDER`` is an in-process ring buffer — no durable row
+# survives a restart carrying a retired name, so there is no stored data whose
+# shape these unions describe.
 IbkrApiRequestName = Literal[
-    "accountSummaryAsync",
-    "cancelOrder",
-    "placeOrder",
     "cancelMktData",
     "qualifyContractsAsync",
-    "reqAllOpenOrders",
-    "reqCompletedOrdersAsync",
     "reqContractDetailsAsync",
-    "reqCurrentTimeAsync",
-    "reqExecutionsAsync",
     "reqHistoricalDataAsync",
-    "reqMatchingSymbolsAsync",
-    "reqMktData",
     "reqMarketDataType",
-    "reqPnL",
-    "reqPnLSingle",
-    "reqPositionsAsync",
+    "reqMktData",
     "reqRealTimeBars",
     "reqSecDefOptParamsAsync",
     "whatIfOrderAsync",
 ]
 IbkrApiCallbackName = Literal[
-    "accountSummary",
     "contractDetails",
-    "completedOrder",
-    "currentTime",
-    "error",
-    "openOrder",
-    "orderStatus",
-    "execDetails",
     "historicalData",
     "marketDataType",
-    "pnl",
-    "pnlSingle",
-    "position",
     "realTimeBar",
     "realTimeBarList",
     "securityDefinitionOptionParameter",
-    "symbolSamples",
     "tickSnapshot",
     "whatIfOrder",
 ]
