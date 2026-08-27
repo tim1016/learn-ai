@@ -30,7 +30,8 @@ from __future__ import annotations
 
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, EmaCrossoverSignalParams
+from app.engine.strategy.programs.ema_crossover_signal import EmaCrossoverSignalParams
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import SignalSession
 
 

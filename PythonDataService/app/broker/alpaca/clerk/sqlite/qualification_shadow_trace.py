@@ -45,9 +45,9 @@ from typing import Any
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
+from app.engine.strategy.params import StrategyParamsBase
 from app.engine.strategy.registry import (
     _STRATEGY_REGISTRY,
-    StrategyParamsBase,
     StrategyRegistration,
 )
 from app.engine.strategy.signal_program import EvaluationTrace, Settlement, trace_root
