@@ -22,10 +22,6 @@ export type PanelActionErrorResponse = components['schemas']['PanelActionErrorRe
 export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
   IbkrOrderEvidenceFields &
   IbkrOrderRefFields;
-export type IbkrOrderSpec = components['schemas']['IbkrOrderSpec'] &
-  IbkrOrderRefFields &
-  IbkrManualOrderFields;
-export type IbkrPosition = components['schemas']['IbkrPosition'];
 
 export type OptionRight = 'C' | 'P';
 export type OrderAction = 'BUY' | 'SELL';
@@ -161,10 +157,6 @@ export interface IbkrOrderEvidenceFields {
 
 export interface IbkrOrderRefFields {
   order_ref?: string | null;
-}
-
-export interface IbkrManualOrderFields {
-  manual_order?: boolean;
 }
 
 export interface IbkrOrderWhatIfPreview extends IbkrOrderEvidenceFields, IbkrOrderRefFields {
