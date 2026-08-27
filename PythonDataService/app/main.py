@@ -24,11 +24,9 @@ from app.routers import (
     alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
     baselines,
-    bot_events,
     broker,
     broker_bots,
     broker_capability,
-    broker_session,
     broker_v2_gallery,
     broker_v2_panel,
     brokers,
@@ -65,15 +63,6 @@ from app.routers import (
     tickers,
     volatility,
     walk_forward,
-)
-from app.routers import (
-    broker_activity as broker_activity_router,
-)
-from app.routers import (
-    live_instances as live_instances_router,
-)
-from app.routers import (
-    live_runs as live_runs_router,
 )
 from app.security.data_plane_control import (
     require_data_plane_control_secret,
@@ -121,8 +110,8 @@ async def lifespan(app: FastAPI):
     must not be silently absorbed.
 
     When broker is disabled: /health returns HTTP 200 with disabled=True
-    (not 503 — Angular HttpClient routes 503 to error path); /diagnose
-    returns DiagnosticReportDisabled; all other broker endpoints return 503.
+    (not 503 — Angular HttpClient routes 503 to error path); all other
+    broker endpoints return 503.
     """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
@@ -293,26 +282,16 @@ async def lifespan(app: FastAPI):
             )
         # The monitor is started even when initial connect failed — it will
         # observe the disconnected state and retry per the backoff policy.
-        # Slice 3 / ADR 0011 amendment — the broker-activity publisher
-        # registry's reconnect-recovery sweep rides the same chain as
-        # the bar aggregator's resubscribe-all. Order inside the wrapped
-        # chain: bar aggregator first (restore read-side market-data
-        # subscriptions), then the broker-activity sweep (replay the day's
-        # executions to catch evidence missed mid-drop).
-        #
-        from app.services.broker_activity_publisher_registry import (
-            get_publisher_registry as get_broker_activity_publisher_registry,
-        )
+        # Recovery re-subscribes read-side market-data streams after a
+        # reconnect; the former broker-activity evidence sweep that used to
+        # ride the same chain retired with the broker-activity publisher
+        # (PR-B of #1813, 2026-08-27).
         from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-        async def _sweep_broker_activity_after_reconnect() -> None:
-            await get_broker_activity_publisher_registry().sweep_all_for_recovery()
 
         monitor = AutoReconnectMonitor(
             ibkr_client,
             recovery_callbacks=[
                 LIVE_BAR_AGGREGATOR.resubscribe_all,
-                _sweep_broker_activity_after_reconnect,
             ],
         )
         monitor.start()
@@ -329,9 +308,7 @@ async def lifespan(app: FastAPI):
     else:
         set_client(None)
         set_monitor(None)
-        logger.info(
-            "IBKR broker disabled (IBKR_BROKER_ENABLED=false). Broker endpoints disabled. Live-runs router available."
-        )
+        logger.info("IBKR broker disabled (IBKR_BROKER_ENABLED=false). Broker endpoints disabled.")
 
     # ── Alpaca Bot Control v2, S2 (#1260) — in-container bot runner ────
     # The task registry is installed regardless of broker_enabled so the
@@ -433,16 +410,6 @@ async def lifespan(app: FastAPI):
         from app.services.broker_v2_panel.live_projection import stop_live_projection_hubs
 
         await stop_live_projection_hubs()
-        await bot_events.get_bot_event_stream_service().stop_all()
-        # ADR 0014 — stop every broker-activity publisher before tearing
-        # down the broker connection so each publisher's WAL append +
-        # subscriber drain completes cleanly. Safe to call even when no
-        # publishers were registered (registry stop_all is a no-op).
-        from app.services.broker_activity_publisher_registry import (
-            get_publisher_registry,
-        )
-
-        await get_publisher_registry().stop_all()
         # Stop the broker monitor BEFORE disconnecting so a tick-in-flight
         # doesn't observe the close and immediately try to reconnect.
         if monitor is not None:
@@ -577,8 +544,6 @@ app.include_router(
 app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # IBKR account/session capability probe (issue #1005 Slice 0).
 app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
-# Broker session mirror — read-only roster/SSE observatory with sensitive runtime data.
-app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Broker System v2 read surface (/api/brokers/{broker}/...). Broker account,
 # position, order, activity, asset, and clock evidence is sensitive operator
 # data, so every v2 read requires the always-on data-plane control secret.
@@ -627,29 +592,6 @@ app.include_router(
     tags=["strategy-validation"],
     dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
 )
-# Authored bot-event stream backfill (ADR 0024 / PRD #928). This is run-scoped
-# historical evidence; live delivery comes in a later SSE slice.
-app.include_router(
-    bot_events.router,
-    prefix="/api/live-runs",
-    tags=["bot-events"],
-    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
-)
-# Live paper-trading run observer (read-only). Three-layer caching:
-# Layer 1: 15 s TTL on dir listing; Layer 2: mtime-signature LRU on status;
-# Layer 3: inode-tracked incremental deque on log tail.
-app.include_router(
-    live_runs_router.router,
-    prefix="/api/live-runs",
-    tags=["live-runs"],
-    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
-)
-app.include_router(
-    live_instances_router.router,
-    prefix="/api/live-instances",
-    tags=["live-instances"],
-    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-)
 app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Activation-selected SQLite Alpaca Clerk command and projection surface.
@@ -660,14 +602,6 @@ app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_P
 # identity, timeline proof refs) — the GET routes need the secret checked
 # unconditionally, like clerk_transactions.router's comparable reads.
 app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
-# ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
-# The router carries its own ``/api/live-instances`` prefix internally
-# (so the path is sibling to the live-instances router), keeping the
-# operator-facing URL space consistent.
-app.include_router(
-    broker_activity_router.router,
-    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-)
 
 # Data lake (Slice 1a) — gated by DATA_LAKE_ENABLED.
 # When disabled, the prefix has no registered routes; clients get 404.
