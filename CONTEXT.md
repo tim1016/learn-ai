@@ -529,22 +529,29 @@ must refuse to restart itself even when that authority is unreachable.
 
 ## Live-instances intent endpoint and command channel (resolved 2026-05-30)
 
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
+**Lineage: historical (ADR 0038; retired 2026-08-18; routes and code deleted by
+PR-B of #1813, 2026-08-27).**
 
 The transport the live-instances plane put in front of durable operator intent.
-The intent itself is live — see "Operator intent — single knob" above.
+The *concept* — operator intent as a single durable knob — is live; see
+"Operator intent — single knob" above. The transport described here is not:
+`routers/live_instances.py` and the command channel were deleted, and no
+`/api/live-instances` route is registered any more.
 
-The intent endpoint (`POST /api/live-instances/{id}/desired-state`): (1) writes
-durable intent first; (2) if a live binding exists, enqueues the matching live
-actuation command to that run; (3) returns both durable-write status and
-live-actuation ack pointer; (4) with no live binding, returns "durable only;
-will gate next start."
+The intent endpoint (`POST /api/live-instances/{id}/desired-state`) used to:
+(1) write durable intent first; (2) if a live binding existed, enqueue the
+matching live actuation command to that run; (3) return both durable-write
+status and live-actuation ack pointer; (4) with no live binding, return
+"durable only; will gate next start."
 
-**Writer contract:**
-- *Primary writer* — `/api/live-instances/{id}/desired-state`.
+**Writer contract, as it stood:**
+- *Primary writer* — `/api/live-instances/{id}/desired-state`. **Retired**; the
+  Alpaca Broker V2 bot-action surface (`POST
+  /api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions`) is the live
+  successor and owns its own intent contract.
 - *Reconciling writers* — the engine command dispatcher and CLI emergency
-  controls. They persist intent as **reconciliation, not primary ownership**;
-  same-value/idempotent writes are acceptable (version churn, not semantic
+  controls. They persisted intent as **reconciliation, not primary ownership**;
+  same-value/idempotent writes were acceptable (version churn, not semantic
   drift).
 
 **One-shot command channel** is reserved for true one-shot operations:
@@ -600,19 +607,21 @@ spec explicitly disallows fallback data.
 
 ## Strategy-agnostic console (resolved 2026-05-30)
 
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
+**Lineage: historical (ADR 0038; retired 2026-08-18; the status route it names
+was deleted by PR-B of #1813, 2026-08-27).**
 
 The console renders **no hardcoded indicator names**. The strategy-state panel is
 driven by **decision-column descriptors** (`name`, `label`, `type`, `format`)
 whose source of truth is the strategy spec (`resolve_decision_columns(spec)` —
 the spec declares types, nullability, and semantics). The
-**delivery vehicle is the status payload** — `/api/live-instances/{id}/status`
-ships the resolved descriptors alongside `latest_decision` values, so the UI is
-one-fetch, never joins the spec client-side, and a missing descriptor is an
-API/test failure rather than a UI interpretation problem. EMA, VWAP-reversion,
-and future strategies render through the same path. Likewise `bar_source` rides
-in `/status` from the latest decision row (engine-authored provenance, not a
-backend recompute).
+**delivery vehicle was the status payload** — `/api/live-instances/{id}/status`
+(retired) shipped the resolved descriptors alongside `latest_decision` values,
+so the UI was one-fetch, never joined the spec client-side, and a missing
+descriptor was an API/test failure rather than a UI interpretation problem. EMA,
+VWAP-reversion, and future strategies rendered through the same path. Likewise
+`bar_source` rode in `/status` from the latest decision row (engine-authored
+provenance, not a backend recompute). The one-fetch descriptor principle carries
+forward to the Alpaca bot panel; the route does not.
 
 ## Broker-observed state & position ownership (resolved 2026-05-30)
 

@@ -1,17 +1,37 @@
 # IBKR broker-activity reconciliation — conceptual reference
 
-**Audience:** engineers extending the broker-activity surface (publisher, reconciler, templates, schemas).
+**Audience:** engineers reading the retired broker-activity surface (publisher, reconciler, templates, schemas) in git history, or designing a comparable reconciliation elsewhere.
 **Not:** operator documentation or an IBKR trading-control procedure; new bot-control work belongs to the Alpaca Broker V2 manual. This is not a re-statement of ADR 0014 (see `docs/architecture/adrs/0014-broker-authored-operator-view-backend-rendered-narratives.md`).
 **Pairs with:** ADR 0014 (the decision), ADR 0008 + 2026-06-22 amendment (identity ladder & sibling WAL).
 
-A conceptual map for engineers extending the reconciler. The decision (why server-authored, why one row per IBKR execution, why a closed verdict enum) lives in ADR 0014 and is assumed here. The mechanics live in code. This doc bridges the two: the *concepts* a contributor needs before reading either.
+> **RETIRED — the subsystem this document describes no longer exists.**
+> PR-A of #1813 (2026-08-26) retired the Account Truth half; PR-B of #1813
+> (2026-08-27) retired the broker-activity half — reconciler, templates,
+> schemas, publisher, WAL, router, and the raw first-capture writer
+> `app/engine/live/broker_callbacks.py`. See PRD #1817, and the retired rows
+> in `docs/math-sources-of-truth.md` and
+> `docs/architecture/engine-authority-map.md`.
+>
+> **Every module path, line number, and route in this document is historical.**
+> Do not read it as an inventory of live code, and do not use it as the model
+> for new work — Alpaca Broker V2's SQLite decision receipts are the surviving
+> execution-evidence product and were never authored by this path.
+>
+> It is kept, not deleted, because that is what `docs/references/` is for: it
+> is the engineering record of *how* the reconciliation worked — the hybrid
+> state-event model, the identity ladder, the four-phase lag decomposition,
+> the closed `ReasonCode` vocabulary and the frozen-template contract — and
+> `docs/math-sources-of-truth.md`'s retired verdict-authoring row cites it as
+> that record.
+
+A conceptual map of the reconciler as it was built. The decision (why server-authored, why one row per IBKR execution, why a closed verdict enum) lives in ADR 0014 and is assumed here. The mechanics live in code. This doc bridges the two: the *concepts* a contributor needs before reading either.
 
 ## The hybrid state-event model
 
 A broker-activity row is the join of two streams:
 
 - **The engine stream** — `LiveStateEnvelope.submitted_orders` (`app/engine/live/live_state_sidecar.py:80`), the durable projection of `intent_events.jsonl` (ADR 0008 §3). Each entry is an `intent_id` the engine *intended* to submit, with sizing provenance, timestamps, and the `order_ref` it stamped.
-- **The broker stream** — `IbkrOrderEvent`s pulled off `ib_async`'s `IB.execDetailsEvent` and `IB.orderStatusEvent` callbacks, surfaced as a single `AsyncIterator` by `app.broker.ibkr.orders.stream_order_events` (`PythonDataService/app/broker/ibkr/orders.py:683`). Each event has, at most, the `order_ref` IBKR echoes back on the order.
+- **The broker stream** — `IbkrOrderEvent`s pulled off `ib_async`'s `IB.execDetailsEvent` and `IB.orderStatusEvent` callbacks, surfaced as a single `AsyncIterator` by `stream_order_events` in the former `PythonDataService/app/broker/ibkr/orders.py` (retired, PR-B of #1813). Each event has, at most, the `order_ref` IBKR echoes back on the order.
 
 **Row identity is broker-authored, overlay is engine-authored.** The broker decides whether a row exists at all (no execution → no row, with one exception below). The engine, when it can be joined, decides what *should have happened* — requested qty, requested price, sizing policy, and the four-phase latency clock. Authoring happens at that join, in `broker_activity_reconciler.author_row_from_event` (`PythonDataService/app/services/broker_activity_reconciler.py:413`).
 
@@ -121,19 +141,26 @@ If you find yourself reading CP Web API docs while extending the reconciler, you
 
 ## Pointers
 
-| Concern | Where |
-|---|---|
-| Decision rationale | `docs/architecture/adrs/0014-broker-authored-operator-view-backend-rendered-narratives.md` |
-| Identity ladder, `order_ref` ownership | `docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md` (§1) |
-| Sibling WAL contract | ADR 0008 amendment 2026-06-22 |
-| Pure reconciler | `PythonDataService/app/services/broker_activity_reconciler.py` |
-| Versioned templates | `PythonDataService/app/services/broker_activity_templates.py` |
-| Stateful publisher | `PythonDataService/app/services/broker_activity_publisher.py` |
-| WAL writer | `PythonDataService/app/services/broker_activity_wal.py` |
-| Row schemas + enums | `PythonDataService/app/schemas/broker_activity.py` |
-| Account-wide truth projection | `PythonDataService/app/broker/ibkr/account_truth.py` |
-| Account Truth schema | `PythonDataService/app/schemas/account_truth.py` |
-| Account Truth REST surface | `GET /api/broker/account-truth` in `PythonDataService/app/routers/broker_account_truth.py` |
-| Resume cursor | `PythonDataService/app/engine/live/live_state_sidecar.py` (`last_broker_activity_wal_seq`) |
-| SSE + REST surface | `PythonDataService/app/routers/broker_activity.py` |
-| Current bot-control operator manual | `docs/broker-v2-operator-manual.md` |
+Only the first three rows and the last still resolve. Everything between them
+is a historical inventory of what the subsystem was made of — the paths are
+recorded so a reader can find the code in git history, not so it can be
+imported.
+
+| Concern | Where | Status |
+|---|---|---|
+| Decision rationale | `docs/architecture/adrs/0014-broker-authored-operator-view-backend-rendered-narratives.md` | live (dated decision record) |
+| Identity ladder, `order_ref` ownership | `docs/architecture/adrs/0008-durable-submit-protocol-order-identity-recovery.md` (§1) | live (dated decision record) |
+| Sibling WAL contract | ADR 0008 amendment 2026-06-22 | live (dated decision record) |
+| Pure reconciler | `PythonDataService/app/services/broker_activity_reconciler.py` | **retired — PR-B of #1813** |
+| Versioned templates | `PythonDataService/app/services/broker_activity_templates.py` | **retired — PR-B of #1813** |
+| Stateful publisher | `PythonDataService/app/services/broker_activity_publisher.py` | **retired — PR-B of #1813** |
+| WAL writer | `PythonDataService/app/services/broker_activity_wal.py` | **retired — PR-B of #1813** |
+| Row schemas + enums | `PythonDataService/app/schemas/broker_activity.py` | **retired — PR-B of #1813** |
+| Raw first-capture WAL | `PythonDataService/app/engine/live/broker_callbacks.py` | **retired — PR-B of #1813** |
+| Broker event stream | `PythonDataService/app/broker/ibkr/orders.py` | **retired — PR-B of #1813** |
+| Account-wide truth projection | `PythonDataService/app/broker/ibkr/account_truth.py` | **retired — PR-A of #1813** |
+| Account Truth schema | `PythonDataService/app/schemas/account_truth.py` | **retired — PR-A of #1813** |
+| Account Truth REST surface | `GET /api/broker/account-truth` in `PythonDataService/app/routers/broker_account_truth.py` | **retired — PR-A of #1813** |
+| Resume cursor | `PythonDataService/app/engine/live/live_state_sidecar.py` (`last_broker_activity_wal_seq`) | file live; the cursor field is a deliberately retained no-op (the envelope is `extra="forbid"`, so removing it would make written envelopes unreadable) |
+| SSE + REST surface | `PythonDataService/app/routers/broker_activity.py` | **retired — PR-B of #1813** |
+| Current bot-control operator manual | `docs/broker-v2-operator-manual.md` | live |

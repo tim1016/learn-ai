@@ -178,15 +178,15 @@ services:
       - IBKR_PORT=${IBKR_PORT:-4002}
       - IBKR_CLIENT_ID=${IBKR_CLIENT_ID:-1}
       - IBKR_REALTIME_BAR_MAX_ACTIVE=${IBKR_REALTIME_BAR_MAX_ACTIVE:-100}
-      - IBKR_PERSIST_TICKS=${IBKR_PERSIST_TICKS:-false}
-      # Operator kill switch for order placement. Default true (matches
-      # IbkrSettings.readonly). Must be surfaced through compose because
-      # the container does NOT read host .env directly — without this
-      # line, flipping IBKR_READONLY=false in .env has no effect and the
-      # error message in orders.py is misleading.
+      # Passed to ib_async.IB.connectAsync so the retained IBKR session is
+      # read-only at the upstream client too. Default true (matches
+      # IbkrSettings.readonly). Must be surfaced through compose because the
+      # container does NOT read host .env directly — without this line,
+      # flipping IBKR_READONLY=false in .env has no effect.
       - IBKR_READONLY=${IBKR_READONLY:-true}
-      # Broker enable/disable switch. Set false when host-venv cmd_start owns
-      # the IBKR session. The container stays up for the live-runs router.
+      # Broker enable/disable switch for the data plane's own IBKR client.
+      # Set false to run the stack with no IBKR connection at all; every other
+      # service, including the Alpaca bot-control plane, stays up.
       - IBKR_BROKER_ENABLED=${IBKR_BROKER_ENABLED:-true}
       # Live-run artifact root. Container path is fixed by the volume mount
       # (./PythonDataService/artifacts:/app/artifacts).

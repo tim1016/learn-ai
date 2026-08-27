@@ -8,7 +8,7 @@ The Interactive Brokers bot list and bot control panel are deprecated:
 
 - Legacy UI routes: `/broker/bots` and `/broker/bots/:id`
 - Legacy Angular areas: `Frontend/src/app/components/broker/bots/` and `Frontend/src/app/components/broker/bot-control/`
-- Legacy Python surface: the IBKR bot catalog/control projections under `PythonDataService/app/routers/live_instances.py` and their supporting surface-assembly services
+- Legacy Python surface: **already deleted.** The IBKR bot catalog/control projections (`PythonDataService/app/routers/live_instances.py`, `live_runs.py`, `bot_events.py`, `broker_session.py`, `broker_activity.py` and their supporting surface-assembly services) were retired by PR-B of #1813 (2026-08-27); the account-authority half went in PR-A (2026-08-26). Do not go looking for these files, and do not reintroduce the surface — see PRD #1817
 
 **Do not build, extend, optimize, or conduct product/architecture research on these IBKR bot-control surfaces. Do not use them as the model for new bot-control work.** The canonical bot-control product is the Alpaca Broker V2 list and panel under `/brokers/alpaca/...` and `Frontend/src/app/components/broker/v2-panel/`.
 
