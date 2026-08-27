@@ -9,6 +9,7 @@
 pytest
 pytest-asyncio
 pytest-cov
+pytest-xdist>=3.6  # `-n auto` in the CI Python Tests job; rationale lives there
 jsonschema>=4.0  # manifest.json schema validation in test_golden_manifest.py
 respx>=0.21      # HTTP mocking for lean_sidecar launcher_client + router tests
 # alpaca-py drives `requests`, which respx/pytest-httpx cannot intercept, so
