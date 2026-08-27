@@ -107,7 +107,6 @@ export class BrokerService {
     filters: ClerkTransactionFilters = {},
   ): Promise<ClerkTransactionHistoryResponse> {
     const params: Record<string, string | number> = { limit };
-    if (filters.broker) params['broker'] = filters.broker;
     if (cursor !== null) params['cursor'] = cursor;
     if (filters.origin) params['origin'] = filters.origin;
     if (filters.lifecycleState) params['lifecycle_state'] = filters.lifecycleState;
