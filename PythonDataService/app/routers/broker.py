@@ -27,6 +27,7 @@ from app.broker.ibkr.api_evidence import (
     get_ibkr_api_evidence_recorder,
 )
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
+from app.broker.ibkr.bar_models import IbkrBarsSnapshot
 from app.broker.ibkr.client import (
     BrokerError,
     ConnectionRefusedDueToSentinelError,
@@ -50,7 +51,6 @@ from app.broker.ibkr.models import (
     DiagnosticReport,
     DiagnosticReportDisabled,
     IbkrAccountSummary,
-    IbkrBarsSnapshot,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
     IbkrOpenOrder,

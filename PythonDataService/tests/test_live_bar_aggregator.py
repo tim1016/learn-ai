@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.ibkr.models import IbkrMinuteBar
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.services import live_bar_aggregator as agg_mod
 from app.services.bar_persistence import BarPersistence
 from app.services.live_bar_aggregator import LiveBarAggregator

@@ -46,7 +46,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
-from app.broker.ibkr.models import IbkrMinuteBar
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.utils.advisory_lock import advisory_file_lock
 from app.utils.atomic_parquet import atomic_parquet_write
 

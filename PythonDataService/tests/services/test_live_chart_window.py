@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 
-from app.broker.ibkr.models import IbkrMinuteBar
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.services import live_chart_window as chart_mod
 from app.services.bar_persistence import BarPersistence
