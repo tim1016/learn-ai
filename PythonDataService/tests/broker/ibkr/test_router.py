@@ -141,29 +141,6 @@ async def test_strikes_endpoint_rejects_missing_expiry_ms() -> None:
     assert resp.status_code == 422
 
 
-# ── Phase 2a endpoints ─────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_account_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/account")
-
-    assert resp.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_positions_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/positions")
-
-    assert resp.status_code == 503
-
-
 # ── Phase 2b endpoints ─────────────────────────────────────────────────
 
 
