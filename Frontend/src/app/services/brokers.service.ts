@@ -28,6 +28,12 @@ import type {
   SqliteRecoveryResult,
   SqliteTimelinePage,
 } from '../api/alpaca.types';
+import type {
+  ClerkTransactionDetail,
+  ClerkTransactionFilters,
+  ClerkTransactionHistoryResponse,
+  ExternalOrderAcknowledgement,
+} from '../api/clerk-transaction-history.types';
 
 /** Exact, server-owned Clerk timeline filters; all values bind the keyset cursor. */
 export interface SqliteTimelineQuery {
@@ -47,11 +53,18 @@ export interface SqliteTimelineQuery {
  * data-plane surface (separate from the v1 `/api/broker/...` family). Phase 1
  * is read-only and Alpaca-only; the broker id is a parameter so later brokers
  * reuse the same client unchanged.
+ *
+ * Also carries the two neighbouring Alpaca Clerk surfaces that are not under
+ * the `/api/brokers` prefix: `/api/alpaca-clerk-sqlite` (snapshot, timeline,
+ * recovery actions) and `/api/accounts/{account_id}/transactions` (the Clerk
+ * transaction-history projection). Both are served by Alpaca-only routers, so
+ * this is the whole of the frontend's Alpaca Clerk read surface.
  */
 @Injectable({ providedIn: 'root' })
 export class BrokersService {
   private readonly http = inject(HttpClient);
   private readonly base = '/api/brokers';
+  private readonly accountsBase = '/api/accounts';
   private readonly accountReads = new Map<
     string,
     { expiresAtMs: number; promise: Promise<BrokerAccountSnapshot> }
@@ -339,6 +352,58 @@ export class BrokersService {
           concurrency_token: action.concurrency_token,
           execution_ref: action.execution_ref,
         },
+      ),
+    );
+  }
+
+  /**
+   * Clerk transaction history — the bounded, account-scoped SQLite projection
+   * under `/api/accounts/{account_id}/transactions`. `cursor` is opaque and
+   * relayed verbatim; the window bounds are int64 ms UTC and filtered
+   * server-side, never in the browser.
+   */
+  accountTransactions(
+    accountId: string,
+    cursor: string | null = null,
+    limit = 50,
+    filters: ClerkTransactionFilters = {},
+  ): Promise<ClerkTransactionHistoryResponse> {
+    const params: Record<string, string | number> = { limit };
+    if (cursor !== null) params['cursor'] = cursor;
+    if (filters.origin) params['origin'] = filters.origin;
+    if (filters.lifecycleState) params['lifecycle_state'] = filters.lifecycleState;
+    if (filters.strategyInstanceId) params['strategy_instance_id'] = filters.strategyInstanceId;
+    if (filters.runId) params['run_id'] = filters.runId;
+    if (filters.fromMs !== null && filters.fromMs !== undefined) params['from_ms'] = filters.fromMs;
+    if (filters.toMs !== null && filters.toMs !== undefined) params['to_ms'] = filters.toMs;
+    return firstValueFrom(
+      this.http.get<ClerkTransactionHistoryResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions`,
+        { params },
+      ),
+    );
+  }
+
+  accountTransaction(
+    accountId: string,
+    transactionId: string,
+  ): Promise<ClerkTransactionDetail> {
+    return firstValueFrom(
+      this.http.get<ClerkTransactionDetail>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions/${encodeURIComponent(transactionId)}`,
+      ),
+    );
+  }
+
+  acknowledgeExternalOrder(
+    accountId: string,
+    externalOrderId: string,
+    operator: string,
+  ): Promise<ExternalOrderAcknowledgement> {
+    return firstValueFrom(
+      this.http.post<ExternalOrderAcknowledgement>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions/external-orders/${encodeURIComponent(externalOrderId)}/acknowledge`,
+        { operator },
       ),
     );
   }

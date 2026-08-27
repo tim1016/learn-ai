@@ -39,10 +39,12 @@ logger = logging.getLogger(__name__)
 def active_sqlite_facade(broker: str = "alpaca") -> SqliteAlpacaClerkFacade | None:
     """Return the selected Alpaca Broker V2 authority, not host-runner health.
 
-    ``HostRunnerHealth.clerks`` is a separate process inventory and can list a
-    Clerk for another account. Alpaca status and custody decisions must resolve
-    through this selector so that another broker's Clerk is never mistaken for
-    the Alpaca SQLite authority.
+    The host-runner Clerk inventory this warned against
+    (``HostRunnerHealth.clerks``, a process listing that could name a Clerk for
+    another account) retired with the IBKR control plane in #1813. The rule it
+    motivated stands: Alpaca status and custody decisions resolve through this
+    selector so that another broker's Clerk is never mistaken for the Alpaca
+    SQLite authority.
     """
     if broker != "alpaca":
         return None

@@ -36,8 +36,8 @@ def test_evidence_recorder_backfills_after_seq() -> None:
     )
     second = recorder.record(
         source="test.second",
-        request=evidence_request("reqPnL", account="DU123", modelCode=""),
-        response=evidence_response("pnl", fields={"dailyPnL": 2.0}),
+        request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES"),
+        response=evidence_response("realTimeBar", fields={"close": 2.0}),
     )
 
     assert first.seq == 1
@@ -61,10 +61,10 @@ def test_evidence_recorder_retains_more_than_default_activity_backfill_window() 
 
 def test_evidence_recorder_clear_resets_events_and_sequence() -> None:
     recorder = IbkrApiEvidenceRecorder()
-    recorder.record(source="test.clear", request=evidence_request("reqPositionsAsync"))
+    recorder.record(source="test.clear", request=evidence_request("reqHistoricalDataAsync"))
 
     recorder.clear()
-    event = recorder.record(source="test.after_clear", request=evidence_request("reqPnL"))
+    event = recorder.record(source="test.after_clear", request=evidence_request("reqContractDetailsAsync"))
 
     assert event.seq == 1
     assert recorder.backfill(after_seq=0) == [event]
@@ -77,8 +77,8 @@ async def test_evidence_recorder_broadcasts_to_subscribers() -> None:
 
     event = recorder.record(
         source="test.broadcast",
-        request=evidence_request("reqPositionsAsync"),
-        response=evidence_response("position", fields={"row_count": 1}),
+        request=evidence_request("reqHistoricalDataAsync"),
+        response=evidence_response("historicalData", fields={"row_count": 1}),
     )
 
     assert await subscription.queue.get() == event
@@ -94,8 +94,10 @@ def test_evidence_response_snapshots_namedtuple_account_value() -> None:
         currency="USD",
     )
 
+    # The callback name is an inert label here — serialization is keyed on the object, not the
+    # callback — so it carries no claim that a tick snapshot conveys an account value.
     response = evidence_response(
-        "accountSummary",
+        "tickSnapshot",
         fields={"row_count": 1},
         objects=[account_value],
     )
@@ -148,8 +150,9 @@ def test_evidence_response_snapshots_ibkr_object_matrix() -> None:
         currency="USD",
     )
 
+    # Inert label, as above: the exec-details matrix below is what is under test, not the callback.
     response = evidence_response(
-        "execDetails",
+        "tickSnapshot",
         objects=[
             account_value,
             position,
@@ -175,8 +178,9 @@ def test_evidence_response_unknown_object_is_placeholder_not_crash(caplog) -> No
         def __init__(self) -> None:
             self.value = "opaque"
 
+    # Inert label, as above: the unsupported object is what is under test, not the callback.
     response = evidence_response(
-        "position",
+        "tickSnapshot",
         fields={"row_count": 1},
         objects=[UnsupportedEvidenceObject()],
     )
@@ -200,8 +204,9 @@ def test_evidence_response_conversion_error_is_placeholder_not_crash(caplog) -> 
         def timestamp(self) -> float:
             raise ValueError("timestamp outside supported range")
 
+    # Inert label, as above: the exploding datetime is what is under test, not the callback.
     response = evidence_response(
-        "position",
+        "tickSnapshot",
         objects=[
             SimpleNamespace(
                 observed_at=ExplodingDatetime(2026, 6, 25, tzinfo=UTC),

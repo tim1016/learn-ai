@@ -1,8 +1,10 @@
 import type { OperatorNotice } from './operator-notice';
 
 /** Structural subset of OperatorNotice that the shared notice renderer and
- *  action contract consume. MutationRungReceipt satisfies it too, so
- *  notice-shaped receipts render through the same component without a cast. */
+ *  action contract consume. Any notice-shaped payload satisfying these fields
+ *  renders through the same component without a cast. (It used to name the
+ *  backend's MutationRungReceipt as the second such payload; PR-C of #1813
+ *  deleted the frontend mirror of that type, which no consumer referenced.) */
 export type RenderableNotice = Pick<
   OperatorNotice,
   'tier' | 'actionability' | 'title' | 'message' | 'resolution' | 'action' | 'forensic_facts'

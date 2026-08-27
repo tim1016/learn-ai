@@ -7,7 +7,9 @@ data sources), and 422 on an invalid ``right`` query param.
 ``/api/broker/symbols/search`` was retired along with
 ``app/broker/ibkr/symbol_search.py`` and the `TokenBucket` throttle it
 was the sole user of (PR-B of #1813, 2026-08-27); its 6 tests were
-removed with it.
+removed with it. This file was called ``test_broker_search_endpoints.py``
+until PR-C of #1813 renamed it: no search endpoint survives, and the
+option-contract drill-down is the only surface it has left to pin.
 """
 
 from __future__ import annotations

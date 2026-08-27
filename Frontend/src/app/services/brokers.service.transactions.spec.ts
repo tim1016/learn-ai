@@ -1,61 +1,55 @@
-import { TestBed } from '@angular/core/testing';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { BrokersService } from './brokers.service';
 
-import { BrokerService } from './broker.service';
-
-describe('BrokerService diagnostics endpoints', () => {
-  let service: BrokerService;
+describe('BrokersService Clerk transaction history', () => {
+  let service: BrokersService;
   let http: HttpTestingController;
 
   beforeEach(() => {
-    TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting()],
-    });
-    service = TestBed.inject(BrokerService);
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    service = TestBed.inject(BrokersService);
     http = TestBed.inject(HttpTestingController);
   });
 
-  afterEach(() => {
-    http.verify();
+  afterEach(() => http.verify());
+
+  it('relays an opaque history cursor without deriving transaction state', async () => {
+    const promise = service.accountTransactions('PA / 1', 'ctxhp1.opaque', 25, {});
+    const request = http.expectOne('/api/accounts/PA%20%2F%201/transactions?limit=25&cursor=ctxhp1.opaque');
+    expect(request.request.method).toBe('GET');
+    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
+    await expect(promise).resolves.toMatchObject({ high_water_journal_seq: 4, rows: [] });
   });
 
-  it('loads data-plane health from the broker diagnostics contract', async () => {
-    const promise = service.dataPlaneHealth();
-    const req = http.expectOne('/api/broker/data-plane/health');
-
-    expect(req.request.method).toBe('GET');
-    req.flush({
-      service: 'polygon-data-service',
-      code_revision: '8398d285978a94d9714490e002962e365e9cd505',
-      process_start_ms: 1_780_000_100_000,
-      fetched_at_ms: 1_780_000_200_000,
-      reload: 'watchfiles-polling',
+  it('sends account-scoped filters to the bounded projection endpoint', async () => {
+    const promise = service.accountTransactions('PA / 1', null, 25, {
+      origin: 'strategy',
+      lifecycleState: 'partially_filled',
+      strategyInstanceId: 'bot-1',
+      runId: 'run-1',
     });
-
-    await expect(promise).resolves.toEqual({
-      service: 'polygon-data-service',
-      code_revision: '8398d285978a94d9714490e002962e365e9cd505',
-      process_start_ms: 1_780_000_100_000,
-      fetched_at_ms: 1_780_000_200_000,
-      reload: 'watchfiles-polling',
-    });
-  });
-
-  it('loads IBKR API evidence backfill with an explicit cursor and limit', async () => {
-    const promise = service.ibkrApiEvidence(7, 120);
-    const req = http.expectOne(
-      (request) =>
-        request.url === '/api/broker/ibkr/evidence' &&
-        request.params.get('after_seq') === '7' &&
-        request.params.get('limit') === '120',
+    const request = http.expectOne(
+      '/api/accounts/PA%20%2F%201/transactions?limit=25&origin=strategy&lifecycle_state=partially_filled&strategy_instance_id=bot-1&run_id=run-1',
     );
+    expect(request.request.method).toBe('GET');
+    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
+    await expect(promise).resolves.toMatchObject({ rows: [] });
+  });
 
-    expect(req.request.method).toBe('GET');
-    req.flush([]);
-
-    await expect(promise).resolves.toEqual([]);
+  it('sends an inclusive UTC-millisecond history window without browser-side filtering', async () => {
+    const promise = service.accountTransactions('PA / 1', null, 25, {
+      fromMs: 1_700_000_000_000,
+      toMs: 1_700_086_400_000,
+    });
+    const request = http.expectOne(
+      '/api/accounts/PA%20%2F%201/transactions?limit=25&from_ms=1700000000000&to_ms=1700086400000',
+    );
+    expect(request.request.method).toBe('GET');
+    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
+    await expect(promise).resolves.toMatchObject({ rows: [] });
   });
 
   it('GETs the canonical SQLite transaction projection, never generic broker orders', async () => {

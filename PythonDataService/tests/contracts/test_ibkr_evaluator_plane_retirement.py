@@ -1,8 +1,19 @@
-"""Structural contract for ADR 0038's evaluator-plane retirement."""
+"""Structural contract for ADR 0038's evaluator-plane retirement.
+
+Module *absence* for this retirement is asserted by
+``tests/structural/test_ibkr_feed_boundary.py::EARLIER_RETIRED_MODULES``,
+which is the single home for "retirement X deleted module M" across all
+three retirement programmes. PR-C of #1813 moved the 33 dotted paths and
+their by-path twins there: this file's own scanner recorded only
+``f"{node.module}.{alias.name}"`` for an ``ImportFrom`` and ignored
+relative imports, so ``from app.services.bot_control_plane import x``
+was invisible to it. What stays here is what only this file can assert —
+route registration, the committed OpenAPI shape, and the non-module
+artifacts.
+"""
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -13,79 +24,6 @@ from app.main import app
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 APPLICATION_ROOT = REPOSITORY_ROOT / "PythonDataService" / "app"
 OPENAPI_CONTRACT = REPOSITORY_ROOT / "contracts/openapi/python-data-service.openapi.json"
-
-RETIRED_RUNTIME_PATHS = (
-    "engine/live/bot_lifecycle_evaluator.py",
-    "engine/live/bot_lifecycle_fence.py",
-    "engine/live/lifecycle_exit_finalizer.py",
-    "engine/live/deploy.py",
-    "engine/live/pre_flight.py",
-    "engine/live/run.py",
-    "engine/live/account_recovery_cli.py",
-    "engine/live/action_plan_deploy_readiness.snapshot.json",
-    "engine/live/daemon_connectivity_monitor.py",
-    "engine/live/child_watchdog.py",
-    "engine/live/orphan_classifier.py",
-    "engine/live/process_registry.py",
-    "engine/live/host_daemon_bot_events.py",
-    "engine/live/watchdog_controller.py",
-    "engine/live/engine_runtime_publisher.py",
-    "engine/live/post_halt_gate.py",
-    "engine/live/run_logging.py",
-    "engine/live/signal_tone.py",
-    "operator/incidents/watchdog_notices.py",
-    "operator/notices/runtime_freshness.py",
-    "schemas/account_recovery.py",
-    "services/bot_control_plane.py",
-    "services/bot_deletion.py",
-    "services/deploy_admission.py",
-    "services/deploy_preflight.py",
-    "services/ibkr_lifecycle_guard.py",
-    "services/risk_reducing_lifecycle_intent.py",
-    "services/resume_guard_state.py",
-    "services/account_crash_recovery.py",
-    "services/bot_lifecycle_receipt_copy.py",
-    "services/bot_roll_call.py",
-    "services/runtime_freshness.py",
-    "services/account_fleet_read_context.py",
-    "services/activity_lifecycle_consistency.py",
-)
-
-RETIRED_APPLICATION_MODULES = (
-    "app.engine.live.bot_lifecycle_evaluator",
-    "app.engine.live.bot_lifecycle_fence",
-    "app.engine.live.lifecycle_exit_finalizer",
-    "app.engine.live.deploy",
-    "app.engine.live.pre_flight",
-    "app.engine.live.run",
-    "app.engine.live.account_recovery_cli",
-    "app.engine.live.daemon_connectivity_monitor",
-    "app.engine.live.child_watchdog",
-    "app.engine.live.orphan_classifier",
-    "app.engine.live.process_registry",
-    "app.engine.live.host_daemon_bot_events",
-    "app.engine.live.watchdog_controller",
-    "app.engine.live.engine_runtime_publisher",
-    "app.engine.live.post_halt_gate",
-    "app.engine.live.run_logging",
-    "app.engine.live.signal_tone",
-    "app.operator.incidents.watchdog_notices",
-    "app.operator.notices.runtime_freshness",
-    "app.schemas.account_recovery",
-    "app.services.bot_control_plane",
-    "app.services.bot_deletion",
-    "app.services.deploy_admission",
-    "app.services.deploy_preflight",
-    "app.services.ibkr_lifecycle_guard",
-    "app.services.risk_reducing_lifecycle_intent",
-    "app.services.resume_guard_state",
-    "app.services.account_crash_recovery",
-    "app.services.bot_lifecycle_receipt_copy",
-    "app.services.bot_roll_call",
-    "app.services.runtime_freshness",
-    "app.services.account_fleet_read_context",
-    "app.services.activity_lifecycle_consistency",
-)
 
 RETIRED_DATA_PLANE_ROUTES = {
     ("POST", "/api/live-instances"),
@@ -133,28 +71,13 @@ def _registered_methods_and_paths() -> set[tuple[str, str]]:
     }
 
 
-def _application_imports() -> set[str]:
-    imports: set[str] = set()
-    for path in APPLICATION_ROOT.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imports.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.update(f"{node.module}.{alias.name}" for alias in node.names)
-    return imports
+def test_retired_evaluator_plane_non_module_artifacts_are_absent() -> None:
+    """The two retired artifacts the module guard cannot express.
 
-
-def test_evaluator_authority_modules_and_imports_are_absent() -> None:
-    for relative_path in RETIRED_RUNTIME_PATHS:
-        assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
-
-    application_imports = _application_imports()
-    for retired_module in RETIRED_APPLICATION_MODULES:
-        assert retired_module not in application_imports
-
-
-def test_retired_eight_bot_launcher_is_absent() -> None:
+    ``EARLIER_RETIRED_MODULES`` pins dotted ``app.*`` modules; neither of
+    these is one — a JSON snapshot inside ``app/`` and a script outside it.
+    """
+    assert not (APPLICATION_ROOT / "engine/live/action_plan_deploy_readiness.snapshot.json").exists()
     assert not (
         REPOSITORY_ROOT / "PythonDataService/scripts/launch_eight_bot_paper_run.py"
     ).exists()
@@ -170,8 +93,9 @@ def test_ibkr_bot_control_routes_are_unregistered() -> None:
 
 
 def test_legacy_ledger_parser_is_replaced_by_a_read_only_identity_reader() -> None:
-    assert not (APPLICATION_ROOT / "engine/live/run_ledger.py").exists()
-
+    # ``app.engine.live.run_ledger``'s absence is pinned by
+    # ``EARLIER_RETIRED_MODULES``; what only this test can assert is the shape
+    # of the read-only reader that replaced it.
     source = (APPLICATION_ROOT / "engine/live/historical_run_identity.py").read_text(
         encoding="utf-8"
     )
@@ -180,27 +104,6 @@ def test_legacy_ledger_parser_is_replaced_by_a_read_only_identity_reader() -> No
     assert "def build_ledger" not in source
     assert "def write_ledger" not in source
     assert "def compute_run_id" not in source
-
-
-def test_account_capability_host_and_its_runtime_are_absent() -> None:
-    """Successor to the source-scan that asserted the host bridge could not
-    reach the bot runner. PR-B of #1813 (2026-08-27) deleted the bridge
-    itself, so the guarantee is now the strictly stronger "no host bridge
-    exists at all" — there is no source left to scan for a `/runs/` or
-    `/deploy` route literal."""
-    for relative_path in (
-        "engine/live/host_daemon.py",
-        "engine/live/host_daemon_client.py",
-        "engine/live/daemon_auth.py",
-        "engine/live/daemon_transport.py",
-        "engine/live/host_runner_policy.py",
-        "engine/live/control_plane.py",
-        "engine/live/command_channel.py",
-        "engine/live/live_engine.py",
-        "engine/live/live_portfolio.py",
-        "services/host_capability.py",
-    ):
-        assert not (APPLICATION_ROOT / relative_path).exists(), relative_path
 
 
 def test_alpaca_control_and_ibkr_read_evidence_routes_remain_registered() -> None:

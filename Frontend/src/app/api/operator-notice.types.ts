@@ -1,38 +1,33 @@
-/** Retained account-evidence, receipt, and shared operator-notice contracts. */
+// Shared operator-notice vocabulary — mirrors
+// PythonDataService/app/operator/notices/schema.py. Hand-written; the OpenAPI
+// codegen gate covers only graphql/generated and broker.types.ts, so keep the
+// names in lockstep with the Python source by hand.
+//
+// All timestamps are int64 ms UTC on the wire and typed `number` here. Never a
+// string. Render through the shared timestamp component, display-side only.
 
-import type {
-  OperatorNoticeAction,
-  OperatorNoticeActionability,
-  OperatorNoticeRemedyStatus,
-  OperatorNoticeTier,
-} from './live-runs.types';
+export type OperatorNoticeTier = 'info' | 'warning' | 'critical';
 
-export type {
-  MutationRungReceipt,
-  MutationRungReceiptCode,
-  MutationRungReceiptStageId,
-  OperatorNoticeAction,
-  OperatorNoticeActionability,
-  OperatorNoticeActionKind,
-  OperatorNoticeRemedyStatus,
-  OperatorNoticeTier,
-} from './live-runs.types';
+export type OperatorNoticeActionability =
+  | 'actuatable'
+  | 'routed'
+  | 'self_resolving'
+  | 'no_remedy';
 
-export type GateResultStatus =
-  | 'pass'
-  | 'block'
-  | 'poison'
-  | 'freeze'
-  | 'unknown'
-  | 'not_applicable';
+export type OperatorNoticeRemedyStatus = 'inherent' | 'unbuilt';
 
-export interface GateResult {
-  gate_id: string;
-  status: GateResultStatus;
-  source: string;
-  operator_reason: string;
-  operator_next_step: string | null;
-  evidence_at_ms: number;
+export type OperatorNoticeActionKind =
+  | 'none'
+  | 'open_runbook'
+  | 'focus_cockpit_action'
+  | 'renew_control_plane_lease'
+  | 'external_manual_check'
+  | 'redeploy';
+
+export interface OperatorNoticeAction {
+  kind: OperatorNoticeActionKind;
+  label: string | null;
+  target: string | null;
 }
 
 export type OperatorNoticeCode =

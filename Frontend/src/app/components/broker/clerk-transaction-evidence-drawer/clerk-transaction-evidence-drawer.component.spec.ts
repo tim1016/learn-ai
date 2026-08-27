@@ -7,7 +7,7 @@ import type {
   ClerkTransactionDetail,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
-import { BrokerService } from '../../../services/broker.service';
+import { BrokersService } from '../../../services/brokers.service';
 import { ClerkTransactionEvidenceDrawerComponent } from './clerk-transaction-evidence-drawer.component';
 
 function summary(accountId: string, transactionId: string): ClerkTransactionSummary {
@@ -64,7 +64,7 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
-        { provide: BrokerService, useValue: broker },
+        { provide: BrokersService, useValue: broker },
       ],
     });
     const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
@@ -138,7 +138,7 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
-        { provide: BrokerService, useValue: broker },
+        { provide: BrokersService, useValue: broker },
       ],
     });
     const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
@@ -186,7 +186,7 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
-        { provide: BrokerService, useValue: broker },
+        { provide: BrokersService, useValue: broker },
       ],
     });
     const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
@@ -228,7 +228,7 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
-        { provide: BrokerService, useValue: broker },
+        { provide: BrokersService, useValue: broker },
       ],
     });
     const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);

@@ -7,9 +7,13 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
+from app.marketdata.feed import BarSessionPhase
 from app.schemas.broker_capability import SessionDataCapability, SessionKind
 
-TradingSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
+# Not a second definition of the phase set: this is the canonical object from
+# ``app.marketdata.feed``, aliased so session code reads in session vocabulary
+# rather than bar vocabulary. ``TradingSessionPhase is BarSessionPhase``.
+TradingSessionPhase = BarSessionPhase
 SessionAuthoritySource = Literal["ibkr_capability", "nyse_calendar"]
 
 _NY = ZoneInfo("America/New_York")

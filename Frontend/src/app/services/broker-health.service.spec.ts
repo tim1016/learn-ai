@@ -1,10 +1,10 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { BrokerHealthService } from './broker-health.service';
-import { BrokerService } from './broker.service';
+import { MarketDataFeedService } from './market-data-feed.service';
 import type { IbkrConnectionHealth } from '../api/broker-models';
 
-class FakeBrokerService {
+class FakeMarketDataFeedService {
   health = vi.fn();
 }
 
@@ -26,9 +26,9 @@ function makeHealth(overrides: Partial<IbkrConnectionHealth> = {}): IbkrConnecti
 }
 
 function setup() {
-  const broker = new FakeBrokerService();
+  const broker = new FakeMarketDataFeedService();
   TestBed.configureTestingModule({
-    providers: [{ provide: BrokerService, useValue: broker }],
+    providers: [{ provide: MarketDataFeedService, useValue: broker }],
   });
   const svc = TestBed.inject(BrokerHealthService);
   return { svc, broker };

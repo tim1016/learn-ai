@@ -10,7 +10,7 @@
 // Canonical source: PythonDataService/app/operator/notices/snapshot.json
 // schema_version: 2
 import { describe, expect, it } from 'vitest';
-import type { OperatorNoticeCode } from './live-instances.types';
+import type { OperatorNoticeCode } from './operator-notice.types';
 
 // Inlined from snapshot.json (operator_notice_codes, schema_version 1).
 const SNAPSHOT_OPERATOR_NOTICE_CODES: readonly string[] = [

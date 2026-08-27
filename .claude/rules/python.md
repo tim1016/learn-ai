@@ -44,15 +44,26 @@ When adding a dep:
 - **Schema separation**: Pydantic models in `app/schemas/<domain>.py`, not inline in routers.
 - **Service separation**: business logic in `app/services/<domain>_service.py`. Routers are transport only.
 
-### Live-control router freeze
+### Live-control router freeze — subject retired 2026-08-27 (#1813)
 
-Routers above **1,000 physical lines** are frozen. New live-instance behavior
-belongs in a service module; the router may only validate/parse the HTTP request,
-call a facade, and shape the response or translate a typed domain error. While
-`app/routers/live_instances.py` exceeds this threshold, a PR may not increase
-its net physical line count: any necessary transport wiring must be offset by a
-same-PR extraction. An emergency safety fix is the sole exception and must ship
-with its regression test plus a tracking issue for the deferred extraction.
+**This freeze currently has no subject.** It was written to stop
+`app/routers/live_instances.py` growing; PR-B of the IBKR control-plane
+decommission (#1813) deleted that router, and no live-control router remains.
+
+The standing principle, kept for the next one: a live-control router above
+**1,000 physical lines** is frozen. New live-instance behavior belongs in a
+service module; the router may only validate/parse the HTTP request, call a
+facade, and shape the response or translate a typed domain error. A frozen
+router may not grow in net physical lines — necessary transport wiring must be
+offset by a same-PR extraction. An emergency safety fix is the sole exception
+and must ship with its regression test plus a tracking issue for the deferred
+extraction.
+
+**Scope note, so this is not read as broader than it is.** Three routers exceed
+1,000 lines today — `lean_sidecar.py` (~1.9k), `engine.py` (~1.8k), `jobs.py`
+(~1.5k). **None is a live-control router and none is frozen by this rule.**
+Whether a size freeze should attach to them is a separate decision that #1813
+did not make and did not have standing to make.
 
 ## Pydantic v2
 

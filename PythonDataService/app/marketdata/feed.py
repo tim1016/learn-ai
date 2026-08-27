@@ -1,5 +1,10 @@
 """Broker-neutral market-data port: MarketDataFeed, MarketDataBar, FeedHealth.
 
+Also the canonical home of ``BarSessionPhase`` — the session-phase label
+stamped on every bar, whatever produced it. It lives here rather than in
+a broker silo because it is not vendor-specific: ``app.broker.ibkr.bar_models``
+imports it from this module (#1813 PR-C, 2026-08-27).
+
 Design constraints (from ADR 0022 + phase-3 design §4 + #1258 L2):
 
 * No IBKR types escape this module.  The IBKR implementation (ibkr_feed.py)
@@ -32,6 +37,13 @@ class MarketDataFeedError(Exception):
 
 
 BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
+"""Canonical session-phase label. Single definition repo-wide: every other site
+imports this object instead of restating the six members —
+``app.broker.ibkr.bar_models``, ``app.broker.ibkr.bars``,
+``app.schemas.run_admission``, ``app.services.live_chart_window``, and
+``app.services.session_authority``, which aliases it as ``TradingSessionPhase``
+so session code reads in session vocabulary (``TradingSessionPhase is
+BarSessionPhase``)."""
 
 
 class MarketDataBar(BaseModel):

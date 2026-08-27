@@ -10682,7 +10682,7 @@ export interface components {
              * Call
              * @enum {string}
              */
-            call: "accountSummaryAsync" | "cancelOrder" | "placeOrder" | "cancelMktData" | "qualifyContractsAsync" | "reqAllOpenOrders" | "reqCompletedOrdersAsync" | "reqContractDetailsAsync" | "reqCurrentTimeAsync" | "reqExecutionsAsync" | "reqHistoricalDataAsync" | "reqMatchingSymbolsAsync" | "reqMktData" | "reqMarketDataType" | "reqPnL" | "reqPnLSingle" | "reqPositionsAsync" | "reqRealTimeBars" | "reqSecDefOptParamsAsync" | "whatIfOrderAsync";
+            call: "cancelMktData" | "qualifyContractsAsync" | "reqContractDetailsAsync" | "reqHistoricalDataAsync" | "reqMarketDataType" | "reqMktData" | "reqRealTimeBars" | "reqSecDefOptParamsAsync" | "whatIfOrderAsync";
             /** Params */
             params?: {
                 [key: string]: components["schemas"]["JsonValue"];
@@ -10697,7 +10697,7 @@ export interface components {
              * Callback
              * @enum {string}
              */
-            callback: "accountSummary" | "contractDetails" | "completedOrder" | "currentTime" | "error" | "openOrder" | "orderStatus" | "execDetails" | "historicalData" | "marketDataType" | "pnl" | "pnlSingle" | "position" | "realTimeBar" | "realTimeBarList" | "securityDefinitionOptionParameter" | "symbolSamples" | "tickSnapshot" | "whatIfOrder";
+            callback: "contractDetails" | "historicalData" | "marketDataType" | "realTimeBar" | "realTimeBarList" | "securityDefinitionOptionParameter" | "tickSnapshot" | "whatIfOrder";
             /** Fields */
             fields?: {
                 [key: string]: components["schemas"]["JsonValue"];

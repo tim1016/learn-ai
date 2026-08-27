@@ -17,7 +17,7 @@ import type {
   ClerkTransactionDetail,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
-import { BrokerService } from '../../../services/broker.service';
+import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
@@ -49,7 +49,7 @@ interface ReceiptSelection {
   styleUrl: './clerk-transaction-evidence-drawer.component.scss',
 })
 export class ClerkTransactionEvidenceDrawerComponent {
-  private readonly broker = inject(BrokerService);
+  private readonly brokers = inject(BrokersService);
   private readonly drawer = viewChild<ElementRef<HTMLDialogElement>>('drawer');
   private readonly requestGeneration = signal(0);
   private activeSelection: ReceiptSelection | null = null;
@@ -117,7 +117,7 @@ export class ClerkTransactionEvidenceDrawerComponent {
     this.loading.set(true);
     this.openNativeDrawer();
     try {
-      const detail = await this.broker.accountTransaction(accountId, transaction.transaction_id);
+      const detail = await this.brokers.accountTransaction(accountId, transaction.transaction_id);
       if (this.requestGeneration() === generation && this.transaction()?.transaction_id === transaction.transaction_id) {
         this.detail.set(detail);
       }

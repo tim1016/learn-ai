@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.marketdata.feed import BarSessionPhase
 from app.schemas.market_liveness import MarketLivenessFact
 
 
@@ -49,7 +50,7 @@ class MarketDataAdmissionFact(BaseModel):
     connected: bool | None = None
     stale: bool | None = None
     active_subscription_count: int | None = Field(default=None, ge=0)
-    scheduled_phase: Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"] = "UNKNOWN"
+    scheduled_phase: BarSessionPhase = "UNKNOWN"
     session_authority_source: Literal["ibkr_capability", "nyse_calendar"] | None = None
     extended_phase_proven: bool = False
 

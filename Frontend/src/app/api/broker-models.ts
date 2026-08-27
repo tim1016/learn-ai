@@ -20,55 +20,29 @@ export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth']
 export type PanelActionErrorResponse = components['schemas']['PanelActionErrorResponse'];
 
 export type OptionRight = 'C' | 'P';
-export type SecType =
-  | 'STK'
-  | 'OPT'
-  | 'FUT'
-  | 'FOP'
-  | 'CASH'
-  | 'BOND'
-  | 'CFD'
-  | 'WAR'
-  | 'IND'
-  | 'BAG';
 export type GreeksSource = 'model' | 'bid' | 'ask' | 'last' | 'none';
+// Mirrors ``app.broker.ibkr.models``'s IbkrApiRequestName / IbkrApiCallbackName.
+// Narrowed to the calls the service can still make by PR-C of #1813
+// (2026-08-27). This hand-kept copy had also drifted from the Pydantic source
+// independently of that narrowing: it was missing `reqHistoricalDataAsync` and
+// `historicalData`, both of which are live, and both are restored here.
 export type IbkrApiRequestName =
-  | 'accountSummaryAsync'
   | 'cancelMktData'
-  | 'placeOrder'
-  | 'cancelOrder'
   | 'qualifyContractsAsync'
-  | 'reqAllOpenOrders'
-  | 'reqCompletedOrdersAsync'
   | 'reqContractDetailsAsync'
-  | 'reqCurrentTimeAsync'
-  | 'reqExecutionsAsync'
-  | 'reqMatchingSymbolsAsync'
-  | 'reqMktData'
+  | 'reqHistoricalDataAsync'
   | 'reqMarketDataType'
-  | 'reqPnL'
-  | 'reqPnLSingle'
-  | 'reqPositionsAsync'
+  | 'reqMktData'
   | 'reqRealTimeBars'
   | 'reqSecDefOptParamsAsync'
   | 'whatIfOrderAsync';
 export type IbkrApiCallbackName =
-  | 'accountSummary'
-  | 'completedOrder'
   | 'contractDetails'
-  | 'currentTime'
-  | 'error'
+  | 'historicalData'
   | 'marketDataType'
-  | 'openOrder'
-  | 'orderStatus'
-  | 'execDetails'
-  | 'pnl'
-  | 'pnlSingle'
-  | 'position'
   | 'realTimeBar'
   | 'realTimeBarList'
   | 'securityDefinitionOptionParameter'
-  | 'symbolSamples'
   | 'tickSnapshot'
   | 'whatIfOrder';
 export type IbkrEvidenceScalar = string | number | boolean | null;

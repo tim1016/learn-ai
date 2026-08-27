@@ -39,6 +39,20 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
 
     @property
     def path(self) -> Path:
+        """The WAL file, confined to ``trusted_root``. The only way in.
+
+        This is the single path-traversal barrier for the class: every method
+        that opens, reads, or truncates the file goes through this property
+        rather than touching ``self._path``. Until PR-C of #1813 the same four
+        lines were inlined at four separate sites here, which is exactly the
+        canonical-helper duplication CLAUDE.md guiding-philosophy #5 governs —
+        four copies of a security check are four places for a fix to miss.
+
+        Keep the ``realpath`` + ``startswith(root_prefix)`` shape. That is the
+        form CodeQL recognises as a path sanitizer; ``os.path.commonpath``
+        alone is **not** recognised, so swapping it would trade a clean scan
+        for a py/path-injection alert without making the code any safer.
+        """
         root_real = os.path.realpath(os.fspath(self._trusted_root))
         candidate = os.path.realpath(os.fspath(self._path))
         root_prefix = root_real.rstrip(os.sep) + os.sep
@@ -53,12 +67,7 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
         return self._next_seq
 
     def append(self, record: RecordT) -> None:
-        root_real = os.path.realpath(os.fspath(self._trusted_root))
-        candidate = os.path.realpath(os.fspath(self._path))
-        root_prefix = root_real.rstrip(os.sep) + os.sep
-        if not candidate.startswith(root_prefix):
-            raise ValueError(f"{self._label} WAL path {candidate} escapes root {root_real}")
-        path = Path(candidate)
+        path = self.path
         path.parent.mkdir(parents=True, exist_ok=True)
         self._truncate_tolerated_tail()
         expected_seq = self.allocate_seq()
@@ -135,12 +144,7 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
     def read_from(self, *, after_seq: int, limit: int | None = None) -> list[RecordT]:
         if after_seq < 0:
             raise ValueError(f"after_seq must be >= 0; got {after_seq}")
-        root_real = os.path.realpath(os.fspath(self._trusted_root))
-        candidate = os.path.realpath(os.fspath(self._path))
-        root_prefix = root_real.rstrip(os.sep) + os.sep
-        if not candidate.startswith(root_prefix):
-            raise ValueError(f"{self._label} WAL path {candidate} escapes root {root_real}")
-        path = Path(candidate)
+        path = self.path
         if not path.exists():
             return []
         raw = path.read_bytes()
@@ -181,12 +185,7 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
         return self._seq_of(rows[-1]) if rows else 0
 
     def _truncate_tolerated_tail(self) -> None:
-        root_real = os.path.realpath(os.fspath(self._trusted_root))
-        candidate = os.path.realpath(os.fspath(self._path))
-        root_prefix = root_real.rstrip(os.sep) + os.sep
-        if not candidate.startswith(root_prefix):
-            raise ValueError(f"{self._label} WAL path {candidate} escapes root {root_real}")
-        path = Path(candidate)
+        path = self.path
         if not path.exists():
             return
         raw = path.read_bytes()

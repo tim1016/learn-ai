@@ -8,7 +8,6 @@ import type {
   BrokerPosition,
   PortfolioHistoryProof,
 } from '../../../api/alpaca.types';
-import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
@@ -210,8 +209,7 @@ async function renderLens(
   await render(AlpacaTraderLensComponent, {
     providers: [
       AlpacaDeskAccountDataService,
-      { provide: BrokersService, useValue: broker },
-      { provide: BrokerService, useValue: clerk },
+      { provide: BrokersService, useValue: { ...broker, ...clerk } },
     ],
   });
   return { broker, clerk };

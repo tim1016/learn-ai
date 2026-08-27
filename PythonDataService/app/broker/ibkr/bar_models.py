@@ -8,6 +8,10 @@ same file. See
 
 All timestamps are ``int64`` ms UTC per the project's numerical-rigor
 rules.
+
+``BarSessionPhase`` is not defined here: it is broker-neutral, so its
+single definition lives in ``app.marketdata.feed`` and this module
+imports it (#1813 PR-C, 2026-08-27).
 """
 
 from __future__ import annotations
@@ -17,8 +21,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.marketdata.feed import BarSessionPhase
+
 BarProvenance = Literal["ibkr_realtime", "ibkr_historical", "polygon_historical", "mixed"]
-BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
 
 
 class IbkrMinuteBar(BaseModel):
