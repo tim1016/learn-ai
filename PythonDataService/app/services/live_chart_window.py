@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Literal, Protocol, cast
 from zoneinfo import ZoneInfo
 
-from app.broker.ibkr.bar_models import BarProvenance, BarSessionPhase, IbkrMinuteBar
+from app.broker.ibkr.bar_models import BarProvenance, IbkrMinuteBar
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
     PolygonBar,
@@ -30,6 +30,7 @@ from app.lean_sidecar.trading_calendar import (
     session_state_at_ms,
     session_windows_ms_utc,
 )
+from app.marketdata.feed import BarSessionPhase
 
 logger = logging.getLogger(__name__)
 
