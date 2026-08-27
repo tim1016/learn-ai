@@ -16,7 +16,7 @@ rather than growing an if/elif chain here or in the repository.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
@@ -67,6 +67,11 @@ from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
     rederive_manual_ticket_state_for_order,
     sync_manual_ticket_effect_state,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import normalized_hold_reason_code
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    account_hold_envelope,
+    insert_account_hold_episode,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     fold_uncertainty_raised as _fold_uncertainty_raised,
 )
@@ -105,6 +110,27 @@ class FoldRegistry:
     def registered_kinds(self) -> frozenset[str]:
         """Expose the closed transition vocabulary for projection-copy checks."""
         return frozenset(self._folds)
+
+    def replacing(self, overrides: Mapping[str, FoldFn]) -> FoldRegistry:
+        """A copy of this registry that folds some kinds a different way.
+
+        The offline v8-to-v9 ceremony rebuilds a *historical* v9 database, so
+        it needs the folds that were current at v9, not the ones current now.
+        Deriving that registry from this one keeps the two in step by
+        construction: a kind added later is replayed by the ceremony without a
+        second list needing an edit, and only the handful of kinds whose
+        projection shape actually changed are named here.
+
+        Every overridden kind must already be registered — an override for an
+        unknown kind is a typo or a rename that would otherwise silently do
+        nothing.
+        """
+        unknown = sorted(set(overrides) - set(self._folds))
+        if unknown:
+            raise ValueError(f"cannot replace unregistered transition_kind(s): {unknown}")
+        derived = FoldRegistry()
+        derived._folds = {**self._folds, **overrides}
+        return derived
 
     def apply(self, conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
         """Look up and run the fold for ``payload['transition_kind']``.
@@ -1290,8 +1316,96 @@ def _fold_reconciliation_attempted(conn: sqlite3.Connection, payload: dict[str, 
     )
 
 
+# ── Legacy account-hold folds (replay only, ADR 0048 Decision 2) ─────────────
+# ``ACCOUNT_HOLD_RAISED``/``_REFRESHED``/``_RESOLVED`` are retired as *write*
+# kinds: nothing appends them any more, and their producers now append the
+# ``UNCERTAINTY_*`` kinds. They stay registered because a mirror recorded
+# before v12 still contains them, and deleting the folds would make every such
+# mirror unreplayable — precisely the condition ``MirrorChainBroken`` exists to
+# make loud.
+#
+# Replaying one now writes an ``uncertainties`` row, because that is where the
+# episode lives after v12. The minted id keeps the ``hold:`` prefix the
+# original fold used, so replaying a pre-v12 mirror and migrating the v11 file
+# it was folded from produce byte-identical rows — the equivalence the upgrade
+# ceremony checks.
 def _fold_account_hold_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Open one database-unique account hold episode for a typed cause."""
+    """Replay one pre-v12 account-hold raise into its uncertainty episode."""
+    legacy = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    insert_account_hold_episode(
+        conn,
+        uncertainty_id=f"hold:{_this_transition_sequence(conn)}",
+        reason_code=normalized_hold_reason_code(legacy.reason_code),
+        evidence_refs=legacy.evidence_refs,
+        observed_at_ms=payload["recorded_at_ms"],
+        resolved_at_ms=None,
+    )
+
+
+def _fold_account_hold_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Replay one pre-v12 account-hold refresh onto its uncertainty episode.
+
+    ``observed_at_ms`` is deliberately *not* advanced. The v11 fold this one
+    stands in for restated ``evidence_refs_json`` and nothing else, so
+    ``holds.opened_at_ms`` stayed at the raise — and the v11-to-v12 backfill
+    carries that instant across verbatim. Advancing it here would make one
+    history describe two different accounts depending on whether it arrived by
+    migration or by mirror replay, and would move the operator-visible
+    ``since_ms`` of a hold every time its evidence changed. The modern
+    ``UNCERTAINTY_REFRESHED`` fold does advance the stamp; that divergence is
+    the point — this fold reproduces retired semantics, not current ones.
+    """
+    legacy = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    facts = account_hold_envelope(
+        reason_code=normalized_hold_reason_code(legacy.reason_code),
+        evidence_refs=legacy.evidence_refs,
+    )
+    conn.execute(
+        "UPDATE uncertainties SET evidence_refs_json = ?, facts_json = ? "
+        "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND resolved_at_ms IS NULL",
+        (
+            canonicalize(facts.evidence_refs),
+            facts.to_facts_json(),
+            facts.reason_code,
+        ),
+    )
+
+
+def _fold_account_hold_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Replay one pre-v12 account-hold resolution onto its uncertainty episode."""
+    legacy = AccountHoldResolvedFacts.from_facts_json(payload["facts_json"])
+    facts = account_hold_envelope(
+        reason_code=normalized_hold_reason_code(legacy.reason_code),
+        evidence_refs=legacy.evidence_refs,
+    )
+    conn.execute(
+        "UPDATE uncertainties SET resolved_at_ms = ?, evidence_refs_json = ?, facts_json = ? "
+        "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND resolved_at_ms IS NULL",
+        (
+            payload["recorded_at_ms"],
+            canonicalize(facts.evidence_refs),
+            facts.to_facts_json(),
+            facts.reason_code,
+        ),
+    )
+
+
+# ── Historical v9 account-hold folds (offline v8-to-v9 ceremony only) ────────
+# ``offline_v9_upgrade`` rebuilds a *v9* database from a v8 mirror and then
+# proves it projection-for-projection against the v8 source. A v9 file keeps a
+# hold in the ``holds`` table under the spelling the transition carried, so the
+# replay that builds it has to write what v9 wrote — the folds below are the
+# pre-v12 bodies, restored verbatim, not the v12 ones aimed at
+# ``uncertainties``. Replaying the current folds into the stage puts the
+# episode in a different table under a normalised code and fails the parity
+# proof, refusing an upgrade that is in fact sound.
+#
+# They cannot be expressed by parameterising the v12 folds: v9 stored the
+# reason code unnormalised and the evidence refs in arrival order, whereas the
+# v12 envelope normalises the code and sorts the refs. That divergence is the
+# whole point of keeping two bodies rather than one with a flag.
+def _fold_account_hold_raised_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Open one database-unique account hold episode for a typed cause (v9)."""
     facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
     hold_id = f"hold:{_this_transition_sequence(conn)}"
     conn.execute(
@@ -1307,7 +1421,7 @@ def _fold_account_hold_raised(conn: sqlite3.Connection, payload: dict[str, Any])
     )
 
 
-def _fold_account_hold_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+def _fold_account_hold_refreshed_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
     conn.execute(
         "UPDATE holds SET evidence_refs_json = ? WHERE scope = 'ACCOUNT_CLERK' "
@@ -1316,7 +1430,7 @@ def _fold_account_hold_refreshed(conn: sqlite3.Connection, payload: dict[str, An
     )
 
 
-def _fold_account_hold_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+def _fold_account_hold_resolved_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     facts = AccountHoldResolvedFacts.from_facts_json(payload["facts_json"])
     conn.execute(
         "UPDATE holds SET state = 'RESOLVED', resolved_at_ms = ?, evidence_refs_json = ? "
@@ -1375,3 +1489,14 @@ DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RESOLVED", _fold_uncertainty_resolve
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
+
+# The registry the offline v8-to-v9 ceremony replays with. Identical to the
+# default except for the three kinds whose projection target moved at v12; see
+# the historical-fold block above.
+V9_FOLD_REGISTRY = DEFAULT_FOLD_REGISTRY.replacing(
+    {
+        "ACCOUNT_HOLD_RAISED": _fold_account_hold_raised_v9,
+        "ACCOUNT_HOLD_REFRESHED": _fold_account_hold_refreshed_v9,
+        "ACCOUNT_HOLD_RESOLVED": _fold_account_hold_resolved_v9,
+    }
+)

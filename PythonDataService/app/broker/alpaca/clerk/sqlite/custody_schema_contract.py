@@ -5,6 +5,16 @@ the dense subject/resource invariants together so they can be reviewed without
 mixing them into the historic schema and migration implementation.
 """
 
+from __future__ import annotations
+
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import HOLD_REASON_CODE_SQL_PARAMS
+
+# Literal rather than bound parameters because this is DDL, not a query: a
+# view definition is stored text and cannot carry placeholders. Rendering it
+# from the same tuple the runtime partition uses is what keeps the view and
+# ``HOLD_REASON_CODES`` from naming different sets.
+_HOLD_REASON_CODE_SQL_LIST = ", ".join(f"'{code}'" for code in HOLD_REASON_CODE_SQL_PARAMS)
+
 CUSTODY_SUBJECT_IDENTITY_DDL = """\
 CREATE TRIGGER trg_custody_subject_identity_immutable
 BEFORE UPDATE OF subject_id, kind, strategy_instance_id, operator_id ON custody_subjects
@@ -146,6 +156,11 @@ END;
 """
 
 
+# Historical, and therefore frozen: this is the v9 shape, which
+# ``apply_v9_schema`` must keep reproducing byte-for-byte for the offline
+# upgrade ceremony and for every migration-chain test that starts from a real
+# v9 file. v12 drops these triggers along with the table they police; it does
+# not edit them here.
 HOLD_SUBJECT_COMPATIBILITY_DDL = """\
 CREATE TRIGGER trg_holds_subject_compatible_insert
 BEFORE INSERT ON holds
@@ -171,6 +186,39 @@ BEGIN
         )
     ) THEN RAISE(ABORT, 'hold subject must own its bot strategy or be manual without strategy') END;
 END;
+"""
+
+
+# ``holds`` is no longer a table (ADR 0048 Decision 2, schema v12). It is this
+# read-only projection of the two hold-shaped ``uncertainties`` causes, keeping
+# every pre-v12 read — ``reads.active_hold``, ``reads.active_holds_for_admission``,
+# ``ClerkSqliteProjectionReader._holds``, the intake fence, the offline upgrade
+# ceremony — working against its original column names and spellings.
+#
+# It is a view rather than a table on purpose: SQLite refuses to write through
+# one, so a write path that was missed in the migration fails loudly at its
+# INSERT instead of quietly maintaining a second, divergent copy of an
+# account-wide entry fence.
+#
+# ``state`` is re-derived here because the merged table has no such column;
+# ``resolved_at_ms IS NULL`` is what "active" has always meant on both sides.
+# The subject-compatibility triggers the table carried are gone with it: the
+# ``uncertainties`` table enforces the identical invariant on every row this
+# view can now show, and a view accepts no writes to police.
+HOLDS_COMPATIBILITY_VIEW_DDL = f"""\
+CREATE VIEW holds AS
+SELECT
+    uncertainty_id                                              AS hold_id,
+    scope                                                       AS scope,
+    subject_id                                                  AS subject_id,
+    strategy_instance_id                                        AS strategy_instance_id,
+    reason_code                                                 AS reason_code,
+    CASE WHEN resolved_at_ms IS NULL THEN 'ACTIVE' ELSE 'RESOLVED' END AS state,
+    observed_at_ms                                              AS opened_at_ms,
+    resolved_at_ms                                              AS resolved_at_ms,
+    evidence_refs_json                                          AS evidence_refs_json
+FROM uncertainties
+WHERE reason_code IN ({_HOLD_REASON_CODE_SQL_LIST});
 """
 
 

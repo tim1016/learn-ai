@@ -22,7 +22,6 @@ from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
-    _REASON_POLICIES,
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
@@ -31,19 +30,12 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     AdmissionBlockedError,
-    AgePolicy,
-    Capability,
-    CauseCleared,
-    ReasonPolicy,
-    RedriveThenEscalate,
     ReductionIntent,
     RefusalClass,
-    VoidAfter,
     admit_new_exposure,
     classify_admission_refusal,
     decide_capability,
     raise_uncertainty,
-    reason_age_policy,
     require_admission,
     resolve_reconciliation_uncertainty,
 )
@@ -53,6 +45,16 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     PositionDriftCause,
     PositionDriftObservation,
     UnknownOrderIdentity,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
+    _REASON_POLICIES,
+    AgePolicy,
+    Capability,
+    CauseCleared,
+    ReasonPolicy,
+    RedriveThenEscalate,
+    VoidAfter,
+    reason_age_policy,
 )
 
 ACCOUNT_ID = "PA-TEST"
@@ -84,7 +86,7 @@ def _raise(
     *,
     strategy_instance_id: str | None,
     **overrides: Any,
-) -> bool:
+) -> str:
     kwargs: dict[str, Any] = {
         "reason_code": "ORDER_OUTCOME_UNKNOWN",
         "headline": "headline",
@@ -162,7 +164,7 @@ def test_new_exposure_uses_the_canonical_attributed_quantity_boundary_fixture(
 
 def test_raise_uncertainty_account_clerk_scope(repo: ClerkSqliteRepository) -> None:
     created = _raise(repo, strategy_instance_id=None)
-    assert created is True
+    assert created == "raised"
     uncertainty = repo.active_uncertainty(
         scope="ACCOUNT_CLERK", reason_code="ORDER_OUTCOME_UNKNOWN", strategy_instance_id=None
     )
@@ -171,7 +173,7 @@ def test_raise_uncertainty_account_clerk_scope(repo: ClerkSqliteRepository) -> N
 
 def test_raise_uncertainty_bot_scope(repo: ClerkSqliteRepository) -> None:
     created = _raise(repo, strategy_instance_id=SID)
-    assert created is True
+    assert created == "raised"
     uncertainty = repo.active_uncertainty(
         scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
@@ -184,8 +186,8 @@ def test_raise_uncertainty_is_idempotent(repo: ClerkSqliteRepository) -> None:
     first = _raise(repo, strategy_instance_id=SID)
     before = len(repo.custody_transitions())
     second = _raise(repo, strategy_instance_id=SID)
-    assert first is True
-    assert second is False
+    assert first == "raised"
+    assert second == "unchanged"
     assert len(repo.custody_transitions()) == before
 
 
@@ -204,7 +206,7 @@ def test_evidence_backed_resolution_allows_a_fresh_raise_afterward(
     )
 
     reraised = _raise(repo, strategy_instance_id=None, reason_code="POSITION_DRIFT")
-    assert reraised is True
+    assert reraised == "raised"
 
 
 def test_raise_uncertainty_default_shape_fails_closed(repo: ClerkSqliteRepository) -> None:
@@ -355,7 +357,7 @@ def test_unknown_cause_blocks_reduction_account_wide(repo: ClerkSqliteRepository
 def test_admit_new_exposure_blocked_by_an_active_hold(repo: ClerkSqliteRepository) -> None:
     """Admission folds the #1378 hold mechanism behind the same surface —
     a caller must be blocked by either, with no separate check needed."""
-    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER", evidence_refs=["bo-1"])
+    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER_HOLD", evidence_refs=["bo-1"])
     repo.append_transition(
         TransitionInput(
             transition_kind="ACCOUNT_HOLD_RAISED",
@@ -369,14 +371,14 @@ def test_admit_new_exposure_blocked_by_an_active_hold(repo: ClerkSqliteRepositor
     )
     decision = admit_new_exposure(repo, strategy_instance_id=SID)
     assert decision.allowed is False
-    assert decision.reason_code == "UNEXPLAINED_ORDER"
+    assert decision.reason_code == "UNEXPLAINED_ORDER_HOLD"
 
 
 @pytest.mark.parametrize("capability", [Capability.CANCEL, Capability.RECONCILE])
 def test_safety_capabilities_remain_allowed_under_active_hold(
     repo: ClerkSqliteRepository, capability: Capability
 ) -> None:
-    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER", evidence_refs=["bo-1"])
+    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER_HOLD", evidence_refs=["bo-1"])
     repo.append_transition(
         TransitionInput(
             transition_kind="ACCOUNT_HOLD_RAISED",

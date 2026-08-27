@@ -14,14 +14,11 @@ from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import redrive_or_escalate_stale_exits
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
-    AccountHoldRaisedFacts,
-    AccountHoldResolvedFacts,
     ReconciliationAttemptedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import (
     position_quantity_is_nonzero,
 )
-from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     resolve_manual_order_cancellation,
@@ -48,13 +45,16 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     AdmissionBlockedError,
+    raise_account_hold,
     raise_uncertainty,
+    resolve_account_hold,
     resolve_exit_not_flat_uncertainty,
     resolve_exit_stuck_uncertainty,
     resolve_incomplete_reconciliation_uncertainty,
     resolve_reconciliation_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     PositionDriftCause,
     PositionDriftObservation,
 )
@@ -68,7 +68,6 @@ from app.engine.live.order_identity import (
 
 logger = logging.getLogger(__name__)
 
-UNEXPLAINED_ORDER_REASON_CODE = "UNEXPLAINED_ORDER"
 MAX_OPEN_ORDER_SNAPSHOT = 500
 
 _RECONCILIATION_LOCKS: WeakKeyDictionary[ClerkSqliteRepository, asyncio.Lock] = WeakKeyDictionary()
@@ -324,45 +323,17 @@ def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tu
         or observation.acknowledged_at_ms is None
     )
     if not evidence_refs:
-        facts = AccountHoldResolvedFacts(
-            reason_code=UNEXPLAINED_ORDER_REASON_CODE,
-            evidence_refs=[],
-        )
-        repo.resolve_account_hold_if_active(
-            reason_code=UNEXPLAINED_ORDER_REASON_CODE,
-            build_transition=lambda: TransitionInput(
-                transition_kind="ACCOUNT_HOLD_RESOLVED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="succeeded",
-                clerk_observed_at_ms=repo.clock(),
-                summary_code="ACCOUNT_HOLD_RESOLVED_BY_RECONCILIATION",
-                facts_json=facts.to_facts_json(),
-            ),
+        resolve_account_hold(
+            repo,
+            reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+            summary_code="ACCOUNT_HOLD_RESOLVED_BY_RECONCILIATION",
         )
         return
 
-    facts = AccountHoldRaisedFacts(
-        reason_code=UNEXPLAINED_ORDER_REASON_CODE,
+    raise_account_hold(
+        repo,
+        reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE,
         evidence_refs=evidence_refs,
-    )
-
-    def transition(kind: str) -> TransitionInput:
-        return TransitionInput(
-            transition_kind=kind,
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code=kind,
-            facts_json=facts.to_facts_json(),
-        )
-
-    repo.observe_account_hold(
-        reason_code=UNEXPLAINED_ORDER_REASON_CODE,
-        evidence_refs_json=canonicalize(evidence_refs),
-        build_raise=lambda: transition("ACCOUNT_HOLD_RAISED"),
-        build_refresh=lambda: transition("ACCOUNT_HOLD_REFRESHED"),
     )
 
 

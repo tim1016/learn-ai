@@ -34,6 +34,9 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+)
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.engine.live.order_identity import OwnershipRung, classify_ownership
 from app.lean_sidecar.trading_calendar import SessionWindow
@@ -483,7 +486,9 @@ def _project_external_order_fixture(
                 }
         finally:
             reader.close()
-        active = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+        active = repo.active_hold(
+            scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE
+        )
         external_orders = [
             {
                 "external_order_id": row["external_order_id"],

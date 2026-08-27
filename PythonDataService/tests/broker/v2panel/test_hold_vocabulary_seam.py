@@ -19,9 +19,11 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
-from app.broker.alpaca.clerk.sqlite.reconcile import UNEXPLAINED_ORDER_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+)
 from app.broker.alpaca.clerk.trade_evidence import UNEXPLAINED_TRADE_UPDATE_REASON_CODE
 from app.schemas.broker_v2_panel import ClerkCard
 from app.services.broker_v2_panel.panel_projection_service import build_clerk_card
@@ -36,7 +38,7 @@ _NOW = 1_700_000_000_000
 # live constants rather than string literals so a writer that renames its
 # code cannot quietly stop being renderable.
 _STORED_HOLD_CAUSES = (
-    UNEXPLAINED_ORDER_REASON_CODE,
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     UNEXPLAINED_TRADE_UPDATE_REASON_CODE,
     STREAM_HEALTH_REASON_CODE,
 )
@@ -97,20 +99,26 @@ def test_every_stored_hold_cause_renders_as_an_active_hold(
 
 def test_the_unexplained_order_cause_keeps_its_own_identity(tmp_path: Path) -> None:
     """Failing closed is not enough -- the operator is told *which* hold."""
-    card = _card_for_stored_cause(tmp_path, UNEXPLAINED_ORDER_REASON_CODE)
+    card = _card_for_stored_cause(tmp_path, UNEXPLAINED_ORDER_HOLD_REASON_CODE)
 
     assert card.hold_reason == "UNEXPLAINED_ORDER_HOLD"
     assert card.hold_reason_label == "Unexplained-order hold"
 
 
-def test_an_unrecognised_active_cause_fails_closed(tmp_path: Path) -> None:
-    """A cause this build cannot name is still a hold, and says so."""
-    card = _card_for_stored_cause(tmp_path, "SOME_FUTURE_HOLD_CAUSE")
+def test_an_unregistered_hold_cause_cannot_be_written_at_all(tmp_path: Path) -> None:
+    """The fail-closed point moved earlier, from render time to write time.
 
-    assert card.hold_active is True
-    assert card.hold_reason == "UNKNOWN_HOLD"
-    assert card.hold_reason_label == "Hold active; cause unrecognised"
-    assert card.hold_reason_explanation.strip()
+    Before v12 an unnameable cause could reach a ``holds`` row and the card
+    narrowed it to ``UNKNOWN_HOLD`` -- fail-closed at the last possible
+    moment. ADR 0048 Decision 2 makes a hold an uncertainty, and every
+    uncertainty must declare a policy, so a cause with no registered policy
+    is now refused where it is written instead of being described after the
+    fact. ``UNKNOWN_HOLD`` survives in the vocabulary for a row written by a
+    *future* build and read by this one, which is the only way one can still
+    arrive.
+    """
+    with pytest.raises(KeyError, match="SOME_FUTURE_HOLD_CAUSE"):
+        _card_for_stored_cause(tmp_path, "SOME_FUTURE_HOLD_CAUSE")
 
 
 def test_no_hold_renders_as_no_hold(tmp_path: Path) -> None:

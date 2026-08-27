@@ -63,8 +63,8 @@ def repo(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_includes_custody_subject_and_cancellation_tables() -> None:
-    assert schema.SCHEMA_VERSION == 11
+def test_schema_version_includes_the_holds_to_uncertainties_merge() -> None:
+    assert schema.SCHEMA_VERSION == 12
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -192,31 +192,6 @@ def test_genesis_prev_hash_column_is_not_null(repo: ClerkSqliteRepository) -> No
             "clerk_observed_at_ms, recorded_at_ms, summary_code, facts_schema_version, facts_json) "
             "VALUES (999, NULL, 'h', 1, 'K', 'ACCOUNT_CLERK', 'ACCOUNT_CLERK', 'succeeded', 1, 1, 'C', 1, '{}')"
         )
-
-
-@pytest.mark.parametrize(
-    ("scope", "strategy_instance_id", "should_fail"),
-    [
-        ("CUSTODY_SUBJECT", None, True),
-        ("CUSTODY_SUBJECT", "spy-bot", False),
-        ("ACCOUNT_CLERK", "spy-bot", True),
-        ("ACCOUNT_CLERK", None, False),
-    ],
-)
-def test_holds_scope_strategy_instance_coupling(
-    repo: ClerkSqliteRepository, scope: str, strategy_instance_id: str | None, should_fail: bool
-) -> None:
-    stmt = (
-        "INSERT INTO holds (hold_id, scope, subject_id, strategy_instance_id, reason_code, state, "
-        "opened_at_ms, resolved_at_ms, evidence_refs_json) "
-        "VALUES ('h1', ?, ?, ?, 'r', 'ACTIVE', 1, NULL, NULL)"
-    )
-    if should_fail:
-        with pytest.raises(sqlite3.IntegrityError):
-            repo._conn.execute(stmt, (scope, f"bot:{strategy_instance_id}" if strategy_instance_id else None, strategy_instance_id))
-    else:
-        repo._conn.execute(stmt, (scope, f"bot:{strategy_instance_id}" if strategy_instance_id else None, strategy_instance_id))
-        repo._conn.commit()
 
 
 @pytest.mark.parametrize(

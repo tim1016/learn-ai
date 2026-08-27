@@ -29,13 +29,15 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
-    RedriveThenEscalate,
     raise_uncertainty,
-    reason_age_policy,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExitNotFlatCause,
     ExitStuckCause,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
+    RedriveThenEscalate,
+    reason_age_policy,
 )
 from app.broker.contract.ports import BrokerTradePort
 
@@ -124,7 +126,7 @@ async def redrive_or_escalate_stale_exits(
                     ).to_mapping(),
                     severity="error",
                 )
-            if escalated:
+            if escalated != "unchanged":
                 logger.error(
                     "stuck EXIT escalated to a durable operator-visible EXIT_STUCK episode",
                     extra={

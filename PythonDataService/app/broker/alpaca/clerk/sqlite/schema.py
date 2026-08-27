@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     EFFECT_SUBJECT_COMPATIBILITY_DDL,
     EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
     HOLD_SUBJECT_COMPATIBILITY_DDL,
+    HOLDS_COMPATIBILITY_VIEW_DDL,
     MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
     MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
     MANUAL_LEG_IDENTITY_V11_DDL,
@@ -31,9 +32,10 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     POSITION_SUBJECT_COMPATIBILITY_DDL,
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
+from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_uncertainties
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -635,7 +637,44 @@ _MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS: tuple[str, ...] = (
     MANUAL_LEG_IDENTITY_V11_DDL,
 )
 SCHEMA_V11_DDL = _MANUAL_LEG_SEQUENCE_V11_DDL
-SCHEMA_DDL = (SCHEMA_V9_DDL + "\n\n" + SCHEMA_V10_DDL + "\n\n" + SCHEMA_V11_DDL).rstrip("\n")
+
+# v12 retires the ``holds`` table and republishes its name as a read-only view
+# of the two hold-shaped ``uncertainties`` causes (ADR 0048 Decision 2).
+#
+# A fresh v12 file therefore creates the v9 table and drops it moments later.
+# That is deliberate and is how every version in this module layers: each
+# historical block stays byte-frozen so ``apply_v9_schema`` keeps reproducing a
+# real v9 file for the offline ceremony, and the current shape is the sum of
+# the blocks. The alternative — editing the v9 block — would silently rewrite
+# the schema the upgrade ceremony and every migration-chain test start from.
+#
+# These are the same statements ``SCHEMA_MIGRATIONS[11]`` applies, so a fresh
+# file and an upgraded one converge on one shape by construction rather than by
+# two hand-kept lists agreeing.
+_V11_TO_V12_STATEMENTS: tuple[str, ...] = (
+    # The subject-compatibility triggers go first: they are defined ON holds,
+    # and SQLite refuses to drop a table while a trigger references it.
+    "DROP TRIGGER IF EXISTS trg_holds_subject_compatible_insert",
+    "DROP TRIGGER IF EXISTS trg_holds_subject_compatible_update",
+    "DROP INDEX IF EXISTS ux_holds_one_active_cause",
+    "DROP INDEX IF EXISTS ix_holds_active_strategy_opened_at",
+    "DROP TABLE holds",
+    HOLDS_COMPATIBILITY_VIEW_DDL,
+)
+
+SCHEMA_V12_DDL = "\n".join(
+    statement if statement.endswith(";") or "\n" in statement else f"{statement};"
+    for statement in _V11_TO_V12_STATEMENTS
+)
+SCHEMA_DDL = (
+    SCHEMA_V9_DDL
+    + "\n\n"
+    + SCHEMA_V10_DDL
+    + "\n\n"
+    + SCHEMA_V11_DDL
+    + "\n\n"
+    + SCHEMA_V12_DDL
+).rstrip("\n")
 
 
 def configure_connection(conn: sqlite3.Connection) -> None:
@@ -765,6 +804,7 @@ _V6_TO_V7_STATEMENTS: tuple[str, ...] = (
 )
 
 
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     4: (
         "CREATE INDEX IF NOT EXISTS ix_runs_started_at ON runs(started_at_ms DESC)",
@@ -838,6 +878,14 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # unique before the per-ticket fence exists. Replacing this narrow identity
     # trigger then makes the ordering as immutable as the ticket/leg identities.
     10: _MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS,
+    # v11 -> v12: holds were uncertainties with nowhere to declare a policy
+    # (ADR 0048 Decision 2). Every row moves into ``uncertainties`` under the
+    # wire spelling of its cause, and the table is replaced by a read-only
+    # view of the same shape so no reader changes. The rows are carried across
+    # by ``backfill_holds_into_uncertainties`` immediately before these
+    # statements run — the envelope each migrated row needs is authored in
+    # Python, not restatable as SQL without duplicating operator copy.
+    11: _V11_TO_V12_STATEMENTS,
 }
 
 
@@ -893,6 +941,9 @@ def migrate_schema(conn: sqlite3.Connection, *, from_version: int) -> None:
                 )
             if version == 6:
                 _require_empty_v6_authority(conn)
+            if version == 11:
+                # Must precede the statements: they drop the table it reads.
+                backfill_holds_into_uncertainties(conn)
             for statement in statements:
                 conn.execute(statement)
             version += 1

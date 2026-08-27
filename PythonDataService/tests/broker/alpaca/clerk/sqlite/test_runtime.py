@@ -371,7 +371,7 @@ async def test_parked_enter_submit_does_not_block_trade_update_fold(tmp_path: Pa
     await fold
     await enter
 
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is not None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is not None
     repo.close()
 
 
@@ -566,7 +566,7 @@ async def test_parked_cancellation_does_not_block_trade_update_fold(tmp_path: Pa
     broker.release_cancel.set()
     await cancel
 
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is not None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is not None
     repo.close()
 
 

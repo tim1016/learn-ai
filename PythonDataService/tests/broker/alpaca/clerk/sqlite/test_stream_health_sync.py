@@ -120,7 +120,7 @@ def test_a_single_bad_sample_never_raises_the_hold(tmp_path: Path) -> None:
     sync.tick()
 
     assert _hold(repo) is None
-    assert _appends(repo, "ACCOUNT_HOLD_RAISED") == 0
+    assert _appends(repo, "UNCERTAINTY_RAISED") == 0
     repo.close()
 
 
@@ -135,7 +135,7 @@ def test_a_sustained_outage_raises_within_two_ticks(tmp_path: Path) -> None:
     sync.tick()
 
     assert _hold(repo) is not None
-    assert _appends(repo, "ACCOUNT_HOLD_RAISED") == 1
+    assert _appends(repo, "UNCERTAINTY_RAISED") == 1
     repo.close()
 
 
@@ -151,8 +151,8 @@ def test_an_unchanged_outage_appends_nothing_further(tmp_path: Path) -> None:
         providers.advance()
 
     assert _hold(repo) is not None
-    assert _appends(repo, "ACCOUNT_HOLD_RAISED") == 1
-    assert _appends(repo, "ACCOUNT_HOLD_REFRESHED") == 0
+    assert _appends(repo, "UNCERTAINTY_RAISED") == 1
+    assert _appends(repo, "UNCERTAINTY_REFRESHED") == 0
     repo.close()
 
 
@@ -169,7 +169,7 @@ def test_a_changed_reason_is_still_recorded(tmp_path: Path) -> None:
     providers.reason = "market_data feed disconnected"
     sync.tick()
 
-    assert _appends(repo, "ACCOUNT_HOLD_REFRESHED") == 1
+    assert _appends(repo, "UNCERTAINTY_REFRESHED") == 1
     repo.close()
 
 
@@ -187,7 +187,7 @@ def test_recovery_releases_within_one_tick(tmp_path: Path) -> None:
     sync.tick()
 
     assert _hold(repo) is None
-    assert _appends(repo, "ACCOUNT_HOLD_RESOLVED") == 1
+    assert _appends(repo, "UNCERTAINTY_RESOLVED") == 1
     repo.close()
 
 
@@ -203,7 +203,7 @@ def test_a_released_hold_stays_released_without_further_appends(tmp_path: Path) 
         providers.advance()
         sync.tick()
 
-    assert _appends(repo, "ACCOUNT_HOLD_RESOLVED") == 1
+    assert _appends(repo, "UNCERTAINTY_RESOLVED") == 1
     repo.close()
 
 
@@ -233,20 +233,24 @@ def test_the_hold_survives_restart_and_releases_on_one_fresh_sample(
 def _count_resolves(repo: ClerkSqliteRepository) -> list[int]:
     """Spy on the ledger call itself, not just its appends.
 
-    ``resolve_account_hold_if_active`` is a no-op when no hold stands, so
+    ``resolve_uncertainty_if_active`` is a no-op when no episode stands, so
     transition counts cannot tell us whether we took the clerk's write lock
     to discover that. On a fleet whose original failure was lock
     contention, "did we touch the ledger at all" is the question worth
     asserting.
+
+    The spied method moved with ADR 0048 Decision 2: the hold-specific
+    repository primitive was deleted, and the release now travels the
+    uncertainty path it was always a duplicate of.
     """
     calls: list[int] = []
-    original = repo.resolve_account_hold_if_active
+    original = repo.resolve_uncertainty_if_active
 
     def counted(**kwargs):
         calls.append(1)
         return original(**kwargs)
 
-    repo.resolve_account_hold_if_active = counted  # type: ignore[method-assign]
+    repo.resolve_uncertainty_if_active = counted  # type: ignore[method-assign]
     return calls
 
 
@@ -407,7 +411,7 @@ def test_a_warming_symbol_never_raises_the_account_hold(tmp_path: Path) -> None:
         providers.advance()
 
     assert _hold(repo) is None
-    assert _appends(repo, "ACCOUNT_HOLD_RAISED") == 0
+    assert _appends(repo, "UNCERTAINTY_RAISED") == 0
     repo.close()
 
 
@@ -465,7 +469,7 @@ def test_a_disconnect_raises_even_once_its_break_timestamp_is_old(
     sync.tick()
 
     assert _hold(repo) is not None
-    assert _appends(repo, "ACCOUNT_HOLD_RAISED") == 1
+    assert _appends(repo, "UNCERTAINTY_RAISED") == 1
     repo.close()
 
 
