@@ -38,6 +38,18 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 > which materializer supplied the underlying zip. This satisfies the AGENTS.md
 > "update both registries" rule via the new row in
 > `docs/architecture/engine-authority-map.md` plus this explicit note.
+>
+> **Amended by #1839 (the flag flip).** `DATA_LAKE_ENABLED` now defaults ON, so
+> the lake path above is the shipped one for a **raw** request. An *adjusted*
+> request still resolves through `ensure_range` and the policy store, because
+> the lake's live pipeline produces raw bars only
+> (`app/data_lake/path_policy.py::lake_serves`). The no-new-concept finding is
+> unchanged either way: both paths still resolve which bytes the reader opens,
+> not a formula over them.
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| LEAN deci-cent price encoding (`price → int`, the on-disk integer both engines read back as `stored / 10_000`) | `PythonDataService/app/data_lake/lean_writer.py::to_deci_cent` — `round_half_up(price * 10_000)`, refusing negatives | None. `app/data_lake/derived_daily.py`, `app/data_lake/derived_quote.py`, and all three writers in `app/engine/data/lean_format.py` call it; `app/data_lake/cache_import.py` mirrors only its negative-price refusal at the decode boundary. Before #1839 `lean_format` truncated via `int(price * PRICE_SCALE)` and could differ by one deci-cent on a sub-grid price. | LEAN's on-disk equity format (`TradeBar._scaleFactor = 1/10000m`); the stored integer is the price on a fixed 1/10,000 grid. Half-up is the nearest-representable rule; truncation is a systematic −0.5 deci-cent bias on every OHLC field. | `PythonDataService/tests/unit/data_lake/test_deci_cent_canonical.py` (rule pinned exactly; both writers asserted row-identical on sub-grid prices; the truncation divergence kept as a live assertion); `tests/integration/data_lake/test_flag_flip_parity.py` (bit-exact across the cache→lake import) | canonical — consolidated by #1839 |
 
 ### Broker display read models
 
