@@ -107,7 +107,7 @@ class LakeMount:
 
     def volume_argument(self) -> str:
         """Render the ``-v`` value podman receives."""
-        return f"{self.host_lake_root}:{CONTAINER_LAKE_DATA_MOUNT}:ro"
+        return f"{self.host_lake_root}:{self.container_target}:{self.mode}"
 
 
 def lake_mount_enabled() -> bool:
@@ -135,6 +135,13 @@ def launcher_host_lake_root() -> Path | None:
     Resolved from :data:`LAKE_VOLUME_HOST_PATH_ENV` exactly the way the
     launcher resolves its artifacts root — deploy-time configuration,
     never request payload.
+
+    Deliberately does NOT create the directory. Unlike the artifacts
+    root, which the launcher owns and fills, the lake is written by the
+    data plane's lake writer; conjuring an empty one here would turn
+    "the lake volume is not mounted on this host" into "every trading
+    day is missing data". The runner's ``is_dir`` check rejects the
+    launch instead.
     """
     raw = os.environ.get(LAKE_VOLUME_HOST_PATH_ENV)
     if not raw:

@@ -75,19 +75,6 @@ def _artifacts_root() -> Path:
     return root
 
 
-def _lake_root() -> Path | None:
-    """Resolve the host-side data-lake root from deploy-time env, or None.
-
-    Deliberately does NOT create the directory: unlike the artifacts
-    root (which the launcher owns and fills), the lake is written by the
-    data plane's lake writer. Conjuring an empty directory here would
-    turn "the lake volume is not mounted on this host" into "every
-    trading day is missing data", which is far harder to diagnose. The
-    runner's ``is_dir`` check rejects the launch instead.
-    """
-    return launcher_host_lake_root()
-
-
 def _expected_token() -> str:
     """Return the launcher's auth token.
 
@@ -180,7 +167,7 @@ async def post_launch(
             launch,
             request,
             artifacts_root=_artifacts_root(),
-            lake_root=_lake_root(),
+            lake_root=launcher_host_lake_root(),
         )
     except LaunchRejectedError as e:
         # 4xx covers all "this request is malformed in a way the

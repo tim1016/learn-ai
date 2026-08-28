@@ -530,17 +530,6 @@ def _iter_trading_dates(start: date, end: date) -> list[date]:
     return out
 
 
-def _hash_data_files(data_root: Path, paths: list[Path]) -> tuple:
-    """Hash a list of paths relative to the LEAN data root of the run.
-
-    ``data_root`` is ``workspace/data`` for a staged run and the lake
-    root for a ``DATA_LAKE_ENABLED`` run — in both cases the directory
-    LEAN sees as its ``data-folder``, so the recorded relative paths
-    mean the same thing to a reader of the manifest.
-    """
-    return hash_staged_files(data_root, paths)
-
-
 def _stage_workspace_data(
     *,
     request: TrustedRunRequest,
@@ -1068,8 +1057,10 @@ def _build_manifest(
     auditable and shows up in the sidebar instead of vanishing.
     """
     # The LEAN data root of this run: the staged workspace subtree, or
-    # the lake itself when the launcher mounted it read-only. Everything
-    # hashed below is relative to whichever one LEAN actually read.
+    # the lake itself when the launcher mounted it read-only. Every hash
+    # below is taken relative to whichever one LEAN actually read, so
+    # ``path_in_workspace`` means the same thing to a manifest reader in
+    # both modes.
     if lake_stream is None:
         data_root = workspace.data_dir
         market_hours, symbol_properties = _list_metadata(workspace)
@@ -1085,7 +1076,7 @@ def _build_manifest(
         is_clean_note = "is_clean=False"
         error_cats_note = "lean_error_categories=[]"
     failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
-    bar_zips = _hash_data_files(data_root, [*bar_zip_paths, *quote_zip_paths, daily_path])
+    bar_zips = hash_staged_files(data_root, [*bar_zip_paths, *quote_zip_paths, daily_path])
     # PR A hardening: flatten the staged-zip hashes into a path-keyed
     # dict. The ``StagedDataManifest.bar_zips`` tuple is the
     # authoritative form; this index is a convenience for consumers
@@ -1097,9 +1088,9 @@ def _build_manifest(
         # in the manifest's staged-data hash list. Reproducibility
         # requires every byte LEAN saw to be hashed.
         bar_zips=bar_zips,
-        market_hours_database=(_hash_data_files(data_root, [market_hours])[0] if market_hours is not None else None),
+        market_hours_database=(hash_staged_files(data_root, [market_hours])[0] if market_hours is not None else None),
         symbol_properties_database=(
-            _hash_data_files(data_root, [symbol_properties])[0] if symbol_properties is not None else None
+            hash_staged_files(data_root, [symbol_properties])[0] if symbol_properties is not None else None
         ),
     )
     runtime_provenance = runtime_provenance_for_digest(PINNED_LEAN_IMAGE_DIGEST)
