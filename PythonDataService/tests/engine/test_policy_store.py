@@ -56,6 +56,13 @@ def test_resolve_data_roots_reference_first_and_creates_policy_root(monkeypatch,
 
 
 def test_resolve_data_roots_skips_missing_reference(monkeypatch, tmp_path: Path):
+    """The reference mount is only stacked in front when it exists.
+
+    Flag explicitly off: the reference-vs-policy ordering is the policy
+    store's own concern, and since #1839 a raw request with the flag on
+    resolves the lake instead (which has no reference mount to skip).
+    """
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
     monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
     monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
 

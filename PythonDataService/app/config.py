@@ -94,10 +94,23 @@ class Settings(BaseSettings):
     # Rate limiting (optional)
     MAX_REQUESTS_PER_MINUTE: int = 100
 
-    # Data lake (Slice 1a)
-    # postgres://user:pass@host:5432/dbname — required when DATA_LAKE_ENABLED is true
+    # Data lake. Default-ON since #1839: the lake is the market-data
+    # authority for raw historical bars (ADR 0049), and the engines, the
+    # LEAN sidecar and the chart split-read all resolve through it.
+    #
+    # What "on" does NOT mean, because the blast radius of this default is
+    # the thing worth stating next to it: an adjusted-bars request still
+    # reads the pre-lake policy store (``path_policy.lake_serves``), so the
+    # engine's own default DataPolicy -- which is adjusted -- is unchanged
+    # by the flip. Turning this off remains a complete rollback: every seam
+    # asks one predicate and every one of them falls back to the path it
+    # used before.
+    #
+    # postgres://user:pass@host:5432/dbname — required when DATA_LAKE_ENABLED
+    # is true, which is now the default. A deployment with no POSTGRES_URL
+    # must set DATA_LAKE_ENABLED=false explicitly.
     POSTGRES_URL: str = ""
-    DATA_LAKE_ENABLED: bool = False
+    DATA_LAKE_ENABLED: bool = True
     # Rebuildable read model over canonical lifecycle/account artifacts.
     # Requires POSTGRES_URL when enabled; files remain canonical when disabled
     # or unavailable.

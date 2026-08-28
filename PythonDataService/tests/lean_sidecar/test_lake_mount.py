@@ -171,16 +171,19 @@ class TestFlagOffIsUnchanged:
         assert LeanConfig().to_payload()["data-folder"] == CONTAINER_DATA_FOLDER
         assert f"{CONTAINER_WORKSPACE_MOUNT}/data" == CONTAINER_DATA_FOLDER
 
-    def test_flag_ships_default_off(self) -> None:
+    def test_flag_ships_default_on(self) -> None:
         """Asserted on the field default, not on the ambient environment.
 
-        A developer with ``DATA_LAKE_ENABLED=true`` in their ``.env``
-        should not fail this; what this slice promises is that the
-        *shipped* default is off.
+        A developer with ``DATA_LAKE_ENABLED=false`` in their ``.env``
+        should not fail this; what #1839 promises is that the *shipped*
+        default is on. The class around it still holds: every assertion in
+        it is about what a flag-OFF deployment renders, which is now the
+        deliberate opt-out rather than the default, and must keep working
+        because turning the flag off is the rollback.
         """
         from app.config import Settings
 
-        assert Settings.model_fields["DATA_LAKE_ENABLED"].default is False
+        assert Settings.model_fields["DATA_LAKE_ENABLED"].default is True
 
     def test_lake_mode_follows_the_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.config import settings

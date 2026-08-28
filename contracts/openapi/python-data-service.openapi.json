@@ -1344,6 +1344,493 @@
         "title": "ArbitrageDetail",
         "type": "object"
       },
+      "ArtifactDetail": {
+        "description": "Full receipt for one catalog row: identity, hashes, and byte metadata.",
+        "properties": {
+          "artifact_kind": {
+            "title": "Artifact Kind",
+            "type": "string"
+          },
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "completed_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At Ms"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "data_contract_hash": {
+            "title": "Data Contract Hash",
+            "type": "string"
+          },
+          "data_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Type"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "fetched_at_ms": {
+            "title": "Fetched At Ms",
+            "type": "integer"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size Bytes"
+          },
+          "first_bar_start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Bar Start Ms"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_bar_start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Bar Start Ms"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "price_adjustment_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Adjustment Mode"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_params": {
+            "title": "Provider Params",
+            "type": "object"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "status": {
+            "enum": [
+              "fetching",
+              "complete",
+              "stale",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trading Date Ms"
+          }
+        },
+        "required": [
+          "id",
+          "artifact_kind",
+          "market",
+          "symbol",
+          "trading_date_ms",
+          "resolution",
+          "data_type",
+          "provider",
+          "provider_params",
+          "price_adjustment_mode",
+          "data_contract_hash",
+          "content_hash",
+          "file_path",
+          "file_size_bytes",
+          "status",
+          "row_count",
+          "first_bar_start_ms",
+          "last_bar_start_ms",
+          "fetched_at_ms",
+          "completed_at_ms",
+          "attempt_count",
+          "last_error",
+          "error_message"
+        ],
+        "title": "ArtifactDetail",
+        "type": "object"
+      },
+      "ArtifactFailure": {
+        "properties": {
+          "artifact_kind": {
+            "title": "Artifact Kind",
+            "type": "string"
+          },
+          "attempt_count": {
+            "default": 0,
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "data_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Type"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "provider_status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Status Code"
+          },
+          "reason": {
+            "enum": [
+              "provider_auth_error",
+              "provider_entitlement_error",
+              "provider_rate_limited",
+              "provider_api_error",
+              "provider_no_data",
+              "unknown_symbol",
+              "validation_failed",
+              "io_error",
+              "lease_timeout",
+              "fetch_timeout",
+              "unsupported_resolution",
+              "unsupported_artifact_kind",
+              "corp_action_revision_mismatch",
+              "data_contract_mismatch",
+              "internal_error",
+              "session_not_produced",
+              "run_aborted"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "trading_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trading Date"
+          }
+        },
+        "required": [
+          "artifact_kind",
+          "symbol",
+          "trading_date",
+          "data_type",
+          "reason"
+        ],
+        "title": "ArtifactFailure",
+        "type": "object"
+      },
+      "ArtifactRecord": {
+        "properties": {
+          "artifact_kind": {
+            "title": "Artifact Kind",
+            "type": "string"
+          },
+          "data_contract_hash": {
+            "title": "Data Contract Hash",
+            "type": "string"
+          },
+          "data_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Type"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_sha256": {
+            "title": "File Sha256",
+            "type": "string"
+          },
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size Bytes"
+          },
+          "first_bar_start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Bar Start Ms"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_bar_start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Bar Start Ms"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "price_adjustment_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Adjustment Mode"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "trading_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trading Date"
+          }
+        },
+        "required": [
+          "id",
+          "artifact_kind",
+          "market",
+          "symbol",
+          "trading_date",
+          "resolution",
+          "data_type",
+          "provider",
+          "price_adjustment_mode",
+          "data_contract_hash",
+          "file_path",
+          "file_sha256",
+          "row_count",
+          "first_bar_start_ms",
+          "last_bar_start_ms"
+        ],
+        "title": "ArtifactRecord",
+        "type": "object"
+      },
       "AtmOffsetStrike": {
         "properties": {
           "offset": {
@@ -1456,6 +1943,62 @@
           "is_complete"
         ],
         "title": "AvailabilityResponse",
+        "type": "object"
+      },
+      "BackfillDefaults": {
+        "description": "The parts of a ``DataRunSpec`` only the data plane knows (#1838).\n\n``lean_image_digest`` is required by ``DataRunSpec`` and has no default;\na browser has no way to derive the pinned LEAN image, and hand-typing a\ncontainer digest into a form is not a receipt anybody could audit. The\ncaps come from ``app.data_lake.types`` so the Observatory rejects an\nover-wide window in the form rather than by round-tripping a 422.\n\n``lean_image_digest`` is ``None`` when the data plane has no pin\nconfigured \u2014 reported honestly rather than as an empty string, so the\nUI can say backfill is unavailable instead of submitting a spec that\nwould fail deep inside Phase 0.",
+        "properties": {
+          "lean_image_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lean Image Digest"
+          },
+          "market": {
+            "const": "usa",
+            "default": "usa",
+            "title": "Market"
+          },
+          "max_symbol_length": {
+            "title": "Max Symbol Length",
+            "type": "integer"
+          },
+          "max_trading_range_days": {
+            "title": "Max Trading Range Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lean_image_digest",
+          "max_trading_range_days",
+          "max_symbol_length"
+        ],
+        "title": "BackfillDefaults",
+        "type": "object"
+      },
+      "BackfillJobRequest": {
+        "additionalProperties": false,
+        "description": "Body of POST /api/data-lake/backfill.\n\nWraps the existing DataRunSpec ensure contract as a job submission:\nthe same snake_case fields and validation as /ensure-data's body\n(this router isn't behind the .NET-forwards-camelCase-verbatim\nconvention app/routers/jobs.py uses \u2014 it's called the same direct way\n/ensure-data already is), plus a job_id the caller mints ahead of\ndispatch, per the established job pattern's convention of the caller\nminting the id before the worker starts writing progress against it.",
+        "properties": {
+          "job_id": {
+            "minLength": 1,
+            "title": "Job Id",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/DataRunSpec"
+          }
+        },
+        "required": [
+          "job_id",
+          "spec"
+        ],
+        "title": "BackfillJobRequest",
         "type": "object"
       },
       "BacktestResultResponse": {
@@ -7934,6 +8477,95 @@
         "title": "CostViabilityResponse",
         "type": "object"
       },
+      "CoverageDay": {
+        "description": "One calendar session's artifact status for a symbol/data-type window.\n\n``trading_date_ms`` is the session's 09:30 ET open, expressed as\nint64 ms UTC \u2014 the canonical anchor for a date-only value. Sessions with\nno matching catalog row report ``status=\"missing\"``; this is never\nemitted for a non-session date, since the router only iterates the\ncanonical calendar's sessions in the first place.",
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "fetching",
+                  "complete",
+                  "stale",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "missing"
+              }
+            ],
+            "title": "Status"
+          },
+          "trading_date_ms": {
+            "title": "Trading Date Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "trading_date_ms",
+          "status"
+        ],
+        "title": "CoverageDay",
+        "type": "object"
+      },
+      "CoverageResponse": {
+        "properties": {
+          "data_type": {
+            "title": "Data Type",
+            "type": "string"
+          },
+          "days": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CoverageDay"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "price_adjustment_mode": {
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "resolution": {
+            "title": "Resolution",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market",
+          "symbol",
+          "data_type",
+          "resolution",
+          "provider",
+          "price_adjustment_mode"
+        ],
+        "title": "CoverageResponse",
+        "type": "object"
+      },
       "CrossAssetBars": {
         "properties": {
           "bars": {
@@ -8823,6 +9455,89 @@
         "title": "DailySummary",
         "type": "object"
       },
+      "DataAvailabilityResult": {
+        "properties": {
+          "artifacts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRecord"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "completed_at_ms": {
+            "title": "Completed At Ms",
+            "type": "integer"
+          },
+          "data_availability_hash": {
+            "title": "Data Availability Hash",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "failures": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ArtifactFailure"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "fetched_artifact_count": {
+            "default": 0,
+            "title": "Fetched Artifact Count",
+            "type": "integer"
+          },
+          "lean_data_root_path": {
+            "title": "Lean Data Root Path",
+            "type": "string"
+          },
+          "overall_status": {
+            "enum": [
+              "complete",
+              "partial",
+              "failed"
+            ],
+            "title": "Overall Status",
+            "type": "string"
+          },
+          "refreshed_artifact_count": {
+            "default": 0,
+            "title": "Refreshed Artifact Count",
+            "type": "integer"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "reused_artifact_count": {
+            "default": 0,
+            "title": "Reused Artifact Count",
+            "type": "integer"
+          },
+          "skipped_non_sessions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/NonSessionRecord"
+            },
+            "title": "Skipped Non Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id",
+          "overall_status",
+          "lean_data_root_path",
+          "data_availability_hash",
+          "completed_at_ms",
+          "duration_ms"
+        ],
+        "title": "DataAvailabilityResult",
+        "type": "object"
+      },
       "DataFiltersModel": {
         "description": "Data quality filters for option contracts.",
         "properties": {
@@ -8974,6 +9689,139 @@
           "symbol"
         ],
         "title": "DataQualityRequest",
+        "type": "object"
+      },
+      "DataRunSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "data_types": {
+            "default": [
+              "trade"
+            ],
+            "items": {
+              "enum": [
+                "trade",
+                "quote"
+              ],
+              "type": "string"
+            },
+            "title": "Data Types",
+            "type": "array"
+          },
+          "end_trading_date": {
+            "format": "date",
+            "title": "End Trading Date",
+            "type": "string"
+          },
+          "fetch_timeout_seconds": {
+            "default": 600,
+            "maximum": 7200.0,
+            "minimum": 10.0,
+            "title": "Fetch Timeout Seconds",
+            "type": "integer"
+          },
+          "force_refresh": {
+            "default": false,
+            "title": "Force Refresh",
+            "type": "boolean"
+          },
+          "include_daily_trade": {
+            "default": true,
+            "title": "Include Daily Trade",
+            "type": "boolean"
+          },
+          "include_factor_files": {
+            "default": true,
+            "title": "Include Factor Files",
+            "type": "boolean"
+          },
+          "include_map_files": {
+            "default": true,
+            "title": "Include Map Files",
+            "type": "boolean"
+          },
+          "lean_image_digest": {
+            "title": "Lean Image Digest",
+            "type": "string"
+          },
+          "market": {
+            "const": "usa",
+            "default": "usa",
+            "title": "Market"
+          },
+          "price_adjustment_mode": {
+            "const": "raw",
+            "default": "raw",
+            "title": "Price Adjustment Mode"
+          },
+          "provider": {
+            "const": "polygon",
+            "default": "polygon",
+            "title": "Provider"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "requester": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requester"
+          },
+          "resolution": {
+            "const": "minute",
+            "default": "minute",
+            "title": "Resolution"
+          },
+          "run_type": {
+            "enum": [
+              "python_lab",
+              "lean_lab"
+            ],
+            "title": "Run Type",
+            "type": "string"
+          },
+          "start_trading_date": {
+            "format": "date",
+            "title": "Start Trading Date",
+            "type": "string"
+          },
+          "strategy_execution_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Execution Id"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id",
+          "run_type",
+          "symbols",
+          "start_trading_date",
+          "end_trading_date",
+          "lean_image_digest"
+        ],
+        "title": "DataRunSpec",
         "type": "object"
       },
       "DataSufficiencyResponse": {
@@ -18830,6 +19678,34 @@
           "selector"
         ],
         "title": "NearestWeeklyExpiry",
+        "type": "object"
+      },
+      "NonSessionRecord": {
+        "properties": {
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "weekend",
+              "market_holiday"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "trading_date": {
+            "format": "date",
+            "title": "Trading Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market",
+          "trading_date",
+          "reason"
+        ],
+        "title": "NonSessionRecord",
         "type": "object"
       },
       "NullDistribution": {
@@ -29421,6 +30297,70 @@
         "title": "StopRunRequest",
         "type": "object"
       },
+      "StorageKindTotal": {
+        "properties": {
+          "artifact_count": {
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "artifact_kind": {
+            "title": "Artifact Kind",
+            "type": "string"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "total_bytes": {
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifact_kind",
+          "resolution",
+          "artifact_count",
+          "total_bytes"
+        ],
+        "title": "StorageKindTotal",
+        "type": "object"
+      },
+      "StorageSummaryResponse": {
+        "properties": {
+          "kinds": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/StorageKindTotal"
+            },
+            "title": "Kinds",
+            "type": "array"
+          },
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "symbols": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SymbolCoverageSpan"
+            },
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "market"
+        ],
+        "title": "StorageSummaryResponse",
+        "type": "object"
+      },
       "StrategyAnalyzeRequest": {
         "description": "Request to analyze an options strategy.",
         "properties": {
@@ -31886,6 +32826,48 @@
           "action"
         ],
         "title": "SurvivalRule",
+        "type": "object"
+      },
+      "SymbolCoverageSpan": {
+        "properties": {
+          "artifact_count": {
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "first_trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Trading Date Ms"
+          },
+          "last_trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Trading Date Ms"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "first_trading_date_ms",
+          "last_trading_date_ms",
+          "artifact_count"
+        ],
+        "title": "SymbolCoverageSpan",
         "type": "object"
       },
       "TargetMetadataResponse": {
@@ -42302,6 +43284,421 @@
         "summary": "List Timeframes",
         "tags": [
           "chart"
+        ]
+      }
+    },
+    "/api/data-lake/artifacts/{artifact_id}": {
+      "get": {
+        "description": "Return the full receipt for one catalog row: hashes, size, provider params.",
+        "operationId": "get_artifact_detail_api_data_lake_artifacts__artifact_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Artifact Detail",
+        "tags": [
+          "data-lake"
+        ]
+      }
+    },
+    "/api/data-lake/backfill": {
+      "post": {
+        "description": "Kick off a data-lake backfill in a worker thread. Returns 202.\n\nThe work iterates the requested range's canonical NYSE sessions and\ncalls the existing ensure_data() seam once per day\n(app.data_lake.backfill.run_backfill), emitting a job.progress tick and\na data_lake.backfill_day event after each one.",
+        "operationId": "start_backfill_job_api_data_lake_backfill_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackfillJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Backfill Job Api Data Lake Backfill Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Backfill Job",
+        "tags": [
+          "data-lake"
+        ]
+      }
+    },
+    "/api/data-lake/backfill-defaults": {
+      "get": {
+        "description": "Spec constants for a backfill form. Reads no catalog state.",
+        "operationId": "get_backfill_defaults_api_data_lake_backfill_defaults_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "const": "usa",
+              "default": "usa",
+              "title": "Market"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackfillDefaults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Backfill Defaults",
+        "tags": [
+          "data-lake"
+        ]
+      }
+    },
+    "/api/data-lake/coverage": {
+      "get": {
+        "description": "Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.\n\nDays are the calendar's own sessions in the requested window \u2014 weekends\nand holidays are simply absent, never listed and never invented. A session\nwith no matching catalog row is reported honestly as ``status=\"missing\"``\nrather than omitted.\n\nThe window arrives as two ``int64 ms UTC`` values, not ISO dates.\n``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a\ntemporal value and a trading date is not an exception to it \u2014 it is a\ndate-anchored value, carried as the millisecond instant of that session's\nopen and resolved back through ``America/New_York``\n(:func:`trading_date_at_ms`). The response has always spoken ms\n(``CoverageDay.trading_date_ms``); before #1839 the request did not, which\nleft one endpoint with a temporal format in each direction.\n\n``provider`` is not a caller-supplied parameter: it's derived from\n``data_type`` via ``provider_for_data_type`` (the same rule\n``expand_required_artifacts`` uses to write these rows) \u2014 trade bars are\nPolygon's, quote bars are ``learn_ai_derived``. A fixed ``provider=\"polygon\"``\nparameter made quote coverage unfindable, since quote rows are never\ncatalogued under that provider.",
+        "operationId": "get_coverage_api_data_lake_coverage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start_trading_date_ms",
+            "required": true,
+            "schema": {
+              "title": "Start Trading Date Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_trading_date_ms",
+            "required": true,
+            "schema": {
+              "title": "End Trading Date Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "const": "usa",
+              "default": "usa",
+              "title": "Market"
+            }
+          },
+          {
+            "in": "query",
+            "name": "data_type",
+            "required": false,
+            "schema": {
+              "default": "trade",
+              "enum": [
+                "trade",
+                "quote"
+              ],
+              "title": "Data Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "price_adjustment_mode",
+            "required": false,
+            "schema": {
+              "default": "raw",
+              "enum": [
+                "raw",
+                "polygon_split_adjusted",
+                "lean_adjusted"
+              ],
+              "title": "Price Adjustment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Coverage",
+        "tags": [
+          "data-lake"
+        ]
+      }
+    },
+    "/api/data-lake/ensure-data": {
+      "post": {
+        "operationId": "post_ensure_data_api_data_lake_ensure_data_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataRunSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataAvailabilityResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Ensure Data",
+        "tags": [
+          "data-lake"
+        ]
+      }
+    },
+    "/api/data-lake/storage-summary": {
+      "get": {
+        "description": "Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.",
+        "operationId": "get_storage_summary_api_data_lake_storage_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "const": "usa",
+              "default": "usa",
+              "title": "Market"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Storage Summary",
+        "tags": [
+          "data-lake"
         ]
       }
     },

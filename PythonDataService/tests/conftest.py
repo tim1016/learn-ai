@@ -90,6 +90,38 @@ def _isolate_strategy_validation_flag_ledger(
 
 
 @pytest.fixture(autouse=True)
+def _isolate_data_lake_write_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep every test's lake root inside its own tmp_path.
+
+    ``DATA_LAKE_ENABLED`` defaults ON since #1839, so root resolution now
+    reaches the lake by default: ``policy_store.resolve_data_roots`` for a raw
+    request, the chart split-read, and the sidecar preflight all resolve
+    ``LEAN_DATA_WRITE_ROOT`` unless a test pins it. Left unpinned that is the
+    deployment path (``/lean-data-writer``) -- a directory a test would create
+    if it could and read a developer's real lake out of if it existed. Either
+    outcome makes a test's result depend on the host rather than on its
+    fixture, which is the same class of local-vs-CI divergence
+    ``_isolate_strategy_validation_flag_ledger`` above exists to prevent.
+
+    ``staging/`` is created alongside ``lake/`` because the writer's atomic
+    promote asserts both exist on the same filesystem.
+
+    A test that wants a specific lake overrides this with its own
+    ``monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", ...)``; later
+    patches win, so this is a floor, not a ceiling.
+    """
+    from app.config import settings
+
+    write_root = tmp_path / "lean-data-writer"
+    (write_root / "lake").mkdir(parents=True, exist_ok=True)
+    (write_root / "staging").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_canary_admission_ledger(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

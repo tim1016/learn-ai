@@ -413,6 +413,24 @@ def materialize_engine_run(
     Failures that withhold nothing this run reads do not stop it; they come
     back as ``incomplete_summary`` so the caller can say so to the operator.
 
+    **This gate is stricter than the path it replaces, deliberately**
+    (carry-forward A7, decided at the flag flip). The pre-lake
+    ``ensure_range`` treated a session the provider could not supply as
+    simply fewer bars: the run proceeded, the series had a hole in it, and
+    the reported numbers looked exactly like numbers from a complete series.
+    The lake refuses instead, naming the sessions. That is the posture
+    ``.claude/rules/numerical-rigor.md`` already takes everywhere else --
+    "if two series have different timestamps, that is data telling you
+    something, do not silence it" -- applied to the one place it was not.
+
+    The cost is real and lands at the flip: a delisted or thin symbol whose
+    window the provider cannot fully supply used to "work" and now refuses.
+    That is the intended outcome, not a regression to soften. A run over
+    such a window was never producing a result worth trusting, and the
+    refusal says which sessions are missing, so the operator can narrow the
+    window, backfill, or accept a different symbol -- all of which are
+    decisions they could not previously have known they were making.
+
     **The fingerprint's scope — canonical statement, referenced elsewhere.**
     ``availability_hash`` is the lake's ``data_availability_hash``, and it
     covers a **superset** of what the Python engine opens: the Phase-0 metadata
