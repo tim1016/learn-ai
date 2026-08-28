@@ -5,6 +5,12 @@ of LEAN paths is permitted anywhere else in the codebase; a lint test enforces
 that the substrings ``equity/usa/``, ``market-hours/``, ``symbol-properties/``
 appear only in this module and its tests.
 
+The two lake roots (``resolve_lake_root`` / ``resolve_staging_root``) live here
+for the same reason: one canonical answer to "where is the lake on disk", so
+its two direct consumers — ``ensure_data``, which writes the artifacts, and the
+chart split-read, which reads them — resolve the identical directory instead of
+each re-deriving it from ``settings``.
+
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
 """
 
@@ -16,33 +22,43 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import UUID
 
+from app.config import settings
+
 Market = Literal["usa"]
 Resolution = Literal["minute", "hour", "daily"]
 DataType = Literal["trade", "quote"]
 MetadataKind = Literal["market_hours", "symbol_properties"]
 
+_LAKE_DIR = "lake"
+_STAGING_DIR = "staging"
+
 
 def resolve_lake_root() -> Path:
-    """The single canonical write root every lake writer must share.
+    """Return the immutable-artifact root of the data lake.
 
-    Wraps ``app.config.settings.LEAN_DATA_WRITE_ROOT`` so any writer that
-    needs "the" configured root -- ``ensure_data``'s live fetch pipeline,
-    and ``app.data_lake.cache_import``'s canonical-root check -- reads it
-    from one place rather than each computing ``Path(settings...)`` itself.
+    This is the directory the LEAN readers are pointed at when
+    ``DATA_LAKE_ENABLED`` is on. It is not created here — a missing root
+    means "the lake holds nothing yet", which every reader must already
+    handle as a per-day miss.
 
     Catalog rows are root-relative: ``FilePath`` carries no root identity of
-    its own. A writer that used a *different* root would produce rows
-    ``ensure_data`` can never actually find once it resolves coverage under
-    the real configured root -- "phantom coverage" that looks complete in
-    the catalog but has no bytes at the root anything else looks under. The
-    full root-identity (``data_root_id``) design that would let more than
-    one physical root coexist honestly is ledgered for the flag-flip
-    integration slice; until then there is exactly one canonical root, and
-    this is it.
+    its own, so every lake writer must resolve the root here — a writer using
+    a different root produces "phantom coverage": rows that look complete in
+    the catalog but have no bytes where anything else looks. The full
+    root-identity (``data_root_id``) design that would let more than one
+    physical root coexist honestly is ledgered for the flag-flip slice
+    (#1839); until then there is exactly one canonical root, and this is it.
     """
-    from app.config import settings  # lazy: keep this module import-time dependency-free
+    return Path(settings.LEAN_DATA_WRITE_ROOT) / _LAKE_DIR
 
-    return Path(settings.LEAN_DATA_WRITE_ROOT)
+
+def resolve_staging_root() -> Path:
+    """Return the per-attempt staging root that promotes into the lake root.
+
+    Must share a filesystem with :func:`resolve_lake_root` so the promote
+    is a rename (see ``app.data_lake.atomic.assert_same_filesystem``).
+    """
+    return Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR
 
 
 def minute_bar_market_root(market: Market) -> PurePosixPath:

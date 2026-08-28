@@ -30,7 +30,9 @@ from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
+from app.lean_sidecar.lake_mount import launcher_host_lake_root
 from app.lean_sidecar.launcher.models import (
+    LAUNCHER_CAPABILITIES,
     ExtractMetadataRequest,
     ExtractMetadataResponse,
     LauncherHealthResponse,
@@ -147,6 +149,7 @@ async def healthz() -> LauncherHealthResponse:
         status="ok" if image.available else "degraded",
         version=LAUNCHER_VERSION,
         image=image,
+        capabilities=list(LAUNCHER_CAPABILITIES),
     )
 
 
@@ -162,7 +165,12 @@ async def post_launch(
             detail="missing or wrong X-Launcher-Token",
         )
     try:
-        return await run_in_threadpool(launch, request, artifacts_root=_artifacts_root())
+        return await run_in_threadpool(
+            launch,
+            request,
+            artifacts_root=_artifacts_root(),
+            lake_root=launcher_host_lake_root(),
+        )
     except LaunchRejectedError as e:
         # 4xx covers all "this request is malformed in a way the
         # launcher refuses to act on". The body carries a stable

@@ -25,9 +25,10 @@ that zip's trading date. Any violation refuses the affected symbol or
 artifact rather than silently claiming a catalog row a provenance document
 doesn't actually attest to.
 
-``--lake-root`` must equal the canonical configured lake root
-(``app.data_lake.path_policy.resolve_lake_root()``, which wraps
-``settings.LEAN_DATA_WRITE_ROOT``) -- see ``LakeRootIdentityError``. Catalog
+``--lake-root`` must equal the canonical configured write root
+(``settings.LEAN_DATA_WRITE_ROOT`` -- the parent under which
+``path_policy.resolve_lake_root()`` and ``resolve_staging_root()`` live) --
+see ``LakeRootIdentityError``. Catalog
 rows are root-relative (``FilePath`` carries no root identity of its own), so
 importing into any other root would produce rows the live ``ensure_data``
 pipeline can never actually find once it resolves coverage under the real
@@ -171,7 +172,12 @@ from app.data_lake.atomic import (
     read_lake_root_mode,
 )
 from app.data_lake.data_contract import data_contract_hash as _dch
-from app.data_lake.path_policy import LeanMinuteBarPath, minute_bar_market_root, resolve_lake_root
+from app.data_lake.path_policy import (
+    LeanMinuteBarPath,
+    minute_bar_market_root,
+    resolve_lake_root,
+    resolve_staging_root,
+)
 from app.data_lake.types import ArtifactIdentity, ArtifactRecord
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.utils.advisory_lock import advisory_file_lock
@@ -1017,8 +1023,9 @@ async def import_cache_root(
 ) -> ImportReport:
     """Import every trade zip under ``cache_root`` into the lake catalog.
 
-    ``lake_root`` must equal ``app.data_lake.path_policy.resolve_lake_root()``
-    -- the canonical configured write root -- or this raises
+    ``lake_root`` must equal the canonical configured write root
+    (``settings.LEAN_DATA_WRITE_ROOT``, the parent ``resolve_lake_root()``
+    and ``resolve_staging_root()`` resolve under) -- or this raises
     ``LakeRootIdentityError`` before touching anything. Artifacts land under
     ``lake_root/lake/...``, staged through ``lake_root/staging/...``. Both
     are created if missing. Makes zero provider calls — every byte written
@@ -1029,7 +1036,9 @@ async def import_cache_root(
     populated) truly is the given mode; see ``check_lake_root_mode`` and the
     module docstring's "One lake root per adjustment mode" section.
     """
-    canonical_root = resolve_lake_root()
+    from app.config import settings
+
+    canonical_root = Path(settings.LEAN_DATA_WRITE_ROOT)
     if lake_root.resolve() != canonical_root.resolve():
         raise LakeRootIdentityError(
             f"--lake-root {lake_root} does not match the canonical configured lake root "
@@ -1043,8 +1052,10 @@ async def import_cache_root(
             f"equal the canonical root."
         )
 
-    lake_dir = lake_root / "lake"
-    staging_dir = lake_root / "staging"
+    # The same setting the canonical helpers wrap, so these cannot diverge
+    # from where ensure_data's live pipeline reads and writes.
+    lake_dir = resolve_lake_root()
+    staging_dir = resolve_staging_root()
     lake_dir.mkdir(parents=True, exist_ok=True)
     staging_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1184,7 +1195,7 @@ def main() -> None:
         required=True,
         help=(
             "Write root: must equal the canonical configured lake root "
-            "(app.data_lake.path_policy.resolve_lake_root(), i.e. settings.LEAN_DATA_WRITE_ROOT) "
+            "(the canonical configured write root, settings.LEAN_DATA_WRITE_ROOT) "
             "or the import refuses (catalog rows are root-relative; any other root produces "
             "'phantom coverage'). Artifacts land under <lake-root>/lake, staged through "
             "<lake-root>/staging. One adjustment mode per lake root -- a second mode targeting "
