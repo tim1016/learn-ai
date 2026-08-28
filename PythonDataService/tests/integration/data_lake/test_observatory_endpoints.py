@@ -2,15 +2,16 @@
 
 GET /api/data-lake/coverage, /artifacts/{id}, /storage-summary. Same pattern
 as test_ensure_data_route.py: build a minimal FastAPI app that includes the
-data_lake router directly, so no app.main reload or settings override is
-needed to exercise the flag-on behavior. catalog_client's Postgres-backed
-functions are monkeypatched at the module level so these tests run without a
-live database.
+data_lake router directly (via the shared ``make_data_lake_app`` fixture in
+conftest.py), so no app.main reload or settings override is needed to
+exercise the flag-on behavior. catalog_client's Postgres-backed functions
+are monkeypatched at the module level so these tests run without a live
+database.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -24,17 +25,9 @@ from app.data_lake.catalog_client import (
     SymbolCoverageSpanRow,
 )
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
-from app.routers.data_lake import router as data_lake_router
+from app.routers.data_lake import _MAX_COVERAGE_RANGE_DAYS
 
 pytestmark = pytest.mark.asyncio
-
-
-def _make_app(*, include_data_lake: bool) -> FastAPI:
-    """Minimal FastAPI app that mirrors main.py's conditional router wiring."""
-    app = FastAPI()
-    if include_data_lake:
-        app.include_router(data_lake_router)
-    return app
 
 
 async def _get(app: FastAPI, url: str) -> tuple[int, dict]:
@@ -56,8 +49,8 @@ async def _get(app: FastAPI, url: str) -> tuple[int, dict]:
         "/api/data-lake/storage-summary",
     ],
 )
-async def test_observatory_routes_404_when_flag_off(url: str):
-    flag_off_app = _make_app(include_data_lake=False)
+async def test_observatory_routes_404_when_flag_off(url: str, make_data_lake_app):
+    flag_off_app = make_data_lake_app(include_data_lake=False)
     status_code, _ = await _get(flag_off_app, url)
     assert status_code == 404
 
@@ -67,7 +60,7 @@ async def test_observatory_routes_404_when_flag_off(url: str):
 # ---------------------------------------------------------------------------
 
 
-async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatch: pytest.MonkeyPatch):
+async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
     """2024-05-20 (Mon) .. 2024-05-26 (Sun) has 5 NYSE sessions and a weekend.
 
     An empty catalog must report every session as "missing" (honest, not
@@ -79,7 +72,7 @@ async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatc
 
     monkeypatch.setattr(catalog_client, "select_artifact_coverage", _empty_coverage)
 
-    app = _make_app(include_data_lake=True)
+    app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
         "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-26",
@@ -96,7 +89,7 @@ async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatc
         assert day["trading_date_ms"] == session_open_ms_utc(session_date)
 
 
-async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.MonkeyPatch):
+async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
     """A day with a catalog row reports that row's real status, not "missing"."""
 
     async def _mixed_coverage(**kwargs) -> list[ArtifactCoverageRow]:
@@ -107,7 +100,7 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(catalog_client, "select_artifact_coverage", _mixed_coverage)
 
-    app = _make_app(include_data_lake=True)
+    app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
         "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
@@ -127,8 +120,8 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
     assert still_missing_day["artifact_id"] is None
 
 
-async def test_coverage_422_when_range_inverted():
-    app = _make_app(include_data_lake=True)
+async def test_coverage_422_when_range_inverted(make_data_lake_app):
+    app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
         "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-24&end_trading_date=2024-05-20",
@@ -137,12 +130,28 @@ async def test_coverage_422_when_range_inverted():
     assert body["detail"]["reason"] == "invalid_range"
 
 
+async def test_coverage_422_when_range_exceeds_max_days(make_data_lake_app):
+    """One day past the cap must 422; the cap mirrors DataRunSpec's 5-year limit."""
+    start = date(2020, 1, 1)
+    end = start + timedelta(days=_MAX_COVERAGE_RANGE_DAYS)  # span_days = cap + 1
+
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        f"/api/data-lake/coverage?symbol=SPY&start_trading_date={start.isoformat()}&end_trading_date={end.isoformat()}",
+    )
+    assert status_code == 422
+    assert body["detail"]["reason"] == "range_too_large"
+
+
 # ---------------------------------------------------------------------------
 # Artifact detail — full receipt, int64 ms UTC timestamps, honest 404.
 # ---------------------------------------------------------------------------
 
 
-async def test_artifact_detail_returns_full_receipt_with_int_ms_timestamps(monkeypatch: pytest.MonkeyPatch):
+async def test_artifact_detail_returns_full_receipt_with_int_ms_timestamps(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
     async def _detail(artifact_id: int) -> ArtifactDetailRow:
         assert artifact_id == 101
         return ArtifactDetailRow(
@@ -170,7 +179,7 @@ async def test_artifact_detail_returns_full_receipt_with_int_ms_timestamps(monke
 
     monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
 
-    app = _make_app(include_data_lake=True)
+    app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(app, "/api/data-lake/artifacts/101")
 
     assert status_code == 200
@@ -187,7 +196,9 @@ async def test_artifact_detail_returns_full_receipt_with_int_ms_timestamps(monke
     assert body["trading_date_ms"] == session_open_ms_utc(date(2024, 5, 20))
 
 
-async def test_artifact_detail_trading_date_ms_is_none_for_non_day_keyed_artifacts(monkeypatch: pytest.MonkeyPatch):
+async def test_artifact_detail_trading_date_ms_is_none_for_non_day_keyed_artifacts(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
     """factor_file/map_file/metadata rows carry no TradingDate — must stay None, not fabricated."""
 
     async def _detail(artifact_id: int) -> ArtifactDetailRow:
@@ -216,7 +227,7 @@ async def test_artifact_detail_trading_date_ms_is_none_for_non_day_keyed_artifac
 
     monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
 
-    app = _make_app(include_data_lake=True)
+    app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(app, "/api/data-lake/artifacts/5")
 
     assert status_code == 200
@@ -224,15 +235,16 @@ async def test_artifact_detail_trading_date_ms_is_none_for_non_day_keyed_artifac
     assert body["content_hash"] == ""
 
 
-async def test_artifact_detail_404_when_row_does_not_exist(monkeypatch: pytest.MonkeyPatch):
+async def test_artifact_detail_404_when_row_does_not_exist(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
     async def _missing(artifact_id: int) -> None:
         return None
 
     monkeypatch.setattr(catalog_client, "select_artifact_by_id", _missing)
 
-    app = _make_app(include_data_lake=True)
-    status_code, _ = await _get(app, "/api/data-lake/artifacts/999")
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(app, "/api/data-lake/artifacts/999")
     assert status_code == 404
+    assert body["detail"]["reason"] == "artifact_not_found"
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +252,9 @@ async def test_artifact_detail_404_when_row_does_not_exist(monkeypatch: pytest.M
 # ---------------------------------------------------------------------------
 
 
-async def test_storage_summary_reports_counts_bytes_and_symbol_spans(monkeypatch: pytest.MonkeyPatch):
+async def test_storage_summary_reports_counts_bytes_and_symbol_spans(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
     async def _kinds(market: str) -> list[StorageKindTotalRow]:
         return [
             StorageKindTotalRow(artifact_kind="time_series_bars", resolution="minute", artifact_count=42, total_bytes=1_048_576),
@@ -260,7 +274,7 @@ async def test_storage_summary_reports_counts_bytes_and_symbol_spans(monkeypatch
     monkeypatch.setattr(catalog_client, "select_storage_totals_by_kind", _kinds)
     monkeypatch.setattr(catalog_client, "select_symbol_coverage_spans", _spans)
 
-    app = _make_app(include_data_lake=True)
+    app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(app, "/api/data-lake/storage-summary")
 
     assert status_code == 200
@@ -278,7 +292,7 @@ async def test_storage_summary_reports_counts_bytes_and_symbol_spans(monkeypatch
     assert span["last_trading_date_ms"] == session_open_ms_utc(date(2024, 5, 24))
 
 
-async def test_storage_summary_honest_empty_on_empty_catalog(monkeypatch: pytest.MonkeyPatch):
+async def test_storage_summary_honest_empty_on_empty_catalog(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
     async def _no_kinds(market: str) -> list[StorageKindTotalRow]:
         return []
 
@@ -288,7 +302,7 @@ async def test_storage_summary_honest_empty_on_empty_catalog(monkeypatch: pytest
     monkeypatch.setattr(catalog_client, "select_storage_totals_by_kind", _no_kinds)
     monkeypatch.setattr(catalog_client, "select_symbol_coverage_spans", _no_spans)
 
-    app = _make_app(include_data_lake=True)
+    app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(app, "/api/data-lake/storage-summary")
 
     assert status_code == 200

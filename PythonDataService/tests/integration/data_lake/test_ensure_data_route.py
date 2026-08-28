@@ -12,12 +12,10 @@ import os
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.routers.data_lake import router as data_lake_router
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,25 +26,17 @@ def _requires_postgres():
         pytest.skip("POSTGRES_URL not configured — skipping DB-dependent route test")
 
 
-def _make_app(*, include_data_lake: bool) -> FastAPI:
-    """Minimal FastAPI app that mirrors main.py's conditional router wiring."""
-    app = FastAPI()
-    if include_data_lake:
-        app.include_router(data_lake_router)
-    return app
-
-
-async def test_route_404_when_flag_off():
+async def test_route_404_when_flag_off(make_data_lake_app):
     """Route is absent when the router is not registered (flag-off behaviour)."""
-    flag_off_app = _make_app(include_data_lake=False)
+    flag_off_app = make_data_lake_app(include_data_lake=False)
     async with AsyncClient(transport=ASGITransport(app=flag_off_app), base_url="http://test") as client:
         r = await client.post("/api/data-lake/ensure-data", json={})
     assert r.status_code == 404
 
 
-async def test_post_ensure_data_known_symbol():
+async def test_post_ensure_data_known_symbol(make_data_lake_app):
     _requires_postgres()
-    flag_on_app = _make_app(include_data_lake=True)
+    flag_on_app = make_data_lake_app(include_data_lake=True)
     payload = {
         "request_id": str(uuid4()),
         "run_type": "python_lab",
@@ -71,8 +61,8 @@ async def test_post_ensure_data_known_symbol():
         await catalog_client.close_pool()
 
 
-async def test_post_ensure_data_422_on_bad_symbol():
-    flag_on_app = _make_app(include_data_lake=True)
+async def test_post_ensure_data_422_on_bad_symbol(make_data_lake_app):
+    flag_on_app = make_data_lake_app(include_data_lake=True)
     payload = {
         "request_id": str(uuid4()),
         "run_type": "python_lab",
