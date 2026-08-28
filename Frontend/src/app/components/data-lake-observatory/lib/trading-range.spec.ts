@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAX_TRADING_RANGE_DAYS,
+  tradingDateToMs,
   tradingRangeRejection,
   tradingRangeSpanDays,
 } from './trading-range';
@@ -98,5 +99,36 @@ describe('tradingRangeRejection', () => {
       'That window is 31 days; the data plane accepts at most 30.',
     );
     expect(tradingRangeRejection('2026-05-01', '2026-05-30', 30)).toBeNull();
+  });
+});
+
+describe('tradingDateToMs', () => {
+  it('resolves back to the same calendar date in Eastern Time', () => {
+    // Both DST states, because the anchor exists to survive the offset
+    // flipping: 2026-01-15 is EST (UTC-5), 2026-07-15 is EDT (UTC-4).
+    for (const iso of ['2026-01-15', '2026-07-15']) {
+      const ms = tradingDateToMs(iso);
+      expect(ms).not.toBeNull();
+      const inEt = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date(ms as number));
+      expect(inEt).toBe(iso);
+    }
+  });
+
+  it('does not use UTC midnight, which would shift the date back a day', () => {
+    // The bug this anchor exists to avoid: midnight UTC on 2026-01-15 is
+    // 19:00 ET on 2026-01-14, so every window would silently start a day early.
+    const ms = tradingDateToMs('2026-01-15') as number;
+    expect(ms).toBeGreaterThan(Date.UTC(2026, 0, 15));
+  });
+
+  it('returns null for anything that is not a YYYY-MM-DD date', () => {
+    expect(tradingDateToMs('')).toBeNull();
+    expect(tradingDateToMs('not-a-date')).toBeNull();
+    expect(tradingDateToMs('2026-5-1')).toBeNull();
   });
 });
