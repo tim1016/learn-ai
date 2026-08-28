@@ -357,6 +357,14 @@ def _legacy_parameter_origins(
     return origins
 
 
+# The remedy for wiring drift, stated once. Both the live proof and the
+# frozen-run replay in `panel_projection_service` hand this to an operator;
+# two copies of one instruction is two instructions that can disagree.
+WIRING_DRIFT_NEXT_STEP = (
+    "Re-run golden qualification for this program so its receipt covers the current wiring."
+)
+
+
 def prove_running_program_build(
     binding: BrokerBotBinding,
     *,
@@ -458,7 +466,7 @@ def prove_running_program_build(
         next_step=(
             None
             if wiring_matches
-            else "Re-run golden qualification for this program so its receipt covers the current wiring."
+            else WIRING_DRIFT_NEXT_STEP
         ),
     )
 
