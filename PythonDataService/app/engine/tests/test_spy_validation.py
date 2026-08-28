@@ -52,8 +52,8 @@ from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
-from app.engine.strategy.algorithms.spy_ema_crossover import (
-    SpyEmaCrossoverAlgorithm,
+from app.engine.strategy.algorithms.ema_crossover_signal import (
+    EmaCrossoverSignalAlgorithm,
 )
 from app.utils.timestamps import ny_datetime, to_ms_utc
 
@@ -158,7 +158,7 @@ def _run_engine(lean_data_root: Path) -> tuple[list, object]:  # type: ignore[ty
     both paths exercise the same orchestration.
     """
     reader = LeanMinuteDataReader(lean_data_root)
-    strategy = SpyEmaCrossoverAlgorithm()
+    strategy = EmaCrossoverSignalAlgorithm()
     engine = BacktestEngine(
         data_source=reader,
         fill_model=FillModel(

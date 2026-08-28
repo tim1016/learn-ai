@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.portfolio import Portfolio
-from app.engine.strategy.algorithms.spy_ema_crossover import (
-    SpyEmaCrossoverAlgorithm,
+from app.engine.strategy.algorithms.ema_crossover_signal import (
+    EmaCrossoverSignalAlgorithm,
 )
 from app.engine.strategy.base import StrategyContext
 
@@ -52,12 +52,12 @@ class _SyntheticStream:
 
 
 def test_constructor_accepts_output_dir(tmp_path: Path) -> None:
-    s = SpyEmaCrossoverAlgorithm(symbol="SPY", output_dir=tmp_path)
+    s = EmaCrossoverSignalAlgorithm(symbol="SPY", output_dir=tmp_path)
     assert s._output_dir == tmp_path
 
 
 def test_constructor_defaults_output_dir_to_none() -> None:
-    s = SpyEmaCrossoverAlgorithm(symbol="SPY")
+    s = EmaCrossoverSignalAlgorithm(symbol="SPY")
     assert s._output_dir is None
 
 
@@ -65,7 +65,7 @@ def test_initialize_creates_csvs_with_correct_headers(tmp_path: Path) -> None:
     """Stand-alone test: instantiate strategy + StrategyContext + initialize."""
     portfolio = Portfolio(initial_cash=Decimal("100000"))
     ctx = StrategyContext(portfolio=portfolio)
-    s = SpyEmaCrossoverAlgorithm(symbol="SPY", output_dir=tmp_path)
+    s = EmaCrossoverSignalAlgorithm(symbol="SPY", output_dir=tmp_path)
     s.ctx = ctx
     s.initialize()
 
@@ -98,7 +98,7 @@ def test_no_csvs_when_output_dir_is_none() -> None:
     """Without output_dir, no files are created and emitter state stays None."""
     portfolio = Portfolio(initial_cash=Decimal("100000"))
     ctx = StrategyContext(portfolio=portfolio)
-    s = SpyEmaCrossoverAlgorithm(symbol="SPY")
+    s = EmaCrossoverSignalAlgorithm(symbol="SPY")
     s.ctx = ctx
     s.initialize()
 
@@ -110,7 +110,7 @@ def test_on_end_of_algorithm_closes_handles(tmp_path: Path) -> None:
     """on_end_of_algorithm must close file handles and clear the references."""
     portfolio = Portfolio(initial_cash=Decimal("100000"))
     ctx = StrategyContext(portfolio=portfolio)
-    s = SpyEmaCrossoverAlgorithm(symbol="SPY", output_dir=tmp_path)
+    s = EmaCrossoverSignalAlgorithm(symbol="SPY", output_dir=tmp_path)
     s.ctx = ctx
     s.initialize()
 
@@ -138,7 +138,7 @@ def test_observations_csv_row_count_matches_minute_bar_input(tmp_path: Path) -> 
     bars = [_spy_minute(datetime(d.year, d.month, d.day, 9, 30 + i, tzinfo=NY)) for i in range(30)]
     n_bars = len(bars)
 
-    strategy = SpyEmaCrossoverAlgorithm(symbol="SPY", output_dir=tmp_path)
+    strategy = EmaCrossoverSignalAlgorithm(symbol="SPY", output_dir=tmp_path)
     # _SyntheticStream.iter_bars ignores the date range; the strategy's
     # initialize() sets a 2-year default range which is fine here.
     engine = BacktestEngine(data_source=_SyntheticStream(bars))
@@ -179,7 +179,7 @@ def test_state_csv_emits_only_after_warmup(tmp_path: Path) -> None:
         start = datetime(d.year, d.month, d.day, 9, 30, tzinfo=NY) + timedelta(minutes=i)
         bars.append(_spy_minute(start, close=str(Decimal("500") + i * Decimal("0.01"))))
 
-    strategy = SpyEmaCrossoverAlgorithm(symbol="SPY", output_dir=tmp_path)
+    strategy = EmaCrossoverSignalAlgorithm(symbol="SPY", output_dir=tmp_path)
     # _SyntheticStream.iter_bars ignores the date range; the strategy's
     # initialize() sets a 2-year default range which is fine here.
     engine = BacktestEngine(data_source=_SyntheticStream(bars))

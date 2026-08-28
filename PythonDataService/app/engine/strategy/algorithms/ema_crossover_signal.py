@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from app.engine.live.indicator_state import ValidationResult
@@ -54,6 +54,7 @@ from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
+from app.engine.strategy.normalized_gap import difference_bps
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
@@ -91,7 +92,17 @@ class EmaCrossoverSignalAlgorithm(Strategy):
     CONSOLIDATOR_PERIOD_MIN = 15
 
     def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
-        """Apply the configured absolute-dollar entry threshold (default 0.20)."""
+        """Apply the configured entry threshold in the configured unit.
+
+        ``absolute`` (default) is the validated LEAN-parity point: a raw
+        EMA(5) - EMA(10) dollar gap. ``bps`` measures the same spread
+        normalized against EMA(10), so the gate scales with price level
+        instead of drifting as the underlying moves. The normalized branch
+        was formerly the separate ``ema_crossover_2_bps`` strategy; its
+        trade-for-trade behaviour is pinned by the ENG-007 golden fixture.
+        """
+        if self._gap_mode == "bps":
+            return difference_bps(ema_fast, ema_slow) >= self._gap_bps
         return ema_fast - ema_slow >= self._gap
 
     def _rsi_gate_bounds(self) -> tuple[Decimal, Decimal]:
@@ -105,6 +116,8 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         gap: Decimal | float = Decimal("0.20"),
         rsi_min: Decimal | float = Decimal(50),
         rsi_max: Decimal | float = Decimal(70),
+        gap_mode: Literal["absolute", "bps"] = "absolute",
+        gap_bps: Decimal | float = Decimal("2"),
     ) -> None:
         super().__init__()
         # This is the signal stream, not an execution target. The Action Plan
@@ -117,8 +130,12 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # sweeps these as parameters. Coerced through str() so a float from
         # the JSON param layer lands as an exact Decimal.
         self._gap = Decimal(str(gap))
+        self._gap_mode: Literal["absolute", "bps"] = gap_mode
+        self._gap_bps = Decimal(str(gap_bps))
         self._rsi_min = Decimal(str(rsi_min))
         self._rsi_max = Decimal(str(rsi_max))
+        if not self._gap_bps.is_finite() or not Decimal(0) <= self._gap_bps <= Decimal(100):
+            raise ValueError("gap_bps must be finite and between 0 and 100")
         self._symbol: str = ""
         self._ema5: ExponentialMovingAverage | None = None
         self._ema10: ExponentialMovingAverage | None = None

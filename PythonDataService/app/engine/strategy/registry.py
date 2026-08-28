@@ -9,23 +9,16 @@ router symbols just to answer deploy/start safety questions.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from app.engine.pine_generators import (
     generate_strategy_a_pine,
     generate_strategy_b_pine,
     generate_strategy_c_pine,
-)
-from app.engine.strategy.algorithms.ema_crossover_2_bps import (
-    EmaCrossover2BpsAlgorithm,
-)
-from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
-from app.engine.strategy.algorithms.spy_ema_crossover import (
-    SpyEmaCrossoverAlgorithm,
 )
 from app.engine.strategy.algorithms.spy_ema_crossover_options import (
     SpyEmaCrossoverOptionsAlgorithm,
@@ -33,7 +26,6 @@ from app.engine.strategy.algorithms.spy_ema_crossover_options import (
 from app.engine.strategy.algorithms.spy_orb import SpyOpeningRangeBreakout
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.params import (
-    EmaCrossoverParams,
     StrategyParamsBase,
 )
 from app.engine.strategy.programs.deployment_validation import (
@@ -84,66 +76,6 @@ from app.schemas.signal_program_seal import (
     SignalSeriesContract,
 )
 from app.schemas.strategy_validation import StrategyCategory
-
-
-class EmaCrossover2BpsParams(EmaCrossoverParams):
-    """Configurable gates shared by the Python strategy and its LEAN twin."""
-
-    gap_bps: float = Field(
-        2.0,
-        ge=0.0,
-        le=100.0,
-        allow_inf_nan=False,
-        title="Crossover gap (bps)",
-        description="Minimum EMA(5) minus EMA(10) crossover gap, measured in basis points of EMA(10).",
-    )
-    rsi_min: float = Field(
-        50.0,
-        ge=0.0,
-        le=100.0,
-        allow_inf_nan=False,
-        title="RSI lower gate",
-        description="Inclusive lower RSI(14) value allowed for entry.",
-    )
-    rsi_max: float = Field(
-        70.0,
-        ge=0.0,
-        le=100.0,
-        allow_inf_nan=False,
-        title="RSI upper gate",
-        description="Inclusive upper RSI(14) value allowed for entry.",
-    )
-
-    @model_validator(mode="after")
-    def _validate_rsi_band(self) -> EmaCrossover2BpsParams:
-        if self.rsi_min >= self.rsi_max:
-            raise ValueError("rsi_min must be less than rsi_max")
-        return self
-
-
-
-
-class DailySmaCrossoverParams(StrategyParamsBase):
-    """Daily-resolution SMA crossover — no ``resolution_minutes`` field.
-
-    The bar cadence is fixed to 1 day by the registry's build function
-    (which sets ``resolution_minutes=1440`` on the underlying algorithm)
-    because the strategy runs directly against LEAN daily zips. Window
-    sizes are in *days* here: a 50/200 is the classic long-term golden
-    cross.
-    """
-
-    symbol: str = Field("AAPL", min_length=1, max_length=20)
-    short_window: int = Field(50, ge=2, le=500)
-    long_window: int = Field(200, ge=3, le=1000)
-
-    @model_validator(mode="after")
-    def _validate_window_order(self) -> DailySmaCrossoverParams:
-        if self.long_window <= self.short_window:
-            raise ValueError("long_window must be strictly greater than short_window")
-        return self
-
-
 
 
 class OrbParams(StrategyParamsBase):
@@ -562,6 +494,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             artifact_paths=(
                 "app/engine/strategy/algorithms/ema_crossover_signal.py",
                 "app/engine/strategy/base.py",
+                "app/engine/strategy/normalized_gap.py",
                 "app/engine/strategy/signal_intent.py",
                 "app/engine/strategy/signal_program.py",
                 "app/engine/indicators/base.py",
@@ -868,9 +801,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "Same TV timestamp conventions as other strategies: viewer's "
             "local timezone in TV exports, proper UTC in Engine Lab, "
             "bar-start vs bar-end labeling differs by the bar length.",
-            "On the daily variant (see daily_sma_crossover) a 50/200 "
-            "cross produces very few signals per year — 1-year backtests "
-            "will often show only 1–4 trades.",
+            "A 50/200 cross produces very few signals per year — 1-year "
+            "backtests will often show only 1–4 trades.",
         ],
         param_schema=SmaCrossoverParams,
         chart_indicators=(
@@ -883,84 +815,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
-    ),
-    "daily_sma_crossover": StrategyRegistration(
-        display_name="Daily SMA Crossover",
-        class_name="SmaCrossoverAlgorithm",
-        description=(
-            "Long-term golden-cross / death-cross run against LEAN daily "
-            "bars (one daily zip per symbol). Defaults "
-            "to the classic 50/200 on AAPL. Same SmaCrossoverAlgorithm as "
-            "the intraday variant - only the bar cadence differs."
-        ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default AAPL)\n"
-            "    resolution = daily (read from the LEAN daily equity zip for the symbol)\n"
-            "\n"
-            "Indicators (Alpha - updated each daily bar close)\n"
-            "    SMA_short = SimpleMovingAverage(short_window days, default 50)\n"
-            "    SMA_long  = SimpleMovingAverage(long_window  days, default 200)\n"
-            "\n"
-            "Warmup\n"
-            "    no signals until both SMAs have window-size samples\n"
-            "    (typically ~200 trading days for the 50/200 default).\n"
-            "\n"
-            "Alpha - bar entry conditions (evaluated while flat)\n"
-            "    golden_cross = SMA_short > SMA_long\n"
-            "                   AND SMA_short[-1] <= SMA_long[-1]\n"
-            "    ⇒ if golden_cross: emit Insight(UP); enter long\n"
-            "\n"
-            "Alpha - bar exit conditions (evaluated while in trade)\n"
-            "    death_cross = SMA_short < SMA_long\n"
-            "    ⇒ if death_cross: Liquidate(symbol)\n"
-            "\n"
-            "Risk Management - position survival rules\n"
-            "    none - overnight gap risk is not modeled by the fill model;\n"
-            "    holding through earnings, splits, and dividends is the\n"
-            "    intended behavior of the long-term cross.\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = signal_bar_close (end-of-day fill at the\n"
-            "    cross bar's close)"
-        ),
-        gotchas=[
-            "Uses the LEAN daily-bar reader, not a consolidator. Bars come "
-            "one-per-day from the LEAN daily equity zip - make sure "
-            "those files exist for your chosen symbol.",
-            "resolution_minutes is hardcoded to 1440 in the registry's "
-            "build function; exposing it as a parameter would let users "
-            "break parity with the intended daily cadence.",
-            "Classic 50/200 on liquid US equities produces ~1–4 crosses "
-            "per year. Choose a 5–10 year window for enough trades to "
-            "evaluate performance meaningfully.",
-            "No intraday timing — fills are at each signal bar's close "
-            "(end of trading day). Slippage/overnight-gap risk is real "
-            "but not modeled by the fill model.",
-            "Because bars are daily, timezone reporting conventions don't "
-            "apply the same way as intraday strategies — TradingView "
-            "exports a date (no time) for daily fills.",
-        ],
-        param_schema=DailySmaCrossoverParams,
-        chart_indicators=(
-            StrategyChartIndicator("sma", {"length": ChartParamRef("short_window")}),
-            StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
-        ),
-        strategy_bars=StrategyBarCadence("day", 1),
-        build=lambda p: SmaCrossoverAlgorithm(
-            symbol=p.symbol,
-            short_window=p.short_window,  # type: ignore[attr-defined]
-            long_window=p.long_window,  # type: ignore[attr-defined]
-            # 1440 min = 1 day. TradeBarConsolidator is reference-rounded
-            # to midnight ET and passes daily bars through 1:1 as long as
-            # consecutive inputs are separated by >= 1 day, which is
-            # always true for LEAN daily zip rows.
-            resolution_minutes=1440,
-        ),
-        supported_resolutions={"daily"},
     ),
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
@@ -2309,80 +2163,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         signal_intent_binding="action_plan_stock",
     ),
 }
-
-# Keep the new strategy structurally coupled to the canonical EMA signal
-# registration. Only its gap rule, names, and LEAN twin identity differ.
-_ema_signal_registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
-_STRATEGY_REGISTRY["ema_crossover_2_bps"] = replace(
-    _ema_signal_registration,
-    display_name="EMA Crossover 2 bps",
-    class_name="EmaCrossover2BpsAlgorithm",
-    description=_ema_signal_registration.description.replace(
-        "a 0.20 minimum gap",
-        "a configurable relative gap (2 basis points by default)",
-    ),
-    algorithm_pseudocode=_ema_signal_registration.algorithm_pseudocode.replace(
-        "gap_ok      = (EMA_fast - EMA_slow) >= 0.20",
-        "gap_bps     = 10,000 * (EMA_fast - EMA_slow) / EMA_slow\n"
-        "    gap_ok      = gap_bps >= gap_bps_parameter (default 2)",
-    ),
-    gotchas=[
-        *_ema_signal_registration.gotchas,
-        "The gap threshold is relative to EMA(10): 2 bps means 0.02%, "
-        "not $0.02 and not 2%. At a $500 slow EMA, the boundary is $0.10.",
-    ],
-    param_schema=EmaCrossover2BpsParams,
-    build=lambda p: EmaCrossover2BpsAlgorithm(
-        symbol=p.symbol,
-        gap_bps=p.gap_bps,  # type: ignore[attr-defined]
-        rsi_min=p.rsi_min,  # type: ignore[attr-defined]
-        rsi_max=p.rsi_max,  # type: ignore[attr-defined]
-    ),
-    lean_twin="ema_crossover_2_bps",
-    lean_parameter_names=("gap_bps", "rsi_min", "rsi_max"),
-    # Issue #1728 defect 1: dataclasses.replace() shallow-copies every field
-    # not explicitly overridden, including signal_program_contract and
-    # signal_program_factory. This strategy uses a relative basis-point gap
-    # (EmaCrossover2BpsAlgorithm, param gap_bps) — genuinely different math
-    # from the canonical EMA Signal Program's absolute-price gap — and has
-    # never been through its own golden qualification. Left inherited, both
-    # bots on this key falsely claimed EMA's golden_trace_root as proof of
-    # their own build, AND signal_program_factory would hand
-    # build_ema_crossover_signal_program a params instance it isn't typed
-    # for. Clearing both routes admission's prove_running_program_build to
-    # its NOT_APPLICABLE state (no registered Signal Program), which
-    # run_admission.py does not gate on, keeping this strategy's existing
-    # execution path working. Promoting it to a real sealed Signal Program
-    # is issue #1730 / Slice 5.
-    signal_program_contract=None,
-    signal_program_factory=None,
-)
-
-# Historical ledgers use this key and import path. Keep it executable but do
-# not offer it as a second picker option beside the migrated signal strategy.
-_STRATEGY_REGISTRY["spy_ema_crossover"] = replace(
-    _STRATEGY_REGISTRY["ema_crossover_signal"],
-    display_name="EMA Crossover (legacy compatibility)",
-    class_name="SpyEmaCrossoverAlgorithm",
-    build=lambda p: SpyEmaCrossoverAlgorithm(symbol=p.symbol),
-    instrument_surface="explicit",
-    action_plan_contract="none",
-    signal_intent_binding="signal_symbol",
-    catalog_visible=False,
-    lean_twin="ema_crossover",
-    # Issue #1728 defect 1: see the identical comment on ema_crossover_2_bps
-    # above. This legacy-compatibility key builds SpyEmaCrossoverAlgorithm
-    # (action_plan_contract="none"), not the canonical EMA Signal Program —
-    # inheriting its contract/factory via dataclasses.replace() let bots on
-    # this key falsely claim EMA's golden_trace_root, and
-    # prove_running_program_build's receipt lookup (keyed on
-    # binding.strategy_key) could never match, permanently bricking Start
-    # and Resume for every such bot. Clearing both is what routes it back to
-    # NOT_APPLICABLE — no registered Signal Program — instead of UNPROVEN.
-    signal_program_contract=None,
-    signal_program_factory=None,
-)
-
 
 __all__ = [
     "_STRATEGY_REGISTRY",

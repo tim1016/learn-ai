@@ -2,7 +2,7 @@
 
 This file is the *audit copy* (§ 3 of the spec) of the QC Cloud algorithm
 that runs in parallel with the canonical Python implementation at
-``PythonDataService/app/engine/strategy/algorithms/spy_ema_crossover.py``.
+``PythonDataService/app/engine/strategy/algorithms/ema_crossover_signal.py``.
 
 This file is NOT executed by this repo's pytest. It is uploaded to QC
 Cloud verbatim and run there as the QC algorithm. The QC Cloud workspace

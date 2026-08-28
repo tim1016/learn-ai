@@ -169,13 +169,14 @@ is exactly the next bullet, and neither is live-deployable
 (`supported_alpaca_paper_strategy_keys` derives from factory presence). Git
 history has the old bullet.*
 
-- **`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
-  of their own.** Both were left with `signal_program_contract=None` /
-  `signal_program_factory=None` after the `dataclasses.replace()` identity-leak
-  fix (see ADR 0043 §4) rather than being given their own qualification, so
-  `prove_running_program_build` reports `NOT_APPLICABLE` and neither strategy's
-  running bytes are checked against any golden corpus. Already tracked in-code
-  and as issue #1730.
+- ~~**`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
+  of their own.**~~ **Resolved 2026-08-28 by removal.** The signal/asset
+  decoupling sweep deleted both registry entries: `spy_ema_crossover` was a
+  compatibility wrapper for run ledgers that are themselves disposable, and
+  `ema_crossover_2_bps` was folded into `ema_crossover_signal`'s `gap_mode`
+  parameter — inheriting that program's real qualification instead of running
+  `NOT_APPLICABLE` beside it. No unqualified registration remains on the EMA
+  lineage.
 - **The external repository-writer census is a convention nudge, not a sound
   safety gate.** `app/broker/alpaca/clerk/sqlite/repository_boundary.py` plus
   `tests/broker/alpaca/clerk/sqlite/test_repository_writer_boundary.py` are
@@ -273,11 +274,16 @@ a defect.
   full-ladder preview (`POST …/bots/admission`) exists and is unused for
   refusal shaping (gate order `app/services/run_admission.py:105-435`; study
   §3).
-- **F6 — zero-bar engine run reports `success=True` (high).**
-  `daily_sma_crossover` has no daily-bar fetch path and its engine run
-  succeeded over zero bars (`execute_engine_backtest`,
-  `app/routers/engine.py:1042`; ceremony doc §1 calls it a platform gap). An
-  engine that cannot fail on empty input is an honesty defect.
+- **F6 — zero-bar engine run reports `success=True` (high).** Still open; the
+  strategy originally cited (`daily_sma_crossover`) was removed on 2026-08-28,
+  but **the defect is not strategy-specific and was reproduced without it**: an
+  `ema_crossover_signal` run over a window the resolved data root does not
+  cover returned `success=True` with zero bars, zero trades, an empty equity
+  curve, and only `run_verdict.status="incomplete"` to show for it
+  (`execute_engine_backtest`, `app/routers/engine.py`). An engine that cannot
+  fail on empty input is an honesty defect, and the reproduction is now easier
+  to hit than before: with `DATA_LAKE_ENABLED` on and `auto_fetch` off, the
+  lake root is legitimately empty for any window nobody has materialized yet.
 - **F7 — QC-ID hard-required client-side though ignored for proof-less
   candidates (low).** Flag-form validation out of sync with the backend
   recording rule

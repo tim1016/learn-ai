@@ -158,6 +158,9 @@ services:
       # Data lake catalog — asyncpg URL; same host/db/creds as the backend.
       # Required when DATA_LAKE_ENABLED=true or for schema-drift integration tests.
       - POSTGRES_URL=postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      # Data lake master switch (ADR 0049). Off, engines and charts read the
+      # pre-lake policy-store cache and /api/data-lake/* is unregistered.
+      - DATA_LAKE_ENABLED=${DATA_LAKE_ENABLED:-false}
       # Polygon paid plans (Starter / Developer / Advanced) all have no
       # per-minute cap; only the free Basic tier is 5/min. Set to a
       # positive integer here only if you're on the free tier.
