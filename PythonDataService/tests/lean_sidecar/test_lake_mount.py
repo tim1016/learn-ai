@@ -8,14 +8,15 @@ Four claims are pinned here, all at the config-rendering / staging seam
 2. With the flag off, the rendered podman argv and ``config.json`` are
    byte-identical to what they were before the lake existed.
 3. Config rendering points LEAN at the mounted lake subtree.
-4. On identical fixture lake artifacts, the bar stream the sidecar
-   hands LEAN and the bar stream the Python LEAN readers produce are
-   the same bars off the same bytes.
+4. Fed from one bar generator, lake mode and staging mode hand LEAN the
+   same bars — the claim that crosses the lake writer and the engine
+   writer, rather than comparing the lake reader against itself.
 """
 
 from __future__ import annotations
 
 import hashlib
+import zipfile
 from datetime import date
 from pathlib import Path
 
@@ -29,14 +30,14 @@ from app.lean_sidecar.lake_mount import (
     CONTAINER_LAKE_DATA_MOUNT,
     LAKE_SUBDIR,
     LAKE_VOLUME_HOST_PATH_ENV,
-    LakeBarStream,
+    LakeArtifacts,
     LakeMount,
     LakeMountError,
     data_plane_lake_root,
-    lake_metadata_paths,
     lake_mount_enabled,
     launcher_host_lake_root,
-    read_lake_bar_stream,
+    require_lake_metadata,
+    resolve_lake_artifacts,
 )
 from app.lean_sidecar.launcher.models import LaunchRequest
 from app.lean_sidecar.launcher.service import LaunchRejectedError, launch
@@ -46,6 +47,7 @@ from app.lean_sidecar.runner import (
     RunnerConfigurationError,
     build_command,
 )
+from app.lean_sidecar.staging import stage_minute_zips_from_store
 from app.lean_sidecar.workspace import SymbolValidationError, resolve_workspace
 from tests._helpers.lake_fixture import (
     seed_lake_metadata,
@@ -53,7 +55,7 @@ from tests._helpers.lake_fixture import (
     seed_lake_window,
     to_lake_bars,
 )
-from tests._helpers.lean_store import make_minute_bars
+from tests._helpers.lean_store import make_minute_bars, seed_store_day
 
 DUMMY_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000003"
 DAY_ONE = date(2026, 1, 5)
@@ -290,31 +292,99 @@ class TestLauncherResolvesTheHostPath:
 
 
 class TestSameBytesAsThePythonReaders:
-    """AC: the sidecar's bar stream matches the Python readers' stream."""
+    """AC: the bar stream LEAN gets is the same in both modes.
 
-    def test_lake_bar_stream_equals_lean_reader_stream(self, fixture_lake: Path) -> None:
-        stream = read_lake_bar_stream(
-            lake_root=fixture_lake,
+    The comparison that matters crosses the two *writers*: staging mode
+    hands LEAN zips written by ``app.engine.data.lean_format``, lake
+    mode hands it zips written by ``app.data_lake.lean_writer``. Both
+    fixtures are seeded from the same ``make_minute_bars`` generator, so
+    any disagreement between those encoders — deci-cent rounding,
+    ms-since-midnight, CSV naming, compression — shows up as a bar-level
+    difference here.
+
+    Comparing the lake against ``LeanMinuteDataReader`` alone would
+    prove nothing: resolving lake artifacts is the reader's own
+    ``iter_dates`` predicate, so such a test cannot fail.
+    """
+
+    def test_resolution_does_not_decode_the_artifacts(self, tmp_path: Path) -> None:
+        """Lake mode never unzips: resolution is ``exists()`` checks only.
+
+        Proven by handing it a lake whose zips are not zips. A decoding
+        resolver would raise ``BadZipFile``; this one does not care,
+        because LEAN decodes from the mount and the run has no use for
+        the bars. That is what keeps a long window off the "unzip every
+        day on the event loop" path.
+        """
+        lake_root = tmp_path / LAKE_SUBDIR
+        seed_lake_window(lake_root, "SPY", WINDOW)
+        for corrupt in lake_root.rglob("*.zip"):
+            corrupt.write_bytes(b"not a zip at all")
+
+        artifacts = resolve_lake_artifacts(
+            lake_root=lake_root,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
-            session="regular",
         )
-        reader = LeanMinuteDataReader([fixture_lake], session="regular")
-        reader_bars = list(reader.iter_bars("SPY", DAY_ONE, DAY_TWO))
 
-        sidecar_bars = [bar for _day, day_bars in stream.bars_by_date for bar in day_bars]
-        assert sidecar_bars == reader_bars
-        assert len(sidecar_bars) == 2 * 390
+        assert artifacts.trading_dates == (DAY_ONE, DAY_TWO)
+
+    def test_lake_mode_and_staging_mode_yield_identical_bars(self, tmp_path: Path) -> None:
+        # Staging mode: engine writer -> bar store -> byte-copy into a workspace.
+        store_root = tmp_path / "polygon-raw"
+        for trading_date in WINDOW:
+            seed_store_day(store_root, "SPY", trading_date)
+        workspace = resolve_workspace("cross-mode-parity", tmp_path / "artifacts")
+        workspace.ensure_layout()
+        stage_minute_zips_from_store(
+            workspace,
+            symbol="SPY",
+            trading_dates=WINDOW,
+            roots=[store_root],
+        )
+
+        # Lake mode: lake writer -> lake, read in place through the mount.
+        lake_root = tmp_path / LAKE_SUBDIR
+        seed_lake_window(lake_root, "SPY", WINDOW)
+
+        staged_bars = list(LeanMinuteDataReader([workspace.data_dir], session="regular").iter_bars("SPY", DAY_ONE, DAY_TWO))
+        lake_bars = list(LeanMinuteDataReader([lake_root], session="regular").iter_bars("SPY", DAY_ONE, DAY_TWO))
+
+        assert len(staged_bars) == 2 * 390
+        assert lake_bars == staged_bars
+
+    def test_the_two_writers_differ_only_by_a_trailing_newline(self, tmp_path: Path) -> None:
+        """Pin the one known encoder difference so it cannot grow.
+
+        The lake writer terminates its CSV with a newline and the engine
+        writer does not, so the zips are *not* byte-identical. Every CSV
+        row is. Byte-equality is therefore deliberately not claimed
+        anywhere; this test is what stops that one-byte difference from
+        quietly becoming a semantic one.
+        """
+        store_root = tmp_path / "polygon-raw"
+        staged_zip = seed_store_day(store_root, "SPY", DAY_ONE)
+        lake_root = tmp_path / LAKE_SUBDIR
+        lake_zip, _quote = seed_lake_minute_day(lake_root, "SPY", DAY_ONE)
+
+        csv_name = f"{DAY_ONE.strftime('%Y%m%d')}_spy_minute_trade.csv"
+        with zipfile.ZipFile(staged_zip) as zf:
+            staged_csv = zf.read(csv_name)
+        with zipfile.ZipFile(lake_zip) as zf:
+            lake_csv = zf.read(csv_name)
+
+        assert lake_csv != staged_csv
+        assert lake_csv == staged_csv + b"\n"
+        assert lake_csv.rstrip(b"\n").split(b"\n") == staged_csv.split(b"\n")
 
     def test_exposed_files_are_the_lake_files_themselves(self, fixture_lake: Path) -> None:
         """No copy, no re-encode: the sidecar exposes the lake's inodes."""
-        stream = read_lake_bar_stream(
+        stream = resolve_lake_artifacts(
             lake_root=fixture_lake,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
-            session="regular",
         )
 
         assert [p.name for p in stream.trade_zip_paths] == [
@@ -333,12 +403,11 @@ class TestSameBytesAsThePythonReaders:
             assert path.read_bytes() == expected
 
     def test_quote_artifacts_are_reported_when_the_lake_has_them(self, fixture_lake: Path) -> None:
-        stream = read_lake_bar_stream(
+        stream = resolve_lake_artifacts(
             lake_root=fixture_lake,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
-            session="regular",
         )
 
         assert [p.name for p in stream.quote_zip_paths] == [
@@ -357,12 +426,11 @@ class TestSameBytesAsThePythonReaders:
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", WINDOW, with_quote=False)
 
-        stream = read_lake_bar_stream(
+        stream = resolve_lake_artifacts(
             lake_root=lake_root,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
-            session="regular",
         )
 
         assert stream.quote_zip_paths == ()
@@ -377,13 +445,12 @@ class TestLakeCoverageFailsLoudly:
         lake_root.mkdir(parents=True)
 
         with pytest.raises(LakeMountError, match="lake_window_empty"):
-            read_lake_bar_stream(
+            resolve_lake_artifacts(
                 lake_root=lake_root,
                 symbol="SPY",
                 start=DAY_ONE,
                 end=DAY_TWO,
-                session="regular",
-            )
+                )
 
     def test_missing_daily_artifact_raises(self, tmp_path: Path) -> None:
         lake_root = tmp_path / LAKE_SUBDIR
@@ -391,63 +458,92 @@ class TestLakeCoverageFailsLoudly:
         seed_lake_metadata(lake_root)
 
         with pytest.raises(LakeMountError, match="lake_missing_daily_artifact"):
-            read_lake_bar_stream(
+            resolve_lake_artifacts(
                 lake_root=lake_root,
                 symbol="SPY",
                 start=DAY_ONE,
                 end=DAY_TWO,
-                session="regular",
-            )
+                )
 
     def test_partial_coverage_returns_only_the_days_present(self, tmp_path: Path) -> None:
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", [DAY_ONE])
 
-        stream = read_lake_bar_stream(
+        stream = resolve_lake_artifacts(
             lake_root=lake_root,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
-            session="regular",
         )
 
         assert stream.trading_dates == (DAY_ONE,)
 
     def test_path_unsafe_symbol_is_rejected_before_any_path_join(self, fixture_lake: Path) -> None:
         with pytest.raises(SymbolValidationError):
-            read_lake_bar_stream(
+            resolve_lake_artifacts(
                 lake_root=fixture_lake,
                 symbol="../../etc/passwd",
                 start=DAY_ONE,
                 end=DAY_TWO,
-                session="regular",
-            )
+                )
 
 
-class TestLakeMetadataPaths:
+class TestRequiredLakeMetadata:
+    """Every metadata kind the lake carries is one LEAN cannot start without.
+
+    Staging mode may legitimately run with no metadata databases and let
+    LEAN fall back to the image defaults. Lake mode has no such
+    fallback — ``data-folder`` points away from the image-extracted
+    workspace copy — so absence is a hard stop, resolved before launch
+    for the same reason the missing-daily-artifact check is.
+    """
+
     def test_present_metadata_is_returned(self, fixture_lake: Path) -> None:
-        market_hours, symbol_properties = lake_metadata_paths(fixture_lake)
+        market_hours, symbol_properties = require_lake_metadata(fixture_lake)
 
-        assert market_hours is not None and market_hours.is_relative_to(fixture_lake)
-        assert symbol_properties is not None and symbol_properties.is_relative_to(fixture_lake)
+        assert market_hours.is_relative_to(fixture_lake)
+        assert symbol_properties.is_relative_to(fixture_lake)
 
-    def test_absent_metadata_is_reported_as_absent_not_invented(self, tmp_path: Path) -> None:
+    def test_absent_required_metadata_raises(self, tmp_path: Path) -> None:
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", WINDOW, with_metadata=False)
 
-        assert lake_metadata_paths(lake_root) == (None, None)
+        with pytest.raises(LakeMountError, match="lake_missing_required_metadata"):
+            require_lake_metadata(lake_root)
+
+    def test_partially_absent_metadata_names_only_the_missing_kind(self, tmp_path: Path) -> None:
+        lake_root = tmp_path / LAKE_SUBDIR
+        seed_lake_window(lake_root, "SPY", WINDOW)
+        require_lake_metadata(lake_root)  # both present to start with
+        market_hours, _symbol_properties = require_lake_metadata(lake_root)
+        market_hours.unlink()
+
+        with pytest.raises(LakeMountError, match=r"\['market_hours'\]"):
+            require_lake_metadata(lake_root)
+
+    def test_resolution_fails_before_launch_not_at_manifest_time(self, tmp_path: Path) -> None:
+        """The check lives on the pre-launch path, not in the manifest."""
+        lake_root = tmp_path / LAKE_SUBDIR
+        seed_lake_window(lake_root, "SPY", WINDOW, with_metadata=False)
+
+        with pytest.raises(LakeMountError, match="lake_missing_required_metadata"):
+            resolve_lake_artifacts(
+                lake_root=lake_root,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
 
 
-def test_lake_bar_stream_is_immutable(fixture_lake: Path) -> None:
-    """The stream is a frozen record of what LEAN was given, not a buffer."""
-    stream = read_lake_bar_stream(
+def test_lake_artifacts_are_immutable(fixture_lake: Path) -> None:
+    """A frozen record of what LEAN was given, not a working buffer."""
+    stream = resolve_lake_artifacts(
         lake_root=fixture_lake,
         symbol="SPY",
         start=DAY_ONE,
         end=DAY_TWO,
-        session="regular",
     )
 
-    assert isinstance(stream, LakeBarStream)
+    assert isinstance(stream, LakeArtifacts)
     with pytest.raises(AttributeError):
         stream.lake_root = fixture_lake  # type: ignore[misc]
