@@ -107,6 +107,26 @@ def test_resolve_data_roots_lake_does_not_split_by_adjustment(monkeypatch, tmp_p
     assert resolve_data_roots(source="polygon", adjusted=True) == resolve_data_roots(source="polygon", adjusted=False)
 
 
+def test_symbol_write_lock_refuses_the_lake_root(monkeypatch, tmp_path: Path):
+    """Only app.data_lake writes to the lake; a zip with no catalog row is invisible."""
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    lake = path_policy.lake_root()
+    lake.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="is the data lake"), symbol_write_lock(lake, "SPY"):
+        pass
+
+
+def test_symbol_write_lock_still_serializes_policy_cache_writes(monkeypatch, tmp_path: Path):
+    """The refusal above is about the lake, not about locking in general."""
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    policy_root = tmp_path / "store" / "polygon-raw"
+    policy_root.mkdir(parents=True)
+
+    with symbol_write_lock(policy_root, "SPY"):
+        assert (policy_root / "locks" / "spy.lock").is_file()
+
+
 def test_snapshot_minute_trade_zips_is_path_independent_and_reference_first(tmp_path: Path):
     reference = tmp_path / "reference"
     cache = tmp_path / "cache"

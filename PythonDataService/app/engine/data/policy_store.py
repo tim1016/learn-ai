@@ -226,9 +226,23 @@ def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
     here; the loser of the race re-checks availability under the lock
     and skips its fetch. ``fcntl.flock`` is process- and thread-safe on
     the Linux container filesystems this service runs on.
+
+    The lake cannot be written through this lock. ``app.data_lake`` is the
+    only writer to ``LEAN_DATA_WRITE_ROOT`` (see its package docstring); it
+    coordinates through the catalog's claim/lease, not through a lock file,
+    and a zip the policy-store exporter dropped into the lake would sit
+    there with no catalog row describing it — unfindable by the readers
+    that consult the catalog, and invisible to every manifest fingerprint.
+    Since ``resolve_data_roots`` hands out the lake root when the flag is
+    on, an unconverted caller can reach here with it; refuse loudly instead.
     """
     safe = _safe_symbol(symbol)
     root_real = os.path.realpath(os.fspath(policy_root))
+    if root_real == os.path.realpath(os.fspath(path_policy.lake_root())):
+        raise ValueError(
+            f"{policy_root} is the data lake; the policy store may not write there — "
+            "materialize through app.data_lake.run_materialization instead"
+        )
     root_prefix = root_real.rstrip(os.sep) + os.sep
     lock_candidate = os.path.realpath(os.path.join(root_real, "locks", f"{safe.lower()}.lock"))
     if not lock_candidate.startswith(root_prefix):
