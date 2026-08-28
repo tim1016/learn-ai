@@ -59,18 +59,6 @@ COMPATIBILITY_FIXTURE_SCHEMA_VERSION = 1
 COMPATIBILITY_FIXTURE_ID_PREFIX = "bar-store-v1-"
 
 
-class LakeAdjustmentUnsupportedError(ValueError):
-    """An adjusted-bars request was made while the lake is the sole authority.
-
-    The lake stores raw bars under one data contract; it does not yet apply
-    split/dividend adjustments (that is slice #1839's decision to make, not
-    this one's). Serving raw bars back to a caller who asked for ``adjusted``
-    would echo an adjusted ``DataPolicy`` while every price in the run was
-    actually raw — materially wrong across any corporate action in the
-    window. Refuse loudly instead of guessing.
-    """
-
-
 def resolve_cache_root() -> Path:
     """Return the writable cache root for Polygon-sourced LEAN zips.
 
@@ -133,22 +121,16 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     mode is carried by the catalog's data contract, not by the directory
     name.
 
-    Raises :class:`LakeAdjustmentUnsupportedError` when the lake is enabled
-    and ``adjusted`` is True: the lake has exactly one data contract per bar
-    and it is raw. Returning the lake root anyway would silently swap the
-    bytes underneath an adjusted request instead of refusing it — the
-    adjusted story belongs to a later slice (#1839), not to this seam.
+    ``adjusted`` selects the lake root rather than being refused by it. It
+    used to raise ``LakeAdjustmentUnsupportedError`` here, because the lake
+    held one data contract per bar and it was raw — returning the raw root to
+    an adjusted request would have handed a run raw prices while it believed
+    it read adjusted ones, materially wrong across a split. #1839 made the
+    adjustment mode a segment of the root, so the honest answer is now a
+    different directory instead of a refusal.
     """
     if settings.DATA_LAKE_ENABLED:
-        if adjusted:
-            raise LakeAdjustmentUnsupportedError(
-                "the data lake serves raw bars only; an adjusted request cannot be "
-                "satisfied by it yet (adjustment support is slice #1839's decision) — "
-                "request adjusted=False, or turn DATA_LAKE_ENABLED off"
-            )
-        # Slice 1 of #1839: the root is mode-keyed, but this seam still
-        # refuses adjusted above, so "raw" is the only reachable mode here.
-        root = path_policy.resolve_lake_root("raw")
+        root = path_policy.resolve_lake_root("polygon_split_adjusted" if adjusted else "raw")
         root.mkdir(parents=True, exist_ok=True)
         return [root]
 

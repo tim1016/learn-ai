@@ -83,9 +83,13 @@ class DataRunSpec(BaseModel):
 
     resolution: Literal["minute"] = "minute"
     data_types: list[Literal["trade", "quote"]] = ["trade"]
-    # Deliberate subset of PriceAdjustmentMode (above) — the only mode the
-    # v1 fetch pipeline can produce, not an independent copy of the vocabulary.
-    price_adjustment_mode: Literal["raw"] = "raw"
+    # Deliberate subset of PriceAdjustmentMode (above): the two the fetch
+    # pipeline can actually produce, not an independent copy of the
+    # vocabulary. ``lean_adjusted`` is excluded because nothing derives it —
+    # it would come from raw bars plus factor files, and no such producer
+    # exists. Widened off ``Literal["raw"]`` by #1839, which gave the lake
+    # root an adjustment segment so the two modes can coexist on disk.
+    price_adjustment_mode: Literal["raw", "polygon_split_adjusted"] = "raw"
     provider: Literal["polygon"] = "polygon"
 
     include_factor_files: bool = True

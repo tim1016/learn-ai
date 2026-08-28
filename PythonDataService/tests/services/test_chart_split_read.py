@@ -472,12 +472,28 @@ def test_compose_chart_bars_serves_an_empty_lake_entirely_from_the_provider(lake
     assert composed.notice_code == "history_provider_fallback"
 
 
-def test_compose_chart_bars_never_reads_the_raw_lake_for_an_adjusted_request(lake_root: Path) -> None:
-    """The lake stores unadjusted bytes only; an adjusted chart must not be
-    served from it, and must say why."""
+def test_compose_chart_bars_reads_the_adjusted_root_for_an_adjusted_request(
+    lake_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An adjusted chart reads the adjusted root, and misses there are ordinary.
+
+    This used to assert the opposite: the lake stored raw bytes only, so an
+    adjusted request fell back wholesale with
+    ``reason="price_adjustment_unsupported"`` — serving raw bytes for an
+    adjusted chart would have been a silent numerical error. #1839 gave the
+    lake a root per mode, so the request now resolves the adjusted root. This
+    root holds nothing, so every day still comes from the provider; what
+    changed is *why* — an ordinary ``lake_gap``, not an unsupported request.
+
+    The bytes written here go to the raw root, which is the point: reading
+    the adjusted root must not find them.
+    """
     _write_lake_day(lake_root, REGULAR_BEFORE)
     _write_lake_day(lake_root, HALF_DAY)
     provider = _ProviderSpy()
+
+    # No explicit lake_root, so the service resolves per mode from settings.
+    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root / mode)
 
     composed = compose_chart_bars(
         ticker=_SYMBOL,
@@ -486,15 +502,12 @@ def test_compose_chart_bars_never_reads_the_raw_lake_for_an_adjusted_request(lak
         adjusted=True,
         fetch_provider=provider,
         now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
     )
 
-    # The raw-only lake can serve nothing here, so this is the flag-off path
-    # exactly: one fetch, one span, no stitch.
     assert provider.calls == [(REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat())]
     assert {span.source for span in composed.spans} == {"provider"}
-    assert [span.reason for span in composed.spans] == ["price_adjustment_unsupported"]
-    assert composed.notice_code == "adjusted_prices_provider_only"
+    assert [span.reason for span in composed.spans] == ["lake_gap"]
+    assert composed.notice_code == "history_provider_fallback"
 
 
 @pytest.mark.parametrize(

@@ -75,6 +75,7 @@ from app.data_lake.types import (
     DataAvailabilityResult,
     DataRunSpec,
     NonSessionRecord,
+    PriceAdjustmentMode,
     classify_overall_status,
 )
 
@@ -88,13 +89,33 @@ _LEASE_TTL_MS = 300_000
 # tests/unit/data_lake/test_catalog_write_ops.py's steal_or_retry coverage.
 _MAX_CLAIM_RETRIES = 3
 
-# data_contract_hash provider params (canonical per artifact kind)
+# data_contract_hash provider params (canonical per artifact kind).
+# ``adjusted`` is filled per request from the run's mode -- it is the literal
+# vendor query parameter, so pinning it here would have made every adjusted
+# artifact claim the raw recipe's contract hash.
 _DCH_MINUTE_TRADE_PARAMS = {
-    "adjusted": False,
     "timespan": "minute",
     "multiplier": 1,
     "endpoint": "v2/aggs",
 }
+
+
+def _polygon_adjusted_flag(price_adjustment_mode: PriceAdjustmentMode) -> bool:
+    """The vendor's ``adjusted`` query parameter for one lake mode.
+
+    ``lean_adjusted`` is a reserved enum value with no producer: it would be
+    derived from raw bars plus factor files, not fetched, so there is no
+    vendor flag that means it. Refuse rather than silently fetching one of
+    the other two under its name.
+    """
+    if price_adjustment_mode == "raw":
+        return False
+    if price_adjustment_mode == "polygon_split_adjusted":
+        return True
+    raise ValueError(
+        f"{price_adjustment_mode!r} is not a fetchable adjustment mode; it would have to be "
+        "derived from raw bars and factor files, and nothing derives it yet"
+    )
 _DCH_FACTOR_FILE_PARAMS = {
     "endpoints": ["v3/reference/splits", "v3/reference/dividends"],
 }
@@ -123,17 +144,22 @@ def _writable_lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
     return lake_root, staging_root
 
 
-def _minute_trade_dch() -> str:
+def _minute_trade_dch(price_adjustment_mode: PriceAdjustmentMode) -> str:
     return _dch(
         provider="polygon",
-        provider_params=_DCH_MINUTE_TRADE_PARAMS,
-        price_adjustment_mode="raw",
+        provider_params={
+            **_DCH_MINUTE_TRADE_PARAMS,
+            "adjusted": _polygon_adjusted_flag(price_adjustment_mode),
+        },
+        price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
         lean_format_version=1,
     )
 
 
-def _factor_file_dch(history_start: date, history_end: date) -> str:
+def _factor_file_dch(
+    history_start: date, history_end: date, price_adjustment_mode: PriceAdjustmentMode
+) -> str:
     """Factor-file contract hash includes the history window.
 
     The factor file content includes anchor rows at history_start and
@@ -148,33 +174,55 @@ def _factor_file_dch(history_start: date, history_end: date) -> str:
             "history_start": history_start.isoformat(),
             "history_end": history_end.isoformat(),
         },
-        price_adjustment_mode="raw",
+        price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
         lean_format_version=1,
     )
 
 
-def _map_file_dch() -> str:
+def _map_file_dch(price_adjustment_mode: PriceAdjustmentMode) -> str:
     return _dch(
         provider="polygon",
         provider_params=_DCH_MAP_FILE_PARAMS,
-        price_adjustment_mode="raw",
+        price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
         lean_format_version=1,
     )
 
 
-def _metadata_dch(lean_image_digest: str, file_name: str) -> str:
+def _metadata_dch(
+    lean_image_digest: str, file_name: str, price_adjustment_mode: PriceAdjustmentMode
+) -> str:
+    """LEAN's session calendar and symbol properties, per lake root.
+
+    The bytes do not vary by adjustment mode -- but the *roots* do, and LEAN
+    resolves this file inside whichever root it is handed, so every mode root
+    needs its own physical copy. The metadata claim is keyed by contract hash
+    alone (``uq_data_lake_artifacts_metadata``), so folding the mode into the
+    hash is what gives each root its own row and therefore its own write. The
+    ``PriceAdjustmentMode`` column stays NULL, which is both what the claim
+    inserts and honest: the content really is mode-independent.
+
+    Without this, the second mode's root would silently never receive the
+    file: the first mode's row already reads 'complete', so the writer skips
+    it, and LEAN then starts against a root with no market-hours database.
+    """
     return _dch(
         provider="lean_image_extract",
-        provider_params={"lean_image_digest": lean_image_digest, "file_name": file_name},
+        provider_params={
+            "lean_image_digest": lean_image_digest,
+            "file_name": file_name,
+            "lake_root_mode": price_adjustment_mode,
+        },
         price_adjustment_mode=None,
         session_policy="full",
         lean_format_version=1,
     )
 
 
-def _quote_dch(source_artifact_id: int, source_file_sha256: str) -> str:
+def _quote_dch(
+    source_artifact_id: int, source_file_sha256: str, price_adjustment_mode: PriceAdjustmentMode
+) -> str:
     return _dch(
         provider="learn_ai_derived",
         provider_params={
@@ -182,13 +230,17 @@ def _quote_dch(source_artifact_id: int, source_file_sha256: str) -> str:
             "source_artifact_id": source_artifact_id,
             "source_file_sha256": source_file_sha256,
         },
-        price_adjustment_mode="raw",
+        price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
         lean_format_version=1,
     )
 
 
-def _daily_dch(source_artifact_ids: list[int], source_file_sha256s: list[str]) -> str:
+def _daily_dch(
+    source_artifact_ids: list[int],
+    source_file_sha256s: list[str],
+    price_adjustment_mode: PriceAdjustmentMode,
+) -> str:
     return _dch(
         provider="learn_ai_derived",
         provider_params={
@@ -196,7 +248,7 @@ def _daily_dch(source_artifact_ids: list[int], source_file_sha256s: list[str]) -
             "source_artifact_ids": sorted(source_artifact_ids),
             "source_file_sha256s": sorted(source_file_sha256s),
         },
-        price_adjustment_mode="raw",
+        price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
         lean_format_version=1,
     )
@@ -280,7 +332,7 @@ def expand_required_artifacts(
                     market=spec.market,
                     symbol=symbol,
                     provider="polygon",
-                    price_adjustment_mode="raw",
+                    price_adjustment_mode=spec.price_adjustment_mode,
                 )
             )
         if spec.include_map_files:
@@ -290,7 +342,7 @@ def expand_required_artifacts(
                     market=spec.market,
                     symbol=symbol,
                     provider="polygon",
-                    price_adjustment_mode="raw",
+                    price_adjustment_mode=spec.price_adjustment_mode,
                 )
             )
 
@@ -305,7 +357,7 @@ def expand_required_artifacts(
                     resolution="daily",
                     data_type="trade",
                     provider="learn_ai_derived",
-                    price_adjustment_mode="raw",
+                    price_adjustment_mode=spec.price_adjustment_mode,
                 )
             )
 
@@ -465,7 +517,7 @@ async def _bootstrap_metadata_artifact(
     - ``"io_error"`` — the launcher could not produce the bytes. Not
       contention; retrying will not help until the launcher is fixed.
     """
-    dch = _metadata_dch(lean_image_digest, file_name)
+    dch = _metadata_dch(lean_image_digest, file_name, spec.price_adjustment_mode)
     file_path = str(rel_path)
 
     identity = ArtifactIdentity(
@@ -572,7 +624,7 @@ async def _process_minute_trade_artifact(
         data_type="trade",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _minute_trade_dch()
+    dch = _minute_trade_dch(spec.price_adjustment_mode)
 
     artifact_id = await catalog_client.claim_minute_bar(
         identity=identity,
@@ -664,6 +716,7 @@ async def _process_minute_trade_artifact(
             start=identity.trading_date,  # type: ignore[arg-type]
             end=identity.trading_date,  # type: ignore[arg-type]
             api_key=api_key,
+            adjusted=_polygon_adjusted_flag(spec.price_adjustment_mode),
         )
     except PolygonAuthError as e:
         await catalog_client.fail_artifact(artifact_id, "provider_auth_error", str(e))
@@ -829,7 +882,7 @@ async def _process_factor_file_artifact(
         symbol=identity.symbol or "",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _factor_file_dch(spec.start_trading_date, spec.end_trading_date)
+    dch = _factor_file_dch(spec.start_trading_date, spec.end_trading_date, spec.price_adjustment_mode)
 
     artifact_id = await catalog_client.claim_corp_action_artifact(
         identity=identity,
@@ -979,7 +1032,7 @@ async def _process_map_file_artifact(
         symbol=identity.symbol or "",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _map_file_dch()
+    dch = _map_file_dch(spec.price_adjustment_mode)
 
     artifact_id = await catalog_client.claim_corp_action_artifact(
         identity=identity,
@@ -1096,7 +1149,7 @@ async def _process_minute_quote_artifact(
         data_type="quote",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _quote_dch(source_trade_record.id, source_trade_record.file_sha256)
+    dch = _quote_dch(source_trade_record.id, source_trade_record.file_sha256, spec.price_adjustment_mode)
 
     artifact_id = await catalog_client.claim_minute_bar(
         identity=identity,
@@ -1220,7 +1273,7 @@ async def _process_daily_trade_artifact(
     file_path = str(rel_path)
     source_ids = [r.id for r in source_trade_records]
     source_shas = [r.file_sha256 for r in source_trade_records]
-    dch = _daily_dch(source_ids, source_shas)
+    dch = _daily_dch(source_ids, source_shas, spec.price_adjustment_mode)
 
     artifact_id = await catalog_client.claim_aggregated_bar_artifact(
         identity=identity,

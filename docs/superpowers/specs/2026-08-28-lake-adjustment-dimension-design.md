@@ -52,6 +52,13 @@ Hardlinking into each root was considered and rejected: it saves nothing that ma
 
 The consequence in the catalog is two rows for one reference artifact, differing only in `PriceAdjustmentMode`, with identical `FilePath` and identical `file_sha256`. That is honest — the row asserts "this artifact exists in this root", the unique key includes the mode, and matching hashes are the correct observable for content that genuinely does not vary by mode.
 
+**Refinement found during implementation.** The uniform rule is simply *every artifact's contract hash and identity carry the run's mode*, and that turned out to need no schema change at all, because each claim key already distinguishes on the mode one way or another:
+
+- Minute bars, factor files, map files, and the derived daily rollup are claimed on keys that include `PriceAdjustmentMode` directly (`claim_corp_action_artifact`'s conflict target names it; the minute/aggregate claims key on the full identity).
+- LEAN metadata (market-hours, symbol-properties) is claimed on `DataContractHash` **alone** (`uq_data_lake_artifacts_metadata`), and its `PriceAdjustmentMode` column is a hardcoded `NULL` in the insert. Folding the mode into `_metadata_dch`'s provider params is therefore what gives each root its own row — and it must, or the second mode's root silently never receives the file: the first mode's row already reads `complete`, the writer skips it, and LEAN starts against a root with no market-hours database. The column stays `NULL`, which is also honest: the *content* really is mode-independent; the *root* is not.
+
+So the catalog work for this change is zero migrations and one extra field in one provider-params dict.
+
 ## 3. What this deletes
 
 Once two modes cannot name the same path, the marker machinery guards nothing. Removed entirely:

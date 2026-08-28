@@ -13,7 +13,6 @@ from app.config import settings
 from app.data_lake import path_policy
 from app.engine.data.availability import _missing_spans, ensure_range
 from app.engine.data.policy_store import (
-    LakeAdjustmentUnsupportedError,
     policy_key,
     read_provenance,
     record_fetch,
@@ -100,19 +99,26 @@ def test_resolve_data_roots_lake_is_the_tree_ensure_data_writes(monkeypatch, tmp
     assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root("raw")]
 
 
-def test_resolve_data_roots_refuses_an_adjusted_request_when_the_flag_is_on(monkeypatch, tmp_path: Path):
-    """The lake has one data contract per bar, and it is raw.
+def test_resolve_data_roots_serves_an_adjusted_request_from_its_own_root(monkeypatch, tmp_path: Path):
+    """An adjusted request resolves a different directory, not a refusal.
 
-    Before this fix, an adjusted request silently got the lake's raw root
-    back — a run believing it read adjusted bars while every price was raw,
-    materially wrong across a split or dividend. Refuse instead of guessing;
-    adjustment support is slice #1839's decision, not this seam's.
+    This test used to assert the opposite: with one raw-only lake, an
+    adjusted request was refused (``LakeAdjustmentUnsupportedError`` → 409),
+    because returning the raw root would have handed a run raw prices while
+    it believed it read adjusted ones — materially wrong across a split.
+    #1839 made the mode a segment of the root, so the seam can now answer
+    honestly instead of refusing. The 409 that blocked a default Strategy Lab
+    backtest with the flag on is gone with it.
     """
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
 
-    with pytest.raises(LakeAdjustmentUnsupportedError, match="raw bars only"):
-        resolve_data_roots(source="polygon", adjusted=True)
+    adjusted_roots = resolve_data_roots(source="polygon", adjusted=True)
+    raw_roots = resolve_data_roots(source="polygon", adjusted=False)
+
+    assert adjusted_roots == [tmp_path / "writer" / "lake" / "polygon_split_adjusted"]
+    assert raw_roots == [tmp_path / "writer" / "lake" / "raw"]
+    assert adjusted_roots != raw_roots
 
 
 def test_resolve_data_roots_flag_off_still_serves_adjusted(monkeypatch, tmp_path: Path):

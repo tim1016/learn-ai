@@ -371,7 +371,7 @@ def test_import_minute_trade_dch_raw_differs_from_ensure_data_fetch_dch():
     from app.data_lake.cache_import import _import_minute_trade_dch
     from app.data_lake.ensure_data import _minute_trade_dch
 
-    assert _import_minute_trade_dch(adjusted=False) != _minute_trade_dch()
+    assert _import_minute_trade_dch(adjusted=False) != _minute_trade_dch("raw")
 
 
 # ---------------------------------------------------------------------------

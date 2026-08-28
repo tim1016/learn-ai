@@ -235,8 +235,8 @@ def test_factor_file_dch_differs_across_windows():
     """Two ensure_data calls with different windows must produce different factor-file DCHs."""
     from app.data_lake.ensure_data import _factor_file_dch
 
-    dch_narrow = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 22))
-    dch_wide = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 24))
+    dch_narrow = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 22), "raw")
+    dch_wide = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 24), "raw")
     assert dch_narrow != dch_wide, "factor-file data_contract_hash must differ when history windows differ"
 
 
