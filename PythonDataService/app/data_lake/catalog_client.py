@@ -236,21 +236,22 @@ async def select_coverage_minute_bars(
     data_type: str,
     start_trading_date: date,
     end_trading_date: date,
-    price_adjustment_mode: str | None = None,
+    *,
+    price_adjustment_mode: str,
 ) -> list[ArtifactRecord]:
-    """Return all complete minute-bar artifacts for the given window.
+    """Return all complete minute-bar artifacts for the given window and
+    adjustment mode.
 
     Used by ensure_data to compute which dates already exist on disk before
     deciding what to fetch. In Slice 1a there are no rows; this returns an
     empty list and exercises the schema/query end-to-end.
 
-    ``price_adjustment_mode`` narrows the match to one adjustment mode when
-    given. Omitted (``None``), the query matches every mode on file for the
-    window — the pre-existing behavior, safe for the live-fetch pipeline
-    because it only ever writes 'raw' rows. Callers where more than one mode
-    can coexist for the same day (e.g. ``app.data_lake.cache_import``) must
-    pass this explicitly; otherwise a match against the wrong mode's row
-    would be picked arbitrarily.
+    ``price_adjustment_mode`` is required (keyword-only): once more than one
+    mode can exist for the same (market, symbol, date, data_type) --
+    true since app.data_lake.cache_import can catalog a
+    'polygon_split_adjusted' row alongside ensure_data's 'raw' rows -- an
+    unscoped query would pick an arbitrary row for the caller's identity.
+    Every call site in the repo already passes this explicitly.
     """
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
@@ -265,7 +266,7 @@ async def select_coverage_minute_bars(
            AND "Symbol" = $2
            AND "DataType" = $3
            AND "TradingDate" BETWEEN $4 AND $5
-           AND ($6::character varying IS NULL OR "PriceAdjustmentMode" = $6)
+           AND "PriceAdjustmentMode" = $6
            AND "Status" = 'complete'
          ORDER BY "TradingDate"
     """
