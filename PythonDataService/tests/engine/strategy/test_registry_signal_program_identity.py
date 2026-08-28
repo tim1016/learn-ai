@@ -261,3 +261,25 @@ def test_validated_against_only_names_evidence_that_actually_exists() -> None:
             )
 
     assert checked, "expected at least one sealed contract to name its evidence"
+
+
+def test_every_registration_constructs_its_params_with_a_symbol() -> None:
+    """Every registered parameter schema builds with no arguments and names a symbol.
+
+    Issue #1736 moved ``symbol`` onto ``StrategyParamsBase`` as a required,
+    un-defaulted field, so a subclass that forgets to supply its own default
+    stops being constructible. That is the intended failure -- a params model
+    with no symbol has nothing for ``alpaca_paper_strategy_default_symbol`` or
+    ``paper_deploy_service`` to read -- but it is only a *loud* failure if
+    something exercises every registration. Before this test only ``spy_orb``
+    was covered (``tests/test_engine_strategies_endpoint.py``), so a new
+    registration could have reached Engine Lab or a deploy form before anyone
+    found out.
+    """
+    for key, reg in _STRATEGY_REGISTRY.items():
+        params = reg.param_schema()
+        assert isinstance(params.symbol, str) and params.symbol, (
+            f"'{key}' registered a parameter schema whose default symbol is empty; "
+            "every strategy names the signal stream it reads."
+        )
+

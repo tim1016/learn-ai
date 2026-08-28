@@ -33,7 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
-from app.engine.strategy.signal_program import Settlement
+from app.engine.strategy.signal_program import EvaluationMode, EvaluationTrace, Settlement
 from app.marketdata.feed import MarketDataBar
 from app.services import bot_trade_strategy as bts
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -43,9 +43,34 @@ from app.services.bot_trade_strategy import (
     _discard_evaluation,
     supported_alpaca_paper_strategy_keys,
 )
-from tests._helpers.signal_program import placeholder_evaluation_trace
 
 _BAR_END_MS = 1_711_641_600_000
+
+
+def _placeholder_trace(evaluation_id: str) -> EvaluationTrace:
+    """A structurally valid trace for a test that asserts nothing about it.
+
+    ``StrategyEvaluation.trace`` is non-optional (issue #1736), so these
+    tests -- which are about settlement and refusal disposition, not
+    decision content -- still have to supply one. Local rather than in
+    ``tests/_helpers/``: that package is explicitly for helpers consumed
+    from more than one test *directory*, and this has one consumer.
+    """
+    return EvaluationTrace(
+        program_key="ema_crossover_signal",
+        program_version="v1",
+        evaluation_id=evaluation_id,
+        bar_close_ms=_BAR_END_MS,
+        bar_qualified=True,
+        bucket_closed=True,
+        ready=True,
+        relation_facts={},
+        signal_facts={},
+        staged_candidate=None,
+        reason_evidence={},
+        action_plan_request=None,
+        evaluation_mode=EvaluationMode.DECIDE,
+    )
 
 
 def _evaluation(settle_stage: object) -> StrategyEvaluation:
@@ -75,9 +100,7 @@ def _evaluation(settle_stage: object) -> StrategyEvaluation:
         # Non-optional since issue #1736 -- the type-level statement of the
         # invariant this module's docstring already argues in prose. These
         # tests are about settlement, not decision content.
-        trace=placeholder_evaluation_trace(
-            evaluation_id="evaluation-under-test", bar_close_ms=_BAR_END_MS
-        ),
+        trace=_placeholder_trace("evaluation-under-test"),
     )
 
 
@@ -140,9 +163,7 @@ class _StubEvaluation:
     # capture the per-bucket trace digest (Direction 2). Non-optional since
     # issue #1736; a stub that kept `None` here would be asserting a state the
     # real dataclass can no longer hold.
-    trace = placeholder_evaluation_trace(
-        evaluation_id="eval-refusal-1", bar_close_ms=1_700_000_000_000
-    )
+    trace = _placeholder_trace("eval-refusal-1")
 
     def __init__(self) -> None:
         self.settlements: list[object] = []

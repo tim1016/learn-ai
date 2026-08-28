@@ -235,9 +235,6 @@ async def _live_adapter_traces(
     feed = _QualifiedBarFeed(symbol, bars)
     traces: list[EvaluationTrace] = []
     async for evaluation in strategy_evaluations(binding, feed):
-        # Both `trace` and `settle_stage` are non-optional on the dataclass;
-        # the `is not None` guards these two lines used to carry described
-        # states that could not occur (issue #1736).
         traces.append(evaluation.trace)
         evaluation.settle_stage(Settlement.COMMIT)
     return tuple(traces)
