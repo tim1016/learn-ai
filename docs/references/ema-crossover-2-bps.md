@@ -3,8 +3,11 @@
 > **Superseded as a separate strategy (2026-08-28).** The signal/asset
 > decoupling sweep removed `ema_crossover_2_bps` from the strategy registry.
 > The normalized-gap behaviour it describes is unchanged and still available —
-> it is now a *parameter mode* of the canonical `ema_crossover_signal`:
-> `gap_mode="bps"` with `gap_bps` (default 2). The `EmaCrossover2BpsAlgorithm`
+> it is now a *parameter point* of the canonical `ema_crossover_signal`:
+> `gap=0, gap_bps=2`. There is no mode flag — `gap` (absolute dollars) and
+> `gap_bps` (normalized) are two independent minimum floors, and `0` disables
+> either one. The strategy's own defaults remain the LEAN-parity point
+> `gap=0.20, gap_bps=0`. The `EmaCrossover2BpsAlgorithm`
 > subclass and its registry entry are gone; `EmaCrossoverSignalAlgorithm`
 > applies the same `difference_bps` gate directly. The ENG-007 LEAN golden
 > fixture was re-pinned against the folded parameter and is the proof the fold

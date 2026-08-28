@@ -44,6 +44,7 @@ async def polygon_exception_handler(request: Request, exc: Exception) -> JSONRes
         content={"success": False, "error": str(exc), "detail": "An error occurred while processing your request"},
     )
 
+
 async def clerk_sqlite_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Answer an unusable Clerk authority in the Clerk's own vocabulary.
 

@@ -85,6 +85,23 @@ class _OpenTrade:
     rsi: Decimal
 
 
+def _finite(name: str, value: Decimal | float) -> Decimal:
+    """Coerce a tunable to Decimal, refusing NaN and infinity.
+
+    ``Decimal(str(x))`` keeps a float from the JSON param layer exact, but it
+    also happily produces ``Decimal("NaN")`` -- and every comparison against
+    NaN is False, so a NaN threshold does not raise, it silently *disables*
+    the gate it configures. Range bounds stay in the Pydantic params model
+    (``programs/ema_crossover_signal.py``), which is the validating boundary;
+    this is only the non-negotiable numeric floor, applied to every tunable
+    rather than to whichever one was added last.
+    """
+    coerced = Decimal(str(value))
+    if not coerced.is_finite():
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    return coerced
+
+
 class EmaCrossoverSignalAlgorithm(Strategy):
     """Generate EMA crossover decisions without selecting the traded asset."""
 
@@ -115,7 +132,9 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         """
         if ema_fast - ema_slow < self._gap:
             return False
-        return not (self._gap_bps > 0 and difference_bps(ema_fast, ema_slow) < self._gap_bps)
+        if self._gap_bps <= 0:
+            return True
+        return difference_bps(ema_fast, ema_slow) >= self._gap_bps
 
     def _rsi_gate_bounds(self) -> tuple[Decimal, Decimal]:
         """Return the configured inclusive RSI entry band (default 50–70)."""
@@ -140,12 +159,10 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # exactly (absolute gap 0.20, RSI band 50–70); the Recency Chart
         # sweeps these as parameters. Coerced through str() so a float from
         # the JSON param layer lands as an exact Decimal.
-        self._gap = Decimal(str(gap))
-        self._gap_bps = Decimal(str(gap_bps))
-        self._rsi_min = Decimal(str(rsi_min))
-        self._rsi_max = Decimal(str(rsi_max))
-        if not self._gap_bps.is_finite() or not Decimal(0) <= self._gap_bps <= Decimal(100):
-            raise ValueError("gap_bps must be finite and between 0 and 100")
+        self._gap = _finite("gap", gap)
+        self._gap_bps = _finite("gap_bps", gap_bps)
+        self._rsi_min = _finite("rsi_min", rsi_min)
+        self._rsi_max = _finite("rsi_max", rsi_max)
         self._symbol: str = ""
         self._ema5: ExponentialMovingAverage | None = None
         self._ema10: ExponentialMovingAverage | None = None

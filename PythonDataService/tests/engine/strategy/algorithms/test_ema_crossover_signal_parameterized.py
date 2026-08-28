@@ -160,3 +160,30 @@ def test_entry_check_honors_a_configured_rsi_band_the_default_would_reject() -> 
         rsi=Decimal(80),
     )
     assert [i.kind for i in intents] == [SignalIntentKind.ENTER]
+
+
+@pytest.mark.parametrize("tunable", ["gap", "gap_bps", "rsi_min", "rsi_max"])
+def test_every_tunable_refuses_a_non_finite_value(tunable: str) -> None:
+    """NaN must raise, not silently disable the gate it configures.
+
+    ``Decimal(str(float("nan")))`` is a valid Decimal, and every comparison
+    against it is False -- so an unguarded NaN threshold does not fail loudly,
+    it turns its entry floor off. The refusal covers all four tunables rather
+    than only the most recently added one.
+    """
+    with pytest.raises(ValueError, match=f"{tunable} must be a finite number"):
+        EmaCrossoverSignalAlgorithm(**{tunable: float("nan")})
+
+
+def test_gap_bps_range_is_enforced_by_the_params_model_not_the_algorithm() -> None:
+    """The validating boundary is the Pydantic params model, deliberately.
+
+    The algorithm accepts any finite ``gap_bps``; the 0–100 bound lives in
+    ``EmaCrossoverSignalParams`` so there is exactly one place to change it.
+    """
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+
+    with pytest.raises(ValidationError):
+        registration.param_schema(symbol="SPY", gap_bps=101.0)
+
+    assert EmaCrossoverSignalAlgorithm(gap_bps=101.0) is not None

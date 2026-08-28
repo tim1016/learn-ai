@@ -133,7 +133,7 @@ def test_ema_signal_advertises_its_matching_lean_validation_template():
     assert strategy["lean_twin"] == "ema_crossover_signal"
 
 
-def test_ema_signal_exposes_the_normalized_gap_mode_as_a_parameter() -> None:
+def test_ema_signal_exposes_the_normalized_gap_floor_as_a_parameter() -> None:
     """The former ``ema_crossover_2_bps`` strategy is now a parameter mode.
 
     Its normalized-gap gate survives the signal/asset decoupling sweep as

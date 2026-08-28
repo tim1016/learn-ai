@@ -77,16 +77,16 @@ def companion_ineligibility_reason(
         return REASON_RESOLUTION
     if not request.from_date or not request.to_date:
         return REASON_WINDOW
-    if _parameters_the_twin_cannot_see(registration, request):
+    if _has_parameters_the_twin_cannot_see(registration, request):
         return REASON_PARAMETERS_UNREPRESENTABLE
     return None
 
 
-def _parameters_the_twin_cannot_see(
+def _has_parameters_the_twin_cannot_see(
     registration: StrategyRegistration,
     request: EngineBacktestRequest,
-) -> frozenset[str]:
-    """Overridden tunables the LEAN companion would never be told about.
+) -> bool:
+    """Whether any overridden tunable would never reach the LEAN companion.
 
     Only ``registration.lean_parameter_names`` are forwarded to the twin
     (see ``dispatch_parity_companion``); every other tunable runs at
@@ -98,9 +98,19 @@ def _parameters_the_twin_cannot_see(
 
     ``symbol`` is excluded: it reaches the twin through the data policy, not
     through ``strategy_parameters``.
+
+    Scope note, because this is broader than the parameter that motivated
+    it: ``ema_crossover_signal`` forwards *no* ``lean_parameter_names``, so
+    this makes a companion unavailable for any override of ``gap``,
+    ``rsi_min``, or ``rsi_max`` too -- not just the new ``gap_bps``. That is
+    the honest disposition (the twin was never told about those either), but
+    it does retire parity coverage that previously ran and silently compared
+    mismatched strategies. The verdict carries only the reason code, not the
+    offending names; surfacing those would mean bumping
+    ``PARITY_VERDICT_SCHEMA_VERSION`` and is deliberately left out of scope.
     """
     overridden = set(request.params or {}) - {"symbol"}
-    return frozenset(overridden - set(registration.lean_parameter_names or ()))
+    return bool(overridden - set(registration.lean_parameter_names or ()))
 
 
 def dispatch_parity_companion(

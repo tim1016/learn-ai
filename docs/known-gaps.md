@@ -158,6 +158,40 @@ generated-type, and accepted-ADR `Vocabulary:` metadata gates previously tracked
 here (issues #1666, #1667, #1668) are closed and merged to master as of
 2026-08-19; git history is the record.
 
+## 7b. Orphans left by the 2026-08-28 signal/asset decoupling sweep
+
+- **`app/engine/options/` has no importers (medium).** Deleting the coupled
+  `spy_ema_crossover_options` strategy removed the last consumer of
+  `chain_resolver.py` and `pricer.py`. Both modules remain in the tree, are
+  imported by nothing, and have no direct test coverage
+  (`docs/math-sources-of-truth.md` records `NONE — pending` for the pricer).
+  They were **not** deleted with the strategy because the package is described
+  as live in five architecture documents (`options-math-authorities.md`,
+  `options-research.md`, `options-routes-research.md`,
+  `engine-authority-map.md`, `math-sources-of-truth.md`), and retiring a
+  documented canonical math row is a decision with its own doc surface, not a
+  side effect of a strategy deletion. Disposition — delete the package and its
+  rows, or re-point it at a decoupled options Action Plan — is deliberately
+  left open. Until then treat it as dead code: `engine-authority-map.md` marks
+  the row `orphaned 2026-08-28`.
+
+- **`EmaCrossover2BpsStrategyParametersModel` survives in the LEAN sidecar
+  (low).** `app/routers/lean_sidecar.py` still defines and uses it (lines ~202,
+  298, 413) for the `ema_crossover_2_bps` trusted sample, which remains a valid
+  LEAN template even though the Python registry entry is gone. It is reachable
+  API surface, not dead code, but the name now refers to a strategy this build
+  does not register. Renaming it changes the committed OpenAPI contract, so it
+  is left alone deliberately.
+
+- **Doc paths predating this sweep (inherited, not introduced here).** A path
+  audit of `math-sources-of-truth.md` and `engine-authority-map.md` found ~30
+  cited `.py` files that no longer exist — almost all from the #1813 IBKR
+  decommission (`app/engine/live/*`, `app/services/account_*`,
+  `app/routers/broker_activity.py`, and neighbours), plus
+  `tests/services/test_bot_runner.py`. Only the two this sweep invalidated
+  (`spy_orb.py`, `spy_ema_crossover_options.py`) were corrected; the rest are
+  pre-existing and out of scope.
+
 ## 8. Sealed Signal Program admission (verified 2026-08-21, issue #1728 / ADR 0043)
 
 *The former first bullet — FR-016 crash-candidate capture "scoped to
@@ -173,7 +207,7 @@ history has the old bullet.*
   of their own.**~~ **Resolved 2026-08-28 by removal.** The signal/asset
   decoupling sweep deleted both registry entries: `spy_ema_crossover` was a
   compatibility wrapper for run ledgers that are themselves disposable, and
-  `ema_crossover_2_bps` was folded into `ema_crossover_signal`'s `gap_mode`
+  `ema_crossover_2_bps` was folded into `ema_crossover_signal`'s `gap_bps` parameter
   parameter — inheriting that program's real qualification instead of running
   `NOT_APPLICABLE` beside it. No unqualified registration remains on the EMA
   lineage.
