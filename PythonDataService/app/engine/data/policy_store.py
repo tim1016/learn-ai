@@ -47,7 +47,6 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from app.config import settings
 from app.data_lake import path_policy
 
 logger = logging.getLogger(__name__)
@@ -57,18 +56,6 @@ PROVENANCE_SCHEMA_VERSION = 1
 BarSource = Literal["polygon"]
 COMPATIBILITY_FIXTURE_SCHEMA_VERSION = 1
 COMPATIBILITY_FIXTURE_ID_PREFIX = "bar-store-v1-"
-
-
-class LakeAdjustmentUnsupportedError(ValueError):
-    """An adjusted-bars request was made while the lake is the sole authority.
-
-    The lake stores raw bars under one data contract; it does not yet apply
-    split/dividend adjustments (that is slice #1839's decision to make, not
-    this one's). Serving raw bars back to a caller who asked for ``adjusted``
-    would echo an adjusted ``DataPolicy`` while every price in the run was
-    actually raw — materially wrong across any corporate action in the
-    window. Refuse loudly instead of guessing.
-    """
 
 
 def resolve_cache_root() -> Path:
@@ -123,7 +110,8 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     bars endpoint must resolve roots through this single function so
     they always observe the same bytes.
 
-    With ``DATA_LAKE_ENABLED`` the lake is the market-data authority and
+    When the lake serves this request (:func:`path_policy.lake_serves` — the
+    flag is on and the request is raw) it is the market-data authority and
     the sole root: its tree is already LEAN-format, so the readers are
     unchanged. The reference mount is deliberately dropped rather than
     stacked in front — a run must be able to say which bytes it consumed,
@@ -133,19 +121,13 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     mode is carried by the catalog's data contract, not by the directory
     name.
 
-    Raises :class:`LakeAdjustmentUnsupportedError` when the lake is enabled
-    and ``adjusted`` is True: the lake has exactly one data contract per bar
-    and it is raw. Returning the lake root anyway would silently swap the
-    bytes underneath an adjusted request instead of refusing it — the
-    adjusted story belongs to a later slice (#1839), not to this seam.
+    An adjusted request keeps the policy-keyed roots below even with the flag
+    on, because the lake's live pipeline has no adjusted bars to give it.
+    ``lake_serves`` carries the reasoning; the short version is that the
+    alternatives are a 409 on every default backtest or a silent swap of raw
+    bytes under an adjusted policy.
     """
-    if settings.DATA_LAKE_ENABLED:
-        if adjusted:
-            raise LakeAdjustmentUnsupportedError(
-                "the data lake serves raw bars only; an adjusted request cannot be "
-                "satisfied by it yet (adjustment support is slice #1839's decision) — "
-                "request adjusted=False, or turn DATA_LAKE_ENABLED off"
-            )
+    if path_policy.lake_serves(adjusted=adjusted):
         root = path_policy.resolve_lake_root()
         root.mkdir(parents=True, exist_ok=True)
         return [root]

@@ -145,11 +145,25 @@ class LakeMount:
         return f"{self.host_lake_root}:{CONTAINER_LAKE_DATA_MOUNT}:ro"
 
 
-def lake_mount_enabled() -> bool:
-    """True when sidecar runs should read the lake instead of staging."""
-    from app.config import settings
+def lake_mount_enabled(*, adjusted: bool) -> bool:
+    """True when this run should read the lake instead of staging its own bars.
 
-    return bool(settings.DATA_LAKE_ENABLED)
+    Delegates to :func:`app.data_lake.path_policy.lake_serves` — the one
+    predicate the engine's root resolver, the engine's materializer, this
+    preflight and the chart split-read all share.
+
+    ``adjusted`` is not decoration. Before #1839 this function asked only
+    whether the flag was on, so a flag-on run whose ``DataPolicy`` said
+    ``adjusted=True`` was handed the raw lake mount and ran to completion:
+    every price in it raw, the manifest and the UI both reporting an adjusted
+    policy, and nothing anywhere to notice. That is the same silent swap the
+    engine's root resolver refuses, arriving through a different door. An
+    adjusted sidecar run therefore keeps the pre-lake staging path, which
+    still fetches and stages genuinely adjusted bars.
+    """
+    from app.data_lake.path_policy import lake_serves
+
+    return lake_serves(adjusted=adjusted)
 
 
 def data_plane_lake_root() -> Path:

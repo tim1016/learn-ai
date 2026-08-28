@@ -184,10 +184,27 @@ class TestFlagOffIsUnchanged:
         from app.config import settings
 
         monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-        assert lake_mount_enabled() is False
+        assert lake_mount_enabled(adjusted=False) is False
 
         monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-        assert lake_mount_enabled() is True
+        assert lake_mount_enabled(adjusted=False) is True
+
+    def test_lake_mode_declines_an_adjusted_run_even_with_the_flag_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sidecar's half of carry-forward A2.
+
+        Before #1839 this preflight asked only whether the flag was on, so a
+        flag-on run whose ``DataPolicy`` said ``adjusted=True`` was handed the
+        raw lake mount and ran to completion: every price raw, the manifest
+        and the UI both reporting an adjusted policy, nothing anywhere to
+        notice. The engine's root resolver already refused that swap; this is
+        the same swap arriving through the sidecar's door.
+        """
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+        assert lake_mount_enabled(adjusted=True) is False
 
     def test_launch_request_does_not_ask_for_the_lake_by_default(self) -> None:
         request = LaunchRequest(

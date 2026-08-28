@@ -13,7 +13,6 @@ from app.config import settings
 from app.data_lake import path_policy
 from app.engine.data.availability import _missing_spans, ensure_range
 from app.engine.data.policy_store import (
-    LakeAdjustmentUnsupportedError,
     policy_key,
     read_provenance,
     record_fetch,
@@ -100,19 +99,47 @@ def test_resolve_data_roots_lake_is_the_tree_ensure_data_writes(monkeypatch, tmp
     assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root()]
 
 
-def test_resolve_data_roots_refuses_an_adjusted_request_when_the_flag_is_on(monkeypatch, tmp_path: Path):
+def test_resolve_data_roots_keeps_the_policy_root_for_an_adjusted_request_when_the_flag_is_on(
+    monkeypatch, tmp_path: Path
+):
     """The lake has one data contract per bar, and it is raw.
 
-    Before this fix, an adjusted request silently got the lake's raw root
-    back — a run believing it read adjusted bars while every price was raw,
-    materially wrong across a split or dividend. Refuse instead of guessing;
-    adjustment support is slice #1839's decision, not this seam's.
+    Handing an adjusted request the lake's raw root would be a run believing
+    it read adjusted bars while every price was raw — materially wrong across
+    a split or dividend. It gets the policy root instead: the tree that
+    actually holds adjusted bars, and the one it read before the flip
+    (carry-forward A2). The lake root must not appear at all, at any
+    position — a reader searching roots in order would otherwise find raw
+    bytes for any day the policy store happens to be missing.
     """
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
 
-    with pytest.raises(LakeAdjustmentUnsupportedError, match="raw bars only"):
-        resolve_data_roots(source="polygon", adjusted=True)
+    roots = resolve_data_roots(source="polygon", adjusted=True)
+
+    assert roots == [tmp_path / "store" / "polygon-adjusted"]
+    assert path_policy.resolve_lake_root() not in roots
+
+
+def test_lake_serves_is_the_conjunction_of_the_flag_and_the_adjustment_mode(monkeypatch):
+    """The predicate every seam shares, pinned in isolation.
+
+    ``lake_holds_adjustment_mode`` is the flag-free half — the chart
+    split-read asks that one, because ``chart_service`` has already checked
+    the flag before calling in.
+    """
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    assert path_policy.lake_serves(adjusted=False) is True
+    assert path_policy.lake_serves(adjusted=True) is False
+
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
+    assert path_policy.lake_serves(adjusted=False) is False
+    assert path_policy.lake_serves(adjusted=True) is False
+
+    assert path_policy.lake_holds_adjustment_mode(adjusted=False) is True
+    assert path_policy.lake_holds_adjustment_mode(adjusted=True) is False
 
 
 def test_resolve_data_roots_flag_off_still_serves_adjusted(monkeypatch, tmp_path: Path):

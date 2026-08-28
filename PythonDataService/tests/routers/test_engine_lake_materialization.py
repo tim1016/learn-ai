@@ -18,13 +18,13 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 
 from app.config import settings
 from app.data_lake import run_materialization
 from app.data_lake.ensure_data import _compute_data_availability_hash
 from app.data_lake.run_materialization import EngineRunMaterialization
 from app.data_lake.types import ArtifactRecord
+from app.engine.data.policy_store import resolve_data_roots
 from app.routers import engine as engine_router
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
@@ -94,11 +94,11 @@ def _request() -> EngineBacktestRequest:
         from_date=DAY_ONE.isoformat(),
         to_date=DAY_THREE.isoformat(),
         auto_fetch=True,
-        # The lake serves raw bars only (LakeAdjustmentUnsupportedError gates
-        # anything else); every test in this file exercises materialization
-        # mechanics, not the adjustment gate, so it asks for what the lake can
-        # actually give it. See test_flag_on_run_refuses_the_legacy_adjusted_default
-        # below for what an unmodified (implicitly adjusted) request now gets.
+        # The lake's live pipeline serves raw bars only; every test in this
+        # file exercises materialization mechanics rather than the adjustment
+        # seam, so it asks for what the lake can actually give it. See
+        # test_flag_on_run_keeps_the_policy_store_for_the_legacy_adjusted_default
+        # below for what an unmodified (implicitly adjusted) request gets.
         data_policy={
             "source": "polygon",
             "symbol": "SPY",
@@ -299,19 +299,27 @@ def test_a_lake_that_cannot_materialize_fails_the_run_loudly(seeded_roots, monke
     assert "provider_no_data" in (response.error or "")
 
 
-def test_flag_on_run_refuses_the_legacy_adjusted_default(seeded_roots, monkeypatch):
+def test_flag_on_run_keeps_the_policy_store_for_the_legacy_adjusted_default(seeded_roots, monkeypatch):
     """A request with no explicit ``data_policy`` defaults to adjusted=True.
 
-    The lake serves raw bars only. Before the fix this silently read the raw
-    lake tree back to a caller who believed the run was adjusted; now root
-    resolution itself refuses, before the lake is ever consulted.
+    The lake's live pipeline serves raw bars only, so the flip must not change
+    what such a request gets: it keeps the policy store, exactly as with the
+    flag off. This is carry-forward item A2 and the reason the flip is not an
+    outage — before it, root resolution 409'd here, which would have been
+    *every default backtest in the product* the moment the flag went on.
+
+    Both negatives matter. The lake must not be consulted (it has nothing
+    adjusted to give), and the run must still succeed (the policy store does).
     """
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     def _must_not_run(**kwargs):
-        raise AssertionError("the lake must not be consulted for a request it cannot satisfy")
+        raise AssertionError("the lake was consulted for a request it cannot satisfy")
 
     monkeypatch.setattr(run_materialization, "materialize_engine_run", _must_not_run)
+    ensured: list[dict] = []
+    monkeypatch.setattr(engine_router, "ensure_range", lambda **kwargs: ensured.append(kwargs))
+
     request = EngineBacktestRequest(
         strategy_name="sma_crossover",
         params={"symbol": "SPY"},
@@ -324,8 +332,24 @@ def test_flag_on_run_refuses_the_legacy_adjusted_default(seeded_roots, monkeypat
     assert request.data_policy is not None
     assert request.data_policy.adjusted is True
 
-    with pytest.raises(HTTPException) as exc_info:
-        execute_engine_backtest(request=request, on_phase=_noop, on_log=_noop)
+    response = execute_engine_backtest(request=request, on_phase=_noop, on_log=_noop)
 
-    assert exc_info.value.status_code == 409
-    assert "raw bars only" in exc_info.value.detail
+    assert response.success, response.error
+    assert [call["adjusted"] for call in ensured] == [True]
+    # Nothing lake-shaped happened, so the run claims no lake fingerprint.
+    assert response.lake_data_availability_hash is None
+
+
+def test_flag_on_adjusted_run_reads_the_policy_root_not_the_lake(seeded_roots, monkeypatch):
+    """The root resolver and the materializer agree about who serves this run.
+
+    The pair is what makes A2 safe: if only the materializer had been gated,
+    an adjusted run would export into the policy store and then read the lake
+    (or the reverse) — fetching bars nobody reads and reading bars nobody
+    fetched. Asserting the resolved root here pins the second half of the
+    agreement that the test above pins the first half of.
+    """
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    assert resolve_data_roots(source="polygon", adjusted=True) == [seeded_roots["policy"]]
+    assert resolve_data_roots(source="polygon", adjusted=False) == [seeded_roots["lake"]]

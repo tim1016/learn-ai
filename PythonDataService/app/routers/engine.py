@@ -29,7 +29,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.config import settings
+from app.data_lake.path_policy import lake_serves
 from app.engine.data.availability import (
     AvailabilityReport,
     check_availability,
@@ -37,7 +37,6 @@ from app.engine.data.availability import (
 )
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import (
-    LakeAdjustmentUnsupportedError,
     policy_key,
     record_fetch,
     resolve_data_roots,
@@ -125,23 +124,14 @@ def _reject_hidden_params(reg: StrategyRegistration, params: dict[str, Any]) -> 
 def _resolve_lean_data_roots(*, adjusted: bool) -> list[Path]:
     """Return the ordered list of roots the reader should search.
 
-    Delegates to the policy-keyed bar store: reference mount first (so
-    the bit-exact SPY fixture always wins), then the policy cache root
-    for the requested adjustment mode. See
-    :mod:`app.engine.data.policy_store` for the layout and the
-    adjusted-vs-raw seam bug this keying fixes.
-
-    Translates ``LakeAdjustmentUnsupportedError`` into a 409 here rather
-    than letting it surface as a generic 500: the lake serves raw bars only,
-    and every caller of this function (the availability/bars endpoints and
-    the backtest route) resolves roots directly from request input, so this
-    is the one boundary that needs to turn the refusal into an actionable
-    response.
+    Delegates to the policy-keyed bar store: the lake alone when it serves
+    this request (flag on, raw), otherwise the reference mount first (so the
+    bit-exact SPY fixture always wins) then the policy cache root for the
+    requested adjustment mode. See :mod:`app.engine.data.policy_store` for the
+    layout and the adjusted-vs-raw seam bug this keying fixes, and
+    ``path_policy.lake_serves`` for which of the two a request gets.
     """
-    try:
-        return resolve_data_roots(source="polygon", adjusted=adjusted)
-    except LakeAdjustmentUnsupportedError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return resolve_data_roots(source="polygon", adjusted=adjusted)
 
 
 def _policy_adjusted(data_policy: _EngineDataPolicyModel | None) -> bool:
@@ -1091,14 +1081,21 @@ def _materialize_missing_bars(
 ) -> str | None:
     """Put the run's bars on disk before the reader looks for them.
 
-    Two materializers, one question. The lake answers it when
-    ``DATA_LAKE_ENABLED`` is set — it fetches only the missing days, records
-    every artifact in the catalog, and hands back the fingerprint this
-    function passes on (see ``materialize_engine_run`` for what that
-    fingerprint does and does not cover). Otherwise the pre-lake policy store
-    exports the range into its cache and there is no such fingerprint to give.
+    Two materializers, one question. The lake answers it when it serves this
+    request — it fetches only the missing days, records every artifact in the
+    catalog, and hands back the fingerprint this function passes on (see
+    ``materialize_engine_run`` for what that fingerprint does and does not
+    cover). Otherwise the pre-lake policy store exports the range into its
+    cache and there is no such fingerprint to give.
+
+    The branch below and ``_resolve_lean_data_roots`` above must agree, which
+    is why both ask ``path_policy.lake_serves`` rather than each testing the
+    flag for itself: materializing into the lake while reading from the policy
+    store would fetch bars nobody reads and then read bars nobody fetched, and
+    the symptom (an empty backtest after a successful fetch) points at neither
+    seam.
     """
-    if settings.DATA_LAKE_ENABLED:
+    if lake_serves(adjusted=_policy_adjusted(request.data_policy)):
         # Lazy for the same reason as the Polygon client below: the flag is
         # off by default and the lake pulls in the catalog + provider stack.
         from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run

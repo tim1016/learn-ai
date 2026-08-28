@@ -66,7 +66,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from app.data_lake.path_policy import resolve_lake_root
+from app.data_lake.path_policy import lake_holds_adjustment_mode, resolve_lake_root
 from app.data_lake.types import is_lake_addressable_symbol
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import (
@@ -401,12 +401,17 @@ def _execute_plan(
         session="extended",
     )
 
-    # The lake is raw-only (``DataRunSpec.price_adjustment_mode == "raw"``), so
-    # an adjusted chart cannot be served from it at any price. Fall the whole
-    # history back to the provider and say why.
-    history_fallback_reason: SpanReason = "price_adjustment_unsupported" if adjusted else "lake_gap"
+    # The lake's live pipeline is raw-only, so an adjusted chart cannot be
+    # served from it at any price. Fall the whole history back to the provider
+    # and say why. Asked through ``lake_holds_adjustment_mode`` — the same fact
+    # the two engine seams and the sidecar preflight consult — so "which
+    # adjustment mode can the lake hold" has one answer in the tree, not four.
+    # The flag half of that question is deliberately not re-asked here:
+    # ``chart_service`` has already checked it before calling in.
+    holds = lake_holds_adjustment_mode(adjusted=adjusted)
+    history_fallback_reason: SpanReason = "lake_gap" if holds else "price_adjustment_unsupported"
     lake_dates: frozenset[date] = frozenset()
-    if not adjusted and completed:
+    if holds and completed:
         held = set(reader.iter_dates(symbol, completed[0].session_date, completed[-1].session_date))
         lake_dates = frozenset(held.intersection(window.session_date for window in completed))
 
