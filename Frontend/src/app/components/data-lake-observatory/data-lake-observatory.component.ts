@@ -16,6 +16,7 @@ import {
 import { LakeStorageSummaryComponent } from './storage-summary/lake-storage-summary.component';
 import { buildCoverageBoard, parseSymbols, type CoverageBoard } from './lib/coverage-board';
 import { DataLakeService, describeFailure } from './lib/data-lake.service';
+import { MAX_TRADING_RANGE_DAYS } from './lib/trading-range';
 
 const DAY_MS = 86_400_000;
 const DEFAULT_LOOKBACK_DAYS = 30;
@@ -121,6 +122,10 @@ export class DataLakeObservatoryComponent {
 
   protected readonly maxSymbolLength = computed(
     () => this.backfillDefaults()?.max_symbol_length ?? 20,
+  );
+
+  protected readonly maxTradingRangeDays = computed(
+    () => this.backfillDefaults()?.max_trading_range_days ?? MAX_TRADING_RANGE_DAYS,
   );
 
   // Only ever consulted while `notEnabled()` is false, so the dark-lake

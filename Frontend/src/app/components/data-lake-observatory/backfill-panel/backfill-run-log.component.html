@@ -4,6 +4,13 @@
       <p class="run__job">job <span class="run__token">{{ id }}</span></p>
     }
 
+    @if (reattached()) {
+      <p class="run__reattached" role="status">
+        Reattached to a backfill that was already running. Everything below was replayed from the
+        job's own event stream, not reconstructed here.
+      </p>
+    }
+
     @if (progress(); as tick) {
       <div class="run__progress">
         <div
@@ -37,10 +44,18 @@
         @for (failure of failures(); track failureKey(failure)) {
           <li class="run__failure">
             <span class="run__reason">{{ failure.reason | receiptLabel }}</span>
+            @if (failure.symbol; as symbol) {
+              <app-asset-identity [symbol]="symbol" size="sm" />
+            } @else {
+              <span class="run__failure-scope">whole run</span>
+            }
             @if (failure.trading_date_ms !== null) {
               <app-timestamp-display [value]="failure.trading_date_ms" mode="date-et" />
             }
             <span class="run__failure-kind">{{ failure.artifact_kind | receiptLabel }}</span>
+            @if (failure.data_type; as dataType) {
+              <span class="run__failure-kind">{{ dataType | receiptLabel }}</span>
+            }
             @if (failure.detail) {
               <span class="run__failure-detail">{{ failure.detail }}</span>
             }

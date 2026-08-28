@@ -8,6 +8,7 @@
 <app-coverage-query-bar
   [initial]="query()"
   [maxSymbolLength]="maxSymbolLength()"
+  [maxTradingRangeDays]="maxTradingRangeDays()"
   [busy]="coverage.isLoading()"
   (applied)="apply($event)"
 />
@@ -64,6 +65,7 @@
       [seedSymbols]="query().symbolsText"
       [seedStartTradingDate]="query().startTradingDate"
       [seedEndTradingDate]="query().endTradingDate"
+      [priceAdjustmentMode]="query().priceAdjustmentMode"
       (runFinished)="onRunFinished()"
     />
   </section>

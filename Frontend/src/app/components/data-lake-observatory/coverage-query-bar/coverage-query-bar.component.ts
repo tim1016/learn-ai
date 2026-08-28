@@ -9,6 +9,7 @@ import {
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { parseSymbols } from '../lib/coverage-board';
+import { MAX_TRADING_RANGE_DAYS, tradingRangeRejection } from '../lib/trading-range';
 import type { DataLakeDataType, PriceAdjustmentMode } from '../lib/data-lake.types';
 
 export interface ObservatoryQuery {
@@ -54,6 +55,8 @@ function inputValue(event: Event): string {
 export class CoverageQueryBarComponent {
   readonly initial = input.required<ObservatoryQuery>();
   readonly maxSymbolLength = input(20);
+  /** The data plane's own window cap; the coverage endpoint 422s past it. */
+  readonly maxTradingRangeDays = input(MAX_TRADING_RANGE_DAYS);
   readonly busy = input(false);
 
   readonly applied = output<ObservatoryQuery>();
@@ -67,13 +70,13 @@ export class CoverageQueryBarComponent {
     parseSymbols(this.draft().symbolsText, this.maxSymbolLength()),
   );
 
-  protected readonly invalidRange = computed(() => {
+  protected readonly rangeRejection = computed(() => {
     const { startTradingDate, endTradingDate } = this.draft();
-    return startTradingDate === '' || endTradingDate === '' || startTradingDate > endTradingDate;
+    return tradingRangeRejection(startTradingDate, endTradingDate, this.maxTradingRangeDays());
   });
 
   protected readonly canApply = computed(
-    () => this.parsed().symbols.length > 0 && !this.invalidRange(),
+    () => this.parsed().symbols.length > 0 && this.rangeRejection() === null,
   );
 
   protected onSymbols(event: Event): void {

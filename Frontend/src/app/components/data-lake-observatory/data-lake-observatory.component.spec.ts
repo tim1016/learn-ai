@@ -1,3 +1,4 @@
+import { signal } from '@angular/core';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -111,7 +112,12 @@ async function renderObservatory(stubs: LakeStubs = {}) {
   const view = await render(DataLakeObservatoryComponent, {
     providers: [
       { provide: DataLakeService, useValue: lake },
-      { provide: JobsService, useValue: { startJob: vi.fn(), cancelJob: vi.fn() } },
+      {
+        provide: JobsService,
+        // `jobs` backs the backfill panel's reattach effect. Nothing is live
+        // in these tests, so that panel stays idle.
+        useValue: { startJob: vi.fn(), cancelJob: vi.fn(), jobs: signal([]) },
+      },
     ],
   });
   return { ...view, lake };
@@ -196,6 +202,30 @@ describe('DataLakeObservatoryComponent', () => {
 
     expect(await screen.findByText('SPY · Range Too Large')).toBeTruthy();
     expect(screen.getByText('range is 3654 days')).toBeTruthy();
+  });
+
+  it('stops the backfill form offering to fill a view it cannot write', async () => {
+    // The heatmap can query an adjusted view; the fetch pipeline only ever
+    // writes raw rows. A backfill submitted from an adjusted view would
+    // succeed and leave that view unchanged, so the panel refuses it — and
+    // this pins the wiring, not just the panel's own rule.
+    const { lake } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
+    await screen.findByRole('heading', { name: 'Coverage' });
+
+    fireEvent.change(screen.getByLabelText('Price adjustment'), {
+      target: { value: 'lean_adjusted' },
+    });
+    await loadSymbols();
+
+    await vi.waitFor(() =>
+      expect(lake.coverage).toHaveBeenCalledWith(
+        expect.objectContaining({ priceAdjustmentMode: 'lean_adjusted' }),
+      ),
+    );
+    expect(await screen.findByText(/writes raw bars only/)).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it('passes AXE with a populated catalog', async () => {

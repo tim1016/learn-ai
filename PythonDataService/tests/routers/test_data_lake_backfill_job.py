@@ -263,16 +263,15 @@ async def test_start_backfill_job_returns_202_and_streams_per_day_progress(monke
 async def test_ensure_data_calls_bridge_onto_the_requests_own_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     """P1-1 regression (review round 3).
 
-    ensure_data's asyncpg pool (app.data_lake.catalog_client) is a
-    process-global bound to whichever event loop first awaits
-    catalog_client.init_pool() — usable only from that same loop.
-    work()'s asyncio.run(_do()) spins up a fresh, throwaway loop per job;
-    without _bridge_ensure_fn, any ensure_data() call inside that thread
-    would run on THAT throwaway loop, crashing with asyncpg's cross-loop
-    error the moment the pool was already initialized elsewhere — a prior
-    /ensure-data call on this request's own loop (the common case, since
-    /ensure-data is a plain async handler that always runs there), or a
-    prior backfill job's now-closed loop.
+    ensure_data's asyncpg pool (app.data_lake.catalog_client) is keyed by
+    the calling event loop, so a loop with no pool of its own raises
+    rather than reusing a foreign one. work()'s asyncio.run(_do()) spins
+    up a fresh, throwaway loop per job; without _bridge_ensure_fn, any
+    ensure_data() call inside that thread would run on THAT throwaway
+    loop and pay for (and never close) a brand-new asyncpg pool every
+    single backfill job, instead of reusing the one already pooled on
+    this request's own loop (the common case, since /ensure-data is a
+    plain async handler that always runs there).
 
     This uses a genuinely separate real background thread (mirroring
     run_in_thread's own fire-and-forget threading.Thread — the whole

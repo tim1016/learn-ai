@@ -156,18 +156,17 @@ async def test_run_backfill_against_real_ensure_data_reports_per_day_progress(cl
 async def test_backfill_survives_a_pool_initialized_on_a_different_loop(clean_artifacts, pool, tmp_lake):
     """P1-1 regression (review round 3).
 
-    ensure_data's asyncpg pool is a process-global bound to whichever
-    event loop first awaits catalog_client.init_pool() — the `pool`
-    fixture above already did that on THIS test's own loop. This test
-    then runs run_backfill on a genuinely separate thread with its own
-    fresh loop (mirroring app/routers/data_lake.py's
+    ensure_data's asyncpg pool is keyed by the calling event loop — the
+    `pool` fixture above already created one on THIS test's own loop.
+    This test then runs run_backfill on a genuinely separate thread with
+    its own fresh loop (mirroring app/routers/data_lake.py's
     work()/asyncio.run(_do()) inside run_in_thread's worker thread),
     wiring ensure_fn/status_fn through the exact same
     _bridge_ensure_fn/_bridge_status_fn the real job path uses to route
-    every pool-touching call back onto this test's loop. Without that
-    bridge, asyncpg raises a cross-loop RuntimeError the moment the
-    worker thread's own loop tries to use a pool bound to a different,
-    already-running one — this proves it doesn't.
+    every pool-touching call back onto this test's loop rather than
+    paying for (and never closing) a second pool on the worker thread's
+    own throwaway loop — this proves the bridge lands the calls on the
+    intended loop and the backfill still completes.
     """
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
         return_value=httpx.Response(200, json=_launcher_response())

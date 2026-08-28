@@ -12,6 +12,8 @@ database — the doubles are pinned to the real functions' keyword signatures
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import date, timedelta
 from urllib.parse import quote
 
@@ -34,6 +36,10 @@ from app.data_lake.types import (
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 
 pytestmark = pytest.mark.asyncio
+
+# Captured before the autouse fixture below ever monkeypatches init_pool, so
+# the pool-lifecycle test can restore the real implementation for itself.
+_REAL_INIT_POOL = catalog_client.init_pool
 
 
 def _artifact_detail_kwargs(**overrides) -> dict:
@@ -79,32 +85,28 @@ async def _get(app: FastAPI, url: str) -> tuple[int, dict]:
     return r.status_code, (r.json() if r.content else {})
 
 
-class _AlreadyInitializedPool:
-    """Sentinel standing in for a real asyncpg pool.
-
-    Satisfies close_pool()'s cleanup path (it awaits ``_pool.close()``)
-    without ever touching real I/O.
-    """
-
-    async def close(self) -> None:
-        return None
-
-    def terminate(self) -> None:
-        return None
-
-
 @pytest.fixture(autouse=True)
 def _catalog_pool_already_initialized(monkeypatch: pytest.MonkeyPatch):
     """Every GET route now depends on _ensure_catalog_pool (#1845 P1-1),
-    which calls catalog_client.init_pool() — a no-op once ``_pool`` is
-    already set, but a RuntimeError (no POSTGRES_URL configured in this
-    sandbox) if it's still None. Every test in this module *except* the
+    which calls catalog_client.init_pool() — a no-op once this loop already
+    has a pool registered, but a RuntimeError (no POSTGRES_URL configured in
+    this sandbox) if it doesn't. Every test in this module *except* the
     "Pool lifecycle" tests below mocks catalog_client's select_* functions
-    directly and never needs a real pool at all, so pre-seed a sentinel here
-    to keep init_pool() a no-op for them. The pool-lifecycle tests
-    explicitly override this back to None to exercise the real init path.
+    directly and never needs a real pool at all, so replace init_pool()
+    itself with a no-op here. The pool-lifecycle tests restore the real
+    init_pool (via monkeypatch's own teardown) to exercise the real path.
+
+    Patching init_pool() rather than pre-seeding a pool object: the pool is
+    now keyed by the calling event loop (catalog_client._pools), and this
+    fixture runs before the test's own loop exists, so it has no loop-scoped
+    hook to pre-register a pool for THIS test's loop. Replacing the function
+    is loop-agnostic and needs no such hook.
     """
-    monkeypatch.setattr(catalog_client, "_pool", _AlreadyInitializedPool())
+
+    async def _noop_init_pool() -> None:
+        return None
+
+    monkeypatch.setattr(catalog_client, "init_pool", _noop_init_pool)
 
 
 # ---------------------------------------------------------------------------
@@ -149,12 +151,13 @@ async def test_get_routes_initialize_the_pool_without_a_prior_post(
     init_pool(), so a GET before any POST hit connection()'s "asyncpg pool
     not initialized" RuntimeError as an unhandled 500. Every other test in
     this module mocks catalog_client's select_* functions directly, which
-    bypasses connection()/_pool entirely — exactly why this bug went
-    unnoticed. This test does NOT mock the selectors: it resets _pool to
-    None (simulating a fresh process), fakes only the asyncpg layer
-    (create_pool + a connection whose fetch/fetchrow return empty results,
-    no real network I/O), and lets the real select_* functions run through
-    the real connection(). Before the fix, connection() would raise
+    bypasses connection()/_pools entirely — exactly why this bug went
+    unnoticed. This test does NOT mock the selectors: it restores the real
+    init_pool (the autouse fixture replaced it with a no-op) and clears this
+    loop's pool entry (simulating a fresh process), fakes only the asyncpg
+    layer (create_pool + a connection whose fetch/fetchrow return empty
+    results, no real network I/O), and lets the real select_* functions run
+    through the real connection(). Before the fix, connection() would raise
     RuntimeError here — this test would have failed (an unhandled exception
     surfacing through httpx.ASGITransport, not a clean response) without
     the pool-init dependency.
@@ -187,8 +190,10 @@ async def test_get_routes_initialize_the_pool_without_a_prior_post(
     async def _fake_create_pool(*args, **kwargs) -> _FakePool:
         return _FakePool()
 
+    monkeypatch.setattr(catalog_client, "init_pool", _REAL_INIT_POOL)
+    loop = asyncio.get_running_loop()
     await catalog_client.close_pool()
-    assert catalog_client._pool is None
+    assert loop not in catalog_client._pools
 
     monkeypatch.setattr(settings, "POSTGRES_URL", "postgres://fake-host/fake-db")
     monkeypatch.setattr(asyncpg, "create_pool", _fake_create_pool)
@@ -202,8 +207,107 @@ async def test_get_routes_initialize_the_pool_without_a_prior_post(
         # way, the request must reach the real selector and its real
         # connection() call, not raise before ever getting there.
         assert status_code in (200, 404)
-        assert catalog_client._pool is not None
+        assert loop in catalog_client._pools
     finally:
+        await catalog_client.close_pool()
+
+
+async def test_router_loop_and_engine_loop_each_get_their_own_pool(monkeypatch: pytest.MonkeyPatch):
+    """Codex finding 3: the router path and the engine path must not race
+    for one process-global pool.
+
+    This test's own loop stands in for the FastAPI app loop that
+    /api/data-lake/* runs on (the "router-style call"); a second, genuinely
+    separate event loop on its own background thread — created the same way
+    ``app.data_lake.run_materialization``'s dedicated materialization loop
+    is (``new_event_loop()`` + ``run_forever()`` on a daemon thread) — stands
+    in for a Python-engine backtest bridging onto it (the "engine-style
+    call"). Both call ``init_pool()`` and then run a query.
+
+    The fake pool below models the one loop-affinity property real asyncpg
+    pools actually enforce: a pool created on loop A refuses ``acquire()``
+    from any other loop. Before the fix (one process-global pool bound to
+    whichever loop called ``init_pool()`` first), the second loop to touch
+    the catalog would silently reuse the first's pool object and this fake
+    would raise exactly where real asyncpg does. After the fix, each loop's
+    ``init_pool()`` creates its own pool, so neither ever acquires a
+    connection from a pool bound to a different loop.
+    """
+
+    class _CrossLoopPoolError(RuntimeError):
+        pass
+
+    class _FakeConnection:
+        async def fetch(self, query: str, *args: object) -> list:
+            return []
+
+    class _FakeAcquireContext:
+        def __init__(self, pool: _FakePool) -> None:
+            self._pool = pool
+
+        async def __aenter__(self) -> _FakeConnection:
+            if asyncio.get_running_loop() is not self._pool.owner_loop:
+                raise _CrossLoopPoolError(
+                    f"pool {self._pool.pool_id} was created on a different loop"
+                )
+            return _FakeConnection()
+
+        async def __aexit__(self, *exc_info: object) -> bool:
+            return False
+
+    class _FakePool:
+        def __init__(self, pool_id: int, owner_loop: asyncio.AbstractEventLoop) -> None:
+            self.pool_id = pool_id
+            self.owner_loop = owner_loop
+
+        def acquire(self) -> _FakeAcquireContext:
+            return _FakeAcquireContext(self)
+
+        async def close(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+    pool_counter = 0
+
+    async def _fake_create_pool(*args, **kwargs) -> _FakePool:
+        nonlocal pool_counter
+        pool_counter += 1
+        return _FakePool(pool_counter, asyncio.get_running_loop())
+
+    monkeypatch.setattr(catalog_client, "init_pool", _REAL_INIT_POOL)
+    monkeypatch.setattr(settings, "POSTGRES_URL", "postgres://fake-host/fake-db")
+    monkeypatch.setattr(asyncpg, "create_pool", _fake_create_pool)
+
+    async def _touch_catalog() -> None:
+        await catalog_client.init_pool()
+        async with catalog_client.connection() as conn:
+            await conn.fetch("select 1")
+
+    await _touch_catalog()  # router-style: this test's own loop
+
+    # A genuinely separate loop on its own thread, mirroring
+    # run_materialization._materialization_loop()'s own mechanism exactly.
+    engine_loop = asyncio.new_event_loop()
+    engine_thread = threading.Thread(target=engine_loop.run_forever, daemon=True)
+    engine_thread.start()
+    try:
+        # engine-style: a call bridged onto the dedicated materialization
+        # loop. Before the fix this raises _CrossLoopPoolError, inheriting
+        # the router loop's pool via the one process-global _pool.
+        future = asyncio.run_coroutine_threadsafe(_touch_catalog(), engine_loop)
+        await asyncio.wrap_future(future)
+
+        # And the router loop must still work afterwards too — the bug is
+        # symmetric, whichever loop touched the catalog second used to lose.
+        await _touch_catalog()
+    finally:
+        close_future = asyncio.run_coroutine_threadsafe(catalog_client.close_pool(), engine_loop)
+        close_future.result(timeout=5)
+        engine_loop.call_soon_threadsafe(engine_loop.stop)
+        engine_thread.join(timeout=5)
+        engine_loop.close()
         await catalog_client.close_pool()
 
 

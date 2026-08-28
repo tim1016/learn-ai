@@ -47,6 +47,9 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from app.config import settings
+from app.data_lake import path_policy
+
 logger = logging.getLogger(__name__)
 
 PROVENANCE_SCHEMA_VERSION = 1
@@ -54,6 +57,18 @@ PROVENANCE_SCHEMA_VERSION = 1
 BarSource = Literal["polygon"]
 COMPATIBILITY_FIXTURE_SCHEMA_VERSION = 1
 COMPATIBILITY_FIXTURE_ID_PREFIX = "bar-store-v1-"
+
+
+class LakeAdjustmentUnsupportedError(ValueError):
+    """An adjusted-bars request was made while the lake is the sole authority.
+
+    The lake stores raw bars under one data contract; it does not yet apply
+    split/dividend adjustments (that is slice #1839's decision to make, not
+    this one's). Serving raw bars back to a caller who asked for ``adjusted``
+    would echo an adjusted ``DataPolicy`` while every price in the run was
+    actually raw — materially wrong across any corporate action in the
+    window. Refuse loudly instead of guessing.
+    """
 
 
 def resolve_cache_root() -> Path:
@@ -107,7 +122,34 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     The policy cache root is created if missing. Both engines and the
     bars endpoint must resolve roots through this single function so
     they always observe the same bytes.
+
+    With ``DATA_LAKE_ENABLED`` the lake is the market-data authority and
+    the sole root: its tree is already LEAN-format, so the readers are
+    unchanged. The reference mount is deliberately dropped rather than
+    stacked in front — a run must be able to say which bytes it consumed,
+    and a fixture silently outranking the lake would make the manifest
+    fingerprint recorded on the run a lie. The policy key stops applying
+    too: the lake stores raw bars under one identity, and the adjustment
+    mode is carried by the catalog's data contract, not by the directory
+    name.
+
+    Raises :class:`LakeAdjustmentUnsupportedError` when the lake is enabled
+    and ``adjusted`` is True: the lake has exactly one data contract per bar
+    and it is raw. Returning the lake root anyway would silently swap the
+    bytes underneath an adjusted request instead of refusing it — the
+    adjusted story belongs to a later slice (#1839), not to this seam.
     """
+    if settings.DATA_LAKE_ENABLED:
+        if adjusted:
+            raise LakeAdjustmentUnsupportedError(
+                "the data lake serves raw bars only; an adjusted request cannot be "
+                "satisfied by it yet (adjustment support is slice #1839's decision) — "
+                "request adjusted=False, or turn DATA_LAKE_ENABLED off"
+            )
+        root = path_policy.resolve_lake_root()
+        root.mkdir(parents=True, exist_ok=True)
+        return [root]
+
     roots: list[Path] = []
     ref = resolve_reference_root()
     if ref.exists():
@@ -208,9 +250,38 @@ def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
     here; the loser of the race re-checks availability under the lock
     and skips its fetch. ``fcntl.flock`` is process- and thread-safe on
     the Linux container filesystems this service runs on.
+
+    The lake cannot be written through this lock. ``app.data_lake`` is the
+    only writer to ``LEAN_DATA_WRITE_ROOT`` (see its package docstring); it
+    coordinates through the catalog's claim/lease, not through a lock file,
+    and a zip the policy-store exporter dropped into the lake would sit
+    there with no catalog row describing it — unfindable by the readers
+    that consult the catalog, and invisible to every manifest fingerprint.
+    Since ``resolve_data_roots`` hands out the lake root when the flag is
+    on, an unconverted caller can reach here with it; refuse loudly instead.
+
+    The LEAN sidecar's live-Polygon staging path (``run_trusted_sample`` in
+    ``app.services.lean_sidecar_service``) is exactly such an unconverted
+    caller — it still calls ``ensure_range`` (and therefore this lock) for a
+    ``data_source == "polygon"`` request — but #1848's lake-mount preflight
+    keeps it from ever reaching here with the lake root while the flag is
+    on: ``run_trusted_sample`` resolves ``lake_artifacts`` (or refuses the
+    run outright) before the workspace exists, and its branch dispatch tries
+    ``elif lake_artifacts is not None`` — which is true whenever the flag is
+    on and the source is Polygon — before it ever falls through to the
+    ``ensure_range`` branch. So this refusal is reachable in principle but
+    not, today, from the sidecar; ``tests/lean_sidecar/test_lake_mount_service.py::test_lake_run_reads_the_mount_and_stages_nothing``
+    pins it by making ``ensure_range`` itself raise if the lake-mode run
+    ever calls it, and ``test_symbol_write_lock_refuses_the_lake_root``
+    (this module's own test file) pins this function's refusal in isolation.
     """
     safe = _safe_symbol(symbol)
     root_real = os.path.realpath(os.fspath(policy_root))
+    if root_real == os.path.realpath(os.fspath(path_policy.resolve_lake_root())):
+        raise ValueError(
+            f"{policy_root} is the data lake; the policy store may not write there — "
+            "materialize through app.data_lake.run_materialization instead"
+        )
     root_prefix = root_real.rstrip(os.sep) + os.sep
     lock_candidate = os.path.realpath(os.path.join(root_real, "locks", f"{safe.lower()}.lock"))
     if not lock_candidate.startswith(root_prefix):

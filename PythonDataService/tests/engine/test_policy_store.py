@@ -9,8 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from app.config import settings
+from app.data_lake import path_policy
 from app.engine.data.availability import _missing_spans, ensure_range
 from app.engine.data.policy_store import (
+    LakeAdjustmentUnsupportedError,
     policy_key,
     read_provenance,
     record_fetch,
@@ -60,6 +63,87 @@ def test_resolve_data_roots_skips_missing_reference(monkeypatch, tmp_path: Path)
     roots = resolve_data_roots(source="polygon", adjusted=False)
 
     assert roots == [tmp_path / "store" / "polygon-raw"]
+
+
+def test_resolve_data_roots_ignores_the_lake_while_the_flag_is_off(monkeypatch, tmp_path: Path):
+    """Default posture: the lake may exist on disk, but nothing reads it."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
+
+    roots = resolve_data_roots(source="polygon", adjusted=False)
+
+    assert roots == [tmp_path / "store" / "polygon-raw"]
+
+
+def test_resolve_data_roots_returns_the_lake_alone_when_the_flag_is_on(monkeypatch, tmp_path: Path):
+    """Flag on, raw request: the lake is the authority, so it is the only root."""
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(reference))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
+
+    roots = resolve_data_roots(source="polygon", adjusted=False)
+
+    assert roots == [tmp_path / "writer" / "lake"]
+    assert roots[0].is_dir()
+
+
+def test_resolve_data_roots_lake_is_the_tree_ensure_data_writes(monkeypatch, tmp_path: Path):
+    """Reader and writer must not disagree about where the lake is."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+
+    assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root()]
+
+
+def test_resolve_data_roots_refuses_an_adjusted_request_when_the_flag_is_on(monkeypatch, tmp_path: Path):
+    """The lake has one data contract per bar, and it is raw.
+
+    Before this fix, an adjusted request silently got the lake's raw root
+    back — a run believing it read adjusted bars while every price was raw,
+    materially wrong across a split or dividend. Refuse instead of guessing;
+    adjustment support is slice #1839's decision, not this seam's.
+    """
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+
+    with pytest.raises(LakeAdjustmentUnsupportedError, match="raw bars only"):
+        resolve_data_roots(source="polygon", adjusted=True)
+
+
+def test_resolve_data_roots_flag_off_still_serves_adjusted(monkeypatch, tmp_path: Path):
+    """The refusal is lake-specific: flag off, adjusted=True works as always."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
+
+    roots = resolve_data_roots(source="polygon", adjusted=True)
+
+    assert roots == [tmp_path / "store" / "polygon-adjusted"]
+
+
+def test_symbol_write_lock_refuses_the_lake_root(monkeypatch, tmp_path: Path):
+    """Only app.data_lake writes to the lake; a zip with no catalog row is invisible."""
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    lake = path_policy.resolve_lake_root()
+    lake.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="is the data lake"), symbol_write_lock(lake, "SPY"):
+        pass
+
+
+def test_symbol_write_lock_still_serializes_policy_cache_writes(monkeypatch, tmp_path: Path):
+    """The refusal above is about the lake, not about locking in general."""
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    policy_root = tmp_path / "store" / "polygon-raw"
+    policy_root.mkdir(parents=True)
+
+    with symbol_write_lock(policy_root, "SPY"):
+        assert (policy_root / "locks" / "spy.lock").is_file()
 
 
 def test_snapshot_minute_trade_zips_is_path_independent_and_reference_first(tmp_path: Path):

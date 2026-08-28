@@ -63,6 +63,6 @@
 @if (parsed().invalid.length > 0) {
   <p class="query__note" role="status">Not a storable symbol: {{ parsed().invalid.join(', ') }}</p>
 }
-@if (invalidRange()) {
-  <p class="query__note" role="status">Pick a start date on or before the end date.</p>
+@if (rangeRejection(); as reason) {
+  <p class="query__note" role="status">{{ reason }}</p>
 }

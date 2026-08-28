@@ -100,12 +100,15 @@ export class DataLakeBackfillStore {
   private readonly progressState = signal<BackfillProgress | null>(null);
   private readonly daysState = signal<readonly BackfillDayEvent[]>([]);
   private readonly errorState = signal<BackfillError | null>(null);
+  private readonly reattachedState = signal(false);
 
   readonly phase = this.phaseState.asReadonly();
   readonly jobId = this.jobIdState.asReadonly();
   readonly progress = this.progressState.asReadonly();
   readonly days = this.daysState.asReadonly();
   readonly error = this.errorState.asReadonly();
+  /** True when this run was adopted mid-flight rather than started here. */
+  readonly reattached = this.reattachedState.asReadonly();
 
   readonly running = computed(() => {
     const phase = this.phaseState();
@@ -157,6 +160,33 @@ export class DataLakeBackfillStore {
     this.openStream(jobId);
   }
 
+  /**
+   * Adopt a backfill the server is already running.
+   *
+   * This store is provided by the panel, so navigating away destroys it
+   * while the worker keeps going; coming back would otherwise show an idle
+   * form beside a job that is still writing sessions to disk.
+   *
+   * Nothing is reconstructed by hand. `GET /api/jobs/{id}/events` with no
+   * `Last-Event-ID` replays the job's whole Redis stream from the start
+   * before it begins tailing (`JobsApi.StreamJobEventsAsync`), so the
+   * ordinary fold rebuilds the progress tick, the per-day receipts and the
+   * failures from the run's own events — and `data_lake.backfill_day` is
+   * keyed on `day_index`, so a session cannot land twice. The only run long
+   * enough to have been trimmed would need more than `MAX_STREAM_LENGTH`
+   * (50k) events, which a day-per-session backfill cannot reach inside the
+   * stream's 24h TTL; a shorter history simply renders as fewer rows, never
+   * as invented ones.
+   */
+  reattach(jobId: string): void {
+    if (this.jobIdState() === jobId) return;
+    this.reset();
+    this.jobIdState.set(jobId);
+    this.reattachedState.set(true);
+    this.phaseState.set('running');
+    this.openStream(jobId);
+  }
+
   async cancel(): Promise<void> {
     const jobId = this.jobIdState();
     if (jobId === null) return;
@@ -170,6 +200,7 @@ export class DataLakeBackfillStore {
     this.progressState.set(null);
     this.daysState.set([]);
     this.errorState.set(null);
+    this.reattachedState.set(false);
   }
 
   /** Folds one already-parsed SSE frame. Unknown event types are ignored. */

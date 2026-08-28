@@ -97,8 +97,19 @@
     color: var(--text-subtle);
   }
 
+  &__reattached {
+    margin: 0;
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+  }
+
   &__failure-kind {
     color: var(--text-secondary);
+  }
+
+  &__failure-scope {
+    font-style: italic;
+    color: var(--text-subtle);
   }
 
   &__failure-detail {

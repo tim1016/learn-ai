@@ -1,10 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { signal } from '@angular/core';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { JobsService } from '../../../services/jobs.service';
+import { JobsService, type JobState } from '../../../services/jobs.service';
 import { DataLakeBackfillStore } from '../lib/data-lake-backfill.store';
-import type { BackfillDefaults } from '../lib/data-lake.types';
+import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../lib/data-lake.types';
 import { LakeBackfillPanelComponent } from './lake-backfill-panel.component';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
@@ -16,6 +17,19 @@ const DEFAULTS: BackfillDefaults = {
   max_trading_range_days: 1830,
   max_symbol_length: 20,
 };
+
+function fakeFailure(symbol: string): BackfillFailure {
+  return {
+    artifact_kind: 'minute_trade',
+    symbol,
+    trading_date_ms: MAY_20_OPEN_MS,
+    data_type: 'trade',
+    reason: 'provider_rate_limited',
+    detail: null,
+    provider_status_code: 429,
+    attempt_count: 1,
+  };
+}
 
 let originalEventSource: typeof EventSource;
 
@@ -30,16 +44,27 @@ function installEventSourceStub(): void {
     StubEventSource as unknown as typeof EventSource;
 }
 
-async function renderPanel(defaults: BackfillDefaults | null = DEFAULTS) {
+interface PanelOptions {
+  defaults?: BackfillDefaults | null;
+  priceAdjustmentMode?: PriceAdjustmentMode;
+  seedStartTradingDate?: string;
+  seedEndTradingDate?: string;
+  /** What `JobsService.jobs()` already holds when the panel mounts. */
+  liveJobs?: readonly Partial<JobState>[];
+}
+
+async function renderPanel(options: PanelOptions = {}) {
   const startJob = vi.fn().mockResolvedValue('job-77');
   const cancelJob = vi.fn().mockResolvedValue(undefined);
+  const jobs = signal(options.liveJobs ?? []);
   const view = await render(LakeBackfillPanelComponent, {
-    providers: [{ provide: JobsService, useValue: { startJob, cancelJob } }],
+    providers: [{ provide: JobsService, useValue: { startJob, cancelJob, jobs } }],
     componentInputs: {
-      defaults,
+      defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
       seedSymbols: 'SPY',
-      seedStartTradingDate: '2026-05-18',
-      seedEndTradingDate: '2026-05-22',
+      seedStartTradingDate: options.seedStartTradingDate ?? '2026-05-18',
+      seedEndTradingDate: options.seedEndTradingDate ?? '2026-05-22',
+      priceAdjustmentMode: options.priceAdjustmentMode ?? 'raw',
     },
   });
   const store = view.fixture.debugElement.injector.get(DataLakeBackfillStore);
@@ -152,11 +177,13 @@ describe('LakeBackfillPanelComponent', () => {
     expect(screen.getByText('plan does not include this feed')).toBeTruthy();
   });
 
-  it.each(['job.completed', 'job.failed'])(
+  it.each(['job.completed', 'job.failed', 'job.cancelled'])(
     'tells the page to re-read coverage after %s',
     async (terminalEvent) => {
-      // A run that dies part-way still put sessions on disk, so a failure
-      // leaves the heatmap just as stale as a success does.
+      // `run_backfill` writes session by session, so a run that died — or
+      // that the operator stopped — between per-day writes still left
+      // completed artifacts on disk. Every terminal phase leaves the
+      // heatmap stale, not just the successful one.
       const { store, fixture, detectChanges } = await renderPanel();
       const finished = vi.fn();
       fixture.componentInstance.runFinished.subscribe(finished);
@@ -170,21 +197,10 @@ describe('LakeBackfillPanelComponent', () => {
     },
   );
 
-  it('leaves the heatmap alone when the operator cancelled the run', async () => {
-    const { store, fixture, detectChanges } = await renderPanel();
-    const finished = vi.fn();
-    fixture.componentInstance.runFinished.subscribe(finished);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
-    await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
-    store.ingestEvent({ type: 'job.cancelled', reason: 'user requested' });
-    detectChanges();
-
-    expect(finished).not.toHaveBeenCalled();
-  });
-
   it('refuses to submit without a pinned LEAN image digest', async () => {
-    const { startJob } = await renderPanel({ ...DEFAULTS, lean_image_digest: null });
+    const { startJob } = await renderPanel({
+      defaults: { ...DEFAULTS, lean_image_digest: null },
+    });
 
     expect(
       screen.getByText(
@@ -211,6 +227,135 @@ describe('LakeBackfillPanelComponent', () => {
     } finally {
       Object.defineProperty(globalThis, 'crypto', { configurable: true, value: realCrypto });
     }
+  });
+
+  it('accepts a window exactly at the range cap', async () => {
+    // 1830 inclusive days from 2026-01-01 is 2031-01-04.
+    const { startJob } = await renderPanel({
+      seedStartTradingDate: '2026-01-01',
+      seedEndTradingDate: '2031-01-04',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalled());
+  });
+
+  it('blocks a window one day past the cap instead of letting the server refuse it', async () => {
+    const { startJob } = await renderPanel({
+      seedStartTradingDate: '2026-01-01',
+      seedEndTradingDate: '2031-01-05',
+    });
+
+    expect(
+      screen.getByText('That window is 1831 days; the data plane accepts at most 1830.'),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+    expect(startJob).not.toHaveBeenCalled();
+  });
+
+  it('honours a cap the data plane lowered rather than a hardcoded one', async () => {
+    await renderPanel({
+      defaults: { ...DEFAULTS, max_trading_range_days: 30 },
+      seedStartTradingDate: '2026-05-01',
+      seedEndTradingDate: '2026-05-31',
+    });
+
+    expect(
+      screen.getByText('That window is 31 days; the data plane accepts at most 30.'),
+    ).toBeTruthy();
+  });
+
+  it.each(['polygon_split_adjusted', 'lean_adjusted'] as const)(
+    'refuses to backfill while the %s view is selected',
+    async (mode) => {
+      // The fetch pipeline writes raw rows only, so the job would succeed
+      // and leave the selected view exactly as empty as it started.
+      const { startJob } = await renderPanel({ priceAdjustmentMode: mode });
+
+      expect(screen.getByText(/writes raw bars only/)).toBeTruthy();
+      expect(
+        (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+      expect(startJob).not.toHaveBeenCalled();
+    },
+  );
+
+  it('attributes each failure to its symbol when several fail the same way', async () => {
+    // Two symbols, same session, same reason: identical in (date, kind,
+    // reason). Without the symbol in the key Angular rejects the duplicate
+    // identity, and without it on screen the receipt cannot be acted on.
+    const { store, detectChanges } = await renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+    await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
+
+    store.ingestEvent({
+      type: 'data_lake.backfill_day',
+      trading_date_ms: MAY_20_OPEN_MS,
+      day_index: 1,
+      total_days: 1,
+      days_remaining: 0,
+      fetched_count: 0,
+      reused_count: 0,
+      failures: [fakeFailure('SPY'), fakeFailure('AAPL')],
+    });
+    detectChanges();
+
+    const failures = screen.getByRole('list', { name: 'Backfill failures' });
+    expect(within(failures).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(failures).getByText('SPY')).toBeTruthy();
+    expect(within(failures).getByText('AAPL')).toBeTruthy();
+  });
+
+  it('says a failure is not symbol-scoped rather than leaving it unattributed', async () => {
+    const { store, detectChanges } = await renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+    await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
+
+    store.ingestEvent({
+      type: 'data_lake.backfill_day',
+      trading_date_ms: MAY_20_OPEN_MS,
+      day_index: 1,
+      total_days: 1,
+      days_remaining: 0,
+      fetched_count: 0,
+      reused_count: 0,
+      failures: [{ ...fakeFailure('SPY'), symbol: null, reason: 'run_aborted' }],
+    });
+    detectChanges();
+
+    expect(screen.getByText('whole run')).toBeTruthy();
+  });
+
+  it('adopts a backfill that was already running when the panel mounted', async () => {
+    const { store, fixture, detectChanges } = await renderPanel({
+      liveJobs: [{ id: 'job-live', type: 'data_lake_backfill', status: 'running' }],
+    });
+    const finished = vi.fn();
+    fixture.componentInstance.runFinished.subscribe(finished);
+
+    await vi.waitFor(() => expect(store.jobId()).toBe('job-live'));
+    expect(screen.getByText(/Reattached to a backfill that was already running/)).toBeTruthy();
+
+    store.ingestEvent({ type: 'job.completed' });
+    detectChanges();
+
+    expect(finished).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an unrelated or finished job alone', async () => {
+    const { store } = await renderPanel({
+      liveJobs: [
+        { id: 'other-type', type: 'engine_backtest', status: 'running' },
+        { id: 'already-done', type: 'data_lake_backfill', status: 'completed' },
+      ],
+    });
+
+    await vi.waitFor(() => expect(store.phase()).toBe('idle'));
+    expect(store.jobId()).toBeNull();
   });
 
   it("names a terminal job failure with the framework's own code", async () => {

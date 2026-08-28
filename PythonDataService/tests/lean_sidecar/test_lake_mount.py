@@ -305,27 +305,14 @@ class TestLauncherResolvesTheHostPath:
     def test_data_plane_lake_root_matches_the_writers_lake_root(self) -> None:
         """Reader and writer must name the same directory.
 
-        ``app.data_lake.ensure_data._lake_roots`` is the writer-side
-        authority; this pins the sidecar's read view to it so the two
-        cannot drift into pointing at different subdirectories of the
-        same volume.
+        ``app.data_lake.path_policy.resolve_lake_root`` is the writer-side
+        authority (#1832 consolidated ``ensure_data``'s private ``_lake_roots``
+        onto it); this pins the sidecar's read view to it so the two cannot
+        drift into pointing at different subdirectories of the same volume.
         """
-        from uuid import uuid4
+        from app.data_lake.path_policy import resolve_lake_root
 
-        from app.data_lake.ensure_data import _lake_roots
-        from app.data_lake.types import DataRunSpec
-
-        spec = DataRunSpec(
-            request_id=uuid4(),
-            run_type="lean_lab",
-            symbols=["SPY"],
-            start_trading_date=DAY_ONE,
-            end_trading_date=DAY_TWO,
-            lean_image_digest=DUMMY_DIGEST,
-        )
-        writer_lake_root, _staging_root = _lake_roots(spec)
-
-        assert data_plane_lake_root() == writer_lake_root
+        assert data_plane_lake_root() == resolve_lake_root()
 
 
 class TestSameBytesAsThePythonReaders:

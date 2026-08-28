@@ -10,11 +10,22 @@ import {
   signal,
 } from '@angular/core';
 
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { ReceiptLabelPipe, formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
+import { JobsService } from '../../../services/jobs.service';
 import { parseSymbols } from '../lib/coverage-board';
 import { BackfillRunLogComponent } from './backfill-run-log.component';
-import { DataLakeBackfillStore, type BackfillPhase } from '../lib/data-lake-backfill.store';
-import type { BackfillDefaults, DataLakeDataType, DataRunSpec } from '../lib/data-lake.types';
+import {
+  BACKFILL_JOB_TYPE,
+  DataLakeBackfillStore,
+  type BackfillPhase,
+} from '../lib/data-lake-backfill.store';
+import type {
+  BackfillDefaults,
+  DataLakeDataType,
+  DataRunSpec,
+  PriceAdjustmentMode,
+} from '../lib/data-lake.types';
+import { MAX_TRADING_RANGE_DAYS, tradingRangeRejection } from '../lib/trading-range';
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
@@ -39,14 +50,22 @@ function inputValue(event: Event): string {
 })
 export class LakeBackfillPanelComponent {
   protected readonly store = inject(DataLakeBackfillStore);
+  private readonly jobs = inject(JobsService);
 
   /** Null while the defaults read is in flight or the lake is dark. */
   readonly defaults = input<BackfillDefaults | null>(null);
   readonly seedSymbols = input<string>('');
   readonly seedStartTradingDate = input.required<string>();
   readonly seedEndTradingDate = input.required<string>();
+  /**
+   * The adjustment mode the heatmap is showing. The fetch pipeline only
+   * ever writes `raw` rows (`DataRunSpec.price_adjustment_mode` is
+   * `Literal["raw"]`), so a backfill run while an adjusted view is selected
+   * would succeed and leave that view exactly as empty as it started.
+   */
+  readonly priceAdjustmentMode = input<PriceAdjustmentMode>('raw');
 
-  /** Fired on a terminal, non-cancelled run so the caller can re-read coverage. */
+  /** Fired once a run reaches any terminal phase, so the caller can re-read coverage. */
   readonly runFinished = output();
 
   protected readonly symbolsText = linkedSignal(() => this.seedSymbols());
@@ -70,12 +89,16 @@ export class LakeBackfillPanelComponent {
     if (this.digest() === null) {
       return 'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.';
     }
-    if (this.parsed().symbols.length === 0) return 'Enter at least one symbol.';
-    if (this.startTradingDate() === '' || this.endTradingDate() === '') return 'Pick a date range.';
-    if (this.startTradingDate() > this.endTradingDate()) {
-      return 'The start date is after the end date.';
+    const mode = this.priceAdjustmentMode();
+    if (mode !== 'raw') {
+      return `The fetch pipeline writes raw bars only, so a backfill cannot fill the ${formatReceiptLabel(mode)} view — those rows arrive by import. Switch the view to Raw to backfill.`;
     }
-    return null;
+    if (this.parsed().symbols.length === 0) return 'Enter at least one symbol.';
+    return tradingRangeRejection(
+      this.startTradingDate(),
+      this.endTradingDate(),
+      this.defaults()?.max_trading_range_days ?? MAX_TRADING_RANGE_DAYS,
+    );
   });
 
   protected readonly canSubmit = computed(
@@ -91,14 +114,32 @@ export class LakeBackfillPanelComponent {
   private lastSeenPhase: BackfillPhase = 'idle';
 
   constructor() {
+    // This store is panel-scoped, so navigating away destroys it while the
+    // worker keeps writing sessions. Adopt any backfill the jobs registry
+    // still shows as live — matching on type alone, because a data-lake
+    // backfill has no per-page scope the way a walk-forward job does, and
+    // this is the only surface that starts one.
+    effect(() => {
+      if (this.store.phase() !== 'idle') return;
+      const live = this.jobs
+        .jobs()
+        .find(
+          (candidate) =>
+            candidate.type === BACKFILL_JOB_TYPE &&
+            (candidate.status === 'queued' || candidate.status === 'running'),
+        );
+      if (live !== undefined) this.store.reattach(live.id);
+    });
+
     // `start()` resolves once the subscription is open, not when the run
     // ends — completion only ever arrives as an SSE frame. Watching the
     // store's phase is what lets the page re-read coverage the moment the
     // last session lands, instead of leaving a stale heatmap behind.
     //
-    // A failed run is re-read too: a range that dies on day 8 of 10 still
-    // put eight sessions on disk, and leaving those invisible is the same
-    // stale heatmap by another route.
+    // Every terminal phase counts, not just success. A range that dies on
+    // day 8 of 10 still put eight sessions on disk, and so does one the
+    // operator cancels between per-day writes; leaving either invisible is
+    // the same stale heatmap by another route.
     effect(() => {
       const phase = this.store.phase();
       const previous = this.lastSeenPhase;
@@ -153,8 +194,14 @@ export class LakeBackfillPanelComponent {
   }
 }
 
-/** Phases after which what is on disk may have changed. */
-const TERMINAL_REREAD_PHASES = new Set<BackfillPhase>(['completed', 'failed']);
+/**
+ * Phases after which what is on disk may have changed.
+ *
+ * All three terminal phases qualify. `run_backfill` writes session by
+ * session, so a run that failed or was cancelled part-way has still put
+ * every session before that point in the catalog.
+ */
+const TERMINAL_REREAD_PHASES = new Set<BackfillPhase>(['completed', 'failed', 'cancelled']);
 
 /** A backfill's `request_id` is its durable identity; refuse to invent a weak one. */
 function canMintRequestId(): boolean {

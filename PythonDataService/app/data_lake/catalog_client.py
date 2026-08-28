@@ -8,10 +8,12 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.4
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
 import time
+import weakref
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -31,56 +33,72 @@ from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 logger = logging.getLogger(__name__)
 
-_pool: asyncpg.Pool | None = None
+# Keyed by the running event loop, not held as one process-global pool: an
+# asyncpg pool is bound to the loop that created it, and this module has
+# two independent callers that each own a loop of their own — the FastAPI
+# app loop serving /api/data-lake/* requests, and the Python engine's
+# dedicated materialization loop (app.data_lake.run_materialization's
+# _materialization_loop, for backtests running on worker threads with no
+# loop of their own). A single global pool binds to whichever of them
+# calls init_pool() first; the other then hits asyncpg's cross-loop error
+# on every subsequent call. Weak-keyed so a loop that is garbage collected
+# without an explicit close_pool() call (routine in tests, where pytest-
+# asyncio hands out a fresh loop per test function) does not pin its pool
+# here forever.
+_pools: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncpg.Pool] = weakref.WeakKeyDictionary()
 
 
 async def init_pool() -> None:
-    """Create the global asyncpg pool. Idempotent."""
-    global _pool
-    if _pool is not None:
+    """Create the asyncpg pool for the calling loop. Idempotent per loop."""
+    loop = asyncio.get_running_loop()
+    if loop in _pools:
         return
     if not settings.POSTGRES_URL:
         raise RuntimeError(
             "POSTGRES_URL is empty; cannot initialize catalog_client. "
             "Set the env var or disable the data lake (DATA_LAKE_ENABLED=False)."
         )
-    _pool = await asyncpg.create_pool(
+    _pools[loop] = await asyncpg.create_pool(
         settings.POSTGRES_URL,
         min_size=1,
         max_size=10,
         command_timeout=30,
     )
-    logger.info("data_lake.catalog_client: asyncpg pool initialized")
+    logger.info("data_lake.catalog_client: asyncpg pool initialized for loop %s", id(loop))
 
 
 async def close_pool() -> None:
-    """Close the global asyncpg pool. Idempotent.
+    """Close the calling loop's asyncpg pool. Idempotent per loop.
 
-    If the pool's event loop is already closed (e.g., a stale pool from a
-    prior test's event loop), fall back to terminate() so the global is
-    always reset to None.
+    Only ever touches the pool bound to the loop this coroutine is running
+    on — it cannot reach into another loop's pool. A caller that wants a
+    clean slate for a loop it does not control (uncommon; today only test
+    teardown ever calls this) gets no signal that another loop still holds
+    one, which is the same trade-off two independent pools always carry.
     """
-    global _pool
-    if _pool is None:
+    loop = asyncio.get_running_loop()
+    pool = _pools.pop(loop, None)
+    if pool is None:
         return
     try:
-        await _pool.close()
+        await pool.close()
     except RuntimeError:
-        # Pool's event loop is closed (common in test teardown when multiple
-        # async tests share the module-level pool global across event loops).
-        # Force-terminate without awaiting to clear the global.
+        # Defensive: closing a pool from the loop that created it should
+        # always succeed, but fall back to terminate() rather than leave a
+        # half-torn-down pool if asyncpg ever disagrees.
         with contextlib.suppress(Exception):
-            _pool.terminate()
-    _pool = None
-    logger.info("data_lake.catalog_client: asyncpg pool closed")
+            pool.terminate()
+    logger.info("data_lake.catalog_client: asyncpg pool closed for loop %s", id(loop))
 
 
 @asynccontextmanager
 async def connection():  # type: ignore[return]
-    """Yield a connection from the pool. Pool must be initialized first."""
-    if _pool is None:
+    """Yield a connection from the calling loop's pool. Pool must be initialized first."""
+    loop = asyncio.get_running_loop()
+    pool = _pools.get(loop)
+    if pool is None:
         raise RuntimeError("asyncpg pool not initialized; call init_pool() first")
-    async with _pool.acquire() as conn:
+    async with pool.acquire() as conn:
         yield conn
 
 
@@ -98,7 +116,7 @@ async def select_complete_metadata_artifact(
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
                "DataContractHash", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
-               "RowCount", "FirstBarStartMs", "LastBarStartMs"
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'metadata'
            AND "DataContractHash" = $1
@@ -125,6 +143,7 @@ async def select_complete_metadata_artifact(
         row_count=row["RowCount"],
         first_bar_start_ms=row["FirstBarStartMs"],
         last_bar_start_ms=row["LastBarStartMs"],
+        file_size_bytes=row["FileSizeBytes"],
     )
 
 
@@ -141,7 +160,7 @@ async def select_complete_corp_action_artifact(
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
                "DataContractHash", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
-               "RowCount", "FirstBarStartMs", "LastBarStartMs"
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = $1
            AND "Market" = $2
@@ -178,6 +197,7 @@ async def select_complete_corp_action_artifact(
         row_count=row["RowCount"],
         first_bar_start_ms=row["FirstBarStartMs"],
         last_bar_start_ms=row["LastBarStartMs"],
+        file_size_bytes=row["FileSizeBytes"],
     )
 
 
@@ -194,7 +214,7 @@ async def select_complete_aggregated_bar_artifact(
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
                "DataContractHash", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
-               "RowCount", "FirstBarStartMs", "LastBarStartMs"
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'time_series_bars'
            AND "Resolution" = $1
@@ -234,6 +254,7 @@ async def select_complete_aggregated_bar_artifact(
         row_count=row["RowCount"],
         first_bar_start_ms=row["FirstBarStartMs"],
         last_bar_start_ms=row["LastBarStartMs"],
+        file_size_bytes=row["FileSizeBytes"],
     )
 
 
@@ -265,7 +286,7 @@ async def select_coverage_minute_bars(
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
                "DataContractHash", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
-               "RowCount", "FirstBarStartMs", "LastBarStartMs"
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'time_series_bars'
            AND "Resolution" = 'minute'
@@ -298,6 +319,7 @@ async def select_coverage_minute_bars(
             row_count=r["RowCount"],
             first_bar_start_ms=r["FirstBarStartMs"],
             last_bar_start_ms=r["LastBarStartMs"],
+            file_size_bytes=r["FileSizeBytes"],
         )
         for r in rows
     ]
@@ -429,6 +451,63 @@ async def claim_minute_bar(
             now_ms + lease_ttl_ms,
             now_ms,
         )
+
+
+@dataclass(frozen=True)
+class MinuteBarClaimState:
+    """The existing row's claim state, for a caller that lost ``claim_minute_bar``.
+
+    ``claim_minute_bar``'s ``ON CONFLICT ... DO NOTHING`` returns nothing when
+    a row already exists, and ``select_coverage_minute_bars`` only sees
+    ``'complete'`` rows — so a caller that lost the race to a ``'failed'`` or
+    lease-expired ``'fetching'`` row has no way to find its ``Id`` (needed by
+    :func:`steal_or_retry_minute_bar`) or to tell that case apart from a live,
+    actively-leased fetch. This is that lookup's result.
+    """
+
+    id: int
+    status: str
+    attempt_count: int
+    last_error: str | None
+
+
+async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> MinuteBarClaimState | None:
+    """Look up the existing minute-bar row's claim state, at any status.
+
+    Matches the same identity tuple as ``claim_minute_bar``'s partial unique
+    index. Returns None only if the row was deleted between the failed claim
+    and this lookup (not expected in practice — rows are never deleted).
+    """
+    query = """
+        SELECT "Id", "Status", "AttemptCount", "LastError"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Market" = $1
+           AND "Symbol" = $2
+           AND "TradingDate" = $3
+           AND "DataType" = $4
+           AND "Provider" = $5
+           AND "PriceAdjustmentMode" = $6
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            query,
+            identity.market,
+            identity.symbol,
+            identity.trading_date,
+            identity.data_type,
+            identity.provider,
+            identity.price_adjustment_mode,
+        )
+    if row is None:
+        return None
+    return MinuteBarClaimState(
+        id=row["Id"],
+        status=row["Status"],
+        attempt_count=row["AttemptCount"],
+        last_error=row["LastError"],
+    )
 
 
 async def complete_artifact(

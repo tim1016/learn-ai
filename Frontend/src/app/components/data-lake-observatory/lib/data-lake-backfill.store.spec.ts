@@ -61,6 +61,76 @@ describe('DataLakeBackfillStore', () => {
     expect(startJob).toHaveBeenCalledWith(BACKFILL_JOB_TYPE, { spec: SPEC });
     expect(store.jobId()).toBe('job-1');
     expect(store.phase()).toBe('running');
+    expect(store.reattached()).toBe(false);
+  });
+
+  it('adopts a run the server is already executing', () => {
+    const store = makeStore({} as Partial<JobsService>);
+
+    store.reattach('job-live');
+
+    expect(store.jobId()).toBe('job-live');
+    expect(store.phase()).toBe('running');
+    expect(store.running()).toBe(true);
+    // Named as adopted, so the panel can say the history below was
+    // replayed rather than observed from the start.
+    expect(store.reattached()).toBe(true);
+  });
+
+  it('rebuilds an adopted run from the replayed stream rather than inventing it', () => {
+    const store = makeStore({} as Partial<JobsService>);
+    store.reattach('job-live');
+
+    // What GET /api/jobs/{id}/events replays when opened with no
+    // Last-Event-ID: the whole stream from the start.
+    store.ingestEvent({ type: 'job.started' });
+    store.ingestEvent({ type: 'job.progress', current: 2, total: 3, unit: 'days' });
+    for (const dayIndex of [1, 2]) {
+      store.ingestEvent({
+        type: 'data_lake.backfill_day',
+        trading_date_ms: MAY_20_OPEN_MS + dayIndex * 86_400_000,
+        day_index: dayIndex,
+        total_days: 3,
+        days_remaining: 3 - dayIndex,
+        fetched_count: 1,
+        reused_count: 0,
+        failures: [],
+      });
+    }
+
+    expect(store.days()).toHaveLength(2);
+    expect(store.fetchedCount()).toBe(2);
+    expect(store.progress()).toMatchObject({ current: 2, total: 3 });
+  });
+
+  it('reaches its terminal phase after adopting, so the caller can re-read', () => {
+    const store = makeStore({} as Partial<JobsService>);
+    store.reattach('job-live');
+
+    store.ingestEvent({ type: 'job.completed' });
+
+    expect(store.phase()).toBe('completed');
+  });
+
+  it('ignores a re-adopt of the run it is already following', () => {
+    const store = makeStore({} as Partial<JobsService>);
+    store.reattach('job-live');
+    store.ingestEvent({ type: 'job.progress', current: 1, total: 2, unit: 'days' });
+
+    store.reattach('job-live');
+
+    expect(store.progress()).toMatchObject({ current: 1 });
+  });
+
+  it('clears the adopted flag when a fresh run is submitted', async () => {
+    const startJob = vi.fn().mockResolvedValue('job-2');
+    const store = makeStore({ startJob } as unknown as Partial<JobsService>);
+    store.reattach('job-live');
+
+    await store.start(SPEC);
+
+    expect(store.jobId()).toBe('job-2');
+    expect(store.reattached()).toBe(false);
   });
 
   it('names a refused submission as "not enabled" when the route is dark', async () => {
