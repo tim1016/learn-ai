@@ -23,13 +23,15 @@ from uuid import UUID
 from pydantic import BaseModel, ValidationError
 
 from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar_lease_status
-from app.data_lake.ensure_data import classify_overall_status, ensure_data
+from app.data_lake.ensure_data import ensure_data, minute_bar_identity
 from app.data_lake.types import (
     ArtifactFailure,
     ArtifactIdentity,
     DataAvailabilityResult,
     DataRunSpec,
     NonSessionRecord,
+    OverallStatus,
+    classify_overall_status,
 )
 from app.lean_sidecar.trading_calendar import expected_sessions
 
@@ -52,6 +54,13 @@ logger = logging.getLogger(__name__)
 # fixed handful of sub-second retries would tolerate.
 _LEASE_POLL_INTERVAL_SECONDS = 0.5
 
+# How often a still-waiting poll is actually surfaced to on_wait (roughly
+# every 5s of wall time) — the caller (the job's SSE emitter) relays every
+# callback it receives verbatim, so the cadence decision has to live here,
+# next to the interval it's derived from, not be re-guessed by the caller
+# from a private constant it shouldn't know about.
+_WAIT_NOTIFY_EVERY = max(1, round(5.0 / _LEASE_POLL_INTERVAL_SECONDS))
+
 EnsureFn = Callable[[DataRunSpec], Awaitable[DataAvailabilityResult]]
 LeaseStatusFn = Callable[[ArtifactIdentity], Awaitable[MinuteBarLeaseStatus | None]]
 
@@ -70,17 +79,19 @@ class BackfillDayProgress:
 
 @dataclass(frozen=True)
 class BackfillWaitProgress:
-    """One poll of a blocked identity's lease, handed to the caller's
-    on_wait callback.
+    """One (throttled) poll of a blocked identity's lease, handed to the
+    caller's on_wait callback.
 
     Lets the caller (the job's SSE emitter) keep the stream informative
     during a slow coalesce — "waiting on another worker" — instead of
-    going silent for the length of the wait.
+    going silent for the length of the wait. The caller should relay
+    every callback it receives; _WAIT_NOTIFY_EVERY above already decides
+    which polls are worth surfacing.
     """
 
     trading_date: date
     symbol: str | None
-    data_type: str | None
+    data_type: Literal["trade", "quote"] | None
     attempt: int
 
 
@@ -99,16 +110,9 @@ class BackfillResult(BaseModel):
     reused_artifact_count: int = 0
     failures: list[ArtifactFailure] = []
     skipped_non_sessions: list[NonSessionRecord] = []
-    overall_status: Literal["complete", "partial", "failed"]
+    overall_status: OverallStatus
     completed_at_ms: int
     duration_ms: int
-
-
-def _provider_for_data_type(data_type: str | None) -> str:
-    """Mirrors expand_required_artifacts's provider assignment for
-    time_series_bars identities (polygon-sourced trade bars vs
-    learn_ai_derived quote bars) — keep the two ternaries in lockstep."""
-    return "polygon" if data_type == "trade" else "learn_ai_derived"
 
 
 def _failure_identity_key(failure: ArtifactFailure) -> tuple[str | None, date | None, str | None]:
@@ -123,31 +127,23 @@ def _failure_from_row(original: ArtifactFailure, row: MinuteBarLeaseStatus) -> A
     typed values — every ensure_data.py call site passes
     ``fail_artifact()`` the exact string it puts in its own
     ``ArtifactFailure.reason`` (see e.g. ``_process_minute_trade_artifact``).
-    Falls back to ``"internal_error"`` if the stored value is ever
-    something Pydantic won't accept as that Literal — a value read across
-    a DB-row boundary deserves that guard even though every write site
-    today is trusted.
+    Uses ``model_validate`` rather than ``model_copy`` — ``model_copy``
+    skips validation entirely in Pydantic v2, which would silently accept
+    a value ``LastError`` was never supposed to hold; ``model_validate``
+    still runs the Literal check, so an unrecognized reason read across
+    the DB-row boundary falls back to ``"internal_error"`` instead of
+    producing a model holding an invalid one.
     """
     detail = row.error_message or row.last_error or "winner permanently failed this artifact"
     try:
-        return ArtifactFailure(
-            artifact_kind=original.artifact_kind,
-            symbol=original.symbol,
-            trading_date=original.trading_date,
-            data_type=original.data_type,
-            reason=row.last_error,  # type: ignore[arg-type]
-            detail=detail,
-            attempt_count=original.attempt_count,
-        )
+        return ArtifactFailure.model_validate({**original.model_dump(), "reason": row.last_error, "detail": detail})
     except ValidationError:
-        return ArtifactFailure(
-            artifact_kind=original.artifact_kind,
-            symbol=original.symbol,
-            trading_date=original.trading_date,
-            data_type=original.data_type,
-            reason="internal_error",
-            detail=f"winner failed with unrecognized reason {row.last_error!r}: {detail}",
-            attempt_count=original.attempt_count,
+        return ArtifactFailure.model_validate(
+            {
+                **original.model_dump(),
+                "reason": "internal_error",
+                "detail": f"winner failed with unrecognized reason {row.last_error!r}: {detail}",
+            }
         )
 
 
@@ -175,15 +171,11 @@ async def _wait_for_lease_resolution(
         stealing/retry for this case is Task 7's territory
         (``steal_or_retry_minute_bar`` already exists for it).
     """
-    identity = ArtifactIdentity(
-        artifact_kind="time_series_bars",
-        market=day_spec.market,
+    identity = minute_bar_identity(
+        day_spec,
         symbol=failure.symbol,
         trading_date=failure.trading_date,
-        resolution="minute",
         data_type=failure.data_type,
-        provider=_provider_for_data_type(failure.data_type),
-        price_adjustment_mode=day_spec.price_adjustment_mode,
     )
     attempt = 0
     while True:
@@ -198,7 +190,7 @@ async def _wait_for_lease_resolution(
         if row.lease_expires_at_ms is None or now_ms >= row.lease_expires_at_ms:
             return failure
 
-        if on_wait is not None:
+        if on_wait is not None and (attempt == 1 or attempt % _WAIT_NOTIFY_EVERY == 0):
             on_wait(
                 BackfillWaitProgress(
                     trading_date=day_spec.start_trading_date,

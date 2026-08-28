@@ -99,14 +99,11 @@ def _emit_wait_progress(emit: ProgressEmitter, progress: BackfillWaitProgress) -
     """Keep the SSE stream informative while a day coalesces on another
     worker's in-flight claim, instead of going silent for the wait.
 
-    run_backfill calls this on every poll (every
-    backfill._LEASE_POLL_INTERVAL_SECONDS); only the first attempt and
-    every tenth one after that are actually surfaced, so a long wait
-    (bounded by the winner's own lease TTL) doesn't flood the stream with
-    a line every half second.
+    run_backfill already decides which polls are worth surfacing
+    (backfill._WAIT_NOTIFY_EVERY, next to the poll interval it's derived
+    from) — every on_wait callback that reaches this router is relayed
+    verbatim, with no second throttling decision duplicated here.
     """
-    if progress.attempt != 1 and progress.attempt % 10 != 0:
-        return
     emit.log(
         f"{progress.trading_date.isoformat()} {progress.symbol} {progress.data_type}: "
         f"waiting on another worker's in-flight fetch (attempt {progress.attempt})",

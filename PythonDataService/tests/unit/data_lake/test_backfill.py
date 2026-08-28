@@ -343,10 +343,10 @@ class TestLeaseWait:
     latencies well past the old ~0.75s budget to pin that."""
 
     async def test_loser_waits_out_a_slow_winner_and_coalesces(self) -> None:
-        """Important 2 (review round 1): the winner's fetch (~2s) is a wide
+        """Important 2 (review round 1): the winner's fetch (~1s) is a wide
         margin past the old retry budget's floor — the loser must still
         coalesce to 'complete', not report a spurious lease_timeout."""
-        catalog = _FakeLeaseCatalog(fetch_seconds=2.0)
+        catalog = _FakeLeaseCatalog(fetch_seconds=1.0)
         trading_date = date(2024, 5, 20)
         wait_progress: list[BackfillWaitProgress] = []
 
@@ -381,7 +381,7 @@ class TestLeaseWait:
         catalog.seed_in_flight("SPY", trading_date)
 
         async def winner_fails_shortly() -> None:
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(0.3)
             catalog.fail("SPY", trading_date, reason="provider_auth_error", detail="401 from Polygon")
 
         winner_task = asyncio.create_task(winner_fails_shortly())

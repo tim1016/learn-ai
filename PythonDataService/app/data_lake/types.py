@@ -150,9 +150,28 @@ class NonSessionRecord(BaseModel):
     reason: Literal["weekend", "market_holiday"]
 
 
+OverallStatus = Literal["complete", "partial", "failed"]
+
+
+def classify_overall_status(*, has_failures: bool, has_success: bool) -> OverallStatus:
+    """Shared complete/partial/failed classification.
+
+    Any success at all downgrades a failure-bearing result from 'failed'
+    to 'partial'. Single source of truth: ensure_data.ensure_data and the
+    backfill job's day- and whole-range rollups (app.data_lake.backfill)
+    all apply this identically rather than each re-deriving the same
+    three-way branch.
+    """
+    if has_failures and has_success:
+        return "partial"
+    if has_failures:
+        return "failed"
+    return "complete"
+
+
 class DataAvailabilityResult(BaseModel):
     request_id: UUID
-    overall_status: Literal["complete", "partial", "failed"]
+    overall_status: OverallStatus
     lean_data_root_path: str
     data_availability_hash: str
     artifacts: list[ArtifactRecord] = []

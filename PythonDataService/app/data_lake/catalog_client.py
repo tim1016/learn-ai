@@ -14,6 +14,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
 import asyncpg
 
@@ -292,7 +293,7 @@ class MinuteBarLeaseStatus:
     ensure_data's whole per-day pipeline on every poll.
     """
 
-    status: str  # 'fetching' | 'complete' | 'failed'
+    status: Literal["fetching", "complete", "failed"]
     lease_expires_at_ms: int | None
     last_error: str | None
     error_message: str | None
