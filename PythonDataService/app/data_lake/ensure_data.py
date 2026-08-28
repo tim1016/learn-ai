@@ -235,7 +235,7 @@ def expand_required_artifacts(
             )
 
         # Daily-trade derived artifact (per symbol, null trading_date).
-        if "trade" in spec.data_types:
+        if "trade" in spec.data_types and spec.include_daily_trade:
             required.append(
                 ArtifactIdentity(
                     artifact_kind="time_series_bars",

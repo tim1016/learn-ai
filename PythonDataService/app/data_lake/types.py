@@ -43,6 +43,18 @@ class DataRunSpec(BaseModel):
 
     include_factor_files: bool = True
     include_map_files: bool = True
+    # Daily-trade (resolution="daily") is a whole-range, per-symbol rollup
+    # derived from every minute-trade artifact in [start_trading_date,
+    # end_trading_date] — see ensure_data._process_daily_trade_artifact.
+    # A caller that ensures the same symbol in successive narrower
+    # sub-ranges (e.g. the Task 6 backfill job, one day at a time) must
+    # opt out of it per sub-range call: recomputing it from a smaller
+    # source set than a prior call collides with the already-completed
+    # wider/narrower rollup and reports a spurious data_contract_mismatch
+    # (re-aggregation is intentionally out of scope for Slice 1c — see the
+    # docstring on _process_daily_trade_artifact). Default True preserves
+    # existing single-shot-ensure behavior.
+    include_daily_trade: bool = True
     # lean_image_digest is required — source of the LEAN-image-extracted
     # session calendar used by ensure_data's Phase 0 bootstrap.
     lean_image_digest: str
