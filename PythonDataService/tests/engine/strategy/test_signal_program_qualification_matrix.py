@@ -17,12 +17,42 @@ promoted later is covered the moment it is registered.
 Genuinely program-specific regressions stay in their own files -- EMA's
 countdown discard/re-emit behaviour, Strategy C's bar-over-bar ADX state --
 because those assert something true of one program only.
+
+Issue #1728 defect 2: ``SignalProgramContract.artifact_paths``
+(``app/engine/strategy/registry.py``) named only 5 files, but the transitive
+first-party import closure of those roots is 22 files. Missing members —
+``app/engine/indicators/sma.py`` (EMA seeds itself from
+``SimpleMovingAverage``), ``app/engine/indicators/base.py`` (shared
+dedup/rounding), ``app/engine/data/trade_bar.py``,
+``app/engine/strategy/signal_intent.py``, ``app/utils/timestamps.py``, and
+``app/lean_sidecar/trading_calendar.py`` among them — could change an
+``EvaluationTrace`` while leaving ``artifact_digest`` unchanged: a stale
+receipt would validate a build that was never re-qualified (PRD FR-008,
+S11.4).
+
+The naive fix — hash the whole 22-file closure — is equally wrong in the
+other direction: it also drags in ``app/engine/execution/*`` (commission,
+order, portfolio, sizing, the signal-intent executor) and
+``app/engine/framework/insight*.py`` via ``app/engine/strategy/base.py``.
+None of those can affect a bar's ``EvaluationTrace`` —
+``SignalSession.advance()`` (``app/engine/strategy/signal_program.py``)
+builds and stores the trace from ``evaluate_signal_bar()``'s return value
+*before* ``settle()`` ever calls ``commit_signal_decision()``, so bytes
+reached only through the commit path cannot retroactively change a trace
+that already exists. Hashing them would invalidate every program receipt on
+an unrelated commission-model edit.
+
+This test recomputes the closure from the registered artifact roots and
+asserts ``closure - documented_exclusions == artifact_paths`` exactly, so
+any newly introduced import must be explicitly triaged into one bucket or
+the other before it can land silently.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -31,7 +61,7 @@ import pytest
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.engine.strategy.signal_program import trace_corpus_root, trace_root
 from app.services.spec_strategy_runner import InMemoryDataReader
 from scripts.run_signal_program_build_qualification import (
@@ -108,12 +138,22 @@ def test_validated_settings_corpus_has_a_pinned_trace_root(key: str) -> None:
         assert trace_root(strategy.signal_program.session.traces) == entry["trace_root"]
 
 
+def _digested_roots(contract: SignalProgramContract) -> tuple[str, ...]:
+    """Both halves of the hashed surface.
+
+    The closure invariant spans the union: ``artifact_paths`` and
+    ``wiring_artifact_paths`` are hashed separately so a drift stays
+    attributable (issue #1735), but *coverage* is one question -- a file the
+    program executes must be in one list or the other, or explicitly excluded.
+    """
+    return contract.artifact_paths + contract.wiring_artifact_paths
+
 @pytest.mark.parametrize("key", _SEALED_PROGRAMS)
 def test_artifact_digest_matches_its_signal_decision_closure(key: str) -> None:
     contract = _contract(key)
     exclusions = _CLOSURE_EXCLUSIONS_BY_PROGRAM[key]
-    digested = set(contract.artifact_paths)
-    covered = signal_decision_import_closure(roots=contract.artifact_paths) - set(exclusions)
+    digested = set(_digested_roots(contract))
+    covered = signal_decision_import_closure(roots=_digested_roots(contract)) - set(exclusions)
 
     assert digested == covered, (
         f"'{key}': artifact_paths no longer equals its signal-decision closure. Either "
@@ -128,14 +168,14 @@ def test_artifact_digest_matches_its_signal_decision_closure(key: str) -> None:
 @pytest.mark.parametrize("key", _SEALED_PROGRAMS)
 def test_exclusion_list_only_names_files_actually_in_the_closure(key: str) -> None:
     contract = _contract(key)
-    stale = set(_CLOSURE_EXCLUSIONS_BY_PROGRAM[key]) - signal_decision_import_closure(roots=contract.artifact_paths)
+    stale = set(_CLOSURE_EXCLUSIONS_BY_PROGRAM[key]) - signal_decision_import_closure(roots=_digested_roots(contract))
     assert not stale, f"'{key}' excludes files no longer in its closure: {sorted(stale)!r}"
 
 
 @pytest.mark.parametrize("key", _SEALED_PROGRAMS)
 def test_exclusions_and_artifact_paths_are_disjoint(key: str) -> None:
     contract = _contract(key)
-    overlap = set(_CLOSURE_EXCLUSIONS_BY_PROGRAM[key]) & set(contract.artifact_paths)
+    overlap = set(_CLOSURE_EXCLUSIONS_BY_PROGRAM[key]) & set(_digested_roots(contract))
     assert not overlap, f"'{key}' both digests and excludes: {sorted(overlap)!r}"
 
 
@@ -143,3 +183,36 @@ def test_exclusions_and_artifact_paths_are_disjoint(key: str) -> None:
 def test_every_exclusion_carries_a_non_trivial_reason(key: str) -> None:
     thin = [path for path, reason in _CLOSURE_EXCLUSIONS_BY_PROGRAM[key].items() if len(reason.strip()) < 40]
     assert not thin, f"'{key}' has exclusions with no substantive reason: {thin!r}"
+
+
+@pytest.mark.parametrize("key", _SEALED_PROGRAMS)
+def test_each_program_hashes_its_own_wiring_and_not_another_programs(key: str) -> None:
+    """The wiring half must name *this* program's module (issue #1735).
+
+    Two failure modes this catches that nothing else does. An empty list
+    hashes to a constant, so its receipt would match forever and the program
+    would silently opt out of the coverage -- the closure assertion above
+    compares a union, and an empty list changes neither side of it. And a
+    copy-pasted contract pointing at a sibling's module would hash real bytes,
+    look entirely healthy, and never notice this program's own wiring change.
+    """
+    contract = _contract(key)
+
+    assert f"app/engine/strategy/programs/{key}.py" in contract.wiring_artifact_paths
+    assert not set(contract.wiring_artifact_paths) & set(contract.artifact_paths)
+
+
+def test_a_contract_cannot_declare_an_empty_wiring_set() -> None:
+    contract = _contract("ema_crossover_signal")
+
+    with pytest.raises(ValueError, match="empty set hashes to a constant"):
+        replace(contract, wiring_artifact_paths=())
+
+
+def test_a_contract_cannot_hash_the_same_file_in_both_halves() -> None:
+    """Overlap would make a drift attributable to both halves at once, which
+    is the ambiguity the split exists to remove."""
+    contract = _contract("ema_crossover_signal")
+
+    with pytest.raises(ValueError, match="overlap"):
+        replace(contract, wiring_artifact_paths=contract.artifact_paths[:1])

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from app.config import settings
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.run_admission import StrategyValidationAdmissionFact
+from app.schemas.signal_program_seal import semantic_payload_hash
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -26,6 +29,7 @@ from app.services.signal_program_admission import (
     prove_running_program_build,
     qualification_receipt_payload,
     reconstruct_legacy_program_seal,
+    running_wiring_digest,
 )
 
 _SID = "sealed-ema-1"
@@ -663,3 +667,138 @@ def test_build_proof_names_which_agreement_broke() -> None:
     assert proof.state == "UNPROVEN"
     assert proof.explanation is not None
     assert "different account" in proof.explanation
+
+
+# --- Issue #1735: the wiring half of the build digest -------------------------
+
+
+def _rewritten_manifest(tmp_path: Path, program_key: str, **fields: str) -> Path:
+    """A structurally valid manifest with one receipt's fields rewritten.
+
+    Re-hashes the receipt rather than only overwriting a digest. A receipt
+    whose ``receipt_hash`` no longer matches its payload fails the manifest's
+    own validation, so the proof would reach UNPROVEN through the
+    unreadable-evidence path and the comparison under test would never run --
+    the test would pass for the wrong reason.
+    """
+    payload = json.loads(DEFAULT_QUALIFICATION_MANIFEST.read_text(encoding="utf-8"))
+    for receipt in payload["receipts"]:
+        if receipt["program_key"] == program_key:
+            receipt.update(fields)
+            receipt["receipt_hash"] = semantic_payload_hash(
+                {name: value for name, value in receipt.items() if name != "receipt_hash"}
+            )
+    path = tmp_path / "rewritten-build-receipts.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_committed_receipts_cover_the_wiring_of_every_sealed_program() -> None:
+    """Every receipt's wiring digest matches the wiring on disk right now.
+
+    This is the check that would have failed before #1735: an edit to a
+    program's factory moved no digest at all, so a stale receipt still read
+    PROVEN.
+    """
+    manifest = ProgramBuildQualificationManifest.model_validate_json(
+        DEFAULT_QUALIFICATION_MANIFEST.read_text(encoding="utf-8")
+    )
+
+    for receipt in manifest.receipts:
+        contract = _STRATEGY_REGISTRY[receipt.program_key].signal_program_contract
+        assert contract is not None
+        assert receipt.wiring_digest == running_wiring_digest(contract), receipt.program_key
+
+
+def test_wiring_drift_is_reported_but_admitted_while_the_toggle_is_off(tmp_path: Path) -> None:
+    manifest_path = _rewritten_manifest(tmp_path, "ema_crossover_signal", wiring_digest="a" * 64)
+
+    proof = prove_running_program_build(
+        _sealed_binding(), verified_at_ms=_NOW, manifest_path=manifest_path
+    )
+
+    assert proof.state == "PROVEN"
+    assert proof.wiring == "DRIFTED"
+    assert proof.next_step is not None
+    # The operator has to be able to see *which* wiring is running, not just
+    # that something drifted.
+    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    assert contract is not None
+    assert f"program-wiring-digest:{running_wiring_digest(contract)}" in proof.evidence_refs
+
+
+def test_wiring_drift_fails_closed_once_the_toggle_is_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED", True)
+    manifest_path = _rewritten_manifest(tmp_path, "ema_crossover_signal", wiring_digest="a" * 64)
+
+    proof = prove_running_program_build(
+        _sealed_binding(), verified_at_ms=_NOW, manifest_path=manifest_path
+    )
+
+    assert proof.state == "UNPROVEN"
+
+
+def test_matching_wiring_proves_and_says_so(tmp_path: Path) -> None:
+    proof = prove_running_program_build(_sealed_binding(), verified_at_ms=_NOW)
+
+    assert proof.state == "PROVEN"
+    assert proof.wiring == "MATCHED"
+    assert proof.next_step is None
+
+
+@pytest.mark.parametrize("enforced", [False, True])
+def test_artifact_drift_still_fails_closed_whatever_the_toggle_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enforced: bool
+) -> None:
+    """Issue #1735's scope note, encoded.
+
+    The toggle governs only the newly-added wiring coverage. Drift in the
+    already-covered artifacts is the admission control the PRD was built
+    around, and stays blocking in both toggle positions -- otherwise turning
+    the toggle off would quietly widen what can start.
+    """
+    monkeypatch.setattr(settings, "SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED", enforced)
+    manifest_path = _rewritten_manifest(
+        tmp_path, "ema_crossover_signal", artifact_digest="b" * 64
+    )
+
+    proof = prove_running_program_build(
+        _sealed_binding(), verified_at_ms=_NOW, manifest_path=manifest_path
+    )
+
+    assert proof.state == "UNPROVEN"
+
+
+def test_an_unreadable_wiring_path_fails_closed_rather_than_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admission must return UNPROVEN, never escape as an internal error.
+
+    Hashing the wiring reads files off disk and raises on a source tree
+    missing a declared path, exactly as the artifact digest does. Computed
+    outside the fail-closed handler it would propagate out of Start/Resume as
+    a 500 instead of a refusal an operator can read.
+    """
+    # Sealed first: ``_sealed_binding`` proves the build itself, so breaking
+    # the contract before that point fails in the fixture, not the assertion.
+    binding = _sealed_binding()
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    monkeypatch.setitem(
+        _STRATEGY_REGISTRY,
+        "ema_crossover_signal",
+        replace(
+            registration,
+            signal_program_contract=replace(
+                contract, wiring_artifact_paths=("app/engine/strategy/programs/deleted_by_a_bad_deploy.py",)
+            ),
+        ),
+    )
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+    assert "unreadable" in proof.explanation

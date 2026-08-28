@@ -10,6 +10,7 @@ evidence for a program that no longer qualifies.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -84,62 +85,102 @@ def test_qualify_signal_program_builds_raises_and_reports_pytest_failure(
     )
 
     with pytest.raises(runner.QualificationFailedError, match="assertion failed"):
-        runner.qualify_signal_program_builds(existing_manifest=None, fresh_qualified_at_ms=1)
+        runner.qualify_signal_program_builds(prior_qualified_at_ms={}, fresh_qualified_at_ms=1)
 
 
-def test_reuses_qualified_at_ms_when_the_receipt_identity_is_unchanged() -> None:
+def _written_manifest(tmp_path: Path, payload: dict) -> Path:
+    path = tmp_path / "prior-build-receipts.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _ema_receipt(qualified_at_ms: int) -> tuple[dict, str]:
     contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
     assert contract is not None
     suite = runner._QUALIFICATION_SUITES["ema_crossover_signal"]
+    return (
+        qualification_receipt_payload(
+            program_key="ema_crossover_signal",
+            contract=contract,
+            qualified_at_ms=qualified_at_ms,
+            qualification_suite=suite,
+        ),
+        suite,
+    )
+
+
+def test_reuses_qualified_at_ms_when_the_receipt_identity_is_unchanged(tmp_path: Path) -> None:
     committed_at_ms = 1_700_000_000_000
-    existing_receipt = qualification_receipt_payload(
+    receipt, suite = _ema_receipt(committed_at_ms)
+    path = _written_manifest(tmp_path, {"schema_version": 2, "receipts": [receipt]})
+
+    index = runner._prior_qualified_at_ms(path)
+
+    identity = runner._qualified_identity(
         program_key="ema_crossover_signal",
-        contract=contract,
-        qualified_at_ms=committed_at_ms,
+        program_version=receipt["program_version"],
+        golden_trace_root=receipt["golden_trace_root"],
+        artifact_digest=receipt["artifact_digest"],
+        wiring_digest=receipt["wiring_digest"],
         qualification_suite=suite,
     )
-    existing = ProgramBuildQualificationManifest.model_validate(
-        {"schema_version": 1, "receipts": [existing_receipt]}
-    )
+    assert index[identity] == committed_at_ms
 
-    reused = runner._reused_or_fresh_qualified_at_ms(
+
+def test_mints_a_fresh_timestamp_when_the_artifact_digest_changed(tmp_path: Path) -> None:
+    receipt, suite = _ema_receipt(1_700_000_000_000)
+    path = _written_manifest(tmp_path, {"schema_version": 2, "receipts": [receipt]})
+
+    index = runner._prior_qualified_at_ms(path)
+
+    changed = runner._qualified_identity(
         program_key="ema_crossover_signal",
-        program_version=contract.program_version,
-        golden_trace_root=contract.golden_trace_root,
-        artifact_digest=existing_receipt["artifact_digest"],
-        qualification_suite=suite,
-        existing=existing,
-        fresh_qualified_at_ms=committed_at_ms + 1,
-    )
-
-    assert reused == committed_at_ms
-
-
-def test_mints_a_fresh_timestamp_when_the_artifact_digest_changed() -> None:
-    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
-    assert contract is not None
-    suite = runner._QUALIFICATION_SUITES["ema_crossover_signal"]
-    existing_receipt = qualification_receipt_payload(
-        program_key="ema_crossover_signal",
-        contract=contract,
-        qualified_at_ms=1_700_000_000_000,
-        qualification_suite=suite,
-    )
-    existing = ProgramBuildQualificationManifest.model_validate(
-        {"schema_version": 1, "receipts": [existing_receipt]}
-    )
-
-    fresh = runner._reused_or_fresh_qualified_at_ms(
-        program_key="ema_crossover_signal",
-        program_version=contract.program_version,
-        golden_trace_root=contract.golden_trace_root,
+        program_version=receipt["program_version"],
+        golden_trace_root=receipt["golden_trace_root"],
         artifact_digest="f" * 64,  # simulates changed artifact bytes
+        wiring_digest=receipt["wiring_digest"],
         qualification_suite=suite,
-        existing=existing,
-        fresh_qualified_at_ms=1_700_000_000_555,
     )
+    assert index.get(changed, 1_700_000_000_555) == 1_700_000_000_555
 
-    assert fresh == 1_700_000_000_555
+
+def test_mints_a_fresh_timestamp_when_only_the_wiring_changed(tmp_path: Path) -> None:
+    """A wiring-only edit must re-date the receipt.
+
+    ``wiring_digest`` is part of the qualified identity precisely so this
+    cannot reuse the old timestamp: the receipt would otherwise attest to
+    wiring bytes that did not exist when it claims they were qualified, and
+    ``canary_admission`` persists that timestamp as activation evidence. This
+    is the case that only appears *after* the initial v1 -> v2 migration,
+    where the artifact half is untouched and the wiring half moves alone.
+    """
+    receipt, suite = _ema_receipt(1_700_000_000_000)
+    path = _written_manifest(tmp_path, {"schema_version": 2, "receipts": [receipt]})
+
+    index = runner._prior_qualified_at_ms(path)
+
+    wiring_moved = runner._qualified_identity(
+        program_key="ema_crossover_signal",
+        program_version=receipt["program_version"],
+        golden_trace_root=receipt["golden_trace_root"],
+        artifact_digest=receipt["artifact_digest"],
+        wiring_digest="c" * 64,  # simulates an edited program factory
+        qualification_suite=suite,
+    )
+    assert index.get(wiring_moved, 1_700_000_000_555) == 1_700_000_000_555
+
+
+def test_a_manifest_from_another_schema_version_is_read_not_rejected(tmp_path: Path) -> None:
+    """Reuse reads raw JSON, so writing a new receipt shape is never blocked by
+    the old one. An unrecognised receipt simply does not match and mints a
+    fresh timestamp, which is the safe direction."""
+    receipt, _suite = _ema_receipt(1_700_000_000_000)
+    alien = {key: value for key, value in receipt.items() if key != "wiring_digest"}
+    path = _written_manifest(tmp_path, {"schema_version": 1, "receipts": [alien]})
+
+    index = runner._prior_qualified_at_ms(path)
+
+    assert index == {}
 
 
 def test_tampered_committed_receipt_fails_its_own_hash_self_check() -> None:

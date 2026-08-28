@@ -55,6 +55,7 @@ from app.services.signal_program_admission import (
     ProgramBuildQualificationManifest,
     qualification_receipt_payload,
     running_artifact_digest,
+    running_wiring_digest,
 )
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import now_ms_utc
@@ -382,45 +383,66 @@ def _run_qualification_suite(test_ref: str) -> None:
         )
 
 
-def _existing_manifest(path: Path) -> ProgramBuildQualificationManifest | None:
-    if not path.is_file():
-        return None
-    return ProgramBuildQualificationManifest.model_validate_json(path.read_text(encoding="utf-8"))
+# The identity a receipt's timestamp is earned against: every hashed half, and
+# what it was tested against. Changing any of these mints a fresh
+# ``qualified_at_ms`` -- a receipt attesting to bytes it has not seen before
+# must not claim they were qualified at the previous receipt's time, because
+# ``canary_admission`` persists that timestamp as activation evidence.
+# Everything else about a receipt's *shape* can change without re-dating it.
+_QUALIFIED_IDENTITY_FIELDS = (
+    "program_key",
+    "program_version",
+    "golden_trace_root",
+    "artifact_digest",
+    "wiring_digest",
+    "qualification_suite",
+)
 
 
-def _reused_or_fresh_qualified_at_ms(
-    *,
-    program_key: str,
-    program_version: str,
-    golden_trace_root: str,
-    artifact_digest: str,
-    qualification_suite: str,
-    existing: ProgramBuildQualificationManifest | None,
-    fresh_qualified_at_ms: int,
-) -> int:
-    """Preserve the prior receipt's timestamp when nothing qualification-relevant changed.
+def _qualified_identity(**fields: str) -> tuple[str, ...]:
+    """Order the identity fields one way, for both the index and the lookup.
 
-    Re-qualifying an unchanged program must be a byte-for-byte no-op, matching
-    the golden-fixture lifecycle rule ("regenerated only with justification").
-    A new timestamp is minted only when the qualified identity actually
-    changed — new program version, new trace root, or new artifact bytes.
+    Both sides used to build this tuple positionally, so reordering
+    ``_QUALIFIED_IDENTITY_FIELDS`` would not have failed -- it would have
+    stopped every lookup matching and silently re-dated all seven receipts.
     """
-    if existing is not None:
-        for receipt in existing.receipts:
-            if (
-                receipt.program_key == program_key
-                and receipt.program_version == program_version
-                and receipt.golden_trace_root == golden_trace_root
-                and receipt.artifact_digest == artifact_digest
-                and receipt.qualification_suite == qualification_suite
-            ):
-                return receipt.qualified_at_ms
-    return fresh_qualified_at_ms
+    missing = set(_QUALIFIED_IDENTITY_FIELDS) ^ set(fields)
+    if missing:
+        raise ValueError(f"qualified identity needs exactly {_QUALIFIED_IDENTITY_FIELDS}; got {sorted(fields)}")
+    return tuple(fields[name] for name in _QUALIFIED_IDENTITY_FIELDS)
+
+
+def _prior_qualified_at_ms(path: Path) -> dict[tuple[str, ...], int]:
+    """Map each already-qualified identity to the timestamp it earned.
+
+    Reads the committed manifest as raw JSON rather than through
+    ``ProgramBuildQualificationManifest``. The only thing wanted here is the
+    prior timestamp for an unchanged identity, and parsing through the model
+    would couple timestamp reuse to the *current* receipt schema — so a schema
+    bump would re-date every receipt, which is exactly the churn the reuse
+    rule exists to prevent (issue #1735 bumps it to v2). A receipt missing any
+    identity field simply does not match, and mints a fresh timestamp.
+
+    A corrupt manifest still raises: silently re-dating every receipt because
+    the file could not be parsed is the failure this whole job exists to
+    prevent.
+    """
+    if not path.is_file():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    index: dict[tuple[str, ...], int] = {}
+    for receipt in payload.get("receipts", ()):
+        values = {field: receipt.get(field) for field in _QUALIFIED_IDENTITY_FIELDS}
+        stamp = receipt.get("qualified_at_ms")
+        if any(value is None for value in values.values()) or not isinstance(stamp, int):
+            continue
+        index[_qualified_identity(**values)] = stamp
+    return index
 
 
 def qualify_signal_program_builds(
     *,
-    existing_manifest: ProgramBuildQualificationManifest | None,
+    prior_qualified_at_ms: dict[tuple[str, ...], int],
     fresh_qualified_at_ms: int,
 ) -> dict[str, Any]:
     """Run every registered qualification suite and assemble the build-receipt manifest.
@@ -441,16 +463,15 @@ def qualify_signal_program_builds(
             )
         qualification_suite = _QUALIFICATION_SUITES[program_key]
         _run_qualification_suite(qualification_suite)
-        artifact_digest = running_artifact_digest(contract)
-        qualified_at_ms = _reused_or_fresh_qualified_at_ms(
+        identity = _qualified_identity(
             program_key=program_key,
             program_version=contract.program_version,
             golden_trace_root=contract.golden_trace_root,
-            artifact_digest=artifact_digest,
+            artifact_digest=running_artifact_digest(contract),
+            wiring_digest=running_wiring_digest(contract),
             qualification_suite=qualification_suite,
-            existing=existing_manifest,
-            fresh_qualified_at_ms=fresh_qualified_at_ms,
         )
+        qualified_at_ms = prior_qualified_at_ms.get(identity, fresh_qualified_at_ms)
         receipts.append(
             qualification_receipt_payload(
                 program_key=program_key,
@@ -459,7 +480,7 @@ def qualify_signal_program_builds(
                 qualification_suite=qualification_suite,
             )
         )
-    return {"schema_version": 1, "receipts": receipts}
+    return {"schema_version": 2, "receipts": receipts}
 
 
 def _manifest_text(manifest: dict[str, Any]) -> str:
@@ -470,14 +491,14 @@ def _manifest_text(manifest: dict[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    existing_manifest = _existing_manifest(args.manifest_path)
+    prior_qualified_at_ms = _prior_qualified_at_ms(args.manifest_path)
     fresh_qualified_at_ms = (
         args.qualified_at_ms if args.qualified_at_ms is not None else now_ms_utc()
     )
 
     try:
         manifest = qualify_signal_program_builds(
-            existing_manifest=existing_manifest,
+            prior_qualified_at_ms=prior_qualified_at_ms,
             fresh_qualified_at_ms=fresh_qualified_at_ms,
         )
     except QualificationFailedError as exc:
