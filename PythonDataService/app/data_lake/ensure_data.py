@@ -51,6 +51,8 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    resolve_lake_root,
+    resolve_staging_root,
 )
 from app.data_lake.polygon_corp_actions import fetch_dividends, fetch_splits
 from app.data_lake.polygon_fetcher import (
@@ -313,8 +315,7 @@ def _polygon_bar_to_minute_trade_bar(pb: PolygonBar) -> MinuteTradeBar:
 
 def _lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
     """Return (lake_root, staging_root) for the current spec."""
-    write_root = Path(settings.LEAN_DATA_WRITE_ROOT)
-    return write_root / "lake", write_root / "staging"
+    return resolve_lake_root(), resolve_staging_root()
 
 
 def _read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeBar]:

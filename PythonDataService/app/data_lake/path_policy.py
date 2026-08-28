@@ -5,6 +5,12 @@ of LEAN paths is permitted anywhere else in the codebase; a lint test enforces
 that the substrings ``equity/usa/``, ``market-hours/``, ``symbol-properties/``
 appear only in this module and its tests.
 
+The two lake roots (``resolve_lake_root`` / ``resolve_staging_root``) live here
+for the same reason: one canonical answer to "where is the lake on disk", so
+every reader — ensure_data, the engine's run materialization, the chart
+split-read — resolves the identical directory instead of re-deriving it from
+``settings`` in three places.
+
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
 """
 
@@ -12,14 +18,39 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import UUID
+
+from app.config import settings
 
 Market = Literal["usa"]
 Resolution = Literal["minute", "hour", "daily"]
 DataType = Literal["trade", "quote"]
 MetadataKind = Literal["market_hours", "symbol_properties"]
+
+_LAKE_DIR = "lake"
+_STAGING_DIR = "staging"
+
+
+def resolve_lake_root() -> Path:
+    """Return the immutable-artifact root of the data lake.
+
+    This is the directory the LEAN readers are pointed at when
+    ``DATA_LAKE_ENABLED`` is on. It is not created here — a missing root
+    means "the lake holds nothing yet", which every reader must already
+    handle as a per-day miss.
+    """
+    return Path(settings.LEAN_DATA_WRITE_ROOT) / _LAKE_DIR
+
+
+def resolve_staging_root() -> Path:
+    """Return the per-attempt staging root that promotes into the lake root.
+
+    Must share a filesystem with :func:`resolve_lake_root` so the promote
+    is a rename (see ``app.data_lake.atomic.assert_same_filesystem``).
+    """
+    return Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR
 
 
 @dataclass(frozen=True)
