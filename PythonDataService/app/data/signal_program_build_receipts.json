@@ -9,8 +9,8 @@
       "artifact_digest": "b237dbbae7ad1354b8b1ba4b25709eb361eca10facfc707f766bb0df0cd058f7",
       "wiring_digest": "10c2de188524643896a785db35d38217c0a9f5a81cdcf1e5499e7c706dfe2e71",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[deployment_validation]",
-      "qualified_at_ms": 1787444990285,
-      "receipt_hash": "d19debe8a8f06b808a0ce0e80cb00db3e04877414c2f014f917a88fda56067bc"
+      "qualified_at_ms": 1787877260955,
+      "receipt_hash": "06a637425147c0fa4c034235cc5da3b0b33481d4c7f462db2dd68a0688f82954"
     },
     {
       "schema_version": 2,
@@ -20,8 +20,8 @@
       "artifact_digest": "3600bc88977d44433495943569039f9065525e1a92fdff9851b296388c9e6df9",
       "wiring_digest": "5e74594f271b5689973bb1c7cb4a7155ec1f0cbd51e19abd6bbee2a0b9ea85e9",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]",
-      "qualified_at_ms": 1787441065525,
-      "receipt_hash": "0a776baa23ef729679d74b201dc3032847755a746bc7ffd66d3c5207ab0e5182"
+      "qualified_at_ms": 1787877260955,
+      "receipt_hash": "5c95b347b83fa2e29f0b244d3cb28db2fab8406b7598ccc958f2f2e6b258c766"
     },
     {
       "schema_version": 2,
@@ -31,8 +31,8 @@
       "artifact_digest": "6191e2397a48a8b5bb0cea7f08d0f4321ecc79e4e9d02b60305d67e29dd6237f",
       "wiring_digest": "c39cbfbbf74cb2e78b3f74edba5023506d505b05bfc6eb574a9da2f9833a3a39",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[rsi_mean_reversion]",
-      "qualified_at_ms": 1787441065525,
-      "receipt_hash": "f36a48e11e9497e4938a8a9540ef9457538b3f92e2242b7eefc633f79e8e5703"
+      "qualified_at_ms": 1787877260955,
+      "receipt_hash": "de7acb1460c1fe71194eb4fa41b2a873d0be901999dbffedda689ff9b960e797"
     },
     {
       "schema_version": 2,
@@ -42,8 +42,8 @@
       "artifact_digest": "f01794640cfb283da10f33b63010ad6271859cb1b9440ec8b4fb7d635ad7ee5d",
       "wiring_digest": "b160c136b7853131752313052c8739f741f59d1f1b1d41b140146ff6e4ff949c",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[sma_crossover]",
-      "qualified_at_ms": 1787441065525,
-      "receipt_hash": "0c87b6bd77a388b2cee9b8082872ed595ec567bd7abb0a9615d72ef09dc89e40"
+      "qualified_at_ms": 1787877260955,
+      "receipt_hash": "921555eb7ddc6bed9893ddd247889cd73c430e1ab27e7db36c60a87ed9879e89"
     },
     {
       "schema_version": 2,
@@ -53,8 +53,8 @@
       "artifact_digest": "82d36271f33620e7f693458ce30c6d1ab60d114d8af4ce0d87eeffc1f1db44a4",
       "wiring_digest": "ce72ac501651597000818a7e9c9c3c48af9c0c3e22c30cd2589b1ee54382e6de",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_a]",
-      "qualified_at_ms": 1787441065525,
-      "receipt_hash": "11225839b22d956903fe1982cfde6e482f8d0221bc8791d06145b9f892d1db7c"
+      "qualified_at_ms": 1787877260955,
+      "receipt_hash": "035f21145e69c54f6775a4654880dc11b070a795cf49d417f3b2d80af1987b63"
     },
     {
       "schema_version": 2,
@@ -64,8 +64,8 @@
       "artifact_digest": "3dcbf45c078ca505a704220934cb727d05973fd1c6eab7aa8c55c564981ed1d8",
       "wiring_digest": "ac903a00b658c642947f0b8b624aaae03b74278f6a2f32c5b8867540cf28d6ad",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_b]",
-      "qualified_at_ms": 1787441065525,
-      "receipt_hash": "0e2f8554efb539d8460b0410330a29c5b992e3f40ac9b15963c22bc64425e67c"
+      "qualified_at_ms": 1787877260955,
+      "receipt_hash": "ee9aa37cf64f718bab7db3038cd56270f1efaedee8b10c7630a5abc8e9bdf0ea"
     },
     {
       "schema_version": 2,
@@ -75,8 +75,8 @@
       "artifact_digest": "230255e8784b0b40589bc36c31740e203486b7da0c4e8ed2089c807a51b5d59f",
       "wiring_digest": "d64cd5f7889136f22ff7ace739243cd706f853049bc881c5f84b9f26011e2dd8",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_c]",
-      "qualified_at_ms": 1787441065525,
-      "receipt_hash": "e552f37676be9bc3f5e5ea352396dd1bce18ccef27eecdf4495c45a6d9021e71"
+      "qualified_at_ms": 1787877260955,
+      "receipt_hash": "34eeed3f0ca2d2e1b108e7f1f35576cb80eab97a2726e5a33b0383ee4043fdc6"
     }
   ]
 }

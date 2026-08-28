@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -768,3 +769,36 @@ def test_artifact_drift_still_fails_closed_whatever_the_toggle_says(
     )
 
     assert proof.state == "UNPROVEN"
+
+
+def test_an_unreadable_wiring_path_fails_closed_rather_than_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admission must return UNPROVEN, never escape as an internal error.
+
+    Hashing the wiring reads files off disk and raises on a source tree
+    missing a declared path, exactly as the artifact digest does. Computed
+    outside the fail-closed handler it would propagate out of Start/Resume as
+    a 500 instead of a refusal an operator can read.
+    """
+    # Sealed first: ``_sealed_binding`` proves the build itself, so breaking
+    # the contract before that point fails in the fixture, not the assertion.
+    binding = _sealed_binding()
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    monkeypatch.setitem(
+        _STRATEGY_REGISTRY,
+        "ema_crossover_signal",
+        replace(
+            registration,
+            signal_program_contract=replace(
+                contract, wiring_artifact_paths=("app/engine/strategy/programs/deleted_by_a_bad_deploy.py",)
+            ),
+        ),
+    )
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+    assert "unreadable" in proof.explanation

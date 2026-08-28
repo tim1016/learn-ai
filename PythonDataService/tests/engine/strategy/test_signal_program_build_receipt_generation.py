@@ -116,12 +116,13 @@ def test_reuses_qualified_at_ms_when_the_receipt_identity_is_unchanged(tmp_path:
 
     index = runner._prior_qualified_at_ms(path)
 
-    identity = (
-        "ema_crossover_signal",
-        receipt["program_version"],
-        receipt["golden_trace_root"],
-        receipt["artifact_digest"],
-        suite,
+    identity = runner._qualified_identity(
+        program_key="ema_crossover_signal",
+        program_version=receipt["program_version"],
+        golden_trace_root=receipt["golden_trace_root"],
+        artifact_digest=receipt["artifact_digest"],
+        wiring_digest=receipt["wiring_digest"],
+        qualification_suite=suite,
     )
     assert index[identity] == committed_at_ms
 
@@ -132,42 +133,54 @@ def test_mints_a_fresh_timestamp_when_the_artifact_digest_changed(tmp_path: Path
 
     index = runner._prior_qualified_at_ms(path)
 
-    changed = (
-        "ema_crossover_signal",
-        receipt["program_version"],
-        receipt["golden_trace_root"],
-        "f" * 64,  # simulates changed artifact bytes
-        suite,
+    changed = runner._qualified_identity(
+        program_key="ema_crossover_signal",
+        program_version=receipt["program_version"],
+        golden_trace_root=receipt["golden_trace_root"],
+        artifact_digest="f" * 64,  # simulates changed artifact bytes
+        wiring_digest=receipt["wiring_digest"],
+        qualification_suite=suite,
     )
     assert index.get(changed, 1_700_000_000_555) == 1_700_000_000_555
 
 
-def test_timestamp_reuse_survives_a_receipt_schema_bump(tmp_path: Path) -> None:
-    """A receipt shape change must not re-date every receipt.
+def test_mints_a_fresh_timestamp_when_only_the_wiring_changed(tmp_path: Path) -> None:
+    """A wiring-only edit must re-date the receipt.
 
-    Issue #1735 added ``wiring_digest`` and bumped the receipt schema to v2.
-    Reuse is keyed on the *qualified identity* and read from raw JSON, so a
-    manifest written under an older schema -- with fields this version has
-    never heard of, and without ones it has -- still hands back the timestamp
-    each unchanged program already earned. Parsing the prior manifest through
-    the current model instead would have silently re-dated all seven.
+    ``wiring_digest`` is part of the qualified identity precisely so this
+    cannot reuse the old timestamp: the receipt would otherwise attest to
+    wiring bytes that did not exist when it claims they were qualified, and
+    ``canary_admission`` persists that timestamp as activation evidence. This
+    is the case that only appears *after* the initial v1 -> v2 migration,
+    where the artifact half is untouched and the wiring half moves alone.
     """
     receipt, suite = _ema_receipt(1_700_000_000_000)
-    stale_shape = {
-        key: value for key, value in receipt.items() if key != "wiring_digest"
-    } | {"schema_version": 1, "some_retired_field": "gone"}
-    path = _written_manifest(tmp_path, {"schema_version": 1, "receipts": [stale_shape]})
+    path = _written_manifest(tmp_path, {"schema_version": 2, "receipts": [receipt]})
 
     index = runner._prior_qualified_at_ms(path)
 
-    identity = (
-        "ema_crossover_signal",
-        receipt["program_version"],
-        receipt["golden_trace_root"],
-        receipt["artifact_digest"],
-        suite,
+    wiring_moved = runner._qualified_identity(
+        program_key="ema_crossover_signal",
+        program_version=receipt["program_version"],
+        golden_trace_root=receipt["golden_trace_root"],
+        artifact_digest=receipt["artifact_digest"],
+        wiring_digest="c" * 64,  # simulates an edited program factory
+        qualification_suite=suite,
     )
-    assert index[identity] == 1_700_000_000_000
+    assert index.get(wiring_moved, 1_700_000_000_555) == 1_700_000_000_555
+
+
+def test_a_manifest_from_another_schema_version_is_read_not_rejected(tmp_path: Path) -> None:
+    """Reuse reads raw JSON, so writing a new receipt shape is never blocked by
+    the old one. An unrecognised receipt simply does not match and mints a
+    fresh timestamp, which is the safe direction."""
+    receipt, _suite = _ema_receipt(1_700_000_000_000)
+    alien = {key: value for key, value in receipt.items() if key != "wiring_digest"}
+    path = _written_manifest(tmp_path, {"schema_version": 1, "receipts": [alien]})
+
+    index = runner._prior_qualified_at_ms(path)
+
+    assert index == {}
 
 
 def test_tampered_committed_receipt_fails_its_own_hash_self_check() -> None:

@@ -389,6 +389,11 @@ def prove_running_program_build(
         return _unproven(binding.strategy_key, verified_at_ms, explanation=failed.explanation)
     try:
         running_digest = running_artifact_digest(contract)
+        # Hashed here, with the artifact digest, rather than after the receipt
+        # lookup where it is used: both read files off disk and both can raise
+        # on a source tree missing a declared path, and an admission check that
+        # escapes as an internal error is not failing closed.
+        running_wiring = running_wiring_digest(contract)
         manifest = ProgramBuildQualificationManifest.model_validate_json(
             manifest_path.read_text(encoding="utf-8")
         )
@@ -420,7 +425,6 @@ def prove_running_program_build(
     # already failed closed by this point regardless of the toggle -- that is
     # the admission control this PRD was built around, and issue #1735's scope
     # note keeps it blocking. Only this newly-covered half is toggle-governed.
-    running_wiring = running_wiring_digest(contract)
     wiring_matches = receipt.wiring_digest == running_wiring
     if not wiring_matches and settings.SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED:
         return _unproven(

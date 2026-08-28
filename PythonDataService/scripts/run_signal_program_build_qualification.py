@@ -55,6 +55,7 @@ from app.services.signal_program_admission import (
     ProgramBuildQualificationManifest,
     qualification_receipt_payload,
     running_artifact_digest,
+    running_wiring_digest,
 )
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import now_ms_utc
@@ -382,14 +383,18 @@ def _run_qualification_suite(test_ref: str) -> None:
         )
 
 
-# The identity a receipt's timestamp is earned against. Changing any of these
-# is what mints a fresh ``qualified_at_ms``; everything else about a receipt
-# can be reshaped without re-dating it.
+# The identity a receipt's timestamp is earned against: every hashed half, and
+# what it was tested against. Changing any of these mints a fresh
+# ``qualified_at_ms`` -- a receipt attesting to bytes it has not seen before
+# must not claim they were qualified at the previous receipt's time, because
+# ``canary_admission`` persists that timestamp as activation evidence.
+# Everything else about a receipt's *shape* can change without re-dating it.
 _QUALIFIED_IDENTITY_FIELDS = (
     "program_key",
     "program_version",
     "golden_trace_root",
     "artifact_digest",
+    "wiring_digest",
     "qualification_suite",
 )
 
@@ -463,6 +468,7 @@ def qualify_signal_program_builds(
             program_version=contract.program_version,
             golden_trace_root=contract.golden_trace_root,
             artifact_digest=running_artifact_digest(contract),
+            wiring_digest=running_wiring_digest(contract),
             qualification_suite=qualification_suite,
         )
         qualified_at_ms = prior_qualified_at_ms.get(identity, fresh_qualified_at_ms)
