@@ -16,6 +16,7 @@ module docstring for why).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import zipfile
@@ -32,6 +33,7 @@ from app.data_lake import catalog_client
 from app.data_lake.cache_import import (
     ClaimDecision,
     CorruptCacheZipError,
+    LakeRootModeConflictError,
     MissingProvenanceError,
     build_provider_params,
     check_lake_root_mode,
@@ -43,6 +45,7 @@ from app.data_lake.cache_import import (
     verify_and_read_zip,
 )
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
+from app.data_lake.path_policy import LeanMinuteBarPath
 from app.data_lake.types import ArtifactRecord
 
 _ET = ZoneInfo("America/New_York")
@@ -410,26 +413,62 @@ def test_decide_claim_outcome_flags_in_flight_when_no_existing_complete_row():
 # ---------------------------------------------------------------------------
 
 
-def test_check_lake_root_mode_allows_first_use(tmp_path: Path):
-    # No marker yet -- any mode is fine, and this alone must not raise.
-    check_lake_root_mode(tmp_path, "raw")
-    check_lake_root_mode(tmp_path, "polygon_split_adjusted")
+def test_check_lake_root_mode_allows_first_use_on_empty_root(tmp_path: Path):
+    # No marker yet, and no lake tree at all -- any mode is fine.
+    lake_dir = tmp_path / "lake"
+    check_lake_root_mode(tmp_path, lake_dir, "raw")
+    check_lake_root_mode(tmp_path, lake_dir, "polygon_split_adjusted")
 
 
 def test_check_lake_root_mode_allows_matching_committed_mode(tmp_path: Path):
     from app.data_lake.cache_import import _commit_lake_root_mode
 
+    lake_dir = tmp_path / "lake"
     _commit_lake_root_mode(tmp_path, "raw")
-    check_lake_root_mode(tmp_path, "raw")  # must not raise
+    check_lake_root_mode(tmp_path, lake_dir, "raw")  # must not raise
 
 
 def test_check_lake_root_mode_refuses_conflicting_mode(tmp_path: Path):
     from app.data_lake.cache_import import LakeRootModeConflictError, _commit_lake_root_mode
 
+    lake_dir = tmp_path / "lake"
     _commit_lake_root_mode(tmp_path, "raw")
 
     with pytest.raises(LakeRootModeConflictError):
-        check_lake_root_mode(tmp_path, "polygon_split_adjusted")
+        check_lake_root_mode(tmp_path, lake_dir, "polygon_split_adjusted")
+
+
+def test_check_lake_root_mode_refuses_unmarked_nonempty_root(tmp_path: Path):
+    """The reviewer's scenario, at the pure-function level: a lake tree
+    already has a real file (e.g. from ensure_data's live pipeline) but was
+    never stamped with this importer's marker. Must not be treated as a
+    fresh, safe-to-claim root."""
+    lake_dir = tmp_path / "lake"
+    (lake_dir / "equity" / "usa" / "minute" / "spy").mkdir(parents=True)
+    (lake_dir / "equity" / "usa" / "minute" / "spy" / "20240520_trade.zip").write_bytes(b"real raw bytes")
+
+    with pytest.raises(LakeRootModeConflictError):
+        check_lake_root_mode(tmp_path, lake_dir, "polygon_split_adjusted")
+
+
+def test_check_lake_root_mode_claim_unmarked_root_as_allows_matching_mode(tmp_path: Path):
+    lake_dir = tmp_path / "lake"
+    (lake_dir / "equity" / "usa" / "minute" / "spy").mkdir(parents=True)
+    (lake_dir / "equity" / "usa" / "minute" / "spy" / "20240520_trade.zip").write_bytes(b"real raw bytes")
+
+    # Must not raise: the operator has explicitly asserted this root's mode.
+    check_lake_root_mode(tmp_path, lake_dir, "raw", claim_unmarked_root_as="raw")
+
+
+def test_check_lake_root_mode_claim_unmarked_root_as_does_not_override_a_mismatch(tmp_path: Path):
+    """The flag asserts a specific mode -- it must not act as a blanket
+    bypass for a *different* mode than the one it names."""
+    lake_dir = tmp_path / "lake"
+    (lake_dir / "equity" / "usa" / "minute" / "spy").mkdir(parents=True)
+    (lake_dir / "equity" / "usa" / "minute" / "spy" / "20240520_trade.zip").write_bytes(b"real raw bytes")
+
+    with pytest.raises(LakeRootModeConflictError):
+        check_lake_root_mode(tmp_path, lake_dir, "polygon_split_adjusted", claim_unmarked_root_as="raw")
 
 
 # ---------------------------------------------------------------------------
@@ -572,8 +611,6 @@ async def test_import_cache_root_refuses_overwrite_on_hash_mismatch(
         await conn.close()
     assert row["FileSha256"] == original_hash
     lake_zip = lake_root / "lake" / "equity" / "usa" / "minute" / "spy" / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
-    import hashlib
-
     assert hashlib.sha256(lake_zip.read_bytes()).hexdigest() == original_hash
 
 
@@ -727,3 +764,140 @@ async def test_import_cache_root_zero_zips_warns_distinctly(
     assert report.imported == []
     assert report.failed == []
     assert any("zero trade zips" in record.message for record in caplog.records)
+
+
+def _seed_real_lake_file(lake_root: Path, symbol: str, trading_date: date, content: bytes) -> Path:
+    """Place a file at the exact LeanMinuteBarPath location under
+    ``lake_root/lake``, with no cache_import marker -- simulating a root
+    ensure_data's live pipeline already populated."""
+    lake_dir = lake_root / "lake"
+    rel = LeanMinuteBarPath(market="usa", symbol=symbol, trading_date=trading_date, data_type="trade").relative_path()
+    dest = lake_dir / Path(*rel.parts)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(content)
+    return dest
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_refuses_unmarked_nonempty_lake_root(clean_artifacts, pool, tmp_path: Path):
+    """Layer 1, end to end: the reviewer's demonstrated scenario -- a real
+    file already sits at the exact destination an adjusted import would
+    target, but the root carries no cache_import marker (because
+    ensure_data's live pipeline, not this importer, put it there). Must be
+    refused, not treated as a fresh root."""
+    lake_root = tmp_path / "lake-root"
+    real_bytes = b"pretend this is ensure_data's real raw fetch bytes"
+    dest = _seed_real_lake_file(lake_root, "SPY", date(2024, 5, 20), real_bytes)
+
+    adjusted_cache = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=True)
+
+    report = await import_cache_root(cache_root=adjusted_cache, lake_root=lake_root)
+
+    assert report.imported == []
+    assert len(report.failed) == 1
+    assert report.failed[0].reason == "lake_root_mode_conflict"
+    assert dest.read_bytes() == real_bytes  # never touched
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        count = await conn.fetchval('SELECT count(*) FROM "DataLakeArtifacts"')
+    finally:
+        await conn.close()
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_claim_unmarked_root_as_stamps_and_proceeds(
+    clean_artifacts, pool, tmp_path: Path
+):
+    """The remedy for the refusal above: an explicit operator assertion lets
+    the import through and stamps the marker for subsequent runs."""
+    lake_root = tmp_path / "lake-root"
+    # A pre-existing file for a *different* symbol/date than what's being
+    # imported, so this test isolates the marker/emptiness gate from the
+    # file-level guard (covered separately below).
+    _seed_real_lake_file(lake_root, "QQQ", date(2024, 1, 2), b"unrelated pre-existing raw content")
+
+    cache_root = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
+
+    report = await import_cache_root(cache_root=cache_root, lake_root=lake_root, claim_unmarked_root_as="raw")
+
+    assert report.failed == []
+    assert len(report.imported) == 1
+    assert report.imported[0].price_adjustment_mode == "raw"
+
+    from app.data_lake.cache_import import _read_lake_root_mode
+
+    assert _read_lake_root_mode(lake_root) == "raw"
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_refuses_destination_file_conflict_even_with_marker_set(
+    clean_artifacts, pool, tmp_path: Path
+):
+    """Layer 2: the file-level guard must catch a destination collision even
+    when layer 1 (the marker) would have let the run through -- e.g. a file
+    placed out-of-band without the catalog ever knowing about it. Proves
+    byte-clobbering is impossible even if the marker layer is bypassed or
+    simply wrong."""
+    lake_root = tmp_path / "lake-root"
+    trading_date = date(2024, 5, 20)
+    conflicting_bytes = b"some other content already sitting at this exact path"
+    dest = _seed_real_lake_file(lake_root, "SPY", trading_date, conflicting_bytes)
+
+    from app.data_lake.cache_import import _commit_lake_root_mode
+
+    _commit_lake_root_mode(lake_root, "raw")  # pre-stamped -- layer 1 lets this through
+
+    cache_root = _build_cache(tmp_path, "SPY", [trading_date], adjusted=False)
+
+    report = await import_cache_root(cache_root=cache_root, lake_root=lake_root)
+
+    assert report.imported == []
+    assert len(report.failed) == 1
+    assert report.failed[0].reason == "destination_file_conflict"
+    assert dest.read_bytes() == conflicting_bytes  # os.replace was never called
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        row = await conn.fetchrow('SELECT "Status" FROM "DataLakeArtifacts" WHERE "Symbol" = $1', "SPY")
+    finally:
+        await conn.close()
+    assert row is not None
+    assert row["Status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_completes_claim_when_destination_file_already_matches(
+    clean_artifacts, pool, tmp_path: Path
+):
+    """If the exact same bytes are already sitting at the destination (no
+    catalog row for them yet), the file-level guard treats it as an
+    idempotent match: no redundant write, but the freshly-claimed row still
+    gets completed rather than left stuck in 'fetching'. The marker is
+    pre-stamped so layer 1 (marker/emptiness) isn't what's under test here
+    -- layer 2 (the file-level guard) is."""
+    lake_root = tmp_path / "lake-root"
+    trading_date = date(2024, 5, 20)
+    cache_root = _build_cache(tmp_path, "SPY", [trading_date], adjusted=False)
+    zip_bytes = (
+        cache_root / "equity" / "usa" / "minute" / "spy" / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
+    ).read_bytes()
+    _seed_real_lake_file(lake_root, "SPY", trading_date, zip_bytes)  # identical bytes already there
+
+    from app.data_lake.cache_import import _commit_lake_root_mode
+
+    _commit_lake_root_mode(lake_root, "raw")
+
+    report = await import_cache_root(cache_root=cache_root, lake_root=lake_root)
+
+    assert report.failed == []
+    assert len(report.imported) == 1
+    assert report.imported[0].file_sha256 == hashlib.sha256(zip_bytes).hexdigest()
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        row = await conn.fetchrow('SELECT "Status" FROM "DataLakeArtifacts" WHERE "Symbol" = $1', "SPY")
+    finally:
+        await conn.close()
+    assert row["Status"] == "complete"

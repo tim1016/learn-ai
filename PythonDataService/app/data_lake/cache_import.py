@@ -45,20 +45,42 @@ redesign. That migration must be applied before this script's adjusted-mode
 path will insert successfully — a 'raw'-only cache (``policy.adjusted=false``)
 already works against the unmigrated schema.
 
-One lake root per adjustment mode (structural, enforced, not just advised):
-``LeanMinuteBarPath`` carries no adjustment-mode component, so a 'raw' row
-and a 'polygon_split_adjusted' row for the same (market, symbol, date, type)
-resolve to the *identical* on-disk path. Importing both cache policy roots
-into the same ``--lake-root`` would silently overwrite one's bytes with the
+One lake root per adjustment mode (structural, enforced, not just advised),
+in two independent layers:
+
+  1. **Marker + emptiness gate** (``check_lake_root_mode``, per symbol,
+     before any claim or write for it). A small marker file at
+     ``<lake-root>/.cache_import_adjustment_mode`` records the mode a given
+     ``--lake-root`` is committed to. A later run targeting the same root
+     with a *different* mode is refused wholesale
+     (``LakeRootModeConflictError``). A root with **no marker but a
+     non-empty lake tree** — e.g. ``ensure_data``'s live pipeline already
+     populated it with real 'raw' fetches, which never write this
+     importer's marker — is *also* refused: this importer will not guess
+     that an unmarked, already-populated root happens to be safe. The
+     remedy is ``--claim-unmarked-root-as <mode>``, an explicit operator
+     assertion ("I have verified this root's true mode is `<mode>`") that
+     stamps the marker and proceeds. An unmarked **empty** root keeps
+     today's default behavior: the first import stamps it.
+  2. **File-level guard** (in ``_import_one_zip``, independent of the
+     marker — protects even if the marker is wrong or was bypassed).
+     Before promoting any zip, if a file already sits at the destination
+     ``LeanMinuteBarPath``: identical content hash → treated as an
+     idempotent no-op (the freshly-claimed row is still completed, just
+     without rewriting the bytes); *different* hash → a typed refusal
+     (``FailedArtifact`` with ``reason="destination_file_conflict"``) and
+     ``atomic_write_and_promote`` (hence ``os.replace``) is never called.
+
+``LeanMinuteBarPath`` carries no adjustment-mode component — that's the root
+cause both layers exist to guard: a 'raw' row and a 'polygon_split_adjusted'
+row for the same (market, symbol, date, type) resolve to the *identical*
+on-disk path, so importing both cache policy roots into the same
+``--lake-root`` can otherwise silently overwrite one's bytes with the
 other's while the first row's catalog hash still describes the bytes that
-used to be there. The honest structural fix — an adjustment-mode-aware path,
-or the ``data_root_id`` design the schema note above already anticipates —
-is deliberately deferred to the data-lake integration slice; this importer's
-stopgap is a small marker file at ``<lake-root>/.cache_import_adjustment_mode``
-recording the first mode a given ``--lake-root`` was used for. A later run
-targeting the same ``--lake-root`` with a *different* mode is refused
-wholesale (``LakeRootModeConflictError`` per affected symbol) before writing
-anything for it — use a separate ``--lake-root`` per adjustment mode.
+used to be there. The honest structural fix — an adjustment-mode-aware
+path, or the ``data_root_id`` design the schema note above already
+anticipates — is deliberately deferred to the data-lake integration slice;
+these two layers are this importer's stopgap, not a replacement for it.
 
 Out of scope: the pre-policy legacy minute-bar tree directly under
 ``lean-cache/`` (no sibling ``provenance/``) is not a policy root this
@@ -230,6 +252,7 @@ ImportFailureReason = Literal[
     "in_flight_or_incomplete",
     "lake_root_mode_conflict",
     "write_failed",
+    "destination_file_conflict",
 ]
 
 
@@ -517,26 +540,66 @@ async def _import_one_zip(
 
     if decision.action == "skip_duplicate":
         return SkippedArtifact(symbol=ref.symbol, trading_date=ref.trading_date, reason="already_imported_same_hash")
-    if decision.action in ("conflict", "in_flight_or_incomplete"):
+    if decision.action == "conflict" or decision.action == "in_flight_or_incomplete":
         logger.error("cache_import: %s %s: %s", ref.symbol, ref.trading_date, decision.detail)
+        # Explicit mapping, not decision.action passed straight through: the
+        # ClaimDecision vocabulary ("conflict") and the ImportFailureReason
+        # contract ("hash_conflict") are deliberately named differently, and
+        # a `# type: ignore` here previously papered over exactly that
+        # mismatch -- the hash-conflict path reported reason="conflict",
+        # which isn't a member of ImportFailureReason at all.
+        reason: ImportFailureReason = "hash_conflict" if decision.action == "conflict" else "in_flight_or_incomplete"
         return FailedArtifact(
             symbol=ref.symbol,
             trading_date=ref.trading_date,
-            reason=decision.action,  # type: ignore[arg-type]
+            reason=reason,
             detail=decision.detail or "",
         )
 
     # decision.action == "proceed"
     assert claim_result is not None  # narrows type for the type checker
+
+    # File-level guard, independent of check_lake_root_mode: even if the
+    # marker is missing, wrong, or was explicitly overridden via
+    # --claim-unmarked-root-as, a real file already sitting at this exact
+    # destination must never be silently clobbered by atomic_write_and_promote's
+    # unconditional os.replace. Checked for every zip, not just when the
+    # marker layer had something to say.
+    dest_path = lake_dir / Path(*rel_path.parts)
+    already_present = False
+    if dest_path.is_file():
+        existing_dest_hash = hashlib.sha256(dest_path.read_bytes()).hexdigest()
+        if existing_dest_hash != content_hash:
+            detail = (
+                f"a file already exists at {dest_path} with a different content hash "
+                f"({existing_dest_hash!r}) than the cache zip being imported "
+                f"({content_hash!r}); refusing to overwrite it -- atomic_write_and_promote "
+                f"was never called. This can happen when a lake root's adjustment-mode "
+                f"marker doesn't (or didn't used to) match what's physically on disk."
+            )
+            await catalog_client.fail_artifact(artifact_id=claim_result, last_error="io_error", error_message=detail)
+            logger.error("cache_import: %s %s: %s", ref.symbol, ref.trading_date, detail)
+            return FailedArtifact(
+                symbol=ref.symbol, trading_date=ref.trading_date, reason="destination_file_conflict", detail=detail
+            )
+        # Identical bytes already at the destination: nothing to write, but
+        # the row we just claimed still needs completing, not left in
+        # 'fetching'.
+        already_present = True
+
     try:
-        file_sha = atomic_write_and_promote(
-            content=verified.raw_bytes,
-            lake_root=lake_dir,
-            staging_root=staging_dir,
-            rel_lake_path=rel_path,
-            request_id=run_id,
-            worker_id=_WORKER_ID,
-            attempt=1,
+        file_sha = (
+            content_hash
+            if already_present
+            else atomic_write_and_promote(
+                content=verified.raw_bytes,
+                lake_root=lake_dir,
+                staging_root=staging_dir,
+                rel_lake_path=rel_path,
+                request_id=run_id,
+                worker_id=_WORKER_ID,
+                attempt=1,
+            )
         )
         await catalog_client.complete_artifact(
             artifact_id=claim_result,
@@ -598,31 +661,84 @@ def _commit_lake_root_mode(lake_root: Path, mode: str) -> None:
     _lake_root_mode_marker_path(lake_root).write_text(mode)
 
 
-def check_lake_root_mode(lake_root: Path, mode: str) -> None:
-    """Raise ``LakeRootModeConflictError`` if ``lake_root`` is already
-    committed (by a marker file this importer writes) to a different
-    adjustment mode than ``mode``. Pure filesystem check, no DB access --
-    directly unit-testable, and evaluated before any catalog claim or lake
-    write happens for the affected symbol.
+def _lake_tree_is_empty(lake_dir: Path) -> bool:
+    """True iff ``lake_dir`` contains no files at all, recursively.
+
+    ``import_cache_root`` always ``mkdir``s ``lake_dir`` before this runs, so
+    a brand-new ``--lake-root`` is an empty *directory*, not a missing one --
+    an empty directory correctly reads as "safe to claim for any mode".
+    """
+    if not lake_dir.is_dir():
+        return True
+    return not any(p.is_file() for p in lake_dir.rglob("*"))
+
+
+def check_lake_root_mode(
+    lake_root: Path,
+    lake_dir: Path,
+    mode: str,
+    *,
+    claim_unmarked_root_as: str | None = None,
+) -> None:
+    """Raise ``LakeRootModeConflictError`` unless ``lake_root`` is safe to
+    import ``mode`` into. Pure filesystem check, no DB access -- directly
+    unit-testable, and evaluated before any catalog claim or lake write
+    happens for the affected symbol.
+
+    Three cases:
+      * A marker already exists: it must match ``mode``, full stop.
+      * No marker, and ``lake_dir`` is empty: safe -- this is a fresh root,
+        and the caller stamps the marker right after this call returns
+        without error.
+      * No marker, and ``lake_dir`` is *non-empty*: this is exactly the
+        dangerous case a marker alone can't see -- e.g. ensure_data's live
+        pipeline already populated this root with real 'raw' fetches, which
+        never write this importer's marker. Refused unless the caller
+        passed ``claim_unmarked_root_as`` equal to ``mode``: an explicit,
+        one-time operator assertion ("I have verified this root's true mode
+        is `mode`"), which the caller then stamps as the marker.
     """
     existing = _read_lake_root_mode(lake_root)
-    if existing is not None and existing != mode:
+    if existing is not None:
+        if existing != mode:
+            raise LakeRootModeConflictError(
+                f"{lake_root} is already committed to adjustment mode {existing!r}; "
+                f"refusing to also import {mode!r} into it -- they would collide at "
+                f"the same on-disk path. Use a separate --lake-root per adjustment "
+                f"mode (see the module docstring's \"One lake root per adjustment "
+                f"mode\" section)."
+            )
+        return
+
+    if _lake_tree_is_empty(lake_dir):
+        return
+
+    if claim_unmarked_root_as != mode:
         raise LakeRootModeConflictError(
-            f"{lake_root} is already committed to adjustment mode {existing!r}; "
-            f"refusing to also import {mode!r} into it -- they would collide at "
-            f"the same on-disk path. Use a separate --lake-root per adjustment "
-            f"mode (see the module docstring's \"One lake root per adjustment "
-            f"mode\" section)."
+            f"{lake_dir} already contains files but carries no adjustment-mode "
+            f"marker (nothing at {_lake_root_mode_marker_path(lake_root)}) -- "
+            f"refusing to guess its mode and import {mode!r} into it. It may be "
+            f"a root the live ensure_data pipeline already populated with 'raw' "
+            f"fetches. If you have verified this root's true adjustment mode is "
+            f"{mode!r}, pass --claim-unmarked-root-as {mode!r} to assert it "
+            f"explicitly and proceed."
         )
 
 
-async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
+async def import_cache_root(
+    cache_root: Path, lake_root: Path, *, claim_unmarked_root_as: str | None = None
+) -> ImportReport:
     """Import every trade zip under ``cache_root`` into the lake catalog.
 
     ``lake_root`` is the write root: artifacts land under
     ``lake_root/lake/...``, staged through ``lake_root/staging/...``. Both are
     created if missing. Makes zero provider calls — every byte written comes
     from the cache zips already on disk.
+
+    ``claim_unmarked_root_as`` is the operator's explicit assertion that an
+    unmarked but non-empty ``lake_root`` (e.g. one ``ensure_data`` already
+    populated) truly is the given mode; see ``check_lake_root_mode`` and the
+    module docstring's "One lake root per adjustment mode" section.
     """
     lake_dir = lake_root / "lake"
     staging_dir = lake_root / "staging"
@@ -674,7 +790,9 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
         price_adjustment_mode = price_adjustment_mode_for(provenance)
 
         try:
-            check_lake_root_mode(lake_root, price_adjustment_mode)
+            check_lake_root_mode(
+                lake_root, lake_dir, price_adjustment_mode, claim_unmarked_root_as=claim_unmarked_root_as
+            )
         except LakeRootModeConflictError as exc:
             logger.error("cache_import: %s", exc)
             for ref in by_symbol[symbol]:
@@ -733,14 +851,35 @@ def main() -> None:
         help=(
             "Write root: artifacts land under <lake-root>/lake, staged through "
             "<lake-root>/staging. One adjustment mode per --lake-root -- a "
-            "second mode targeting an already-committed root is refused "
-            "(see the module docstring)."
+            "second mode targeting an already-committed root is refused, and so "
+            "is an unmarked but non-empty root (see --claim-unmarked-root-as and "
+            "the module docstring)."
+        ),
+    )
+    parser.add_argument(
+        "--claim-unmarked-root-as",
+        choices=["raw", "polygon_split_adjusted"],
+        default=None,
+        help=(
+            "Explicit operator assertion that an unmarked, non-empty --lake-root "
+            "(e.g. one ensure_data's live pipeline already populated) truly is "
+            "this adjustment mode. Stamps the marker and proceeds. Has no effect "
+            "on an already-marked or genuinely empty root. Get this wrong and "
+            "the file-level guard is the only thing left standing between a "
+            "mismatched import and silently overwritten bytes -- verify the "
+            "root's true mode out-of-band before passing this."
         ),
     )
     args = parser.parse_args()
 
     try:
-        report = asyncio.run(import_cache_root(cache_root=args.cache_root, lake_root=args.lake_root))
+        report = asyncio.run(
+            import_cache_root(
+                cache_root=args.cache_root,
+                lake_root=args.lake_root,
+                claim_unmarked_root_as=args.claim_unmarked_root_as,
+            )
+        )
     finally:
         # Closed in its own asyncio.run: the pool is bound to the event loop
         # import_cache_root ran in, which is already closed by the time this
