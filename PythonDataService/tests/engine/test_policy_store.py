@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.data.availability import ensure_range
+from app.engine.data.availability import _missing_spans, ensure_range
 from app.engine.data.policy_store import (
     policy_key,
     read_provenance,
@@ -20,6 +20,7 @@ from app.engine.data.policy_store import (
     snapshot_minute_trade_zips,
     symbol_write_lock,
 )
+from app.lean_sidecar.trading_calendar import expected_sessions, is_trading_day
 from app.lean_sidecar.workspace import SymbolValidationError
 
 FETCHED_AT_MS = 1783958400000
@@ -482,15 +483,19 @@ def test_ensure_range_records_only_the_delta_in_provenance(tmp_path: Path):
 def test_ensure_range_over_a_provider_blackout_refetches_only_that_day(tmp_path: Path):
     """A day the provider has no bars for never becomes available.
 
-    ``_iter_weekdays`` counts exchange holidays as expected days, so such
-    a window can never report complete and re-fetches on every call. This
-    pins that the repeated fetch is now the one blacked-out day rather
-    than the whole window — the leak is bounded, not closed. Closing it
-    needs a holiday-aware expected-day set, which is the data lake's job
-    (parent #1825), not this store's.
+    ``date(2026, 1, 8)`` here is an ordinary trading Thursday, not a real
+    NYSE holiday — the point of this test is a blackout the calendar
+    can't see (an outage, a delisting gap, anything provider-side), so
+    ``_iter_weekdays`` counting it as an expected day is not the bug:
+    such a window genuinely can never report complete and re-fetches on
+    every call. This pins that the repeated fetch is bounded to the one
+    blacked-out day rather than the whole window. A window whose only
+    gap actually *is* a real exchange holiday no longer even re-fetches
+    — see ``test_missing_spans_drops_a_holiday_from_the_grouping`` and
+    ``test_ensure_range_makes_zero_further_calls_for_a_holiday_only_gap``.
     """
-    holiday = date(2026, 1, 8)
-    polygon = _FakePolygon(blackout={holiday})
+    outage_day = date(2026, 1, 8)
+    polygon = _FakePolygon(blackout={outage_day})
     policy_root = tmp_path / "polygon-raw"
     policy_root.mkdir()
     window = (date(2026, 1, 5), date(2026, 1, 16))
@@ -499,5 +504,52 @@ def test_ensure_range_over_a_provider_blackout_refetches_only_that_day(tmp_path:
 
     report = _ensure_spy(polygon, policy_root, *window)
 
-    assert report.missing_days == [holiday]
+    assert report.missing_days == [outage_day]
     assert polygon.ranges == [("2026-01-08", "2026-01-08")]
+
+
+def test_missing_spans_drops_a_holiday_from_the_grouping():
+    """A day check_availability flags "missing" that isn't a real NYSE
+    trading session (a holiday) never starts or extends a span — it is
+    simply skipped, since ``_missing_spans`` now walks the canonical
+    session calendar instead of ``_iter_weekdays``."""
+    holiday = date(2026, 1, 1)  # New Year's Day, not a session
+    window = (date(2025, 12, 30), date(2026, 1, 2))
+    assert holiday not in expected_sessions(*window)
+
+    spans = _missing_spans(*window, {holiday, date(2025, 12, 30)})
+
+    assert spans == [(date(2025, 12, 30), date(2025, 12, 30))]
+
+
+def test_ensure_range_makes_zero_further_calls_for_a_holiday_only_gap(tmp_path: Path):
+    """Once every real trading session in a window is cached, a re-check
+    whose only naively-"missing" day is a real NYSE holiday makes ZERO
+    further provider calls — there is nothing to fetch for a day the
+    market never opened. Contrast with
+    ``test_ensure_range_over_a_provider_blackout_refetches_only_that_day``,
+    where the blacked-out day *is* a real trading session and the
+    re-fetch is merely bounded, not eliminated."""
+    window = (date(2025, 12, 30), date(2026, 1, 2))
+    holiday = date(2026, 1, 1)  # New Year's Day, observed Thursday
+    # Derive/assert the holiday's status from the canonical calendar —
+    # never hardcode "this date is a non-session" as a bare fact.
+    assert holiday.weekday() < 5  # passes check_availability's naive weekday filter
+    assert not is_trading_day(holiday)  # ...but is not a real NYSE session
+    assert holiday not in expected_sessions(*window)
+
+    polygon = _FakePolygon(blackout={holiday})
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    _ensure_spy(polygon, policy_root, *window)
+    calls_after_first = polygon.calls
+    assert calls_after_first >= 1
+
+    report = _ensure_spy(polygon, policy_root, *window)
+
+    # check_availability's weekday-only filter still can't see the
+    # holiday, so it's reported "missing" and the window "incomplete" —
+    # but nothing further was fetched for it.
+    assert report.missing_days == [holiday]
+    assert not report.is_complete
+    assert polygon.calls == calls_after_first
