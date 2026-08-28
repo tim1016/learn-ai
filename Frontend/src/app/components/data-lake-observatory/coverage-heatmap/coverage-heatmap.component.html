@@ -1,0 +1,56 @@
+@let boardValue = board();
+
+<div class="heatmap">
+  <div class="heatmap__axis">
+    <span class="heatmap__axis-count">{{ boardValue.sessionCount }} sessions</span>
+    @if (boardValue.firstSessionMs !== null && boardValue.lastSessionMs !== null) {
+      <span class="heatmap__axis-range">
+        <app-timestamp-display [value]="boardValue.firstSessionMs" mode="date-et" />
+        <span aria-hidden="true">→</span>
+        <span class="sr-only">to</span>
+        <app-timestamp-display [value]="boardValue.lastSessionMs" mode="date-et" />
+      </span>
+    }
+    <span class="heatmap__axis-note">
+      Sessions come from the exchange calendar, so weekends and holidays are not drawn at all.
+    </span>
+  </div>
+
+  <ul class="legend" aria-label="Coverage states">
+    @for (entry of legend(); track entry.status) {
+      <li class="legend__item">
+        <span class="swatch" [attr.data-status]="entry.status" aria-hidden="true">{{ entry.glyph }}</span>
+        <span class="legend__label">{{ entry.status | receiptLabel }}</span>
+        <span class="legend__count">{{ entry.count }}</span>
+      </li>
+    }
+  </ul>
+
+  @for (row of rows(); track row.symbol) {
+    <section class="heatmap__row">
+      <h3 class="heatmap__symbol" [id]="'lake-row-' + row.symbol">{{ row.symbol }}</h3>
+      <div class="heatmap__strip" role="group" [attr.aria-labelledby]="'lake-row-' + row.symbol">
+        @for (cell of row.cells; track cell.tradingDateMs) {
+          <button
+            type="button"
+            class="swatch cell"
+            [class.cell--selected]="cell.artifactId !== null && cell.artifactId === selectedArtifactId()"
+            [disabled]="cell.artifactId === null"
+            [attr.aria-label]="cellLabel(row, cell)"
+            [attr.data-status]="cell.status"
+            (click)="select(row, cell)"
+          >
+            <span aria-hidden="true">{{ glyph(cell.status) }}</span>
+          </button>
+        }
+      </div>
+      <p class="heatmap__tally">
+        @for (entry of legend(); track entry.status) {
+          <span class="heatmap__tally-item">
+            {{ entry.status | receiptLabel }} {{ row.counts[entry.status] }}
+          </span>
+        }
+      </p>
+    </section>
+  }
+</div>

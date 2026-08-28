@@ -1,0 +1,67 @@
+@if (phase() !== 'idle') {
+  <div class="run">
+    @if (jobId(); as id) {
+      <p class="run__job">job <span class="run__token">{{ id }}</span></p>
+    }
+
+    @if (progress(); as tick) {
+      <div class="run__progress">
+        <div
+          class="run__bar"
+          role="progressbar"
+          aria-label="Backfill progress"
+          [attr.aria-valuenow]="percent()"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        >
+          <span class="run__bar-fill" [style.width.%]="percent()"></span>
+        </div>
+        <p class="run__tick" aria-live="polite">
+          {{ tick.current }} / {{ tick.total }} {{ tick.unit }}
+          @if (tick.message) {
+            <span class="run__tick-message">· {{ tick.message }}</span>
+          }
+        </p>
+      </div>
+    }
+
+    @if (error(); as failure) {
+      <p class="run__error" role="alert">
+        <span class="run__reason">{{ failure.code | receiptLabel }}</span>
+        <span>{{ failure.message }}</span>
+      </p>
+    }
+
+    @if (failures().length > 0) {
+      <ul class="run__failures" aria-label="Backfill failures">
+        @for (failure of failures(); track failureKey(failure)) {
+          <li class="run__failure">
+            <span class="run__reason">{{ failure.reason | receiptLabel }}</span>
+            @if (failure.trading_date_ms !== null) {
+              <app-timestamp-display [value]="failure.trading_date_ms" mode="date-et" />
+            }
+            <span class="run__failure-kind">{{ failure.artifact_kind | receiptLabel }}</span>
+            @if (failure.detail) {
+              <span class="run__failure-detail">{{ failure.detail }}</span>
+            }
+          </li>
+        }
+      </ul>
+    }
+
+    @if (days().length > 0) {
+      <ol class="run__days" aria-label="Sessions processed">
+        @for (day of days(); track day.day_index) {
+          <li class="run__day">
+            <app-timestamp-display [value]="day.trading_date_ms" mode="date-et" />
+            <span>fetched {{ day.fetched_count }}</span>
+            <span>reused {{ day.reused_count }}</span>
+            <span>failed {{ day.failures.length }}</span>
+          </li>
+        }
+      </ol>
+    } @else if (phase() === 'running') {
+      <p class="run__waiting" aria-live="polite">Waiting for the first session to report…</p>
+    }
+  </div>
+}

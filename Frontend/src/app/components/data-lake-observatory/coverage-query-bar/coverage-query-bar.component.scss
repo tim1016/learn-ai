@@ -1,0 +1,65 @@
+:host {
+  display: block;
+}
+
+.query {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4);
+
+  &__apply {
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    color: var(--text-on-accent);
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+  }
+
+  &__note {
+    margin: var(--space-2) 0 0;
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--text-subtle);
+
+  &__input {
+    min-width: 9rem;
+    padding: var(--space-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+
+    &--wide {
+      min-width: 14rem;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: 1px;
+    }
+  }
+}

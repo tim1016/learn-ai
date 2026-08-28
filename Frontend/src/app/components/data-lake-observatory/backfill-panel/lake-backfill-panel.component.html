@@ -1,0 +1,74 @@
+<form class="backfill" (submit)="$event.preventDefault(); submit()">
+  <div class="backfill__fields">
+    <div class="field">
+      <label for="backfill-symbols">Symbols to backfill</label>
+      <input
+        id="backfill-symbols"
+        class="field__input"
+        type="text"
+        autocomplete="off"
+        placeholder="SPY, AAPL"
+        [value]="symbolsText()"
+        (input)="onSymbols($event)"
+      />
+    </div>
+    <div class="field">
+      <label for="backfill-start">Backfill start date</label>
+      <input
+        id="backfill-start"
+        class="field__input"
+        type="date"
+        [value]="startTradingDate()"
+        (input)="onStart($event)"
+      />
+    </div>
+    <div class="field">
+      <label for="backfill-end">Backfill end date</label>
+      <input
+        id="backfill-end"
+        class="field__input"
+        type="date"
+        [value]="endTradingDate()"
+        (input)="onEnd($event)"
+      />
+    </div>
+    <div class="field field--check">
+      <input id="backfill-quotes" type="checkbox" [checked]="includeQuotes()" (change)="onIncludeQuotes($event)" />
+      <label for="backfill-quotes">Also derive quote bars</label>
+    </div>
+    <div class="field field--check">
+      <input id="backfill-force" type="checkbox" [checked]="forceRefresh()" (change)="onForceRefresh($event)" />
+      <label for="backfill-force">Re-fetch artifacts that already exist</label>
+    </div>
+  </div>
+
+  @if (parsed().invalid.length > 0) {
+    <p class="backfill__note" role="status">
+      Not a storable symbol: {{ parsed().invalid.join(', ') }}
+    </p>
+  }
+  @if (blockedReason(); as reason) {
+    <p class="backfill__note" role="status">{{ reason }}</p>
+  }
+  @if (submitError(); as message) {
+    <p class="backfill__note backfill__note--error" role="alert">{{ message }}</p>
+  }
+
+  <div class="backfill__actions">
+    <button type="submit" class="backfill__submit" [disabled]="!canSubmit()">Run backfill</button>
+    @if (store.running()) {
+      <button type="button" class="backfill__cancel" (click)="cancel()">Cancel</button>
+    }
+    <span class="backfill__phase">{{ store.phase() | receiptLabel }}</span>
+  </div>
+
+  <app-backfill-run-log
+    [phase]="store.phase()"
+    [percent]="percent()"
+    [progress]="store.progress()"
+    [days]="store.days()"
+    [failures]="store.failures()"
+    [error]="store.error()"
+    [jobId]="store.jobId()"
+  />
+</form>

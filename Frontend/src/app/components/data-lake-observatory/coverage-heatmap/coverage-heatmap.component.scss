@@ -1,0 +1,162 @@
+:host {
+  display: block;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+
+  &__axis {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3);
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+  }
+
+  &__axis-count {
+    font-weight: var(--fw-semi);
+    color: var(--text-secondary);
+  }
+
+  &__axis-range {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+  }
+
+  &__row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
+  &__symbol {
+    margin: 0;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-caps);
+    color: var(--text-primary);
+  }
+
+  &__strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+
+  &__tally {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin: 0;
+    font-size: var(--fs-xxs);
+    color: var(--text-subtle);
+  }
+}
+
+// One state palette, worn by both the grid cell and its legend key, so the
+// two can never drift. Colour is the third channel only: the glyph inside
+// the square and the state named in the accessible label each carry the
+// state on their own (WCAG 1.4.1).
+.swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-subtle);
+
+  &[data-status='complete'] {
+    background: var(--bull-soft);
+    border-color: var(--bull);
+    color: var(--bull);
+  }
+
+  &[data-status='fetching'] {
+    background: var(--info-soft);
+    border-color: var(--info);
+    color: var(--info);
+  }
+
+  &[data-status='stale'] {
+    background: var(--warn-soft);
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+
+  &[data-status='failed'] {
+    background: var(--bear-soft);
+    border-color: var(--bear);
+    color: var(--bear);
+  }
+
+  &[data-status='missing'] {
+    background: var(--bg-sunken);
+    border-color: var(--border-strong);
+    color: var(--text-subtle);
+  }
+}
+
+.cell {
+  cursor: pointer;
+
+  &:disabled {
+    cursor: default;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent-text);
+    outline-offset: 1px;
+  }
+
+  &--selected {
+    box-shadow: 0 0 0 2px var(--accent-text);
+  }
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  &__item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+  }
+
+  &__count {
+    font-family: var(--font-mono);
+    font-weight: var(--fw-semi);
+    color: var(--text-primary);
+  }
+}

@@ -1,0 +1,62 @@
+<div class="inspector">
+  <p class="inspector__eyebrow">
+    @if (symbol(); as sym) {
+      <span>{{ sym }}</span>
+    }
+    <span class="inspector__id">artifact {{ artifactId() }}</span>
+  </p>
+
+  @if (detail.isLoading()) {
+    <p class="inspector__state" aria-live="polite" aria-busy="true">Loading the artifact receipt…</p>
+  } @else if (receiptAbsent()) {
+    <p class="inspector__state" role="status">
+      No receipt for artifact {{ artifactId() }}. Either the catalog holds no such row, or the data
+      lake is not enabled on this data plane.
+    </p>
+  } @else if (problem(); as issue) {
+    <p class="inspector__state inspector__state--error" role="alert">
+      <span class="inspector__reason">{{ issue.reason | receiptLabel }}</span>
+      <span>{{ issue.message }}</span>
+    </p>
+  } @else {
+    @for (section of sections(); track section.title) {
+      <section class="receipt">
+        <h4 class="receipt__title">{{ section.title }}</h4>
+        <dl class="receipt__list">
+          @for (row of section.rows; track row.label) {
+            <div class="receipt__row">
+              <dt class="receipt__label">{{ row.label | receiptLabel }}</dt>
+              <dd class="receipt__value">
+                @switch (row.kind) {
+                  @case ('exact') {
+                    <span class="receipt__token">{{ row.value }}</span>
+                    <app-copy-button
+                      [text]="row.value"
+                      [ariaLabel]="'Copy ' + row.label"
+                      copiedLabel="Copied"
+                    />
+                  }
+                  @case ('date') {
+                    <app-timestamp-display [value]="row.value" mode="date-et" />
+                  }
+                  @case ('instant') {
+                    <app-timestamp-display [value]="row.value" mode="local" />
+                  }
+                  @case ('count') {
+                    <span class="receipt__token">{{ row.value }}</span>
+                  }
+                  @case ('prose') {
+                    <span>{{ row.value }}</span>
+                  }
+                  @case ('code') {
+                    <span>{{ row.value | receiptLabel }}</span>
+                  }
+                }
+              </dd>
+            </div>
+          }
+        </dl>
+      </section>
+    }
+  }
+</div>
