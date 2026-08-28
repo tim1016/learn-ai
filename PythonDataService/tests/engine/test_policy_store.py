@@ -278,10 +278,12 @@ class _FakePolygon:
     def __init__(self) -> None:
         self.calls = 0
         self.adjusted_seen: list[bool] = []
+        self.ranges_seen: list[tuple[str, str]] = []
 
     def fetch_aggregates(self, **kwargs) -> list[dict]:
         self.calls += 1
         self.adjusted_seen.append(kwargs["adjusted"])
+        self.ranges_seen.append((kwargs["from_date"], kwargs["to_date"]))
         start = date.fromisoformat(kwargs["from_date"])
         end = date.fromisoformat(kwargs["to_date"])
         bars: list[dict] = []
@@ -382,3 +384,108 @@ def test_ensure_range_concurrent_runs_fetch_once(tmp_path: Path):
     assert polygon.calls == 1
     zips = sorted(p.name for p in (policy_root / "equity" / "usa" / "minute" / "spy").glob("*_trade.zip"))
     assert zips == ["20260105_trade.zip", "20260106_trade.zip"]
+
+
+def test_ensure_range_refetches_only_the_missing_day_not_the_whole_window(tmp_path: Path):
+    """Regression for #1830: a window with one missing day out of a
+    larger, otherwise-complete range must fetch only that one day from
+    the provider — not re-export the entire requested window."""
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = {"start": date(2026, 1, 5), "end": date(2026, 1, 9)}  # Mon-Fri, no holidays
+
+    ensure_range(
+        reference_roots=[],
+        cache_root=policy_root,
+        symbol="SPY",
+        polygon=polygon,
+        adjusted=False,
+        resolution="minute",
+        **window,
+    )
+    assert polygon.calls == 1
+    assert polygon.ranges_seen == [("2026-01-05", "2026-01-09")]
+
+    # Simulate a single missing day in the middle of an otherwise-complete
+    # window (e.g. a torn/evicted zip).
+    zip_dir = policy_root / "equity" / "usa" / "minute" / "spy"
+    (zip_dir / "20260107_trade.zip").unlink()
+
+    report = ensure_range(
+        reference_roots=[],
+        cache_root=policy_root,
+        symbol="SPY",
+        polygon=polygon,
+        adjusted=False,
+        resolution="minute",
+        **window,
+    )
+
+    assert report.is_complete
+    assert polygon.calls == 2
+    assert polygon.ranges_seen[-1] == ("2026-01-07", "2026-01-07")
+    doc = json.loads((policy_root / "provenance" / "spy.json").read_text())
+    assert [f["from_date"] for f in doc["fetches"]] == ["2026-01-05", "2026-01-07"]
+    assert [f["to_date"] for f in doc["fetches"]] == ["2026-01-09", "2026-01-07"]
+    zips = sorted(p.name for p in zip_dir.glob("*_trade.zip"))
+    assert zips == [
+        "20260105_trade.zip",
+        "20260106_trade.zip",
+        "20260107_trade.zip",
+        "20260108_trade.zip",
+        "20260109_trade.zip",
+    ]
+
+
+def test_ensure_range_fetches_disjoint_missing_subranges_separately(tmp_path: Path):
+    """A contiguous gap and an isolated gap in the same window produce two
+    provider calls and two provenance records — one per delta range, not
+    one call per missing day and not one call for the whole window."""
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = {"start": date(2026, 1, 5), "end": date(2026, 1, 9)}
+
+    ensure_range(
+        reference_roots=[],
+        cache_root=policy_root,
+        symbol="SPY",
+        polygon=polygon,
+        adjusted=False,
+        resolution="minute",
+        **window,
+    )
+
+    zip_dir = policy_root / "equity" / "usa" / "minute" / "spy"
+    (zip_dir / "20260106_trade.zip").unlink()
+    (zip_dir / "20260107_trade.zip").unlink()
+    (zip_dir / "20260109_trade.zip").unlink()
+
+    report = ensure_range(
+        reference_roots=[],
+        cache_root=policy_root,
+        symbol="SPY",
+        polygon=polygon,
+        adjusted=False,
+        resolution="minute",
+        **window,
+    )
+
+    assert report.is_complete
+    assert polygon.ranges_seen[1:] == [("2026-01-06", "2026-01-07"), ("2026-01-09", "2026-01-09")]
+    doc = json.loads((policy_root / "provenance" / "spy.json").read_text())
+    fetched_ranges = [(f["from_date"], f["to_date"]) for f in doc["fetches"]]
+    assert fetched_ranges == [
+        ("2026-01-05", "2026-01-09"),
+        ("2026-01-06", "2026-01-07"),
+        ("2026-01-09", "2026-01-09"),
+    ]
+    zips = sorted(p.name for p in zip_dir.glob("*_trade.zip"))
+    assert zips == [
+        "20260105_trade.zip",
+        "20260106_trade.zip",
+        "20260107_trade.zip",
+        "20260108_trade.zip",
+        "20260109_trade.zip",
+    ]
