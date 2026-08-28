@@ -103,6 +103,27 @@ def _write_lake_day(lake_root: Path, session_date: date) -> None:
     path.write_bytes(payload)
 
 
+def _provider_rows(from_date: str, to_date: str) -> list[dict[str, Any]]:
+    """The bars the provider would return for an inclusive ISO day range."""
+    return [
+        {
+            "timestamp": ts,
+            "open": o,
+            "high": h,
+            "low": low,
+            "close": c,
+            "volume": v,
+            # The provider carries two columns the lake has no counterpart
+            # for; keeping them here proves the mixed frame still resamples
+            # to the same response.
+            "vwap": c,
+            "transactions": 10,
+        }
+        for window in session_windows_ms_utc(date.fromisoformat(from_date), date.fromisoformat(to_date))
+        for ts, o, h, low, c, v in _session_rows(window.session_date)
+    ]
+
+
 class _ProviderSpy:
     """Stands in for the per-request provider fetch and records its ranges."""
 
@@ -111,30 +132,19 @@ class _ProviderSpy:
 
     def __call__(self, from_date: str, to_date: str) -> list[dict[str, Any]]:
         self.calls.append((from_date, to_date))
-        out: list[dict[str, Any]] = []
-        for window in session_windows_ms_utc(date.fromisoformat(from_date), date.fromisoformat(to_date)):
-            for ts, o, h, low, c, v in _session_rows(window.session_date):
-                out.append(
-                    {
-                        "timestamp": ts,
-                        "open": o,
-                        "high": h,
-                        "low": low,
-                        "close": c,
-                        "volume": v,
-                        # The provider carries two columns the lake has no
-                        # counterpart for; keeping them here proves the mixed
-                        # frame still resamples to the same response.
-                        "vwap": c,
-                        "transactions": 10,
-                    }
-                )
-        return out
+        return _provider_rows(from_date, to_date)
 
 
 @pytest.fixture
 def lake_root(tmp_path: Path) -> Path:
     return tmp_path / "lake"
+
+
+@pytest.fixture(autouse=True)
+def _clear_chart_caches() -> None:
+    """The chart's two in-process caches outlive a test; start every one cold."""
+    chart_service._resample_cache.clear()
+    chart_service._indicator_cache.clear()
 
 
 def _during(session_date: date) -> int:
@@ -361,7 +371,8 @@ def test_compose_chart_bars_rejects_a_provider_range_that_overlaps_the_lake(lake
     _write_lake_day(lake_root, HALF_DAY)
 
     def over_returning_provider(_from_date: str, _to_date: str) -> list[dict[str, Any]]:
-        return _ProviderSpy()(HALF_DAY.isoformat(), LIVE_SESSION.isoformat())
+        """Re-serves the half-day the lake already covered."""
+        return _provider_rows(HALF_DAY.isoformat(), LIVE_SESSION.isoformat())
 
     with pytest.raises(CanonicalBarsError, match="duplicate timestamp"):
         compose_chart_bars(
@@ -410,28 +421,22 @@ def test_compose_chart_bars_spans_report_session_anchored_ms_boundaries(lake_roo
 # ──────────────────────────────────────────────
 # End-to-end through get_chart_data
 # ──────────────────────────────────────────────
-@pytest.fixture(autouse=True)
-def _clear_chart_caches() -> None:
-    chart_service._resample_cache.clear()
-    chart_service._indicator_cache.clear()
-
-
-def _run_chart(**overrides: Any) -> dict[str, Any]:
-    request = {
-        "ticker": _SYMBOL,
-        "from_date": REGULAR_BEFORE.isoformat(),
-        "to_date": LIVE_SESSION.isoformat(),
-        "timeframe": "15m",
-        "session": "rth",
-        "indicators": [{"name": "ema", "params": {"length": 5}}],
-        "adjusted": False,
-    }
-    request.update(overrides)
-    return chart_service.get_chart_data(**request)
+def _run_chart() -> dict[str, Any]:
+    return chart_service.get_chart_data(
+        ticker=_SYMBOL,
+        from_date=REGULAR_BEFORE.isoformat(),
+        to_date=LIVE_SESSION.isoformat(),
+        timeframe="15m",
+        session="rth",
+        indicators=[{"name": "ema", "params": {"length": 5}}],
+        adjusted=False,
+    )
 
 
 @pytest.fixture
-def _provider_backed(monkeypatch: pytest.MonkeyPatch) -> _ProviderSpy:
+def chart_provider(monkeypatch: pytest.MonkeyPatch) -> _ProviderSpy:
+    """Replace the chart service's provider fetch — both the flag-off path and
+    the composed path go through this one seam."""
     provider = _ProviderSpy()
     monkeypatch.setattr(
         chart_service,
@@ -442,7 +447,7 @@ def _provider_backed(monkeypatch: pytest.MonkeyPatch) -> _ProviderSpy:
 
 
 def test_get_chart_data_omits_bar_sources_when_the_flag_is_off(
-    monkeypatch: pytest.MonkeyPatch, _provider_backed: _ProviderSpy
+    monkeypatch: pytest.MonkeyPatch, chart_provider: _ProviderSpy
 ) -> None:
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
 
@@ -453,7 +458,7 @@ def test_get_chart_data_omits_bar_sources_when_the_flag_is_off(
 
 
 def test_get_chart_data_flag_on_matches_flag_off_bars_and_indicators(
-    monkeypatch: pytest.MonkeyPatch, _provider_backed: _ProviderSpy, lake_root: Path
+    monkeypatch: pytest.MonkeyPatch, chart_provider: _ProviderSpy, lake_root: Path
 ) -> None:
     """Resampling and indicator outputs are identical for identical inputs.
 
@@ -478,7 +483,7 @@ def test_get_chart_data_flag_on_matches_flag_off_bars_and_indicators(
 
 
 def test_get_chart_data_carries_the_source_indicator_when_history_is_lake_backed(
-    monkeypatch: pytest.MonkeyPatch, _provider_backed: _ProviderSpy, lake_root: Path
+    monkeypatch: pytest.MonkeyPatch, chart_provider: _ProviderSpy, lake_root: Path
 ) -> None:
     for window in session_windows_ms_utc(date(2025, 10, 1), HALF_DAY):
         _write_lake_day(lake_root, window.session_date)
@@ -494,4 +499,4 @@ def test_get_chart_data_carries_the_source_indicator_when_history_is_lake_backed
     # Warmup pulled the fetch window back before the requested range, and every
     # one of those sessions came out of the lake: the provider saw the current
     # session only.
-    assert _provider_backed.calls == [(LIVE_SESSION.isoformat(), LIVE_SESSION.isoformat())]
+    assert chart_provider.calls == [(LIVE_SESSION.isoformat(), LIVE_SESSION.isoformat())]

@@ -74,9 +74,9 @@ class BarSourceSpan:
 
     source: BarSourceName
     reason: SpanReason
-    sessions: tuple[date, ...]
     from_session_open_ms_utc: int
     to_session_open_ms_utc: int
+    session_count: int
     bar_count: int
 
     def as_response_dict(self) -> dict[str, Any]:
@@ -87,7 +87,7 @@ class BarSourceSpan:
             "reason": self.reason,
             "from_session_open_ms_utc": self.from_session_open_ms_utc,
             "to_session_open_ms_utc": self.to_session_open_ms_utc,
-            "session_count": len(self.sessions),
+            "session_count": self.session_count,
             "bar_count": self.bar_count,
         }
 
@@ -247,9 +247,9 @@ def compose_chart_bars(
             BarSourceSpan(
                 source=source,
                 reason=reason,
-                sessions=tuple(window.session_date for window in windows),
                 from_session_open_ms_utc=windows[0].open_ms_utc,
                 to_session_open_ms_utc=windows[-1].open_ms_utc,
+                session_count=len(windows),
                 bar_count=len(segment_bars),
             )
         )
