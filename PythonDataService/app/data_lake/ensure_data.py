@@ -29,6 +29,7 @@ import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -273,6 +274,22 @@ def _compute_data_availability_hash(artifacts: list[ArtifactRecord]) -> str:
     fingerprints.sort(key=lambda t: tuple("" if v is None else str(v) for v in t))
     blob = json.dumps(fingerprints, default=str, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
+
+
+def classify_overall_status(*, has_failures: bool, has_success: bool) -> Literal["complete", "partial", "failed"]:
+    """Shared complete/partial/failed classification.
+
+    Any success at all downgrades a failure-bearing result from 'failed'
+    to 'partial'. Single source of truth for this rule — both ensure_data
+    (below) and the backfill job's per-day/whole-range rollups
+    (app.data_lake.backfill) apply it identically rather than each
+    re-deriving the same three-way branch.
+    """
+    if has_failures and has_success:
+        return "partial"
+    if has_failures:
+        return "failed"
+    return "complete"
 
 
 def _is_minute_trade(identity: ArtifactIdentity) -> bool:
@@ -1449,12 +1466,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             elif failure is not None:
                 failures.append(failure)
 
-    if failures and artifacts:
-        overall_status = "partial"
-    elif failures:
-        overall_status = "failed"
-    else:
-        overall_status = "complete"
+    overall_status = classify_overall_status(has_failures=bool(failures), has_success=bool(artifacts))
 
     completed_ms = int(time.time() * 1000)
     return DataAvailabilityResult(

@@ -281,6 +281,63 @@ async def select_coverage_minute_bars(
     ]
 
 
+@dataclass(frozen=True)
+class MinuteBarLeaseStatus:
+    """Current row state for one minute-bar claim, independent of Status.
+
+    ``select_coverage_minute_bars`` above only ever answers "is it
+    complete?" — the caller can't tell an in-flight claim from one that
+    has already permanently failed. This lets a caller (the backfill
+    job's lease-wait loop, #1836) distinguish the two without re-running
+    ensure_data's whole per-day pipeline on every poll.
+    """
+
+    status: str  # 'fetching' | 'complete' | 'failed'
+    lease_expires_at_ms: int | None
+    last_error: str | None
+    error_message: str | None
+
+
+async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBarLeaseStatus | None:
+    """Return the current row state for one minute-bar identity, or None
+    if no row exists for it yet. A single indexed SELECT — no join, no
+    aggregation; cheap to poll.
+    """
+    if identity.artifact_kind != "time_series_bars" or identity.resolution != "minute":
+        raise ValueError(f"select_minute_bar_lease_status called with non-minute-bar identity: {identity!r}")
+    query = """
+        SELECT "Status", "LeaseExpiresAtMs", "LastError", "ErrorMessage"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Market" = $1
+           AND "Symbol" = $2
+           AND "TradingDate" = $3
+           AND "DataType" = $4
+           AND "Provider" = $5
+           AND "PriceAdjustmentMode" = $6
+         LIMIT 1
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            query,
+            identity.market,
+            identity.symbol,
+            identity.trading_date,
+            identity.data_type,
+            identity.provider,
+            identity.price_adjustment_mode,
+        )
+    if row is None:
+        return None
+    return MinuteBarLeaseStatus(
+        status=row["Status"],
+        lease_expires_at_ms=row["LeaseExpiresAtMs"],
+        last_error=row["LastError"],
+        error_message=row["ErrorMessage"],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Slice 1b write operations
 # ---------------------------------------------------------------------------
