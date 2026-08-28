@@ -38,3 +38,26 @@ def test_blocking_lock_propagates_a_posix_lock_os_error(
         tmp_path / "attempt"
     ):
         pass
+
+
+def test_try_lock_reports_contention_while_another_holder_has_the_lock(tmp_path: Path) -> None:
+    """Genuine mutual exclusion, not just simulated-OS-error handling: two
+    independent open()s of the same sibling lock file (the shape
+    advisory_file_lock / try_advisory_file_lock always produce) must
+    actually conflict via flock -- proving the primitive real callers (e.g.
+    app.data_lake.cache_import's lake-root-mode critical section) rely on
+    for cross-process exclusion isn't a no-op."""
+    target = tmp_path / "artifact"
+
+    with advisory_file_lock(target), try_advisory_file_lock(target) as acquired:
+        assert acquired is False
+
+
+def test_try_lock_succeeds_once_the_holder_releases(tmp_path: Path) -> None:
+    target = tmp_path / "artifact"
+
+    with advisory_file_lock(target):
+        pass  # released on context exit
+
+    with try_advisory_file_lock(target) as acquired:
+        assert acquired is True

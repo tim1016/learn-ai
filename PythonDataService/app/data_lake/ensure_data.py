@@ -542,12 +542,20 @@ async def _process_minute_trade_artifact(
     )
     if artifact_id is None:
         # Already complete (or in-flight); read the existing complete row.
+        # price_adjustment_mode is passed explicitly (not left to the
+        # query's "match any mode" default): app.data_lake.cache_import can
+        # now put a 'polygon_split_adjusted' row in the catalog for the same
+        # (market, symbol, date, data_type) this 'raw' identity claims, and
+        # picking the wrong one here would silently launder into a
+        # nondeterministic downstream quote data_contract_hash (_quote_dch
+        # below keys off this record's id/file_sha256).
         existing = await catalog_client.select_coverage_minute_bars(
             market=identity.market,  # type: ignore[arg-type]
             symbol=identity.symbol,  # type: ignore[arg-type]
             data_type="trade",
             start_trading_date=identity.trading_date,  # type: ignore[arg-type]
             end_trading_date=identity.trading_date,  # type: ignore[arg-type]
+            price_adjustment_mode=identity.price_adjustment_mode,
         )
         if existing:
             return existing[0], None, True  # cache hit
@@ -683,6 +691,7 @@ async def _process_minute_trade_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
 
     first_bar_ms = polygon_bars[0].t_ms
@@ -842,6 +851,7 @@ async def _process_factor_file_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -949,6 +959,7 @@ async def _process_map_file_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -1013,12 +1024,16 @@ async def _process_minute_quote_artifact(
         file_path=file_path,
     )
     if artifact_id is None:
+        # price_adjustment_mode scoped explicitly for the same reason as the
+        # minute-trade lookup above: a coexisting different-mode row for
+        # this (market, symbol, date, data_type) must never be picked here.
         existing = await catalog_client.select_coverage_minute_bars(
             market=identity.market,  # type: ignore[arg-type]
             symbol=identity.symbol,  # type: ignore[arg-type]
             data_type="quote",
             start_trading_date=identity.trading_date,  # type: ignore[arg-type]
             end_trading_date=identity.trading_date,  # type: ignore[arg-type]
+            price_adjustment_mode=identity.price_adjustment_mode,
         )
         if existing:
             return existing[0], None, True  # cache hit
@@ -1069,6 +1084,7 @@ async def _process_minute_quote_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     row_count = len(trade_bars)
     first_ms = int(trade_bars[0].bar_start_et.timestamp() * 1000) if trade_bars else 0
@@ -1204,6 +1220,7 @@ async def _process_daily_trade_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     row_count = len(aggregates)
     await catalog_client.complete_artifact(

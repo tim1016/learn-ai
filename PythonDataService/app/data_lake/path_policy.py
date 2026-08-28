@@ -40,6 +40,14 @@ def resolve_lake_root() -> Path:
     ``DATA_LAKE_ENABLED`` is on. It is not created here — a missing root
     means "the lake holds nothing yet", which every reader must already
     handle as a per-day miss.
+
+    Catalog rows are root-relative: ``FilePath`` carries no root identity of
+    its own, so every lake writer must resolve the root here — a writer using
+    a different root produces "phantom coverage": rows that look complete in
+    the catalog but have no bytes where anything else looks. The full
+    root-identity (``data_root_id``) design that would let more than one
+    physical root coexist honestly is ledgered for the flag-flip slice
+    (#1839); until then there is exactly one canonical root, and this is it.
     """
     return Path(settings.LEAN_DATA_WRITE_ROOT) / _LAKE_DIR
 
@@ -53,6 +61,18 @@ def resolve_staging_root() -> Path:
     return Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR
 
 
+def minute_bar_market_root(market: Market) -> PurePosixPath:
+    """Return the market-wide minute-bar directory (no symbol/date/type yet).
+
+    A caller that needs to *discover* what's already on disk for a market
+    (rather than construct one artifact's fully-known path) still goes
+    through path_policy for the prefix instead of hand-rolling
+    ``equity/<market>/minute`` itself. ``LeanMinuteBarPath.relative_path``
+    below builds on top of this so the segments are declared exactly once.
+    """
+    return PurePosixPath("equity") / market / "minute"
+
+
 @dataclass(frozen=True)
 class LeanMinuteBarPath:
     market: Market
@@ -62,9 +82,7 @@ class LeanMinuteBarPath:
 
     def relative_path(self) -> PurePosixPath:
         return (
-            PurePosixPath("equity")
-            / self.market
-            / "minute"
+            minute_bar_market_root(self.market)
             / self.symbol.lower()
             / f"{self.trading_date.strftime('%Y%m%d')}_{self.data_type}.zip"
         )
