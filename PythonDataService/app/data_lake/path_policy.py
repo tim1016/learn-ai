@@ -17,10 +17,11 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, get_args
 from uuid import UUID
 
 from app.config import settings
@@ -33,6 +34,11 @@ MetadataKind = Literal["market_hours", "symbol_properties"]
 
 _LAKE_DIR = "lake"
 _STAGING_DIR = "staging"
+# The closed set of directory names a lake root may have. Mirrors
+# ``types.PriceAdjustmentMode``; restated as a runtime value because this
+# module turns the mode into a filesystem path and a typing Literal does not
+# survive to runtime.
+_ADJUSTMENT_MODES: frozenset[str] = frozenset(get_args(PriceAdjustmentMode))
 
 
 def lake_subpath(price_adjustment_mode: PriceAdjustmentMode) -> PurePosixPath:
@@ -95,8 +101,36 @@ def resolve_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
     and are written into each mode root that needs them, because LEAN takes
     exactly one data root and must resolve them inside it. Their duplicated
     bytes are CSVs and one JSON; the minute-bar zips are the volume.
+
+    The mode is validated here rather than trusted. It reaches this function
+    from request input (``DataRunSpec.price_adjustment_mode``, and the
+    coverage endpoint's query parameter), and it is now a path segment, so an
+    unchecked value would be a traversal away from the lake. Pydantic's
+    ``Literal`` already constrains both callers, but a type annotation is not
+    a runtime boundary and this is the one place the segment is constructed —
+    it is where the check belongs.
     """
-    return Path(settings.LEAN_DATA_WRITE_ROOT) / lake_subpath(price_adjustment_mode)
+    return _lake_root_within_container(price_adjustment_mode)
+
+
+def _lake_root_within_container(price_adjustment_mode: str) -> Path:
+    """Build the mode root, refusing anything that escapes the lake.
+
+    Two checks, because they fail differently. The membership test rejects
+    the value; the containment test proves the *path* it produced is still
+    inside the lake, which is the property that actually matters and the one
+    a future third mode could break by accident.
+    """
+    if price_adjustment_mode not in _ADJUSTMENT_MODES:
+        raise ValueError(
+            f"{price_adjustment_mode!r} is not a price adjustment mode; expected one of "
+            f"{', '.join(sorted(_ADJUSTMENT_MODES))}"
+        )
+    container = os.path.realpath(os.fspath(resolve_lake_container()))
+    root = os.path.realpath(os.path.join(container, price_adjustment_mode))
+    if not root.startswith(container.rstrip(os.sep) + os.sep):
+        raise ValueError(f"lake root {root!r} escapes the lake container {container!r}")
+    return Path(root)
 
 
 def resolve_staging_root() -> Path:

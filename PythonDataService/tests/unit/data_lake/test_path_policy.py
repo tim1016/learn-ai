@@ -9,6 +9,8 @@ from datetime import date
 from pathlib import Path, PurePosixPath
 from uuid import UUID
 
+import pytest
+
 from app.config import settings
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
@@ -164,3 +166,28 @@ class TestLakeRoots:
 
         assert ensure_data.resolve_lake_root is resolve_lake_root
         assert ensure_data.resolve_staging_root is resolve_staging_root
+
+
+class TestLakeRootRefusesUntrustedModes:
+    """The mode reaches ``resolve_lake_root`` from request input and is now a
+    path segment, so it is validated at the one place the segment is built."""
+
+    @pytest.mark.parametrize(
+        "mode",
+        ["../../etc", "raw/../../..", "..", "/absolute", "nonsense", ""],
+    )
+    def test_a_mode_that_is_not_one_refuses(self, monkeypatch, mode: str):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+
+        with pytest.raises(ValueError):
+            resolve_lake_root(mode)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("mode", ["raw", "polygon_split_adjusted", "lean_adjusted"])
+    def test_every_real_mode_resolves_inside_the_container(self, monkeypatch, mode: str):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        container = resolve_lake_container()
+
+        root = resolve_lake_root(mode)  # type: ignore[arg-type]
+
+        assert root.parent == container
+        assert root != container
