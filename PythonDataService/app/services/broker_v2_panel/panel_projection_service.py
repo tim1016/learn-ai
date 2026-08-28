@@ -63,6 +63,7 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
+from app.services.signal_program_admission import WIRING_DRIFT_NEXT_STEP
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -459,7 +460,7 @@ def program_build_view_from_run_evidence(
         next_step=(
             None
             if evidence.wiring != "DRIFTED"
-            else "Re-run golden qualification for this program so its receipt covers the current wiring."
+            else WIRING_DRIFT_NEXT_STEP
         ),
         verification="frozen_run_evidence",
     )

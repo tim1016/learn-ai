@@ -24,6 +24,7 @@ from app.schemas.signal_program_seal import (
     seal_bot_program,
 )
 from app.services.bot_binding_repository import (
+    NON_IDENTITY_EVIDENCE_FIELDS,
     BotBindingRepository,
     BotRunOutcomeRecord,
     BotRunRecord,
@@ -37,6 +38,10 @@ from app.services.bot_binding_repository import (
     alpaca_v1_action_plan,
 )
 from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
+from app.services.broker_v2_panel.panel_projection_service import (
+    program_build_view_from_run_evidence,
+)
+from app.services.signal_program_admission import WIRING_DRIFT_NEXT_STEP
 
 _SID = "alpaca-spy-ema-01"
 
@@ -681,4 +686,54 @@ def test_program_build_evidence_still_conflicts_on_a_different_run_proof(
             ),
             launch_reason="deploy",
         )
+
+
+def test_every_evidence_field_is_classified_as_identity_or_not() -> None:
+    """Adding a field to per-run proof must be a decision, not a default.
+
+    ``run_identity`` excludes a named set and compares the rest, so a new
+    field joins the integrity check unless it is listed. That is the safe
+    default -- but only if someone notices. This pins the split so a new
+    field fails here first and its author has to say which side it is on:
+    genuinely part of *which run's proof this is*, or an observation about
+    the run like ``wiring``. Getting that wrong in the quiet direction means
+    an immutable proof record whose changes stop being detected.
+    """
+    identity = set(ProgramBuildRunEvidence.model_fields) - NON_IDENTITY_EVIDENCE_FIELDS
+
+    assert identity == {
+        "strategy_instance_id",
+        "run_id",
+        "sealed_program_hash",
+        "program_version",
+        "golden_trace_root",
+        "running_artifact_digest",
+        "qualification_receipt_hash",
+        "verified_at_ms",
+    }
+    assert {"schema_version", "wiring"} == NON_IDENTITY_EVIDENCE_FIELDS
+
+
+def test_the_frozen_replay_and_the_live_proof_offer_the_same_drift_remedy() -> None:
+    """One operator instruction, not two that can drift apart.
+
+    A trader reading a live Start refusal and the same bot's frozen run
+    afterwards must be told to do the same thing.
+    """
+    seal = _sealed_program()
+    evidence = ProgramBuildRunEvidence(
+        strategy_instance_id=_SID,
+        run_id="run-001",
+        sealed_program_hash=seal.bot_configuration_hash,
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=1_000,
+        wiring="DRIFTED",
+    )
+
+    replayed = program_build_view_from_run_evidence("ema_crossover_signal", evidence)
+
+    assert replayed.next_step == WIRING_DRIFT_NEXT_STEP
 

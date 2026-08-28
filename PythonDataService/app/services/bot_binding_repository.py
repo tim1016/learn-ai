@@ -177,6 +177,11 @@ class BotRunRecord(BaseModel):
     started_at_ms: int
 
 
+# Fields of `ProgramBuildRunEvidence` that describe the record rather than
+# identify the run whose proof it is. See `run_identity`.
+NON_IDENTITY_EVIDENCE_FIELDS: frozenset[str] = frozenset({"schema_version", "wiring"})
+
+
 class ProgramBuildRunEvidence(BaseModel):
     """Per-run proof of the exact qualified bytes admitted to execute."""
 
@@ -204,27 +209,26 @@ class ProgramBuildRunEvidence(BaseModel):
     # without a wiring check.
     wiring: Literal["MATCHED", "DRIFTED", "NOT_CHECKED"] = "NOT_CHECKED"
 
-    def run_identity(self) -> tuple[str, ...]:
-        """The fields that make this record *this run's* proof.
+    def run_identity(self) -> dict[str, object]:
+        """Everything about this record except what is not this run's identity.
 
         The create-once conflict check asks whether a second write describes
-        the same run, so it compares these and not the whole model.
+        the same run, so it compares this rather than the whole model.
         ``wiring`` is an observation about the run and ``schema_version`` is a
         fact about the file; neither is identity, and comparing them would
         report a same-run rewrite as a conflicting one -- which for a record
-        written before ``wiring`` existed would surface as a refused launch
-        rather than as anything resembling its cause.
+        written before ``wiring`` existed surfaces as a refused launch, saying
+        nothing resembling its cause.
+
+        Deliberately a denylist, not a hand-listed allowlist. A future field
+        left out of an allowlist would silently stop being compared, quietly
+        weakening the integrity check on immutable per-run proof; left out of
+        this denylist it is compared, and the worst case is the loud, already
+        understood spurious conflict above.
+        ``test_every_evidence_field_is_classified_as_identity_or_not`` forces
+        the choice to be made rather than defaulted into.
         """
-        return (
-            self.strategy_instance_id,
-            self.run_id,
-            self.sealed_program_hash,
-            self.program_version,
-            self.golden_trace_root,
-            self.running_artifact_digest,
-            self.qualification_receipt_hash,
-            str(self.verified_at_ms),
-        )
+        return self.model_dump(exclude=NON_IDENTITY_EVIDENCE_FIELDS)
 
 
 class LegacyMigrationLineageRecord(BaseModel):
