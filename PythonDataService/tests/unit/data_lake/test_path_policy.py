@@ -15,8 +15,21 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    minute_bar_market_root,
     staging_path_for,
 )
+
+
+class TestMinuteBarMarketRoot:
+    def test_root_for_usa(self):
+        assert minute_bar_market_root("usa") == PurePosixPath("equity/usa/minute")
+
+    def test_is_the_prefix_of_a_full_minute_bar_path(self):
+        root = minute_bar_market_root("usa")
+        full = LeanMinuteBarPath(
+            market="usa", symbol="SPY", trading_date=date(2024, 5, 20), data_type="trade"
+        ).relative_path()
+        assert str(full).startswith(str(root) + "/")
 
 
 class TestLeanMinuteBarPath:

@@ -22,6 +22,18 @@ DataType = Literal["trade", "quote"]
 MetadataKind = Literal["market_hours", "symbol_properties"]
 
 
+def minute_bar_market_root(market: Market) -> PurePosixPath:
+    """Return the market-wide minute-bar directory (no symbol/date/type yet).
+
+    A caller that needs to *discover* what's already on disk for a market
+    (rather than construct one artifact's fully-known path) still goes
+    through path_policy for the prefix instead of hand-rolling
+    ``equity/<market>/minute`` itself. ``LeanMinuteBarPath.relative_path``
+    below builds on top of this so the segments are declared exactly once.
+    """
+    return PurePosixPath("equity") / market / "minute"
+
+
 @dataclass(frozen=True)
 class LeanMinuteBarPath:
     market: Market
@@ -31,9 +43,7 @@ class LeanMinuteBarPath:
 
     def relative_path(self) -> PurePosixPath:
         return (
-            PurePosixPath("equity")
-            / self.market
-            / "minute"
+            minute_bar_market_root(self.market)
             / self.symbol.lower()
             / f"{self.trading_date.strftime('%Y%m%d')}_{self.data_type}.zip"
         )
