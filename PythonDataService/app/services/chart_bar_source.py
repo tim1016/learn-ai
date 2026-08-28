@@ -28,9 +28,12 @@ Three things fall back to the provider and say so in the response:
   filesystem path is built, and served by the identical provider call the
   flag-off path makes (``symbol_not_lake_addressable``).
 
-Stitching is also capped: past ``_MAX_PROVIDER_RUNS`` contiguous provider runs
-the composition gives up and takes the flag-off path wholesale, so a lake full
-of holes can never cost more provider calls than not having a lake at all.
+Composing never costs more provider calls than not composing. A lake holding
+nothing for the window short-circuits to the flag-off path immediately — there
+is nothing to stitch, so splitting one fetch into a history call and a live
+call would be pure loss — and past ``_MAX_PROVIDER_RUNS`` contiguous provider
+runs a hole-riddled lake takes the same escape. Both land on one whole-window
+fetch over the identical range the flag-off path uses.
 
 The receipt describes the **visible** window. Composition runs over the
 warmup-extended range the caller asks for, but the spans and the notice are cut
@@ -249,7 +252,7 @@ def _visible_spans(
     notice. So the receipt is cut to the visible sessions, at the same
     session-open anchor the span boundaries already use.
     """
-    visible: list[tuple[BarSourceName, SpanReason, list[SessionWindow], list[dict[str, Any]]]] = []
+    visible: list[_ExecutedSegment] = []
     for source, reason, windows, segment_bars in executed:
         in_view = [window for window in windows if window.session_date >= visible_from]
         if in_view:
@@ -346,6 +349,21 @@ def _execute_plan(
     if not adjusted and completed:
         held = set(reader.iter_dates(symbol, completed[0].session_date, completed[-1].session_date))
         lake_dates = frozenset(held.intersection(window.session_date for window in completed))
+
+    if not lake_dates:
+        # Nothing to stitch. Composing anyway would split the window into a
+        # history segment and a live segment — two provider fetches where the
+        # flag-off path makes one, and only two runs, so the fan-out cap would
+        # never notice. This is the *common* shape, not an edge case: an
+        # adjusted chart (the chart's default) can never read the raw-only
+        # lake, and a not-yet-backfilled lake holds nothing at all.
+        return _whole_window_from_provider(
+            from_date=from_date,
+            to_date=to_date,
+            windows=all_windows,
+            reason=history_fallback_reason,
+            fetch_provider=fetch_provider,
+        )
 
     plan = _plan_segments(completed, live, lake_dates, history_fallback_reason)
     provider_runs = sum(1 for source, _reason, _windows in plan if source == "provider")

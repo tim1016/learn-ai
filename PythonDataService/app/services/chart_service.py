@@ -261,12 +261,15 @@ def _resample_cache_key(
     timeframe: str,
     session: str,
     forward_fill: bool,
-    adjusted: bool = True,
-    lake_read: bool = False,
+    adjusted: bool,
+    lake_read: bool,
 ) -> str:
     # ``lake_read`` keys the two sourcing modes apart. Without it a process that
     # flipped DATA_LAKE_ENABLED would serve a composed entry (and its source
-    # indicator) to a flag-off caller from the same key.
+    # indicator) to a flag-off caller from the same key. It has no default for
+    # exactly that reason: a defaulted discriminator is the silent lie the
+    # parameter exists to prevent. (``adjusted`` loses its default alongside it —
+    # Python cannot put a required parameter after a defaulted one.)
     #
     # Known and accepted: the cached entry carries the source indicator computed
     # at fetch time, so for up to one TTL (15 min) after a backfill fills a hole

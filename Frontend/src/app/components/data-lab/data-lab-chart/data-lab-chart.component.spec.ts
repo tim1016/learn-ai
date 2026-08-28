@@ -100,7 +100,6 @@ describe('DataLabChartComponent data-source notice', () => {
       chartResponse({
         boundary_ms_utc: 1_764_599_400_000,
         notice_code: 'history_provider_fallback',
-        spans: [],
       }),
     );
 
@@ -116,7 +115,6 @@ describe('DataLabChartComponent data-source notice', () => {
       chartResponse({
         boundary_ms_utc: null,
         notice_code: 'adjusted_prices_provider_only',
-        spans: [],
       }),
     );
 
@@ -126,7 +124,7 @@ describe('DataLabChartComponent data-source notice', () => {
 
   it('explains a symbol the lake does not carry', async () => {
     const container = await renderChartWith(
-      chartResponse({ boundary_ms_utc: null, notice_code: 'symbol_provider_only', spans: [] }),
+      chartResponse({ boundary_ms_utc: null, notice_code: 'symbol_provider_only' }),
     );
 
     expect(screen.getByRole('status').textContent).toContain('does not carry this symbol');
@@ -141,7 +139,7 @@ describe('DataLabChartComponent data-source notice', () => {
 
   it('shows no notice when history is fully lake-backed', async () => {
     const container = await renderChartWith(
-      chartResponse({ boundary_ms_utc: 1_764_599_400_000, notice_code: null, spans: [] }),
+      chartResponse({ boundary_ms_utc: 1_764_599_400_000, notice_code: null }),
     );
 
     expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
@@ -149,7 +147,7 @@ describe('DataLabChartComponent data-source notice', () => {
 
   it('stays silent — and leaks nothing — on a code the copy map does not know', async () => {
     const container = await renderChartWith(
-      chartResponse({ boundary_ms_utc: null, notice_code: 'some_future_code', spans: [] }),
+      chartResponse({ boundary_ms_utc: null, notice_code: 'some_future_code' }),
     );
 
     expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();

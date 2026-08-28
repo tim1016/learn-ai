@@ -60,34 +60,19 @@ export interface QualityReport {
   out_of_order_fixed?: number;
 }
 
-/** Mirrors the backend's closed `BarSourceName` / `SpanReason` literals in
- *  `app/services/chart_bar_source.py`. */
-export type BarSourceName = 'lake' | 'provider';
-export type BarSourceReason =
-  | 'completed_sessions'
-  | 'current_session'
-  | 'lake_gap'
-  | 'price_adjustment_unsupported'
-  | 'symbol_not_lake_addressable';
-
-export interface BarSourceSpan {
-  source: BarSourceName;
-  reason: BarSourceReason;
-  from_session_open_ms_utc: number;
-  to_session_open_ms_utc: number;
-  session_count: number;
-  bar_count: number;
-}
-
-/** Which portion of the series each source served. Present only while the
- *  data lake is in the chart's read path; absent otherwise. */
+/** The part of the backend's source receipt this chart actually reads. Present
+ *  only while the data lake is in the chart's read path; absent otherwise.
+ *
+ *  The response also carries per-span provenance. Nothing here consumes it, and
+ *  an unread mirror of a backend type drifts without anyone noticing, so it is
+ *  deliberately left undeclared — model it when a surface reads it.
+ *
+ *  `notice_code` is `string`, not a union, because it only ever reaches the
+ *  closed copy map below: a union would make a backend that adds a code look
+ *  impossible rather than merely unknown. */
 export interface BarSources {
   boundary_ms_utc: number | null;
-  /** Deliberately `string`, not a union: this value only ever reaches the
-   *  closed copy map below, and a union would make a backend that adds a code
-   *  look impossible rather than merely unknown. */
   notice_code: string | null;
-  spans: BarSourceSpan[];
 }
 
 export interface ChartDataResponse {

@@ -85,5 +85,4 @@ async def test_chart_data_path_unsafe_ticker_is_typed_no_data_not_a_server_error
         response = await _post_chart(api)
 
         assert response.status_code == 404, f"DATA_LAKE_ENABLED={lake_enabled}"
-        assert response.status_code != 500
         assert response.json()["detail"]["error_code"] == "NO_DATA"

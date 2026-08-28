@@ -389,10 +389,10 @@ def test_compose_chart_bars_serves_an_empty_lake_entirely_from_the_provider(lake
         lake_root=lake_root,
     )
 
-    assert provider.calls == [
-        (REGULAR_BEFORE.isoformat(), HALF_DAY.isoformat()),
-        (LIVE_SESSION.isoformat(), LIVE_SESSION.isoformat()),
-    ]
+    # An empty lake has nothing to stitch, so composing costs exactly what the
+    # flag-off path costs: one fetch over the whole window, not one per segment.
+    assert provider.calls == [(REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat())]
+    assert [(span.source, span.reason) for span in composed.spans] == [("provider", "lake_gap")]
     assert composed.notice_code == "history_provider_fallback"
 
 
@@ -413,8 +413,11 @@ def test_compose_chart_bars_never_reads_the_raw_lake_for_an_adjusted_request(lak
         lake_root=lake_root,
     )
 
+    # The raw-only lake can serve nothing here, so this is the flag-off path
+    # exactly: one fetch, one span, no stitch.
+    assert provider.calls == [(REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat())]
     assert {span.source for span in composed.spans} == {"provider"}
-    assert [span.reason for span in composed.spans] == ["price_adjustment_unsupported", "current_session"]
+    assert [span.reason for span in composed.spans] == ["price_adjustment_unsupported"]
     assert composed.notice_code == "adjusted_prices_provider_only"
 
 

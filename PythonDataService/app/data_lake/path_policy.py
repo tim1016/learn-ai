@@ -7,9 +7,9 @@ appear only in this module and its tests.
 
 The two lake roots (``resolve_lake_root`` / ``resolve_staging_root``) live here
 for the same reason: one canonical answer to "where is the lake on disk", so
-every reader — ensure_data, the engine's run materialization, the chart
-split-read — resolves the identical directory instead of re-deriving it from
-``settings`` in three places.
+its two direct consumers — ``ensure_data``, which writes the artifacts, and the
+chart split-read, which reads them — resolve the identical directory instead of
+each re-deriving it from ``settings``.
 
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
 """
