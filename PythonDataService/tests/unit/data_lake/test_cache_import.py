@@ -34,6 +34,7 @@ from app.data_lake.cache_import import (
     CorruptCacheZipError,
     MissingProvenanceError,
     build_provider_params,
+    check_lake_root_mode,
     decide_claim_outcome,
     discover_cache_zips,
     import_cache_root,
@@ -97,8 +98,9 @@ def test_discover_cache_zips_finds_all_symbols_and_dates_sorted(tmp_path: Path):
     _write_valid_zip(tmp_path, "SPY", date(2024, 5, 20))
     _write_valid_zip(tmp_path, "QQQ", date(2024, 5, 20))
 
-    refs = discover_cache_zips(tmp_path)
+    refs, unrecognized = discover_cache_zips(tmp_path)
 
+    assert unrecognized == []
     assert [(r.symbol, r.trading_date) for r in refs] == [
         ("QQQ", date(2024, 5, 20)),
         ("SPY", date(2024, 5, 20)),
@@ -112,14 +114,44 @@ def test_discover_cache_zips_ignores_non_trade_files(tmp_path: Path):
     (stray_dir / "20240520_quote.zip").write_bytes(b"not a trade zip")
     (stray_dir / "notes.txt").write_text("hello")
 
-    refs = discover_cache_zips(tmp_path)
+    refs, unrecognized = discover_cache_zips(tmp_path)
 
+    assert unrecognized == []
     assert len(refs) == 1
     assert refs[0].zip_path.name == "20240520_trade.zip"
 
 
 def test_discover_cache_zips_missing_minute_tree_returns_empty(tmp_path: Path):
-    assert discover_cache_zips(tmp_path) == []
+    assert discover_cache_zips(tmp_path) == ([], [])
+
+
+def test_discover_cache_zips_surfaces_mis_named_file_as_unrecognized(tmp_path: Path):
+    _write_valid_zip(tmp_path, "SPY", date(2024, 5, 20))
+    stray_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
+    # Matches the *_trade.zip glob but not the <yyyymmdd>_trade.zip shape.
+    (stray_dir / "spy_2024-05-21_trade.zip").write_bytes(b"whatever")
+
+    refs, unrecognized = discover_cache_zips(tmp_path)
+
+    assert len(refs) == 1  # the well-formed zip is still found
+    assert len(unrecognized) == 1
+    assert unrecognized[0].symbol == "SPY"
+    assert unrecognized[0].path.name == "spy_2024-05-21_trade.zip"
+
+
+def test_discover_cache_zips_surfaces_invalid_calendar_date_as_unrecognized(tmp_path: Path):
+    _write_valid_zip(tmp_path, "SPY", date(2024, 5, 20))
+    stray_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
+    # 8 digits, matches the regex shape, but month 13 doesn't exist -- must
+    # not raise an uncaught ValueError out of discover_cache_zips.
+    (stray_dir / "20241332_trade.zip").write_bytes(b"whatever")
+
+    refs, unrecognized = discover_cache_zips(tmp_path)
+
+    assert len(refs) == 1
+    assert len(unrecognized) == 1
+    assert unrecognized[0].symbol == "SPY"
+    assert "20241332" in unrecognized[0].detail
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +193,36 @@ def test_load_symbol_provenance_invalid_json_raises(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# _import_minute_trade_dch (imported-vs-fetched provenance distinction)
+# ---------------------------------------------------------------------------
+
+
+def test_import_minute_trade_dch_differs_by_adjustment_mode():
+    from app.data_lake.cache_import import _import_minute_trade_dch
+
+    assert _import_minute_trade_dch(adjusted=False) != _import_minute_trade_dch(adjusted=True)
+
+
+def test_import_minute_trade_dch_is_deterministic():
+    from app.data_lake.cache_import import _import_minute_trade_dch
+
+    assert _import_minute_trade_dch(adjusted=True) == _import_minute_trade_dch(adjusted=True)
+
+
+def test_import_minute_trade_dch_raw_differs_from_ensure_data_fetch_dch():
+    """An imported 'raw' artifact and a live Polygon fetch produce the same
+    kind of bytes, but must carry a *different* data_contract_hash -- the
+    DCH is part of the provenance trail, so "this was imported, not fetched"
+    must be visible there even when nothing else about the row would
+    otherwise distinguish the two. Mirrors test_ensure_data.py's own style
+    of importing a private DCH helper directly for a parity assertion."""
+    from app.data_lake.cache_import import _import_minute_trade_dch
+    from app.data_lake.ensure_data import _minute_trade_dch
+
+    assert _import_minute_trade_dch(adjusted=False) != _minute_trade_dch()
+
+
+# ---------------------------------------------------------------------------
 # build_provider_params (provenance preservation)
 # ---------------------------------------------------------------------------
 
@@ -190,6 +252,13 @@ def test_build_provider_params_preserves_original_fetch_history(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
+# 2024-05-20 09:30:00 America/New_York (EDT, UTC-4) = 1716211800000 ms UTC --
+# the same ET anchor test_ensure_data.py's _polygon_ok_payload documents and
+# relies on, cross-checked independently here via ZoneInfo rather than
+# trusted from the module under test.
+_KNOWN_BAR_START_MS = 1716211800000
+
+
 def test_verify_and_read_zip_valid_zip_returns_metadata(tmp_path: Path):
     trading_date = date(2024, 5, 20)
     bars = [_bar(9, 30, trading_date, "500.00"), _bar(9, 31, trading_date, "500.05")]
@@ -198,8 +267,30 @@ def test_verify_and_read_zip_valid_zip_returns_metadata(tmp_path: Path):
     verified = verify_and_read_zip(zip_path, "SPY", trading_date)
 
     assert verified.row_count == 2
-    assert verified.first_bar_start_ms < verified.last_bar_start_ms
+    # Pinned to the actual ET-anchored epoch value, not just first < last --
+    # a wrong UTC offset (or a naive/UTC anchor instead of ET) would still
+    # satisfy first < last while being numerically wrong.
+    assert verified.first_bar_start_ms == _KNOWN_BAR_START_MS
+    assert verified.last_bar_start_ms == _KNOWN_BAR_START_MS + 60_000
     assert verified.raw_bytes == zip_path.read_bytes()
+
+
+def test_verify_and_read_zip_encrypted_member_raises(tmp_path: Path):
+    trading_date = date(2024, 5, 20)
+    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
+    day_dir.mkdir(parents=True)
+    zip_path = day_dir / "20240520_trade.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("20240520_spy_minute_trade.csv", "34200000,5000000,5000000,5000000,5000000,100\n")
+        for info in zf.infolist():
+            # Flip the "encrypted" bit (bit 0 of the general-purpose flag) in
+            # the central-directory entry so a read without a password
+            # raises RuntimeError -- no third-party AES-zip library needed
+            # just to build the fixture.
+            info.flag_bits |= 0x1
+
+    with pytest.raises(CorruptCacheZipError):
+        verify_and_read_zip(zip_path, "SPY", trading_date)
 
 
 def test_verify_and_read_zip_not_a_zip_raises(tmp_path: Path):
@@ -312,6 +403,33 @@ def test_decide_claim_outcome_refuses_conflict_on_hash_mismatch():
 def test_decide_claim_outcome_flags_in_flight_when_no_existing_complete_row():
     decision = decide_claim_outcome(claim_result=None, existing=None, content_hash="deadbeef")
     assert decision.action == "in_flight_or_incomplete"
+
+
+# ---------------------------------------------------------------------------
+# check_lake_root_mode (one lake root per adjustment mode, pure/filesystem-only)
+# ---------------------------------------------------------------------------
+
+
+def test_check_lake_root_mode_allows_first_use(tmp_path: Path):
+    # No marker yet -- any mode is fine, and this alone must not raise.
+    check_lake_root_mode(tmp_path, "raw")
+    check_lake_root_mode(tmp_path, "polygon_split_adjusted")
+
+
+def test_check_lake_root_mode_allows_matching_committed_mode(tmp_path: Path):
+    from app.data_lake.cache_import import _commit_lake_root_mode
+
+    _commit_lake_root_mode(tmp_path, "raw")
+    check_lake_root_mode(tmp_path, "raw")  # must not raise
+
+
+def test_check_lake_root_mode_refuses_conflicting_mode(tmp_path: Path):
+    from app.data_lake.cache_import import LakeRootModeConflictError, _commit_lake_root_mode
+
+    _commit_lake_root_mode(tmp_path, "raw")
+
+    with pytest.raises(LakeRootModeConflictError):
+        check_lake_root_mode(tmp_path, "polygon_split_adjusted")
 
 
 # ---------------------------------------------------------------------------
@@ -525,3 +643,87 @@ async def test_import_cache_root_makes_zero_provider_calls(clean_artifacts, pool
         report = await import_cache_root(cache_root=cache_root, lake_root=lake_root)
 
     assert len(report.imported) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_refuses_second_mode_into_same_lake_root(
+    clean_artifacts, pool, tmp_path: Path
+):
+    """Raw + adjusted zips for the same (symbol, date) resolve to the same
+    on-disk path (LeanMinuteBarPath carries no adjustment-mode component).
+    Importing a 'raw' cache into a --lake-root and then an adjusted cache
+    into the *same* --lake-root must refuse the second mode wholesale,
+    never silently overwrite the first mode's bytes."""
+    raw_cache = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
+    adjusted_cache = _build_cache(tmp_path / "adjusted-src", "QQQ", [date(2024, 5, 21)], adjusted=True)
+    lake_root = tmp_path / "lake-root"
+
+    first = await import_cache_root(cache_root=raw_cache, lake_root=lake_root)
+    assert len(first.imported) == 1
+    assert first.imported[0].price_adjustment_mode == "raw"
+
+    second = await import_cache_root(cache_root=adjusted_cache, lake_root=lake_root)
+
+    assert second.imported == []
+    assert len(second.failed) == 1
+    assert second.failed[0].reason == "lake_root_mode_conflict"
+    assert second.failed[0].symbol == "QQQ"
+
+    # The raw row from the first run is untouched, and no QQQ row exists.
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        rows = await conn.fetch('SELECT "Symbol", "PriceAdjustmentMode" FROM "DataLakeArtifacts"')
+    finally:
+        await conn.close()
+    assert [(r["Symbol"], r["PriceAdjustmentMode"]) for r in rows] == [("SPY", "raw")]
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_marks_failed_not_stranded_when_write_fails(
+    clean_artifacts, pool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A failure between claim and complete must not leave the row stuck in
+    'fetching' forever -- it is explicitly marked 'failed' so an external
+    steal/retry tool (not this one-shot importer) can recover it later."""
+    import app.data_lake.cache_import as cache_import_module
+
+    def _boom(**kwargs):
+        raise RuntimeError("disk full (simulated)")
+
+    monkeypatch.setattr(cache_import_module, "atomic_write_and_promote", _boom)
+
+    cache_root = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
+    lake_root = tmp_path / "lake-root"
+
+    report = await import_cache_root(cache_root=cache_root, lake_root=lake_root)
+
+    assert report.imported == []
+    assert len(report.failed) == 1
+    assert report.failed[0].reason == "write_failed"
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        row = await conn.fetchrow('SELECT "Status" FROM "DataLakeArtifacts" WHERE "Symbol" = $1', "SPY")
+    finally:
+        await conn.close()
+    assert row is not None
+    assert row["Status"] == "failed"  # never left stuck in 'fetching'
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_zero_zips_warns_distinctly(
+    clean_artifacts, pool, tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    """A typo'd --cache-root that resolves to an empty (or non-cache)
+    directory must not look indistinguishable from "fully imported, nothing
+    left to do" -- it should say plainly that nothing was found."""
+    empty_cache_root = tmp_path / "typo-ed-cache-root"
+    empty_cache_root.mkdir()
+    lake_root = tmp_path / "lake-root"
+
+    with caplog.at_level("WARNING"):
+        report = await import_cache_root(cache_root=empty_cache_root, lake_root=lake_root)
+
+    assert report.imported == []
+    assert report.failed == []
+    assert any("zero trade zips" in record.message for record in caplog.records)

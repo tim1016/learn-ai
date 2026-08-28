@@ -45,6 +45,38 @@ redesign. That migration must be applied before this script's adjusted-mode
 path will insert successfully — a 'raw'-only cache (``policy.adjusted=false``)
 already works against the unmigrated schema.
 
+One lake root per adjustment mode (structural, enforced, not just advised):
+``LeanMinuteBarPath`` carries no adjustment-mode component, so a 'raw' row
+and a 'polygon_split_adjusted' row for the same (market, symbol, date, type)
+resolve to the *identical* on-disk path. Importing both cache policy roots
+into the same ``--lake-root`` would silently overwrite one's bytes with the
+other's while the first row's catalog hash still describes the bytes that
+used to be there. The honest structural fix — an adjustment-mode-aware path,
+or the ``data_root_id`` design the schema note above already anticipates —
+is deliberately deferred to the data-lake integration slice; this importer's
+stopgap is a small marker file at ``<lake-root>/.cache_import_adjustment_mode``
+recording the first mode a given ``--lake-root`` was used for. A later run
+targeting the same ``--lake-root`` with a *different* mode is refused
+wholesale (``LakeRootModeConflictError`` per affected symbol) before writing
+anything for it — use a separate ``--lake-root`` per adjustment mode.
+
+Out of scope: the pre-policy legacy minute-bar tree directly under
+``lean-cache/`` (no sibling ``provenance/``) is not a policy root this
+importer recognizes —
+pointing ``--cache-root`` at it (or at a policy root missing a symbol's
+provenance file) surfaces as a typed ``missing_provenance`` refusal, never a
+guessed adjustment mode. Whether to adopt or discard that legacy tree is a
+decision for the data-lake integration slice, not this one-time tool.
+
+Recovery after a claimed-but-failed write: if a zip claims its catalog row
+successfully but then fails to write to the lake or to complete (disk full,
+a dropped DB connection, ...), the row is explicitly marked ``'failed'`` via
+``catalog_client.fail_artifact`` rather than left stranded in ``'fetching'``
+forever. This importer does not itself retry a failed or in-flight row on a
+later run (it has no lease-stealing loop); recovering one requires an
+external tool calling ``catalog_client.steal_or_retry_minute_bar`` (or the
+sweep), the same as any other stuck artifact in the catalog.
+
 Usage::
 
     python -m app.data_lake.cache_import \\
@@ -73,7 +105,7 @@ from zoneinfo import ZoneInfo
 from app.data_lake import catalog_client
 from app.data_lake.atomic import atomic_write_and_promote
 from app.data_lake.data_contract import data_contract_hash as _dch
-from app.data_lake.path_policy import LeanMinuteBarPath
+from app.data_lake.path_policy import LeanMinuteBarPath, minute_bar_market_root
 from app.data_lake.types import ArtifactIdentity, ArtifactRecord
 from app.utils.timestamps import now_ms_utc, to_ms_utc
 
@@ -83,6 +115,7 @@ _ET = ZoneInfo("America/New_York")
 _WORKER_ID = os.environ.get("HOSTNAME", "cache-import")
 _LEASE_TTL_MS = 300_000
 _TRADE_ZIP_RE = re.compile(r"^(\d{8})_trade\.zip$")
+_LAKE_ROOT_MODE_MARKER = ".cache_import_adjustment_mode"
 
 # data_contract_hash provider params for an imported (not live-fetched)
 # minute-trade artifact. 'import_source' distinguishes these from a live
@@ -117,10 +150,23 @@ class MissingProvenanceError(RuntimeError):
 
 class CorruptCacheZipError(RuntimeError):
     """A cache zip cannot be verified: unreadable, missing its expected CSV
-    member, or containing a malformed row.
+    member, encrypted, or containing a malformed row.
 
     Refused with no catalog row and no lake write — never silently repaired
     or partially imported.
+    """
+
+
+class LakeRootModeConflictError(RuntimeError):
+    """``--lake-root`` is already committed to a different adjustment mode.
+
+    ``LeanMinuteBarPath`` carries no adjustment-mode component, so a 'raw'
+    and a 'polygon_split_adjusted' row for the same (market, symbol, date,
+    type) resolve to the identical on-disk path. Writing both into the same
+    lake root would silently overwrite one's bytes with the other's while
+    the earlier row's catalog hash still describes the bytes that used to be
+    there. See the module docstring's "One lake root per adjustment mode"
+    section for the (deliberately deferred) real fix.
     """
 
 
@@ -129,6 +175,20 @@ class CacheZipRef:
     symbol: str
     trading_date: date
     zip_path: Path
+
+
+@dataclass(frozen=True)
+class UnrecognizedCacheEntry:
+    """A ``*_trade.zip`` under the minute-bar tree that doesn't parse as a
+    LEAN minute-trade filename (wrong date-prefix shape, or an invalid
+    calendar date). Surfaced as a failure, never silently skipped — an
+    unparseable file existing in the cache is exactly the kind of thing that
+    would otherwise let "every existing cache zip appears as a complete
+    catalog row" quietly stop being true."""
+
+    symbol: str
+    path: Path
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -164,16 +224,21 @@ class SkippedArtifact:
 
 ImportFailureReason = Literal[
     "missing_provenance",
+    "unrecognized_filename",
     "corrupt_zip",
     "hash_conflict",
     "in_flight_or_incomplete",
+    "lake_root_mode_conflict",
+    "write_failed",
 ]
 
 
 @dataclass(frozen=True)
 class FailedArtifact:
     symbol: str
-    trading_date: date
+    # None when the filename itself didn't parse to a trading date
+    # (an UnrecognizedCacheEntry) -- there is no date to report.
+    trading_date: date | None
     reason: ImportFailureReason
     detail: str
 
@@ -185,27 +250,54 @@ class ImportReport:
     failed: list[FailedArtifact] = field(default_factory=list)
 
 
-def discover_cache_zips(cache_root: Path) -> list[CacheZipRef]:
+def discover_cache_zips(cache_root: Path) -> tuple[list[CacheZipRef], list[UnrecognizedCacheEntry]]:
     """Find every ``<yyyymmdd>_trade.zip`` under the cache root's minute-bar tree.
 
-    Returns refs sorted by (symbol, trading_date) for deterministic processing
-    order. A cache root with no minute-bar tree yet (e.g. a policy directory
-    that has never fetched anything) returns an empty list rather than
-    raising.
+    The minute-bar tree location is derived from
+    ``app.data_lake.path_policy.minute_bar_market_root`` — the sole path
+    authority — rather than hand-built here.
+
+    Returns ``(refs, unrecognized)``. ``refs`` is sorted by
+    (symbol, trading_date) for deterministic processing order. A file that
+    matches the ``*_trade.zip`` glob but doesn't parse as
+    ``<yyyymmdd>_trade.zip`` (wrong shape, or 8 digits that aren't a valid
+    calendar date) is reported in ``unrecognized`` instead of silently
+    skipped. A cache root with no minute-bar tree yet (e.g. a policy
+    directory that has never fetched anything) returns ``([], [])`` rather
+    than raising.
     """
-    minute_root = cache_root / "equity" / "usa" / "minute"
+    minute_root = cache_root / Path(*minute_bar_market_root("usa").parts)
     if not minute_root.is_dir():
-        return []
+        return [], []
     refs: list[CacheZipRef] = []
+    unrecognized: list[UnrecognizedCacheEntry] = []
     for symbol_dir in sorted(p for p in minute_root.iterdir() if p.is_dir()):
         symbol = symbol_dir.name.upper()
         for zip_path in sorted(symbol_dir.glob("*_trade.zip")):
             match = _TRADE_ZIP_RE.match(zip_path.name)
             if match is None:
+                unrecognized.append(
+                    UnrecognizedCacheEntry(
+                        symbol=symbol,
+                        path=zip_path,
+                        detail=f"filename does not match <yyyymmdd>_trade.zip: {zip_path.name!r}",
+                    )
+                )
                 continue
-            trading_date = datetime.strptime(match.group(1), "%Y%m%d").date()
+            date_str = match.group(1)
+            try:
+                trading_date = datetime.strptime(date_str, "%Y%m%d").date()
+            except ValueError as exc:
+                unrecognized.append(
+                    UnrecognizedCacheEntry(
+                        symbol=symbol,
+                        path=zip_path,
+                        detail=f"{date_str!r} is not a valid calendar date: {exc}",
+                    )
+                )
+                continue
             refs.append(CacheZipRef(symbol=symbol, trading_date=trading_date, zip_path=zip_path))
-    return sorted(refs, key=lambda r: (r.symbol, r.trading_date))
+    return sorted(refs, key=lambda r: (r.symbol, r.trading_date)), unrecognized
 
 
 def load_symbol_provenance(cache_root: Path, symbol: str) -> dict[str, Any]:
@@ -278,15 +370,23 @@ def verify_and_read_zip(zip_path: Path, symbol: str, trading_date: date) -> Veri
 
     expected_name = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_trade.csv"
     try:
-        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
-            names = zf.namelist()
-            if names != [expected_name]:
-                raise CorruptCacheZipError(
-                    f"{zip_path}: expected exactly one member named {expected_name!r}, found {names!r}"
-                )
-            csv_bytes = zf.read(expected_name)
+        zf = zipfile.ZipFile(io.BytesIO(raw_bytes))
     except zipfile.BadZipFile as exc:
         raise CorruptCacheZipError(f"{zip_path}: not a valid zip file: {exc}") from exc
+    with zf:
+        names = zf.namelist()
+        if names != [expected_name]:
+            raise CorruptCacheZipError(
+                f"{zip_path}: expected exactly one member named {expected_name!r}, found {names!r}"
+            )
+        try:
+            # zipfile raises a bare RuntimeError (not BadZipFile) for an
+            # encrypted member read without a password -- fold it into our
+            # typed error too, so an encrypted zip is refused the same way a
+            # structurally-corrupt one is, not left to escape uncaught.
+            csv_bytes = zf.read(expected_name)
+        except RuntimeError as exc:
+            raise CorruptCacheZipError(f"{zip_path}: cannot read member {expected_name!r}: {exc}") from exc
 
     try:
         text = csv_bytes.decode("ascii")
@@ -428,23 +528,50 @@ async def _import_one_zip(
 
     # decision.action == "proceed"
     assert claim_result is not None  # narrows type for the type checker
-    file_sha = atomic_write_and_promote(
-        content=verified.raw_bytes,
-        lake_root=lake_dir,
-        staging_root=staging_dir,
-        rel_lake_path=rel_path,
-        request_id=run_id,
-        worker_id=_WORKER_ID,
-        attempt=1,
-    )
-    await catalog_client.complete_artifact(
-        artifact_id=claim_result,
-        row_count=verified.row_count,
-        first_bar_start_ms=verified.first_bar_start_ms,
-        last_bar_start_ms=verified.last_bar_start_ms,
-        file_size_bytes=len(verified.raw_bytes),
-        file_sha256=file_sha,
-    )
+    try:
+        file_sha = atomic_write_and_promote(
+            content=verified.raw_bytes,
+            lake_root=lake_dir,
+            staging_root=staging_dir,
+            rel_lake_path=rel_path,
+            request_id=run_id,
+            worker_id=_WORKER_ID,
+            attempt=1,
+        )
+        await catalog_client.complete_artifact(
+            artifact_id=claim_result,
+            row_count=verified.row_count,
+            first_bar_start_ms=verified.first_bar_start_ms,
+            last_bar_start_ms=verified.last_bar_start_ms,
+            file_size_bytes=len(verified.raw_bytes),
+            file_sha256=file_sha,
+        )
+    except Exception as exc:
+        # Caught broadly and deliberately: whatever goes wrong here (disk
+        # full, a dropped DB connection, an unexpected atomic-write failure),
+        # the row has already been claimed and MUST NOT be left in
+        # 'fetching' forever -- that would strand it: every later re-run
+        # would find claim_minute_bar returns None (a row exists) and
+        # select_coverage_minute_bars returns no *complete* row for it,
+        # permanently reporting in_flight_or_incomplete with no way for this
+        # tool to recover it (see the module docstring's recovery note).
+        # Marking it 'failed' at least makes the row visible to
+        # catalog_client.steal_or_retry_minute_bar / the sweep.
+        await catalog_client.fail_artifact(
+            artifact_id=claim_result,
+            last_error="io_error",
+            error_message=str(exc),
+        )
+        logger.exception(
+            "cache_import: %s %s: claimed artifact_id=%s but failed to write/complete",
+            ref.symbol,
+            ref.trading_date,
+            claim_result,
+        )
+        return FailedArtifact(
+            symbol=ref.symbol, trading_date=ref.trading_date, reason="write_failed", detail=str(exc)
+        )
+
     logger.info("cache_import: imported %s %s (%s)", ref.symbol, ref.trading_date, price_adjustment_mode)
     return ImportedArtifact(
         symbol=ref.symbol,
@@ -454,6 +581,39 @@ async def _import_one_zip(
         file_sha256=file_sha,
         row_count=verified.row_count,
     )
+
+
+def _lake_root_mode_marker_path(lake_root: Path) -> Path:
+    return lake_root / _LAKE_ROOT_MODE_MARKER
+
+
+def _read_lake_root_mode(lake_root: Path) -> str | None:
+    marker = _lake_root_mode_marker_path(lake_root)
+    if not marker.is_file():
+        return None
+    return marker.read_text().strip() or None
+
+
+def _commit_lake_root_mode(lake_root: Path, mode: str) -> None:
+    _lake_root_mode_marker_path(lake_root).write_text(mode)
+
+
+def check_lake_root_mode(lake_root: Path, mode: str) -> None:
+    """Raise ``LakeRootModeConflictError`` if ``lake_root`` is already
+    committed (by a marker file this importer writes) to a different
+    adjustment mode than ``mode``. Pure filesystem check, no DB access --
+    directly unit-testable, and evaluated before any catalog claim or lake
+    write happens for the affected symbol.
+    """
+    existing = _read_lake_root_mode(lake_root)
+    if existing is not None and existing != mode:
+        raise LakeRootModeConflictError(
+            f"{lake_root} is already committed to adjustment mode {existing!r}; "
+            f"refusing to also import {mode!r} into it -- they would collide at "
+            f"the same on-disk path. Use a separate --lake-root per adjustment "
+            f"mode (see the module docstring's \"One lake root per adjustment "
+            f"mode\" section)."
+        )
 
 
 async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
@@ -471,13 +631,28 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
 
     await catalog_client.init_pool()
 
-    refs = discover_cache_zips(cache_root)
+    refs, unrecognized = discover_cache_zips(cache_root)
+    if not refs and not unrecognized:
+        logger.warning(
+            "cache_import: found zero trade zips under %s -- check --cache-root "
+            "points at a populated policy directory (nothing will be imported)",
+            cache_root,
+        )
+
     by_symbol: dict[str, list[CacheZipRef]] = {}
     for ref in refs:
         by_symbol.setdefault(ref.symbol, []).append(ref)
 
     report = ImportReport()
     run_id = uuid4()
+
+    for entry in unrecognized:
+        report.failed.append(
+            FailedArtifact(
+                symbol=entry.symbol, trading_date=None, reason="unrecognized_filename", detail=entry.detail
+            )
+        )
+        logger.warning("cache_import: %s", entry.detail)
 
     for symbol in sorted(by_symbol):
         try:
@@ -497,6 +672,23 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
 
         adjusted = provenance["policy"]["adjusted"]
         price_adjustment_mode = price_adjustment_mode_for(provenance)
+
+        try:
+            check_lake_root_mode(lake_root, price_adjustment_mode)
+        except LakeRootModeConflictError as exc:
+            logger.error("cache_import: %s", exc)
+            for ref in by_symbol[symbol]:
+                report.failed.append(
+                    FailedArtifact(
+                        symbol=symbol,
+                        trading_date=ref.trading_date,
+                        reason="lake_root_mode_conflict",
+                        detail=str(exc),
+                    )
+                )
+            continue
+        _commit_lake_root_mode(lake_root, price_adjustment_mode)
+
         dch = _import_minute_trade_dch(adjusted)
         provider_params = build_provider_params(cache_root, provenance)
 
@@ -538,11 +730,23 @@ def main() -> None:
         "--lake-root",
         type=Path,
         required=True,
-        help="Write root: artifacts land under <lake-root>/lake, staged through <lake-root>/staging",
+        help=(
+            "Write root: artifacts land under <lake-root>/lake, staged through "
+            "<lake-root>/staging. One adjustment mode per --lake-root -- a "
+            "second mode targeting an already-committed root is refused "
+            "(see the module docstring)."
+        ),
     )
     args = parser.parse_args()
 
-    report = asyncio.run(import_cache_root(cache_root=args.cache_root, lake_root=args.lake_root))
+    try:
+        report = asyncio.run(import_cache_root(cache_root=args.cache_root, lake_root=args.lake_root))
+    finally:
+        # Closed in its own asyncio.run: the pool is bound to the event loop
+        # import_cache_root ran in, which is already closed by the time this
+        # line runs. close_pool() is written to tolerate exactly that (falls
+        # back to a non-awaited terminate() when the bound loop is gone).
+        asyncio.run(catalog_client.close_pool())
 
     logger.info(
         "Done. imported=%d skipped=%d failed=%d",
