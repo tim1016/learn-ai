@@ -20,6 +20,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.utils.timestamps import ny_datetime
+
 #: The lake's symbol policy. ``DataRunSpec`` enforces it on every write, so it
 #: is also the answer to "could the lake ever hold this symbol?" — readers that
 #: classify a symbol's provenance must consult it (is_lake_addressable_symbol
@@ -57,6 +59,32 @@ ArtifactStatus = Literal["fetching", "complete", "stale", "failed"]
 def trading_range_span_days(start: date, end: date) -> int:
     """Inclusive day count of a closed ``[start, end]`` trading-date window."""
     return (end - start).days + 1
+
+
+def trading_date_at_ms(trading_date_ms: int) -> date:
+    """Read a trading date back out of its ``int64 ms UTC`` anchor.
+
+    The inverse of ``trading_calendar.session_open_ms_utc``, and the lake's
+    only one. A trading date travels the wire as a single ``int64 ms UTC``
+    value anchored at that session's open (``.claude/rules/temporal-rigor.md``,
+    "Date-anchored and wall-clock values"); this resolves it back in
+    ``America/New_York``, which is what stops the date drifting a calendar day
+    for a caller west of UTC.
+
+    Deliberately not fussy about *which* instant in the day it is handed: any
+    ms inside the ET day resolves to that day, so a caller anchoring at the
+    close, or at a bar in the middle of the session, gets the same answer as
+    one anchoring at the open. Accepting only the exact open would make the
+    parameter a checksum rather than a timestamp.
+
+    **Not in ``app.utils.timestamps``, deliberately.** That module is
+    content-hashed into all seven signal-program qualification receipts (see
+    ``wiring_artifact_paths`` in ``app/engine/strategy/registry.py``, where it
+    sits beside ``trading_calendar.py``), so adding a function to it flips
+    those programs UNPROVEN. It lives here, with the rest of the lake's wire
+    vocabulary, until that seal is deliberately re-minted.
+    """
+    return ny_datetime(trading_date_ms).date()
 
 
 def is_lake_addressable_symbol(symbol: str) -> bool:
