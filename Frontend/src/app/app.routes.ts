@@ -132,6 +132,16 @@ export const routes: Routes = [
       ),
   },
   {
+    // Flag-gated data-lake catalog surface. The page renders an honest
+    // "not enabled" state when DATA_LAKE_ENABLED is off and every
+    // /api/data-lake route 404s, so the route itself stays unconditional.
+    path: "data-lake",
+    loadComponent: () =>
+      import(
+        "./components/data-lake-observatory/data-lake-observatory.component"
+      ).then((m) => m.DataLakeObservatoryComponent),
+  },
+  {
     path: "data-lab-docs",
     loadComponent: () =>
       import(
