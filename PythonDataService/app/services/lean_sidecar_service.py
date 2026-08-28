@@ -40,11 +40,10 @@ from app.lean_sidecar.config import (
 )
 from app.lean_sidecar.lake_mount import (
     CONTAINER_LAKE_DATA_MOUNT,
-    LakeBarStream,
+    LakeArtifacts,
     data_plane_lake_root,
-    lake_metadata_paths,
     lake_mount_enabled,
-    read_lake_bar_stream,
+    resolve_lake_artifacts,
 )
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
 from app.lean_sidecar.launcher_client import post_launch
@@ -674,7 +673,11 @@ async def run_trusted_sample(
     # Non-None only for a ``DATA_LAKE_ENABLED`` live-Polygon run: the
     # lake artifacts LEAN will read through its read-only mount. Its
     # presence is what tells the rest of this function "no staging".
-    lake_stream: LakeBarStream | None = None
+    lake_artifacts: LakeArtifacts | None = None
+    # Decoded bars. Only the staging path needs them — it re-encodes
+    # quote and daily zips from them — so lake mode leaves this empty
+    # rather than unzipping a window it is not going to write.
+    bars_by_date: list[tuple[date, list[TradeBar]]] = []
     compatibility_fixture = bool(
         request.data_policy.provider_kind == "fixture"
         and request.data_policy.fixture_id
@@ -746,18 +749,16 @@ async def run_trusted_sample(
         # deliberately unaffected: their frozen recordings are the data
         # authority for those runs, and the lake has nothing to say
         # about them.
-        lake_stream = read_lake_bar_stream(
+        lake_artifacts = resolve_lake_artifacts(
             lake_root=data_plane_lake_root(),
             symbol=request.symbol,
             start=request.start_date,
             end=request.end_date,
-            session=request.data_policy.session,
         )
-        bars_by_date = list(lake_stream.bars_by_date)
-        trading_dates = list(lake_stream.trading_dates)
+        trading_dates = list(lake_artifacts.trading_dates)
         _emit_log(
             f"Lake coverage for {request.symbol}: {len(trading_dates)} trading days "
-            f"under {lake_stream.lake_root}"
+            f"under {lake_artifacts.lake_root}"
         )
     elif data_source == "polygon":
         # Live polygon runs stage from the shared policy-keyed bar store —
@@ -802,13 +803,13 @@ async def run_trusted_sample(
         # Defense-in-depth — Pydantic Literal already rejects unknown values.
         raise LeanSidecarServiceError(f"unknown data_source: {data_source!r}")
 
-    if lake_stream is not None:
+    if lake_artifacts is not None:
         # Lake mode stages nothing: LEAN reads these exact artifacts in
         # place through the read-only lake mount the launcher adds, so
         # the paths recorded here are lake paths, not workspace paths.
-        bar_zip_paths = list(lake_stream.trade_zip_paths)
-        quote_zip_paths = list(lake_stream.quote_zip_paths)
-        daily_path = lake_stream.daily_zip_path
+        bar_zip_paths = list(lake_artifacts.trade_zip_paths)
+        quote_zip_paths = list(lake_artifacts.quote_zip_paths)
+        daily_path = lake_artifacts.daily_zip_path
     else:
         bar_zip_paths, quote_zip_paths, daily_path = _stage_workspace_data(
             request=request,
@@ -837,7 +838,7 @@ async def run_trusted_sample(
     config = LeanConfig(
         # Lake mode re-points LEAN's data folder at the read-only lake
         # mount; every other run keeps the staged workspace subtree.
-        data_folder=(CONTAINER_LAKE_DATA_MOUNT if lake_stream is not None else CONTAINER_DATA_FOLDER),
+        data_folder=(CONTAINER_LAKE_DATA_MOUNT if lake_artifacts is not None else CONTAINER_DATA_FOLDER),
         parameters={
             "start_date": request.start_date.isoformat(),
             "end_date": request.end_date.isoformat(),
@@ -864,7 +865,7 @@ async def run_trusted_sample(
         # Ask for the lake's read-only mount only when this run actually
         # read the lake. The launcher resolves the host path itself and
         # rejects the launch if it has none configured.
-        mount_lake_read_only=lake_stream is not None,
+        mount_lake_read_only=lake_artifacts is not None,
         # Intentionally NOT setting hardening_profile until we have a
         # verified fix for the wide-window SIGILL. The plumbing is in
         # place (HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX
@@ -958,7 +959,7 @@ async def run_trusted_sample(
         # staged window match (or surface that they don't).
         staged_trading_dates=trading_dates,
         failure_reason=failure_reason,
-        lake_stream=lake_stream,
+        lake_artifacts=lake_artifacts,
     )
     write_manifest(manifest, workspace.manifest_path)
 
@@ -1043,7 +1044,7 @@ def _build_manifest(
     normalized: NormalizedResult | None,
     staged_trading_dates: list[date],
     failure_reason: str | None = None,
-    lake_stream: LakeBarStream | None = None,
+    lake_artifacts: LakeArtifacts | None = None,
 ) -> RunManifest:
     """Construct the full reproducibility manifest from the run.
 
@@ -1062,12 +1063,13 @@ def _build_manifest(
     # below is taken relative to whichever one LEAN actually read, so
     # ``path_in_workspace`` means the same thing to a manifest reader in
     # both modes.
-    if lake_stream is None:
+    if lake_artifacts is None:
         data_root = workspace.data_dir
         market_hours, symbol_properties = _list_metadata(workspace)
     else:
-        data_root = lake_stream.lake_root
-        market_hours, symbol_properties = lake_metadata_paths(lake_stream.lake_root)
+        data_root = lake_artifacts.lake_root
+        market_hours = lake_artifacts.market_hours_path
+        symbol_properties = lake_artifacts.symbol_properties_path
     if response is not None:
         exit_code = response.exit_code
         is_clean_note = f"is_clean={response.is_clean}"

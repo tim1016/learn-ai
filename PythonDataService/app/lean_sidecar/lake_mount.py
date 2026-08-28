@@ -28,9 +28,15 @@ implementation mounts the whole workspace at ``/lean-run`` (see
 mount at ``/lean-run/data`` would nest inside the read-write workspace
 mount, shadow ``workspace/data``, and depend on podman's mount-ordering
 semantics. The lake is therefore mounted at a sibling target,
-:data:`CONTAINER_LAKE_DATA_MOUNT` — which is the reader-side container
-path the same spec section names (``LEAN_DATA_ROOT=/lean-data``) — and
-LEAN's ``data-folder`` is re-pointed there by config rendering.
+:data:`CONTAINER_LAKE_DATA_MOUNT`, and LEAN's ``data-folder`` is
+re-pointed there by config rendering.
+
+The literal string ``/lean-data`` is borrowed from that same spec
+section, but note what it means there: ``LEAN_DATA_ROOT=/lean-data`` is
+the **Python data service's** read mount, not the LEAN container's. The
+spec assigns the LEAN container no target other than ``/lean-run/data``,
+so this is a new target chosen for symmetry with the reader's — not one
+the spec sanctions for this container.
 """
 
 from __future__ import annotations
@@ -38,34 +44,36 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from app.data_lake.path_policy import LeanDailyBarPath, LeanMetadataPath, LeanMinuteBarPath
 from app.lean_sidecar.workspace import validate_symbol
 
-if TYPE_CHECKING:
-    from app.engine.data.trade_bar import TradeBar
-
 logger = logging.getLogger(__name__)
 
-# ``app.config`` and the engine reader are imported inside the functions
-# that need them, not at module scope. The launcher is a standalone host
-# process that imports this module only for :class:`LakeMount`; it has
-# neither the data plane's ``Settings`` environment (importing
-# ``app.config`` without ``POLYGON_API_KEY`` raises) nor any business
-# reading bars.
+# ``app.config`` is imported inside the two functions that need it, not
+# at module scope. The launcher is a standalone host process that
+# imports this module only for :class:`LakeMount`, and does not have the
+# data plane's ``Settings`` environment (importing ``app.config``
+# without ``POLYGON_API_KEY`` raises).
 
-# Container-side target of the lake's read-only mount. Named to match
-# the spec's reader-side env var (``LEAN_DATA_ROOT=/lean-data``); see
-# the module docstring for why it is not ``/lean-run/data``.
+# Container-side target of the lake's read-only mount. See the module
+# docstring for why it is not ``/lean-run/data`` and for what
+# ``/lean-data`` does and does not mean in the spec.
 CONTAINER_LAKE_DATA_MOUNT = "/lean-data"
 
 # Subdirectory of the deploy volume holding the immutable lake. The
 # writer-side counterpart is ``app.data_lake.ensure_data._lake_roots``,
 # which derives ``<LEAN_DATA_WRITE_ROOT>/lake`` from the same setting;
 # ``tests/lean_sidecar/test_lake_mount.py`` pins the two in lockstep.
+#
+# The duplicate is deliberate and temporary: the adoption slice that
+# would host a shared resolver is in flight against ``ensure_data.py``
+# at the same time as this one, and editing that file concurrently
+# costs more than one constant. The integration slice collapses both
+# onto a single resolver and deletes the parity test with this comment.
 LAKE_SUBDIR = "lake"
 
 # Deploy-time env naming the **host** path of the lake volume. The
@@ -120,9 +128,12 @@ def lake_mount_enabled() -> bool:
 def data_plane_lake_root() -> Path:
     """The lake root as *this* process sees it.
 
-    The data plane holds a read view of the same volume the writer owns,
-    so the root is derived from the writer setting rather than from a
-    second knob that could drift out of agreement with it.
+    Derived from ``LEAN_DATA_WRITE_ROOT`` because that is the mount the
+    data plane actually has: compose gives this container one
+    read-write mount of the volume, and the sidecar reads the lake
+    through it. The spec's separate read-only reader mount
+    (``LEAN_DATA_ROOT``) does not exist in this deployment yet; when it
+    does, this is the one function that changes.
     """
     from app.config import settings
 
@@ -150,63 +161,70 @@ def launcher_host_lake_root() -> Path | None:
 
 
 @dataclass(frozen=True, slots=True)
-class LakeBarStream:
-    """The lake artifacts one run exposes to LEAN, plus their bars.
+class LakeArtifacts:
+    """Exactly which lake files this run exposes to LEAN.
 
-    ``bars_by_date`` is decoded by the canonical LEAN reader
-    (:class:`app.engine.data.lean_format.LeanMinuteDataReader`) — the
-    same reader the Python engine uses — straight off the lake files
-    named in ``trade_zip_paths``. No copy and no re-encode sits between
-    the two, which is what makes the bytes LEAN mounts and the bars the
-    Python readers produce provably the same artifacts.
+    Paths only, deliberately: in lake mode nothing is copied or
+    re-encoded, so the run has no use for decoded bars — LEAN decodes
+    them itself from the mount. Resolving the set is pure ``exists()``
+    checks, which keeps a long window off the "unzip every day on the
+    event loop" path the staging mode needs.
     """
 
     lake_root: Path
     trading_dates: tuple[date, ...]
-    bars_by_date: tuple[tuple[date, list[TradeBar]], ...]
     trade_zip_paths: tuple[Path, ...]
     quote_zip_paths: tuple[Path, ...]
     daily_zip_path: Path
+    market_hours_path: Path
+    symbol_properties_path: Path
 
 
-def read_lake_bar_stream(
+def resolve_lake_artifacts(
     *,
     lake_root: Path,
     symbol: str,
     start: date,
     end: date,
-    session: Literal["regular", "extended"],
-) -> LakeBarStream:
-    """Collect the lake artifacts for ``symbol`` over ``[start, end]``.
+) -> LakeArtifacts:
+    """Resolve the lake artifacts for ``symbol`` over ``[start, end]``.
 
-    Purely a read: the lake is never written, never fetched into, and
-    never copied out of. Days the lake does not cover are simply absent
-    from the result — the caller decides whether partial coverage is
-    acceptable — but a window with *no* trade artifact at all, or a
-    symbol with no daily artifact, raises :class:`LakeMountError`
-    because LEAN cannot run on either.
+    Purely a read, and not even a decode: the lake is never written,
+    never fetched into, and never copied out of.
+
+    Partial coverage is allowed — days the lake does not cover are
+    simply absent from the result, and the caller decides whether that
+    is acceptable, matching what the staging path does. Everything LEAN
+    *cannot start without* fails loud instead: no trade artifact at all
+    in the window, a missing daily artifact, or a missing required
+    metadata database each raise :class:`LakeMountError` here, before a
+    container is launched.
+
+    Note the deliberate asymmetry with the staging path, which may run
+    with no metadata databases at all and let LEAN fall back to the
+    image defaults. That fallback does not exist here: lake mode
+    re-points ``data-folder`` away from the image-extracted workspace
+    copy, so absent metadata in the lake is a hard stop, not a
+    degraded-but-working run.
     """
-    from app.engine.data.lean_format import LeanMinuteDataReader
-
     safe_symbol = validate_symbol(symbol)
-    reader = LeanMinuteDataReader([lake_root], session=session)
 
     trading_dates: list[date] = []
-    bars_by_date: list[tuple[date, list[TradeBar]]] = []
     trade_zip_paths: list[Path] = []
     quote_zip_paths: list[Path] = []
-    for trading_date in reader.iter_dates(safe_symbol, start, end):
-        bars = reader.read_day(safe_symbol, trading_date)
-        if not bars:
-            continue
-        trading_dates.append(trading_date)
-        bars_by_date.append((trading_date, bars))
-        trade_zip_paths.append(_lake_minute_path(lake_root, safe_symbol, trading_date, "trade"))
-        quote_path = _lake_minute_path(lake_root, safe_symbol, trading_date, "quote")
-        if quote_path.exists():
-            quote_zip_paths.append(quote_path)
+    trading_date = start
+    one_day = timedelta(days=1)
+    while trading_date <= end:
+        trade_path = _lake_minute_path(lake_root, safe_symbol, trading_date, "trade")
+        if trade_path.exists():
+            trading_dates.append(trading_date)
+            trade_zip_paths.append(trade_path)
+            quote_path = _lake_minute_path(lake_root, safe_symbol, trading_date, "quote")
+            if quote_path.exists():
+                quote_zip_paths.append(quote_path)
+        trading_date += one_day
 
-    if not bars_by_date:
+    if not trade_zip_paths:
         raise LakeMountError(
             f"lake_window_empty: no minute-trade artifacts for {safe_symbol} in "
             f"{start.isoformat()}..{end.isoformat()} under {lake_root}"
@@ -219,8 +237,10 @@ def read_lake_bar_stream(
             "daily artifact for benchmark resolution"
         )
 
+    market_hours_path, symbol_properties_path = require_lake_metadata(lake_root)
+
     logger.info(
-        "lean sidecar reading lake artifacts",
+        "lean sidecar resolving lake artifacts",
         extra={
             "symbol": safe_symbol,
             "lake_root": str(lake_root),
@@ -228,39 +248,56 @@ def read_lake_bar_stream(
             "quote_artifacts": len(quote_zip_paths),
         },
     )
-    return LakeBarStream(
+    return LakeArtifacts(
         lake_root=lake_root,
         trading_dates=tuple(trading_dates),
-        bars_by_date=tuple(bars_by_date),
         trade_zip_paths=tuple(trade_zip_paths),
         quote_zip_paths=tuple(quote_zip_paths),
         daily_zip_path=daily_zip_path,
+        market_hours_path=market_hours_path,
+        symbol_properties_path=symbol_properties_path,
     )
 
 
-def lake_metadata_paths(lake_root: Path) -> tuple[Path | None, Path | None]:
-    """Return (market_hours_db, symbol_properties_db) present in the lake.
+# Every metadata kind the lake bootstraps is one LEAN refuses to
+# initialize without (see
+# ``staging.stage_lean_metadata_from_image``'s docstring), so the lake
+# has no optional metadata today. A future optional kind belongs in a
+# separate accessor that may return ``None``, not in this one.
+REQUIRED_LAKE_METADATA: tuple[Literal["market_hours", "symbol_properties"], ...] = (
+    "market_hours",
+    "symbol_properties",
+)
+
+
+def require_lake_metadata(lake_root: Path) -> tuple[Path, Path]:
+    """Return (market_hours_db, symbol_properties_db) or raise.
 
     Lake-mode counterpart of
-    :func:`app.lean_sidecar.staging.list_metadata_databases`: in lake
-    mode LEAN's data folder IS the lake, so the metadata databases the
-    manifest must hash are the lake's Phase-0 bootstrap artifacts rather
-    than the per-run image extraction. ``None`` for an absent file, so
-    the manifest records absence rather than inventing a hash.
+    :func:`app.lean_sidecar.staging.list_metadata_databases`, but a
+    demand rather than a survey: in lake mode LEAN's data folder IS the
+    lake, and LEAN refuses to initialize when either database is
+    missing from it. Returning ``None`` here would defer that certain
+    failure to a launched container, and would let the manifest record
+    "no metadata" as though it were a legitimate shape.
     """
-    return (
-        _lake_metadata_path(lake_root, "market_hours"),
-        _lake_metadata_path(lake_root, "symbol_properties"),
-    )
+    paths = {kind: _lake_metadata_path(lake_root, kind) for kind in REQUIRED_LAKE_METADATA}
+    missing = sorted(kind for kind, path in paths.items() if not path.exists())
+    if missing:
+        raise LakeMountError(
+            f"lake_missing_required_metadata: {missing} absent under {lake_root}; "
+            "LEAN refuses to initialize without them and lake mode has no image-extracted fallback"
+        )
+    return paths["market_hours"], paths["symbol_properties"]
 
 
 def _lake_metadata_path(
     lake_root: Path,
     kind: Literal["market_hours", "symbol_properties"],
-) -> Path | None:
+) -> Path:
+    """Where the metadata database belongs, present or not."""
     relative = LeanMetadataPath(kind=kind).relative_path()
-    candidate = lake_root / Path(*relative.parts)
-    return candidate if candidate.exists() else None
+    return lake_root / Path(*relative.parts)
 
 
 def _lake_minute_path(
