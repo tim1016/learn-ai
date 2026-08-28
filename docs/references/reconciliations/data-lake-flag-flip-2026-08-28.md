@@ -45,7 +45,13 @@ so a tolerance would admit a difference that cannot arise and conceal one that c
 **What is not claimed.** The two *writers* are row-identical but not byte-identical: the lake
 writer terminates its CSV with a newline and the policy writer does not. One byte differs and no
 reader can observe it. Byte-equality between the two writers is claimed nowhere in this repo, and
-the inequality is asserted in a test so the weaker claim cannot be silently promoted.
+both halves of that weaker claim — the row equality and the byte inequality — are asserted in
+`tests/unit/data_lake/test_deci_cent_canonical.py::test_both_writers_encode_identically_on_sub_grid_prices`,
+which is the only place that builds the two zips from the *same bars* and can therefore assert
+the inequality for its real reason. (An earlier draft asserted it in the parity suite against a
+five-bar zip and a 390-bar imported day, where the row counts alone drive the difference; that
+assertion could not have failed for its stated reason and was removed.) Mutation-checked: giving
+the policy writer a trailing newline fails the guard.
 
 ## Prerequisite fixed before the comparison was trusted
 
@@ -70,9 +76,13 @@ numerical-rigor's loosening rule requires.
 
 One **known, accepted, non-numerical input divergence** is recorded separately and is not a bar
 difference: a lake-mode LEAN sidecar run has no `alternative/interest-rate` subtree where a
-staging-mode run does, so LEAN falls back to its built-in risk-free rate. It is not fixable from
-inside the data plane (the launcher's `/extract-metadata` contract returns two byte fields), is
-logged once per run, and is documented in `app/lean_sidecar/lake_mount.py`'s module docstring.
+staging-mode run does, so LEAN falls back to its built-in risk-free rate. These are equity-only
+backtests with no option pricing, so that rate feeds portfolio *statistics* and never a fill, a
+commission, or a position size; those statistics leave the sidecar as strings
+(`normalized_parser` keeps `statistics` as `dict[str, str]`) and no category in this taxonomy
+gates on them. It is not fixable from inside the data plane (the launcher's `/extract-metadata`
+contract returns two byte fields), is logged once per run, and is documented in
+`app/lean_sidecar/lake_mount.py`'s module docstring.
 
 ## Tests
 

@@ -24,9 +24,11 @@ all the same level. Stating which claim is which is the point:
   *fresh*, the two writers produce identical rows in non-identical archives:
   the lake writer terminates its CSV with a newline and the policy writer does
   not. Byte-equality between the two writers is claimed nowhere in this repo.
-  ``tests/unit/data_lake/test_deci_cent_canonical.py`` owns that weaker claim;
-  this file owns the strong one, and the distinction is asserted below rather
-  than left to a reader to infer.
+  ``tests/unit/data_lake/test_deci_cent_canonical.py`` owns that weaker claim
+  in full -- both halves of it, since only that file builds the two zips from
+  the same bars and can therefore assert the inequality for its real reason.
+  This file owns the strong claim, and shows the row-level agreement on the
+  imported day for continuity.
 
 **No Postgres.** The CI "Python Tests" job sets no ``POSTGRES_URL``, so every
 live-catalog test skips there (carry-forward A8). A parity proof that only ran
@@ -280,18 +282,23 @@ def test_both_engines_resolve_the_same_artifact_hashes_for_one_run(
     assert len(engine_digests) == len(WINDOW)
 
 
-def test_the_two_writers_agree_on_rows_but_not_on_bytes(imported_lake: Path) -> None:
-    """The weaker claim, asserted so nobody upgrades it by accident.
+def test_the_two_writers_agree_on_rows_for_the_imported_day(imported_lake: Path) -> None:
+    """The weaker claim: same rows out of two different writers.
 
     A day the *lake* fetches fresh goes through ``lean_writer``; the same day
     fetched through the pre-lake path goes through ``lean_format``. Since
     #1839 both encode prices with the one canonical deci-cent rule, so the
-    decoded rows are identical -- but the archives are not, because the lake
-    writer terminates its CSV with a newline. That difference is harmless and
-    invisible to every reader; it is asserted here because a future change
-    that made the writers byte-identical would let someone widen the
-    bit-exact claim above from "across the import" to "everywhere", and this
-    test is where they would find out that is a different claim.
+    decoded rows are identical even though the archives are not.
+
+    **The byte-INEQUALITY is guarded elsewhere, deliberately.** It cannot be
+    asserted here: this compares a five-bar lake zip against the imported
+    390-bar day, so the bytes differ because the row counts differ, and the
+    assertion would still pass if the writers became byte-identical -- a
+    guard that cannot fail for its stated reason is worse than none. The real
+    guard builds both zips from the *same* bars and lives in
+    ``tests/unit/data_lake/test_deci_cent_canonical.py``
+    (``test_both_writers_encode_identically_on_sub_grid_prices``); that is
+    where a future change making the writers byte-identical gets caught.
     """
     bars = make_minute_bars(SYMBOL, DAY_ONE, count=5)
     lake_written = build_minute_trade_zip_bytes(
@@ -302,7 +309,6 @@ def test_the_two_writers_agree_on_rows_but_not_on_bytes(imported_lake: Path) -> 
     store_written = (imported_lake / Path(*_lake_relative_path(DAY_ONE).parts)).read_bytes()
 
     assert _csv_rows(lake_written)[:5] == _csv_rows(store_written)[:5]
-    assert lake_written != store_written
 
 
 def _as_lake_bar(bar):
@@ -549,11 +555,6 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
         # them would make the assertion about the wrong thing.
         assert materialization.reused_artifact_count >= len(WINDOW)
         assert materialization.availability_hash
-
-        # The fingerprint the run records is the one the byte-level claim
-        # above predicts from the cache zips -- the two halves of this file
-        # meeting in the middle.
-        assert materialization.availability_hash != ""
     finally:
         _close_materialization_pool(catalog_client)
 

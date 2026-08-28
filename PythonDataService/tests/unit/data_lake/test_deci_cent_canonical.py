@@ -121,6 +121,14 @@ def test_both_writers_encode_identically_on_sub_grid_prices(tmp_path) -> None:
     store_zip_path = write_lean_day_zip(tmp_path, symbol, trading_date, store_bars)
 
     assert _csv_rows(lake_zip) == _csv_rows(store_zip_path.read_bytes())
+    # And the other half of the same claim, which only means anything here:
+    # both zips describe the *same five bars*, so the one byte they differ by
+    # is the lake writer's trailing newline and nothing else. This is the
+    # canonical guard for "row-identical, not byte-identical" -- if a future
+    # change made the writers byte-identical, this is the line that fails and
+    # tells whoever made it that widening the repo's bit-exact claim from
+    # "across the import" to "everywhere" is a separate decision.
+    assert lake_zip != store_zip_path.read_bytes()
 
 
 def _csv_rows(zip_bytes: bytes) -> list[str]:
