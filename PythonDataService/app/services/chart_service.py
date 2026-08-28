@@ -267,6 +267,13 @@ def _resample_cache_key(
     # ``lake_read`` keys the two sourcing modes apart. Without it a process that
     # flipped DATA_LAKE_ENABLED would serve a composed entry (and its source
     # indicator) to a flag-off caller from the same key.
+    #
+    # Known and accepted: the cached entry carries the source indicator computed
+    # at fetch time, so for up to one TTL (15 min) after a backfill fills a hole
+    # the chart can still show the provider-fallback notice. Only the notice goes
+    # stale — the bars are the same bars either way — and the next miss recomputes
+    # it. Keying on lake coverage instead would mean probing the lake on every
+    # cache hit, which is the cost this cache exists to avoid.
     return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}|{lake_read}"
 
 
@@ -896,6 +903,7 @@ def _fetch_chart_bars(
     fetch_from: str,
     to_date: str,
     adjusted: bool,
+    requested_from: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Return the 1-minute bar stream and its per-portion source indicator.
 
@@ -904,6 +912,9 @@ def _fetch_chart_bars(
     completed sessions come from lake artifacts and only the still-forming
     session touches the provider, with a receipt of which portion was
     provider-served (see :mod:`app.services.chart_bar_source`).
+
+    ``fetch_from`` is warmup-extended; ``requested_from`` is what the operator
+    asked for, and the receipt describes only that.
     """
     if not settings.DATA_LAKE_ENABLED:
         return fetch_bars_chunked(_polygon, ticker, fetch_from, to_date, adjusted=adjusted), None
@@ -914,6 +925,7 @@ def _fetch_chart_bars(
         to_date=to_date,
         adjusted=adjusted,
         fetch_provider=lambda start, end: fetch_bars_chunked(_polygon, ticker, start, end, adjusted=adjusted),
+        visible_from_date=requested_from,
     )
     return composed.bars, composed.as_response_dict()
 
@@ -966,6 +978,11 @@ def get_chart_data(
         }
 
     # ── Layer 1: Fetch + Preprocess + Resample (cached) ──
+    # Known and accepted: with the flag on and adjusted=True the lake is never
+    # read (it stores raw bytes only), so this key holds a second entry whose
+    # bars are identical to the flag-off entry's. One duplicated cache slot per
+    # such range is a smaller price than making the key lie about which sourcing
+    # mode produced the entry it holds.
     resample_key = _resample_cache_key(
         ticker,
         from_date,
@@ -993,7 +1010,7 @@ def get_chart_data(
             fetch_from = compute_warmup_start_date(from_date, max_lookback)
             logger.info(f"[CHART] Warmup: fetching from {fetch_from} (requested {from_date})")
 
-        bars, bar_sources = _fetch_chart_bars(ticker, fetch_from, to_date, adjusted)
+        bars, bar_sources = _fetch_chart_bars(ticker, fetch_from, to_date, adjusted, from_date)
         if not bars:
             return {
                 "error_code": "NO_DATA",

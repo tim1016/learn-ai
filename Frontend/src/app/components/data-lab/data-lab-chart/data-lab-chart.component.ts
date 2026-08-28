@@ -60,9 +60,19 @@ export interface QualityReport {
   out_of_order_fixed?: number;
 }
 
+/** Mirrors the backend's closed `BarSourceName` / `SpanReason` literals in
+ *  `app/services/chart_bar_source.py`. */
+export type BarSourceName = 'lake' | 'provider';
+export type BarSourceReason =
+  | 'completed_sessions'
+  | 'current_session'
+  | 'lake_gap'
+  | 'price_adjustment_unsupported'
+  | 'symbol_not_lake_addressable';
+
 export interface BarSourceSpan {
-  source: string;
-  reason: string;
+  source: BarSourceName;
+  reason: BarSourceReason;
   from_session_open_ms_utc: number;
   to_session_open_ms_utc: number;
   session_count: number;
@@ -73,6 +83,9 @@ export interface BarSourceSpan {
  *  data lake is in the chart's read path; absent otherwise. */
 export interface BarSources {
   boundary_ms_utc: number | null;
+  /** Deliberately `string`, not a union: this value only ever reaches the
+   *  closed copy map below, and a union would make a backend that adds a code
+   *  look impossible rather than merely unknown. */
   notice_code: string | null;
   spans: BarSourceSpan[];
 }

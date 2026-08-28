@@ -28,8 +28,30 @@ Three things fall back to the provider and say so in the response:
   filesystem path is built, and served by the identical provider call the
   flag-off path makes (``symbol_not_lake_addressable``).
 
+Stitching is also capped: past ``_MAX_PROVIDER_RUNS`` contiguous provider runs
+the composition gives up and takes the flag-off path wholesale, so a lake full
+of holes can never cost more provider calls than not having a lake at all.
+
+The receipt describes the **visible** window. Composition runs over the
+warmup-extended range the caller asks for, but the spans and the notice are cut
+to ``visible_from_date`` — a notice about warmup bars would be a notice about
+bars nobody is looking at.
+
 Resampling and indicator math sit above this module and are untouched: what
 comes back is the same list-of-dicts a provider fetch returns.
+
+**Known precision seam — a composed series is not uniformly precise.**
+Lake-served days are quantized to LEAN's deci-cent grid (``lean_writer``
+multiplies by 10,000 and rounds half-up, so 1/100 of a cent is the finest
+representable step), while provider-served days carry the vendor's full float
+precision all the way to the chart response's 6-decimal rounding. A range that
+mixes both therefore mixes two precisions, and for a sub-penny-tick name the
+lake portion can differ from the provider portion in the 5th and 6th decimal.
+This is a property of the LEAN on-disk format the whole data-lake plan adopts,
+not something this module can fix — quantization happens at write time, before
+any reader sees the bytes. Note also that the flag-on/flag-off equality test
+cannot surface it: its fixture prices are 2-decimal, which round-trip through
+deci-cents exactly. Ledgered for the integration slice's parity decision.
 """
 
 from __future__ import annotations
@@ -75,6 +97,22 @@ NoticeCode = Literal[
 #: the caller to the very same provider fetch the flag-off path uses, so the
 #: live tail and every fallback range travel one unchanged code path.
 ProviderFetch = Callable[[str, str], list[dict[str, Any]]]
+
+#: One executed segment: where it came from, why, which sessions it covers, and
+#: the bars it produced. The plan is executed before any of it is reported, so
+#: the receipt can be cut to the visible window without re-fetching anything.
+_ExecutedSegment = tuple[BarSourceName, SpanReason, list[SessionWindow], list[dict[str, Any]]]
+
+#: Ceiling on how many separate provider fetches a composed range may cost.
+#:
+#: Each contiguous provider run is one ``fetch_bars_chunked`` call, and they run
+#: serially inside the chart's worker thread. A partially-backfilled lake — the
+#: normal rollout state — is exactly the shape that produces many small holes,
+#: so an uncapped composition would issue O(holes) Polygon calls where the
+#: flag-off path issues one. Above this many runs the composition collapses to
+#: the flag-off behavior: one whole-window fetch, every session marked
+#: provider-served. That makes the worst case exactly today's cost.
+_MAX_PROVIDER_RUNS = 3
 
 
 @dataclass(frozen=True)
@@ -178,45 +216,59 @@ def _plan_segments(
     return segments
 
 
-def _serve_unaddressable_symbol(
+def _whole_window_from_provider(
     *,
-    ticker: str,
     from_date: str,
     to_date: str,
+    windows: Sequence[SessionWindow],
+    reason: SpanReason,
     fetch_provider: ProviderFetch,
-    now_ms: int,
-) -> ComposedBars:
-    """Serve the whole window from the provider, exactly as the flag-off path does.
+) -> list[_ExecutedSegment]:
+    """Serve everything with the single fetch the flag-off path would make.
 
-    A ticker the lake cannot address — an index or option prefix such as
-    ``I:SPX``, or a path-unsafe string — must never reach a filesystem join.
-    Rejecting it must not change the *answer* either: the single fetch below is
-    the identical call, over the identical range, that ``chart_service`` makes
-    with the flag off, so both modes yield the same bars for the same input —
-    including the typed ``NO_DATA`` the router maps to 404 when the provider has
-    nothing to give. The rejection is logged, never silent.
+    The call below uses the identical range ``chart_service`` passes with the
+    flag off, so this outcome is today's outcome — the same bars, and the same
+    typed ``NO_DATA`` when the provider has nothing to give. Both escapes from
+    the composed path land here: a ticker the lake cannot address, and a lake
+    too full of holes to be worth stitching.
     """
-    logger.warning(
-        "[CHART] %r is not addressable in the lake; serving the whole window from the provider",
-        ticker,
-        extra={"ticker": ticker, "from_date": from_date, "to_date": to_date},
+    return [("provider", reason, list(windows), fetch_provider(from_date, to_date))]
+
+
+def _visible_spans(
+    executed: Sequence[_ExecutedSegment],
+    visible_from: date,
+) -> tuple[BarSourceSpan, ...]:
+    """Report provenance for the window the operator can actually see.
+
+    Composition runs over the **warmup-extended** window, which can reach weeks
+    behind the requested range. Reporting those warmup sessions would put a
+    notice on the chart about bars nobody is looking at — and at the lake's
+    leading edge, where warmup routinely predates the backfill, a chart whose
+    every visible session came from the lake would still show the fallback
+    notice. So the receipt is cut to the visible sessions, at the same
+    session-open anchor the span boundaries already use.
+    """
+    visible: list[tuple[BarSourceName, SpanReason, list[SessionWindow], list[dict[str, Any]]]] = []
+    for source, reason, windows, segment_bars in executed:
+        in_view = [window for window in windows if window.session_date >= visible_from]
+        if in_view:
+            visible.append((source, reason, in_view, segment_bars))
+    if not visible:
+        return ()
+
+    cut_ms = visible[0][2][0].open_ms_utc
+    return tuple(
+        BarSourceSpan(
+            source=source,
+            reason=reason,
+            from_session_open_ms_utc=in_view[0].open_ms_utc,
+            to_session_open_ms_utc=in_view[-1].open_ms_utc,
+            session_count=len(in_view),
+            bar_count=sum(1 for bar in segment_bars if bar["timestamp"] >= cut_ms),
+        )
+        for source, reason, in_view, segment_bars in visible
     )
-    completed, live, boundary_ms_utc = split_sessions_at_boundary(from_date, to_date, now_ms)
-    windows = [*completed, *live]
-    bars = fetch_provider(from_date, to_date)
-    if not windows:
-        # No scheduled session in the window: there is no session anchor to
-        # report a span against, and nothing to say about where bars came from.
-        return ComposedBars(bars=bars, spans=(), boundary_ms_utc=boundary_ms_utc)
-    span = BarSourceSpan(
-        source="provider",
-        reason="symbol_not_lake_addressable",
-        from_session_open_ms_utc=windows[0].open_ms_utc,
-        to_session_open_ms_utc=windows[-1].open_ms_utc,
-        session_count=len(windows),
-        bar_count=len(bars),
-    )
-    return ComposedBars(bars=bars, spans=(span,), boundary_ms_utc=boundary_ms_utc)
 
 
 def _read_lake_bars(
@@ -248,42 +300,36 @@ def _read_lake_bars(
     return out
 
 
-def compose_chart_bars(
+def _execute_plan(
     *,
     ticker: str,
     from_date: str,
     to_date: str,
     adjusted: bool,
+    completed: Sequence[SessionWindow],
+    live: Sequence[SessionWindow],
     fetch_provider: ProviderFetch,
-    now_ms: int | None = None,
-    lake_root: Path | None = None,
-) -> ComposedBars:
-    """Compose one 1-minute stream from lake history and a live provider tail.
-
-    ``from_date`` / ``to_date`` are ISO day strings in the chart service's own
-    vocabulary (``from_date`` is already warmup-adjusted by the caller).
-    ``now_ms`` and ``lake_root`` exist so tests can pin the boundary and the
-    fixture root; production leaves both at their defaults.
-
-    A ticker the lake cannot address never reaches the reader — see
-    :func:`_serve_unaddressable_symbol` — so this function raises nothing the
-    flag-off path would not also raise for the same input.
-    """
-    at_ms = now_ms_utc() if now_ms is None else now_ms
+    lake_root: Path | None,
+) -> list[_ExecutedSegment]:
+    """Decide where every session's bars come from, then go and get them."""
+    all_windows = [*completed, *live]
     try:
         # The boundary guard: the LEAN reader joins the symbol straight into a
         # path, so anything that is not a lake-addressable ticker stops here.
         symbol = validate_symbol(ticker)
     except SymbolValidationError:
-        return _serve_unaddressable_symbol(
-            ticker=ticker,
+        logger.warning(
+            "[CHART] %r is not addressable in the lake; serving the whole window from the provider",
+            ticker,
+            extra={"ticker": ticker, "from_date": from_date, "to_date": to_date},
+        )
+        return _whole_window_from_provider(
             from_date=from_date,
             to_date=to_date,
+            windows=all_windows,
+            reason="symbol_not_lake_addressable",
             fetch_provider=fetch_provider,
-            now_ms=at_ms,
         )
-
-    completed, live, boundary_ms_utc = split_sessions_at_boundary(from_date, to_date, at_ms)
 
     reader = LeanMinuteDataReader(
         [lake_root if lake_root is not None else resolve_lake_root()],
@@ -301,9 +347,29 @@ def compose_chart_bars(
         held = set(reader.iter_dates(symbol, completed[0].session_date, completed[-1].session_date))
         lake_dates = frozenset(held.intersection(window.session_date for window in completed))
 
-    bars: list[dict[str, Any]] = []
-    spans: list[BarSourceSpan] = []
-    for source, reason, windows in _plan_segments(completed, live, lake_dates, history_fallback_reason):
+    plan = _plan_segments(completed, live, lake_dates, history_fallback_reason)
+    provider_runs = sum(1 for source, _reason, _windows in plan if source == "provider")
+    if provider_runs > _MAX_PROVIDER_RUNS:
+        # Counted before a single fetch is issued, so the cap costs nothing to
+        # enforce. Stitching a lake this holey would cost more provider calls
+        # than not stitching at all.
+        logger.info(
+            "[CHART] %s would need %d provider fetches (cap %d); serving the whole window from the provider",
+            symbol,
+            provider_runs,
+            _MAX_PROVIDER_RUNS,
+            extra={"symbol": symbol, "provider_runs": provider_runs, "cap": _MAX_PROVIDER_RUNS},
+        )
+        return _whole_window_from_provider(
+            from_date=from_date,
+            to_date=to_date,
+            windows=all_windows,
+            reason=history_fallback_reason,
+            fetch_provider=fetch_provider,
+        )
+
+    executed: list[_ExecutedSegment] = []
+    for source, reason, windows in plan:
         if source == "lake":
             segment_bars = _read_lake_bars(reader, symbol, windows)
         else:
@@ -311,32 +377,67 @@ def compose_chart_bars(
                 windows[0].session_date.isoformat(),
                 windows[-1].session_date.isoformat(),
             )
-        spans.append(
-            BarSourceSpan(
-                source=source,
-                reason=reason,
-                from_session_open_ms_utc=windows[0].open_ms_utc,
-                to_session_open_ms_utc=windows[-1].open_ms_utc,
-                session_count=len(windows),
-                bar_count=len(segment_bars),
-            )
-        )
-        bars.extend(segment_bars)
+        executed.append((source, reason, windows, segment_bars))
+    return executed
+
+
+def compose_chart_bars(
+    *,
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    adjusted: bool,
+    fetch_provider: ProviderFetch,
+    visible_from_date: str | None = None,
+    now_ms: int | None = None,
+    lake_root: Path | None = None,
+) -> ComposedBars:
+    """Compose one 1-minute stream from lake history and a live provider tail.
+
+    ``from_date`` / ``to_date`` are ISO day strings in the chart service's own
+    vocabulary, where ``from_date`` is already **warmup-extended** by the
+    caller. ``visible_from_date`` is the range the operator actually asked for;
+    the returned spans and notice describe only that, so a notice never
+    reports on warmup bars nobody can see. It defaults to ``from_date`` for
+    callers with no warmup.
+
+    ``now_ms`` and ``lake_root`` exist so tests can pin the boundary and the
+    fixture root; production leaves both at their defaults.
+
+    A ticker the lake cannot address never reaches the reader, so this function
+    raises nothing the flag-off path would not also raise for the same input.
+    """
+    at_ms = now_ms_utc() if now_ms is None else now_ms
+    completed, live, boundary_ms_utc = split_sessions_at_boundary(from_date, to_date, at_ms)
+
+    executed = _execute_plan(
+        ticker=ticker,
+        from_date=from_date,
+        to_date=to_date,
+        adjusted=adjusted,
+        completed=completed,
+        live=live,
+        fetch_provider=fetch_provider,
+        lake_root=lake_root,
+    )
+
+    bars = [bar for _source, _reason, _windows, segment_bars in executed for bar in segment_bars]
 
     # Composition is an ingestion boundary of its own: a duplicate or
     # out-of-order bar at the stitch must fail loudly, never be repaired.
-    assert_canonical_bar_stream(bars, symbol)
+    assert_canonical_bar_stream(bars, ticker)
 
+    spans = _visible_spans(executed, date.fromisoformat(visible_from_date or from_date))
     logger.info(
-        "[CHART] composed %d bars for %s over %d span(s)",
+        "[CHART] composed %d bars for %s over %d visible span(s)",
         len(bars),
-        symbol,
+        ticker,
         len(spans),
         extra={
-            "symbol": symbol,
+            "ticker": ticker,
             "boundary_ms_utc": boundary_ms_utc,
-            "lake_session_count": len(lake_dates),
+            "executed_segment_count": len(executed),
             "live_session_count": len(live),
         },
     )
-    return ComposedBars(bars=bars, spans=tuple(spans), boundary_ms_utc=boundary_ms_utc)
+    return ComposedBars(bars=bars, spans=spans, boundary_ms_utc=boundary_ms_utc)

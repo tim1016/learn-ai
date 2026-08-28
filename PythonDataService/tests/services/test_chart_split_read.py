@@ -29,7 +29,11 @@ from app.lean_sidecar.trading_calendar import (
     session_windows_ms_utc,
 )
 from app.services import chart_bar_source, chart_service
-from app.services.chart_bar_source import compose_chart_bars, split_sessions_at_boundary
+from app.services.chart_bar_source import (
+    _MAX_PROVIDER_RUNS,
+    compose_chart_bars,
+    split_sessions_at_boundary,
+)
 from app.services.dataset_service import CanonicalBarsError
 
 _ET = ZoneInfo("America/New_York")
@@ -40,6 +44,14 @@ REGULAR_BEFORE = date(2025, 11, 26)  # regular session
 HOLIDAY = date(2025, 11, 27)  # Thanksgiving — not a session
 HALF_DAY = date(2025, 11, 28)  # early close, 13:00 ET
 LIVE_SESSION = date(2025, 12, 1)  # Monday after the weekend
+
+# A warmup start well before the requested range — the chart service always
+# extends the fetch window backwards when indicators need lookback.
+WARMUP_FROM = date(2025, 11, 17)
+
+# Two clean weeks, used to build a lake full of holes.
+HOLEY_START = date(2025, 11, 3)
+HOLEY_END = date(2025, 11, 14)
 
 
 # ──────────────────────────────────────────────
@@ -150,6 +162,47 @@ def _clear_chart_caches() -> None:
 def _during(session_date: date) -> int:
     """A ``now_ms`` inside ``session_date`` — one minute after its open."""
     return session_open_ms_utc(session_date) + 60_000
+
+
+def _holey_sessions() -> list[date]:
+    """The ten scheduled sessions of the two-week hole-testing window."""
+    return [window.session_date for window in session_windows_ms_utc(HOLEY_START, HOLEY_END)]
+
+
+def _lake_coverage_with_holes(hole_run_count: int) -> list[date]:
+    """Sessions to seed so the completed range has ``hole_run_count`` holes.
+
+    Holes go at odd indices so no two are adjacent — each is its own contiguous
+    provider run. The last session is live and always provider-served, so the
+    total provider-run count is ``hole_run_count + 1``. Derived from
+    ``_MAX_PROVIDER_RUNS`` by the callers rather than hardcoded, so raising the
+    cap moves both scenarios with it.
+    """
+    sessions = _holey_sessions()
+    completed = sessions[:-1]
+    holes = {completed[2 * index + 1] for index in range(hole_run_count)}
+    return [session_date for session_date in completed if session_date not in holes]
+
+
+def _compose_holey(lake_root: Path, held_sessions: Sequence[date]) -> tuple[Any, _ProviderSpy]:
+    """Compose the two-week window with only ``held_sessions`` in the lake.
+
+    The final session is live, so it is always provider-served; the holes among
+    the nine completed sessions are what drives the provider-run count.
+    """
+    for session_date in held_sessions:
+        _write_lake_day(lake_root, session_date)
+    provider = _ProviderSpy()
+    composed = compose_chart_bars(
+        ticker=_SYMBOL,
+        from_date=HOLEY_START.isoformat(),
+        to_date=HOLEY_END.isoformat(),
+        adjusted=False,
+        fetch_provider=provider,
+        now_ms=_during(_holey_sessions()[-1]),
+        lake_root=lake_root,
+    )
+    return composed, provider
 
 
 # ──────────────────────────────────────────────
@@ -400,6 +453,107 @@ def test_compose_chart_bars_serves_a_lake_unaddressable_symbol_from_the_provider
     assert composed.notice_code == "symbol_provider_only"
 
 
+# ──────────────────────────────────────────────
+# The provider fan-out cap
+# ──────────────────────────────────────────────
+def test_compose_chart_bars_collapses_a_holey_lake_to_one_provider_fetch(lake_root: Path) -> None:
+    """Past the cap, stitching costs more provider calls than not stitching.
+
+    One more hole run than the cap allows (plus the live tail) collapses the
+    composition to the single whole-window fetch the flag-off path would have
+    made.
+    """
+    sessions = _holey_sessions()
+    composed, provider = _compose_holey(lake_root, _lake_coverage_with_holes(_MAX_PROVIDER_RUNS))
+
+    assert provider.calls == [(HOLEY_START.isoformat(), HOLEY_END.isoformat())]
+    assert [(span.source, span.reason) for span in composed.spans] == [("provider", "lake_gap")]
+    assert composed.spans[0].session_count == len(sessions)
+    assert composed.notice_code == "history_provider_fallback"
+    # Collapsing changes where the bars came from, never which bars they are.
+    assert [bar["timestamp"] for bar in composed.bars] == _expected_minutes(sessions)
+
+
+def test_compose_chart_bars_still_stitches_at_the_provider_run_cap(lake_root: Path) -> None:
+    """Exactly at the cap the composition still reads the lake — the collapse is
+    for windows that exceed it, not windows that reach it."""
+    sessions = _holey_sessions()
+
+    composed, provider = _compose_holey(lake_root, _lake_coverage_with_holes(_MAX_PROVIDER_RUNS - 1))
+
+    # One hole run short of the cap, plus the live tail: the cap exactly.
+    assert len(provider.calls) == _MAX_PROVIDER_RUNS
+    assert [span.source for span in composed.spans] == [
+        "lake",
+        "provider",
+        "lake",
+        "provider",
+        "lake",
+        "provider",
+    ]
+    assert [bar["timestamp"] for bar in composed.bars] == _expected_minutes(sessions)
+
+
+# ──────────────────────────────────────────────
+# The receipt covers the visible window, not the warmup
+# ──────────────────────────────────────────────
+def test_compose_chart_bars_reports_only_the_visible_window(lake_root: Path) -> None:
+    """Warmup-only provider days must not raise a notice about bars nobody sees.
+
+    At the lake's leading edge this is the common case: warmup reaches back
+    before the backfill, so without the cut a fully lake-backed visible chart
+    would show the fallback notice on every load.
+    """
+    _write_lake_day(lake_root, REGULAR_BEFORE)
+    _write_lake_day(lake_root, HALF_DAY)
+    provider = _ProviderSpy()
+
+    composed = compose_chart_bars(
+        ticker=_SYMBOL,
+        from_date=WARMUP_FROM.isoformat(),
+        to_date=LIVE_SESSION.isoformat(),
+        visible_from_date=REGULAR_BEFORE.isoformat(),
+        adjusted=False,
+        fetch_provider=provider,
+        now_ms=_during(LIVE_SESSION),
+        lake_root=lake_root,
+    )
+
+    assert composed.notice_code is None
+    assert [(span.source, span.reason) for span in composed.spans] == [
+        ("lake", "completed_sessions"),
+        ("provider", "current_session"),
+    ]
+    assert composed.spans[0].from_session_open_ms_utc == session_open_ms_utc(REGULAR_BEFORE)
+    assert composed.spans[0].session_count == 2
+    assert composed.spans[0].bar_count == len(_expected_minutes([REGULAR_BEFORE, HALF_DAY]))
+    # The warmup bars are still in the series — only the receipt is cut.
+    assert min(bar["timestamp"] for bar in composed.bars) < session_open_ms_utc(REGULAR_BEFORE)
+
+
+def test_compose_chart_bars_still_reports_a_hole_inside_the_visible_window(lake_root: Path) -> None:
+    """The cut hides warmup, not real gaps the operator is looking at."""
+    _write_lake_day(lake_root, REGULAR_BEFORE)  # HALF_DAY is visible and missing
+
+    composed = compose_chart_bars(
+        ticker=_SYMBOL,
+        from_date=WARMUP_FROM.isoformat(),
+        to_date=LIVE_SESSION.isoformat(),
+        visible_from_date=REGULAR_BEFORE.isoformat(),
+        adjusted=False,
+        fetch_provider=_ProviderSpy(),
+        now_ms=_during(LIVE_SESSION),
+        lake_root=lake_root,
+    )
+
+    assert composed.notice_code == "history_provider_fallback"
+    assert [(span.source, span.reason) for span in composed.spans] == [
+        ("lake", "completed_sessions"),
+        ("provider", "lake_gap"),
+        ("provider", "current_session"),
+    ]
+
+
 def test_compose_chart_bars_rejects_a_provider_range_that_overlaps_the_lake(lake_root: Path) -> None:
     """A stitch that would duplicate a bar must fail loudly, never repair itself."""
     _write_lake_day(lake_root, REGULAR_BEFORE)
@@ -511,7 +665,10 @@ def test_get_chart_data_flag_on_matches_flag_off_bars_and_indicators(
     monkeypatch.setattr(chart_bar_source, "now_ms_utc", lambda: _during(LIVE_SESSION))
     flag_on = _run_chart()
 
-    assert flag_on.pop("bar_sources")["notice_code"] == "history_provider_fallback"
+    # Warmup pulled the fetch window back before the requested range and those
+    # sessions came from the provider, but the operator cannot see them — so the
+    # receipt stays quiet. Every *visible* session is lake-backed.
+    assert flag_on.pop("bar_sources")["notice_code"] is None
     assert flag_on["bars"] == flag_off["bars"]
     assert flag_on["indicators"] == flag_off["indicators"]
     assert flag_on == flag_off
