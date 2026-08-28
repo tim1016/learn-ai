@@ -78,9 +78,18 @@ contract change plus a third metadata artifact kind in the catalog's
 vocabulary. Booked rather than papered over, and
 :func:`log_lake_mode_input_divergences` says so once per lake-mode run so
 an operator chasing a rate-sensitive difference has the breadcrumb rather
-than a mystery. Materially it is narrow: the sidecar's trusted-sample
-runs are cash-account equity backtests, where LEAN consumes the
-risk-free rate for reporting statistics rather than for fills.
+than a mystery.
+
+Materially it is narrow, for a reason worth stating precisely rather than
+by account type — three of the four trusted samples run
+``AccountType.Margin``, so "cash account" would be simply wrong. These are
+**equity-only backtests with no option pricing**: LEAN's risk-free rate
+feeds portfolio *statistics* (Sharpe and its relatives), never a fill, a
+commission, or a position size. Those statistics leave the sidecar as
+strings (``normalized_parser`` keeps ``statistics`` as ``dict[str, str]``,
+preserving LEAN's own formatting) and no category in the reconciliation
+taxonomy gates on them. So the divergence cannot move a trade, a price, or
+a P&L figure — it can only move a reported ratio, which nothing compares.
 """
 
 from __future__ import annotations
