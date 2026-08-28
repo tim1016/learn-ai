@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.data.availability import ensure_range
+from app.engine.data.availability import _missing_spans, ensure_range
 from app.engine.data.policy_store import (
     policy_key,
     read_provenance,
@@ -20,6 +20,7 @@ from app.engine.data.policy_store import (
     snapshot_minute_trade_zips,
     symbol_write_lock,
 )
+from app.lean_sidecar.trading_calendar import expected_sessions, is_trading_day
 from app.lean_sidecar.workspace import SymbolValidationError
 
 FETCHED_AT_MS = 1783958400000
@@ -275,19 +276,24 @@ def test_symbol_write_lock_serializes_writers(tmp_path: Path):
 class _FakePolygon:
     """Deterministic minute-bar source counting how often it is fetched."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, blackout: set[date] | None = None) -> None:
         self.calls = 0
         self.adjusted_seen: list[bool] = []
+        self.ranges: list[tuple[str, str]] = []
+        # Dates the provider has no bars for — a market holiday, say. The
+        # exporter writes no zip for them, so they stay missing forever.
+        self.blackout = blackout or set()
 
     def fetch_aggregates(self, **kwargs) -> list[dict]:
         self.calls += 1
         self.adjusted_seen.append(kwargs["adjusted"])
+        self.ranges.append((kwargs["from_date"], kwargs["to_date"]))
         start = date.fromisoformat(kwargs["from_date"])
         end = date.fromisoformat(kwargs["to_date"])
         bars: list[dict] = []
         current = start
         while current <= end:
-            if current.weekday() < 5:
+            if current.weekday() < 5 and current not in self.blackout:
                 open_ms = int(datetime(current.year, current.month, current.day, 14, 30, tzinfo=UTC).timestamp() * 1000)
                 for i in range(30):
                     bars.append(
@@ -382,3 +388,168 @@ def test_ensure_range_concurrent_runs_fetch_once(tmp_path: Path):
     assert polygon.calls == 1
     zips = sorted(p.name for p in (policy_root / "equity" / "usa" / "minute" / "spy").glob("*_trade.zip"))
     assert zips == ["20260105_trade.zip", "20260106_trade.zip"]
+
+
+def _minute_zip(policy_root: Path, trading_date: date) -> Path:
+    return policy_root / "equity" / "usa" / "minute" / "spy" / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
+
+
+def _ensure_spy(polygon: _FakePolygon, policy_root: Path, start: date, end: date):
+    return ensure_range(
+        reference_roots=[],
+        cache_root=policy_root,
+        symbol="SPY",
+        start=start,
+        end=end,
+        polygon=polygon,
+        adjusted=False,
+        resolution="minute",
+    )
+
+
+def test_ensure_range_fetches_only_the_missing_day(tmp_path: Path):
+    """One hole in a covered window costs one one-day request, not a re-export.
+
+    Before #1830 the whole window was re-exported whenever any single day
+    was missing, which is how one symbol's provenance accumulated 43
+    fetches of the same two years.
+    """
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    _minute_zip(policy_root, date(2026, 1, 8)).unlink()
+    polygon.ranges.clear()
+
+    report = _ensure_spy(polygon, policy_root, *window)
+
+    assert report.is_complete
+    assert polygon.ranges == [("2026-01-08", "2026-01-08")]
+
+
+def test_ensure_range_batches_days_a_weekend_apart_into_one_request(tmp_path: Path):
+    """Adjacency is in trading days: Friday and Monday are one span.
+
+    Calendar adjacency would split a missing month into weekly requests,
+    which is the per-request cost the batching exists to respect.
+    """
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    for hole in (date(2026, 1, 9), date(2026, 1, 12)):
+        _minute_zip(policy_root, hole).unlink()
+    polygon.ranges.clear()
+
+    _ensure_spy(polygon, policy_root, *window)
+
+    assert polygon.ranges == [("2026-01-09", "2026-01-12")]
+
+
+def test_ensure_range_splits_gaps_separated_by_a_covered_day(tmp_path: Path):
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    for hole in (date(2026, 1, 6), date(2026, 1, 8)):
+        _minute_zip(policy_root, hole).unlink()
+    polygon.ranges.clear()
+
+    _ensure_spy(polygon, policy_root, *window)
+
+    assert polygon.ranges == [("2026-01-06", "2026-01-06"), ("2026-01-08", "2026-01-08")]
+
+
+def test_ensure_range_records_only_the_delta_in_provenance(tmp_path: Path):
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    _minute_zip(policy_root, date(2026, 1, 13)).unlink()
+
+    _ensure_spy(polygon, policy_root, *window)
+
+    fetches = json.loads((policy_root / "provenance" / "spy.json").read_text())["fetches"]
+    assert [(f["from_date"], f["to_date"]) for f in fetches] == [
+        ("2026-01-05", "2026-01-16"),
+        ("2026-01-13", "2026-01-13"),
+    ]
+
+
+def test_ensure_range_over_a_provider_blackout_refetches_only_that_day(tmp_path: Path):
+    """A day the provider has no bars for never becomes available.
+
+    ``date(2026, 1, 8)`` here is an ordinary trading Thursday, not a real
+    NYSE holiday — the point of this test is a blackout the calendar
+    can't see (an outage, a delisting gap, anything provider-side), so
+    ``_iter_weekdays`` counting it as an expected day is not the bug:
+    such a window genuinely can never report complete and re-fetches on
+    every call. This pins that the repeated fetch is bounded to the one
+    blacked-out day rather than the whole window. A window whose only
+    gap actually *is* a real exchange holiday no longer even re-fetches
+    — see ``test_missing_spans_drops_a_holiday_from_the_grouping`` and
+    ``test_ensure_range_makes_zero_further_calls_for_a_holiday_only_gap``.
+    """
+    outage_day = date(2026, 1, 8)
+    polygon = _FakePolygon(blackout={outage_day})
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    polygon.ranges.clear()
+
+    report = _ensure_spy(polygon, policy_root, *window)
+
+    assert report.missing_days == [outage_day]
+    assert polygon.ranges == [("2026-01-08", "2026-01-08")]
+
+
+def test_missing_spans_drops_a_holiday_from_the_grouping():
+    """A day check_availability flags "missing" that isn't a real NYSE
+    trading session (a holiday) never starts or extends a span — it is
+    simply skipped, since ``_missing_spans`` now walks the canonical
+    session calendar instead of ``_iter_weekdays``."""
+    holiday = date(2026, 1, 1)  # New Year's Day, not a session
+    window = (date(2025, 12, 30), date(2026, 1, 2))
+    assert holiday not in expected_sessions(*window)
+
+    spans = _missing_spans(*window, {holiday, date(2025, 12, 30)})
+
+    assert spans == [(date(2025, 12, 30), date(2025, 12, 30))]
+
+
+def test_ensure_range_makes_zero_further_calls_for_a_holiday_only_gap(tmp_path: Path):
+    """Once every real trading session in a window is cached, a re-check
+    whose only naively-"missing" day is a real NYSE holiday makes ZERO
+    further provider calls — there is nothing to fetch for a day the
+    market never opened. Contrast with
+    ``test_ensure_range_over_a_provider_blackout_refetches_only_that_day``,
+    where the blacked-out day *is* a real trading session and the
+    re-fetch is merely bounded, not eliminated."""
+    window = (date(2025, 12, 30), date(2026, 1, 2))
+    holiday = date(2026, 1, 1)  # New Year's Day, observed Thursday
+    # Derive/assert the holiday's status from the canonical calendar —
+    # never hardcode "this date is a non-session" as a bare fact.
+    assert holiday.weekday() < 5  # passes check_availability's naive weekday filter
+    assert not is_trading_day(holiday)  # ...but is not a real NYSE session
+    assert holiday not in expected_sessions(*window)
+
+    polygon = _FakePolygon(blackout={holiday})
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    _ensure_spy(polygon, policy_root, *window)
+    calls_after_first = polygon.calls
+    assert calls_after_first >= 1
+
+    report = _ensure_spy(polygon, policy_root, *window)
+
+    # check_availability's weekday-only filter still can't see the
+    # holiday, so it's reported "missing" and the window "incomplete" —
+    # but nothing further was fetched for it.
+    assert report.missing_days == [holiday]
+    assert not report.is_complete
+    assert polygon.calls == calls_after_first

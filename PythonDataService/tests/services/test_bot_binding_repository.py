@@ -24,6 +24,7 @@ from app.schemas.signal_program_seal import (
     seal_bot_program,
 )
 from app.services.bot_binding_repository import (
+    NON_IDENTITY_EVIDENCE_FIELDS,
     BotBindingRepository,
     BotRunOutcomeRecord,
     BotRunRecord,
@@ -37,6 +38,10 @@ from app.services.bot_binding_repository import (
     alpaca_v1_action_plan,
 )
 from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
+from app.services.broker_v2_panel.panel_projection_service import (
+    program_build_view_from_run_evidence,
+)
+from app.services.signal_program_admission import WIRING_DRIFT_NEXT_STEP
 
 _SID = "alpaca-spy-ema-01"
 
@@ -577,3 +582,158 @@ def test_read_lifts_legacy_binding_when_current_run_evidence_is_missing(
     )
 
     assert repository.read(_SID) == binding
+
+
+def _evidence_path(tmp_path: Path, run_id: str = "run-001") -> Path:
+    return tmp_path / "live_state" / _SID / "program_build_evidence" / f"{run_id}.json"
+
+
+def test_the_wiring_verdict_a_run_started_under_is_recorded(tmp_path: Path) -> None:
+    """#1828: a frozen run must replay the verdict it actually ran under.
+
+    While ``SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED`` is off, a bot whose wiring
+    drifted is admitted and told so. If that verdict is not written down, the
+    panel can only say NOT_CHECKED afterwards -- so the one situation the
+    warning-only posture exists to surface is the one that vanishes from the
+    record.
+    """
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    proof = _proven_program_build(seal).model_copy(
+        update={"wiring": "DRIFTED", "next_step": "Re-qualify this program's wiring."}
+    )
+
+    repository.record_launch(_binding(sealed_program=seal, program_build=proof), launch_reason="deploy")
+
+    evidence = repository.read_program_build_evidence(_SID, "run-001")
+    assert evidence is not None
+    assert evidence.wiring == "DRIFTED"
+    assert evidence.schema_version == 2
+
+
+def test_evidence_written_before_the_wiring_field_is_still_readable(tmp_path: Path) -> None:
+    """A per-run record is written once and never migrated, so the reader has
+    to accept the older shape forever."""
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    repository.record_launch(
+        _binding(sealed_program=seal, program_build=_proven_program_build(seal)),
+        launch_reason="deploy",
+    )
+    path = _evidence_path(tmp_path)
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    legacy["schema_version"] = 1
+    del legacy["wiring"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    evidence = repository.read_program_build_evidence(_SID, "run-001")
+
+    assert evidence is not None
+    assert evidence.schema_version == 1
+    # Absence is reported as absence, never inferred as a passing check.
+    assert evidence.wiring == "NOT_CHECKED"
+
+
+def test_relaunching_a_run_whose_evidence_predates_wiring_is_not_a_conflict(
+    tmp_path: Path,
+) -> None:
+    """The trap this field could easily have introduced.
+
+    ``_ensure_program_build_evidence`` is create-once and compares a second
+    write against the stored record. Comparing whole models would make a
+    record written before ``wiring`` existed differ from the candidate for the
+    *same run* the moment the field was added -- and that difference surfaces
+    as ``RunIdentityConflictError``, i.e. a refused launch whose message says
+    nothing about the real cause. Identity is compared instead; ``wiring`` is
+    an observation about the run, not part of which run it is.
+    """
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    proof = _proven_program_build(seal).model_copy(update={"wiring": "MATCHED"})
+    binding = _binding(sealed_program=seal, program_build=proof)
+    repository.record_launch(binding, launch_reason="deploy")
+    path = _evidence_path(tmp_path)
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    legacy["schema_version"] = 1
+    del legacy["wiring"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    repository.record_launch(binding, launch_reason="deploy")
+
+    # The stored record is left exactly as written; create-once does not
+    # rewrite history to add a field it now knows about.
+    assert json.loads(path.read_text(encoding="utf-8")) == legacy
+
+
+def test_program_build_evidence_still_conflicts_on_a_different_run_proof(
+    tmp_path: Path,
+) -> None:
+    """Loosening the comparison must not loosen the guard it exists to be.
+
+    This branch had no coverage before #1828 despite being the integrity
+    check on immutable per-run proof.
+    """
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    proof = _proven_program_build(seal)
+    repository.record_launch(_binding(sealed_program=seal, program_build=proof), launch_reason="deploy")
+
+    with pytest.raises(RunIdentityConflictError):
+        repository.record_launch(
+            _binding(
+                sealed_program=seal,
+                program_build=proof.model_copy(update={"running_artifact_digest": "d" * 64}),
+            ),
+            launch_reason="deploy",
+        )
+
+
+def test_every_evidence_field_is_classified_as_identity_or_not() -> None:
+    """Adding a field to per-run proof must be a decision, not a default.
+
+    ``run_identity`` excludes a named set and compares the rest, so a new
+    field joins the integrity check unless it is listed. That is the safe
+    default -- but only if someone notices. This pins the split so a new
+    field fails here first and its author has to say which side it is on:
+    genuinely part of *which run's proof this is*, or an observation about
+    the run like ``wiring``. Getting that wrong in the quiet direction means
+    an immutable proof record whose changes stop being detected.
+    """
+    identity = set(ProgramBuildRunEvidence.model_fields) - NON_IDENTITY_EVIDENCE_FIELDS
+
+    assert identity == {
+        "strategy_instance_id",
+        "run_id",
+        "sealed_program_hash",
+        "program_version",
+        "golden_trace_root",
+        "running_artifact_digest",
+        "qualification_receipt_hash",
+        "verified_at_ms",
+    }
+    assert {"schema_version", "wiring"} == NON_IDENTITY_EVIDENCE_FIELDS
+
+
+def test_the_frozen_replay_and_the_live_proof_offer_the_same_drift_remedy() -> None:
+    """One operator instruction, not two that can drift apart.
+
+    A trader reading a live Start refusal and the same bot's frozen run
+    afterwards must be told to do the same thing.
+    """
+    seal = _sealed_program()
+    evidence = ProgramBuildRunEvidence(
+        strategy_instance_id=_SID,
+        run_id="run-001",
+        sealed_program_hash=seal.bot_configuration_hash,
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=1_000,
+        wiring="DRIFTED",
+    )
+
+    replayed = program_build_view_from_run_evidence("ema_crossover_signal", evidence)
+
+    assert replayed.next_step == WIRING_DRIFT_NEXT_STEP
+

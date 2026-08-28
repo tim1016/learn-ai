@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import logging
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Container, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Literal
 
@@ -39,9 +40,18 @@ logger = logging.getLogger(__name__)
 Resolution = Literal["minute", "daily"]
 
 # US equities open Monday–Friday. This filter is deliberately naive: it
-# ignores exchange holidays because the downstream reader already skips
-# dates with no zip file. The goal here is only to avoid reporting Sundays
-# as "missing" and confusing users.
+# ignores exchange holidays. That is harmless for *reporting* — the
+# downstream reader already skips dates with no zip file — but it means
+# `check_availability`'s own expected/missing counts still flag a
+# holiday as perpetually "missing," so a window containing one never
+# reports complete. That no longer forces a re-fetch, though:
+# `_missing_spans` groups over the canonical trading-session calendar
+# (see its docstring) rather than this weekday walk, so a holiday never
+# starts or extends a fetch span. #1830 bounded the leak to the holiday
+# itself; layering the calendar into the span walk (not into this
+# reporting-only filter, which stays this store's one intentionally
+# naive corner) closes it — the window still reports incomplete, but
+# nothing further is ever fetched for a day the market never opened.
 _WEEKEND = {5, 6}
 
 
@@ -52,6 +62,34 @@ def _iter_weekdays(start: date, end: date):
         if current.weekday() not in _WEEKEND:
             yield current
         current += one_day
+
+
+def _missing_spans(start: date, end: date, missing: Container[date]) -> list[tuple[date, date]]:
+    """Group missing days into contiguous fetch spans.
+
+    Adjacency is read off the canonical NYSE trading-session calendar
+    (``app.lean_sidecar.trading_calendar.expected_sessions``), never the
+    weekday-only walk ``check_availability`` still uses for its own
+    expected/missing counts: two missing sessions share a span when no
+    session between them was covered, so a Friday and the following
+    Monday are one span, and a holiday inside the window never starts or
+    extends a span — there is nothing to fetch for a day the market
+    never opened. This is the piece that closes the residual noted on
+    ``_WEEKEND``: it doesn't change what ``check_availability`` reports
+    as "missing," only what ``ensure_range`` bothers fetching for it.
+    """
+    # Imported lazily, matching `ensure_range`'s own lazy imports below —
+    # this keeps pure availability-report callers (e.g. the availability
+    # endpoint, which never reaches this function) from paying for the
+    # calendar/pandas stack.
+    from app.lean_sidecar.trading_calendar import expected_sessions
+
+    spans: list[tuple[date, date]] = []
+    for is_missing, days in groupby(expected_sessions(start, end), key=lambda day: day in missing):
+        if is_missing:
+            run = list(days)
+            spans.append((run[0], run[-1]))
+    return spans
 
 
 def _minute_zip_filename(trading_date: date) -> str:
@@ -230,10 +268,21 @@ def ensure_range(
     symbol serialize, and the loser observes the winner's zips instead of
     re-fetching. Every fetch appends to the symbol's provenance document.
 
-    The function always exports the *full requested range* rather than
-    cherry-picking missing days because the Polygon aggregates endpoint is
-    billed per request, and fetching one range is cheaper than N one-day
-    requests for sparse gaps.
+    Only the *missing* spans of the window are fetched, not the whole
+    window (issue #1830). The Polygon aggregates endpoint is billed per
+    request, so contiguous missing days are batched into one request
+    each; a window that is wholly new, or extended at either end, still
+    costs a single request, and alternating coverage costs one per gap.
+    A window containing an exchange holiday -- see the note on
+    ``_WEEKEND`` -- still reports incomplete on every call, since
+    ``check_availability``'s own weekday-only day-set can't see the
+    holiday; but it costs zero further provider calls once every real
+    trading session in the window is covered, because ``_missing_spans``
+    groups over the canonical trading-session calendar and a holiday
+    never starts or extends a span. A day the provider genuinely has no
+    bars for on a real trading session (an outage, not a holiday) is a
+    separate case the calendar can't help with, and still re-fetches on
+    every call -- bounded to that one day, never the whole window.
     """
     all_roots = [*reference_roots, cache_root]
     pre = check_availability(all_roots, symbol, start, end, resolution=resolution)
@@ -269,34 +318,37 @@ def ensure_range(
             )
             return pre
 
+        spans = _missing_spans(start, end, set(pre.missing_days))
         logger.info(
-            "[ENGINE] Materializing %s %s %s..%s into cache — %d/%d weekdays missing",
+            "[ENGINE] Materializing %s %s %s..%s into cache — %d/%d weekdays missing in %d span(s)",
             resolution,
             symbol,
             start,
             end,
             len(pre.missing_days),
             pre.expected_days,
+            len(spans),
         )
 
-        export_polygon_range_to_lean(
-            polygon=polygon,
-            output_root=cache_root,
-            symbol=symbol.upper(),
-            from_date=start.isoformat(),
-            to_date=end.isoformat(),
-            adjusted=adjusted,
-            resolution=resolution,
-        )
-        record_fetch(
-            cache_root,
-            symbol,
-            source="polygon",
-            adjusted=adjusted,
-            resolution=resolution,
-            from_date=start.isoformat(),
-            to_date=end.isoformat(),
-            fetched_at_ms=now_ms_utc(),
-        )
+        for span_start, span_end in spans:
+            export_polygon_range_to_lean(
+                polygon=polygon,
+                output_root=cache_root,
+                symbol=symbol.upper(),
+                from_date=span_start.isoformat(),
+                to_date=span_end.isoformat(),
+                adjusted=adjusted,
+                resolution=resolution,
+            )
+            record_fetch(
+                cache_root,
+                symbol,
+                source="polygon",
+                adjusted=adjusted,
+                resolution=resolution,
+                from_date=span_start.isoformat(),
+                to_date=span_end.isoformat(),
+                fetched_at_ms=now_ms_utc(),
+            )
 
     return check_availability(all_roots, symbol, start, end, resolution=resolution)

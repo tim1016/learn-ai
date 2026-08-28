@@ -1308,6 +1308,39 @@ def test_program_build_view_from_run_evidence_replays_the_proven_verdict() -> No
         "program-build-receipt:" + "c" * 64,
         "program-build-digest:" + "b" * 64,
     )
+    # Evidence that records no verdict replays as absence, not as a pass.
+    assert fact.wiring == "NOT_CHECKED"
+
+
+def test_program_build_view_replays_the_wiring_verdict_the_run_started_under() -> None:
+    """#1828: a run admitted with drifted wiring must still say so once frozen.
+
+    Under the warning-only posture a drifted bot runs, carrying
+    ``wiring="DRIFTED"`` and a re-qualification next step. Replaying that as
+    NOT_CHECKED would erase exactly the case the posture exists to surface --
+    the panel would be unable to distinguish "we checked and it had drifted"
+    from "we never looked".
+    """
+    seal = _sealed_bot_program()
+    evidence = ProgramBuildRunEvidence(
+        strategy_instance_id=SID,
+        run_id="run-1",
+        sealed_program_hash=seal.bot_configuration_hash,
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=1_000,
+        wiring="DRIFTED",
+    )
+
+    fact = program_build_view_from_run_evidence("ema_crossover_signal", evidence)
+
+    assert fact.state == "PROVEN"
+    assert fact.wiring == "DRIFTED"
+    # `_proven_carries_its_full_proof` requires a PROVEN-but-drifted fact to
+    # carry a next step; the replay must satisfy that, not bypass it.
+    assert fact.next_step is not None
 
 
 def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() -> None:

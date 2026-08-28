@@ -177,12 +177,22 @@ class BotRunRecord(BaseModel):
     started_at_ms: int
 
 
+# Fields of `ProgramBuildRunEvidence` that describe the record rather than
+# identify the run whose proof it is. See `run_identity`.
+NON_IDENTITY_EVIDENCE_FIELDS: frozenset[str] = frozenset({"schema_version", "wiring"})
+
+
 class ProgramBuildRunEvidence(BaseModel):
     """Per-run proof of the exact qualified bytes admitted to execute."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    # Accepts both shapes on read, writes the current one (#1828). A durable
+    # per-run file is written once and never rewritten, so an old record can
+    # only ever be read, never migrated -- pinning this to the newest version
+    # would make every pre-#1828 run's evidence unreadable, which is the
+    # opposite of what recording more evidence is for.
+    schema_version: Literal[1, 2] = 2
     strategy_instance_id: str
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     sealed_program_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -191,6 +201,34 @@ class ProgramBuildRunEvidence(BaseModel):
     running_artifact_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     qualification_receipt_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     verified_at_ms: int = Field(ge=0)
+    # The wiring half of the build proof (#1735), recorded so a frozen run
+    # replays the verdict it actually ran under instead of an unknown (#1828).
+    # A schema_version 1 record has none and defaults here; that default is a
+    # true statement about a run that started before this was captured, and
+    # `schema_version` is what distinguishes it from a run genuinely admitted
+    # without a wiring check.
+    wiring: Literal["MATCHED", "DRIFTED", "NOT_CHECKED"] = "NOT_CHECKED"
+
+    def run_identity(self) -> dict[str, object]:
+        """Everything about this record except what is not this run's identity.
+
+        The create-once conflict check asks whether a second write describes
+        the same run, so it compares this rather than the whole model.
+        ``wiring`` is an observation about the run and ``schema_version`` is a
+        fact about the file; neither is identity, and comparing them would
+        report a same-run rewrite as a conflicting one -- which for a record
+        written before ``wiring`` existed surfaces as a refused launch, saying
+        nothing resembling its cause.
+
+        Deliberately a denylist, not a hand-listed allowlist. A future field
+        left out of an allowlist would silently stop being compared, quietly
+        weakening the integrity check on immutable per-run proof; left out of
+        this denylist it is compared, and the worst case is the loud, already
+        understood spurious conflict above.
+        ``test_every_evidence_field_is_classified_as_identity_or_not`` forces
+        the choice to be made rather than defaulted into.
+        """
+        return self.model_dump(exclude=NON_IDENTITY_EVIDENCE_FIELDS)
 
 
 class LegacyMigrationLineageRecord(BaseModel):
@@ -639,6 +677,7 @@ class BotBindingRepository:
             running_artifact_digest=proof.running_artifact_digest,
             qualification_receipt_hash=proof.qualification_receipt_hash,
             verified_at_ms=proof.verified_at_ms,
+            wiring=proof.wiring,
         )
         evidence_dir = instance_dir / RUN_BUILD_EVIDENCE_DIRECTORY
         evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -648,7 +687,7 @@ class BotBindingRepository:
             return
         except FileExistsError:
             existing = ProgramBuildRunEvidence.model_validate_json(path.read_text(encoding="utf-8"))
-        if existing != candidate:
+        if existing.run_identity() != candidate.run_identity():
             raise RunIdentityConflictError(
                 f"Run '{binding.run_id}' already has different program-build evidence."
             )
