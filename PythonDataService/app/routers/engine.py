@@ -29,6 +29,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from app.config import settings
 from app.engine.data.availability import (
     AvailabilityReport,
     check_availability,
@@ -442,6 +443,12 @@ class EngineBacktestResponse(BaseModel):
     data_policy: _EngineDataPolicyModel | None = None
     run_verdict: RunVerdict | None = None
     validation_analytics: EngineValidationAnalyticsResponse | None = None
+    # Fingerprint of the exact lake artifacts this run materialized and read
+    # (the lake's ``data_availability_hash``: a digest over every artifact's
+    # path, byte hash, row count and bar range). Null when the data lake is
+    # off, or when the run did not materialize anything — a run that read
+    # the pre-lake policy cache has no lake bytes to name.
+    lake_data_availability_hash: str | None = None
 
 
 class ResolvedRunConfiguration(BaseModel):
@@ -1063,6 +1070,56 @@ def _pin_compatibility_fixture(
     request.data_policy.fixture_sha256 = str(receipt["fixture_sha256"])
 
 
+def _materialize_missing_bars(
+    *,
+    request: EngineBacktestRequest,
+    symbol: str,
+    start: date,
+    end: date,
+    data_roots: list[Path],
+    on_log: LogCallback,
+) -> str | None:
+    """Put the run's bars on disk before the reader looks for them.
+
+    Two materializers, one question. The lake answers it when
+    ``DATA_LAKE_ENABLED`` is set — it fetches only the missing days, records
+    every artifact in the catalog, and returns a fingerprint of the exact
+    bytes the reader will consume, which is what this function passes back.
+    Otherwise the pre-lake policy store exports the range into its cache and
+    there is no such fingerprint to give.
+    """
+    if settings.DATA_LAKE_ENABLED:
+        # Lazy for the same reason as the Polygon client below: the flag is
+        # off by default and the lake pulls in the catalog + provider stack.
+        from app.data_lake.run_materialization import materialize_engine_run
+
+        availability = materialize_engine_run(
+            symbol=symbol,
+            start=start,
+            end=end,
+            requester=request.strategy_name,
+        )
+        on_log(
+            f"Lake: fetched {availability.fetched_artifact_count}, "
+            f"reused {availability.reused_artifact_count} artifact(s)"
+        )
+        return availability.data_availability_hash
+
+    from app.services.polygon_client import PolygonClientService
+
+    ensure_range(
+        reference_roots=data_roots[:-1],
+        cache_root=data_roots[-1],
+        symbol=symbol,
+        start=start,
+        end=end,
+        polygon=PolygonClientService(),
+        adjusted=_policy_adjusted(request.data_policy),
+        resolution=request.resolution,
+    )
+    return None
+
+
 def execute_engine_backtest(
     *,
     request: EngineBacktestRequest,
@@ -1120,6 +1177,11 @@ def execute_engine_backtest(
 
     strategy = registration.build(validated_params)
 
+    # Fingerprint of the exact lake bytes this run consumed. Stays None when
+    # the lake is off, or when nothing was materialized — the run then has
+    # nothing to claim about which bytes it read.
+    lake_manifest: str | None = None
+
     if request.auto_fetch:
         symbol = getattr(validated_params, "symbol", None)
         start_override = request.from_date
@@ -1128,18 +1190,13 @@ def execute_engine_backtest(
             on_phase("fetching_data")
             on_log(f"Ensuring {symbol} {request.resolution} bars {start_override} → {end_override}")
             try:
-                from app.services.polygon_client import PolygonClientService
-
-                polygon = PolygonClientService()
-                ensure_range(
-                    reference_roots=data_roots[:-1],
-                    cache_root=data_roots[-1],
+                lake_manifest = _materialize_missing_bars(
+                    request=request,
                     symbol=symbol,
                     start=_parse_iso_date(start_override, "start_date"),
                     end=_parse_iso_date(end_override, "end_date"),
-                    polygon=polygon,
-                    adjusted=_policy_adjusted(request.data_policy),
-                    resolution=request.resolution,
+                    data_roots=data_roots,
+                    on_log=on_log,
                 )
             except HTTPException:
                 raise
@@ -1434,6 +1491,7 @@ def execute_engine_backtest(
         data_policy=request.data_policy,  # PR B — echo the normalized policy
         run_verdict=run_verdict,
         validation_analytics=validation_analytics,
+        lake_data_availability_hash=lake_manifest,
     )
 
     # ── Auto-save to .NET backend (synchronous so we can return the id) ──

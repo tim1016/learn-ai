@@ -10053,6 +10053,17 @@
             "title": "Insights",
             "type": "array"
           },
+          "lake_data_availability_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lake Data Availability Hash"
+          },
           "lean_statistics": {
             "anyOf": [
               {

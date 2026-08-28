@@ -9015,6 +9015,8 @@ export interface components {
             insight_summary?: Record<string, never>;
             /** Insights */
             insights?: Record<string, never>[];
+            /** Lake Data Availability Hash */
+            lake_data_availability_hash?: string | null;
             lean_statistics?: components["schemas"]["LeanStatisticsResponse"] | null;
             /**
              * Log Lines
