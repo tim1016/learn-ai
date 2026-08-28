@@ -72,6 +72,18 @@ class LaunchRequest(BaseModel):
             "Mutually exclusive with ``hardening_profile``."
         ),
     )
+    mount_lake_read_only: bool = Field(
+        default=False,
+        description=(
+            "Request the data lake's read-only mount for this run "
+            "(``DATA_LAKE_ENABLED`` runs). The data plane states the "
+            "intent; the launcher resolves the host path from its own "
+            "deploy-time configuration, so this stays consistent with "
+            "'the data plane never sends paths and cannot widen the "
+            "mount'. The launcher refuses the launch when it has no "
+            "lake root configured."
+        ),
+    )
     hardening_profile: str | None = Field(
         default=None,
         description=(

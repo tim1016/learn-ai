@@ -30,6 +30,7 @@ from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
+from app.lean_sidecar.lake_mount import launcher_host_lake_root
 from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
@@ -72,6 +73,19 @@ def _artifacts_root() -> Path:
     if not root.is_dir():
         raise RuntimeError(f"LEAN_LAUNCHER_ARTIFACTS_ROOT must be a directory; got {root}")
     return root
+
+
+def _lake_root() -> Path | None:
+    """Resolve the host-side data-lake root from deploy-time env, or None.
+
+    Deliberately does NOT create the directory: unlike the artifacts
+    root (which the launcher owns and fills), the lake is written by the
+    data plane's lake writer. Conjuring an empty directory here would
+    turn "the lake volume is not mounted on this host" into "every
+    trading day is missing data", which is far harder to diagnose. The
+    runner's ``is_dir`` check rejects the launch instead.
+    """
+    return launcher_host_lake_root()
 
 
 def _expected_token() -> str:
@@ -162,7 +176,12 @@ async def post_launch(
             detail="missing or wrong X-Launcher-Token",
         )
     try:
-        return await run_in_threadpool(launch, request, artifacts_root=_artifacts_root())
+        return await run_in_threadpool(
+            launch,
+            request,
+            artifacts_root=_artifacts_root(),
+            lake_root=_lake_root(),
+        )
     except LaunchRejectedError as e:
         # 4xx covers all "this request is malformed in a way the
         # launcher refuses to act on". The body carries a stable
