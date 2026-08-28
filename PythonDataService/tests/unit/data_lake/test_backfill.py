@@ -208,12 +208,15 @@ class TestProgressCallback:
 class TestTypedFailurePropagation:
     async def test_typed_failure_reason_survives_into_progress_and_final_result(self) -> None:
         """Failures carry the lake's typed reason codes end to end — never
-        collapsed into prose."""
+        collapsed into prose. Uses a per-day, non-fatal reason
+        (provider_no_data) so days 20 and 22 both still get attempted —
+        the globally-fatal short-circuit (auth/entitlement/rate-limited)
+        has its own dedicated TestGloballyFatalShortCircuit tests."""
         progress_events: list[BackfillDayProgress] = []
 
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
             if day_spec.start_trading_date == date(2024, 5, 21):
-                return _failure_result(day_spec, reason="provider_auth_error", detail="401 from Polygon")
+                return _failure_result(day_spec, reason="provider_no_data", detail="Polygon returned no bars")
             return _ok_result(day_spec)
 
         spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
@@ -222,16 +225,17 @@ class TestTypedFailurePropagation:
         # Final result.
         assert result.days_with_failures == 1
         assert result.days_completed == 2
+        assert result.days_unattempted == 0
         assert result.overall_status == "partial"
         assert len(result.failures) == 1
-        assert result.failures[0].reason == "provider_auth_error"
-        assert result.failures[0].detail == "401 from Polygon"
+        assert result.failures[0].reason == "provider_no_data"
+        assert result.failures[0].detail == "Polygon returned no bars"
 
         # Progress events — the failing day's callback carries the same
         # typed reason, not a stringified summary.
         failing_day = next(p for p in progress_events if p.trading_date == date(2024, 5, 21))
         assert len(failing_day.failures) == 1
-        assert failing_day.failures[0].reason == "provider_auth_error"
+        assert failing_day.failures[0].reason == "provider_no_data"
 
     async def test_all_days_failing_reports_overall_status_failed(self) -> None:
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
@@ -243,6 +247,247 @@ class TestTypedFailurePropagation:
         assert result.overall_status == "failed"
         assert result.days_with_failures == 1
         assert result.days_completed == 0
+
+
+def _metadata_only_failure_result(spec: DataRunSpec, *, fetched: int, reused: int) -> DataAvailabilityResult:
+    """Models ensure_data's real shape for a day whose requested bar
+    artifact fails outright: Phase 0 metadata bootstrap still "succeeds"
+    (fetched once on day 1, reused on every day after — see
+    ensure_data.ensure_data's unconditional Phase 0 step), so
+    fetched_artifact_count/reused_artifact_count are non-zero even though
+    zero bar artifacts were ever produced.
+    """
+    return DataAvailabilityResult(
+        request_id=spec.request_id,
+        overall_status="partial",
+        lean_data_root_path="/tmp/lake",
+        data_availability_hash="hash",
+        artifacts=[],
+        failures=[
+            ArtifactFailure(
+                artifact_kind="time_series_bars",
+                symbol=spec.symbols[0],
+                trading_date=spec.start_trading_date,
+                data_type="trade",
+                reason="unknown_symbol",
+                detail="symbol not found",
+                attempt_count=1,
+            )
+        ],
+        skipped_non_sessions=[],
+        fetched_artifact_count=fetched,
+        reused_artifact_count=reused,
+        completed_at_ms=1,
+        duration_ms=1,
+    )
+
+
+class TestOverallStatusFromRequestedBarArtifactsOnly:
+    """P1-2 regression (review round 3)."""
+
+    async def test_metadata_success_does_not_mask_all_bar_failures_as_partial(self) -> None:
+        """Before this fix, overall_status was classified from raw
+        fetched/reused counts — which ensure_data's Phase 0 metadata
+        bootstrap always inflates (fetched on day 1, reused on every
+        subsequent day) regardless of whether the day's actual requested
+        bar artifact ever succeeds. An all-days-bar-failure backfill would
+        read "partial" purely because metadata kept "succeeding". It must
+        read "failed": zero requested bar artifacts were ever produced.
+        """
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            is_first_day = day_spec.start_trading_date == date(2024, 5, 20)
+            return _metadata_only_failure_result(day_spec, fetched=1 if is_first_day else 0, reused=0 if is_first_day else 1)
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        # The metadata counts still roll up honestly...
+        assert result.fetched_artifact_count == 1
+        assert result.reused_artifact_count == 2
+        # ...but every day genuinely failed to produce a bar, so the
+        # overall verdict must say so.
+        assert result.days_with_failures == 3
+        assert result.days_completed == 0
+        assert result.overall_status == "failed"
+
+    async def test_a_real_bar_success_still_reads_partial(self) -> None:
+        """Sanity check on the other side of the fix: a genuine bar
+        artifact success must still count toward has_success — this isn't
+        "ignore all successes", only "ignore metadata-only successes"."""
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            if day_spec.start_trading_date == date(2024, 5, 20):
+                return _ok_result(day_spec)
+            return _failure_result(day_spec, reason="unknown_symbol")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 21))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.overall_status == "partial"
+
+
+class TestCalendarDivergenceProducesTypedFailure:
+    """P1-4 regression (review round 3)."""
+
+    async def test_metadata_only_day_reports_session_not_produced(self) -> None:
+        """ensure_data's own calendar (app.data_lake.sessions) can drop a
+        session the canonical NYSE calendar iterates — expand_required_artifacts
+        then requires nothing for it, so the day "completes" with zero bar
+        artifacts and zero bar failures. Must be flagged as a typed
+        session_not_produced failure, not silently counted as backfilled.
+        """
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            return DataAvailabilityResult(
+                request_id=day_spec.request_id,
+                overall_status="complete",
+                lean_data_root_path="/tmp/lake",
+                data_availability_hash="hash",
+                artifacts=[],
+                failures=[],
+                skipped_non_sessions=[],
+                fetched_artifact_count=0,
+                reused_artifact_count=1,
+                completed_at_ms=1,
+                duration_ms=1,
+            )
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 20))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.days_with_failures == 1
+        assert result.days_completed == 0
+        assert len(result.failures) == 1
+        failure = result.failures[0]
+        assert failure.reason == "session_not_produced"
+        assert failure.symbol == "SPY"
+        assert failure.data_type == "trade"
+        assert failure.trading_date == date(2024, 5, 20)
+        assert result.overall_status == "failed"
+
+    async def test_does_not_double_report_when_a_real_failure_already_explains_the_gap(self) -> None:
+        """A genuine provider failure for (symbol, data_type) already
+        explains why no artifact exists — must not ALSO get a redundant
+        session_not_produced entry for the same identity."""
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            return _failure_result(day_spec, reason="unknown_symbol")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 20))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert [f.reason for f in result.failures] == ["unknown_symbol"]
+
+
+class TestGloballyFatalShortCircuit:
+    """P1-5 regression (review round 3)."""
+
+    async def test_auth_error_on_a_1000_day_range_makes_exactly_one_attempt(self) -> None:
+        attempts: list[date] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            attempts.append(day_spec.start_trading_date)
+            return _failure_result(day_spec, reason="provider_auth_error", detail="401 from Polygon")
+
+        spec = _spec(start=date(2022, 1, 1), end=date(2024, 9, 27))  # ~1000 calendar days
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert len(attempts) == 1
+        assert result.total_sessions > 1
+        assert result.days_completed == 0
+        assert result.days_with_failures == 1
+        assert result.days_unattempted == result.total_sessions - 1
+        assert result.overall_status == "failed"
+
+        reasons = [f.reason for f in result.failures]
+        assert reasons.count("provider_auth_error") == 1
+        assert reasons.count("run_aborted") == 1
+        aborted = next(f for f in result.failures if f.reason == "run_aborted")
+        assert aborted.symbol is None
+        assert aborted.trading_date is None
+        assert str(result.days_unattempted) in (aborted.detail or "")
+
+    async def test_entitlement_error_also_short_circuits(self) -> None:
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            return _failure_result(day_spec, reason="provider_entitlement_error")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.days_unattempted == result.total_sessions - 1
+
+    async def test_rate_limited_also_short_circuits_as_a_documented_stop(self) -> None:
+        """provider_rate_limited stops rather than backing off and
+        retrying — a documented choice (see backfill._GLOBALLY_FATAL_REASONS),
+        not a bounded-retry policy, which is Task 7's territory."""
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            return _failure_result(day_spec, reason="provider_rate_limited")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.days_unattempted == result.total_sessions - 1
+
+    async def test_fatal_on_the_last_day_synthesizes_no_empty_abort_marker(self) -> None:
+        """No remaining days to abort — no run_aborted marker."""
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            return _failure_result(day_spec, reason="provider_auth_error")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 20))  # exactly one session
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.days_unattempted == 0
+        assert result.days_with_failures == 1
+        assert [f.reason for f in result.failures] == ["provider_auth_error"]
+
+    async def test_non_fatal_failures_do_not_short_circuit(self) -> None:
+        attempts: list[date] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            attempts.append(day_spec.start_trading_date)
+            return _failure_result(day_spec, reason="unknown_symbol")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert len(attempts) == 3
+        assert result.days_unattempted == 0
+
+
+class TestSkippedNonSessionsFromRequestedRange:
+    """P2-6 regression (review round 3)."""
+
+    async def test_weekend_and_holiday_days_are_listed_from_the_requested_range(self) -> None:
+        """2024-05-25/26 is a weekend and 2024-05-27 is Memorial Day.
+        Per-session sub-results never carry these (each sub-spec's range
+        IS a single canonical session, so ensure_data's own one-day
+        calendar check trivially finds no gaps) — they must come from the
+        requested range directly."""
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            return _ok_result(day_spec)
+
+        spec = _spec(start=date(2024, 5, 24), end=date(2024, 5, 28))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        skipped_by_date = {r.trading_date: r.reason for r in result.skipped_non_sessions}
+        assert skipped_by_date == {
+            date(2024, 5, 25): "weekend",
+            date(2024, 5, 26): "weekend",
+            date(2024, 5, 27): "market_holiday",
+        }
+
+    async def test_no_skipped_non_sessions_when_the_range_is_all_trading_days(self) -> None:
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            return _ok_result(day_spec)
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))  # Mon-Fri, no holiday
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.skipped_non_sessions == []
 
 
 class _FakeLeaseCatalog:

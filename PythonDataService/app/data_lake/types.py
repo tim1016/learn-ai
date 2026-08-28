@@ -138,6 +138,9 @@ class ArtifactFailure(BaseModel):
         "corp_action_revision_mismatch",
         "data_contract_mismatch",
         "internal_error",
+        # Added for the backfill job (#1836, review round 3):
+        "session_not_produced",  # canonical calendar disagrees with ensure_data's own — see app.data_lake.backfill
+        "run_aborted",  # a globally-fatal failure stopped the remaining range before it was attempted
     ]
     detail: str | None = None
     provider_status_code: int | None = None

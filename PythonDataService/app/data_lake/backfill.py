@@ -16,7 +16,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -61,6 +61,23 @@ _LEASE_POLL_INTERVAL_SECONDS = 0.5
 # from a private constant it shouldn't know about.
 _WAIT_NOTIFY_EVERY = max(1, round(5.0 / _LEASE_POLL_INTERVAL_SECONDS))
 
+# Reasons that mean "this provider credential/account is broken for every
+# remaining day too" (auth, entitlement) — retrying them per day would just
+# repeat the same doomed call up to _MAX_RANGE_YEARS*366 times.
+# provider_rate_limited is bundled in here as a documented stop rather than
+# a bounded backoff-and-retry: a real backoff/retry policy for rate limits
+# is Task 7's territory (steal_or_retry_minute_bar already exists for the
+# analogous lease-stuck case); stopping and reporting it typed is strictly
+# better than silently burning the rest of the range against a limit that
+# just tripped.
+_GLOBALLY_FATAL_REASONS = frozenset(
+    {
+        "provider_auth_error",
+        "provider_entitlement_error",
+        "provider_rate_limited",
+    }
+)
+
 EnsureFn = Callable[[DataRunSpec], Awaitable[DataAvailabilityResult]]
 LeaseStatusFn = Callable[[ArtifactIdentity], Awaitable[MinuteBarLeaseStatus | None]]
 
@@ -96,7 +113,15 @@ class BackfillWaitProgress:
 
 
 class BackfillResult(BaseModel):
-    """Final job result — the whole range's outcome, folded day by day."""
+    """Final job result — the whole range's outcome, folded day by day.
+
+    days_completed + days_with_failures + days_unattempted always equals
+    total_sessions. days_unattempted is non-zero only when a
+    globally-fatal provider failure (auth, entitlement, rate-limited)
+    stopped the run early — those sessions were never even attempted, a
+    materially different fact from "attempted and failed" that a caller
+    should not have to infer from the failures list.
+    """
 
     request_id: UUID
     market: str
@@ -106,6 +131,7 @@ class BackfillResult(BaseModel):
     total_sessions: int
     days_completed: int
     days_with_failures: int
+    days_unattempted: int = 0
     fetched_artifact_count: int = 0
     reused_artifact_count: int = 0
     failures: list[ArtifactFailure] = []
@@ -290,6 +316,101 @@ def _day_sub_spec(spec: DataRunSpec, trading_date: date) -> DataRunSpec:
     )
 
 
+def _missing_bar_failures(
+    day_spec: DataRunSpec, trading_date: date, day_result: DataAvailabilityResult
+) -> list[ArtifactFailure]:
+    """Detect a canonical session that ensure_data's own calendar silently
+    dropped, per requested (symbol, data_type).
+
+    run_backfill iterates the canonical NYSE calendar
+    (app.lean_sidecar.trading_calendar); ensure_data's per-day
+    expand_required_artifacts consults its own, separate LEAN-image/
+    hardcoded calendar (app.data_lake.sessions). If the two diverge on
+    this date, ensure_data requires nothing for it: the day "completes"
+    with only the unconditional Phase 0 metadata artifacts and zero
+    requested bars — silently counted as backfilled without this check.
+    Only flags a (symbol, data_type) that produced neither an artifact
+    nor a failure; a real provider failure already explains the gap and
+    is left alone rather than double-reported.
+    """
+    produced = {
+        (a.symbol, a.data_type)
+        for a in day_result.artifacts
+        if a.artifact_kind == "time_series_bars" and a.resolution == "minute"
+    }
+    already_explained = {
+        (f.symbol, f.data_type) for f in day_result.failures if f.artifact_kind == "time_series_bars"
+    }
+    missing: list[ArtifactFailure] = []
+    for symbol in day_spec.symbols:
+        for data_type in day_spec.data_types:
+            key = (symbol, data_type)
+            if key in produced or key in already_explained:
+                continue
+            missing.append(
+                ArtifactFailure(
+                    artifact_kind="time_series_bars",
+                    symbol=symbol,
+                    trading_date=trading_date,
+                    data_type=data_type,
+                    reason="session_not_produced",
+                    detail=(
+                        f"the canonical NYSE calendar treats {trading_date.isoformat()} as a session, "
+                        "but ensure_data's own calendar did not require a bar artifact for it "
+                        "(calendar divergence) — no matching artifact or failure was produced"
+                    ),
+                    attempt_count=0,
+                )
+            )
+    return missing
+
+
+def _run_aborted_failure(trading_date: date, fatal: ArtifactFailure, remaining_dates: list[date]) -> ArtifactFailure:
+    """Typed marker recording that a globally-fatal failure stopped the
+    run before the remaining sessions were ever attempted.
+
+    Not tied to one symbol/day (trading_date=None) — it describes the
+    whole unattempted remainder, not a single artifact.
+    """
+    detail_suffix = f": {fatal.detail}" if fatal.detail else ""
+    return ArtifactFailure(
+        artifact_kind="time_series_bars",
+        symbol=None,
+        trading_date=None,
+        data_type=None,
+        reason="run_aborted",
+        detail=(
+            f"stopped after a globally-fatal {fatal.reason} on {trading_date.isoformat()}{detail_suffix} — "
+            f"{len(remaining_dates)} remaining session(s) "
+            f"({remaining_dates[0].isoformat()}..{remaining_dates[-1].isoformat()}) were not attempted"
+        ),
+        attempt_count=0,
+    )
+
+
+def _skipped_non_sessions(spec: DataRunSpec, sessions: list[date]) -> list[NonSessionRecord]:
+    """Every calendar date in the requested range that is not a canonical
+    NYSE session — weekends and holidays the day loop below never visits.
+
+    Deliberately NOT accumulated from each day's own
+    DataAvailabilityResult.skipped_non_sessions: every per-day sub-spec's
+    range IS a single canonical session by construction (it came from
+    `sessions` itself), so ensure_data's own one-day calendar check
+    trivially finds no gaps in it — that field is always empty on every
+    sub-result. The requested range's actual non-sessions are computed
+    directly from the calendar instead.
+    """
+    session_set = set(sessions)
+    out: list[NonSessionRecord] = []
+    current = spec.start_trading_date
+    while current <= spec.end_trading_date:
+        if current not in session_set:
+            reason: Literal["weekend", "market_holiday"] = "weekend" if current.weekday() >= 5 else "market_holiday"
+            out.append(NonSessionRecord(market=spec.market, trading_date=current, reason=reason))
+        current += timedelta(days=1)
+    return out
+
+
 async def run_backfill(
     spec: DataRunSpec,
     *,
@@ -306,14 +427,26 @@ async def run_backfill(
     temporal-rigor.md's authority), not ensure_data's own internal
     LEAN-image/hardcoded-holiday fallback (app.data_lake.sessions). The two
     can diverge on an edge date; when they do, ensure_data's per-day call
-    simply finds nothing to require for that day (expand_required_artifacts
-    returns an empty list) and the day completes trivially — it does not
-    fail.
+    finds nothing to require for it (expand_required_artifacts returns an
+    empty list) and would otherwise complete trivially — _missing_bar_failures
+    catches that and reports it as a typed session_not_produced failure per
+    requested (symbol, data_type) instead of silently counting the day as
+    backfilled.
+
+    A globally-fatal provider failure (auth, entitlement, rate-limited —
+    see _GLOBALLY_FATAL_REASONS) stops the loop after the day it first
+    appears on: the remaining sessions are marked days_unattempted and one
+    typed run_aborted failure records why, rather than repeating the same
+    doomed provider call for every remaining day in the range.
 
     This backfill is scoped to minute-bar (and same-day derived quote)
     coverage. Corp-action and whole-range daily-trade artifacts are left to
     a follow-up ensure_data() call over the full range once every day's
-    minute bars are in place (see _day_sub_spec).
+    minute bars are in place (see _day_sub_spec). overall_status is
+    classified from requested minute-bar artifacts only — the Phase 0
+    metadata bootstrap that ensure_data unconditionally attempts every day
+    counts toward its own fetched/reused totals but must not make an
+    all-days-failed backfill read as "partial".
 
     cancel_check, when given, is called before each day and may raise to
     abort the loop (the job.runner contract: JobCancelled propagates to
@@ -321,13 +454,15 @@ async def run_backfill(
     """
     started_ms = int(time.time() * 1000)
     sessions = expected_sessions(spec.start_trading_date, spec.end_trading_date)
+    skipped_non_sessions = _skipped_non_sessions(spec, sessions)
 
     fetched_total = 0
     reused_total = 0
+    bar_success_total = 0
     all_failures: list[ArtifactFailure] = []
-    all_skipped: list[NonSessionRecord] = []
     days_completed = 0
     days_with_failures = 0
+    days_unattempted = 0
 
     for day_index, trading_date in enumerate(sessions, start=1):
         if cancel_check is not None:
@@ -336,10 +471,28 @@ async def run_backfill(
         day_spec = _day_sub_spec(spec, trading_date)
         day_result = await _ensure_day_with_lease_retry(day_spec, ensure_fn, status_fn=status_fn, on_wait=on_wait)
 
+        missing = _missing_bar_failures(day_spec, trading_date, day_result)
+        if missing:
+            day_result = day_result.model_copy(
+                update={
+                    "failures": [*day_result.failures, *missing],
+                    "overall_status": classify_overall_status(
+                        has_failures=True, has_success=bool(day_result.artifacts)
+                    ),
+                }
+            )
+
+        fatal = next((f for f in day_result.failures if f.reason in _GLOBALLY_FATAL_REASONS), None)
+        remaining_dates = sessions[day_index:] if fatal is not None else []
+        if fatal is not None and remaining_dates:
+            day_result = day_result.model_copy(
+                update={"failures": [*day_result.failures, _run_aborted_failure(trading_date, fatal, remaining_dates)]}
+            )
+
         fetched_total += day_result.fetched_artifact_count
         reused_total += day_result.reused_artifact_count
+        bar_success_total += sum(1 for a in day_result.artifacts if a.artifact_kind == "time_series_bars")
         all_failures.extend(day_result.failures)
-        all_skipped.extend(day_result.skipped_non_sessions)
         if day_result.failures:
             days_with_failures += 1
         else:
@@ -357,6 +510,10 @@ async def run_backfill(
                 )
             )
 
+        if fatal is not None:
+            days_unattempted = len(remaining_dates)
+            break
+
     completed_ms = int(time.time() * 1000)
     return BackfillResult(
         request_id=spec.request_id,
@@ -367,13 +524,12 @@ async def run_backfill(
         total_sessions=len(sessions),
         days_completed=days_completed,
         days_with_failures=days_with_failures,
+        days_unattempted=days_unattempted,
         fetched_artifact_count=fetched_total,
         reused_artifact_count=reused_total,
         failures=all_failures,
-        skipped_non_sessions=all_skipped,
-        overall_status=classify_overall_status(
-            has_failures=bool(all_failures), has_success=bool(fetched_total or reused_total)
-        ),
+        skipped_non_sessions=skipped_non_sessions,
+        overall_status=classify_overall_status(has_failures=bool(all_failures), has_success=bar_success_total > 0),
         completed_at_ms=completed_ms,
         duration_ms=completed_ms - started_ms,
     )
