@@ -29,6 +29,7 @@ import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -51,6 +52,7 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    resolve_lake_root,
 )
 from app.data_lake.polygon_corp_actions import fetch_dividends, fetch_splits
 from app.data_lake.polygon_fetcher import (
@@ -173,6 +175,19 @@ def _daily_dch(source_artifact_ids: list[int], source_file_sha256s: list[str]) -
     )
 
 
+def provider_for_data_type(data_type: Literal["trade", "quote"]) -> str:
+    """Return the catalog Provider identity for a minute-bar data_type.
+
+    Trade minute-bars come straight from Polygon. Quote minute-bars are
+    synthesized in-process from same-day trade bytes (DataRunSpec requires
+    'trade' whenever 'quote' is requested) and are catalogued under
+    'learn_ai_derived' rather than 'polygon' — this is the single source
+    for that mapping; expand_required_artifacts below and the coverage
+    endpoint (app/routers/data_lake.py) both call it so they cannot drift.
+    """
+    return "polygon" if data_type == "trade" else "learn_ai_derived"
+
+
 def expand_required_artifacts(
     spec: DataRunSpec,
     market_hours_db_path: Path | None = None,
@@ -198,7 +213,7 @@ def expand_required_artifacts(
         # Per-day minute bars.
         for trading_date in sessions:
             for data_type in spec.data_types:
-                provider = "polygon" if data_type == "trade" else "learn_ai_derived"
+                provider = provider_for_data_type(data_type)
                 required.append(
                     ArtifactIdentity(
                         artifact_kind="time_series_bars",
@@ -313,7 +328,7 @@ def _polygon_bar_to_minute_trade_bar(pb: PolygonBar) -> MinuteTradeBar:
 
 def _lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
     """Return (lake_root, staging_root) for the current spec."""
-    write_root = Path(settings.LEAN_DATA_WRITE_ROOT)
+    write_root = resolve_lake_root()
     return write_root / "lake", write_root / "staging"
 
 
@@ -662,6 +677,7 @@ async def _process_minute_trade_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
 
     first_bar_ms = polygon_bars[0].t_ms
@@ -821,6 +837,7 @@ async def _process_factor_file_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -928,6 +945,7 @@ async def _process_map_file_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -1052,6 +1070,7 @@ async def _process_minute_quote_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     row_count = len(trade_bars)
     first_ms = int(trade_bars[0].bar_start_et.timestamp() * 1000) if trade_bars else 0
@@ -1187,6 +1206,7 @@ async def _process_daily_trade_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     row_count = len(aggregates)
     await catalog_client.complete_artifact(

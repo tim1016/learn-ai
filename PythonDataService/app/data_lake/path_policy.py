@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import UUID
 
@@ -20,6 +20,29 @@ Market = Literal["usa"]
 Resolution = Literal["minute", "hour", "daily"]
 DataType = Literal["trade", "quote"]
 MetadataKind = Literal["market_hours", "symbol_properties"]
+
+
+def resolve_lake_root() -> Path:
+    """The single canonical write root every lake writer must share.
+
+    Wraps ``app.config.settings.LEAN_DATA_WRITE_ROOT`` so any writer that
+    needs "the" configured root -- ``ensure_data``'s live fetch pipeline,
+    and ``app.data_lake.cache_import``'s canonical-root check -- reads it
+    from one place rather than each computing ``Path(settings...)`` itself.
+
+    Catalog rows are root-relative: ``FilePath`` carries no root identity of
+    its own. A writer that used a *different* root would produce rows
+    ``ensure_data`` can never actually find once it resolves coverage under
+    the real configured root -- "phantom coverage" that looks complete in
+    the catalog but has no bytes at the root anything else looks under. The
+    full root-identity (``data_root_id``) design that would let more than
+    one physical root coexist honestly is ledgered for the flag-flip
+    integration slice; until then there is exactly one canonical root, and
+    this is it.
+    """
+    from app.config import settings  # lazy: keep this module import-time dependency-free
+
+    return Path(settings.LEAN_DATA_WRITE_ROOT)
 
 
 def minute_bar_market_root(market: Market) -> PurePosixPath:
