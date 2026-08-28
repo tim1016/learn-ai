@@ -7,7 +7,7 @@ import { TestBed } from '@angular/core/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
-import { DataLakeService, classifyDataLakeError } from './data-lake.service';
+import { DataLakeService, classifyDataLakeError, describeFailure } from './data-lake.service';
 
 const BASE = `${environment.pythonServiceUrl}/api/data-lake`;
 
@@ -45,14 +45,34 @@ describe('DataLakeService', () => {
     http.verify();
   });
 
-  it('reports a 404 as "not enabled" rather than an unclassified failure', async () => {
+  it('reports an untyped 404 — the unmounted router — as "not enabled"', async () => {
     const pending = service.storageSummary();
 
+    // FastAPI's own body when the route does not exist: a bare string.
     http
       .expectOne((candidate) => candidate.url === `${BASE}/storage-summary`)
       .flush({ detail: 'Not Found' }, { status: 404, statusText: 'Not Found' });
 
     await expect(pending).resolves.toEqual({ kind: 'not_enabled' });
+    http.verify();
+  });
+
+  it('reports a typed 404 as the rejection it is, not as a dark lake', async () => {
+    // GET /artifacts/{id} raises HTTPException(404, detail={reason, message})
+    // for an id the catalog does not hold. Same status as the unmounted
+    // router, different body — and the body is the discriminator.
+    const pending = service.artifact(99);
+
+    http.expectOne((candidate) => candidate.url === `${BASE}/artifacts/99`).flush(
+      { detail: { reason: 'artifact_not_found', message: 'artifact 99 not found' } },
+      { status: 404, statusText: 'Not Found' },
+    );
+
+    await expect(pending).resolves.toEqual({
+      kind: 'rejected',
+      reason: 'artifact_not_found',
+      message: 'artifact 99 not found',
+    });
     http.verify();
   });
 
@@ -99,5 +119,46 @@ describe('classifyDataLakeError', () => {
       kind: 'unavailable',
       message: 'boom',
     });
+  });
+
+  it('ignores a detail that is a string, however 404-shaped the status is', () => {
+    expect(
+      classifyDataLakeError(
+        new HttpErrorResponse({ status: 404, statusText: 'Not Found', error: { detail: 'Not Found' } }),
+      ),
+    ).toEqual({ kind: 'not_enabled' });
+  });
+
+  it('keeps a typed reason on any status, not just the two it was written for', () => {
+    expect(
+      classifyDataLakeError(
+        new HttpErrorResponse({
+          status: 503,
+          statusText: 'Service Unavailable',
+          error: { detail: { reason: 'catalog_unreachable', message: 'pool exhausted' } },
+        }),
+      ),
+    ).toEqual({ kind: 'rejected', reason: 'catalog_unreachable', message: 'pool exhausted' });
+  });
+});
+
+describe('describeFailure', () => {
+  it('gives every failure a reason code, including the dark lake', () => {
+    expect(describeFailure({ kind: 'not_enabled' })).toEqual({
+      reason: 'data_lake_not_enabled',
+      message: 'The data lake is not enabled on this data plane.',
+    });
+    expect(describeFailure({ kind: 'unavailable', message: 'no answer' })).toEqual({
+      reason: 'unavailable',
+      message: 'no answer',
+    });
+    expect(
+      describeFailure({ kind: 'rejected', reason: 'artifact_not_found', message: 'artifact 99 not found' }),
+    ).toEqual({ reason: 'artifact_not_found', message: 'artifact 99 not found' });
+  });
+
+  it('has nothing to say about a read that succeeded or has not landed', () => {
+    expect(describeFailure({ kind: 'ok', value: 1 })).toBeNull();
+    expect(describeFailure(undefined)).toBeNull();
   });
 });

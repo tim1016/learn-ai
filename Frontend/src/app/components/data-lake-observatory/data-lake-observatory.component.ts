@@ -15,8 +15,7 @@ import {
 } from './coverage-query-bar/coverage-query-bar.component';
 import { LakeStorageSummaryComponent } from './storage-summary/lake-storage-summary.component';
 import { buildCoverageBoard, parseSymbols, type CoverageBoard } from './lib/coverage-board';
-import { DataLakeService } from './lib/data-lake.service';
-import type { DataLakeRead } from './lib/data-lake.types';
+import { DataLakeService, describeFailure } from './lib/data-lake.service';
 
 const DAY_MS = 86_400_000;
 const DEFAULT_LOOKBACK_DAYS = 30;
@@ -124,7 +123,10 @@ export class DataLakeObservatoryComponent {
     () => this.backfillDefaults()?.max_symbol_length ?? 20,
   );
 
-  protected readonly storageProblem = computed(() => describeProblem(this.storage.value()));
+  // Only ever consulted while `notEnabled()` is false, so the dark-lake
+  // reason `describeFailure` synthesizes never reaches this panel — the
+  // page-wide banner has already taken over by then.
+  protected readonly storageProblem = computed(() => describeFailure(this.storage.value()));
 
   protected apply(next: ObservatoryQuery): void {
     this.selection.set(null);
@@ -162,13 +164,4 @@ export class DataLakeObservatoryComponent {
     );
     return buildCoverageBoard(reads);
   }
-}
-
-function describeProblem(
-  read: DataLakeRead<unknown> | undefined,
-): { reason: string; message: string } | null {
-  if (read === undefined) return null;
-  if (read.kind === 'rejected') return { reason: read.reason, message: read.message };
-  if (read.kind === 'unavailable') return { reason: 'unavailable', message: read.message };
-  return null;
 }

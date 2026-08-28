@@ -71,9 +71,26 @@ describe('DataLakeBackfillStore', () => {
 
     await store.start(SPEC);
 
-    expect(store.notEnabled()).toBe(true);
     expect(store.phase()).toBe('failed');
-    expect(store.error()?.code).toBe('data_lake_not_enabled');
+    expect(store.error()).toEqual({
+      code: 'data_lake_not_enabled',
+      message: 'The data plane refused the backfill: the data lake is not enabled.',
+    });
+  });
+
+  it("carries a typed rejection's own reason code onto the run", async () => {
+    const startJob = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 422,
+        statusText: 'Unprocessable Entity',
+        error: { detail: { reason: 'range_too_large', message: 'range is 3654 days' } },
+      }),
+    );
+    const store = makeStore({ startJob } as unknown as Partial<JobsService>);
+
+    await store.start(SPEC);
+
+    expect(store.error()).toEqual({ code: 'range_too_large', message: 'range is 3654 days' });
   });
 
   it('folds a per-day domain event into the run, typed failures intact', () => {

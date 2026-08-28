@@ -8,11 +8,6 @@
 
   @if (detail.isLoading()) {
     <p class="inspector__state" aria-live="polite" aria-busy="true">Loading the artifact receipt…</p>
-  } @else if (receiptAbsent()) {
-    <p class="inspector__state" role="status">
-      No receipt for artifact {{ artifactId() }}. Either the catalog holds no such row, or the data
-      lake is not enabled on this data plane.
-    </p>
   } @else if (problem(); as issue) {
     <p class="inspector__state inspector__state--error" role="alert">
       <span class="inspector__reason">{{ issue.reason | receiptLabel }}</span>

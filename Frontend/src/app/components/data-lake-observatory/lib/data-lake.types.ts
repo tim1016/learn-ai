@@ -165,17 +165,23 @@ export interface DataRunSpec {
 }
 
 /**
- * Every data-lake read resolves to exactly one of these.
+ * Every way a data-lake read can fail to produce a value.
  *
- * The lake is dark in production until the enablement slice flips
- * `DATA_LAKE_ENABLED`, and a dark lake answers 404 — so "not enabled" is a
- * first-class outcome the UI names, not an error it renders as a crash or an
- * endless spinner. `rejected` carries the endpoint's own typed
- * `{reason, message}` 422 body so the reason renders through the
- * receipt-label pipe instead of being re-worded here.
+ * `not_enabled` is a first-class outcome, not an error: the lake is dark in
+ * production until the enablement slice flips `DATA_LAKE_ENABLED`, and a
+ * dark router answers a bare 404 on every route. `rejected` carries the
+ * endpoint's own typed `{reason, message}` body verbatim so the reason
+ * renders through the receipt-label pipe instead of being re-worded here —
+ * that covers both the 422 validators and the `artifact_not_found` 404.
+ *
+ * Named separately from `DataLakeRead` because classification only ever
+ * produces a failure; a function that cannot return `ok` should not be
+ * typed as if it might.
  */
-export type DataLakeRead<T> =
-  | { readonly kind: 'ok'; readonly value: T }
+export type DataLakeFailure =
   | { readonly kind: 'not_enabled' }
   | { readonly kind: 'rejected'; readonly reason: string; readonly message: string }
   | { readonly kind: 'unavailable'; readonly message: string };
+
+/** Every data-lake read resolves to exactly one of these. */
+export type DataLakeRead<T> = { readonly kind: 'ok'; readonly value: T } | DataLakeFailure;

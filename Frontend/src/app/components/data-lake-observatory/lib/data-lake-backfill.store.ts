@@ -100,15 +100,12 @@ export class DataLakeBackfillStore {
   private readonly progressState = signal<BackfillProgress | null>(null);
   private readonly daysState = signal<readonly BackfillDayEvent[]>([]);
   private readonly errorState = signal<BackfillError | null>(null);
-  private readonly notEnabledState = signal(false);
 
   readonly phase = this.phaseState.asReadonly();
   readonly jobId = this.jobIdState.asReadonly();
   readonly progress = this.progressState.asReadonly();
   readonly days = this.daysState.asReadonly();
   readonly error = this.errorState.asReadonly();
-  /** True when submission was refused because the lake is not enabled. */
-  readonly notEnabled = this.notEnabledState.asReadonly();
 
   readonly running = computed(() => {
     const phase = this.phaseState();
@@ -143,7 +140,6 @@ export class DataLakeBackfillStore {
       const classified = classifyDataLakeError(error);
       this.phaseState.set('failed');
       if (classified.kind === 'not_enabled') {
-        this.notEnabledState.set(true);
         this.errorState.set({
           code: 'data_lake_not_enabled',
           message: 'The data plane refused the backfill: the data lake is not enabled.',
@@ -152,7 +148,7 @@ export class DataLakeBackfillStore {
       }
       this.errorState.set({
         code: classified.kind === 'rejected' ? classified.reason : 'submission_failed',
-        message: classified.kind === 'ok' ? '' : classified.message,
+        message: classified.message,
       });
       return;
     }
@@ -174,7 +170,6 @@ export class DataLakeBackfillStore {
     this.progressState.set(null);
     this.daysState.set([]);
     this.errorState.set(null);
-    this.notEnabledState.set(false);
   }
 
   /** Folds one already-parsed SSE frame. Unknown event types are ignored. */

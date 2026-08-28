@@ -50,9 +50,6 @@
   @if (blockedReason(); as reason) {
     <p class="backfill__note" role="status">{{ reason }}</p>
   }
-  @if (submitError(); as message) {
-    <p class="backfill__note backfill__note--error" role="alert">{{ message }}</p>
-  }
 
   <div class="backfill__actions">
     <button type="submit" class="backfill__submit" [disabled]="!canSubmit()">Run backfill</button>

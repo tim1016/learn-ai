@@ -54,7 +54,6 @@ export class LakeBackfillPanelComponent {
   protected readonly endTradingDate = linkedSignal(() => this.seedEndTradingDate());
   protected readonly includeQuotes = signal(false);
   protected readonly forceRefresh = signal(false);
-  protected readonly submitError = signal<string | null>(null);
 
   protected readonly parsed = computed(() =>
     parseSymbols(this.symbolsText(), this.defaults()?.max_symbol_length ?? 20),
@@ -63,6 +62,10 @@ export class LakeBackfillPanelComponent {
   protected readonly digest = computed(() => this.defaults()?.lean_image_digest ?? null);
 
   protected readonly blockedReason = computed<string | null>(() => {
+    // Every reason submit is unavailable lives here, the capability check
+    // included: a `request_id` is the run's durable identity, so a browser
+    // that cannot mint one has no business reaching the submit path at all.
+    if (!canMintRequestId()) return 'This browser cannot create a durable request identity.';
     if (this.defaults() === null) return 'Backfill is unavailable until the data plane answers.';
     if (this.digest() === null) {
       return 'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.';
@@ -92,10 +95,15 @@ export class LakeBackfillPanelComponent {
     // ends — completion only ever arrives as an SSE frame. Watching the
     // store's phase is what lets the page re-read coverage the moment the
     // last session lands, instead of leaving a stale heatmap behind.
+    //
+    // A failed run is re-read too: a range that dies on day 8 of 10 still
+    // put eight sessions on disk, and leaving those invisible is the same
+    // stale heatmap by another route.
     effect(() => {
       const phase = this.store.phase();
-      if (phase === 'completed' && this.lastSeenPhase !== 'completed') this.runFinished.emit();
+      const previous = this.lastSeenPhase;
       this.lastSeenPhase = phase;
+      if (phase !== previous && TERMINAL_REREAD_PHASES.has(phase)) this.runFinished.emit();
     });
   }
 
@@ -123,19 +131,11 @@ export class LakeBackfillPanelComponent {
     const digest = this.digest();
     const defaults = this.defaults();
     if (digest === null || defaults === null || !this.canSubmit()) return;
-    this.submitError.set(null);
-
-    let requestId: string;
-    try {
-      requestId = newRequestId();
-    } catch (error) {
-      this.submitError.set(error instanceof Error ? error.message : String(error));
-      return;
-    }
 
     const dataTypes: DataLakeDataType[] = this.includeQuotes() ? ['trade', 'quote'] : ['trade'];
     const spec: DataRunSpec = {
-      request_id: requestId,
+      // `canSubmit()` already proved `randomUUID` exists — see blockedReason.
+      request_id: globalThis.crypto.randomUUID(),
       run_type: 'python_lab',
       market: defaults.market,
       symbols: this.parsed().symbols,
@@ -153,10 +153,10 @@ export class LakeBackfillPanelComponent {
   }
 }
 
+/** Phases after which what is on disk may have changed. */
+const TERMINAL_REREAD_PHASES = new Set<BackfillPhase>(['completed', 'failed']);
+
 /** A backfill's `request_id` is its durable identity; refuse to invent a weak one. */
-function newRequestId(): string {
-  if (typeof globalThis.crypto?.randomUUID !== 'function') {
-    throw new Error('This browser cannot create a durable request identity.');
-  }
-  return globalThis.crypto.randomUUID();
+function canMintRequestId(): boolean {
+  return typeof globalThis.crypto?.randomUUID === 'function';
 }

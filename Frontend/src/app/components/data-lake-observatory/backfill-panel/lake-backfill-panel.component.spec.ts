@@ -152,17 +152,35 @@ describe('LakeBackfillPanelComponent', () => {
     expect(screen.getByText('plan does not include this feed')).toBeTruthy();
   });
 
-  it('tells the page a run finished so coverage can be re-read', async () => {
+  it.each(['job.completed', 'job.failed'])(
+    'tells the page to re-read coverage after %s',
+    async (terminalEvent) => {
+      // A run that dies part-way still put sessions on disk, so a failure
+      // leaves the heatmap just as stale as a success does.
+      const { store, fixture, detectChanges } = await renderPanel();
+      const finished = vi.fn();
+      fixture.componentInstance.runFinished.subscribe(finished);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+      await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
+      store.ingestEvent({ type: terminalEvent, code: 'io_error', message: 'disk full' });
+      detectChanges();
+
+      expect(finished).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('leaves the heatmap alone when the operator cancelled the run', async () => {
     const { store, fixture, detectChanges } = await renderPanel();
     const finished = vi.fn();
     fixture.componentInstance.runFinished.subscribe(finished);
 
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
-    store.ingestEvent({ type: 'job.completed' });
+    store.ingestEvent({ type: 'job.cancelled', reason: 'user requested' });
     detectChanges();
 
-    expect(finished).toHaveBeenCalledTimes(1);
+    expect(finished).not.toHaveBeenCalled();
   });
 
   it('refuses to submit without a pinned LEAN image digest', async () => {
@@ -177,6 +195,22 @@ describe('LakeBackfillPanelComponent', () => {
       true,
     );
     expect(startJob).not.toHaveBeenCalled();
+  });
+
+  it('blocks submission on a browser that cannot mint a durable request id', async () => {
+    const realCrypto = globalThis.crypto;
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
+    try {
+      const { startJob } = await renderPanel();
+
+      expect(screen.getByText('This browser cannot create a durable request identity.')).toBeTruthy();
+      expect(
+        (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(startJob).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: realCrypto });
+    }
   });
 
   it("names a terminal job failure with the framework's own code", async () => {

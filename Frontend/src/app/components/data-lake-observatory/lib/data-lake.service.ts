@@ -8,6 +8,7 @@ import type {
   BackfillDefaults,
   CoverageResponse,
   DataLakeDataType,
+  DataLakeFailure,
   DataLakeRead,
   PriceAdjustmentMode,
   StorageSummaryResponse,
@@ -23,9 +24,10 @@ export interface CoverageQuery {
   readonly priceAdjustmentMode?: PriceAdjustmentMode;
 }
 
-interface RejectionDetail {
-  readonly reason?: unknown;
-  readonly message?: unknown;
+/** The `{reason, message}` object every typed data-lake rejection puts in `detail`. */
+export interface DataLakeProblem {
+  readonly reason: string;
+  readonly message: string;
 }
 
 /**
@@ -93,27 +95,67 @@ export class DataLakeService {
 }
 
 /**
+ * Reads the router's own typed rejection body, if it sent one.
+ *
+ * Every deliberate refusal on this surface raises
+ * `HTTPException(detail={"reason": ..., "message": ...})` — the 422
+ * validators on `/coverage` and the `artifact_not_found` 404 on
+ * `/artifacts/{id}` alike. FastAPI's own 404 (the route is not mounted)
+ * carries the bare string `"Not Found"` instead, which is exactly what
+ * makes the two 404s tellable apart.
+ */
+function typedProblem(error: HttpErrorResponse): DataLakeProblem | null {
+  const detail = (error.error as { detail?: unknown } | null)?.detail;
+  if (typeof detail !== 'object' || detail === null) return null;
+  const { reason, message } = detail as { reason?: unknown; message?: unknown };
+  if (typeof reason !== 'string') return null;
+  return { reason, message: typeof message === 'string' ? message : error.message };
+}
+
+/**
  * Maps a failed data-lake request onto its named outcome.
  *
- * 404 is the flag-off signature: `main.py` skips mounting the router
- * entirely when `DATA_LAKE_ENABLED` is false, so every route answers 404
- * with FastAPI's own body. `GET /artifacts/{id}` also 404s for an id the
- * catalog does not hold; both mean "there is nothing here to show", and the
- * artifact inspector says so with the artifact id in hand.
+ * The typed body is consulted before the status code, because the status
+ * alone cannot separate the two 404s this surface produces: one means the
+ * catalog has no such artifact (`{reason: "artifact_not_found"}`), the
+ * other means `main.py` never mounted the router because
+ * `DATA_LAKE_ENABLED` is off. Only a 404 with no typed body is the dark
+ * lake; a typed one is a rejection like any other and renders its reason
+ * through the receipt-label pipe.
  */
-export function classifyDataLakeError<T>(error: unknown): DataLakeRead<T> {
+export function classifyDataLakeError(error: unknown): DataLakeFailure {
   if (!(error instanceof HttpErrorResponse)) {
     return { kind: 'unavailable', message: error instanceof Error ? error.message : String(error) };
   }
+  const problem = typedProblem(error);
+  if (problem !== null) return { kind: 'rejected', ...problem };
   if (error.status === 404) return { kind: 'not_enabled' };
   if (error.status === 422) {
-    const detail = (error.error as { detail?: RejectionDetail } | null)?.detail;
-    const reason = typeof detail?.reason === 'string' ? detail.reason : 'validation_failed';
-    const message = typeof detail?.message === 'string' ? detail.message : error.message;
-    return { kind: 'rejected', reason, message };
+    return { kind: 'rejected', reason: 'validation_failed', message: error.message };
   }
   return {
     kind: 'unavailable',
     message: error.status === 0 ? 'The data plane did not respond.' : error.message,
+  };
+}
+
+/**
+ * The one fold from a read to the `{reason, message}` pair every panel
+ * renders — reason through the receipt-label pipe, message as the
+ * backend's own words.
+ *
+ * `not_enabled` gets a reason code of its own rather than a null, so a
+ * surface that only knows how to render a problem still says something
+ * true instead of going blank. A surface that treats the dark lake
+ * specially — the Observatory page, which shows a page-wide banner —
+ * checks the kind directly and never reaches this.
+ */
+export function describeFailure(read: DataLakeRead<unknown> | undefined): DataLakeProblem | null {
+  if (read === undefined || read.kind === 'ok') return null;
+  if (read.kind === 'rejected') return { reason: read.reason, message: read.message };
+  if (read.kind === 'unavailable') return { reason: 'unavailable', message: read.message };
+  return {
+    reason: 'data_lake_not_enabled',
+    message: 'The data lake is not enabled on this data plane.',
   };
 }

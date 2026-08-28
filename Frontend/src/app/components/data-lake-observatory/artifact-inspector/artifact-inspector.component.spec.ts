@@ -133,10 +133,23 @@ describe('ArtifactInspectorComponent', () => {
     expect(screen.getByText('Polygon returned 429 four times.')).toBeTruthy();
   });
 
-  it('says so honestly when the catalog has no such row', async () => {
+  it("names a missing row by the endpoint's own reason, without hedging", async () => {
+    // The 404 for an unknown id carries a typed body, so the panel says
+    // which failure this was instead of covering two possibilities at once.
+    await renderInspector(
+      { kind: 'rejected', reason: 'artifact_not_found', message: 'artifact 99 not found' },
+      99,
+    );
+
+    expect(await screen.findByText('Artifact Not Found')).toBeTruthy();
+    expect(screen.getByText('artifact 99 not found')).toBeTruthy();
+  });
+
+  it('still says something true if it is ever opened against a dark lake', async () => {
     await renderInspector({ kind: 'not_enabled' }, 99);
 
-    expect(await screen.findByText(/No receipt for artifact 99/)).toBeTruthy();
+    expect(await screen.findByText('Data Lake Not Enabled')).toBeTruthy();
+    expect(screen.getByText('The data lake is not enabled on this data plane.')).toBeTruthy();
   });
 
   it('surfaces a rejection reason instead of a blank panel', async () => {
