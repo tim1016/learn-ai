@@ -20,6 +20,7 @@ import pytest
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.types import ArtifactIdentity
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 pytestmark = pytest.mark.asyncio
 
@@ -80,6 +81,17 @@ async def test_observatory_selects_read_a_real_complete_artifact(clean_artifacts
         file_path="equity/usa/minute/spy/20240520_trade.zip",
     )
     assert isinstance(artifact_id, int)
+
+    # Before completion: content_hash must be None, never "" — MAJOR 4 from
+    # the #1835 review round 2 (select_artifact_by_id has no Status filter,
+    # so a still-fetching row must not emit an empty string as if it were a
+    # real hash on a documented receipt surface).
+    fetching_detail = await catalog_client.select_artifact_by_id(artifact_id)
+    assert fetching_detail is not None
+    assert fetching_detail.status == "fetching"
+    assert fetching_detail.content_hash is None
+    assert fetching_detail.file_size_bytes is None
+
     await catalog_client.complete_artifact(
         artifact_id,
         row_count=390,
@@ -113,7 +125,7 @@ async def test_observatory_selects_read_a_real_complete_artifact(clean_artifacts
     assert detail.file_size_bytes == 123456
     assert detail.provider_params == {}
     assert detail.status == "complete"
-    assert detail.trading_date == date(2024, 5, 20)
+    assert detail.trading_date_ms == session_open_ms_utc(date(2024, 5, 20))
 
     # select_storage_totals_by_kind: one complete time_series_bars/minute row.
     totals = await catalog_client.select_storage_totals_by_kind("usa")
@@ -127,8 +139,8 @@ async def test_observatory_selects_read_a_real_complete_artifact(clean_artifacts
     spans = await catalog_client.select_symbol_coverage_spans("usa")
     assert len(spans) == 1
     assert spans[0].symbol == "SPY"
-    assert spans[0].first_trading_date == date(2024, 5, 20)
-    assert spans[0].last_trading_date == date(2024, 5, 20)
+    assert spans[0].first_trading_date_ms == session_open_ms_utc(date(2024, 5, 20))
+    assert spans[0].last_trading_date_ms == session_open_ms_utc(date(2024, 5, 20))
     assert spans[0].artifact_count == 1
 
 
