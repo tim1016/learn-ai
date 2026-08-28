@@ -13,14 +13,18 @@ database — the doubles are pinned to the real functions' keyword signatures
 from __future__ import annotations
 
 from datetime import date, timedelta
+from urllib.parse import quote
 
+import asyncpg
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.catalog_client import ArtifactCoverageRow
 from app.data_lake.types import (
+    MAX_SYMBOL_LENGTH,
     MAX_TRADING_RANGE_DAYS,
     ArtifactDetail,
     StorageKindTotal,
@@ -32,10 +36,75 @@ from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms
 pytestmark = pytest.mark.asyncio
 
 
+def _artifact_detail_kwargs(**overrides) -> dict:
+    """Base ArtifactDetail field set (a complete, non-failed minute-bar row).
+
+    Every field is required by the model; individual tests override only the
+    ones the scenario cares about, so adding a new required field (e.g.
+    attempt_count/last_error/error_message for #1845 P2-6) means updating
+    this one place, not every construction site.
+    """
+    base = dict(
+        id=101,
+        artifact_kind="time_series_bars",
+        market="usa",
+        symbol="SPY",
+        trading_date_ms=session_open_ms_utc(date(2024, 5, 20)),
+        resolution="minute",
+        data_type="trade",
+        provider="polygon",
+        provider_params={},
+        price_adjustment_mode="raw",
+        data_contract_hash="a" * 64,
+        content_hash="b" * 64,
+        file_path="equity/usa/minute/spy/20240520_trade.zip",
+        file_size_bytes=123456,
+        status="complete",
+        row_count=390,
+        first_bar_start_ms=1716196200000,
+        last_bar_start_ms=1716219540000,
+        fetched_at_ms=1716220000000,
+        completed_at_ms=1716220050000,
+        attempt_count=1,
+        last_error=None,
+        error_message=None,
+    )
+    base.update(overrides)
+    return base
+
+
 async def _get(app: FastAPI, url: str) -> tuple[int, dict]:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         r = await client.get(url)
     return r.status_code, (r.json() if r.content else {})
+
+
+class _AlreadyInitializedPool:
+    """Sentinel standing in for a real asyncpg pool.
+
+    Satisfies close_pool()'s cleanup path (it awaits ``_pool.close()``)
+    without ever touching real I/O.
+    """
+
+    async def close(self) -> None:
+        return None
+
+    def terminate(self) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _catalog_pool_already_initialized(monkeypatch: pytest.MonkeyPatch):
+    """Every GET route now depends on _ensure_catalog_pool (#1845 P1-1),
+    which calls catalog_client.init_pool() — a no-op once ``_pool`` is
+    already set, but a RuntimeError (no POSTGRES_URL configured in this
+    sandbox) if it's still None. Every test in this module *except* the
+    "Pool lifecycle" tests below mocks catalog_client's select_* functions
+    directly and never needs a real pool at all, so pre-seed a sentinel here
+    to keep init_pool() a no-op for them. The pool-lifecycle tests
+    explicitly override this back to None to exercise the real init path.
+    """
+    monkeypatch.setattr(catalog_client, "_pool", _AlreadyInitializedPool())
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +124,87 @@ async def test_observatory_routes_404_when_flag_off(url: str, make_data_lake_app
     flag_off_app = make_data_lake_app(include_data_lake=False)
     status_code, _ = await _get(flag_off_app, url)
     assert status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Pool lifecycle — a GET must work on a fresh process, no prior POST.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        "/api/data-lake/artifacts/1",
+        "/api/data-lake/storage-summary",
+    ],
+)
+async def test_get_routes_initialize_the_pool_without_a_prior_post(
+    url: str, monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    """#1845 P1-1: in a fresh process, all three GET routes used to 500.
+
+    ensure_data() calls catalog_client.init_pool() as its own first step, so
+    POST /ensure-data never needed help — but nothing else ever called
+    init_pool(), so a GET before any POST hit connection()'s "asyncpg pool
+    not initialized" RuntimeError as an unhandled 500. Every other test in
+    this module mocks catalog_client's select_* functions directly, which
+    bypasses connection()/_pool entirely — exactly why this bug went
+    unnoticed. This test does NOT mock the selectors: it resets _pool to
+    None (simulating a fresh process), fakes only the asyncpg layer
+    (create_pool + a connection whose fetch/fetchrow return empty results,
+    no real network I/O), and lets the real select_* functions run through
+    the real connection(). Before the fix, connection() would raise
+    RuntimeError here — this test would have failed (an unhandled exception
+    surfacing through httpx.ASGITransport, not a clean response) without
+    the pool-init dependency.
+    """
+
+    class _FakeConnection:
+        async def fetch(self, query: str, *args: object) -> list:
+            return []
+
+        async def fetchrow(self, query: str, *args: object) -> None:
+            return None
+
+    class _FakeAcquireContext:
+        async def __aenter__(self) -> _FakeConnection:
+            return _FakeConnection()
+
+        async def __aexit__(self, *exc_info: object) -> bool:
+            return False
+
+    class _FakePool:
+        def acquire(self) -> _FakeAcquireContext:
+            return _FakeAcquireContext()
+
+        async def close(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+    async def _fake_create_pool(*args, **kwargs) -> _FakePool:
+        return _FakePool()
+
+    await catalog_client.close_pool()
+    assert catalog_client._pool is None
+
+    monkeypatch.setattr(settings, "POSTGRES_URL", "postgres://fake-host/fake-db")
+    monkeypatch.setattr(asyncpg, "create_pool", _fake_create_pool)
+
+    try:
+        app = make_data_lake_app(include_data_lake=True)
+        status_code, _ = await _get(app, url)
+        # 404 for the artifact-detail URL (id=1, no row in the fake
+        # connection's empty result set) is the expected "found nothing"
+        # outcome, not the pool failure this test guards against — either
+        # way, the request must reach the real selector and its real
+        # connection() call, not raise before ever getting there.
+        assert status_code in (200, 404)
+        assert catalog_client._pool is not None
+    finally:
+        await catalog_client.close_pool()
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +288,76 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
     assert still_missing_day["artifact_id"] is None
 
 
+@pytest.mark.parametrize(
+    ("data_type", "expected_provider"),
+    [
+        ("trade", "polygon"),
+        ("quote", "learn_ai_derived"),
+    ],
+)
+async def test_coverage_derives_provider_from_data_type(
+    data_type: str, expected_provider: str, monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    """#1845 P1-2: quote coverage was unfindable.
+
+    expand_required_artifacts catalogs quote minute-bars under
+    Provider='learn_ai_derived' (they're synthesized from same-day trade
+    bytes, not fetched from Polygon directly) — but the coverage endpoint
+    used to accept only provider="polygon" as a query param and feed it
+    straight into the filter, so a quote artifact could never match. The
+    endpoint no longer takes a provider parameter at all: it derives one
+    from data_type via provider_for_data_type, the same function
+    expand_required_artifacts calls.
+    """
+    captured: dict[str, object] = {}
+
+    async def _capturing_coverage(**kwargs) -> list[ArtifactCoverageRow]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _capturing_coverage)
+
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        f"/api/data-lake/coverage?symbol=SPY&data_type={data_type}"
+        "&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+    )
+
+    assert status_code == 200
+    assert captured["provider"] == expected_provider
+    assert body["provider"] == expected_provider
+
+
+async def test_coverage_finds_a_seeded_quote_artifact_as_complete(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
+    """A quote artifact recorded under Provider='learn_ai_derived' must report "complete".
+
+    Seeds select_artifact_coverage's return value as if a real
+    'learn_ai_derived' quote row exists for 2024-05-21 — this is what the
+    live-Postgres equivalent (test_catalog_observatory_reads.py) confirms
+    against a real schema; this mocked version pins the router's own
+    provider-derivation wiring in isolation.
+    """
+
+    async def _quote_coverage(**kwargs) -> list[ArtifactCoverageRow]:
+        assert kwargs["provider"] == "learn_ai_derived"
+        return [ArtifactCoverageRow(trading_date=date(2024, 5, 21), status="complete", artifact_id=55)]
+
+    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _quote_coverage)
+
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        "/api/data-lake/coverage?symbol=SPY&data_type=quote&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+    )
+
+    assert status_code == 200
+    by_ms = {d["trading_date_ms"]: d for d in body["days"]}
+    quote_day = by_ms[session_open_ms_utc(date(2024, 5, 21))]
+    assert quote_day["status"] == "complete"
+    assert quote_day["artifact_id"] == 55
+
+
 async def test_coverage_422_when_range_inverted(make_data_lake_app):
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
@@ -146,6 +366,48 @@ async def test_coverage_422_when_range_inverted(make_data_lake_app):
     )
     assert status_code == 422
     assert body["detail"]["reason"] == "invalid_range"
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    [
+        "spy",  # lowercase — SYMBOL_RE requires uppercase
+        "SP Y",  # whitespace
+        "S" * (MAX_SYMBOL_LENGTH + 1),  # exceeds the catalog's storable length
+        "1SPY",  # must start with a letter
+    ],
+)
+async def test_coverage_422_when_symbol_invalid(symbol: str, make_data_lake_app):
+    """#1845 P2-4: validate at the boundary with DataRunSpec's own pattern + length limit.
+
+    An invalid symbol used to sail straight through to the catalog query
+    (which would just find nothing and report every session "missing" —
+    honest-empty, but for the wrong reason: not because the query was
+    validated, because it was never checked at all).
+    """
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        f"/api/data-lake/coverage?symbol={quote(symbol)}&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+    )
+    assert status_code == 422
+    assert body["detail"]["reason"] == "invalid_symbol"
+
+
+async def test_coverage_200_when_symbol_valid(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
+    """The canonical uppercase-letters-digits-dot pattern must still be accepted."""
+
+    async def _empty_coverage(**kwargs) -> list[ArtifactCoverageRow]:
+        return []
+
+    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _empty_coverage)
+
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, _ = await _get(
+        app,
+        "/api/data-lake/coverage?symbol=BRK.B&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+    )
+    assert status_code == 200
 
 
 async def test_coverage_422_when_range_exceeds_max_days(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
@@ -183,17 +445,20 @@ async def test_coverage_200_at_exactly_max_range_days(monkeypatch: pytest.Monkey
     validator and this endpoint now share one formula (trading_range_span_days)
     and one constant, so a window right at the cap is treated identically by
     both — this is the case the pre-fix drift got wrong.
+
+    No longer stubs the calendar walk (round-2 review flagged this as a
+    concern, #1845 P2-5 made it a real fix): the endpoint now builds the
+    whole range's NYSE schedule in one session_windows_ms_utc() call instead
+    of one session_open_ms_utc() call per returned day, so even this
+    5-year-wide request resolves in well under a second — see
+    test_coverage_builds_one_schedule_for_the_whole_range below, which pins
+    that call count directly.
     """
 
     async def _empty_coverage(**kwargs) -> list[ArtifactCoverageRow]:
         return []
 
     monkeypatch.setattr(catalog_client, "select_artifact_coverage", _empty_coverage)
-    # This test's job is to pin the validation boundary, not to exercise a
-    # real ~5-year NYSE session walk (pandas_market_calendars schedules each
-    # day individually via session_open_ms_utc, which is genuinely slow at
-    # this width) — stub the calendar walk so the test stays fast.
-    monkeypatch.setattr("app.routers.data_lake.expected_sessions", lambda start, end: [])
 
     start = date(2020, 1, 1)
     # span_days = trading_range_span_days(start, end) == MAX_TRADING_RANGE_DAYS exactly.
@@ -208,6 +473,43 @@ async def test_coverage_200_at_exactly_max_range_days(monkeypatch: pytest.Monkey
     assert status_code == 200
 
 
+async def test_coverage_builds_one_schedule_for_the_whole_range(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
+    """#1845 P2-5: coverage must call the calendar's range accessor ONCE,
+
+    not once per returned day. Spies on session_windows_ms_utc (the one
+    range-wide accessor) and asserts it's called exactly once per request,
+    regardless of how many sessions the range contains — the bug was a
+    per-day session_open_ms_utc() call inside the router's day loop, which
+    measured ~10s at the 5-year cap before this fix.
+    """
+    import app.routers.data_lake as data_lake_router_module
+
+    async def _empty_coverage(**kwargs) -> list[ArtifactCoverageRow]:
+        return []
+
+    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _empty_coverage)
+
+    call_count = 0
+    real_session_windows_ms_utc = data_lake_router_module.session_windows_ms_utc
+
+    def _counting_session_windows_ms_utc(start: date, end: date):
+        nonlocal call_count
+        call_count += 1
+        return real_session_windows_ms_utc(start, end)
+
+    monkeypatch.setattr(data_lake_router_module, "session_windows_ms_utc", _counting_session_windows_ms_utc)
+
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+    )
+
+    assert status_code == 200
+    assert len(body["days"]) == 5
+    assert call_count == 1
+
+
 # ---------------------------------------------------------------------------
 # Artifact detail — full receipt, int64 ms UTC timestamps, honest 404.
 # ---------------------------------------------------------------------------
@@ -218,28 +520,7 @@ async def test_artifact_detail_returns_full_receipt_with_int_ms_timestamps(
 ):
     async def _detail(artifact_id: int) -> ArtifactDetail:
         assert artifact_id == 101
-        return ArtifactDetail(
-            id=101,
-            artifact_kind="time_series_bars",
-            market="usa",
-            symbol="SPY",
-            trading_date_ms=session_open_ms_utc(date(2024, 5, 20)),
-            resolution="minute",
-            data_type="trade",
-            provider="polygon",
-            provider_params={"adjusted": "true"},
-            price_adjustment_mode="raw",
-            data_contract_hash="a" * 64,
-            content_hash="b" * 64,
-            file_path="equity/usa/minute/spy/20240520_trade.zip",
-            file_size_bytes=123456,
-            status="complete",
-            row_count=390,
-            first_bar_start_ms=1716196200000,
-            last_bar_start_ms=1716219540000,
-            fetched_at_ms=1716220000000,
-            completed_at_ms=1716220050000,
-        )
+        return ArtifactDetail(**_artifact_detail_kwargs(provider_params={"adjusted": "true"}))
 
     monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
 
@@ -273,26 +554,21 @@ async def test_artifact_detail_trading_date_ms_is_none_for_non_day_keyed_artifac
 
     async def _detail(artifact_id: int) -> ArtifactDetail:
         return ArtifactDetail(
-            id=5,
-            artifact_kind="metadata",
-            market="usa",
-            symbol="SPY",
-            trading_date_ms=None,
-            resolution=None,
-            data_type=None,
-            provider="polygon",
-            provider_params={},
-            price_adjustment_mode=None,
-            data_contract_hash="c" * 64,
-            content_hash=None,
-            file_path="equity/usa/metadata/spy.json",
-            file_size_bytes=512,
-            status="complete",
-            row_count=None,
-            first_bar_start_ms=None,
-            last_bar_start_ms=None,
-            fetched_at_ms=1716220000000,
-            completed_at_ms=1716220050000,
+            **_artifact_detail_kwargs(
+                id=5,
+                artifact_kind="metadata",
+                trading_date_ms=None,
+                resolution=None,
+                data_type=None,
+                price_adjustment_mode=None,
+                data_contract_hash="c" * 64,
+                content_hash=None,
+                file_path="equity/usa/metadata/spy.json",
+                file_size_bytes=512,
+                row_count=None,
+                first_bar_start_ms=None,
+                last_bar_start_ms=None,
+            )
         )
 
     monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
@@ -315,26 +591,19 @@ async def test_artifact_detail_content_hash_is_none_until_complete(monkeypatch: 
 
     async def _detail(artifact_id: int) -> ArtifactDetail:
         return ArtifactDetail(
-            id=7,
-            artifact_kind="time_series_bars",
-            market="usa",
-            symbol="SPY",
-            trading_date_ms=session_open_ms_utc(date(2024, 5, 21)),
-            resolution="minute",
-            data_type="trade",
-            provider="polygon",
-            provider_params={},
-            price_adjustment_mode="raw",
-            data_contract_hash="d" * 64,
-            content_hash=None,
-            file_path="equity/usa/minute/spy/20240521_trade.zip",
-            file_size_bytes=None,
-            status="fetching",
-            row_count=None,
-            first_bar_start_ms=None,
-            last_bar_start_ms=None,
-            fetched_at_ms=1716220000000,
-            completed_at_ms=None,
+            **_artifact_detail_kwargs(
+                id=7,
+                trading_date_ms=session_open_ms_utc(date(2024, 5, 21)),
+                data_contract_hash="d" * 64,
+                content_hash=None,
+                file_path="equity/usa/minute/spy/20240521_trade.zip",
+                file_size_bytes=None,
+                status="fetching",
+                row_count=None,
+                first_bar_start_ms=None,
+                last_bar_start_ms=None,
+                completed_at_ms=None,
+            )
         )
 
     monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
@@ -346,6 +615,46 @@ async def test_artifact_detail_content_hash_is_none_until_complete(monkeypatch: 
     assert body["status"] == "fetching"
     assert body["content_hash"] is None
     assert body["file_size_bytes"] is None
+
+
+async def test_artifact_detail_returns_failure_diagnostics_for_failed_artifact(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    """#1845 P2-6: a 'failed' row's receipt must carry what fail_artifact() persisted.
+
+    fail_artifact() (catalog_client.py) writes LastError, ErrorMessage, and
+    increments AttemptCount, but select_artifact_by_id used to omit all
+    three from the projected receipt — an operator looking at a failed
+    artifact's detail had no way to see why it failed.
+    """
+
+    async def _detail(artifact_id: int) -> ArtifactDetail:
+        return ArtifactDetail(
+            **_artifact_detail_kwargs(
+                id=9,
+                content_hash=None,
+                file_size_bytes=None,
+                status="failed",
+                row_count=None,
+                first_bar_start_ms=None,
+                last_bar_start_ms=None,
+                completed_at_ms=None,
+                attempt_count=3,
+                last_error="provider_rate_limited",
+                error_message="429 Too Many Requests from Polygon after 3 attempts",
+            )
+        )
+
+    monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
+
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(app, "/api/data-lake/artifacts/9")
+
+    assert status_code == 200
+    assert body["status"] == "failed"
+    assert body["attempt_count"] == 3
+    assert body["last_error"] == "provider_rate_limited"
+    assert body["error_message"] == "429 Too Many Requests from Polygon after 3 attempts"
 
 
 async def test_artifact_detail_404_when_row_does_not_exist(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
