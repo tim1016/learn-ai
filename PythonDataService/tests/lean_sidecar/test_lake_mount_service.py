@@ -35,13 +35,13 @@ WINDOW = [DAY_ONE, DAY_TWO]
 SYMBOL = "SPY"
 
 
-def _polygon_live_policy() -> Any:
+def _polygon_live_policy(*, adjusted: bool = False) -> Any:
     from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
 
     return DataPolicy(
         source="polygon",
         symbol=SYMBOL,
-        adjusted=False,
+        adjusted=adjusted,
         session="regular",
         input_bars=BarsSpec(timespan="minute", multiplier=1),
         strategy_bars=BarsSpec(timespan="minute", multiplier=15),
@@ -53,7 +53,7 @@ def _polygon_live_policy() -> Any:
     )
 
 
-def _request(run_id: str) -> Any:
+def _request(run_id: str, *, adjusted: bool = False) -> Any:
     from app.services.lean_sidecar_service import TrustedRunRequest
 
     return TrustedRunRequest(
@@ -64,7 +64,7 @@ def _request(run_id: str) -> Any:
         start_ms_utc=session_open_ms_utc(DAY_ONE),
         end_ms_utc=session_open_ms_utc(next_trading_day(DAY_TWO)),
         starting_cash=100_000.0,
-        data_policy=_polygon_live_policy(),
+        data_policy=_polygon_live_policy(adjusted=adjusted),
     )
 
 
@@ -285,6 +285,81 @@ async def test_lake_refusal_leaves_the_run_id_reusable(
     seed_lake_window(write_root / LAKE_SUBDIR, SYMBOL, WINDOW)
     result = await service.run_trusted_sample(_request("reusable-run-id"))
     assert result.workspace_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_an_adjusted_request_stays_on_staging_with_the_flag_on(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """The adjusted run must not touch the lake, asserted at the service seam.
+
+    ``lake_mount_enabled(adjusted=...)`` is unit-tested, but nothing pinned
+    that ``run_trusted_sample`` actually hands it the *run's* adjustment mode.
+    A refactor passing a literal ``adjusted=False`` would restore the exact
+    bug #1839 found -- a flag-on adjusted run served raw lake bytes, with the
+    manifest and the UI both reporting an adjusted policy -- and every other
+    test in this file would stay green, because they all request raw bars.
+
+    The lake here is fully serveable, so a run that consulted it would
+    succeed and mount it. The assertion is that it does not: no
+    ``mount_lake_read_only`` on the launch request, which is what a lake-mode
+    run sets and a staging run leaves alone.
+    """
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    (write_root / LAKE_SUBDIR).mkdir(parents=True, exist_ok=True)
+    seed_lake_window(write_root / LAKE_SUBDIR, SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    resolved: list[object] = []
+    real_resolve = service._resolve_lake_artifacts_or_refuse
+
+    async def _spy(request):
+        outcome = await real_resolve(request)
+        resolved.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(service, "_resolve_lake_artifacts_or_refuse", _spy)
+
+    await service.run_trusted_sample(_request("adjusted-stays-on-staging", adjusted=True))
+
+    assert resolved == [], "an adjusted run resolved lake artifacts"
+    assert orchestrator.launch_requests
+    assert not orchestrator.launch_requests[-1].mount_lake_read_only
+
+
+@pytest.mark.asyncio
+async def test_a_raw_request_does_reach_the_lake_with_the_flag_on(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """The counterpart, so the test above is a discrimination and not a no-op.
+
+    Identical setup, raw policy: this one must mount the lake. Without it,
+    a change that disabled lake mode outright would leave the adjusted
+    assertion passing for entirely the wrong reason.
+    """
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    (write_root / LAKE_SUBDIR).mkdir(parents=True, exist_ok=True)
+    seed_lake_window(write_root / LAKE_SUBDIR, SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    await service.run_trusted_sample(_request("raw-reaches-the-lake", adjusted=False))
+
+    assert orchestrator.launch_requests
+    assert orchestrator.launch_requests[-1].mount_lake_read_only
 
 
 @pytest.mark.asyncio
