@@ -16,10 +16,23 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
-    lake_root,
+    minute_bar_market_root,
+    resolve_lake_root,
+    resolve_staging_root,
     staging_path_for,
-    staging_root,
 )
+
+
+class TestMinuteBarMarketRoot:
+    def test_root_for_usa(self):
+        assert minute_bar_market_root("usa") == PurePosixPath("equity/usa/minute")
+
+    def test_is_the_prefix_of_a_full_minute_bar_path(self):
+        root = minute_bar_market_root("usa")
+        full = LeanMinuteBarPath(
+            market="usa", symbol="SPY", trading_date=date(2024, 5, 20), data_type="trade"
+        ).relative_path()
+        assert str(full).startswith(str(root) + "/")
 
 
 class TestLeanMinuteBarPath:
@@ -106,20 +119,26 @@ class TestLakeRoots:
 
     def test_lake_root_derives_from_write_root(self, monkeypatch):
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert lake_root() == Path("/mnt/writer/lake")
+        assert resolve_lake_root() == Path("/mnt/writer/lake")
 
     def test_staging_root_derives_from_write_root(self, monkeypatch):
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert staging_root() == Path("/mnt/writer/staging")
+        assert resolve_staging_root() == Path("/mnt/writer/staging")
 
     def test_staging_shares_a_filesystem_with_the_lake(self, monkeypatch):
         """Atomic promotion is a rename(2), so both roots share a parent."""
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert lake_root().parent == staging_root().parent
+        assert resolve_lake_root().parent == resolve_staging_root().parent
 
-    def test_ensure_data_writes_where_path_policy_points(self, monkeypatch):
-        """One answer to "where is the lake?" — ensure_data must not re-derive it."""
-        from app.data_lake.ensure_data import _lake_roots
+    def test_ensure_data_imports_the_same_functions_and_does_not_re_derive(self, monkeypatch):
+        """One answer to "where is the lake?" — ensure_data must not re-derive it.
 
-        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert _lake_roots() == (lake_root(), staging_root())
+        ``ensure_data`` imports ``resolve_lake_root`` / ``resolve_staging_root``
+        directly rather than through a wrapper of its own; asserting identity
+        (not just equal output) catches a reimplementation that happens to
+        agree today but could silently drift from this module.
+        """
+        from app.data_lake import ensure_data
+
+        assert ensure_data.resolve_lake_root is resolve_lake_root
+        assert ensure_data.resolve_staging_root is resolve_staging_root

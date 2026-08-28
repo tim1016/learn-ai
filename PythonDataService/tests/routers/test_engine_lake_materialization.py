@@ -18,6 +18,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from app.config import settings
 from app.data_lake import run_materialization
@@ -93,6 +94,19 @@ def _request() -> EngineBacktestRequest:
         from_date=DAY_ONE.isoformat(),
         to_date=DAY_THREE.isoformat(),
         auto_fetch=True,
+        # The lake serves raw bars only (LakeAdjustmentUnsupportedError gates
+        # anything else); every test in this file exercises materialization
+        # mechanics, not the adjustment gate, so it asks for what the lake can
+        # actually give it. See test_flag_on_run_refuses_the_legacy_adjusted_default
+        # below for what an unmodified (implicitly adjusted) request now gets.
+        data_policy={
+            "source": "polygon",
+            "symbol": "SPY",
+            "adjusted": False,
+            "session": "regular",
+            "input_bars": {"timespan": "minute", "multiplier": 1},
+            "strategy_bars": {"timespan": "minute", "multiplier": 1},
+        },
     )
 
 
@@ -283,3 +297,35 @@ def test_a_lake_that_cannot_materialize_fails_the_run_loudly(seeded_roots, monke
 
     assert response.success is False
     assert "provider_no_data" in (response.error or "")
+
+
+def test_flag_on_run_refuses_the_legacy_adjusted_default(seeded_roots, monkeypatch):
+    """A request with no explicit ``data_policy`` defaults to adjusted=True.
+
+    The lake serves raw bars only. Before the fix this silently read the raw
+    lake tree back to a caller who believed the run was adjusted; now root
+    resolution itself refuses, before the lake is ever consulted.
+    """
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    def _must_not_run(**kwargs):
+        raise AssertionError("the lake must not be consulted for a request it cannot satisfy")
+
+    monkeypatch.setattr(run_materialization, "materialize_engine_run", _must_not_run)
+    request = EngineBacktestRequest(
+        strategy_name="sma_crossover",
+        params={"symbol": "SPY"},
+        from_date=DAY_ONE.isoformat(),
+        to_date=DAY_THREE.isoformat(),
+        auto_fetch=True,
+    )
+    # No explicit data_policy on the wire — the request validator synthesizes
+    # one from params.symbol with the legacy default, adjusted=True.
+    assert request.data_policy is not None
+    assert request.data_policy.adjusted is True
+
+    with pytest.raises(HTTPException) as exc_info:
+        execute_engine_backtest(request=request, on_phase=_noop, on_log=_noop)
+
+    assert exc_info.value.status_code == 409
+    assert "raw bars only" in exc_info.value.detail

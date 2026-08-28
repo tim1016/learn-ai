@@ -13,6 +13,7 @@ from app.config import settings
 from app.data_lake import path_policy
 from app.engine.data.availability import _missing_spans, ensure_range
 from app.engine.data.policy_store import (
+    LakeAdjustmentUnsupportedError,
     policy_key,
     read_provenance,
     record_fetch,
@@ -77,7 +78,7 @@ def test_resolve_data_roots_ignores_the_lake_while_the_flag_is_off(monkeypatch, 
 
 
 def test_resolve_data_roots_returns_the_lake_alone_when_the_flag_is_on(monkeypatch, tmp_path: Path):
-    """Flag on: the lake is the authority, so it is the only root."""
+    """Flag on, raw request: the lake is the authority, so it is the only root."""
     reference = tmp_path / "reference"
     reference.mkdir()
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
@@ -85,7 +86,7 @@ def test_resolve_data_roots_returns_the_lake_alone_when_the_flag_is_on(monkeypat
     monkeypatch.setenv("LEAN_DATA_ROOT", str(reference))
     monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
 
-    roots = resolve_data_roots(source="polygon", adjusted=True)
+    roots = resolve_data_roots(source="polygon", adjusted=False)
 
     assert roots == [tmp_path / "writer" / "lake"]
     assert roots[0].is_dir()
@@ -96,21 +97,39 @@ def test_resolve_data_roots_lake_is_the_tree_ensure_data_writes(monkeypatch, tmp
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
 
-    assert resolve_data_roots(source="polygon", adjusted=True) == [path_policy.lake_root()]
+    assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root()]
 
 
-def test_resolve_data_roots_lake_does_not_split_by_adjustment(monkeypatch, tmp_path: Path):
-    """The lake keys bytes by data contract, not by a policy directory name."""
+def test_resolve_data_roots_refuses_an_adjusted_request_when_the_flag_is_on(monkeypatch, tmp_path: Path):
+    """The lake has one data contract per bar, and it is raw.
+
+    Before this fix, an adjusted request silently got the lake's raw root
+    back — a run believing it read adjusted bars while every price was raw,
+    materially wrong across a split or dividend. Refuse instead of guessing;
+    adjustment support is slice #1839's decision, not this seam's.
+    """
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
 
-    assert resolve_data_roots(source="polygon", adjusted=True) == resolve_data_roots(source="polygon", adjusted=False)
+    with pytest.raises(LakeAdjustmentUnsupportedError, match="raw bars only"):
+        resolve_data_roots(source="polygon", adjusted=True)
+
+
+def test_resolve_data_roots_flag_off_still_serves_adjusted(monkeypatch, tmp_path: Path):
+    """The refusal is lake-specific: flag off, adjusted=True works as always."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
+
+    roots = resolve_data_roots(source="polygon", adjusted=True)
+
+    assert roots == [tmp_path / "store" / "polygon-adjusted"]
 
 
 def test_symbol_write_lock_refuses_the_lake_root(monkeypatch, tmp_path: Path):
     """Only app.data_lake writes to the lake; a zip with no catalog row is invisible."""
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    lake = path_policy.lake_root()
+    lake = path_policy.resolve_lake_root()
     lake.mkdir(parents=True)
 
     with pytest.raises(ValueError, match="is the data lake"), symbol_write_lock(lake, "SPY"):

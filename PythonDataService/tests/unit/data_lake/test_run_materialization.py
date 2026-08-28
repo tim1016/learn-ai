@@ -75,7 +75,13 @@ class FakeCatalog:
         artifact_id = self._next_id
         self._next_id += 1
         self.keys[key] = artifact_id
-        self.rows[artifact_id] = {**row, "id": artifact_id, "status": "fetching"}
+        self.rows[artifact_id] = {
+            **row,
+            "id": artifact_id,
+            "status": "fetching",
+            "attempt_count": 1,
+            "last_error": None,
+        }
         return artifact_id
 
     @staticmethod
@@ -97,9 +103,11 @@ class FakeCatalog:
             "last_bar_start_ms": None,
         }
 
-    @staticmethod
-    def _record(row: dict) -> ArtifactRecord:
-        return ArtifactRecord(**{k: v for k, v in row.items() if k != "status"})
+    _BOOKKEEPING_KEYS = frozenset({"status", "attempt_count", "last_error"})
+
+    @classmethod
+    def _record(cls, row: dict) -> ArtifactRecord:
+        return ArtifactRecord(**{k: v for k, v in row.items() if k not in cls._BOOKKEEPING_KEYS})
 
     # -- catalog_client surface --------------------------------------------
 
@@ -124,8 +132,9 @@ class FakeCatalog:
                 return self._record(row)
         return None
 
-    async def claim_minute_bar(self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path) -> int | None:
-        key = (
+    @staticmethod
+    def _minute_key(identity) -> tuple:
+        return (
             "minute",
             identity.market,
             identity.symbol,
@@ -134,11 +143,41 @@ class FakeCatalog:
             identity.provider,
             identity.price_adjustment_mode,
         )
-        return self._claim(key, self._identity_row(identity, data_contract_hash, file_path))
+
+    async def claim_minute_bar(self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path) -> int | None:
+        return self._claim(self._minute_key(identity), self._identity_row(identity, data_contract_hash, file_path))
+
+    async def select_minute_bar_claim_state(self, identity) -> catalog_client.MinuteBarClaimState | None:
+        artifact_id = self.keys.get(self._minute_key(identity))
+        if artifact_id is None:
+            return None
+        row = self.rows[artifact_id]
+        return catalog_client.MinuteBarClaimState(
+            id=artifact_id,
+            status=row["status"],
+            attempt_count=row["attempt_count"],
+            last_error=row["last_error"],
+        )
+
+    async def steal_or_retry_minute_bar(self, artifact_id, worker_id, lease_ttl_ms, max_retries) -> bool:
+        row = self.rows[artifact_id]
+        # The fake has no lease clock, so "fetching" always means a live
+        # lease held by someone else — nothing to steal, matching the real
+        # WHERE clause's "LeaseExpiresAtMs < now" arm never firing here.
+        if row["status"] == "failed" and row["attempt_count"] < max_retries:
+            row["status"] = "fetching"
+            row["attempt_count"] += 1
+            row["last_error"] = None
+            return True
+        return False
 
     async def select_coverage_minute_bars(
-        self, market, symbol, data_type, start_trading_date, end_trading_date
+        self, market, symbol, data_type, start_trading_date, end_trading_date, *, price_adjustment_mode
     ) -> list[ArtifactRecord]:
+        # Mode is a required filter in the real query (#1832): two modes can
+        # coexist for one (market, symbol, date, data_type), and a fake that
+        # ignored the distinction would hide exactly the wrong-row bug the
+        # required parameter exists to prevent.
         return [
             self._record(row)
             for row in self.rows.values()
@@ -147,6 +186,7 @@ class FakeCatalog:
             and row["market"] == market
             and row["symbol"] == symbol
             and row["data_type"] == data_type
+            and row["price_adjustment_mode"] == price_adjustment_mode
             and row["status"] == "complete"
             and start_trading_date <= row["trading_date"] <= end_trading_date
         ]
@@ -193,7 +233,7 @@ class FakeCatalog:
         )
 
     async def fail_artifact(self, artifact_id, last_error, error_message=None) -> None:
-        self.rows[artifact_id]["status"] = "failed"
+        self.rows[artifact_id].update(status="failed", last_error=last_error)
 
 
 @pytest.fixture
@@ -204,6 +244,8 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "claim_metadata_artifact",
         "select_complete_metadata_artifact",
         "claim_minute_bar",
+        "select_minute_bar_claim_state",
+        "steal_or_retry_minute_bar",
         "select_coverage_minute_bars",
         "claim_aggregated_bar_artifact",
         "select_complete_aggregated_bar_artifact",
@@ -518,6 +560,83 @@ async def test_materialize_run_data_returns_a_real_failure_without_waiting(fake_
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_ensure_data_reclaims_a_failed_minute_artifact_instead_of_polling_it(fake_catalog, tmp_lake):
+    """A 'failed' row is a done deal, not a sibling fetch to wait out.
+
+    Before the fix, ``claim_minute_bar`` losing to an existing row of ANY
+    status (not just an active lease) was reported as ``lease_timeout`` —
+    contention, per ``_CONTENTION_REASONS`` — which sends the bridge into a
+    poll loop that re-tries the exact same failed claim every interval until
+    ``fetch_timeout_seconds`` elapses, because the row never transitions on
+    its own. The fix reclaims a 'failed' row via the same primitive the
+    lease-expiry sweep uses, so the very next ``ensure_data`` pass gets a
+    fresh attempt at the bytes — no polling required to get there.
+    """
+    _mock_launcher()
+    responses = iter(
+        [
+            httpx.Response(200, json={"ticker": "SPY", "status": "OK", "results": []}),
+            httpx.Response(200, json=_polygon_payload("SPY")),
+        ]
+    )
+
+    async def _next_response(request: httpx.Request) -> httpx.Response:
+        return next(responses)
+
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        side_effect=_next_response
+    )
+    spec = _spec()
+
+    first = await ensure_data(spec)
+    minute_failure = next(
+        f for f in first.failures if f.artifact_kind == "time_series_bars" and f.trading_date == TRADING_DAY
+    )
+    assert minute_failure.reason == "provider_no_data"
+
+    # No poll, no wait — one direct second call, and the previously-failed
+    # row is what gets fetched: the provider's second response completes it.
+    second = await ensure_data(spec)
+
+    assert second.overall_status == "complete", second.failures
+    minute = [a for a in second.artifacts if a.resolution == "minute"]
+    assert len(minute) == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_data_reports_a_terminal_failure_once_retries_are_exhausted(fake_catalog, tmp_lake, monkeypatch):
+    """A row that keeps failing must eventually say so plainly, not loop.
+
+    ``fetch_timeout`` (not ``lease_timeout``) so the bridge's contention
+    classifier does not send this back into the 600s poll it can never win —
+    an exhausted retry budget clears no faster the fourth time it is asked.
+    """
+    from app.data_lake import ensure_data as ensure_data_module
+
+    _mock_launcher()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json={"ticker": "SPY", "status": "OK", "results": []})
+    )
+    monkeypatch.setattr(ensure_data_module, "_MAX_CLAIM_RETRIES", 2)
+    spec = _spec()
+
+    await ensure_data(spec)  # attempt 1: fails, AttemptCount=1
+    await ensure_data(spec)  # attempt 2: reclaimed, fails again, AttemptCount=2
+    third = await ensure_data(spec)  # attempt 3: exhausted at max_retries=2
+
+    minute_failure = next(
+        f for f in third.failures if f.artifact_kind == "time_series_bars" and f.trading_date == TRADING_DAY
+    )
+    assert minute_failure.reason == "fetch_timeout"
+    assert "exhausted" in (minute_failure.detail or "")
+    # The terminal reason must not be read as contention, or the bridge would
+    # poll a row that will never change again.
+    assert not run_materialization._is_blocked_by_a_sibling_fetch(third)
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_materialize_run_data_stops_waiting_at_the_fetch_deadline(
     fake_catalog, tmp_lake, monkeypatch, ensure_attempts
 ):
@@ -664,6 +783,41 @@ def test_materialize_engine_run_refuses_a_missing_session_for_a_minute_run(monke
         materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
 
 
+def test_materialize_engine_run_refuses_a_missing_session_for_a_daily_run(monkeypatch):
+    """The derived daily zip IS every source session, aggregated.
+
+    ``ensure_data`` builds the daily artifact from whatever minute artifacts
+    materialized, so a source session Polygon could not supply is silently
+    absent from an otherwise "complete" daily zip — nothing about the
+    aggregate's own data contract ever flags it, because the contract is
+    keyed by the sessions that DID materialize, and that set is stable if
+    the missing day never gets fetched. Refuse on the underlying per-day
+    failure directly, the same way a minute run would, rather than trusting
+    the aggregate to notice on its own.
+    """
+
+    def _missing_day(spec: DataRunSpec) -> DataAvailabilityResult:
+        return _partial(
+            spec,
+            ArtifactFailure(
+                artifact_kind="time_series_bars",
+                symbol="SPY",
+                trading_date=TRADING_DAY,
+                data_type="trade",
+                reason="provider_no_data",
+            ),
+        )
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _missing_day)
+
+    with pytest.raises(LakeMaterializationError, match="incomplete daily coverage") as exc_info:
+        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="daily")
+
+    # The refusal names which session is missing, not just that the window is
+    # short one — critical once a window can span more than a single day.
+    assert str(TRADING_DAY) in str(exc_info.value)
+
+
 def test_materialize_engine_run_lets_a_metadata_note_through(monkeypatch):
     """Metadata failures degrade the calendar; they withhold no bars."""
 
@@ -684,6 +838,133 @@ def test_materialize_engine_run_lets_a_metadata_note_through(monkeypatch):
     result = materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY)
 
     assert result.incomplete_summary == "metadata/io_error"
+
+
+def _minute_record(rel_path: str, *, file_size_bytes: int | None) -> ArtifactRecord:
+    return ArtifactRecord(
+        id=1,
+        artifact_kind="time_series_bars",
+        market="usa",
+        symbol="SPY",
+        trading_date=TRADING_DAY,
+        resolution="minute",
+        data_type="trade",
+        provider="polygon",
+        price_adjustment_mode="raw",
+        data_contract_hash="c" * 64,
+        file_path=rel_path,
+        file_sha256="d" * 64,
+        row_count=390,
+        first_bar_start_ms=0,
+        last_bar_start_ms=0,
+        file_size_bytes=file_size_bytes,
+    )
+
+
+def _complete_with_artifacts(spec: DataRunSpec, *, lake_root: Path, artifacts: list[ArtifactRecord]):
+    return DataAvailabilityResult(
+        request_id=spec.request_id,
+        overall_status="complete",
+        lean_data_root_path=str(lake_root),
+        data_availability_hash="e" * 64,
+        artifacts=artifacts,
+        fetched_artifact_count=0,
+        reused_artifact_count=len(artifacts),
+        completed_at_ms=0,
+        duration_ms=0,
+    )
+
+
+def test_materialize_engine_run_refuses_when_a_reused_artifacts_file_is_gone(monkeypatch, tmp_path: Path):
+    """Codex finding 6: a catalog row marked complete does not mean the
+    bytes are still there.
+
+    ``ensure_data``'s claim machinery only ever checks the catalog once a
+    row is 'complete' — a reused artifact is never re-touched, so a volume
+    restored from an older snapshot (or a manual prune) can leave a
+    'complete' row naming a file that is no longer on disk. Without this
+    check, the LEAN reader would silently treat the missing day as an
+    ordinary hole in the series rather than a torn promise.
+    """
+    lake_root = tmp_path / "lake"
+    rel_path = f"equity/usa/minute/spy/{TRADING_DAY:%Y%m%d}_trade.zip"
+    file_path = lake_root / rel_path
+    file_path.parent.mkdir(parents=True)
+    payload = b"stand-in for a real zip; only the byte count matters here"
+    file_path.write_bytes(payload)
+    record = _minute_record(rel_path, file_size_bytes=len(payload))
+
+    monkeypatch.setattr(
+        run_materialization,
+        "_materialize_run_data_sync",
+        lambda spec: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[record]),
+    )
+
+    file_path.unlink()  # the gap this check exists to catch
+
+    with pytest.raises(LakeMaterializationError, match="not on disk"):
+        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
+
+
+def test_materialize_engine_run_refuses_when_a_reused_artifacts_size_has_drifted(monkeypatch, tmp_path: Path):
+    """A file that exists but no longer matches the catalog's recorded size
+    is refused too — not just a missing file."""
+    lake_root = tmp_path / "lake"
+    rel_path = f"equity/usa/minute/spy/{TRADING_DAY:%Y%m%d}_trade.zip"
+    file_path = lake_root / rel_path
+    file_path.parent.mkdir(parents=True)
+    file_path.write_bytes(b"the wrong number of bytes")
+    record = _minute_record(rel_path, file_size_bytes=999_999)  # does not match what's on disk
+
+    monkeypatch.setattr(
+        run_materialization,
+        "_materialize_run_data_sync",
+        lambda spec: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[record]),
+    )
+
+    with pytest.raises(LakeMaterializationError, match="the catalog recorded"):
+        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
+
+
+def test_materialize_engine_run_does_not_verify_a_file_this_run_never_opens(monkeypatch, tmp_path: Path):
+    """Scoped like the coverage gate: a missing daily zip is not this
+    function's business on a minute run."""
+    lake_root = tmp_path / "lake"
+    minute_rel = f"equity/usa/minute/spy/{TRADING_DAY:%Y%m%d}_trade.zip"
+    minute_path = lake_root / minute_rel
+    minute_path.parent.mkdir(parents=True)
+    minute_payload = b"the only file this minute run actually reads"
+    minute_path.write_bytes(minute_payload)
+    minute_record = _minute_record(minute_rel, file_size_bytes=len(minute_payload))
+
+    daily_record = ArtifactRecord(
+        id=2,
+        artifact_kind="time_series_bars",
+        market="usa",
+        symbol="SPY",
+        trading_date=None,  # the aggregate identity
+        resolution="daily",
+        data_type="trade",
+        provider="learn_ai_derived",
+        price_adjustment_mode="raw",
+        data_contract_hash="f" * 64,
+        file_path="equity/usa/daily/spy.zip",  # never written to disk in this test
+        file_sha256="a" * 64,
+        row_count=1,
+        first_bar_start_ms=0,
+        last_bar_start_ms=0,
+        file_size_bytes=123,
+    )
+
+    monkeypatch.setattr(
+        run_materialization,
+        "_materialize_run_data_sync",
+        lambda spec: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[minute_record, daily_record]),
+    )
+
+    result = materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
+
+    assert result.incomplete_summary is None
 
 
 def test_materialize_engine_run_hands_back_only_what_a_run_may_act_on(monkeypatch):

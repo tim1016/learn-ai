@@ -29,11 +29,11 @@ import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.data_lake import catalog_client, path_policy
+from app.data_lake import catalog_client
 from app.data_lake.atomic import atomic_write_and_promote
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
@@ -52,6 +52,8 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    resolve_lake_root,
+    resolve_staging_root,
 )
 from app.data_lake.polygon_corp_actions import fetch_dividends, fetch_splits
 from app.data_lake.polygon_fetcher import (
@@ -73,6 +75,7 @@ from app.data_lake.types import (
     DataAvailabilityResult,
     DataRunSpec,
     NonSessionRecord,
+    classify_overall_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +83,10 @@ logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 _WORKER_ID = os.environ.get("HOSTNAME", "py-data-lake")  # one writer per process
 _LEASE_TTL_MS = 300_000
+# A row that has failed this many times is reported as a terminal failure
+# rather than reclaimed again. Matches the retry budget already exercised by
+# tests/unit/data_lake/test_catalog_write_ops.py's steal_or_retry coverage.
+_MAX_CLAIM_RETRIES = 3
 
 # data_contract_hash provider params (canonical per artifact kind)
 _DCH_MINUTE_TRADE_PARAMS = {
@@ -175,6 +182,49 @@ def _daily_dch(source_artifact_ids: list[int], source_file_sha256s: list[str]) -
     )
 
 
+def provider_for_data_type(data_type: Literal["trade", "quote"]) -> str:
+    """Return the catalog Provider identity for a minute-bar data_type.
+
+    Trade minute-bars come straight from Polygon. Quote minute-bars are
+    synthesized in-process from same-day trade bytes (DataRunSpec requires
+    'trade' whenever 'quote' is requested) and are catalogued under
+    'learn_ai_derived' rather than 'polygon' — this is the single source
+    for that mapping; minute_bar_identity below and the coverage
+    endpoint (app/routers/data_lake.py) both call it so they cannot drift.
+    """
+    return "polygon" if data_type == "trade" else "learn_ai_derived"
+
+
+def minute_bar_identity(
+    spec: DataRunSpec,
+    *,
+    symbol: str | None,
+    trading_date: date | None,
+    data_type: str | None,
+) -> ArtifactIdentity:
+    """Canonical minute-bar ArtifactIdentity builder.
+
+    Single source of truth for the (provider, price_adjustment_mode) pair
+    a minute-bar identity carries: the provider comes from
+    provider_for_data_type (the one mapping the coverage endpoint also
+    uses), at the spec's own price-adjustment mode (never a hardcoded
+    literal that could drift from it). Both expand_required_artifacts's
+    inner loop (below) and the backfill job's lease-wait poll
+    (app.data_lake.backfill._wait_for_lease_resolution) call this so they
+    can't independently drift on the provider ternary.
+    """
+    return ArtifactIdentity(
+        artifact_kind="time_series_bars",
+        market=spec.market,
+        symbol=symbol,
+        trading_date=trading_date,
+        resolution="minute",
+        data_type=data_type,
+        provider=provider_for_data_type(data_type),
+        price_adjustment_mode=spec.price_adjustment_mode,
+    )
+
+
 def expand_required_artifacts(
     spec: DataRunSpec,
     market_hours_db_path: Path | None = None,
@@ -200,19 +250,7 @@ def expand_required_artifacts(
         # Per-day minute bars.
         for trading_date in sessions:
             for data_type in spec.data_types:
-                provider = "polygon" if data_type == "trade" else "learn_ai_derived"
-                required.append(
-                    ArtifactIdentity(
-                        artifact_kind="time_series_bars",
-                        market=spec.market,
-                        symbol=symbol,
-                        trading_date=trading_date,
-                        resolution="minute",
-                        data_type=data_type,
-                        provider=provider,
-                        price_adjustment_mode="raw",
-                    )
-                )
+                required.append(minute_bar_identity(spec, symbol=symbol, trading_date=trading_date, data_type=data_type))
 
         # Corp-action artifacts.
         if spec.include_factor_files:
@@ -237,7 +275,7 @@ def expand_required_artifacts(
             )
 
         # Daily-trade derived artifact (per symbol, null trading_date).
-        if "trade" in spec.data_types:
+        if "trade" in spec.data_types and spec.include_daily_trade:
             required.append(
                 ArtifactIdentity(
                     artifact_kind="time_series_bars",
@@ -311,15 +349,6 @@ def _polygon_bar_to_minute_trade_bar(pb: PolygonBar) -> MinuteTradeBar:
         close=Decimal(str(pb.close)),
         volume=pb.volume,
     )
-
-
-def _lake_roots() -> tuple[Path, Path]:
-    """Return the (lake_root, staging_root) pair every writer promotes through.
-
-    Both roots come from ``path_policy`` so writer and readers resolve the
-    same tree — see ``app.engine.data.policy_store.resolve_data_roots``.
-    """
-    return path_policy.lake_root(), path_policy.staging_root()
 
 
 def _read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeBar]:
@@ -495,6 +524,7 @@ async def _bootstrap_metadata_artifact(
             row_count=1,
             first_bar_start_ms=0,
             last_bar_start_ms=0,
+            file_size_bytes=len(content),
         ),
         False,  # freshly fetched
         None,
@@ -533,29 +563,78 @@ async def _process_minute_trade_artifact(
     )
     if artifact_id is None:
         # Already complete (or in-flight); read the existing complete row.
+        # price_adjustment_mode is passed explicitly (not left to the
+        # query's "match any mode" default): app.data_lake.cache_import can
+        # now put a 'polygon_split_adjusted' row in the catalog for the same
+        # (market, symbol, date, data_type) this 'raw' identity claims, and
+        # picking the wrong one here would silently launder into a
+        # nondeterministic downstream quote data_contract_hash (_quote_dch
+        # below keys off this record's id/file_sha256).
         existing = await catalog_client.select_coverage_minute_bars(
             market=identity.market,  # type: ignore[arg-type]
             symbol=identity.symbol,  # type: ignore[arg-type]
             data_type="trade",
             start_trading_date=identity.trading_date,  # type: ignore[arg-type]
             end_trading_date=identity.trading_date,  # type: ignore[arg-type]
+            price_adjustment_mode=identity.price_adjustment_mode,
         )
         if existing:
             return existing[0], None, True  # cache hit
-        # In-flight elsewhere; Slice 1c doesn't poll. Report as transient.
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=identity.trading_date,
-                data_type=identity.data_type,
-                reason="lease_timeout",
-                detail="another worker has the lease; polling not implemented in Slice 1c",
-                attempt_count=1,
-            ),
-            False,
-        )
+
+        # Not complete either — the row exists but is 'failed' or 'fetching'.
+        # Those need different answers: a 'failed' (or lease-expired
+        # 'fetching') row is not contention, it is a done deal, and reporting
+        # it as lease_timeout would send the caller into a 600s poll loop that
+        # can never resolve, because the row never transitions on its own.
+        # Reclaim it here instead — the same primitive the lease-expiry sweep
+        # uses — so this call either gets a fresh attempt at the bytes or a
+        # terminal answer, on this pass.
+        row_state = await catalog_client.select_minute_bar_claim_state(identity)
+        if row_state is not None:
+            reclaimed = await catalog_client.steal_or_retry_minute_bar(
+                artifact_id=row_state.id,
+                worker_id=_WORKER_ID,
+                lease_ttl_ms=_LEASE_TTL_MS,
+                max_retries=_MAX_CLAIM_RETRIES,
+            )
+            if reclaimed:
+                artifact_id = row_state.id
+                # Falls through to the fetch below, exactly as a fresh claim would.
+            elif row_state.status == "failed":
+                # Retries exhausted: a real, terminal failure, not contention.
+                # fetch_timeout (not lease_timeout) so the bridge's contention
+                # classifier does not send this back into the poll loop.
+                return (
+                    None,
+                    ArtifactFailure(
+                        artifact_kind=identity.artifact_kind,
+                        symbol=identity.symbol,
+                        trading_date=identity.trading_date,
+                        data_type=identity.data_type,
+                        reason="fetch_timeout",
+                        detail=(
+                            f"exhausted {row_state.attempt_count} attempt(s); "
+                            f"last error: {row_state.last_error}"
+                        ),
+                        attempt_count=row_state.attempt_count,
+                    ),
+                    False,
+                )
+        if artifact_id is None:
+            # Genuinely fetching under a live lease elsewhere — real contention.
+            return (
+                None,
+                ArtifactFailure(
+                    artifact_kind=identity.artifact_kind,
+                    symbol=identity.symbol,
+                    trading_date=identity.trading_date,
+                    data_type=identity.data_type,
+                    reason="lease_timeout",
+                    detail="another worker has the lease",
+                    attempt_count=1,
+                ),
+                False,
+            )
 
     # Fetch from Polygon.
     api_key = settings.POLYGON_API_KEY
@@ -665,7 +744,7 @@ async def _process_minute_trade_artifact(
         trading_date_yyyymmdd=identity.trading_date.strftime("%Y%m%d"),  # type: ignore[union-attr]
         bars=minute_bars,
     )
-    lake_root, staging_root = _lake_roots()
+    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -674,6 +753,7 @@ async def _process_minute_trade_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
 
     first_bar_ms = polygon_bars[0].t_ms
@@ -704,6 +784,7 @@ async def _process_minute_trade_artifact(
             row_count=len(polygon_bars),
             first_bar_start_ms=first_bar_ms,
             last_bar_start_ms=last_bar_ms,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly fetched
@@ -824,7 +905,7 @@ async def _process_factor_file_artifact(
             ),
             False,
         )
-    _, staging_root = _lake_roots()
+    staging_root = resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -833,6 +914,7 @@ async def _process_factor_file_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -859,6 +941,7 @@ async def _process_factor_file_artifact(
             row_count=len(splits) + len(dividends),
             first_bar_start_ms=0,
             last_bar_start_ms=0,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly fetched
@@ -931,7 +1014,7 @@ async def _process_map_file_artifact(
         history_end=spec.end_trading_date,
         exchange="nyse",
     )
-    lake_root, staging_root = _lake_roots()
+    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -940,6 +1023,7 @@ async def _process_map_file_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -966,6 +1050,7 @@ async def _process_map_file_artifact(
             row_count=len(events),
             first_bar_start_ms=0,
             last_bar_start_ms=0,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly fetched
@@ -1004,12 +1089,16 @@ async def _process_minute_quote_artifact(
         file_path=file_path,
     )
     if artifact_id is None:
+        # price_adjustment_mode scoped explicitly for the same reason as the
+        # minute-trade lookup above: a coexisting different-mode row for
+        # this (market, symbol, date, data_type) must never be picked here.
         existing = await catalog_client.select_coverage_minute_bars(
             market=identity.market,  # type: ignore[arg-type]
             symbol=identity.symbol,  # type: ignore[arg-type]
             data_type="quote",
             start_trading_date=identity.trading_date,  # type: ignore[arg-type]
             end_trading_date=identity.trading_date,  # type: ignore[arg-type]
+            price_adjustment_mode=identity.price_adjustment_mode,
         )
         if existing:
             return existing[0], None, True  # cache hit
@@ -1051,7 +1140,7 @@ async def _process_minute_quote_artifact(
         trading_date_yyyymmdd=identity.trading_date.strftime("%Y%m%d"),  # type: ignore[union-attr]
         bars=trade_bars,
     )
-    _, staging_root = _lake_roots()
+    staging_root = resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1060,6 +1149,7 @@ async def _process_minute_quote_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     row_count = len(trade_bars)
     first_ms = int(trade_bars[0].bar_start_et.timestamp() * 1000) if trade_bars else 0
@@ -1090,6 +1180,7 @@ async def _process_minute_quote_artifact(
             row_count=row_count,
             first_bar_start_ms=first_ms,
             last_bar_start_ms=last_ms,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly derived
@@ -1186,7 +1277,7 @@ async def _process_daily_trade_artifact(
 
     aggregates = aggregate_minute_to_daily(all_bars)
     payload = build_daily_zip_bytes(symbol=identity.symbol or "", aggregates=aggregates)
-    _, staging_root = _lake_roots()
+    staging_root = resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1195,6 +1286,7 @@ async def _process_daily_trade_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
+        price_adjustment_mode=identity.price_adjustment_mode,
     )
     row_count = len(aggregates)
     await catalog_client.complete_artifact(
@@ -1222,6 +1314,7 @@ async def _process_daily_trade_artifact(
             row_count=row_count,
             first_bar_start_ms=0,
             last_bar_start_ms=0,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly derived
@@ -1247,7 +1340,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     daily-trade (from all same-symbol trade artifacts). Runs after Pass 1.
     """
     started_ms = int(time.time() * 1000)
-    lake_root, staging_root = _lake_roots()
+    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
 
     # Ensure pool exists. init_pool is idempotent; pool stays alive across calls.
     await catalog_client.init_pool()
@@ -1469,12 +1562,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             elif failure is not None:
                 failures.append(failure)
 
-    if failures and artifacts:
-        overall_status = "partial"
-    elif failures:
-        overall_status = "failed"
-    else:
-        overall_status = "complete"
+    overall_status = classify_overall_status(has_failures=bool(failures), has_success=bool(artifacts))
 
     completed_ms = int(time.time() * 1000)
     return DataAvailabilityResult(

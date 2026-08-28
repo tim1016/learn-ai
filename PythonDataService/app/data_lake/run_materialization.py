@@ -36,11 +36,12 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
 from app.data_lake.ensure_data import ensure_data
-from app.data_lake.types import ArtifactFailure, DataAvailabilityResult, DataRunSpec
+from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
 
 logger = logging.getLogger(__name__)
 
@@ -194,13 +195,20 @@ async def _materialize_run_data(
 #
 # Backtests are synchronous and execute on worker threads (FastAPI's
 # threadpool for the sync route, the Jobs worker's own thread otherwise).
-# ``catalog_client`` keeps one module-global asyncpg pool, and an asyncpg
-# pool belongs to the event loop that created it. ``asyncio.run`` per call
-# would therefore leave that global bound to a closed loop and break the
-# next run; a process-wide lock around it would fix that by serializing
-# every materialization, which is worse than what it replaces — the policy
-# store's lock is per symbol, so two runs on different symbols never wait
-# on each other today.
+# An asyncpg pool belongs to the event loop that created it, and
+# ``catalog_client`` keys its pools by that loop (a bare process-global pool
+# used to bind to whichever loop called ``init_pool()`` first, breaking
+# every other loop's catalog calls the moment coexistence with
+# ``/api/data-lake/*`` — which runs on the FastAPI app loop — actually
+# happened; see ``catalog_client``'s own module comment). Loop-awareness
+# there means a fresh ``asyncio.run()`` per call would ALSO work correctly
+# here now, each call getting a valid pool for its own throwaway loop — but
+# it would pay for a brand-new asyncpg pool (real Postgres connections) on
+# every single backtest, and never close it, since nothing calls
+# ``close_pool()`` on a throwaway loop after the fact. A process-wide lock
+# would avoid that churn by serializing everything onto one pool, which is
+# worse than what it replaces — the policy store's lock is per symbol, so
+# two runs on different symbols never wait on each other today.
 #
 # So: one long-lived loop for the whole process. The pool is created on it
 # once, concurrent runs submit onto it and interleave there, and who
@@ -251,8 +259,17 @@ def _materialize_run_data_sync(spec: DataRunSpec) -> DataAvailabilityResult:
 
 
 def _describe_failures(failures: Iterable[ArtifactFailure]) -> str:
-    """One short ``kind/reason`` summary of what the lake could not produce."""
-    return "; ".join(sorted({f"{f.artifact_kind}/{f.reason}" for f in failures}))
+    """One short ``kind/reason`` summary of what the lake could not produce.
+
+    A per-day failure additionally names its trading date
+    (``kind/reason@date``) so a refusal spanning a multi-day window says
+    which session it means, not just which kind of thing went wrong.
+    """
+    return "; ".join(
+        sorted(
+            {f"{f.artifact_kind}/{f.reason}" + (f"@{f.trading_date}" if f.trading_date else "") for f in failures}
+        )
+    )
 
 
 def _withholds_bars_the_run_reads(failure: ArtifactFailure, *, resolution: EngineResolution) -> bool:
@@ -261,14 +278,101 @@ def _withholds_bars_the_run_reads(failure: ArtifactFailure, *, resolution: Engin
     ``ArtifactFailure`` carries no resolution, but within ``time_series_bars``
     the spec makes the discriminator exact: per-day minute artifacts carry a
     ``trading_date``, and the per-symbol aggregated (daily) artifact does not.
-    A minute-resolution run opens the former, a daily-resolution run the
-    latter. Metadata failures mean the lake fell back to its hardcoded
-    calendar — bad, and logged — but they withhold no bars.
+
+    A minute-resolution run opens only the former, so only a per-day failure
+    withholds its bars — a stale or missing daily zip is not this run's
+    concern.
+
+    A daily-resolution run is different, and asymmetrically so: the daily zip
+    IS every source session's minute bars, aggregated — ``ensure_data``
+    derives it from whichever minute artifacts materialized, even when the
+    window's source coverage is partial, and a data-contract match against
+    that partial set is stable (nothing about the identity changes) if the
+    missing session never gets fetched. So a per-day failure withholds a
+    daily reader's bars exactly as surely as a failure on the aggregate
+    artifact itself does — the alternative is a daily-resolution run
+    silently reading a series with a session missing, with no failure on the
+    aggregate to ever catch it. Every ``time_series_bars`` failure therefore
+    withholds a daily run, unconditionally.
+
+    Metadata failures mean the lake fell back to its hardcoded calendar —
+    bad, and logged — but they withhold no bars, at either resolution.
     """
     if failure.artifact_kind != "time_series_bars":
         return False
-    is_aggregated = failure.trading_date is None
+    if resolution == "daily":
+        return True
+    return failure.trading_date is not None
+
+
+def _opened_by_this_run(artifact: ArtifactRecord, *, resolution: EngineResolution) -> bool:
+    """Does this run's reader actually open this artifact's file?
+
+    Mirrors :func:`_withholds_bars_the_run_reads`'s discriminator. Phase-0
+    metadata artifacts feed the lake's own calendar bootstrap; the Python
+    engine never opens them directly (see :func:`_build_engine_run_spec`),
+    so they are excluded regardless of resolution.
+    """
+    if artifact.artifact_kind != "time_series_bars":
+        return False
+    is_aggregated = artifact.trading_date is None
     return is_aggregated if resolution == "daily" else not is_aggregated
+
+
+def _verify_bytes_on_disk(
+    artifacts: Iterable[ArtifactRecord],
+    *,
+    lake_root: str,
+    resolution: EngineResolution,
+    symbol: str,
+    start: date,
+    end: date,
+) -> None:
+    """Refuse rather than hand a run bytes the catalog only believes exist.
+
+    ``ensure_data``'s claim machinery checks the catalog, not the
+    filesystem, once a row is already 'complete' — a reused artifact is
+    never re-touched, so a catalog row can go on describing a file that
+    volume loss, a restored-from-snapshot host, or a manual prune already
+    removed. The Python engine's reader (``LeanMinuteDataReader`` /
+    ``LeanDailyDataReader``) treats a missing day as an ordinary hole in the
+    series, not an error — so without this check, a run silently trades on
+    a series one or more sessions short of what the fingerprint it records
+    claims to have materialized.
+
+    Deliberately a cheap ``stat()`` (existence + size), not a re-hash: a
+    full SHA-256 comparison against every reused artifact on every run
+    would turn a stat-cost check into an I/O-bound one for artifacts that
+    already cost nothing to reuse, precisely the case this codepath exists
+    to keep cheap. Byte-exact verification against a corrupted-but-right-
+    sized file is the observatory's and the backfill job's job (they can
+    afford to walk every artifact off the request's critical path), not
+    every run's.
+
+    Only artifacts this run's own reader will open are checked (via
+    :func:`_opened_by_this_run`) — a stale daily zip is not this function's
+    business on a minute run, matching the coverage gate's own scoping.
+    """
+    for artifact in artifacts:
+        if not _opened_by_this_run(artifact, resolution=resolution):
+            continue
+        path = Path(lake_root) / artifact.file_path
+        try:
+            actual_size = path.stat().st_size
+        except OSError:
+            raise LakeMaterializationError(
+                f"the lake cannot serve {symbol} {start}..{end}: the catalog names "
+                f"{artifact.file_path!r} as a complete artifact but it is not on disk "
+                "(volume loss or a stale snapshot) — refusing rather than running on a "
+                "gap the reader would silently treat as an ordinary missing day"
+            ) from None
+        if artifact.file_size_bytes is not None and actual_size != artifact.file_size_bytes:
+            raise LakeMaterializationError(
+                f"the lake cannot serve {symbol} {start}..{end}: {artifact.file_path!r} is "
+                f"{actual_size} bytes on disk but the catalog recorded "
+                f"{artifact.file_size_bytes} — refusing rather than running on bytes that "
+                "have changed since the catalog last saw them"
+            )
 
 
 def materialize_engine_run(
@@ -287,7 +391,7 @@ def materialize_engine_run(
     list onward would invite a second caller to judge it differently.
 
     Raises :class:`LakeMaterializationError` rather than returning a result the
-    run would silently misread. Two cases:
+    run would silently misread. Three cases:
 
     - Nothing materialized at all (``overall_status == "failed"``).
     - Partial coverage that withholds the artifact class this resolution
@@ -299,6 +403,12 @@ def materialize_engine_run(
       run stale bars with a fingerprint that says everything was fine. (The
       deeper fix — having ``ensure_data`` re-aggregate instead of reporting a
       mismatch — is the integration slice's.)
+    - Complete coverage per the catalog, but a reused artifact's file is not
+      actually on disk at its recorded size (see :func:`_verify_bytes_on_disk`)
+      — the catalog says "complete" for a row it has not re-touched since it
+      last wrote it, so this is the only place a materialized-against-nothing
+      gap gets caught before the reader silently treats it as an ordinary
+      missing day.
 
     Failures that withhold nothing this run reads do not stop it; they come
     back as ``incomplete_summary`` so the caller can say so to the operator.
@@ -325,6 +435,15 @@ def materialize_engine_run(
             f"{_describe_failures(withheld)} — refusing rather than running on bars "
             "that do not match the request"
         )
+
+    _verify_bytes_on_disk(
+        result.artifacts,
+        lake_root=result.lean_data_root_path,
+        resolution=resolution,
+        symbol=symbol,
+        start=start,
+        end=end,
+    )
 
     incomplete_summary = _describe_failures(result.failures) if result.failures else None
     if incomplete_summary:

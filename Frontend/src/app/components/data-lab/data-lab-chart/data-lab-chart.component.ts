@@ -60,6 +60,21 @@ export interface QualityReport {
   out_of_order_fixed?: number;
 }
 
+/** The part of the backend's source receipt this chart actually reads. Present
+ *  only while the data lake is in the chart's read path; absent otherwise.
+ *
+ *  The response also carries per-span provenance. Nothing here consumes it, and
+ *  an unread mirror of a backend type drifts without anyone noticing, so it is
+ *  deliberately left undeclared — model it when a surface reads it.
+ *
+ *  `notice_code` is `string`, not a union, because it only ever reaches the
+ *  closed copy map below: a union would make a backend that adds a code look
+ *  impossible rather than merely unknown. */
+export interface BarSources {
+  boundary_ms_utc: number | null;
+  notice_code: string | null;
+}
+
 export interface ChartDataResponse {
   bars: ChartBar[];
   indicators: ChartIndicatorResult[];
@@ -68,7 +83,28 @@ export interface ChartDataResponse {
   estimated_bars_per_timeframe: Record<string, number>;
   recommended_timeframe: string;
   meta: { cached_resample: boolean; cached_indicators: boolean };
+  bar_sources?: BarSources;
 }
+
+/** Closed operator-copy map for the chart's data-source notice.
+ *
+ *  The backend sends a machine code; that code is never rendered. A code with
+ *  no entry here produces no notice at all rather than leaking a raw
+ *  identifier into the UI. */
+const BAR_SOURCE_NOTICE_COPY = new Map<string, string>([
+  [
+    'history_provider_fallback',
+    'Some sessions in this range are not in the data lake yet and came straight from the market-data provider.',
+  ],
+  [
+    'adjusted_prices_provider_only',
+    'Split- and dividend-adjusted prices come straight from the market-data provider. The data lake holds unadjusted prices only.',
+  ],
+  [
+    'symbol_provider_only',
+    'The data lake does not carry this symbol, so its bars came straight from the market-data provider.',
+  ],
+]);
 
 interface SubPanel {
   id: string;
@@ -195,6 +231,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     recommendedTimeframe: string;
     visibleIndicatorIds: string[];
     timeframe: string;
+    barSources: BarSources | null;
   }>();
 
   /** Emitted when the chart endpoint rejects the request with a
@@ -223,6 +260,15 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
 
   quality = signal<QualityReport | null>(null);
   qualityModalOpen = signal(false);
+
+  private barSources = signal<BarSources | null>(null);
+
+  /** Non-intrusive notice when part of the range was provider-served rather
+   *  than lake-backed. Null when there is nothing to say. */
+  sourceNotice = computed(() => {
+    const code = this.barSources()?.notice_code;
+    return code ? BAR_SOURCE_NOTICE_COPY.get(code) ?? null : null;
+  });
 
   // Chart data
   private bars = signal<ChartBar[]>([]);
@@ -298,10 +344,15 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     recommendedTimeframe: string;
     visibleIndicatorIds: string[];
     timeframe: string;
+    barSources?: BarSources | null;
   }): void {
     this.bars.set(snapshot.bars);
     this.indicatorResults.set(snapshot.indicators);
     this.quality.set(snapshot.quality);
+    // Restore the provenance the saved bars were shown with. A snapshot taken
+    // before the receipt existed carries none, which reads as "nothing to say"
+    // — never as the previous fetch's notice left standing over other bars.
+    this.barSources.set(snapshot.barSources ?? null);
     this.allowedTimeframes.set(snapshot.allowedTimeframes);
     this.estimatedBars.set(snapshot.estimatedBarsPerTimeframe);
     this.recommendedTimeframe.set(snapshot.recommendedTimeframe);
@@ -365,6 +416,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       this.bars.set(resp.bars);
       this.indicatorResults.set(resp.indicators);
       this.quality.set(resp.quality);
+      this.barSources.set(resp.bar_sources ?? null);
       this.allowedTimeframes.set(resp.allowed_timeframes);
       this.estimatedBars.set(resp.estimated_bars_per_timeframe);
       this.recommendedTimeframe.set(resp.recommended_timeframe);
@@ -390,6 +442,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
         recommendedTimeframe: resp.recommended_timeframe,
         visibleIndicatorIds: visibleIds,
         timeframe: this.timeframe(),
+        barSources: resp.bar_sources ?? null,
       });
     } catch (error: unknown) {
       const detail = error instanceof Error && isChartRequestErrorDetail(

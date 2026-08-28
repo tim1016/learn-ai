@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
 import type {
+  BarSources,
   ChartBar,
   QualityReport,
 } from '../components/data-lab/data-lab-chart/data-lab-chart.component';
@@ -31,6 +32,10 @@ export interface DataLabSessionChartSnapshot {
   estimatedBarsPerTimeframe: Record<string, number>;
   recommendedTimeframe: string;
   visibleIndicatorIds: string[];
+  /** Where the saved bars came from, so a restored chart keeps the provenance
+   *  notice it was showing. Optional: snapshots saved before this field existed
+   *  simply have no receipt, and restore with none. */
+  barSources?: BarSources | null;
 }
 
 export interface DataLabSession {

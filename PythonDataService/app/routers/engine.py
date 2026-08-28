@@ -37,6 +37,7 @@ from app.engine.data.availability import (
 )
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import (
+    LakeAdjustmentUnsupportedError,
     policy_key,
     record_fetch,
     resolve_data_roots,
@@ -129,8 +130,18 @@ def _resolve_lean_data_roots(*, adjusted: bool) -> list[Path]:
     for the requested adjustment mode. See
     :mod:`app.engine.data.policy_store` for the layout and the
     adjusted-vs-raw seam bug this keying fixes.
+
+    Translates ``LakeAdjustmentUnsupportedError`` into a 409 here rather
+    than letting it surface as a generic 500: the lake serves raw bars only,
+    and every caller of this function (the availability/bars endpoints and
+    the backtest route) resolves roots directly from request input, so this
+    is the one boundary that needs to turn the refusal into an actionable
+    response.
     """
-    return resolve_data_roots(source="polygon", adjusted=adjusted)
+    try:
+        return resolve_data_roots(source="polygon", adjusted=adjusted)
+    except LakeAdjustmentUnsupportedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 def _policy_adjusted(data_policy: _EngineDataPolicyModel | None) -> bool:
