@@ -88,7 +88,7 @@ def test_resolve_data_roots_returns_the_lake_alone_when_the_flag_is_on(monkeypat
 
     roots = resolve_data_roots(source="polygon", adjusted=False)
 
-    assert roots == [tmp_path / "writer" / "lake"]
+    assert roots == [tmp_path / "writer" / "lake" / "raw"]
     assert roots[0].is_dir()
 
 
@@ -97,7 +97,7 @@ def test_resolve_data_roots_lake_is_the_tree_ensure_data_writes(monkeypatch, tmp
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
 
-    assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root()]
+    assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root("raw")]
 
 
 def test_resolve_data_roots_refuses_an_adjusted_request_when_the_flag_is_on(monkeypatch, tmp_path: Path):
@@ -126,13 +126,30 @@ def test_resolve_data_roots_flag_off_still_serves_adjusted(monkeypatch, tmp_path
     assert roots == [tmp_path / "store" / "polygon-adjusted"]
 
 
-def test_symbol_write_lock_refuses_the_lake_root(monkeypatch, tmp_path: Path):
-    """Only app.data_lake writes to the lake; a zip with no catalog row is invisible."""
+@pytest.mark.parametrize("mode", ["raw", "polygon_split_adjusted", "lean_adjusted"])
+def test_symbol_write_lock_refuses_any_lake_mode_root(monkeypatch, tmp_path: Path, mode: str):
+    """Only app.data_lake writes to the lake; a zip with no catalog row is invisible.
+
+    Parameterized over every mode because the refusal used to be an exact
+    match against the single lake root. Since #1839 the lake is a tree of
+    mode subtrees, so an exact match would have waved through a policy-store
+    write aimed at any mode the reader did not happen to be resolving.
+    """
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    lake = path_policy.resolve_lake_root()
+    lake = path_policy.resolve_lake_root(mode)
     lake.mkdir(parents=True)
 
-    with pytest.raises(ValueError, match="is the data lake"), symbol_write_lock(lake, "SPY"):
+    with pytest.raises(ValueError, match="is inside the data lake"), symbol_write_lock(lake, "SPY"):
+        pass
+
+
+def test_symbol_write_lock_refuses_the_lake_container_itself(monkeypatch, tmp_path: Path):
+    """The container is not a data root, but it is still not ours to write."""
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    container = path_policy.resolve_lake_container()
+    container.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="is inside the data lake"), symbol_write_lock(container, "SPY"):
         pass
 
 

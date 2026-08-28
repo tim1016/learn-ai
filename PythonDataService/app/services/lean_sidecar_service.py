@@ -558,7 +558,7 @@ async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeA
 
     try:
         return resolve_lake_artifacts(
-            lake_root=data_plane_lake_root(),
+            lake_root=data_plane_lake_root("raw"),
             symbol=request.symbol,
             start=request.start_date,
             end=request.end_date,

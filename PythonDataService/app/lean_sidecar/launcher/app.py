@@ -169,7 +169,7 @@ async def post_launch(
             launch,
             request,
             artifacts_root=_artifacts_root(),
-            lake_root=launcher_host_lake_root(),
+            lake_root=launcher_host_lake_root("raw"),
         )
     except LaunchRejectedError as e:
         # 4xx covers all "this request is malformed in a way the

@@ -23,6 +23,7 @@ from fastapi import HTTPException
 from app.config import settings
 from app.data_lake import run_materialization
 from app.data_lake.ensure_data import _compute_data_availability_hash
+from app.data_lake.path_policy import lake_subpath
 from app.data_lake.run_materialization import EngineRunMaterialization
 from app.data_lake.types import ArtifactRecord
 from app.routers import engine as engine_router
@@ -129,7 +130,7 @@ def seeded_roots(monkeypatch, tmp_path: Path) -> dict[str, Path]:
     difference in what happened to be on disk.
     """
     write_root = tmp_path / "writer-root"
-    lake_dir = write_root / "lake"
+    lake_dir = write_root / lake_subpath("raw")
     lake_dir.mkdir(parents=True)
     (write_root / "staging").mkdir()
     policy_root = tmp_path / "store" / "polygon-adjusted"

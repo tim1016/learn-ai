@@ -801,7 +801,7 @@ def test_get_chart_data_flag_on_matches_flag_off_bars_and_indicators(
     _write_lake_day(lake_root, REGULAR_BEFORE)
     _write_lake_day(lake_root, HALF_DAY)
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda: lake_root)
+    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root)
     monkeypatch.setattr(chart_bar_source, "now_ms_utc", lambda: _during(LIVE_SESSION))
     flag_on = _run_chart()
 
@@ -820,7 +820,7 @@ def test_get_chart_data_carries_the_source_indicator_when_history_is_lake_backed
     for window in session_windows_ms_utc(date(2025, 10, 1), HALF_DAY):
         _write_lake_day(lake_root, window.session_date)
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda: lake_root)
+    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root)
     monkeypatch.setattr(chart_bar_source, "now_ms_utc", lambda: _during(LIVE_SESSION))
 
     result = _run_chart()

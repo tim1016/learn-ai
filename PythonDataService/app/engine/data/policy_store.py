@@ -146,7 +146,9 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
                 "satisfied by it yet (adjustment support is slice #1839's decision) — "
                 "request adjusted=False, or turn DATA_LAKE_ENABLED off"
             )
-        root = path_policy.resolve_lake_root()
+        # Slice 1 of #1839: the root is mode-keyed, but this seam still
+        # refuses adjusted above, so "raw" is the only reachable mode here.
+        root = path_policy.resolve_lake_root("raw")
         root.mkdir(parents=True, exist_ok=True)
         return [root]
 
@@ -277,9 +279,15 @@ def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
     """
     safe = _safe_symbol(symbol)
     root_real = os.path.realpath(os.fspath(policy_root))
-    if root_real == os.path.realpath(os.fspath(path_policy.resolve_lake_root())):
+    # Compared against the container holding every per-mode lake root, not
+    # against one root: since #1839 the lake is a tree of mode subtrees, and
+    # an exact match on a single root would wave through a policy-store write
+    # aimed at any other mode's subtree. Prefix containment is also the more
+    # honest question — "is this path part of the lake at all?"
+    lake_container_real = os.path.realpath(os.fspath(path_policy.resolve_lake_container()))
+    if root_real == lake_container_real or root_real.startswith(lake_container_real.rstrip(os.sep) + os.sep):
         raise ValueError(
-            f"{policy_root} is the data lake; the policy store may not write there — "
+            f"{policy_root} is inside the data lake; the policy store may not write there — "
             "materialize through app.data_lake.run_materialization instead"
         )
     root_prefix = root_real.rstrip(os.sep) + os.sep

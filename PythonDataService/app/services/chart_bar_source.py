@@ -395,7 +395,9 @@ def _execute_plan(
         )
 
     reader = LeanMinuteDataReader(
-        [lake_root if lake_root is not None else resolve_lake_root()],
+        # Raw only, matching the `adjusted` fallback immediately below: the
+        # chart cannot yet ask the lake for adjusted bytes (#1839 slice 2).
+        [lake_root if lake_root is not None else resolve_lake_root("raw")],
         # The lake holds the whole trading day; the chart applies its own
         # RTH / extended mask downstream, so read everything and change nothing.
         session="extended",

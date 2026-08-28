@@ -17,6 +17,7 @@ from app.data_lake.path_policy import (
     LeanMetadataPath,
     LeanMinuteBarPath,
     minute_bar_market_root,
+    resolve_lake_container,
     resolve_lake_root,
     resolve_staging_root,
     staging_path_for,
@@ -117,18 +118,39 @@ class TestStagingPathFor:
 class TestLakeRoots:
     """The absolute roots writer and readers must agree on."""
 
-    def test_lake_root_derives_from_write_root(self, monkeypatch):
+    def test_lake_root_derives_from_write_root_and_carries_the_mode(self, monkeypatch):
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert resolve_lake_root() == Path("/mnt/writer/lake")
+        assert resolve_lake_root("raw") == Path("/mnt/writer/lake/raw")
+        assert resolve_lake_root("polygon_split_adjusted") == Path("/mnt/writer/lake/polygon_split_adjusted")
+
+    def test_lake_container_is_the_parent_of_every_mode_root(self, monkeypatch):
+        """The container is what "is this path in the lake at all?" asks.
+
+        ``policy_store``'s write refusal compares against it rather than
+        against one mode root: an exact match on a single root would wave
+        through a policy-store write aimed at a sibling mode's subtree.
+        """
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        container = resolve_lake_container()
+
+        assert container == Path("/mnt/writer/lake")
+        for mode in ("raw", "polygon_split_adjusted", "lean_adjusted"):
+            assert resolve_lake_root(mode).parent == container
 
     def test_staging_root_derives_from_write_root(self, monkeypatch):
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
         assert resolve_staging_root() == Path("/mnt/writer/staging")
 
     def test_staging_shares_a_filesystem_with_the_lake(self, monkeypatch):
-        """Atomic promotion is a rename(2), so both roots share a parent."""
+        """Atomic promotion is a rename(2), so both roots share a filesystem.
+
+        Staging is deliberately not mode-keyed, so the shared ancestor is one
+        level higher than it used to be: ``<write root>`` rather than the
+        lake container. Same filesystem either way — which is the invariant
+        ``atomic.assert_same_filesystem`` actually needs.
+        """
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert resolve_lake_root().parent == resolve_staging_root().parent
+        assert resolve_lake_root("raw").parent.parent == resolve_staging_root().parent
 
     def test_ensure_data_imports_the_same_functions_and_does_not_re_derive(self, monkeypatch):
         """One answer to "where is the lake?" — ensure_data must not re-derive it.

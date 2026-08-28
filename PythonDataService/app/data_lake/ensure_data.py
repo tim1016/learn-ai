@@ -103,6 +103,26 @@ _DCH_MAP_FILE_PARAMS = {
 }
 
 
+def _writable_lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
+    """Resolve this run's lake and staging roots, creating both.
+
+    The writer creates its own roots. ``resolve_lake_root`` deliberately does
+    not — for a *reader*, a missing root is a legitimate "the lake holds
+    nothing yet for this mode" — but ``atomic.assert_same_filesystem`` needs
+    both to exist before it can compare their devices, so somebody has to,
+    and it should be the side that is about to write.
+
+    This became load-bearing with #1839: the mode is now a path segment, so
+    the first write in a new adjustment mode faces a directory that has never
+    existed, not merely an empty one.
+    """
+    lake_root = resolve_lake_root(spec.price_adjustment_mode)
+    staging_root = resolve_staging_root()
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+    return lake_root, staging_root
+
+
 def _minute_trade_dch() -> str:
     return _dch(
         provider="polygon",
@@ -744,7 +764,7 @@ async def _process_minute_trade_artifact(
         trading_date_yyyymmdd=identity.trading_date.strftime("%Y%m%d"),  # type: ignore[union-attr]
         bars=minute_bars,
     )
-    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
+    lake_root, staging_root = _writable_lake_roots(spec)
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -753,7 +773,6 @@ async def _process_minute_trade_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
-        price_adjustment_mode=identity.price_adjustment_mode,
     )
 
     first_bar_ms = polygon_bars[0].t_ms
@@ -914,7 +933,6 @@ async def _process_factor_file_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
-        price_adjustment_mode=identity.price_adjustment_mode,
     )
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -1014,7 +1032,7 @@ async def _process_map_file_artifact(
         history_end=spec.end_trading_date,
         exchange="nyse",
     )
-    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
+    lake_root, staging_root = _writable_lake_roots(spec)
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1023,7 +1041,6 @@ async def _process_map_file_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
-        price_adjustment_mode=identity.price_adjustment_mode,
     )
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -1149,7 +1166,6 @@ async def _process_minute_quote_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
-        price_adjustment_mode=identity.price_adjustment_mode,
     )
     row_count = len(trade_bars)
     first_ms = int(trade_bars[0].bar_start_et.timestamp() * 1000) if trade_bars else 0
@@ -1286,7 +1302,6 @@ async def _process_daily_trade_artifact(
         request_id=spec.request_id,
         worker_id=_WORKER_ID,
         attempt=1,
-        price_adjustment_mode=identity.price_adjustment_mode,
     )
     row_count = len(aggregates)
     await catalog_client.complete_artifact(
@@ -1340,7 +1355,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     daily-trade (from all same-symbol trade artifacts). Runs after Pass 1.
     """
     started_ms = int(time.time() * 1000)
-    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
+    lake_root, staging_root = _writable_lake_roots(spec)
 
     # Ensure pool exists. init_pool is idempotent; pool stays alive across calls.
     await catalog_client.init_pool()

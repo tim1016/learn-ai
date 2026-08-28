@@ -22,7 +22,8 @@ from typing import Any
 
 import pytest
 
-from app.lean_sidecar.lake_mount import CONTAINER_LAKE_DATA_MOUNT, LAKE_SUBDIR
+from app.data_lake.path_policy import lake_subpath
+from app.lean_sidecar.lake_mount import CONTAINER_LAKE_DATA_MOUNT
 from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITIES, LaunchRequest, LaunchResponse
 from app.lean_sidecar.lean_config import CONTAINER_DATA_FOLDER
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
@@ -166,7 +167,7 @@ async def test_lake_run_reads_the_mount_and_stages_nothing(
     from app.services import lean_sidecar_service as service
 
     write_root = tmp_path / "lean-data-writer"
-    lake_root = write_root / LAKE_SUBDIR
+    lake_root = write_root / lake_subpath("raw")
     seed_lake_window(lake_root, SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
@@ -266,7 +267,7 @@ async def test_lake_refusal_leaves_the_run_id_reusable(
     from app.services import lean_sidecar_service as service
 
     write_root = tmp_path / "lean-data-writer"
-    (write_root / LAKE_SUBDIR).mkdir(parents=True)  # a lake with nothing in it
+    (write_root / lake_subpath("raw")).mkdir(parents=True)  # a lake with nothing in it
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
@@ -277,7 +278,7 @@ async def test_lake_refusal_leaves_the_run_id_reusable(
 
     # The same id now works once the lake can serve it — the refusal
     # was about the lake, and nothing about the id was consumed.
-    seed_lake_window(write_root / LAKE_SUBDIR, SYMBOL, WINDOW)
+    seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     result = await service.run_trusted_sample(_request("reusable-run-id"))
     assert result.workspace_root.exists()
 
@@ -300,7 +301,7 @@ async def test_stale_launcher_refuses_before_the_workspace_exists(
     from app.services import lean_sidecar_service as service
 
     write_root = tmp_path / "lean-data-writer"
-    seed_lake_window(write_root / LAKE_SUBDIR, SYMBOL, WINDOW)
+    seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
@@ -345,7 +346,7 @@ async def test_unreachable_launcher_refuses_before_the_workspace_exists(
     monkeypatch.setattr(launcher_client, "get_healthz", unreachable)
 
     write_root = tmp_path / "lean-data-writer"
-    seed_lake_window(write_root / LAKE_SUBDIR, SYMBOL, WINDOW)
+    seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
@@ -381,7 +382,7 @@ async def test_factor_files_move_the_input_snapshot(
     from app.services import lean_sidecar_service as service
 
     write_root = tmp_path / "lean-data-writer"
-    lake_root = write_root / LAKE_SUBDIR
+    lake_root = write_root / lake_subpath("raw")
     seed_lake_window(lake_root, SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)

@@ -5,11 +5,12 @@ of LEAN paths is permitted anywhere else in the codebase; a lint test enforces
 that the substrings ``equity/usa/``, ``market-hours/``, ``symbol-properties/``
 appear only in this module and its tests.
 
-The two lake roots (``resolve_lake_root`` / ``resolve_staging_root``) live here
-for the same reason: one canonical answer to "where is the lake on disk", so
-its two direct consumers — ``ensure_data``, which writes the artifacts, and the
-chart split-read, which reads them — resolve the identical directory instead of
-each re-deriving it from ``settings``.
+The lake roots (``resolve_lake_container`` / ``resolve_lake_root`` /
+``resolve_staging_root``) live here for the same reason: one canonical answer
+to "where is the lake on disk", so every consumer — ``ensure_data``, which
+writes the artifacts, ``cache_import``, which imports them, the chart
+split-read, and the sidecar mount — resolves the identical directory instead
+of each re-deriving it from ``settings``.
 
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
 """
@@ -23,6 +24,7 @@ from typing import Literal
 from uuid import UUID
 
 from app.config import settings
+from app.data_lake.types import PriceAdjustmentMode
 
 Market = Literal["usa"]
 Resolution = Literal["minute", "hour", "daily"]
@@ -33,30 +35,82 @@ _LAKE_DIR = "lake"
 _STAGING_DIR = "staging"
 
 
-def resolve_lake_root() -> Path:
-    """Return the immutable-artifact root of the data lake.
+def lake_subpath(price_adjustment_mode: PriceAdjustmentMode) -> PurePosixPath:
+    """Return the lake root's path *relative to the write root*.
 
-    This is the directory the LEAN readers are pointed at when
-    ``DATA_LAKE_ENABLED`` is on. It is not created here — a missing root
-    means "the lake holds nothing yet", which every reader must already
-    handle as a per-day miss.
+    Exists for the one caller that cannot use :func:`resolve_lake_root`:
+    ``app.lean_sidecar.lake_mount.launcher_host_lake_root`` builds the same
+    location against the launcher **host**'s view of the volume, which is a
+    different base than ``settings.LEAN_DATA_WRITE_ROOT``. Sharing the suffix
+    here is what keeps the container-side and host-side answers from drifting
+    -- they used to drift behind a duplicated ``LAKE_SUBDIR`` constant and a
+    test pinning the two in lockstep.
+    """
+    return PurePosixPath(_LAKE_DIR) / price_adjustment_mode
 
-    Catalog rows are root-relative: ``FilePath`` carries no root identity of
-    its own, so every lake writer must resolve the root here — a writer using
-    a different root produces "phantom coverage": rows that look complete in
-    the catalog but have no bytes where anything else looks. The full
-    root-identity (``data_root_id``) design that would let more than one
-    physical root coexist honestly is ledgered for the flag-flip slice
-    (#1839); until then there is exactly one canonical root, and this is it.
+
+def resolve_lake_container() -> Path:
+    """Return the directory holding every per-mode lake root.
+
+    Not itself a readable data root — LEAN is never pointed here, because
+    ``equity/`` lives one level further down, inside a mode. Its one job is
+    to answer "is this path part of the lake at all?" for callers that must
+    refuse to treat any lake tree as their own writable store.
     """
     return Path(settings.LEAN_DATA_WRITE_ROOT) / _LAKE_DIR
 
 
-def resolve_staging_root() -> Path:
-    """Return the per-attempt staging root that promotes into the lake root.
+def resolve_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
+    """Return the immutable-artifact root of the lake for one adjustment mode.
 
-    Must share a filesystem with :func:`resolve_lake_root` so the promote
-    is a rename (see ``app.data_lake.atomic.assert_same_filesystem``).
+    This is the directory the LEAN readers are pointed at when
+    ``DATA_LAKE_ENABLED`` is on. It is not created here — a missing root
+    means "the lake holds nothing yet for this mode", which every reader must
+    already handle as a per-day miss.
+
+    **The mode is a path segment above the LEAN tree**, so ``equity/usa/...``
+    still sits directly inside whatever root a reader is handed and the LEAN
+    format is untouched. That placement is what lets raw and adjusted bytes
+    for the same ``(market, symbol, trading_date, data_type)`` coexist: they
+    resolve to different absolute paths while their catalog ``FilePath``
+    stays byte-identical, because ``FilePath`` is root-relative and carries
+    no root identity of its own. It also means the mode a run reads is
+    structural rather than advisory — a reader cannot accidentally observe
+    the other mode's bytes, because they are not in its tree.
+
+    This replaces the whole-root mutual exclusion that stood here before
+    (a ``.cache_import_adjustment_mode`` marker committing an entire tree to
+    one mode and refusing the other, with a per-mode ``--lake-root`` as the
+    operator's only way to hold both). That mechanism guarded a collision
+    that this path shape makes structurally impossible; issue #1839 deleted
+    it rather than teaching it a second mode.
+
+    Every lake writer must still resolve its root here. A writer using a
+    different root produces "phantom coverage": rows that look complete in
+    the catalog but have no bytes where anything else looks.
+
+    The mode passed here is the **run's** mode, not the artifact's. Artifact
+    kinds with no adjustment mode of their own — factor files, map files, the
+    market-hours and symbol-properties metadata — are adjustment-independent
+    and are written into each mode root that needs them, because LEAN takes
+    exactly one data root and must resolve them inside it. Their duplicated
+    bytes are CSVs and one JSON; the minute-bar zips are the volume.
+    """
+    return Path(settings.LEAN_DATA_WRITE_ROOT) / lake_subpath(price_adjustment_mode)
+
+
+def resolve_staging_root() -> Path:
+    """Return the per-attempt staging root that promotes into a lake root.
+
+    Must share a filesystem with :func:`resolve_lake_root` so the promote is
+    a rename (see ``app.data_lake.atomic.assert_same_filesystem``); both live
+    under ``LEAN_DATA_WRITE_ROOT``, so they always do.
+
+    Deliberately *not* keyed by adjustment mode. Staging paths are already
+    collision-free by ``(request_id, worker_id, attempt)`` — see
+    :func:`staging_path_for` — and a run carries a single mode, so a second
+    dimension here would partition nothing. The mode belongs to the durable
+    tree, not to per-attempt scratch.
     """
     return Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR
 

@@ -82,7 +82,10 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    lake_subpath,
+    resolve_lake_root,
 )
+from app.data_lake.types import PriceAdjustmentMode
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.lean_sidecar.workspace import validate_symbol
 
@@ -98,18 +101,6 @@ logger = logging.getLogger(__name__)
 # docstring for why it is not ``/lean-run/data`` and for what
 # ``/lean-data`` does and does not mean in the spec.
 CONTAINER_LAKE_DATA_MOUNT = "/lean-data"
-
-# Subdirectory of the deploy volume holding the immutable lake. The
-# writer-side counterpart is ``app.data_lake.path_policy.resolve_lake_root``,
-# which derives ``<LEAN_DATA_WRITE_ROOT>/lake`` from the same setting;
-# ``tests/lean_sidecar/test_lake_mount.py`` pins the two in lockstep.
-#
-# The duplicate is deliberate and temporary: the adoption slice that
-# would host a shared resolver is in flight against ``ensure_data.py``
-# at the same time as this one, and editing that file concurrently
-# costs more than one constant. The integration slice collapses both
-# onto a single resolver and deletes the parity test with this comment.
-LAKE_SUBDIR = "lake"
 
 # Deploy-time env naming the **host** path of the lake volume. The
 # launcher (a host process with podman) resolves the mount source from
@@ -152,8 +143,8 @@ def lake_mount_enabled() -> bool:
     return bool(settings.DATA_LAKE_ENABLED)
 
 
-def data_plane_lake_root() -> Path:
-    """The lake root as *this* process sees it.
+def data_plane_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
+    """The lake root as *this* process sees it, for one adjustment mode.
 
     Derived from ``LEAN_DATA_WRITE_ROOT`` because that is the mount the
     data plane actually has: compose gives this container one
@@ -161,13 +152,16 @@ def data_plane_lake_root() -> Path:
     through it. The spec's separate read-only reader mount
     (``LEAN_DATA_ROOT``) does not exist in this deployment yet; when it
     does, this is the one function that changes.
+
+    Delegates to the canonical writer-side resolver rather than rebuilding
+    the path: this used to be a deliberate duplicate behind a ``LAKE_SUBDIR``
+    constant, kept honest only by a lockstep test, and #1839 collapsed both
+    onto ``path_policy`` as that duplicate's own comment asked.
     """
-    from app.config import settings
-
-    return Path(settings.LEAN_DATA_WRITE_ROOT) / LAKE_SUBDIR
+    return resolve_lake_root(price_adjustment_mode)
 
 
-def launcher_host_lake_root() -> Path | None:
+def launcher_host_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path | None:
     """The lake root as the *launcher host* sees it, or None if unset.
 
     Resolved from :data:`LAKE_VOLUME_HOST_PATH_ENV` exactly the way the
@@ -199,7 +193,7 @@ def launcher_host_lake_root() -> Path | None:
             f"({Path.cwd()}), compose against the directory holding compose.yaml; "
             "set an absolute path so both agree."
         )
-    return candidate.resolve() / LAKE_SUBDIR
+    return candidate.resolve() / lake_subpath(price_adjustment_mode)
 
 
 @dataclass(frozen=True, slots=True)
