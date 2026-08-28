@@ -174,6 +174,7 @@ from app.data_lake.atomic import (
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.path_policy import (
     LeanMinuteBarPath,
+    ensure_lean_readable_layout,
     minute_bar_market_root,
     resolve_lake_root,
     resolve_staging_root,
@@ -1141,6 +1142,10 @@ async def import_cache_root(
                 if not marker_committed:
                     commit_lake_root_mode(lake_dir, price_adjustment_mode)
                     marker_committed = True
+                # An imported-only lake is still a lake LEAN may be pointed
+                # at, so it needs the same corporate-action directories the
+                # live pipeline creates. See path_policy.
+                ensure_lean_readable_layout(lake_dir)
         except LakeRootModeConflictError as exc:
             logger.error("cache_import: %s", exc)
             _fail_all(report, covered_refs, "lake_root_mode_conflict", str(exc))

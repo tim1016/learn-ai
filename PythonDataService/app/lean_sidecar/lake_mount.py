@@ -65,6 +65,22 @@ under image A can serve a run pinned to image B and this module cannot
 tell. Detecting it needs a catalog read this module deliberately does
 not do — the sidecar's lake access is filesystem-only. Recorded for the
 integration slice, which already talks to the catalog.
+
+**The lake has no ``alternative/interest-rate`` subtree, and staging
+does.** ``staging.stage_lean_metadata_from_image`` extracts that subtree
+out of the LEAN image alongside the two metadata databases, so a
+staging-mode run gives LEAN real risk-free-rate data and a lake-mode run
+gives it none — LEAN falls back to its built-in default. It is the one
+known input divergence between the two modes, and it is not fixable from
+inside the data plane: the launcher's ``/extract-metadata`` contract
+returns exactly two byte fields, so closing it needs a launcher-side
+contract change plus a third metadata artifact kind in the catalog's
+vocabulary. Booked rather than papered over, and
+:func:`log_lake_mode_input_divergences` says so once per lake-mode run so
+an operator chasing a rate-sensitive difference has the breadcrumb rather
+than a mystery. Materially it is narrow: the sidecar's trusted-sample
+runs are cash-account equity backtests, where LEAN consumes the
+risk-free rate for reporting statistics rather than for fills.
 """
 
 from __future__ import annotations
@@ -73,7 +89,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from app.data_lake.path_policy import (
@@ -99,16 +115,13 @@ logger = logging.getLogger(__name__)
 # ``/lean-data`` does and does not mean in the spec.
 CONTAINER_LAKE_DATA_MOUNT = "/lean-data"
 
-# Subdirectory of the deploy volume holding the immutable lake. The
-# writer-side counterpart is ``app.data_lake.path_policy.resolve_lake_root``,
-# which derives ``<LEAN_DATA_WRITE_ROOT>/lake`` from the same setting;
-# ``tests/lean_sidecar/test_lake_mount.py`` pins the two in lockstep.
+# Subdirectory of the deploy volume holding the immutable lake.
 #
-# The duplicate is deliberate and temporary: the adoption slice that
-# would host a shared resolver is in flight against ``ensure_data.py``
-# at the same time as this one, and editing that file concurrently
-# costs more than one constant. The integration slice collapses both
-# onto a single resolver and deletes the parity test with this comment.
+# Only :func:`launcher_host_lake_root` still needs it: that path is rooted at
+# the *host's* volume, which ``path_policy`` — a data-plane module reading
+# ``settings`` — cannot know. The data-plane-side root is no longer derived
+# here at all; :func:`data_plane_lake_root` delegates to the canonical
+# resolver, which is what the T4 ledger meant by collapsing the two.
 LAKE_SUBDIR = "lake"
 
 # Deploy-time env naming the **host** path of the lake volume. The
@@ -169,16 +182,19 @@ def lake_mount_enabled(*, adjusted: bool) -> bool:
 def data_plane_lake_root() -> Path:
     """The lake root as *this* process sees it.
 
-    Derived from ``LEAN_DATA_WRITE_ROOT`` because that is the mount the
-    data plane actually has: compose gives this container one
-    read-write mount of the volume, and the sidecar reads the lake
-    through it. The spec's separate read-only reader mount
-    (``LEAN_DATA_ROOT``) does not exist in this deployment yet; when it
-    does, this is the one function that changes.
-    """
-    from app.config import settings
+    The canonical resolver, verbatim. It stays as a named function because
+    the sidecar's vocabulary distinguishes this root from
+    :func:`launcher_host_lake_root` — the same directory seen from two
+    processes — and a bare ``resolve_lake_root()`` at the call site would
+    read like the launcher-side one.
 
-    return Path(settings.LEAN_DATA_WRITE_ROOT) / LAKE_SUBDIR
+    The spec's separate read-only reader mount (``LEAN_DATA_ROOT``) does not
+    exist in this deployment yet; when it does, ``path_policy`` is where that
+    changes, not here.
+    """
+    from app.data_lake.path_policy import resolve_lake_root
+
+    return resolve_lake_root()
 
 
 def launcher_host_lake_root() -> Path | None:
@@ -304,14 +320,25 @@ def resolve_lake_artifacts(
         # LEAN's default minute subscription requests trade AND quote;
         # staging synthesizes the quote zips for exactly this reason.
         # Launching without them guarantees failed_data_requests.
+        #
+        # The message names the remedy because there is exactly one, and
+        # because the common way to arrive here is not a bug: ``cache_import``
+        # imports the legacy cache's trade-only zips, so a freshly imported
+        # lake has every trade artifact and no quote artifact. ``ensure_data``
+        # derives quotes from the same-day trade artifact it already holds, so
+        # the backfill costs no provider call — it reuses the trade rows and
+        # writes the derived quotes beside them.
         raise LakeMountError(
             f"lake_incomplete_quote_coverage: {safe_symbol} is missing minute-quote artifacts "
             f"for {_render_sessions(missing_quote)}; LEAN's default minute subscription "
-            "requests quotes and the read-only mount cannot synthesize them"
+            "requests quotes and the read-only mount cannot synthesize them — run the lake "
+            "backfill over this window with data_types=['trade','quote'] to derive them from "
+            "the trade artifacts already present (no provider call)"
         )
 
     daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
     market_hours_path, symbol_properties_path = require_lake_metadata(lake_root)
+    log_lake_mode_input_divergences(lake_root)
 
     logger.info(
         "lean sidecar resolving lake artifacts",
@@ -331,6 +358,36 @@ def resolve_lake_artifacts(
         symbol_properties_path=symbol_properties_path,
         factor_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "factor"),
         map_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "map"),
+    )
+
+
+# LEAN's risk-free-rate subtree. Staging extracts it from the image
+# (``staging.IMAGE_INTEREST_RATE``); the lake has no producer for it. See the
+# module docstring's "known input divergence".
+_INTEREST_RATE_SUBTREE = PurePosixPath("alternative") / "interest-rate"
+
+
+def log_lake_mode_input_divergences(lake_root: Path) -> None:
+    """Say once, per run, where lake mode gives LEAN less than staging would.
+
+    Deliberately a log and not a refusal. Refusing would block every lake-mode
+    run over a gap that is a missing *producer*, not a missing *fetch* — no
+    operator action could clear it, so the refusal would be permanent and the
+    flag unusable. Deliberately not silent either: the whole claim of this
+    slice is that a flag-on run and a flag-off run read the same inputs, and
+    this is the one place they knowably do not.
+    """
+    interest_rate = lake_root / Path(*_INTEREST_RATE_SUBTREE.parts)
+    if interest_rate.is_dir():
+        return
+    logger.warning(
+        "lean sidecar lake-mode run has no interest-rate data",
+        extra={
+            "lake_root": str(lake_root),
+            "missing_subtree": _INTEREST_RATE_SUBTREE.as_posix(),
+            "consequence": "LEAN falls back to its built-in risk-free rate; a staging-mode "
+            "run would have read the image's interest-rate files",
+        },
     )
 
 

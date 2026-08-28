@@ -52,6 +52,7 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    ensure_lean_readable_layout,
     resolve_lake_root,
     resolve_staging_root,
 )
@@ -1340,6 +1341,11 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     """
     started_ms = int(time.time() * 1000)
     lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
+    # LEAN reads the lake as its data folder in sidecar mode, and it expects
+    # the corporate-action directories to exist even when a window has no
+    # corporate actions. The read-only mount cannot create them at run time,
+    # so a writer does it here. Idempotent; see path_policy.
+    ensure_lean_readable_layout(lake_root, spec.market)
 
     # Ensure pool exists. init_pool is idempotent; pool stays alive across calls.
     await catalog_client.init_pool()

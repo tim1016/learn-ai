@@ -16,6 +16,7 @@ Four claims are pinned here, all at the config-rendering / staging seam
 from __future__ import annotations
 
 import hashlib
+import logging
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -24,6 +25,7 @@ import pytest
 
 from app.data_lake.derived_quote import build_minute_quote_zip_bytes
 from app.data_lake.lean_writer import build_minute_trade_zip_bytes
+from app.data_lake.path_policy import ensure_lean_readable_layout
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.lake_mount import (
@@ -634,6 +636,102 @@ class TestRequiredLakeMetadata:
                 start=DAY_ONE,
                 end=DAY_TWO,
             )
+
+
+class TestLakeModeGivesLeanTheSameShapeStagingWould:
+    """Carry-forward A3: what the lake lacks that a staged data folder has.
+
+    Two gaps, and they get opposite treatments because they are different
+    kinds of missing. A missing directory the writer can create is a bug to
+    fix; a missing subtree with no producer in the data plane is a divergence
+    to declare.
+    """
+
+    def test_a_written_lake_carries_the_corporate_action_directories(self, tmp_path: Path) -> None:
+        """A3(b). LEAN's ``LocalDiskMapFileProvider`` warns without them.
+
+        The staging path creates them empty on every run so a clean window is
+        classified clean; the read-only mount cannot, so the lake's writers do
+        it instead — an empty directory says "no corporate actions", a missing
+        one says "no idea", and the run classifier counts the difference.
+        """
+        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root.mkdir()
+
+        ensure_lean_readable_layout(lake_root)
+
+        assert (lake_root / "equity" / "usa" / "factor_files").is_dir()
+        assert (lake_root / "equity" / "usa" / "map_files").is_dir()
+
+    def test_bootstrapping_the_layout_twice_is_harmless(self, tmp_path: Path) -> None:
+        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root.mkdir()
+        ensure_lean_readable_layout(lake_root)
+        (lake_root / "equity" / "usa" / "factor_files" / "spy.csv").write_text("kept\n")
+
+        ensure_lean_readable_layout(lake_root)
+
+        assert (lake_root / "equity" / "usa" / "factor_files" / "spy.csv").read_text() == "kept\n"
+
+    def test_the_missing_interest_rate_subtree_is_warned_about_not_refused(
+        self, fixture_lake: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A3(a). Declared, because it cannot be fixed from in here.
+
+        Refusing would block every lake-mode run over a gap no operator action
+        can clear — the launcher's ``/extract-metadata`` returns two byte
+        fields and there is no third. Staying silent would hide the one known
+        input difference between a flag-on and a flag-off run, which is
+        exactly the claim this slice exists to make.
+        """
+        with caplog.at_level(logging.WARNING):
+            resolve_lake_artifacts(
+                lake_root=fixture_lake,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
+
+        assert any("interest-rate" in record.getMessage() for record in caplog.records)
+
+    def test_a_lake_that_does_carry_interest_rate_data_says_nothing(
+        self, fixture_lake: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        (fixture_lake / "alternative" / "interest-rate").mkdir(parents=True)
+
+        with caplog.at_level(logging.WARNING):
+            resolve_lake_artifacts(
+                lake_root=fixture_lake,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
+
+        assert not any("interest-rate" in record.getMessage() for record in caplog.records)
+
+    def test_the_quote_refusal_names_the_remedy(self, tmp_path: Path) -> None:
+        """A4. A trade-only import is the common way to reach this refusal.
+
+        ``cache_import`` imports the legacy cache's trade-only zips, so a
+        freshly imported lake has every trade artifact and no quote artifact —
+        not a bug, a stage. The refusal has to point at the backfill, which
+        derives the quotes from trade artifacts already on disk and costs no
+        provider call, or an operator reads "the lake cannot synthesize them"
+        as a dead end.
+        """
+        lake_root = tmp_path / LAKE_SUBDIR
+        seed_lake_window(lake_root, "SPY", WINDOW, with_quote=False)
+
+        with pytest.raises(LakeMountError, match="lake_incomplete_quote_coverage") as exc_info:
+            resolve_lake_artifacts(
+                lake_root=lake_root,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
+
+        assert "backfill" in str(exc_info.value)
+        assert "no provider call" in str(exc_info.value)
 
 
 def test_lake_artifacts_are_immutable(fixture_lake: Path) -> None:
