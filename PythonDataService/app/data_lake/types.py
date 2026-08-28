@@ -20,6 +20,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+#: The lake's symbol policy. ``DataRunSpec`` enforces it on every write, so it
+#: is also the answer to "could the lake ever hold this symbol?" — readers that
+#: classify a symbol's provenance must consult it (is_lake_addressable_symbol
+#: below) rather than assume any ticker the filesystem tolerates is one
+#: ensure_data can seed.
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
 # Mirrors the DataLakeArtifacts.Symbol column: character varying(20)
 # (Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs). Shared
@@ -54,6 +59,16 @@ def trading_range_span_days(start: date, end: date) -> int:
     return (end - start).days + 1
 
 
+def is_lake_addressable_symbol(symbol: str) -> bool:
+    """True iff the lake writer would accept ``symbol``.
+
+    ``DataRunSpec`` refuses hyphenated and digit-leading tickers, so
+    ``ensure_data`` can never seed one. A reader that called such a symbol a
+    lake *gap* would be promising a backfill that cannot happen.
+    """
+    return bool(SYMBOL_RE.match(symbol))
+
+
 class DataRunSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
@@ -75,6 +90,18 @@ class DataRunSpec(BaseModel):
 
     include_factor_files: bool = True
     include_map_files: bool = True
+    # Daily-trade (resolution="daily") is a whole-range, per-symbol rollup
+    # derived from every minute-trade artifact in [start_trading_date,
+    # end_trading_date] — see ensure_data._process_daily_trade_artifact.
+    # A caller that ensures the same symbol in successive narrower
+    # sub-ranges (e.g. the Task 6 backfill job, one day at a time) must
+    # opt out of it per sub-range call: recomputing it from a smaller
+    # source set than a prior call collides with the already-completed
+    # wider/narrower rollup and reports a spurious data_contract_mismatch
+    # (re-aggregation is intentionally out of scope for Slice 1c — see the
+    # docstring on _process_daily_trade_artifact). Default True preserves
+    # existing single-shot-ensure behavior.
+    include_daily_trade: bool = True
     # lean_image_digest is required — source of the LEAN-image-extracted
     # session calendar used by ensure_data's Phase 0 bootstrap.
     lean_image_digest: str
@@ -86,7 +113,7 @@ class DataRunSpec(BaseModel):
     def _validate(self) -> DataRunSpec:
         # Symbols: uppercase canonical, within the catalog's storable length.
         for sym in self.symbols:
-            if not SYMBOL_RE.match(sym):
+            if not is_lake_addressable_symbol(sym):
                 raise ValueError(f"symbol must match {SYMBOL_RE.pattern}: {sym!r}")
             if len(sym) > MAX_SYMBOL_LENGTH:
                 raise ValueError(f"symbol exceeds {MAX_SYMBOL_LENGTH}-char catalog limit: {sym!r}")
@@ -160,6 +187,9 @@ class ArtifactFailure(BaseModel):
         "corp_action_revision_mismatch",
         "data_contract_mismatch",
         "internal_error",
+        # Added for the backfill job (#1836, review round 3):
+        "session_not_produced",  # canonical calendar disagrees with ensure_data's own — see app.data_lake.backfill
+        "run_aborted",  # a globally-fatal failure stopped the remaining range before it was attempted
     ]
     detail: str | None = None
     provider_status_code: int | None = None
@@ -172,9 +202,28 @@ class NonSessionRecord(BaseModel):
     reason: Literal["weekend", "market_holiday"]
 
 
+OverallStatus = Literal["complete", "partial", "failed"]
+
+
+def classify_overall_status(*, has_failures: bool, has_success: bool) -> OverallStatus:
+    """Shared complete/partial/failed classification.
+
+    Any success at all downgrades a failure-bearing result from 'failed'
+    to 'partial'. Single source of truth: ensure_data.ensure_data and the
+    backfill job's day- and whole-range rollups (app.data_lake.backfill)
+    all apply this identically rather than each re-deriving the same
+    three-way branch.
+    """
+    if has_failures and has_success:
+        return "partial"
+    if has_failures:
+        return "failed"
+    return "complete"
+
+
 class DataAvailabilityResult(BaseModel):
     request_id: UUID
-    overall_status: Literal["complete", "partial", "failed"]
+    overall_status: OverallStatus
     lean_data_root_path: str
     data_availability_hash: str
     artifacts: list[ArtifactRecord] = []

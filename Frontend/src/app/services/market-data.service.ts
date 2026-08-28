@@ -8,7 +8,7 @@ import {
   StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
   StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput, FetchProgress,
-  IndicatorTableResult, RuleBasedBacktestResult, PricingCompareResult,
+  RuleBasedBacktestResult, PricingCompareResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
 import { todayDateString, dateStringMonthsFromNow } from '../utils/date-validation';
@@ -496,53 +496,6 @@ interface PricingModelComparisonResponse {
   errors?: { message: string }[];
 }
 
-const GENERATE_INDICATOR_TABLE_QUERY = `
-  query GenerateIndicatorTable(
-    $ticker: String!
-    $fromDate: String!
-    $toDate: String!
-    $multiplier: Int! = 1
-    $timespan: String! = "minute"
-    $emaPeriods: [Int!]
-    $bbLength: Int! = 20
-    $bbStd: Float! = 2.0
-    $supertrendLength: Int! = 10
-    $supertrendMultiplier: Float! = 3.0
-    $rsiLength: Int! = 14
-    $rsiMaLength: Int! = 14
-    $macdFast: Int! = 12
-    $macdSlow: Int! = 26
-    $macdSignal: Int! = 9
-    $adxLength: Int! = 14
-  ) {
-    generateIndicatorTable(
-      ticker: $ticker
-      fromDate: $fromDate
-      toDate: $toDate
-      multiplier: $multiplier
-      timespan: $timespan
-      emaPeriods: $emaPeriods
-      bbLength: $bbLength
-      bbStd: $bbStd
-      supertrendLength: $supertrendLength
-      supertrendMultiplier: $supertrendMultiplier
-      rsiLength: $rsiLength
-      rsiMaLength: $rsiMaLength
-      macdFast: $macdFast
-      macdSlow: $macdSlow
-      macdSignal: $macdSignal
-      adxLength: $adxLength
-    ) {
-      success ticker rowCount columns rows error
-    }
-  }
-`;
-
-interface GenerateIndicatorTableResponse {
-  data: { generateIndicatorTable: IndicatorTableResult };
-  errors?: { message: string }[];
-}
-
 @Injectable({
   providedIn: 'root'
 })
@@ -839,41 +792,6 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.runRuleBasedBacktest)
-      );
-  }
-
-  generateIndicatorTable(
-    ticker: string,
-    fromDate: string,
-    toDate: string,
-    options: {
-      multiplier?: number;
-      timespan?: string;
-      emaPeriods?: number[];
-      bbLength?: number;
-      bbStd?: number;
-      supertrendLength?: number;
-      supertrendMultiplier?: number;
-      rsiLength?: number;
-      rsiMaLength?: number;
-      macdFast?: number;
-      macdSlow?: number;
-      macdSignal?: number;
-      adxLength?: number;
-    } = {}
-  ): Observable<IndicatorTableResult> {
-    return this.http
-      .post<GenerateIndicatorTableResponse>(GRAPHQL_URL, {
-        query: GENERATE_INDICATOR_TABLE_QUERY,
-        variables: { ticker, fromDate, toDate, ...options }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.generateIndicatorTable)
       );
   }
 

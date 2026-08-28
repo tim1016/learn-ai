@@ -52,6 +52,8 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    resolve_lake_root,
+    resolve_staging_root,
 )
 from app.data_lake.polygon_corp_actions import fetch_dividends, fetch_splits
 from app.data_lake.polygon_fetcher import (
@@ -72,6 +74,7 @@ from app.data_lake.types import (
     DataAvailabilityResult,
     DataRunSpec,
     NonSessionRecord,
+    classify_overall_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,10 +184,40 @@ def provider_for_data_type(data_type: Literal["trade", "quote"]) -> str:
     synthesized in-process from same-day trade bytes (DataRunSpec requires
     'trade' whenever 'quote' is requested) and are catalogued under
     'learn_ai_derived' rather than 'polygon' — this is the single source
-    for that mapping; expand_required_artifacts below and the coverage
+    for that mapping; minute_bar_identity below and the coverage
     endpoint (app/routers/data_lake.py) both call it so they cannot drift.
     """
     return "polygon" if data_type == "trade" else "learn_ai_derived"
+
+
+def minute_bar_identity(
+    spec: DataRunSpec,
+    *,
+    symbol: str | None,
+    trading_date: date | None,
+    data_type: str | None,
+) -> ArtifactIdentity:
+    """Canonical minute-bar ArtifactIdentity builder.
+
+    Single source of truth for the (provider, price_adjustment_mode) pair
+    a minute-bar identity carries: the provider comes from
+    provider_for_data_type (the one mapping the coverage endpoint also
+    uses), at the spec's own price-adjustment mode (never a hardcoded
+    literal that could drift from it). Both expand_required_artifacts's
+    inner loop (below) and the backfill job's lease-wait poll
+    (app.data_lake.backfill._wait_for_lease_resolution) call this so they
+    can't independently drift on the provider ternary.
+    """
+    return ArtifactIdentity(
+        artifact_kind="time_series_bars",
+        market=spec.market,
+        symbol=symbol,
+        trading_date=trading_date,
+        resolution="minute",
+        data_type=data_type,
+        provider=provider_for_data_type(data_type),
+        price_adjustment_mode=spec.price_adjustment_mode,
+    )
 
 
 def expand_required_artifacts(
@@ -212,19 +245,7 @@ def expand_required_artifacts(
         # Per-day minute bars.
         for trading_date in sessions:
             for data_type in spec.data_types:
-                provider = provider_for_data_type(data_type)
-                required.append(
-                    ArtifactIdentity(
-                        artifact_kind="time_series_bars",
-                        market=spec.market,
-                        symbol=symbol,
-                        trading_date=trading_date,
-                        resolution="minute",
-                        data_type=data_type,
-                        provider=provider,
-                        price_adjustment_mode="raw",
-                    )
-                )
+                required.append(minute_bar_identity(spec, symbol=symbol, trading_date=trading_date, data_type=data_type))
 
         # Corp-action artifacts.
         if spec.include_factor_files:
@@ -249,7 +270,7 @@ def expand_required_artifacts(
             )
 
         # Daily-trade derived artifact (per symbol, null trading_date).
-        if "trade" in spec.data_types:
+        if "trade" in spec.data_types and spec.include_daily_trade:
             required.append(
                 ArtifactIdentity(
                     artifact_kind="time_series_bars",
@@ -323,12 +344,6 @@ def _polygon_bar_to_minute_trade_bar(pb: PolygonBar) -> MinuteTradeBar:
         close=Decimal(str(pb.close)),
         volume=pb.volume,
     )
-
-
-def _lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
-    """Return (lake_root, staging_root) for the current spec."""
-    write_root = Path(settings.LEAN_DATA_WRITE_ROOT)
-    return write_root / "lake", write_root / "staging"
 
 
 def _read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeBar]:
@@ -659,7 +674,7 @@ async def _process_minute_trade_artifact(
         trading_date_yyyymmdd=identity.trading_date.strftime("%Y%m%d"),  # type: ignore[union-attr]
         bars=minute_bars,
     )
-    lake_root, staging_root = _lake_roots(spec)
+    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -818,7 +833,7 @@ async def _process_factor_file_artifact(
             ),
             False,
         )
-    _, staging_root = _lake_roots(spec)
+    staging_root = resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -925,7 +940,7 @@ async def _process_map_file_artifact(
         history_end=spec.end_trading_date,
         exchange="nyse",
     )
-    lake_root, staging_root = _lake_roots(spec)
+    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1045,7 +1060,7 @@ async def _process_minute_quote_artifact(
         trading_date_yyyymmdd=identity.trading_date.strftime("%Y%m%d"),  # type: ignore[union-attr]
         bars=trade_bars,
     )
-    _, staging_root = _lake_roots(spec)
+    staging_root = resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1180,7 +1195,7 @@ async def _process_daily_trade_artifact(
 
     aggregates = aggregate_minute_to_daily(all_bars)
     payload = build_daily_zip_bytes(symbol=identity.symbol or "", aggregates=aggregates)
-    _, staging_root = _lake_roots(spec)
+    staging_root = resolve_staging_root()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1241,7 +1256,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     daily-trade (from all same-symbol trade artifacts). Runs after Pass 1.
     """
     started_ms = int(time.time() * 1000)
-    lake_root, staging_root = _lake_roots(spec)
+    lake_root, staging_root = resolve_lake_root(), resolve_staging_root()
 
     # Ensure pool exists. init_pool is idempotent; pool stays alive across calls.
     await catalog_client.init_pool()
@@ -1463,12 +1478,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             elif failure is not None:
                 failures.append(failure)
 
-    if failures and artifacts:
-        overall_status = "partial"
-    elif failures:
-        overall_status = "failed"
-    else:
-        overall_status = "complete"
+    overall_status = classify_overall_status(has_failures=bool(failures), has_success=bool(artifacts))
 
     completed_ms = int(time.time() * 1000)
     return DataAvailabilityResult(
