@@ -18,13 +18,14 @@ import logging
 from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.data_lake import catalog_client
-from app.data_lake.catalog_client import session_open_ms_or_none
-from app.data_lake.ensure_data import ensure_data
+from app.data_lake.ensure_data import ensure_data, provider_for_data_type
 from app.data_lake.types import (
+    MAX_SYMBOL_LENGTH,
     MAX_TRADING_RANGE_DAYS,
+    SYMBOL_RE,
     ArtifactDetail,
     CoverageDay,
     CoverageResponse,
@@ -34,10 +35,24 @@ from app.data_lake.types import (
     StorageSummaryResponse,
     trading_range_span_days,
 )
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-lake", tags=["data-lake"])
+
+
+async def _ensure_catalog_pool() -> None:
+    """FastAPI dependency: guarantee the asyncpg pool exists before a route
+    touches the catalog.
+
+    ensure_data() already calls catalog_client.init_pool() as its own first
+    step, so POST /ensure-data has never needed this. The GET read routes
+    never called it at all — in a fresh process (flag on, no prior POST),
+    a GET hit connection()'s "asyncpg pool not initialized" RuntimeError as
+    an unhandled 500. init_pool() is idempotent, so wiring it here is a
+    no-op once ensure_data (or an earlier GET) has already initialized it.
+    """
+    await catalog_client.init_pool()
 
 
 @router.post("/ensure-data", response_model=DataAvailabilityResult)
@@ -50,14 +65,13 @@ async def post_ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     return await ensure_data(spec)
 
 
-@router.get("/coverage", response_model=CoverageResponse)
+@router.get("/coverage", response_model=CoverageResponse, dependencies=[Depends(_ensure_catalog_pool)])
 async def get_coverage(
     symbol: str,
     start_trading_date: date,
     end_trading_date: date,
     market: Literal["usa"] = "usa",
     data_type: Literal["trade", "quote"] = "trade",
-    provider: Literal["polygon"] = "polygon",
     price_adjustment_mode: PriceAdjustmentMode = "raw",
 ) -> CoverageResponse:
     """Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.
@@ -66,7 +80,22 @@ async def get_coverage(
     end_trading_date]`` — weekends and holidays are simply absent, never
     listed and never invented. A session with no matching catalog row is
     reported honestly as ``status="missing"`` rather than omitted.
+
+    ``provider`` is not a caller-supplied parameter: it's derived from
+    ``data_type`` via ``provider_for_data_type`` (the same rule
+    ``expand_required_artifacts`` uses to write these rows) — trade bars are
+    Polygon's, quote bars are ``learn_ai_derived``. A fixed ``provider="polygon"``
+    parameter made quote coverage unfindable, since quote rows are never
+    catalogued under that provider.
     """
+    if not SYMBOL_RE.match(symbol) or len(symbol) > MAX_SYMBOL_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "invalid_symbol",
+                "message": f"symbol must match {SYMBOL_RE.pattern} and be at most {MAX_SYMBOL_LENGTH} chars: {symbol!r}",
+            },
+        )
     if start_trading_date > end_trading_date:
         raise HTTPException(
             status_code=422,
@@ -94,7 +123,12 @@ async def get_coverage(
         start_trading_date,
         end_trading_date,
     )
-    sessions = expected_sessions(start_trading_date, end_trading_date)
+    provider = provider_for_data_type(data_type)
+    # One schedule build for the whole range, not one per day: session_date
+    # and its 09:30 ET open both come off the same SessionWindow, so no
+    # per-day session_open_ms_utc() call re-queries pandas_market_calendars.
+    # A per-day query pattern here measured ~10s at the 5-year cap.
+    windows = session_windows_ms_utc(start_trading_date, end_trading_date)
     rows_by_date = {
         row.trading_date: row
         for row in await catalog_client.select_artifact_coverage(
@@ -108,11 +142,11 @@ async def get_coverage(
         )
     }
     days = []
-    for session_date in sessions:
-        row = rows_by_date.get(session_date)
+    for window in windows:
+        row = rows_by_date.get(window.session_date)
         days.append(
             CoverageDay(
-                trading_date_ms=session_open_ms_or_none(session_date),
+                trading_date_ms=window.open_ms_utc,
                 status=row.status if row is not None else "missing",
                 artifact_id=row.artifact_id if row is not None else None,
             )
@@ -128,7 +162,7 @@ async def get_coverage(
     )
 
 
-@router.get("/artifacts/{artifact_id}", response_model=ArtifactDetail)
+@router.get("/artifacts/{artifact_id}", response_model=ArtifactDetail, dependencies=[Depends(_ensure_catalog_pool)])
 async def get_artifact_detail(artifact_id: int) -> ArtifactDetail:
     """Return the full receipt for one catalog row: hashes, size, provider params."""
     logger.info("[STEP 1] /api/data-lake/artifacts/%s requested", artifact_id)
@@ -144,7 +178,7 @@ async def get_artifact_detail(artifact_id: int) -> ArtifactDetail:
     return detail
 
 
-@router.get("/storage-summary", response_model=StorageSummaryResponse)
+@router.get("/storage-summary", response_model=StorageSummaryResponse, dependencies=[Depends(_ensure_catalog_pool)])
 async def get_storage_summary(market: Literal["usa"] = "usa") -> StorageSummaryResponse:
     """Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span."""
     logger.info("[STEP 1] /api/data-lake/storage-summary requested: market=%s", market)

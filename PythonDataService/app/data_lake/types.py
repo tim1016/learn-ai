@@ -20,7 +20,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
+SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
+# Mirrors the DataLakeArtifacts.Symbol column: character varying(20)
+# (Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs). Shared
+# by DataRunSpec's write-path validator and the coverage endpoint's
+# query-param validator (app/routers/data_lake.py) so neither can accept a
+# symbol the catalog could never actually store.
+MAX_SYMBOL_LENGTH = 20
 _MAX_RANGE_YEARS = 5
 # Shared by DataRunSpec's write-window validator and the coverage endpoint's
 # read-window validator (app/routers/data_lake.py) — one constant, one
@@ -78,10 +84,12 @@ class DataRunSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> DataRunSpec:
-        # Symbols: uppercase canonical.
+        # Symbols: uppercase canonical, within the catalog's storable length.
         for sym in self.symbols:
-            if not _SYMBOL_RE.match(sym):
-                raise ValueError(f"symbol must match {_SYMBOL_RE.pattern}: {sym!r}")
+            if not SYMBOL_RE.match(sym):
+                raise ValueError(f"symbol must match {SYMBOL_RE.pattern}: {sym!r}")
+            if len(sym) > MAX_SYMBOL_LENGTH:
+                raise ValueError(f"symbol exceeds {MAX_SYMBOL_LENGTH}-char catalog limit: {sym!r}")
         # Date ordering.
         if self.start_trading_date > self.end_trading_date:
             raise ValueError(f"start_trading_date {self.start_trading_date} > end_trading_date {self.end_trading_date}")
@@ -242,6 +250,12 @@ class ArtifactDetail(BaseModel):
     last_bar_start_ms: int | None
     fetched_at_ms: int
     completed_at_ms: int | None
+    # Diagnostics fail_artifact() persists on a 'failed' row (catalog_client.py).
+    # None on a row that has never failed; attempt_count is NOT NULL in the
+    # schema (every claim sets it, starting at 1) so it's always present.
+    attempt_count: int
+    last_error: str | None
+    error_message: str | None
 
 
 class StorageKindTotal(BaseModel):

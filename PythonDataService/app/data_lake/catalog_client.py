@@ -780,6 +780,10 @@ async def select_artifact_by_id(artifact_id: int) -> ArtifactDetail | None:
     Status='complete' and FileSha256 is actually populated — no COALESCE
     here, unlike select_coverage_minute_bars, which is allowed to default
     the column because its Status='complete' filter guarantees a real hash.
+
+    Includes the failure diagnostics fail_artifact() persists (AttemptCount,
+    LastError, ErrorMessage) — a 'failed' row's receipt is not "full"
+    without them.
     """
     query = """
         SELECT "Id" AS id, "ArtifactKind" AS artifact_kind, "Market" AS market,
@@ -793,7 +797,9 @@ async def select_artifact_by_id(artifact_id: int) -> ArtifactDetail | None:
                "Status" AS status, "RowCount" AS row_count,
                "FirstBarStartMs" AS first_bar_start_ms,
                "LastBarStartMs" AS last_bar_start_ms,
-               "FetchedAtMs" AS fetched_at_ms, "CompletedAtMs" AS completed_at_ms
+               "FetchedAtMs" AS fetched_at_ms, "CompletedAtMs" AS completed_at_ms,
+               "AttemptCount" AS attempt_count, "LastError" AS last_error,
+               "ErrorMessage" AS error_message
           FROM "DataLakeArtifacts"
          WHERE "Id" = $1
     """
@@ -837,11 +843,15 @@ async def select_storage_totals_by_kind(market: str) -> list[StorageKindTotal]:
 
 
 async def select_symbol_coverage_spans(market: str) -> list[SymbolCoverageSpan]:
-    """Per-symbol day-keyed coverage span over complete time_series_bars artifacts.
+    """Per-symbol day-keyed coverage span over complete minute-bar artifacts.
 
-    factor_file/map_file/metadata rows carry no TradingDate and are excluded
-    by the ArtifactKind filter — the "span" concept only applies to
-    day-keyed bar artifacts.
+    Resolution='minute' is the filter, not just ArtifactKind='time_series_bars':
+    hour/daily aggregated-bar rows carry TradingDate=NULL (one row per
+    symbol's whole history — see uq_data_lake_artifacts_aggregated_bars), so
+    without this filter a symbol with ONLY aggregated data would still
+    produce a row here (MIN/MAX NULL, artifact_count=0 since COUNT ignores
+    NULLs) — a fabricated placeholder for a symbol with no day-keyed
+    coverage at all, not the honest absence the "span" concept documents.
     """
     query = """
         SELECT "Symbol" AS symbol,
@@ -851,6 +861,7 @@ async def select_symbol_coverage_spans(market: str) -> list[SymbolCoverageSpan]:
           FROM "DataLakeArtifacts"
          WHERE "Market" = $1
            AND "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
            AND "Status" = 'complete'
            AND "Symbol" IS NOT NULL
          GROUP BY "Symbol"
