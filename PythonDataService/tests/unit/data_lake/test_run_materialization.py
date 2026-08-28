@@ -14,6 +14,7 @@ import asyncio
 import base64
 import json
 import re
+from collections import Counter
 from datetime import date
 from pathlib import Path
 from uuid import UUID
@@ -24,16 +25,21 @@ import respx
 
 from app.config import settings
 from app.data_lake import catalog_client, run_materialization
+from app.data_lake.ensure_data import ensure_data
 from app.data_lake.run_materialization import (
     LakeMaterializationError,
     build_engine_run_spec,
+    materialize_engine_run,
     materialize_run_data,
     materialize_run_data_sync,
 )
-from app.data_lake.types import ArtifactRecord, DataAvailabilityResult, DataRunSpec
+from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
 
 # 2024-05-20 is a Monday and a full NYSE session; 09:30 ET == 13:30 UTC.
 TRADING_DAY = date(2024, 5, 20)
+# Tuesday of the same week — a second session, so a window ending here
+# aggregates a different set of minute artifacts into the daily zip.
+WIDER_WINDOW_END = date(2024, 5, 21)
 BAR_START_MS = 1716211800000
 
 
@@ -208,6 +214,25 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
 
 
 @pytest.fixture
+def ensure_attempts(monkeypatch) -> list[UUID]:
+    """Record every ``ensure_data`` pass, keyed by the run that made it.
+
+    The retry loop is the only thing that produces a second pass for one
+    request_id, so these counts are what makes a deleted loop visible: without
+    it the coalescing and deadline tests would still pass on cache reuse.
+    """
+    attempts: list[UUID] = []
+    real_ensure_data = run_materialization.ensure_data
+
+    async def _counting(spec: DataRunSpec):
+        attempts.append(spec.request_id)
+        return await real_ensure_data(spec)
+
+    monkeypatch.setattr(run_materialization, "ensure_data", _counting)
+    return attempts
+
+
+@pytest.fixture
 def tmp_lake(tmp_path: Path, monkeypatch) -> Path:
     """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/."""
     write_root = tmp_path / "writer-root"
@@ -269,20 +294,46 @@ def _polygon_payload(ticker: str) -> dict:
     }
 
 
-def _mock_launcher() -> None:
-    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_payload())
+def _responder(payload: dict, *, latency_s: float):
+    """A respx side effect that actually suspends the caller.
+
+    ``mock(return_value=…)`` returns without ever awaiting, so two coroutines
+    driven by ``asyncio.gather`` run strictly one after the other and a test
+    that thinks it proved concurrency has proved sequential cache reuse. A
+    non-zero ``latency_s`` puts a real suspension point inside the request, so
+    the second ensure runs while the first is still mid-fetch.
+    """
+
+    async def _respond(request: httpx.Request) -> httpx.Response:
+        if latency_s:
+            await asyncio.sleep(latency_s)
+        return httpx.Response(200, json=payload)
+
+    return _respond
+
+
+def _mock_launcher(*, latency_s: float = 0.0):
+    return respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_responder(_launcher_payload(), latency_s=latency_s)
     )
 
 
-def _mock_polygon(ticker: str = "SPY"):
+def _mock_polygon(ticker: str = "SPY", *, latency_s: float = 0.0):
     return respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/{ticker}/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_payload(ticker))
+        side_effect=_responder(_polygon_payload(ticker), latency_s=latency_s)
     )
 
 
 def _spec() -> DataRunSpec:
     return build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="test")
+
+
+def _narrow_spec() -> DataRunSpec:
+    return build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY)
+
+
+def _wide_spec() -> DataRunSpec:
+    return build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END)
 
 
 # ---------------------------------------------------------------------------
@@ -378,10 +429,16 @@ async def test_materialize_run_data_reuses_the_bytes_on_a_second_run(fake_catalo
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_two_concurrent_runs_coalesce_onto_one_fetch(fake_catalog, tmp_lake):
-    """The catalog hands the fetch to one run; the other takes its bytes."""
+async def test_two_concurrent_runs_coalesce_onto_one_fetch(fake_catalog, tmp_lake, ensure_attempts):
+    """The catalog hands the fetch to one run; the other waits and takes its bytes.
+
+    The provider mock suspends mid-fetch, so the second ensure genuinely runs
+    while the first holds the claim — it loses every claim, gets
+    ``lease_timeout``, and only reaches ``complete`` because it comes back for
+    a second pass. Delete the retry loop and this test fails.
+    """
     _mock_launcher()
-    polygon = _mock_polygon()
+    polygon = _mock_polygon(latency_s=0.05)
 
     first, second = await asyncio.gather(
         materialize_run_data(_spec(), poll_interval_s=0.01),
@@ -394,14 +451,18 @@ async def test_two_concurrent_runs_coalesce_onto_one_fetch(fake_catalog, tmp_lak
     # Both runs must be able to name the same bytes, or the fingerprint each
     # records would describe a different lake than the one it read.
     assert first.data_availability_hash == second.data_availability_hash
+    # Exactly one of them was blocked and had to come back for the winner's
+    # bytes; a run that never retried never contended.
+    retried = [rid for rid, count in Counter(ensure_attempts).items() if count > 1]
+    assert len(retried) == 1, f"expected one run to wait and retry, saw attempts {Counter(ensure_attempts)}"
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_concurrent_runs_record_one_artifact_per_identity(fake_catalog, tmp_lake):
+async def test_concurrent_runs_record_one_artifact_per_identity(fake_catalog, tmp_lake, ensure_attempts):
     """Coalescing is the catalog's unique claim, not a lucky interleaving."""
     _mock_launcher()
-    _mock_polygon()
+    _mock_polygon(latency_s=0.05)
 
     await asyncio.gather(
         materialize_run_data(_spec(), poll_interval_s=0.01),
@@ -415,6 +476,27 @@ async def test_concurrent_runs_record_one_artifact_per_identity(fake_catalog, tm
     ]
     assert len(minute_rows) == 1
     assert minute_rows[0]["status"] == "complete"
+    assert len(ensure_attempts) > 2, "neither run contended; the interleaving did not happen"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_sequential_second_run_never_needs_a_retry(fake_catalog, tmp_lake, ensure_attempts):
+    """Contrast with the test above: cache reuse alone costs no second pass.
+
+    This is what the concurrency tests would collapse into if the provider mock
+    stopped suspending — one pass each, one fetch, and the retry loop dead
+    weight. Pinning it here keeps that collapse visible.
+    """
+    _mock_launcher()
+    polygon = _mock_polygon()
+
+    await materialize_run_data(_spec())
+    await materialize_run_data(_spec())
+
+    assert polygon.call_count == 1
+    assert len(ensure_attempts) == 2
+    assert max(Counter(ensure_attempts).values()) == 1
 
 
 @respx.mock
@@ -435,7 +517,9 @@ async def test_materialize_run_data_returns_a_real_failure_without_waiting(fake_
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_materialize_run_data_stops_waiting_at_the_fetch_deadline(fake_catalog, tmp_lake, monkeypatch):
+async def test_materialize_run_data_stops_waiting_at_the_fetch_deadline(
+    fake_catalog, tmp_lake, monkeypatch, ensure_attempts
+):
     """A lease that never clears must not hang the run forever."""
     _mock_launcher()
     _mock_polygon()
@@ -457,6 +541,171 @@ async def test_materialize_run_data_stops_waiting_at_the_fetch_deadline(fake_cat
 
     assert result.overall_status in {"partial", "failed"}
     assert any(f.reason == "lease_timeout" for f in result.failures)
+    # One pass, one wait, one more pass, then the deadline. Without the loop
+    # there would be exactly one attempt and this test would prove nothing.
+    assert len(ensure_attempts) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase-0 metadata: contention is not a launcher failure
+#
+# The wait above keys off ``lease_timeout``, so ``ensure_data`` reporting the
+# two Phase-0 outcomes under one reason would make it un-waitable: a run that
+# lost the metadata race would look exactly like a run whose launcher is dead.
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_metadata_leased_elsewhere_reports_contention(fake_catalog, tmp_lake):
+    _mock_launcher(latency_s=0.05)
+    _mock_polygon()
+
+    # Raw ensure_data, not the bridge: the bridge's retry would erase the
+    # loser's report, and the loser's report is the subject here.
+    both = await asyncio.gather(ensure_data(_spec()), ensure_data(_spec()))
+
+    metadata_failures = [f for result in both for f in result.failures if f.artifact_kind == "metadata"]
+    assert metadata_failures, "the two runs did not race for the Phase-0 claim"
+    assert all(f.reason == "lease_timeout" for f in metadata_failures)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_metadata_launcher_failure_is_not_contention(fake_catalog, tmp_lake):
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(500, json={"detail": "launcher internal error"})
+    )
+    _mock_polygon()
+
+    result = await ensure_data(_spec())
+
+    metadata_failures = [f for f in result.failures if f.artifact_kind == "metadata"]
+    assert metadata_failures
+    assert all(f.reason == "io_error" for f in metadata_failures)
+
+
+# ---------------------------------------------------------------------------
+# Partial coverage the run cannot survive
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_second_window_leaves_the_daily_artifact_contract_mismatched(fake_catalog, tmp_lake):
+    """The hazard the gate below exists for, demonstrated end to end.
+
+    The derived daily artifact's data contract is keyed by the set of minute
+    artifacts it aggregated, so widening the window makes the cached daily zip
+    describe a different set. ``ensure_data`` reports the mismatch and leaves
+    the previous window's zip on disk — a partial result whose daily bars are
+    stale rather than absent.
+    """
+    _mock_launcher()
+    _mock_polygon()
+
+    await materialize_run_data(_narrow_spec())
+    wider = await materialize_run_data(_wide_spec())
+
+    assert wider.overall_status == "partial"
+    stale_daily = [
+        f
+        for f in wider.failures
+        if f.artifact_kind == "time_series_bars" and f.trading_date is None and f.reason == "data_contract_mismatch"
+    ]
+    assert stale_daily, wider.failures
+
+
+def test_materialize_engine_run_refuses_when_the_daily_bars_it_reads_are_stale(monkeypatch):
+    """A daily-resolution run must not read the previous window's zip."""
+    monkeypatch.setattr(
+        run_materialization,
+        "materialize_run_data_sync",
+        lambda spec: _partial_with_stale_daily(spec),
+    )
+
+    with pytest.raises(LakeMaterializationError, match="incomplete daily coverage"):
+        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="daily")
+
+
+def test_materialize_engine_run_ignores_a_stale_daily_for_a_minute_run(monkeypatch):
+    """The same partial is harmless to a run that never opens the daily zip."""
+    monkeypatch.setattr(
+        run_materialization,
+        "materialize_run_data_sync",
+        lambda spec: _partial_with_stale_daily(spec),
+    )
+
+    result = materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
+
+    assert result.overall_status == "partial"
+
+
+def test_materialize_engine_run_refuses_a_missing_session_for_a_minute_run(monkeypatch):
+    """A day the provider could not supply is a hole in the backtest, not a note."""
+
+    def _missing_day(spec: DataRunSpec) -> DataAvailabilityResult:
+        return _partial(
+            spec,
+            ArtifactFailure(
+                artifact_kind="time_series_bars",
+                symbol="SPY",
+                trading_date=TRADING_DAY,
+                data_type="trade",
+                reason="provider_no_data",
+            ),
+        )
+
+    monkeypatch.setattr(run_materialization, "materialize_run_data_sync", _missing_day)
+
+    with pytest.raises(LakeMaterializationError, match="incomplete minute coverage"):
+        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
+
+
+def test_materialize_engine_run_lets_a_metadata_note_through(monkeypatch):
+    """Metadata failures degrade the calendar; they withhold no bars."""
+
+    def _metadata_only(spec: DataRunSpec) -> DataAvailabilityResult:
+        return _partial(
+            spec,
+            ArtifactFailure(
+                artifact_kind="metadata",
+                symbol=None,
+                trading_date=None,
+                data_type=None,
+                reason="io_error",
+            ),
+        )
+
+    monkeypatch.setattr(run_materialization, "materialize_run_data_sync", _metadata_only)
+
+    assert materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY).overall_status == "partial"
+
+
+def _partial(spec: DataRunSpec, *failures: ArtifactFailure) -> DataAvailabilityResult:
+    return DataAvailabilityResult(
+        request_id=spec.request_id,
+        overall_status="partial",
+        lean_data_root_path="/lean-data-writer/lake",
+        data_availability_hash="b" * 64,
+        failures=list(failures),
+        completed_at_ms=0,
+        duration_ms=0,
+    )
+
+
+def _partial_with_stale_daily(spec: DataRunSpec) -> DataAvailabilityResult:
+    """The exact failure shape the end-to-end test above produces."""
+    return _partial(
+        spec,
+        ArtifactFailure(
+            artifact_kind="time_series_bars",
+            symbol="SPY",
+            trading_date=None,
+            data_type="trade",
+            reason="data_contract_mismatch",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
