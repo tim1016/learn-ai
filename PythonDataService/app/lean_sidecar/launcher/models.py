@@ -108,9 +108,7 @@ class LaunchRequest(BaseModel):
 
         valid = {p.value for p in HardeningProfile}
         if v not in valid:
-            raise ValueError(
-                f"hardening_profile must be one of {sorted(valid)}, got {v!r}"
-            )
+            raise ValueError(f"hardening_profile must be one of {sorted(valid)}, got {v!r}")
         return v
 
     @field_validator("run_id")
@@ -135,9 +133,7 @@ class LaunchRequest(BaseModel):
         concatenate? does profile win? does flags win?). Reject up
         front so the caller picks one."""
         if self.hardening_profile is not None and self.hardening_flags:
-            raise ValueError(
-                "hardening_profile and hardening_flags are mutually exclusive; pick one"
-            )
+            raise ValueError("hardening_profile and hardening_flags are mutually exclusive; pick one")
         return self
 
 
@@ -199,8 +195,7 @@ class ExtractMetadataRequest(BaseModel):
     image_digest: str = Field(
         ...,
         description=(
-            "Pinned image digest (``sha256:...``). Must be in the "
-            "launcher's allow-list, same as for ``/launch``."
+            "Pinned image digest (``sha256:...``). Must be in the launcher's allow-list, same as for ``/launch``."
         ),
     )
 

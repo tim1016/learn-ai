@@ -472,8 +472,7 @@ def _assert_compatibility_fixture_receipt(
     """Fail closed when the LEAN side no longer sees Python's pinned bytes."""
     if actual.get("fixture_id") != expected_id or actual.get("fixture_sha256") != expected_sha256:
         raise LeanSidecarServiceError(
-            f"compatibility_fixture_{phase}_mismatch: expected={expected_id!r} "
-            f"actual={actual.get('fixture_id')!r}"
+            f"compatibility_fixture_{phase}_mismatch: expected={expected_id!r} actual={actual.get('fixture_id')!r}"
         )
 
 
@@ -713,9 +712,7 @@ async def run_trusted_sample(
         ]
         bars_by_date = [(trading_date, bars) for trading_date, bars in bars_by_date if bars]
         if not bars_by_date:
-            raise LeanSidecarServiceError(
-                f"compatibility_fixture_empty: {request.data_policy.fixture_id}"
-            )
+            raise LeanSidecarServiceError(f"compatibility_fixture_empty: {request.data_policy.fixture_id}")
         trading_dates = [d for d, _ in bars_by_date]
     elif data_source == "polygon" and request.data_policy.provider_kind == "fixture":
         # Fixture replay (parity tests / freshness canary): stage the
@@ -757,8 +754,7 @@ async def run_trusted_sample(
         )
         trading_dates = list(lake_artifacts.trading_dates)
         _emit_log(
-            f"Lake coverage for {request.symbol}: {len(trading_dates)} trading days "
-            f"under {lake_artifacts.lake_root}"
+            f"Lake coverage for {request.symbol}: {len(trading_dates)} trading days under {lake_artifacts.lake_root}"
         )
     elif data_source == "polygon":
         # Live polygon runs stage from the shared policy-keyed bar store —
@@ -825,9 +821,7 @@ async def run_trusted_sample(
     # read-write mount beyond the workspace) is what makes accepting
     # arbitrary source safe.
     source_to_stage = (
-        request.algorithm_source
-        if request.algorithm_source
-        else trusted_template_definition(request.template).source
+        request.algorithm_source if request.algorithm_source else trusted_template_definition(request.template).source
     )
     source_path = stage_algorithm_source(workspace, source_to_stage)
     # PR B: ``bar_minutes`` for the LEAN config is derived from
@@ -848,7 +842,7 @@ async def run_trusted_sample(
             "session": request.data_policy.session,
             "adjustment": polygon_adjustment,
             **{name: str(value) for name, value in request.strategy_parameters},
-        }
+        },
     )
     config_path = stage_lean_config(workspace, config)
 
@@ -1098,9 +1092,7 @@ def _build_manifest(
     )
     runtime_provenance = runtime_provenance_for_digest(PINNED_LEAN_IMAGE_DIGEST)
     if runtime_provenance is None:
-        raise LeanSidecarServiceError(
-            f"lean_runtime_provenance_unpinned: digest={PINNED_LEAN_IMAGE_DIGEST!r}"
-        )
+        raise LeanSidecarServiceError(f"lean_runtime_provenance_unpinned: digest={PINNED_LEAN_IMAGE_DIGEST!r}")
     return RunManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
         run_id=request.run_id,

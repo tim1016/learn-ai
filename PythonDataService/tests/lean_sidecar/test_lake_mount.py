@@ -349,7 +349,9 @@ class TestSameBytesAsThePythonReaders:
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", WINDOW)
 
-        staged_bars = list(LeanMinuteDataReader([workspace.data_dir], session="regular").iter_bars("SPY", DAY_ONE, DAY_TWO))
+        staged_bars = list(
+            LeanMinuteDataReader([workspace.data_dir], session="regular").iter_bars("SPY", DAY_ONE, DAY_TWO)
+        )
         lake_bars = list(LeanMinuteDataReader([lake_root], session="regular").iter_bars("SPY", DAY_ONE, DAY_TWO))
 
         assert len(staged_bars) == 2 * 390
@@ -451,7 +453,7 @@ class TestLakeCoverageFailsLoudly:
                 symbol="SPY",
                 start=DAY_ONE,
                 end=DAY_TWO,
-                )
+            )
 
     def test_missing_daily_artifact_raises(self, tmp_path: Path) -> None:
         lake_root = tmp_path / LAKE_SUBDIR
@@ -464,7 +466,7 @@ class TestLakeCoverageFailsLoudly:
                 symbol="SPY",
                 start=DAY_ONE,
                 end=DAY_TWO,
-                )
+            )
 
     def test_partial_coverage_returns_only_the_days_present(self, tmp_path: Path) -> None:
         lake_root = tmp_path / LAKE_SUBDIR
@@ -486,7 +488,7 @@ class TestLakeCoverageFailsLoudly:
                 symbol="../../etc/passwd",
                 start=DAY_ONE,
                 end=DAY_TWO,
-                )
+            )
 
 
 class TestRequiredLakeMetadata:

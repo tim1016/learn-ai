@@ -105,9 +105,7 @@ class TestLaunchValidation:
 
 
 class TestPinnedImageReadiness:
-    def test_check_pinned_image_reports_local_pinned_image_as_ready(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_check_pinned_image_reports_local_pinned_image_as_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.lean_sidecar.launcher import service as launcher_service
 
         monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
@@ -203,9 +201,7 @@ class TestLauncherAppConcurrency:
             assert (tmp_path / ".launcher-token").is_file()
 
     @pytest.mark.asyncio
-    async def test_healthz_coalesces_concurrent_pinned_image_probes(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_healthz_coalesces_concurrent_pinned_image_probes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.lean_sidecar.launcher import app as launcher_app_module
 
         calls = 0
