@@ -9,6 +9,7 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.4
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -685,3 +686,210 @@ async def refresh_complete_minute_bar(
         prior_file_path=row["FilePath"],
         prior_file_sha256=row["FileSha256"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 5 observatory read projections
+#
+# Thin, read-only SELECTs backing the Observatory endpoints in
+# app/routers/data_lake.py. Unlike the ensure_data-facing selects above
+# (which only ever want 'complete' rows to decide what's reusable), these
+# return every status — an operator view needs to see fetching/failed rows
+# too, not just what's usable.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ArtifactCoverageRow:
+    trading_date: date
+    status: str
+    artifact_id: int
+
+
+async def select_artifact_coverage(
+    market: str,
+    symbol: str,
+    data_type: str,
+    provider: str,
+    price_adjustment_mode: str,
+    start_trading_date: date,
+    end_trading_date: date,
+) -> list[ArtifactCoverageRow]:
+    """Return per-day minute-bar artifact status in the window, any status.
+
+    Only 'time_series_bars'/'minute' rows carry a per-day TradingDate —
+    hour/daily aggregated-bar artifacts cover a symbol's whole history in one
+    row (see uq_data_lake_artifacts_aggregated_bars), so day-keyed coverage
+    is meaningful only at minute resolution.
+    """
+    query = """
+        SELECT "TradingDate", "Status", "Id"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Market" = $1
+           AND "Symbol" = $2
+           AND "DataType" = $3
+           AND "Provider" = $4
+           AND "PriceAdjustmentMode" = $5
+           AND "TradingDate" BETWEEN $6 AND $7
+         ORDER BY "TradingDate"
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(
+            query,
+            market,
+            symbol,
+            data_type,
+            provider,
+            price_adjustment_mode,
+            start_trading_date,
+            end_trading_date,
+        )
+    return [
+        ArtifactCoverageRow(trading_date=r["TradingDate"], status=r["Status"], artifact_id=r["Id"]) for r in rows
+    ]
+
+
+@dataclass(frozen=True)
+class ArtifactDetailRow:
+    id: int
+    artifact_kind: str
+    market: str | None
+    symbol: str | None
+    trading_date: date | None
+    resolution: str | None
+    data_type: str | None
+    provider: str
+    provider_params: dict
+    price_adjustment_mode: str | None
+    data_contract_hash: str
+    content_hash: str
+    file_path: str
+    file_size_bytes: int | None
+    status: str
+    row_count: int | None
+    first_bar_start_ms: int | None
+    last_bar_start_ms: int | None
+    fetched_at_ms: int
+    completed_at_ms: int | None
+
+
+async def select_artifact_by_id(artifact_id: int) -> ArtifactDetailRow | None:
+    """Return the full receipt for one catalog row, or None when it doesn't exist."""
+    query = """
+        SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
+               "Resolution", "DataType", "Provider", "ProviderParams",
+               "PriceAdjustmentMode", "DataContractHash",
+               COALESCE("FileSha256", '') AS file_sha256,
+               "FilePath", "FileSizeBytes", "Status", "RowCount",
+               "FirstBarStartMs", "LastBarStartMs", "FetchedAtMs", "CompletedAtMs"
+          FROM "DataLakeArtifacts"
+         WHERE "Id" = $1
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(query, artifact_id)
+    if row is None:
+        return None
+    return ArtifactDetailRow(
+        id=row["Id"],
+        artifact_kind=row["ArtifactKind"],
+        market=row["Market"],
+        symbol=row["Symbol"],
+        trading_date=row["TradingDate"],
+        resolution=row["Resolution"],
+        data_type=row["DataType"],
+        provider=row["Provider"],
+        # asyncpg returns jsonb as raw text unless a codec is registered; no
+        # codec is registered here (see init_pool), so decode explicitly.
+        provider_params=json.loads(row["ProviderParams"]) if row["ProviderParams"] else {},
+        price_adjustment_mode=row["PriceAdjustmentMode"],
+        data_contract_hash=row["DataContractHash"],
+        content_hash=row["file_sha256"],
+        file_path=row["FilePath"],
+        file_size_bytes=row["FileSizeBytes"],
+        status=row["Status"],
+        row_count=row["RowCount"],
+        first_bar_start_ms=row["FirstBarStartMs"],
+        last_bar_start_ms=row["LastBarStartMs"],
+        fetched_at_ms=row["FetchedAtMs"],
+        completed_at_ms=row["CompletedAtMs"],
+    )
+
+
+@dataclass(frozen=True)
+class StorageKindTotalRow:
+    artifact_kind: str
+    resolution: str | None
+    artifact_count: int
+    total_bytes: int
+
+
+async def select_storage_totals_by_kind(market: str) -> list[StorageKindTotalRow]:
+    """Complete-artifact counts and bytes, grouped by kind (+ resolution).
+
+    Scoped to Status='complete': only completed artifacts have bytes on
+    disk to count: fetching/failed rows have no FileSizeBytes.
+    """
+    query = """
+        SELECT "ArtifactKind", "Resolution",
+               COUNT(*) AS artifact_count,
+               COALESCE(SUM("FileSizeBytes"), 0) AS total_bytes
+          FROM "DataLakeArtifacts"
+         WHERE "Market" = $1
+           AND "Status" = 'complete'
+         GROUP BY "ArtifactKind", "Resolution"
+         ORDER BY "ArtifactKind", "Resolution" NULLS FIRST
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(query, market)
+    return [
+        StorageKindTotalRow(
+            artifact_kind=r["ArtifactKind"],
+            resolution=r["Resolution"],
+            artifact_count=r["artifact_count"],
+            total_bytes=r["total_bytes"],
+        )
+        for r in rows
+    ]
+
+
+@dataclass(frozen=True)
+class SymbolCoverageSpanRow:
+    symbol: str
+    first_trading_date: date | None
+    last_trading_date: date | None
+    artifact_count: int
+
+
+async def select_symbol_coverage_spans(market: str) -> list[SymbolCoverageSpanRow]:
+    """Per-symbol day-keyed coverage span over complete time_series_bars artifacts.
+
+    factor_file/map_file/metadata rows carry no TradingDate and are excluded
+    by the ArtifactKind filter — the "span" concept only applies to
+    day-keyed bar artifacts.
+    """
+    query = """
+        SELECT "Symbol",
+               MIN("TradingDate") AS first_trading_date,
+               MAX("TradingDate") AS last_trading_date,
+               COUNT("TradingDate") AS artifact_count
+          FROM "DataLakeArtifacts"
+         WHERE "Market" = $1
+           AND "ArtifactKind" = 'time_series_bars'
+           AND "Status" = 'complete'
+           AND "Symbol" IS NOT NULL
+         GROUP BY "Symbol"
+         ORDER BY "Symbol"
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(query, market)
+    return [
+        SymbolCoverageSpanRow(
+            symbol=r["Symbol"],
+            first_trading_date=r["first_trading_date"],
+            last_trading_date=r["last_trading_date"],
+            artifact_count=r["artifact_count"],
+        )
+        for r in rows
+    ]

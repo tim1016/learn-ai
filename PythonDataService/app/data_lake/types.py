@@ -151,3 +151,83 @@ class DataAvailabilityResult(BaseModel):
     refreshed_artifact_count: int = 0
     completed_at_ms: int
     duration_ms: int
+
+
+# ---------------------------------------------------------------------------
+# Task 5: Observatory read-endpoint response models.
+#
+# Thin projections of the catalog for the future Observatory UI. All
+# timestamps are int64 ms UTC; a ``TradingDate`` column value is converted to
+# its canonical ET session-open anchor (see temporal-rigor.md) by the router,
+# not here — these models only describe the wire shape.
+# ---------------------------------------------------------------------------
+
+
+class CoverageDay(BaseModel):
+    """One calendar session's artifact status for a symbol/data-type window.
+
+    ``trading_date_ms`` is the session's 09:30 ET open, expressed as
+    int64 ms UTC — the canonical anchor for a date-only value. Sessions with
+    no matching catalog row report ``status="missing"``; this is never
+    emitted for a non-session date, since the router only iterates the
+    canonical calendar's sessions in the first place.
+    """
+
+    trading_date_ms: int
+    status: Literal["complete", "fetching", "stale", "failed", "missing"]
+    artifact_id: int | None = None
+
+
+class CoverageResponse(BaseModel):
+    market: str
+    symbol: str
+    data_type: str
+    resolution: str
+    provider: str
+    price_adjustment_mode: str
+    days: list[CoverageDay] = []
+
+
+class ArtifactDetail(BaseModel):
+    """Full receipt for one catalog row: identity, hashes, and byte metadata."""
+
+    id: int
+    artifact_kind: str
+    market: str | None
+    symbol: str | None
+    trading_date_ms: int | None
+    resolution: str | None
+    data_type: str | None
+    provider: str
+    provider_params: dict[str, object]
+    price_adjustment_mode: str | None
+    data_contract_hash: str
+    content_hash: str
+    file_path: str
+    file_size_bytes: int | None
+    status: str
+    row_count: int | None
+    first_bar_start_ms: int | None
+    last_bar_start_ms: int | None
+    fetched_at_ms: int
+    completed_at_ms: int | None
+
+
+class StorageKindTotal(BaseModel):
+    artifact_kind: str
+    resolution: str | None
+    artifact_count: int
+    total_bytes: int
+
+
+class SymbolCoverageSpan(BaseModel):
+    symbol: str
+    first_trading_date_ms: int | None
+    last_trading_date_ms: int | None
+    artifact_count: int
+
+
+class StorageSummaryResponse(BaseModel):
+    market: str
+    kinds: list[StorageKindTotal] = []
+    symbols: list[SymbolCoverageSpan] = []
