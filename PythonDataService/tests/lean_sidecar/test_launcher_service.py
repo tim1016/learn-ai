@@ -105,9 +105,7 @@ class TestLaunchValidation:
 
 
 class TestPinnedImageReadiness:
-    def test_check_pinned_image_reports_local_pinned_image_as_ready(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_check_pinned_image_reports_local_pinned_image_as_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.lean_sidecar.launcher import service as launcher_service
 
         monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
@@ -203,9 +201,7 @@ class TestLauncherAppConcurrency:
             assert (tmp_path / ".launcher-token").is_file()
 
     @pytest.mark.asyncio
-    async def test_healthz_coalesces_concurrent_pinned_image_probes(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_healthz_coalesces_concurrent_pinned_image_probes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.lean_sidecar.launcher import app as launcher_app_module
 
         calls = 0
@@ -244,7 +240,12 @@ class TestLauncherAppConcurrency:
         launch_started = threading.Event()
         release_launch = threading.Event()
 
-        def slow_launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
+        def slow_launch(
+            request: LaunchRequest,
+            *,
+            artifacts_root: Path,
+            lake_root: Path | None = None,
+        ) -> LaunchResponse:
             launch_started.set()
             if not release_launch.wait(timeout=2):
                 raise AssertionError("test did not release the blocked launch")

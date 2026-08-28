@@ -1,8 +1,13 @@
 """Workspace layout, path resolution, and run-id validation.
 
 Every LEAN Lab run owns a fresh directory under the configured artifacts
-root. The launcher mounts **only** that directory into the LEAN container.
-This module is the single source of truth for what lives where.
+root. It is the **only** thing under the artifacts root the launcher
+mounts into the LEAN container, and the container's only read-write
+mount. This module is the single source of truth for what lives where.
+
+A ``DATA_LAKE_ENABLED`` run adds one further mount that is not a
+workspace at all: the data lake, read-only — see
+:mod:`app.lean_sidecar.lake_mount`.
 
 Authority: docs/architecture/lean-sidecar-lab.md §"Workspace contract".
 """
@@ -70,7 +75,7 @@ class Workspace:
 
     @property
     def workspace_dir(self) -> Path:
-        """The single directory mounted into the LEAN container."""
+        """The container's only read-write mount (at ``/lean-run``)."""
         return self.root / "workspace"
 
     @property
