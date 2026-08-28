@@ -26,6 +26,19 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 > comparator; the AGENTS.md "update both registries" rule is satisfied by the new
 > row in `docs/architecture/engine-authority-map.md` plus this explicit note.
 
+> **No-new-concept note — flag-gated engine data-resolution path (#1833).** With
+> `DATA_LAKE_ENABLED`, the Python engine's backtest data root resolves through
+> `PythonDataService/app/data_lake/run_materialization.py::materialize_engine_run`
+> instead of the policy store's `app.engine.data.availability::ensure_range`; with
+> the flag off (the shipped default — migration state is flag-dark until #1839
+> decides the cutover), `ensure_range` is unchanged. Neither path introduces a new
+> math concept: both resolve *which bytes the reader opens*, not a formula over
+> them — the LEAN-format minute/daily bar readers, the indicators, and every
+> strategy math concept in this registry are byte-for-byte the same regardless of
+> which materializer supplied the underlying zip. This satisfies the AGENTS.md
+> "update both registries" rule via the new row in
+> `docs/architecture/engine-authority-map.md` plus this explicit note.
+
 ### Broker display read models
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |

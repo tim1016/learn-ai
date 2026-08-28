@@ -164,6 +164,36 @@ class ArtifactRecord(BaseModel):
     row_count: int | None
     first_bar_start_ms: int | None
     last_bar_start_ms: int | None
+    # None for a caller that never selected it (some coverage/lookup queries
+    # don't need it and skip the column) — never treat None as "verified
+    # empty"; a consumer that cares (see
+    # app.data_lake.run_materialization.materialize_engine_run's reused-
+    # artifact verification) must skip the size check rather than fail it.
+    file_size_bytes: int | None = None
+
+
+# Named so producers upstream of ``ArtifactFailure`` can carry a reason with
+# the same type the failure will be built from, instead of a bare ``str``.
+ArtifactFailureReason = Literal[
+    "provider_auth_error",
+    "provider_entitlement_error",
+    "provider_rate_limited",
+    "provider_api_error",
+    "provider_no_data",
+    "unknown_symbol",
+    "validation_failed",
+    "io_error",
+    "lease_timeout",
+    "fetch_timeout",
+    "unsupported_resolution",
+    "unsupported_artifact_kind",
+    "corp_action_revision_mismatch",
+    "data_contract_mismatch",
+    "internal_error",
+    # Added for the backfill job (#1836, review round 3):
+    "session_not_produced",  # canonical calendar disagrees with ensure_data's own — see app.data_lake.backfill
+    "run_aborted",  # a globally-fatal failure stopped the remaining range before it was attempted
+]
 
 
 class ArtifactFailure(BaseModel):
@@ -171,26 +201,7 @@ class ArtifactFailure(BaseModel):
     symbol: str | None
     trading_date: date | None
     data_type: str | None
-    reason: Literal[
-        "provider_auth_error",
-        "provider_entitlement_error",
-        "provider_rate_limited",
-        "provider_api_error",
-        "provider_no_data",
-        "unknown_symbol",
-        "validation_failed",
-        "io_error",
-        "lease_timeout",
-        "fetch_timeout",
-        "unsupported_resolution",
-        "unsupported_artifact_kind",
-        "corp_action_revision_mismatch",
-        "data_contract_mismatch",
-        "internal_error",
-        # Added for the backfill job (#1836, review round 3):
-        "session_not_produced",  # canonical calendar disagrees with ensure_data's own — see app.data_lake.backfill
-        "run_aborted",  # a globally-fatal failure stopped the remaining range before it was attempted
-    ]
+    reason: ArtifactFailureReason
     detail: str | None = None
     provider_status_code: int | None = None
     attempt_count: int = 0

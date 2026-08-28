@@ -6,9 +6,10 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
 from __future__ import annotations
 
 from datetime import date
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from uuid import UUID
 
+from app.config import settings
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
     LeanFactorFilePath,
@@ -16,6 +17,8 @@ from app.data_lake.path_policy import (
     LeanMetadataPath,
     LeanMinuteBarPath,
     minute_bar_market_root,
+    resolve_lake_root,
+    resolve_staging_root,
     staging_path_for,
 )
 
@@ -109,3 +112,33 @@ class TestStagingPathFor:
         a1 = staging_path_for(rel, request_id, "worker-1", 1)
         a2 = staging_path_for(rel, request_id, "worker-1", 2)
         assert a1 != a2
+
+
+class TestLakeRoots:
+    """The absolute roots writer and readers must agree on."""
+
+    def test_lake_root_derives_from_write_root(self, monkeypatch):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_lake_root() == Path("/mnt/writer/lake")
+
+    def test_staging_root_derives_from_write_root(self, monkeypatch):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_staging_root() == Path("/mnt/writer/staging")
+
+    def test_staging_shares_a_filesystem_with_the_lake(self, monkeypatch):
+        """Atomic promotion is a rename(2), so both roots share a parent."""
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_lake_root().parent == resolve_staging_root().parent
+
+    def test_ensure_data_imports_the_same_functions_and_does_not_re_derive(self, monkeypatch):
+        """One answer to "where is the lake?" — ensure_data must not re-derive it.
+
+        ``ensure_data`` imports ``resolve_lake_root`` / ``resolve_staging_root``
+        directly rather than through a wrapper of its own; asserting identity
+        (not just equal output) catches a reimplementation that happens to
+        agree today but could silently drift from this module.
+        """
+        from app.data_lake import ensure_data
+
+        assert ensure_data.resolve_lake_root is resolve_lake_root
+        assert ensure_data.resolve_staging_root is resolve_staging_root

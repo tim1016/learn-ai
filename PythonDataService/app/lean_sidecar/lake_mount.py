@@ -100,7 +100,7 @@ logger = logging.getLogger(__name__)
 CONTAINER_LAKE_DATA_MOUNT = "/lean-data"
 
 # Subdirectory of the deploy volume holding the immutable lake. The
-# writer-side counterpart is ``app.data_lake.ensure_data._lake_roots``,
+# writer-side counterpart is ``app.data_lake.path_policy.resolve_lake_root``,
 # which derives ``<LEAN_DATA_WRITE_ROOT>/lake`` from the same setting;
 # ``tests/lean_sidecar/test_lake_mount.py`` pins the two in lockstep.
 #

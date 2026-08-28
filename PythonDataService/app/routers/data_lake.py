@@ -323,23 +323,22 @@ def _bridge_ensure_fn(loop: asyncio.AbstractEventLoop) -> EnsureFn:
     """Route every ensure_data() call back onto the loop this HTTP
     request is already running on.
 
-    ensure_data's asyncpg pool (app.data_lake.catalog_client) is a
-    process-global bound to whichever event loop first awaits
-    catalog_client.init_pool() — using it from a different loop raises
-    asyncpg's cross-loop error. run_in_thread's worker thread has no loop
-    of its own; work()'s asyncio.run(_do()) below spins up a brand-new,
-    throwaway loop per job, which IS a different loop the moment the pool
-    was already initialized elsewhere — a prior /ensure-data call on this
-    request's own loop (the common case, since /ensure-data is a plain
-    async handler that always runs there), or a prior backfill job's
-    now-closed one. Bridging every ensure_data() call through
-    run_coroutine_threadsafe onto the loop captured here — before the
-    worker thread starts — keeps every data-lake asyncpg operation on one
-    consistent loop for the life of the process. Only the pool-touching
-    call is bridged; run_backfill's own orchestration and the emitter's
-    synchronous Redis calls (progress/log/cancel-check) stay on the
-    worker thread exactly as before, so this doesn't reintroduce blocking
-    work onto the shared app loop.
+    ensure_data's asyncpg pool (app.data_lake.catalog_client) is keyed by
+    the calling event loop — using it from a loop with no pool of its own
+    raises "asyncpg pool not initialized" rather than silently reusing a
+    foreign one. run_in_thread's worker thread has no loop of its own;
+    work()'s asyncio.run(_do()) below spins up a brand-new, throwaway loop
+    per job, which would pay for (and never close) a fresh asyncpg pool
+    every single backfill job if left unbridged. Bridging every
+    ensure_data() call through run_coroutine_threadsafe onto the loop
+    captured here — before the worker thread starts — keeps every
+    data-lake asyncpg operation on one consistent, already-pooled loop for
+    the life of the process instead of churning through one pool per job.
+    Only the pool-touching call is bridged; run_backfill's own
+    orchestration and the emitter's synchronous Redis calls
+    (progress/log/cancel-check) stay on the worker thread exactly as
+    before, so this doesn't reintroduce blocking work onto the shared app
+    loop.
     """
 
     async def _ensure_on_request_loop(day_spec: DataRunSpec) -> DataAvailabilityResult:

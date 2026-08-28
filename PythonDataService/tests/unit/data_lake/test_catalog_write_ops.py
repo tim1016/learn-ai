@@ -95,6 +95,55 @@ async def test_claim_minute_bar_returns_none_on_conflict(clean_artifacts, pool):
     assert b is None  # second claim loses
 
 
+async def test_select_minute_bar_claim_state_returns_none_for_no_row(clean_artifacts, pool):
+    assert await catalog_client.select_minute_bar_claim_state(_minute_identity()) is None
+
+
+async def test_select_minute_bar_claim_state_finds_a_failed_row(clean_artifacts, pool):
+    """The lookup a caller that lost claim_minute_bar's conflict needs.
+
+    ``select_coverage_minute_bars`` cannot see this row (it is not
+    'complete'); this is the id + status lookup that lets a caller reclaim
+    it via ``steal_or_retry_minute_bar`` instead of reporting contention.
+    """
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    await catalog_client.fail_artifact(artifact_id=artifact_id, last_error="provider_no_data")
+
+    state = await catalog_client.select_minute_bar_claim_state(identity)
+
+    assert state is not None
+    assert state.id == artifact_id
+    assert state.status == "failed"
+    assert state.attempt_count == 1
+    assert state.last_error == "provider_no_data"
+
+
+async def test_select_minute_bar_claim_state_finds_an_active_fetch(clean_artifacts, pool):
+    """A live lease reads as 'fetching', distinct from a failed row."""
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+
+    state = await catalog_client.select_minute_bar_claim_state(identity)
+
+    assert state is not None
+    assert state.id == artifact_id
+    assert state.status == "fetching"
+    assert state.last_error is None
+
+
 async def test_complete_artifact_updates_to_complete(clean_artifacts, pool):
     identity = _minute_identity()
     artifact_id = await catalog_client.claim_minute_bar(

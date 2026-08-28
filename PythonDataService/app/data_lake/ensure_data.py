@@ -29,7 +29,7 @@ import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, NamedTuple
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -69,6 +69,7 @@ from app.data_lake.polygon_ticker_events import fetch_ticker_events
 from app.data_lake.sessions import trading_sessions_for
 from app.data_lake.types import (
     ArtifactFailure,
+    ArtifactFailureReason,
     ArtifactIdentity,
     ArtifactRecord,
     DataAvailabilityResult,
@@ -82,6 +83,10 @@ logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 _WORKER_ID = os.environ.get("HOSTNAME", "py-data-lake")  # one writer per process
 _LEASE_TTL_MS = 300_000
+# A row that has failed this many times is reported as a terminal failure
+# rather than reclaimed again. Matches the retry budget already exercised by
+# tests/unit/data_lake/test_catalog_write_ops.py's steal_or_retry coverage.
+_MAX_CLAIM_RETRIES = 3
 
 # data_contract_hash provider params (canonical per artifact kind)
 _DCH_MINUTE_TRADE_PARAMS = {
@@ -411,6 +416,15 @@ def _read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTrade
 # ---------------------------------------------------------------------------
 
 
+class MetadataBootstrap(NamedTuple):
+    """Outcome of one Phase-0 artifact: the row, whether it was a cache hit,
+    and — when there is no row — the reason, typed as the failure it becomes."""
+
+    record: ArtifactRecord | None
+    is_reused: bool
+    failure_reason: ArtifactFailureReason | None
+
+
 async def _bootstrap_metadata_artifact(
     file_name: str,
     metadata_kind: str,
@@ -419,12 +433,17 @@ async def _bootstrap_metadata_artifact(
     spec: DataRunSpec,
     lake_root: Path,
     staging_root: Path,
-) -> tuple[ArtifactRecord | None, bool]:
+) -> MetadataBootstrap:
     """Claim, extract, write, and complete one LEAN metadata artifact.
 
-    Returns (record, is_reused). is_reused=True when the artifact already existed
-    in the catalog (cache hit). Returns (None, False) when in-flight elsewhere or
-    extraction failed.
+    On failure ``record`` is None and ``failure_reason`` names *why*, because
+    the two failure modes need different handling by the caller:
+
+    - ``"lease_timeout"`` — another worker holds the claim and has not
+      completed yet. Transient: retrying the whole spec once the winner
+      finishes turns this into a cache hit.
+    - ``"io_error"`` — the launcher could not produce the bytes. Not
+      contention; retrying will not help until the launcher is fixed.
     """
     dch = _metadata_dch(lean_image_digest, file_name)
     file_path = str(rel_path)
@@ -449,14 +468,14 @@ async def _bootstrap_metadata_artifact(
         # Already exists (complete or in-flight). Try to return the complete row.
         existing = await catalog_client.select_complete_metadata_artifact(dch)
         if existing is not None:
-            return existing, True  # cache hit
+            return MetadataBootstrap(existing, True, None)  # cache hit
         # In-flight elsewhere; skip (non-blocking in Slice 1c).
         logger.warning(
             "data_lake.ensure_data: metadata artifact %s is in-flight elsewhere; "
             "Phase 0 may use fallback holiday list for sessions.",
             file_name,
         )
-        return None, False
+        return MetadataBootstrap(None, False, "lease_timeout")
 
     # Fetch from launcher.
     try:
@@ -468,7 +487,7 @@ async def _bootstrap_metadata_artifact(
     except LeanMetadataExtractionError as e:
         await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e))
         logger.warning("data_lake.ensure_data: metadata extraction failed: %s", e)
-        return None, False
+        return MetadataBootstrap(None, False, "io_error")
 
     content = mh_bytes if metadata_kind == "market_hours" else sp_bytes
     file_sha = atomic_write_and_promote(
@@ -488,7 +507,7 @@ async def _bootstrap_metadata_artifact(
         file_size_bytes=len(content),
         file_sha256=file_sha,
     )
-    return (
+    return MetadataBootstrap(
         ArtifactRecord(
             id=artifact_id,
             artifact_kind="metadata",
@@ -505,8 +524,10 @@ async def _bootstrap_metadata_artifact(
             row_count=1,
             first_bar_start_ms=0,
             last_bar_start_ms=0,
+            file_size_bytes=len(content),
         ),
         False,  # freshly fetched
+        None,
     )
 
 
@@ -559,20 +580,61 @@ async def _process_minute_trade_artifact(
         )
         if existing:
             return existing[0], None, True  # cache hit
-        # In-flight elsewhere; Slice 1c doesn't poll. Report as transient.
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=identity.trading_date,
-                data_type=identity.data_type,
-                reason="lease_timeout",
-                detail="another worker has the lease; polling not implemented in Slice 1c",
-                attempt_count=1,
-            ),
-            False,
-        )
+
+        # Not complete either — the row exists but is 'failed' or 'fetching'.
+        # Those need different answers: a 'failed' (or lease-expired
+        # 'fetching') row is not contention, it is a done deal, and reporting
+        # it as lease_timeout would send the caller into a 600s poll loop that
+        # can never resolve, because the row never transitions on its own.
+        # Reclaim it here instead — the same primitive the lease-expiry sweep
+        # uses — so this call either gets a fresh attempt at the bytes or a
+        # terminal answer, on this pass.
+        row_state = await catalog_client.select_minute_bar_claim_state(identity)
+        if row_state is not None:
+            reclaimed = await catalog_client.steal_or_retry_minute_bar(
+                artifact_id=row_state.id,
+                worker_id=_WORKER_ID,
+                lease_ttl_ms=_LEASE_TTL_MS,
+                max_retries=_MAX_CLAIM_RETRIES,
+            )
+            if reclaimed:
+                artifact_id = row_state.id
+                # Falls through to the fetch below, exactly as a fresh claim would.
+            elif row_state.status == "failed":
+                # Retries exhausted: a real, terminal failure, not contention.
+                # fetch_timeout (not lease_timeout) so the bridge's contention
+                # classifier does not send this back into the poll loop.
+                return (
+                    None,
+                    ArtifactFailure(
+                        artifact_kind=identity.artifact_kind,
+                        symbol=identity.symbol,
+                        trading_date=identity.trading_date,
+                        data_type=identity.data_type,
+                        reason="fetch_timeout",
+                        detail=(
+                            f"exhausted {row_state.attempt_count} attempt(s); "
+                            f"last error: {row_state.last_error}"
+                        ),
+                        attempt_count=row_state.attempt_count,
+                    ),
+                    False,
+                )
+        if artifact_id is None:
+            # Genuinely fetching under a live lease elsewhere — real contention.
+            return (
+                None,
+                ArtifactFailure(
+                    artifact_kind=identity.artifact_kind,
+                    symbol=identity.symbol,
+                    trading_date=identity.trading_date,
+                    data_type=identity.data_type,
+                    reason="lease_timeout",
+                    detail="another worker has the lease",
+                    attempt_count=1,
+                ),
+                False,
+            )
 
     # Fetch from Polygon.
     api_key = settings.POLYGON_API_KEY
@@ -722,6 +784,7 @@ async def _process_minute_trade_artifact(
             row_count=len(polygon_bars),
             first_bar_start_ms=first_bar_ms,
             last_bar_start_ms=last_bar_ms,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly fetched
@@ -878,6 +941,7 @@ async def _process_factor_file_artifact(
             row_count=len(splits) + len(dividends),
             first_bar_start_ms=0,
             last_bar_start_ms=0,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly fetched
@@ -986,6 +1050,7 @@ async def _process_map_file_artifact(
             row_count=len(events),
             first_bar_start_ms=0,
             last_bar_start_ms=0,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly fetched
@@ -1115,6 +1180,7 @@ async def _process_minute_quote_artifact(
             row_count=row_count,
             first_bar_start_ms=first_ms,
             last_bar_start_ms=last_ms,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly derived
@@ -1248,6 +1314,7 @@ async def _process_daily_trade_artifact(
             row_count=row_count,
             first_bar_start_ms=0,
             last_bar_start_ms=0,
+            file_size_bytes=len(payload),
         ),
         None,
         False,  # freshly derived
@@ -1289,7 +1356,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     mh_rel = LeanMetadataPath(kind="market_hours").relative_path()
     sp_rel = LeanMetadataPath(kind="symbol_properties").relative_path()
 
-    mh_record, mh_reused = await _bootstrap_metadata_artifact(
+    mh_record, mh_reused, mh_failure_reason = await _bootstrap_metadata_artifact(
         file_name="market-hours-database.json",
         metadata_kind="market_hours",
         rel_path=mh_rel,
@@ -1298,7 +1365,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
         lake_root=lake_root,
         staging_root=staging_root,
     )
-    sp_record, sp_reused = await _bootstrap_metadata_artifact(
+    sp_record, sp_reused, sp_failure_reason = await _bootstrap_metadata_artifact(
         file_name="symbol-properties-database.csv",
         metadata_kind="symbol_properties",
         rel_path=sp_rel,
@@ -1328,7 +1395,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 symbol=None,
                 trading_date=None,
                 data_type=None,
-                reason="io_error",
+                reason=mh_failure_reason,
                 detail="market-hours metadata bootstrap failed; see launcher logs",
                 attempt_count=1,
             )
@@ -1347,7 +1414,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 symbol=None,
                 trading_date=None,
                 data_type=None,
-                reason="io_error",
+                reason=sp_failure_reason,
                 detail="symbol-properties metadata bootstrap failed; see launcher logs",
                 attempt_count=1,
             )
