@@ -2,7 +2,7 @@
 
 **Status:** Accepted 2026-08-27
 
-**Vocabulary:** `CONTEXT.md` § "Data lake" — **Data lake**, **Catalog**, **Artifact**, **Coverage**, **Claim / lease**. Owed on acceptance: `CONTEXT.md` had no entry for any of the five, and the observatory surface ([#1838](https://github.com/tim1016/learn-ai/issues/1838)) puts coverage and artifacts in front of an operator. Per ADR 0040 Decision 4.
+**Vocabulary:** `CONTEXT.md` § "Data lake" — **Data lake**, **Lake catalog**, **Lake artifact**, **Data coverage**, **Claim / lease**. Owed on acceptance: `CONTEXT.md` had no entry for any of the five, and the observatory surface ([#1838](https://github.com/tim1016/learn-ai/issues/1838)) puts coverage and artifacts in front of an operator. Per ADR 0040 Decision 4.
 
 - **Date:** 2026-08-27
 - **Provenance:** PRD [#1825](https://github.com/tim1016/learn-ai/issues/1825),
@@ -51,11 +51,36 @@ never owning desired state, the run ledger, or the audit trail.
 The lake honors that doctrine rather than carving an exception from it:
 
 - **The bytes stay files.** A bar day is a LEAN zip on disk, hashed. Losing
-  Postgres loses the index, not the data; the catalog is rebuildable by walking
-  the lake and re-hashing, which is precisely ADR 0001's "derived projection".
+  Postgres loses the index, not the data.
 - **Postgres owns no market data.** It owns *statements about* market data —
   which artifact exists, its hash, its provenance, and who currently holds a
   claim to fetch it.
+
+Rebuildability is the test that makes "projection" mean something, so it is
+worth being exact about what survives a lost catalog rather than waving at it.
+Three kinds of row content, three different answers:
+
+- **Identity, hash, and coverage are rebuildable** by walking the lake and
+  re-hashing. This is the index, and it is the bulk of the catalog.
+- **Lease state is deliberately *not* rebuilt.** A lease is a claim on work in
+  flight; one that survived a catalog rebuild would be a stale claim blocking a
+  fetch nothing is performing. Losing it is correct, not a gap.
+- **Provenance and fetch history are not derivable from bytes** — when a day was
+  fetched, under which provider parameters, after how many failed attempts, and
+  (after the import in [#1832](https://github.com/tim1016/learn-ai/issues/1832))
+  whether it was fetched from the provider at all or imported from the policy
+  store. An imported zip and a fetched zip are byte-identical.
+
+That last category is the one ADR 0001 speaks to directly, because provenance is
+audit trail, and ADR 0001 says Postgres never owns the audit trail. **So it does
+not: provenance keeps a file-side home in the lake, and the catalog's copy is
+the projection of it.** This is not a concession invented here to rescue the
+argument — PRD #1825 already requires the existing cache's provenance documents
+to be carried into the import's provenance trail rather than deleted, because
+they are the evidence for the [#1830](https://github.com/tim1016/learn-ai/issues/1830)
+refetch leak. Writing provenance file-side keeps that evidence on the substrate
+ADR 0001 designated for it, and makes the rebuildability claim above true rather
+than approximately true.
 - **The scope is disjoint.** ADR 0001 governs the live-runtime control plane:
   run identity, decisions, executions, trades, kill switches. None of that moves.
   Historical bar data was never in that substrate; it sat in an uncatalogued
@@ -88,6 +113,20 @@ one process. It also spreads decisions about LEAN-format semantics across two
 languages, which the spec itself argued against in the same section that
 assigned orchestration to .NET (§ 122: "LEAN-format knowledge ... stays
 Python-side").
+
+**What the deviation gives up.** The spec's flow carried two capabilities that
+in-process orchestration does not inherit for free, and a deviation record that
+lists only its own reasons is an argument, not a record:
+
+- **The partial-coverage policy table** (§ 528): a `run_type` × `failure.reason`
+  matrix in Backend deciding whether a run proceeds on incomplete data. In-process
+  orchestration still has to answer that question; it just answers it in Python,
+  and nothing in this decision says how. That is a real open question for
+  [#1833](https://github.com/tim1016/learn-ai/issues/1833), not a solved one.
+- **Backend-side `request_id` idempotency** (§§ 541–543), which deduped retried
+  orchestration calls. Materializing in-process removes the retrying caller, so
+  the need mostly dissolves — but "mostly" is doing work in that sentence, and
+  the catalog's own claim/complete semantics are what has to carry it.
 
 This is recorded rather than silently dropped because the spec is cited by
 section number throughout the lake's source, and a reader who recovers it will
