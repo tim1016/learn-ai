@@ -220,6 +220,26 @@
   }
 }
 
+// ── Data-source notice ──
+// Informational, not a warning: the series is complete, only its provenance
+// is mixed. Sits above the chart so it reads once and stays out of the way.
+.source-notice {
+  padding: 8px 16px;
+  margin: 8px 12px;
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-left: 3px solid $text-muted;
+  border-radius: 6px;
+  color: $text-secondary;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  i { color: $text-muted; }
+}
+
 // ── Error ──
 .chart-error {
   padding: 12px 16px;

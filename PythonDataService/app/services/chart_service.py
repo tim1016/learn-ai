@@ -22,7 +22,9 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from app.config import settings
 from app.lean_sidecar.trading_calendar import session_window_for_date, session_windows_ms_utc
+from app.services.chart_bar_source import compose_chart_bars
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
     assert_canonical_bar_stream,
@@ -259,9 +261,23 @@ def _resample_cache_key(
     timeframe: str,
     session: str,
     forward_fill: bool,
-    adjusted: bool = True,
+    adjusted: bool,
+    lake_read: bool,
 ) -> str:
-    return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}"
+    # ``lake_read`` keys the two sourcing modes apart. Without it a process that
+    # flipped DATA_LAKE_ENABLED would serve a composed entry (and its source
+    # indicator) to a flag-off caller from the same key. It has no default for
+    # exactly that reason: a defaulted discriminator is the silent lie the
+    # parameter exists to prevent. (``adjusted`` loses its default alongside it —
+    # Python cannot put a required parameter after a defaulted one.)
+    #
+    # Known and accepted: the cached entry carries the source indicator computed
+    # at fetch time, so for up to one TTL (15 min) after a backfill fills a hole
+    # the chart can still show the provider-fallback notice. Only the notice goes
+    # stale — the bars are the same bars either way — and the next miss recomputes
+    # it. Keying on lake coverage instead would mean probing the lake on every
+    # cache hit, which is the cost this cache exists to avoid.
+    return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}|{lake_read}"
 
 
 def _indicator_cache_key(resample_key: str, indicators: list[dict[str, Any]]) -> str:
@@ -880,9 +896,50 @@ def compute_indicator_results(
 
 
 # ──────────────────────────────────────────────
-# Main public API
+# Bar sourcing
 # ──────────────────────────────────────────────
 _polygon = PolygonClientService()
+
+
+def _fetch_chart_bars(
+    ticker: str,
+    fetch_from: str,
+    to_date: str,
+    adjusted: bool,
+    requested_from: str,
+    session: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Return the 1-minute bar stream and its per-portion source indicator.
+
+    Flag off (the default): one provider fetch, exactly as before, and no
+    source indicator — the response keeps the shape it has today. Flag on:
+    completed sessions come from lake artifacts and only the still-forming
+    session touches the provider, with a receipt of which portion was
+    provider-served (see :mod:`app.services.chart_bar_source`).
+
+    ``fetch_from`` is warmup-extended; ``requested_from`` is what the operator
+    asked for, and the receipt describes only that. ``session`` decides when a
+    trading date stops forming — this chart renders post-market bars when it is
+    ``extended``, so the composer must hold today open that much longer.
+    """
+    if not settings.DATA_LAKE_ENABLED:
+        return fetch_bars_chunked(_polygon, ticker, fetch_from, to_date, adjusted=adjusted), None
+
+    composed = compose_chart_bars(
+        ticker=ticker,
+        from_date=fetch_from,
+        to_date=to_date,
+        adjusted=adjusted,
+        fetch_provider=lambda start, end: fetch_bars_chunked(_polygon, ticker, start, end, adjusted=adjusted),
+        session=session,
+        visible_from_date=requested_from,
+    )
+    return composed.bars, composed.as_response_dict()
+
+
+# ──────────────────────────────────────────────
+# Main public API
+# ──────────────────────────────────────────────
 
 
 def get_chart_data(
@@ -928,11 +985,25 @@ def get_chart_data(
         }
 
     # ── Layer 1: Fetch + Preprocess + Resample (cached) ──
-    resample_key = _resample_cache_key(ticker, from_date, to_date, timeframe, session, forward_fill, adjusted)
+    # Known and accepted: with the flag on and adjusted=True the lake is never
+    # read (it stores raw bytes only), so this key holds a second entry whose
+    # bars are identical to the flag-off entry's. One duplicated cache slot per
+    # such range is a smaller price than making the key lie about which sourcing
+    # mode produced the entry it holds.
+    resample_key = _resample_cache_key(
+        ticker,
+        from_date,
+        to_date,
+        timeframe,
+        session,
+        forward_fill,
+        adjusted,
+        settings.DATA_LAKE_ENABLED,
+    )
     cached_resample = _resample_cache.get(resample_key)
 
     if cached_resample is not None:
-        df_resampled, quality = cached_resample
+        df_resampled, quality, bar_sources = cached_resample
         logger.info(f"[CHART] Cache HIT for resample: {resample_key}")
         cache_hit_resample = True
     else:
@@ -946,7 +1017,7 @@ def get_chart_data(
             fetch_from = compute_warmup_start_date(from_date, max_lookback)
             logger.info(f"[CHART] Warmup: fetching from {fetch_from} (requested {from_date})")
 
-        bars = fetch_bars_chunked(_polygon, ticker, fetch_from, to_date, adjusted=adjusted)
+        bars, bar_sources = _fetch_chart_bars(ticker, fetch_from, to_date, adjusted, from_date, session)
         if not bars:
             return {
                 "error_code": "NO_DATA",
@@ -981,7 +1052,7 @@ def get_chart_data(
                 "recommended_timeframe": recommended,
             }
 
-        _resample_cache.put(resample_key, (df_resampled.copy(), quality))
+        _resample_cache.put(resample_key, (df_resampled.copy(), quality, bar_sources))
 
     # ── Layer 2: Indicator computation (cached) ──
     indicator_results: list[dict[str, Any]] = []
@@ -1035,7 +1106,7 @@ def get_chart_data(
             if s:
                 bar["synthetic"] = True
 
-    return {
+    response: dict[str, Any] = {
         "bars": bars_out,
         "indicators": indicator_results,
         "quality": {
@@ -1069,3 +1140,8 @@ def get_chart_data(
             "cached_indicators": cache_hit_indicators,
         },
     }
+    # Additive: the key is absent entirely when the lake is not in the read
+    # path, so a flag-off response is byte-identical to today's.
+    if bar_sources is not None:
+        response["bar_sources"] = bar_sources
+    return response

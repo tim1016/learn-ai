@@ -20,6 +20,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+#: The lake's symbol policy. ``DataRunSpec`` enforces it on every write, so it
+#: is also the answer to "could the lake ever hold this symbol?" — readers that
+#: classify a symbol's provenance must consult it (is_lake_addressable_symbol
+#: below) rather than assume any ticker the filesystem tolerates is one
+#: ensure_data can seed.
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
 # Mirrors the DataLakeArtifacts.Symbol column: character varying(20)
 # (Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs). Shared
@@ -52,6 +57,16 @@ ArtifactStatus = Literal["fetching", "complete", "stale", "failed"]
 def trading_range_span_days(start: date, end: date) -> int:
     """Inclusive day count of a closed ``[start, end]`` trading-date window."""
     return (end - start).days + 1
+
+
+def is_lake_addressable_symbol(symbol: str) -> bool:
+    """True iff the lake writer would accept ``symbol``.
+
+    ``DataRunSpec`` refuses hyphenated and digit-leading tickers, so
+    ``ensure_data`` can never seed one. A reader that called such a symbol a
+    lake *gap* would be promising a backfill that cannot happen.
+    """
+    return bool(SYMBOL_RE.match(symbol))
 
 
 class DataRunSpec(BaseModel):
@@ -98,7 +113,7 @@ class DataRunSpec(BaseModel):
     def _validate(self) -> DataRunSpec:
         # Symbols: uppercase canonical, within the catalog's storable length.
         for sym in self.symbols:
-            if not SYMBOL_RE.match(sym):
+            if not is_lake_addressable_symbol(sym):
                 raise ValueError(f"symbol must match {SYMBOL_RE.pattern}: {sym!r}")
             if len(sym) > MAX_SYMBOL_LENGTH:
                 raise ValueError(f"symbol exceeds {MAX_SYMBOL_LENGTH}-char catalog limit: {sym!r}")
