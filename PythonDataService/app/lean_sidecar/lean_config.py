@@ -45,6 +45,12 @@ class LeanConfig:
     algorithm_type_name: str = "MyAlgorithm"
     parameters: Mapping[str, str] = ()
     environment: str = "backtesting"
+    # Container-side LEAN ``data-folder``. Defaults to the staged
+    # workspace subtree, which is what every pre-data-lake run renders.
+    # A ``DATA_LAKE_ENABLED`` run passes
+    # :data:`app.lean_sidecar.lake_mount.CONTAINER_LAKE_DATA_MOUNT`
+    # instead, pointing LEAN at the read-only lake mount.
+    data_folder: str = CONTAINER_DATA_FOLDER
 
     def to_payload(self) -> dict[str, object]:
         """Return the dict serialized into ``config.json``.
@@ -62,7 +68,7 @@ class LeanConfig:
             "algorithm-language": self.algorithm_language,
             "algorithm-type-name": self.algorithm_type_name,
             "algorithm-location": algorithm_location,
-            "data-folder": CONTAINER_DATA_FOLDER,
+            "data-folder": self.data_folder,
             "results-destination-folder": CONTAINER_RESULTS_FOLDER,
             # Override LEAN's default ObjectStore root (image overlay at
             # /Lean/Launcher/bin/Debug/storage) so per-run audit files

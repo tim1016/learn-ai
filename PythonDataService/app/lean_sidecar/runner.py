@@ -22,6 +22,7 @@ import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.lean_sidecar.config import (
     ALLOWED_IMAGE_DIGESTS,
@@ -31,6 +32,9 @@ from app.lean_sidecar.config import (
     RunLimits,
 )
 from app.lean_sidecar.workspace import Workspace
+
+if TYPE_CHECKING:
+    from app.lean_sidecar.lake_mount import LakeMount
 
 logger = logging.getLogger(__name__)
 
@@ -397,12 +401,20 @@ def build_command(
     hardening_flags: tuple[str, ...] = (),
     hardening_profile: HardeningProfile | None = None,
     allowed_image_digests: frozenset[str] | None = None,
+    lake_mount: LakeMount | None = None,
 ) -> RunnerPlan:
     """Construct the `podman run` argv for this workspace + image.
 
     The returned argv is the *exact* command the runner will execute.
     Tests assert on it so a future refactor cannot silently widen the
     sandbox.
+
+    ``lake_mount`` adds the data lake's read-only bind mount alongside
+    the workspace mount (``DATA_LAKE_ENABLED`` runs only). ``None`` —
+    the default — renders exactly the argv this function rendered
+    before the lake existed. :class:`~app.lean_sidecar.lake_mount.LakeMount`
+    has no writable form, so the lake can only ever reach the container
+    as ``:ro``.
 
     Two ways to specify optional hardening:
 
@@ -439,6 +451,11 @@ def build_command(
         raise RunnerConfigurationError(f"workspace directory does not exist: {workspace.workspace_dir}")
     if not workspace.workspace_dir.is_dir():
         raise RunnerConfigurationError(f"workspace path is not a directory: {workspace.workspace_dir}")
+    if lake_mount is not None and not lake_mount.host_lake_root.is_dir():
+        # Same fail-fast shape as the workspace check above. Podman
+        # would otherwise create the missing source as an empty
+        # directory and LEAN would report every day as missing data.
+        raise RunnerConfigurationError(f"lake root does not exist or is not a directory: {lake_mount.host_lake_root}")
 
     image_reference = _require_image_in_allowlist(
         image_digest,
@@ -508,6 +525,12 @@ def build_command(
             f"{workspace.workspace_dir}:{CONTAINER_WORKSPACE_MOUNT}:rw",
         ]
     )
+    if lake_mount is not None:
+        # The lake is the run's data folder in lake mode; the workspace
+        # mount above stays read-write for output/, launcher/, and the
+        # rendered project/. A crashing LEAN container cannot mutate the
+        # lake because this mount is rendered ``:ro`` at the OS level.
+        argv.extend(["-v", lake_mount.volume_argument()])
     # Optional hardening flags survive only if the security-flag matrix
     # proved the pinned image tolerates them. Already validated against
     # ALLOWED_HARDENING_TOKENS above.
