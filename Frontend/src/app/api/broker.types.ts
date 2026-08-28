@@ -14419,6 +14419,12 @@ export interface components {
             verification?: "live_reproof" | "frozen_run_evidence";
             /** Verified At Ms */
             verified_at_ms: number;
+            /**
+             * Wiring
+             * @default NOT_CHECKED
+             * @enum {string}
+             */
+            wiring?: "MATCHED" | "DRIFTED" | "NOT_CHECKED";
         };
         /** ProjectedCommandResponse */
         ProjectedCommandResponse: {
