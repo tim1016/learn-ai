@@ -23,7 +23,7 @@ from app.broker.alpaca.clerk.account_authority import (
     paper_evidence_account_id_for_strategy,
     synthetic_account_id_for_strategy,
 )
-from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+from app.broker.alpaca.clerk.sqlite.decision_receipts import QUARANTINE_OUTCOME, SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     ShadowTraceDivergence,
@@ -154,7 +154,7 @@ _CRASH_OUTCOME = "candidate_uncaptured_at_crash"
 # with. Excluded before the identity requirement below, which would otherwise
 # read a legitimate quarantine receipt as an unalignable journal and make
 # replay proof unavailable for the entire run.
-_QUARANTINE_OUTCOME = "decision_bar_quarantined"
+_QUARANTINE_OUTCOME = QUARANTINE_OUTCOME
 
 
 @dataclass(frozen=True)

@@ -51,6 +51,13 @@ DecisionOutcome = Literal[
     "decision_bar_quarantined",
 ]
 
+# Named because three modules outside this one must recognise this specific
+# outcome -- the journal that writes it, the replay proof that must exclude
+# it from decision alignment, and the panel station that must not render it
+# as a satisfied signal. A literal repeated across those is a literal that
+# eventually disagrees with itself.
+QUARANTINE_OUTCOME: DecisionOutcome = "decision_bar_quarantined"
+
 
 class DecisionReceipt(BaseModel):
     """Trader-facing view of one SQLite decision receipt."""

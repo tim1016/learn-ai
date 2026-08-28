@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    QUARANTINE_OUTCOME,
+    DecisionOutcome,
+    SqliteDecisionReceipts,
+)
 from app.engine.strategy.signal_program import StageQuarantine, StageStatus
 from app.services.bot_decision_quarantine import (
-    QUARANTINE_OUTCOME,
     QuarantineJournal,
     QuarantineReceiptSink,
     quarantine_bar_ref,
@@ -193,4 +196,29 @@ def test_the_sink_protocol_still_matches_the_journal_it_stands_for() -> None:
             f"{expected.annotation!r}, the Protocol declares "
             f"{protocol.parameters[name].annotation!r}"
         )
+
+
+def test_the_panel_view_still_mirrors_every_decision_outcome() -> None:
+    """``RecentDecisionView.outcome`` restates ``DecisionOutcome`` by hand.
+
+    Its comment says it mirrors that union, but nothing enforced it. The two
+    cannot be collapsed -- one is the storage vocabulary and one is the wire
+    contract the Frontend types are generated from -- so the duplication is
+    real and the only question is whether it is checked. Adding
+    ``decision_bar_quarantined`` (issue #1827) made it a three-way sync;
+    a panel that silently cannot represent an outcome the journal writes
+    fails as a validation error on a live read, which is the worst place to
+    find out.
+    """
+    import typing
+
+    from app.schemas.broker_v2_panel import RecentDecisionView
+
+    storage = set(typing.get_args(DecisionOutcome))
+    wire = set(typing.get_args(RecentDecisionView.model_fields["outcome"].annotation))
+
+    assert storage == wire, (
+        f"only in DecisionOutcome: {sorted(storage - wire)}; "
+        f"only in RecentDecisionView: {sorted(wire - storage)}"
+    )
 

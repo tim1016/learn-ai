@@ -318,3 +318,45 @@ def test_signal_is_explicit_absence_when_no_decision_is_linked_to_the_selected_t
     receipts = _receipts(stations)
     assert states["SIGNAL"] == "not_applicable"
     assert ref in receipts["SIGNAL"]
+
+
+def test_signal_is_blocked_not_satisfied_when_the_last_bar_was_quarantined() -> None:
+    """Issue #1827 regression: a refused decision bar is not a decision.
+
+    Giving a quarantined bar a durable receipt (so an operator can find out
+    why a bot decided nothing) put a row in the decision window that SIGNAL
+    would otherwise render through the ordinary "latest decision" path --
+    reporting `satisfied`, whose operator copy is "This station completed
+    with recorded evidence."
+
+    That is wrong at exactly the moment it matters most. A systematically
+    mis-shaped decision clock refuses *every* bar, so the bot records no
+    other receipt and the quarantine row is the entire window: the panel
+    would have shown a satisfied SIGNAL station for a bot that has never
+    evaluated a decision at all.
+    """
+    decisions = [
+        decision_receipt(
+            seq=1,
+            ts_ms=_NOW - 100,
+            outcome="decision_bar_quarantined",
+            reason_code="TIMEFRAME_MISMATCH",
+        )
+    ]
+
+    stations = derive_stations(
+        sid=SID,
+        transaction_ref=None,
+        all_entries=[],
+        decisions=decisions,
+        latest_reconciliation=None,
+        now_ms=_NOW,
+    )
+
+    signal = next(station for station in stations if station.station_id == "SIGNAL")
+    assert signal.state == "blocked", (
+        "a bot whose decision bars are being refused must not read as a satisfied signal"
+    )
+    assert "TIMEFRAME_MISMATCH" in signal.receipt
+    assert "refused" in signal.receipt
+

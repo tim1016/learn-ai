@@ -16,7 +16,11 @@ import logging
 from collections.abc import Mapping
 from typing import Protocol
 
-from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome, JsonValue
+from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    QUARANTINE_OUTCOME,
+    DecisionOutcome,
+    JsonValue,
+)
 from app.engine.strategy.signal_program import StageQuarantine
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.utils.timestamps import now_ms_utc
@@ -35,9 +39,6 @@ _QUARANTINE_LOG_EVERY = 50
 # (UNSETTLED_STAGE, NON_MONOTONIC_DECISION_CLOCK) refuse a bucket of exactly
 # the right width, so reporting expected/observed alongside them is noise.
 _TIMEFRAME_MISMATCH_REASON = "TIMEFRAME_MISMATCH"
-
-QUARANTINE_OUTCOME: DecisionOutcome = "decision_bar_quarantined"
-
 
 class QuarantineReceiptSink(Protocol):
     """The ``SqliteDecisionReceipts.append`` shape this module writes through.
