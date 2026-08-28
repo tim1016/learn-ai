@@ -202,6 +202,39 @@ def check_availability(
     )
 
 
+def _missing_fetch_ranges(
+    missing_days: Sequence[date],
+    trading_sessions: Sequence[date],
+) -> list[tuple[date, date]]:
+    """Group ``missing_days`` into contiguous provider-fetch windows.
+
+    Adjacency is decided by walking ``trading_sessions`` — the canonical
+    NYSE session calendar (see ``app.lean_sidecar.trading_calendar``),
+    never weekday arithmetic. Two missing days merge into one range iff
+    no *covered* trading session falls between them, so a gap spanning a
+    weekend or a holiday still merges cleanly (e.g. a missing Friday and
+    the following Monday become a single range). A day that ``missing_days``
+    flags but that is not itself a real trading session (the weekday-only
+    filter in :func:`check_availability` cannot see holidays, so it flags
+    them as perpetually "missing") has nothing to fetch and is dropped.
+    """
+    missing = set(missing_days)
+    ranges: list[tuple[date, date]] = []
+    range_start: date | None = None
+    range_end: date | None = None
+    for session in trading_sessions:
+        if session in missing:
+            if range_start is None:
+                range_start = session
+            range_end = session
+        elif range_start is not None:
+            ranges.append((range_start, range_end))
+            range_start = None
+    if range_start is not None:
+        ranges.append((range_start, range_end))
+    return ranges
+
+
 def ensure_range(
     *,
     reference_roots: Sequence[Path],
@@ -230,10 +263,13 @@ def ensure_range(
     symbol serialize, and the loser observes the winner's zips instead of
     re-fetching. Every fetch appends to the symbol's provenance document.
 
-    The function always exports the *full requested range* rather than
-    cherry-picking missing days because the Polygon aggregates endpoint is
-    billed per request, and fetching one range is cheaper than N one-day
-    requests for sparse gaps.
+    Only the missing sub-ranges are fetched, not the full requested
+    window: missing days are grouped into contiguous windows using the
+    canonical NYSE trading-session calendar (see
+    :func:`_missing_fetch_ranges`), and each window gets its own
+    Polygon call and its own provenance record. A window with a single
+    missing day out of a large range therefore costs one one-day
+    request, not a re-fetch of the whole range.
     """
     all_roots = [*reference_roots, cache_root]
     pre = check_availability(all_roots, symbol, start, end, resolution=resolution)
@@ -252,6 +288,7 @@ def ensure_range(
     # want to read a report (e.g. the availability endpoint).
     from app.engine.data.policy_store import record_fetch, symbol_write_lock
     from app.engine.data.polygon_export import export_polygon_range_to_lean
+    from app.lean_sidecar.trading_calendar import expected_sessions
     from app.utils.timestamps import now_ms_utc
 
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -269,34 +306,49 @@ def ensure_range(
             )
             return pre
 
+        fetch_ranges = _missing_fetch_ranges(pre.missing_days, expected_sessions(start, end))
+        if not fetch_ranges:
+            # Every naively-flagged missing day (see check_availability's
+            # weekday-only filter) turned out not to be a real trading
+            # session — a holiday inside the window, most likely. There is
+            # nothing to fetch.
+            logger.info(
+                "[ENGINE] %s data for %s %s..%s has no missing trading sessions to fetch",
+                resolution,
+                symbol,
+                start,
+                end,
+            )
+            return pre
+
         logger.info(
-            "[ENGINE] Materializing %s %s %s..%s into cache — %d/%d weekdays missing",
+            "[ENGINE] Materializing %s %s %s..%s into cache — %d missing sub-range(s)",
             resolution,
             symbol,
             start,
             end,
-            len(pre.missing_days),
-            pre.expected_days,
+            len(fetch_ranges),
         )
 
-        export_polygon_range_to_lean(
-            polygon=polygon,
-            output_root=cache_root,
-            symbol=symbol.upper(),
-            from_date=start.isoformat(),
-            to_date=end.isoformat(),
-            adjusted=adjusted,
-            resolution=resolution,
-        )
-        record_fetch(
-            cache_root,
-            symbol,
-            source="polygon",
-            adjusted=adjusted,
-            resolution=resolution,
-            from_date=start.isoformat(),
-            to_date=end.isoformat(),
-            fetched_at_ms=now_ms_utc(),
-        )
+        for range_start, range_end in fetch_ranges:
+            export_polygon_range_to_lean(
+                polygon=polygon,
+                output_root=cache_root,
+                symbol=symbol.upper(),
+                from_date=range_start.isoformat(),
+                to_date=range_end.isoformat(),
+                adjusted=adjusted,
+                resolution=resolution,
+            )
+            record_fetch(
+                cache_root,
+                symbol,
+                source="polygon",
+                adjusted=adjusted,
+                resolution=resolution,
+                from_date=range_start.isoformat(),
+                to_date=range_end.isoformat(),
+                fetched_at_ms=now_ms_utc(),
+            )
 
     return check_availability(all_roots, symbol, start, end, resolution=resolution)

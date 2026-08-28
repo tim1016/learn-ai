@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.data.availability import ensure_range
+from app.engine.data.availability import _missing_fetch_ranges, ensure_range
 from app.engine.data.policy_store import (
     policy_key,
     read_provenance,
@@ -384,6 +384,43 @@ def test_ensure_range_concurrent_runs_fetch_once(tmp_path: Path):
     assert polygon.calls == 1
     zips = sorted(p.name for p in (policy_root / "equity" / "usa" / "minute" / "spy").glob("*_trade.zip"))
     assert zips == ["20260105_trade.zip", "20260106_trade.zip"]
+
+
+def test_missing_fetch_ranges_groups_contiguous_sessions_across_a_weekend():
+    # Fri 2026-01-09, Mon 2026-01-12 are adjacent trading sessions (the
+    # weekend between them is not a session at all) and must merge into
+    # one range.
+    sessions = [date(2026, 1, 8), date(2026, 1, 9), date(2026, 1, 12), date(2026, 1, 13)]
+    missing = [date(2026, 1, 9), date(2026, 1, 12)]
+
+    ranges = _missing_fetch_ranges(missing, sessions)
+
+    assert ranges == [(date(2026, 1, 9), date(2026, 1, 12))]
+
+
+def test_missing_fetch_ranges_splits_non_adjacent_gaps():
+    sessions = [date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8), date(2026, 1, 9)]
+    missing = [date(2026, 1, 5), date(2026, 1, 9)]
+
+    ranges = _missing_fetch_ranges(missing, sessions)
+
+    assert ranges == [(date(2026, 1, 5), date(2026, 1, 5)), (date(2026, 1, 9), date(2026, 1, 9))]
+
+
+def test_missing_fetch_ranges_drops_non_session_days():
+    # A day that check_availability's weekday-only filter flags as
+    # "missing" (e.g. a holiday) but that never appears in the canonical
+    # session list has nothing to fetch.
+    sessions = [date(2026, 1, 5), date(2026, 1, 6)]
+    missing = [date(2026, 1, 1), date(2026, 1, 6)]
+
+    ranges = _missing_fetch_ranges(missing, sessions)
+
+    assert ranges == [(date(2026, 1, 6), date(2026, 1, 6))]
+
+
+def test_missing_fetch_ranges_empty_when_nothing_missing():
+    assert _missing_fetch_ranges([], [date(2026, 1, 5)]) == []
 
 
 def test_ensure_range_refetches_only_the_missing_day_not_the_whole_window(tmp_path: Path):
