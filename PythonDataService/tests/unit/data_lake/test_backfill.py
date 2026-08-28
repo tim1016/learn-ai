@@ -1,12 +1,12 @@
 """Unit tests for app.data_lake.backfill.run_backfill.
 
-These tests never touch Postgres or Polygon: run_backfill's ensure_fn is
-injectable, so the per-day orchestration (session iteration, progress
-callbacks, typed-failure propagation, lease-timeout retry) is exercised
-against a small in-memory fake that mimics ensure_data's per-day contract.
-Real-catalog claim/lease behavior stays covered by
-tests/unit/data_lake/test_catalog_write_ops.py and
-tests/unit/data_lake/test_ensure_data.py (Postgres-gated).
+These tests never touch Postgres or Polygon: run_backfill's ensure_fn and
+status_fn are both injectable, so the per-day orchestration (session
+iteration, progress callbacks, typed-failure propagation, lease-wait
+polling) is exercised against small in-memory fakes that mimic
+ensure_data's and the catalog's per-day contract. Real-catalog claim/lease
+behavior stays covered by tests/unit/data_lake/test_catalog_write_ops.py
+and tests/unit/data_lake/test_ensure_data.py (Postgres-gated).
 
 Issue: #1836.
 """
@@ -14,13 +14,15 @@ Issue: #1836.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import date
 from uuid import UUID
 
 import pytest
 
-from app.data_lake.backfill import BackfillDayProgress, run_backfill
-from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
+from app.data_lake.backfill import BackfillDayProgress, BackfillWaitProgress, run_backfill
+from app.data_lake.catalog_client import MinuteBarLeaseStatus
+from app.data_lake.types import ArtifactFailure, ArtifactIdentity, ArtifactRecord, DataAvailabilityResult, DataRunSpec
 
 pytestmark = pytest.mark.asyncio
 
@@ -243,42 +245,183 @@ class TestTypedFailurePropagation:
         assert result.days_completed == 0
 
 
-class TestLeaseTimeoutRetry:
-    async def test_retries_a_lease_timeout_and_succeeds_once_the_other_worker_completes(self) -> None:
-        attempts: list[int] = []
+class _FakeLeaseCatalog:
+    """In-process model of the real catalog's per-identity claim state
+    machine ('fetching' -> 'complete' | 'failed'), keyed exactly like the
+    real DataLakeArtifacts unique index: (symbol, trading_date, data_type).
 
-        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
-            attempts.append(1)
-            if len(attempts) < 3:
-                return _failure_result(day_spec, reason="lease_timeout", detail="another worker has the lease")
-            return _ok_result(day_spec)
+    ensure_fn mirrors ensure_data's own claim contract: the first caller
+    to see no row wins the claim and does the (simulated) fetch; every
+    other caller sees the existing row, and — critically, matching the
+    real bug this fake exists to reproduce — reports reason="lease_timeout"
+    whether that row is still 'fetching' *or* already permanently
+    'failed' (ensure_data's own claim fallback, select_coverage_minute_bars,
+    only ever checks for 'complete'; it cannot see 'failed'). Only
+    status_fn can see the true state — which is exactly the gap
+    run_backfill's lease-wait loop closes.
+    """
 
-        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 20))
-        result = await run_backfill(spec, ensure_fn=fake_ensure)
+    def __init__(self, *, fetch_seconds: float = 0.0, lease_ttl_ms: int = 300_000) -> None:
+        self._rows: dict[tuple, dict] = {}
+        self._lock = asyncio.Lock()
+        self.fetch_seconds = fetch_seconds
+        self.lease_ttl_ms = lease_ttl_ms
+        self.fetch_calls: dict[tuple, int] = {}
 
-        assert len(attempts) == 3
-        assert result.overall_status == "complete"
-        assert result.failures == []
+    @staticmethod
+    def _key(symbol: str, trading_date: date, data_type: str) -> tuple:
+        return (symbol, trading_date, data_type)
 
-    async def test_gives_up_after_max_retries_and_surfaces_lease_timeout(self) -> None:
-        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
-            return _failure_result(day_spec, reason="lease_timeout", detail="stuck")
+    def seed_in_flight(self, symbol: str, trading_date: date, data_type: str = "trade") -> None:
+        """Pre-seed a row as already claimed (status='fetching') by some
+        other, external winner — for tests that drive the winner's
+        completion/failure directly rather than through this fake's own
+        ensure_fn claim race."""
+        key = self._key(symbol, trading_date, data_type)
+        self._rows[key] = {
+            "status": "fetching",
+            "lease_expires_at_ms": int(time.time() * 1000) + self.lease_ttl_ms,
+            "last_error": None,
+            "error_message": None,
+        }
 
-        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 20))
-        result = await run_backfill(spec, ensure_fn=fake_ensure)
+    def complete(self, symbol: str, trading_date: date, data_type: str = "trade") -> None:
+        self._rows[self._key(symbol, trading_date, data_type)]["status"] = "complete"
+
+    def fail(self, symbol: str, trading_date: date, reason: str, detail: str, data_type: str = "trade") -> None:
+        row = self._rows[self._key(symbol, trading_date, data_type)]
+        row["status"] = "failed"
+        row["last_error"] = reason
+        row["error_message"] = detail
+
+    async def ensure_fn(self, day_spec: DataRunSpec) -> DataAvailabilityResult:
+        symbol = day_spec.symbols[0]
+        trading_date = day_spec.start_trading_date
+        data_type = "trade"
+        key = self._key(symbol, trading_date, data_type)
+
+        async with self._lock:
+            row = self._rows.get(key)
+            won = row is None
+            if won:
+                row = {
+                    "status": "fetching",
+                    "lease_expires_at_ms": int(time.time() * 1000) + self.lease_ttl_ms,
+                    "last_error": None,
+                    "error_message": None,
+                }
+                self._rows[key] = row
+
+        if not won:
+            if row["status"] == "complete":
+                return _ok_result(day_spec)
+            return _failure_result(day_spec, reason="lease_timeout", detail="in-flight elsewhere")
+
+        self.fetch_calls[key] = self.fetch_calls.get(key, 0) + 1
+        if self.fetch_seconds:
+            await asyncio.sleep(self.fetch_seconds)
+        async with self._lock:
+            row["status"] = "complete"
+        return _ok_result(day_spec)
+
+    async def status_fn(self, identity: ArtifactIdentity) -> MinuteBarLeaseStatus | None:
+        row = self._rows.get(self._key(identity.symbol or "", identity.trading_date, identity.data_type or "trade"))
+        if row is None:
+            return None
+        return MinuteBarLeaseStatus(
+            status=row["status"],
+            lease_expires_at_ms=row["lease_expires_at_ms"],
+            last_error=row["last_error"],
+            error_message=row["error_message"],
+        )
+
+
+class TestLeaseWait:
+    """Important 1 (review round 1): the wait must be bounded by the
+    winner's own lease TTL, not a fixed sub-second retry budget — a real
+    fetch can legitimately run for tens of seconds. These tests use
+    latencies well past the old ~0.75s budget to pin that."""
+
+    async def test_loser_waits_out_a_slow_winner_and_coalesces(self) -> None:
+        """Important 2 (review round 1): the winner's fetch (~2s) is a wide
+        margin past the old retry budget's floor — the loser must still
+        coalesce to 'complete', not report a spurious lease_timeout."""
+        catalog = _FakeLeaseCatalog(fetch_seconds=2.0)
+        trading_date = date(2024, 5, 20)
+        wait_progress: list[BackfillWaitProgress] = []
+
+        winner_spec = _spec(start=trading_date, end=trading_date)
+        loser_spec = _spec(start=trading_date, end=trading_date)
+
+        winner_result, loser_result = await asyncio.gather(
+            run_backfill(winner_spec, ensure_fn=catalog.ensure_fn, status_fn=catalog.status_fn),
+            run_backfill(
+                loser_spec,
+                ensure_fn=catalog.ensure_fn,
+                status_fn=catalog.status_fn,
+                on_wait=wait_progress.append,
+            ),
+        )
+
+        assert winner_result.overall_status == "complete"
+        assert loser_result.overall_status == "complete"
+        assert loser_result.failures == []
+        # Exactly one real fetch happened — the loser coalesced onto it.
+        assert catalog.fetch_calls[("SPY", trading_date, "trade")] == 1
+        # The loser actually waited (not an instant no-op) — on_wait fired.
+        assert len(wait_progress) >= 1
+        assert all(p.trading_date == trading_date and p.symbol == "SPY" for p in wait_progress)
+
+    async def test_loser_surfaces_the_winners_real_permanent_failure_reason(self) -> None:
+        """Important 1's second requirement: when the winner permanently
+        fails the row, the loser must report that real reason, not a
+        misleading lease_timeout."""
+        catalog = _FakeLeaseCatalog()
+        trading_date = date(2024, 5, 20)
+        catalog.seed_in_flight("SPY", trading_date)
+
+        async def winner_fails_shortly() -> None:
+            await asyncio.sleep(0.6)
+            catalog.fail("SPY", trading_date, reason="provider_auth_error", detail="401 from Polygon")
+
+        winner_task = asyncio.create_task(winner_fails_shortly())
+        try:
+            spec = _spec(start=trading_date, end=trading_date)
+            result = await run_backfill(spec, ensure_fn=catalog.ensure_fn, status_fn=catalog.status_fn)
+        finally:
+            await winner_task
+
+        assert result.overall_status == "failed"
+        assert len(result.failures) == 1
+        assert result.failures[0].reason == "provider_auth_error"
+        assert result.failures[0].detail == "401 from Polygon"
+
+    async def test_gives_up_once_the_winners_own_lease_has_expired(self) -> None:
+        """A winner that never completes or fails (e.g. it crashed) must
+        not be waited on forever — once its own lease TTL has elapsed,
+        the loser gives up and reports lease_timeout."""
+        catalog = _FakeLeaseCatalog(lease_ttl_ms=-1)  # already expired the instant it's claimed
+        trading_date = date(2024, 5, 20)
+        catalog.seed_in_flight("SPY", trading_date)
+
+        spec = _spec(start=trading_date, end=trading_date)
+        result = await run_backfill(spec, ensure_fn=catalog.ensure_fn, status_fn=catalog.status_fn)
 
         assert result.overall_status == "failed"
         assert result.failures[0].reason == "lease_timeout"
 
-    async def test_non_lease_failure_is_not_retried(self) -> None:
+    async def test_non_lease_failure_never_touches_status_fn(self) -> None:
         attempts: list[int] = []
 
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
             attempts.append(1)
             return _failure_result(day_spec, reason="provider_rate_limited")
 
+        async def unexpected_status_fn(identity: ArtifactIdentity) -> MinuteBarLeaseStatus | None:
+            raise AssertionError("status_fn must not be called for a non-lease failure")
+
         spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 20))
-        result = await run_backfill(spec, ensure_fn=fake_ensure)
+        result = await run_backfill(spec, ensure_fn=fake_ensure, status_fn=unexpected_status_fn)
 
         assert len(attempts) == 1
         assert result.failures[0].reason == "provider_rate_limited"
@@ -287,46 +430,25 @@ class TestLeaseTimeoutRetry:
 class TestConcurrentOverlappingBackfills:
     """Two run_backfill() calls over overlapping ranges must coalesce
     through the same claim/lease contract ensure_data uses: exactly one
-    fetch per (symbol, day), and both jobs report the day as complete.
+    fetch per (symbol, day), and both jobs report every day as complete.
 
-    This fake models the catalog's claim semantics directly (first caller
-    to claim an identity wins; concurrent callers see a transient
-    lease_timeout until the winner completes) so the coalescing behavior of
-    run_backfill's retry loop is exercised without a live Postgres — the
-    catalog's own claim atomicity is covered separately by
+    _FakeLeaseCatalog models the catalog's claim semantics directly (first
+    caller to claim an identity wins; concurrent callers see a transient
+    lease_timeout, resolved by run_backfill's lease-wait loop polling
+    status_fn) so this coalescing behavior is exercised without a live
+    Postgres — the catalog's own claim atomicity is covered separately by
     tests/unit/data_lake/test_catalog_write_ops.py.
     """
 
     async def test_two_overlapping_jobs_share_one_fetch_per_day_and_both_complete(self) -> None:
-        fetch_calls: dict[date, int] = {}
-        claimed: dict[date, str] = {}  # day -> "fetching" | "complete"
-        lock = asyncio.Lock()
-
-        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
-            day = day_spec.start_trading_date
-            async with lock:
-                state = claimed.get(day)
-                if state == "complete":
-                    return _ok_result(day_spec)
-                if state == "fetching":
-                    return _failure_result(day_spec, reason="lease_timeout", detail="in-flight elsewhere")
-                claimed[day] = "fetching"
-
-            # Simulate the winner's fetch — outside the lock, like a real
-            # Polygon call would be.
-            fetch_calls[day] = fetch_calls.get(day, 0) + 1
-            await asyncio.sleep(0.01)
-
-            async with lock:
-                claimed[day] = "complete"
-            return _ok_result(day_spec)
+        catalog = _FakeLeaseCatalog(fetch_seconds=0.05)
 
         spec_a = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
         spec_b = _spec(start=date(2024, 5, 21), end=date(2024, 5, 23))
 
         result_a, result_b = await asyncio.gather(
-            run_backfill(spec_a, ensure_fn=fake_ensure),
-            run_backfill(spec_b, ensure_fn=fake_ensure),
+            run_backfill(spec_a, ensure_fn=catalog.ensure_fn, status_fn=catalog.status_fn),
+            run_backfill(spec_b, ensure_fn=catalog.ensure_fn, status_fn=catalog.status_fn),
         )
 
         assert result_a.overall_status == "complete"
@@ -335,6 +457,7 @@ class TestConcurrentOverlappingBackfills:
         assert result_b.failures == []
         # The overlapping days (05-21, 05-22) were fetched exactly once
         # across both jobs — no duplicate fetch.
-        for day, count in fetch_calls.items():
-            assert count == 1, f"{day} was fetched {count} times, expected exactly 1"
-        assert set(fetch_calls) == {date(2024, 5, 20), date(2024, 5, 21), date(2024, 5, 22), date(2024, 5, 23)}
+        for key, count in catalog.fetch_calls.items():
+            assert count == 1, f"{key} was fetched {count} times, expected exactly 1"
+        fetched_days = {key[1] for key in catalog.fetch_calls}
+        assert fetched_days == {date(2024, 5, 20), date(2024, 5, 21), date(2024, 5, 22), date(2024, 5, 23)}

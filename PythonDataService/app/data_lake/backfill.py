@@ -12,6 +12,7 @@ Issue: #1836. Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-des
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -19,23 +20,40 @@ from datetime import date
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from app.data_lake.ensure_data import ensure_data
-from app.data_lake.types import ArtifactFailure, DataAvailabilityResult, DataRunSpec, NonSessionRecord
+from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar_lease_status
+from app.data_lake.ensure_data import classify_overall_status, ensure_data
+from app.data_lake.types import (
+    ArtifactFailure,
+    ArtifactIdentity,
+    DataAvailabilityResult,
+    DataRunSpec,
+    NonSessionRecord,
+)
 from app.lean_sidecar.trading_calendar import expected_sessions
 
+logger = logging.getLogger(__name__)
+
 # ensure_data's Slice 1c claim path does not poll an in-flight lease (see
-# _process_minute_trade_artifact's "polling not implemented in Slice 1c").
-# Two concurrent backfills over overlapping ranges land on the same
-# calendar day: the loser's claim conflicts with the winner's still-fetching
-# row. Retrying at this layer — never touching the ensure seam or the
-# catalog — turns that race into "wait a beat, then observe the artifact
-# the other worker just completed" instead of a spurious failure.
-_LEASE_RETRY_ATTEMPTS = 5
-_LEASE_RETRY_BASE_DELAY_SECONDS = 0.05
+# _process_minute_trade_artifact's "polling not implemented in Slice 1c"):
+# the loser of a claim race gets a generic reason="lease_timeout" whether
+# the winner is still fetching or has already permanently failed, and its
+# own claim fallback (select_coverage_minute_bars — 'complete' rows only)
+# can never distinguish the two, no matter how many times it's re-called.
+# Waiting out the winner's own lease here — polling the row directly,
+# never touching the ensure seam or the catalog's write path — turns the
+# still-fetching case into "observe the artifact the other worker just
+# completed" instead of a spurious failure, and the permanently-failed
+# case into the winner's real recorded reason instead of a misleading
+# lease_timeout. The wait is bounded by the winner's own lease TTL, not an
+# arbitrary short retry budget: a legitimate fetch can run for the
+# provider's full request timeout (tens of seconds), far longer than a
+# fixed handful of sub-second retries would tolerate.
+_LEASE_POLL_INTERVAL_SECONDS = 0.5
 
 EnsureFn = Callable[[DataRunSpec], Awaitable[DataAvailabilityResult]]
+LeaseStatusFn = Callable[[ArtifactIdentity], Awaitable[MinuteBarLeaseStatus | None]]
 
 
 @dataclass(frozen=True)
@@ -48,6 +66,22 @@ class BackfillDayProgress:
     fetched_count: int
     reused_count: int
     failures: tuple[ArtifactFailure, ...]
+
+
+@dataclass(frozen=True)
+class BackfillWaitProgress:
+    """One poll of a blocked identity's lease, handed to the caller's
+    on_wait callback.
+
+    Lets the caller (the job's SSE emitter) keep the stream informative
+    during a slow coalesce — "waiting on another worker" — instead of
+    going silent for the length of the wait.
+    """
+
+    trading_date: date
+    symbol: str | None
+    data_type: str | None
+    attempt: int
 
 
 class BackfillResult(BaseModel):
@@ -70,24 +104,174 @@ class BackfillResult(BaseModel):
     duration_ms: int
 
 
+def _provider_for_data_type(data_type: str | None) -> str:
+    """Mirrors expand_required_artifacts's provider assignment for
+    time_series_bars identities (polygon-sourced trade bars vs
+    learn_ai_derived quote bars) — keep the two ternaries in lockstep."""
+    return "polygon" if data_type == "trade" else "learn_ai_derived"
+
+
+def _failure_identity_key(failure: ArtifactFailure) -> tuple[str | None, date | None, str | None]:
+    return (failure.symbol, failure.trading_date, failure.data_type)
+
+
+def _failure_from_row(original: ArtifactFailure, row: MinuteBarLeaseStatus) -> ArtifactFailure:
+    """Build the replacement ArtifactFailure once the blocking row is
+    found to be permanently 'failed'.
+
+    ``LastError`` already stores one of ``ArtifactFailure.reason``'s own
+    typed values — every ensure_data.py call site passes
+    ``fail_artifact()`` the exact string it puts in its own
+    ``ArtifactFailure.reason`` (see e.g. ``_process_minute_trade_artifact``).
+    Falls back to ``"internal_error"`` if the stored value is ever
+    something Pydantic won't accept as that Literal — a value read across
+    a DB-row boundary deserves that guard even though every write site
+    today is trusted.
+    """
+    detail = row.error_message or row.last_error or "winner permanently failed this artifact"
+    try:
+        return ArtifactFailure(
+            artifact_kind=original.artifact_kind,
+            symbol=original.symbol,
+            trading_date=original.trading_date,
+            data_type=original.data_type,
+            reason=row.last_error,  # type: ignore[arg-type]
+            detail=detail,
+            attempt_count=original.attempt_count,
+        )
+    except ValidationError:
+        return ArtifactFailure(
+            artifact_kind=original.artifact_kind,
+            symbol=original.symbol,
+            trading_date=original.trading_date,
+            data_type=original.data_type,
+            reason="internal_error",
+            detail=f"winner failed with unrecognized reason {row.last_error!r}: {detail}",
+            attempt_count=original.attempt_count,
+        )
+
+
+async def _wait_for_lease_resolution(
+    day_spec: DataRunSpec,
+    failure: ArtifactFailure,
+    *,
+    status_fn: LeaseStatusFn,
+    on_wait: Callable[[BackfillWaitProgress], None] | None,
+) -> ArtifactFailure | None:
+    """Poll one blocked minute-bar identity's row until the winner's claim
+    resolves or its own lease expires.
+
+    Returns:
+      - ``None``: the row is now 'complete' — the coalesce case. The
+        caller re-runs ``ensure_fn`` once more to pick up the cache hit.
+      - a replacement ``ArtifactFailure``: the row is permanently
+        'failed' — carries the winner's actual recorded reason instead of
+        the generic ``lease_timeout`` ``ensure_data``'s claim fallback
+        would keep reporting forever (it only ever checks for
+        'complete').
+      - the original failure, unchanged: the row is still 'fetching' but
+        the winner's own lease TTL has now elapsed — genuinely stuck (the
+        winner likely crashed); give up rather than wait forever. Lease
+        stealing/retry for this case is Task 7's territory
+        (``steal_or_retry_minute_bar`` already exists for it).
+    """
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars",
+        market=day_spec.market,
+        symbol=failure.symbol,
+        trading_date=failure.trading_date,
+        resolution="minute",
+        data_type=failure.data_type,
+        provider=_provider_for_data_type(failure.data_type),
+        price_adjustment_mode=day_spec.price_adjustment_mode,
+    )
+    attempt = 0
+    while True:
+        attempt += 1
+        row = await status_fn(identity)
+        if row is None or row.status == "complete":
+            return None
+        if row.status == "failed":
+            return _failure_from_row(failure, row)
+
+        now_ms = int(time.time() * 1000)
+        if row.lease_expires_at_ms is None or now_ms >= row.lease_expires_at_ms:
+            return failure
+
+        if on_wait is not None:
+            on_wait(
+                BackfillWaitProgress(
+                    trading_date=day_spec.start_trading_date,
+                    symbol=failure.symbol,
+                    data_type=failure.data_type,
+                    attempt=attempt,
+                )
+            )
+        logger.info(
+            "data_lake.backfill: waiting on an in-flight lease",
+            extra={
+                "trading_date": day_spec.start_trading_date.isoformat(),
+                "symbol": failure.symbol,
+                "data_type": failure.data_type,
+                "attempt": attempt,
+            },
+        )
+        await asyncio.sleep(_LEASE_POLL_INTERVAL_SECONDS)
+
+
 async def _ensure_day_with_lease_retry(
     day_spec: DataRunSpec,
     ensure_fn: EnsureFn,
+    *,
+    status_fn: LeaseStatusFn,
+    on_wait: Callable[[BackfillWaitProgress], None] | None,
 ) -> DataAvailabilityResult:
-    """Call ensure_fn for one day, retrying while blocked on another
-    worker's in-flight claim (reason="lease_timeout").
+    """Call ensure_fn for one day; wait out any lease_timeout by polling
+    the blocked row directly instead of blindly re-running the whole day
+    on a fixed backoff.
 
     Every other typed failure (auth, entitlement, rate-limited, unknown
     symbol, ...) is returned immediately — those are not transient, and
     retrying them would just repeat the same provider call.
     """
     result = await ensure_fn(day_spec)
-    for attempt in range(1, _LEASE_RETRY_ATTEMPTS + 1):
-        if not any(f.reason == "lease_timeout" for f in result.failures):
-            return result
-        await asyncio.sleep(_LEASE_RETRY_BASE_DELAY_SECONDS * attempt)
+    lease_failures = [f for f in result.failures if f.reason == "lease_timeout"]
+    if not lease_failures:
+        return result
+
+    resolutions: dict[tuple[str | None, date | None, str | None], ArtifactFailure] = {}
+    any_completed = False
+    for failure in lease_failures:
+        outcome = await _wait_for_lease_resolution(day_spec, failure, status_fn=status_fn, on_wait=on_wait)
+        if outcome is None:
+            any_completed = True
+        else:
+            resolutions[_failure_identity_key(failure)] = outcome
+
+    if any_completed:
+        # At least one blocked identity is now complete — re-run the day
+        # so ensure_fn's own claim fallback reports it as a cache hit and
+        # every other field (artifacts, counts, hash) stays self-consistent.
         result = await ensure_fn(day_spec)
-    return result
+
+    # Substitute the diagnosed outcome for anything still reporting
+    # lease_timeout — a permanent-failure reason if we learned one, or the
+    # unchanged still-stuck failure if the wait budget ran out. A fresh
+    # ensure_fn call can never surface a 'failed' row on its own (its
+    # claim fallback only ever checks for 'complete'), so without this
+    # substitution a permanently-failed winner would report lease_timeout
+    # forever.
+    patched_failures = [
+        resolutions.get(_failure_identity_key(f), f) if f.reason == "lease_timeout" else f for f in result.failures
+    ]
+    return result.model_copy(
+        update={
+            "failures": patched_failures,
+            "overall_status": classify_overall_status(
+                has_failures=bool(patched_failures), has_success=bool(result.artifacts)
+            ),
+        }
+    )
 
 
 def _day_sub_spec(spec: DataRunSpec, trading_date: date) -> DataRunSpec:
@@ -118,8 +302,10 @@ async def run_backfill(
     spec: DataRunSpec,
     *,
     on_day_progress: Callable[[BackfillDayProgress], None] | None = None,
+    on_wait: Callable[[BackfillWaitProgress], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
     ensure_fn: EnsureFn = ensure_data,
+    status_fn: LeaseStatusFn = select_minute_bar_lease_status,
 ) -> BackfillResult:
     """Ensure every canonical NYSE session in spec's range, one day at a time.
 
@@ -156,7 +342,7 @@ async def run_backfill(
             cancel_check()
 
         day_spec = _day_sub_spec(spec, trading_date)
-        day_result = await _ensure_day_with_lease_retry(day_spec, ensure_fn)
+        day_result = await _ensure_day_with_lease_retry(day_spec, ensure_fn, status_fn=status_fn, on_wait=on_wait)
 
         fetched_total += day_result.fetched_artifact_count
         reused_total += day_result.reused_artifact_count
@@ -179,13 +365,6 @@ async def run_backfill(
                 )
             )
 
-    if all_failures and (fetched_total or reused_total):
-        overall_status: Literal["complete", "partial", "failed"] = "partial"
-    elif all_failures:
-        overall_status = "failed"
-    else:
-        overall_status = "complete"
-
     completed_ms = int(time.time() * 1000)
     return BackfillResult(
         request_id=spec.request_id,
@@ -200,7 +379,9 @@ async def run_backfill(
         reused_artifact_count=reused_total,
         failures=all_failures,
         skipped_non_sessions=all_skipped,
-        overall_status=overall_status,
+        overall_status=classify_overall_status(
+            has_failures=bool(all_failures), has_success=bool(fetched_total or reused_total)
+        ),
         completed_at_ms=completed_ms,
         duration_ms=completed_ms - started_ms,
     )
