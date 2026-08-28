@@ -244,7 +244,12 @@ class TestLauncherAppConcurrency:
         launch_started = threading.Event()
         release_launch = threading.Event()
 
-        def slow_launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
+        def slow_launch(
+            request: LaunchRequest,
+            *,
+            artifacts_root: Path,
+            lake_root: Path | None = None,
+        ) -> LaunchResponse:
             launch_started.set()
             if not release_launch.wait(timeout=2):
                 raise AssertionError("test did not release the blocked launch")
