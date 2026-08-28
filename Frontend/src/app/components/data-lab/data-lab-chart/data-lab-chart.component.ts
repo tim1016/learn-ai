@@ -231,6 +231,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     recommendedTimeframe: string;
     visibleIndicatorIds: string[];
     timeframe: string;
+    barSources: BarSources | null;
   }>();
 
   /** Emitted when the chart endpoint rejects the request with a
@@ -343,13 +344,15 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     recommendedTimeframe: string;
     visibleIndicatorIds: string[];
     timeframe: string;
+    barSources?: BarSources | null;
   }): void {
     this.bars.set(snapshot.bars);
     this.indicatorResults.set(snapshot.indicators);
     this.quality.set(snapshot.quality);
-    // A persisted snapshot carries no source receipt, so say nothing rather
-    // than leaving the previous fetch's notice standing over other bars.
-    this.barSources.set(null);
+    // Restore the provenance the saved bars were shown with. A snapshot taken
+    // before the receipt existed carries none, which reads as "nothing to say"
+    // — never as the previous fetch's notice left standing over other bars.
+    this.barSources.set(snapshot.barSources ?? null);
     this.allowedTimeframes.set(snapshot.allowedTimeframes);
     this.estimatedBars.set(snapshot.estimatedBarsPerTimeframe);
     this.recommendedTimeframe.set(snapshot.recommendedTimeframe);
@@ -439,6 +442,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
         recommendedTimeframe: resp.recommended_timeframe,
         visibleIndicatorIds: visibleIds,
         timeframe: this.timeframe(),
+        barSources: resp.bar_sources ?? null,
       });
     } catch (error: unknown) {
       const detail = error instanceof Error && isChartRequestErrorDetail(

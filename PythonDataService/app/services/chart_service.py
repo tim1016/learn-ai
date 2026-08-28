@@ -907,6 +907,7 @@ def _fetch_chart_bars(
     to_date: str,
     adjusted: bool,
     requested_from: str,
+    session: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Return the 1-minute bar stream and its per-portion source indicator.
 
@@ -917,7 +918,9 @@ def _fetch_chart_bars(
     provider-served (see :mod:`app.services.chart_bar_source`).
 
     ``fetch_from`` is warmup-extended; ``requested_from`` is what the operator
-    asked for, and the receipt describes only that.
+    asked for, and the receipt describes only that. ``session`` decides when a
+    trading date stops forming — this chart renders post-market bars when it is
+    ``extended``, so the composer must hold today open that much longer.
     """
     if not settings.DATA_LAKE_ENABLED:
         return fetch_bars_chunked(_polygon, ticker, fetch_from, to_date, adjusted=adjusted), None
@@ -928,6 +931,7 @@ def _fetch_chart_bars(
         to_date=to_date,
         adjusted=adjusted,
         fetch_provider=lambda start, end: fetch_bars_chunked(_polygon, ticker, start, end, adjusted=adjusted),
+        session=session,
         visible_from_date=requested_from,
     )
     return composed.bars, composed.as_response_dict()
@@ -1013,7 +1017,7 @@ def get_chart_data(
             fetch_from = compute_warmup_start_date(from_date, max_lookback)
             logger.info(f"[CHART] Warmup: fetching from {fetch_from} (requested {from_date})")
 
-        bars, bar_sources = _fetch_chart_bars(ticker, fetch_from, to_date, adjusted, from_date)
+        bars, bar_sources = _fetch_chart_bars(ticker, fetch_from, to_date, adjusted, from_date, session)
         if not bars:
             return {
                 "error_code": "NO_DATA",

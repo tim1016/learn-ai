@@ -67,8 +67,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.data_lake.path_policy import resolve_lake_root
+from app.data_lake.types import is_lake_addressable_symbol
 from app.engine.data.lean_format import LeanMinuteDataReader
-from app.lean_sidecar.trading_calendar import SessionWindow, session_windows_ms_utc
+from app.lean_sidecar.trading_calendar import (
+    SessionWindow,
+    current_trading_session_window,
+    session_windows_ms_utc,
+)
 from app.lean_sidecar.workspace import SymbolValidationError, validate_symbol
 from app.services.dataset_service import assert_canonical_bar_stream
 from app.utils.timestamps import now_ms_utc
@@ -173,21 +178,49 @@ def split_sessions_at_boundary(
     from_date: str,
     to_date: str,
     now_ms: int,
+    session: str = "rth",
 ) -> tuple[list[SessionWindow], list[SessionWindow], int | None]:
     """Split the scheduled sessions in ``[from_date, to_date]`` at the boundary.
 
     Returns ``(completed, live, boundary_ms_utc)``. A session is completed once
-    its **scheduled** close is at or before ``now_ms`` — the calendar answers
-    that, so an early-close half-day completes at its real 13:00-ET close and a
-    regular session at 16:00 ET without either time appearing here.
-    ``boundary_ms_utc`` is the scheduled open of the first live session, or
-    ``None`` when every session in the window has already closed.
+    it has stopped producing bars *for the requested session policy* — the
+    calendar answers that, so an early-close half-day completes at its real
+    13:00-ET close and a regular session at 16:00 ET without either time
+    appearing here. ``boundary_ms_utc`` is the scheduled open of the first live
+    session, or ``None`` when every session in the window has finished.
+
+    The session policy matters. An ``extended`` chart renders pre- and
+    post-market bars, which keep forming after the regular close, so a trading
+    date whose 16:00-ET close has passed is *not* finished for that reader:
+    serving it from a lake artifact would silently freeze the chart while the
+    post-market tape was still filling. Extended requests therefore hold the
+    **current trading date** open for its whole length, which
+    :func:`current_trading_session_window` identifies — the NY trading date, not
+    browser-local midnight, and no wall-clock literal anywhere.
+
+    That is deliberately more conservative than the vendor's 20:00-ET
+    extended-window end. Holding the date open a few hours longer costs one
+    provider fetch for a day whose tape has stopped moving; getting it wrong in
+    the other direction serves a lake artifact for a day that is still filling.
     """
     windows = session_windows_ms_utc(date.fromisoformat(from_date), date.fromisoformat(to_date))
+    completed, live, boundary_ms_utc = windows, [], None
     for index, window in enumerate(windows):
         if window.close_ms_utc > now_ms:
-            return windows[:index], windows[index:], window.open_ms_utc
-    return windows, [], None
+            completed, live, boundary_ms_utc = windows[:index], windows[index:], window.open_ms_utc
+            break
+
+    # Mirrors how the chart's own preprocessing branches: anything that is not
+    # "rth" is served the full extended tape.
+    if session != "rth" and completed:
+        today = current_trading_session_window(now_ms)
+        # Only the last rth-completed session can be today; every earlier one
+        # belongs to a trading date that has already rolled.
+        if today is not None and completed[-1].session_date == today.session_date:
+            last = completed[-1]
+            completed, live, boundary_ms_utc = completed[:-1], [last, *live], last.open_ms_utc
+
+    return completed, live, boundary_ms_utc
 
 
 def _plan_segments(
@@ -241,6 +274,7 @@ def _whole_window_from_provider(
 def _visible_spans(
     executed: Sequence[_ExecutedSegment],
     visible_from: date,
+    completed_dates: frozenset[date],
 ) -> tuple[BarSourceSpan, ...]:
     """Report provenance for the window the operator can actually see.
 
@@ -251,12 +285,21 @@ def _visible_spans(
     every visible session came from the lake would still show the fallback
     notice. So the receipt is cut to the visible sessions, at the same
     session-open anchor the span boundaries already use.
+
+    A provider span whose visible sessions are *all* still forming is reported
+    as ``current_session`` whatever drove the fetch. Nothing there could have
+    been lake-backed — the forming session is provider-served by design — so
+    any other reason would tell the operator history is missing when no history
+    is in view at all.
     """
     visible: list[_ExecutedSegment] = []
     for source, reason, windows, segment_bars in executed:
         in_view = [window for window in windows if window.session_date >= visible_from]
-        if in_view:
-            visible.append((source, reason, in_view, segment_bars))
+        if not in_view:
+            continue
+        if source == "provider" and not any(window.session_date in completed_dates for window in in_view):
+            reason = "current_session"
+        visible.append((source, reason, in_view, segment_bars))
     if not visible:
         return ()
 
@@ -303,6 +346,26 @@ def _read_lake_bars(
     return out
 
 
+def _lake_addressable_symbol(ticker: str) -> str | None:
+    """Return the canonical symbol iff the lake can both store and address it.
+
+    Two gates, both required, and both about the lake rather than the provider:
+
+    * ``validate_symbol`` is the filesystem boundary — the LEAN reader joins the
+      symbol straight into a path, so a path-unsafe string must never get that
+      far.
+    * ``is_lake_addressable_symbol`` is the *writer's* policy, the same one
+      ``DataRunSpec`` enforces. It is stricter: hyphenated and digit-leading
+      tickers survive the path check but ``ensure_data`` will never seed them,
+      so calling one a lake gap would promise a backfill that cannot happen.
+    """
+    try:
+        symbol = validate_symbol(ticker)
+    except SymbolValidationError:
+        return None
+    return symbol if is_lake_addressable_symbol(symbol) else None
+
+
 def _execute_plan(
     *,
     ticker: str,
@@ -316,11 +379,8 @@ def _execute_plan(
 ) -> list[_ExecutedSegment]:
     """Decide where every session's bars come from, then go and get them."""
     all_windows = [*completed, *live]
-    try:
-        # The boundary guard: the LEAN reader joins the symbol straight into a
-        # path, so anything that is not a lake-addressable ticker stops here.
-        symbol = validate_symbol(ticker)
-    except SymbolValidationError:
+    symbol = _lake_addressable_symbol(ticker)
+    if symbol is None:
         logger.warning(
             "[CHART] %r is not addressable in the lake; serving the whole window from the provider",
             ticker,
@@ -406,6 +466,7 @@ def compose_chart_bars(
     to_date: str,
     adjusted: bool,
     fetch_provider: ProviderFetch,
+    session: str = "rth",
     visible_from_date: str | None = None,
     now_ms: int | None = None,
     lake_root: Path | None = None,
@@ -419,6 +480,10 @@ def compose_chart_bars(
     reports on warmup bars nobody can see. It defaults to ``from_date`` for
     callers with no warmup.
 
+    ``session`` is the chart's own session policy and decides when a trading
+    date stops forming — an extended-hours chart keeps today provider-backed
+    until its post-market tape ends, not merely until the regular close.
+
     ``now_ms`` and ``lake_root`` exist so tests can pin the boundary and the
     fixture root; production leaves both at their defaults.
 
@@ -426,7 +491,7 @@ def compose_chart_bars(
     raises nothing the flag-off path would not also raise for the same input.
     """
     at_ms = now_ms_utc() if now_ms is None else now_ms
-    completed, live, boundary_ms_utc = split_sessions_at_boundary(from_date, to_date, at_ms)
+    completed, live, boundary_ms_utc = split_sessions_at_boundary(from_date, to_date, at_ms, session)
 
     executed = _execute_plan(
         ticker=ticker,
@@ -445,7 +510,11 @@ def compose_chart_bars(
     # out-of-order bar at the stitch must fail loudly, never be repaired.
     assert_canonical_bar_stream(bars, ticker)
 
-    spans = _visible_spans(executed, date.fromisoformat(visible_from_date or from_date))
+    spans = _visible_spans(
+        executed,
+        date.fromisoformat(visible_from_date or from_date),
+        frozenset(window.session_date for window in completed),
+    )
     logger.info(
         "[CHART] composed %d bars for %s over %d visible span(s)",
         len(bars),

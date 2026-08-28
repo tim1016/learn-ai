@@ -12,7 +12,11 @@ import { TestBed } from '@angular/core/testing';
 import { render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import { DataLabChartComponent, type ChartDataResponse } from './data-lab-chart.component';
+import {
+  DataLabChartComponent,
+  type BarSources,
+  type ChartDataResponse,
+} from './data-lab-chart.component';
 
 // The DOM chart is not exercised here — only the notice above it.
 vi.mock('lightweight-charts', () => {
@@ -29,9 +33,11 @@ vi.mock('lightweight-charts', () => {
     applyOptions: vi.fn(),
     resize: vi.fn(),
     timeScale: vi.fn(() => ({
+      applyOptions: vi.fn(),
       fitContent: vi.fn(),
       getVisibleLogicalRange: vi.fn(() => null),
       setVisibleLogicalRange: vi.fn(),
+      setVisibleRange: vi.fn(),
       subscribeVisibleLogicalRangeChange: vi.fn(),
     })),
     subscribeCrosshairMove: vi.fn(),
@@ -72,8 +78,23 @@ function chartResponse(barSources?: ChartDataResponse['bar_sources']): ChartData
   return barSources ? { ...response, bar_sources: barSources } : response;
 }
 
-async function renderChartWith(response: ChartDataResponse): Promise<HTMLElement> {
-  const { fixture, container } = await render(DataLabChartComponent, {
+function cachedSnapshot(barSources?: BarSources | null) {
+  const { bars, indicators, quality, allowed_timeframes, estimated_bars_per_timeframe } = chartResponse();
+  return {
+    bars,
+    indicators,
+    quality,
+    allowedTimeframes: allowed_timeframes,
+    estimatedBarsPerTimeframe: estimated_bars_per_timeframe,
+    recommendedTimeframe: '15m',
+    visibleIndicatorIds: [],
+    timeframe: '15m',
+    ...(barSources === undefined ? {} : { barSources }),
+  };
+}
+
+async function renderChart() {
+  return render(DataLabChartComponent, {
     inputs: {
       ticker: 'SPY',
       fromDate: '2025-11-26',
@@ -84,19 +105,25 @@ async function renderChartWith(response: ChartDataResponse): Promise<HTMLElement
     },
     providers: [provideHttpClient(), provideHttpClientTesting()],
   });
+}
+
+async function renderChartWith(response: ChartDataResponse) {
+  const { fixture, container } = await renderChart();
   const http = TestBed.inject(HttpTestingController);
+  const emitted: { barSources: BarSources | null }[] = [];
+  fixture.componentInstance.dataLoaded.subscribe((event) => emitted.push(event));
 
   fixture.componentInstance.fetchData();
   http.expectOne((candidate) => candidate.url.endsWith('/api/chart/data')).flush(response);
   await waitFor(() => expect(fixture.componentInstance.quality()).not.toBeNull());
   fixture.detectChanges();
 
-  return container as HTMLElement;
+  return { fixture, container: container as HTMLElement, emitted };
 }
 
 describe('DataLabChartComponent data-source notice', () => {
   it('shows the provider-fallback notice when the response says history was provider-served', async () => {
-    const container = await renderChartWith(
+    const { container } = await renderChartWith(
       chartResponse({
         boundary_ms_utc: 1_764_599_400_000,
         notice_code: 'history_provider_fallback',
@@ -111,7 +138,7 @@ describe('DataLabChartComponent data-source notice', () => {
   });
 
   it('explains the raw-only lake when adjusted prices force the provider path', async () => {
-    const container = await renderChartWith(
+    const { container } = await renderChartWith(
       chartResponse({
         boundary_ms_utc: null,
         notice_code: 'adjusted_prices_provider_only',
@@ -123,7 +150,7 @@ describe('DataLabChartComponent data-source notice', () => {
   });
 
   it('explains a symbol the lake does not carry', async () => {
-    const container = await renderChartWith(
+    const { container } = await renderChartWith(
       chartResponse({ boundary_ms_utc: null, notice_code: 'symbol_provider_only' }),
     );
 
@@ -132,13 +159,13 @@ describe('DataLabChartComponent data-source notice', () => {
   });
 
   it('shows no notice when the response carries no source indicator (lake off)', async () => {
-    const container = await renderChartWith(chartResponse());
+    const { container } = await renderChartWith(chartResponse());
 
     expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
   });
 
   it('shows no notice when history is fully lake-backed', async () => {
-    const container = await renderChartWith(
+    const { container } = await renderChartWith(
       chartResponse({ boundary_ms_utc: 1_764_599_400_000, notice_code: null }),
     );
 
@@ -146,11 +173,66 @@ describe('DataLabChartComponent data-source notice', () => {
   });
 
   it('stays silent — and leaks nothing — on a code the copy map does not know', async () => {
-    const container = await renderChartWith(
+    const { container } = await renderChartWith(
       chartResponse({ boundary_ms_utc: null, notice_code: 'some_future_code' }),
     );
 
     expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
     expect(container.textContent).not.toContain('some_future_code');
+  });
+});
+
+describe('DataLabChartComponent saved-session provenance', () => {
+  it('hands the provenance to the parent so a save can carry it', async () => {
+    const { emitted } = await renderChartWith(
+      chartResponse({
+        boundary_ms_utc: 1_764_599_400_000,
+        notice_code: 'history_provider_fallback',
+      }),
+    );
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].barSources).toEqual({
+      boundary_ms_utc: 1_764_599_400_000,
+      notice_code: 'history_provider_fallback',
+    });
+  });
+
+  it('emits a null receipt when the response carries none', async () => {
+    const { emitted } = await renderChartWith(chartResponse());
+
+    expect(emitted[0].barSources).toBeNull();
+  });
+
+  it('restores the notice a saved snapshot was showing', async () => {
+    const { fixture, container } = await renderChart();
+
+    fixture.componentInstance.loadCachedData(
+      cachedSnapshot({ boundary_ms_utc: null, notice_code: 'history_provider_fallback' }),
+    );
+    fixture.detectChanges();
+
+    expect(container.querySelector(NOTICE_SELECTOR)?.textContent).toContain('not in the data lake yet');
+  });
+
+  it('shows no notice for a snapshot saved before the receipt existed', async () => {
+    const { fixture, container } = await renderChart();
+
+    fixture.componentInstance.loadCachedData(cachedSnapshot());
+    fixture.detectChanges();
+
+    expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
+  });
+
+  it('does not leave a previous notice standing over restored bars', async () => {
+    const { fixture, container } = await renderChartWith(
+      chartResponse({ boundary_ms_utc: null, notice_code: 'history_provider_fallback' }),
+    );
+    expect(container.querySelector(NOTICE_SELECTOR)).not.toBeNull();
+
+    fixture.componentInstance.loadCachedData(cachedSnapshot(null));
+    fixture.detectChanges();
+
+    expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
   });
 });

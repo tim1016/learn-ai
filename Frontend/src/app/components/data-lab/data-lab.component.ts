@@ -1049,6 +1049,7 @@ export class DataLabComponent {
       estimatedBarsPerTimeframe: event.estimatedBarsPerTimeframe,
       recommendedTimeframe: event.recommendedTimeframe,
       visibleIndicatorIds: event.visibleIndicatorIds,
+      barSources: event.barSources ?? null,
     });
 
     // Auto-update snapshot if this is an active (already-saved) session
@@ -1167,6 +1168,7 @@ export class DataLabComponent {
             recommendedTimeframe: chartSnapshot.recommendedTimeframe,
             visibleIndicatorIds: chartSnapshot.visibleIndicatorIds,
             timeframe: chartSnapshot.timeframe,
+            barSources: chartSnapshot.barSources ?? null,
           });
         }
       });

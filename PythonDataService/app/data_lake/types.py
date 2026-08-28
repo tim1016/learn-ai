@@ -20,8 +20,22 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
+#: The lake's symbol policy. ``DataRunSpec`` enforces it on every write, so it
+#: is also the answer to "could the lake ever hold this symbol?" — readers that
+#: classify a symbol's provenance must consult it rather than assume any ticker
+#: the filesystem tolerates is one ensure_data can seed.
+SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
 _MAX_RANGE_YEARS = 5
+
+
+def is_lake_addressable_symbol(symbol: str) -> bool:
+    """True iff the lake writer would accept ``symbol``.
+
+    ``DataRunSpec`` refuses hyphenated and digit-leading tickers, so
+    ``ensure_data`` can never seed one. A reader that called such a symbol a
+    lake *gap* would be promising a backfill that cannot happen.
+    """
+    return bool(SYMBOL_RE.match(symbol))
 
 
 class DataRunSpec(BaseModel):
@@ -54,8 +68,8 @@ class DataRunSpec(BaseModel):
     def _validate(self) -> DataRunSpec:
         # Symbols: uppercase canonical.
         for sym in self.symbols:
-            if not _SYMBOL_RE.match(sym):
-                raise ValueError(f"symbol must match {_SYMBOL_RE.pattern}: {sym!r}")
+            if not is_lake_addressable_symbol(sym):
+                raise ValueError(f"symbol must match {SYMBOL_RE.pattern}: {sym!r}")
         # Date ordering.
         if self.start_trading_date > self.end_trading_date:
             raise ValueError(f"start_trading_date {self.start_trading_date} > end_trading_date {self.end_trading_date}")

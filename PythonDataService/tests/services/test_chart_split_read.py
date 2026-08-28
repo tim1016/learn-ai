@@ -23,6 +23,7 @@ from app.config import settings
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.path_policy import LeanMinuteBarPath
 from app.lean_sidecar.trading_calendar import (
+    next_trading_day,
     session_close_ms_utc,
     session_open_ms_utc,
     session_window_for_date,
@@ -246,6 +247,81 @@ def test_split_sessions_at_boundary_has_no_live_tail_once_every_session_closed()
     assert [window.session_date for window in completed] == [REGULAR_BEFORE, HALF_DAY]
     assert live == []
     assert boundary_ms is None
+
+
+# ──────────────────────────────────────────────
+# The boundary respects the requested session policy
+# ──────────────────────────────────────────────
+def test_split_sessions_at_boundary_holds_today_open_for_an_extended_request() -> None:
+    """After the regular close, an extended chart is still watching today's
+    post-market tape fill — so today is not finished for that reader."""
+    after_rth_close = session_close_ms_utc(LIVE_SESSION) + 60_000
+
+    rth_completed, rth_live, _ = split_sessions_at_boundary(
+        REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat(), after_rth_close, "rth"
+    )
+    ext_completed, ext_live, ext_boundary = split_sessions_at_boundary(
+        REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat(), after_rth_close, "extended"
+    )
+
+    # For an RTH chart today is finished; for an extended one it is not.
+    assert [window.session_date for window in rth_completed] == [REGULAR_BEFORE, HALF_DAY, LIVE_SESSION]
+    assert rth_live == []
+    assert [window.session_date for window in ext_completed] == [REGULAR_BEFORE, HALF_DAY]
+    assert [window.session_date for window in ext_live] == [LIVE_SESSION]
+    assert ext_boundary == session_open_ms_utc(LIVE_SESSION)
+
+
+def test_split_sessions_at_boundary_completes_an_extended_day_once_the_date_rolls() -> None:
+    completed, live, boundary_ms = split_sessions_at_boundary(
+        REGULAR_BEFORE.isoformat(),
+        LIVE_SESSION.isoformat(),
+        session_open_ms_utc(next_trading_day(LIVE_SESSION)),
+        "extended",
+    )
+
+    assert [window.session_date for window in completed] == [REGULAR_BEFORE, HALF_DAY, LIVE_SESSION]
+    assert live == []
+    assert boundary_ms is None
+
+
+def test_split_sessions_at_boundary_holds_a_half_day_open_for_an_extended_request() -> None:
+    """A half-day's regular session ends at 13:00 ET but its post-market tape
+    runs on, so an extended chart must not treat it as finished either."""
+    after_early_close = session_close_ms_utc(HALF_DAY) + 60_000
+
+    completed, live, _ = split_sessions_at_boundary(
+        REGULAR_BEFORE.isoformat(), HALF_DAY.isoformat(), after_early_close, "extended"
+    )
+
+    assert [window.session_date for window in completed] == [REGULAR_BEFORE]
+    assert [window.session_date for window in live] == [HALF_DAY]
+
+
+def test_compose_chart_bars_keeps_the_forming_extended_day_provider_backed(lake_root: Path) -> None:
+    """The staleness regression: a lake zip for today must not freeze an
+    extended chart while its post-market bars are still arriving."""
+    for session_date in (REGULAR_BEFORE, HALF_DAY, LIVE_SESSION):
+        _write_lake_day(lake_root, session_date)
+    provider = _ProviderSpy()
+
+    composed = compose_chart_bars(
+        ticker=_SYMBOL,
+        from_date=REGULAR_BEFORE.isoformat(),
+        to_date=LIVE_SESSION.isoformat(),
+        adjusted=False,
+        fetch_provider=provider,
+        session="extended",
+        now_ms=session_close_ms_utc(LIVE_SESSION) + 60_000,
+        lake_root=lake_root,
+    )
+
+    assert provider.calls == [(LIVE_SESSION.isoformat(), LIVE_SESSION.isoformat())]
+    assert [(span.source, span.reason) for span in composed.spans] == [
+        ("lake", "completed_sessions"),
+        ("provider", "current_session"),
+    ]
+    assert composed.boundary_ms_utc == session_open_ms_utc(LIVE_SESSION)
 
 
 # ──────────────────────────────────────────────
@@ -555,6 +631,67 @@ def test_compose_chart_bars_still_reports_a_hole_inside_the_visible_window(lake_
         ("provider", "lake_gap"),
         ("provider", "current_session"),
     ]
+
+
+def test_compose_chart_bars_raises_no_notice_when_only_today_is_in_view(lake_root: Path) -> None:
+    """Provider service for the forming session is the design, not a gap.
+
+    Nothing in view could have been lake-backed, so calling it a lake gap would
+    tell the operator history is missing when no history is on screen at all.
+    """
+    composed = compose_chart_bars(
+        ticker=_SYMBOL,
+        from_date=LIVE_SESSION.isoformat(),
+        to_date=LIVE_SESSION.isoformat(),
+        adjusted=False,
+        fetch_provider=_ProviderSpy(),
+        now_ms=_during(LIVE_SESSION),
+        lake_root=lake_root,
+    )
+
+    assert [(span.source, span.reason) for span in composed.spans] == [("provider", "current_session")]
+    assert composed.notice_code is None
+
+
+def test_compose_chart_bars_raises_no_notice_when_only_warmup_missed_the_lake(lake_root: Path) -> None:
+    """Same rule through the warmup cut: the uncovered sessions are all behind
+    the visible window, and the only session in view is still forming."""
+    composed = compose_chart_bars(
+        ticker=_SYMBOL,
+        from_date=WARMUP_FROM.isoformat(),
+        to_date=LIVE_SESSION.isoformat(),
+        visible_from_date=LIVE_SESSION.isoformat(),
+        adjusted=False,
+        fetch_provider=_ProviderSpy(),
+        now_ms=_during(LIVE_SESSION),
+        lake_root=lake_root,
+    )
+
+    assert [(span.source, span.reason) for span in composed.spans] == [("provider", "current_session")]
+    assert composed.notice_code is None
+    # The warmup bars are still fetched and still in the series.
+    assert min(bar["timestamp"] for bar in composed.bars) < session_open_ms_utc(LIVE_SESSION)
+
+
+def test_compose_chart_bars_calls_a_symbol_the_lake_writer_refuses_provider_only(lake_root: Path) -> None:
+    """A hyphenated ticker survives the path check but ``DataRunSpec`` refuses
+    it, so ensure_data can never seed it — reporting a lake *gap* would promise
+    a backfill that cannot happen."""
+    _write_lake_day(lake_root, REGULAR_BEFORE)
+    _write_lake_day(lake_root, HALF_DAY)
+
+    composed = compose_chart_bars(
+        ticker="BRK-B",
+        from_date=REGULAR_BEFORE.isoformat(),
+        to_date=LIVE_SESSION.isoformat(),
+        adjusted=False,
+        fetch_provider=_ProviderSpy(),
+        now_ms=_during(LIVE_SESSION),
+        lake_root=lake_root,
+    )
+
+    assert [span.reason for span in composed.spans] == ["symbol_not_lake_addressable"]
+    assert composed.notice_code == "symbol_provider_only"
 
 
 def test_compose_chart_bars_rejects_a_provider_range_that_overlaps_the_lake(lake_root: Path) -> None:
