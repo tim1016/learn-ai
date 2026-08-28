@@ -191,8 +191,8 @@ class TrustedRunRequest:
     the bundled trusted sample; when ``None`` (default), the trusted sample
     selected by ``template`` is used. The Phase 1c sandbox shape
     (``--read-only``, ``--user=<non-root>``, ``--cap-drop=ALL``,
-    ``--network=none``, workspace-only mount) is what makes accepting
-    arbitrary source safe.
+    ``--network=none``, and no read-write mount beyond the workspace) is
+    what makes accepting arbitrary source safe.
 
     ``start_ms_utc`` and ``end_ms_utc`` are int64 ms UTC per the repo's
     timestamp rigor rule. They are converted to ``date`` *inside this
@@ -820,8 +820,9 @@ async def run_trusted_sample(
         )
     # Phase 4c: ``algorithm_source`` overrides the bundled trusted
     # sample when present. The Phase 1c sandbox shape (--read-only,
-    # --user=<non-root>, --cap-drop=ALL, --network=none, workspace-
-    # only mount) is what makes accepting arbitrary source safe.
+    # --user=<non-root>, --cap-drop=ALL, --network=none, and no
+    # read-write mount beyond the workspace) is what makes accepting
+    # arbitrary source safe.
     source_to_stage = (
         request.algorithm_source
         if request.algorithm_source

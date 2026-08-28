@@ -47,9 +47,11 @@ class RunnerConfigurationError(RuntimeError):
     """
 
 
-# Container-side mount point for the workspace. The launcher mounts only
-# this single directory; nothing else under the artifacts root is
-# visible to the LEAN container.
+# Container-side mount point for the workspace. This is the only
+# read-write mount, and it is the only thing under the artifacts root
+# the LEAN container can see. A ``DATA_LAKE_ENABLED`` run adds exactly
+# one more mount — the lake, read-only, at
+# ``app.lean_sidecar.lake_mount.CONTAINER_LAKE_DATA_MOUNT``.
 CONTAINER_WORKSPACE_MOUNT = "/lean-run"
 
 # Token-level allow-list for caller-supplied hardening flags.
