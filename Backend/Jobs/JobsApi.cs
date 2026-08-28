@@ -46,6 +46,12 @@ public static class JobsApi
         ["spy_ema_walk_forward"] = "/api/jobs-internal/spy-ema-walk-forward",
         ["spy_ema_exhaustive"] = "/api/jobs-internal/spy-ema-exhaustive",
         ["recency_chart"] = "/api/jobs-internal/recency-chart",
+        // The data-lake backfill worker lives on the flag-gated data-lake
+        // router rather than /api/jobs-internal/*; it accepts the same
+        // caller-minted job_id this method injects below, so the framework
+        // (state, events, cancel, result) is unchanged. The route 404s while
+        // DATA_LAKE_ENABLED is off, which surfaces here as a rejected start.
+        ["data_lake_backfill"] = "/api/data-lake/backfill",
     };
 
     public static void MapJobsEndpoints(this WebApplication app)
