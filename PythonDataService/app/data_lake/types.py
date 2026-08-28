@@ -174,7 +174,7 @@ class CoverageDay(BaseModel):
     """
 
     trading_date_ms: int
-    status: Literal["complete", "fetching", "stale", "failed", "missing"]
+    status: Literal["complete", "fetching", "failed", "missing"]
     artifact_id: int | None = None
 
 

@@ -130,7 +130,13 @@ async def get_artifact_detail(artifact_id: int) -> ArtifactDetail:
     logger.info("[STEP 1] /api/data-lake/artifacts/%s requested", artifact_id)
     row = await catalog_client.select_artifact_by_id(artifact_id)
     if row is None:
-        raise HTTPException(status_code=404, detail=f"artifact {artifact_id} not found")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": "artifact_not_found",
+                "message": f"artifact {artifact_id} not found",
+            },
+        )
     return ArtifactDetail(
         id=row.id,
         artifact_kind=row.artifact_kind,
