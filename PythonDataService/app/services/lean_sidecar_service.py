@@ -41,6 +41,7 @@ from app.lean_sidecar.config import (
 from app.lean_sidecar.lake_mount import (
     CONTAINER_LAKE_DATA_MOUNT,
     LakeArtifacts,
+    LakeMountError,
     data_plane_lake_root,
     lake_mount_enabled,
     resolve_lake_artifacts,
@@ -528,6 +529,44 @@ def _iter_trading_dates(start: date, end: date) -> list[date]:
     return out
 
 
+async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeArtifacts:
+    """Resolve the run's lake artifacts, or refuse with a typed error.
+
+    Two failure classes, both translated into
+    :class:`LeanSidecarServiceError` so the routers' existing mapping
+    applies instead of the raw exception escaping as an unstructured
+    500:
+
+    * the launcher is too old to mount the lake at all — checked first,
+      because no amount of lake coverage rescues a launcher that will
+      silently drop the mount;
+    * the lake cannot fully serve the requested window.
+
+    Called before the workspace is created, so a refusal leaves the
+    ``run_id`` unused and the operator's retry with the same id works.
+    """
+    from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITY_LAKE_MOUNT
+    from app.lean_sidecar.launcher_client import (
+        LauncherCapabilityUnsupported,
+        assert_launcher_supports,
+    )
+
+    try:
+        await assert_launcher_supports(LAUNCHER_CAPABILITY_LAKE_MOUNT)
+    except LauncherCapabilityUnsupported as e:
+        raise LeanSidecarServiceError(f"lake_mount_unsupported_by_launcher: {e}") from e
+
+    try:
+        return resolve_lake_artifacts(
+            lake_root=data_plane_lake_root(),
+            symbol=request.symbol,
+            start=request.start_date,
+            end=request.end_date,
+        )
+    except LakeMountError as e:
+        raise LeanSidecarServiceError(str(e)) from e
+
+
 def _stage_workspace_data(
     *,
     request: TrustedRunRequest,
@@ -631,6 +670,19 @@ async def run_trusted_sample(
             "PINNED_LEAN_IMAGE_DIGEST is not set; run scripts/lean_sidecar_pin_image.py first"
         )
 
+    # Lake-mode preflight, deliberately BEFORE the workspace exists.
+    # Resolving the lake can refuse the run (incomplete coverage, stale
+    # daily artifact, missing metadata, launcher too old), and every one
+    # of those refusals is a "fix the lake, then re-submit" condition.
+    # Doing it after ``ensure_layout`` would burn the run_id on the way
+    # out — the workspace directory survives the failure and the
+    # duplicate-run_id guard below then rejects the operator's retry
+    # with the *same* id, which is not a fresh-id problem and reads like
+    # one. Failing here leaves the id reusable.
+    lake_artifacts: LakeArtifacts | None = None
+    if request.data_policy.source == "polygon" and lake_mount_enabled():
+        lake_artifacts = await _resolve_lake_artifacts_or_refuse(request)
+
     workspace = resolve_workspace(request.run_id, DEFAULT_ARTIFACTS_ROOT)
     # Reviewer P1: reject a reused run_id BEFORE staging touches the
     # workspace. Without this guard, ``ensure_layout`` silently no-ops
@@ -669,10 +721,6 @@ async def run_trusted_sample(
     # Roots of the shared bar store when the run stages from it. ``None``
     # for synthetic and standalone recorded-fixture replays.
     store_roots: list[Path] | None = None
-    # Non-None only for a ``DATA_LAKE_ENABLED`` live-Polygon run: the
-    # lake artifacts LEAN will read through its read-only mount. Its
-    # presence is what tells the rest of this function "no staging".
-    lake_artifacts: LakeArtifacts | None = None
     # Decoded bars. Only the staging path needs them — it re-encodes
     # quote and daily zips from them — so lake mode leaves this empty
     # rather than unzipping a window it is not going to write.
@@ -738,20 +786,15 @@ async def run_trusted_sample(
                 f"{request.end_date.isoformat()}; symbol={request.symbol}"
             )
         trading_dates = [d for d, _ in bars_by_date]
-    elif data_source == "polygon" and lake_mount_enabled():
-        # DATA_LAKE_ENABLED: the lake is the market-data authority. Read
-        # its artifacts in place — no ``ensure_range``, no Polygon call,
-        # no byte-copy into the workspace — and let the launcher mount
-        # the lake read-only for LEAN. Fixture replays above are
-        # deliberately unaffected: their frozen recordings are the data
-        # authority for those runs, and the lake has nothing to say
-        # about them.
-        lake_artifacts = resolve_lake_artifacts(
-            lake_root=data_plane_lake_root(),
-            symbol=request.symbol,
-            start=request.start_date,
-            end=request.end_date,
-        )
+    elif lake_artifacts is not None:
+        # DATA_LAKE_ENABLED: the lake is the market-data authority. Its
+        # artifacts were already resolved (and the run already refused
+        # if they were not serveable) in the preflight above, before the
+        # workspace existed. Nothing to do here but record the window —
+        # no ``ensure_range``, no Polygon call, no byte-copy into the
+        # workspace. Fixture replays above are deliberately unaffected:
+        # their frozen recordings are the data authority for those runs,
+        # and the lake has nothing to say about them.
         trading_dates = list(lake_artifacts.trading_dates)
         _emit_log(
             f"Lake coverage for {request.symbol}: {len(trading_dates)} trading days under {lake_artifacts.lake_root}"
@@ -1080,11 +1123,24 @@ def _build_manifest(
     # that want "what's the sha for this path?" without traversing
     # the tuple.
     staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in bar_zips}
+    # Corporate actions are inputs, not decoration: LEAN reads factor
+    # and map files off the data root and they change split/dividend
+    # handling, so a factor-file update must move
+    # ``input_snapshot_sha256``. Lake mode is where this bites — the
+    # mounted lake carries real files whose contents can change under a
+    # rerun. (Staging mode creates these directories empty, so the
+    # staged run keeps hashing nothing, exactly as before.)
     staged_data = StagedDataManifest(
         # Phase 5c: include the quote zips alongside trade + daily
         # in the manifest's staged-data hash list. Reproducibility
         # requires every byte LEAN saw to be hashed.
         bar_zips=bar_zips,
+        factor_files=(
+            hash_staged_files(data_root, list(lake_artifacts.factor_file_paths)) if lake_artifacts is not None else ()
+        ),
+        map_files=(
+            hash_staged_files(data_root, list(lake_artifacts.map_file_paths)) if lake_artifacts is not None else ()
+        ),
         market_hours_database=(hash_staged_files(data_root, [market_hours])[0] if market_hours is not None else None),
         symbol_properties_database=(
             hash_staged_files(data_root, [symbol_properties])[0] if symbol_properties is not None else None
