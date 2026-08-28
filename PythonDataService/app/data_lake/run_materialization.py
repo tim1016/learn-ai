@@ -5,8 +5,9 @@ them. Historically that was the policy store's ``ensure_range``, which
 exported Polygon aggregates into a policy-keyed cache directory. With
 ``DATA_LAKE_ENABLED`` the same question is answered by the lake:
 ``ensure_data`` materializes exactly the missing artifacts, the catalog
-arbitrates who fetches what, and every run leaves with the fingerprint of
-the bytes it consumed.
+arbitrates who fetches what, and every run leaves with a fingerprint of the
+lake state it materialized against (a superset of the bars it then reads —
+see :func:`materialize_engine_run`).
 
 This module is only the bridge. Callers want one call —
 :func:`materialize_engine_run` — and it composes three things none of them
