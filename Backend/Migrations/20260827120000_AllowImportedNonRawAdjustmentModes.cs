@@ -44,6 +44,15 @@ namespace Backend.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Intentionally NOT safe to run while any 'polygon_split_adjusted'
+            // row exists: Postgres validates every existing row against a
+            // newly-added CHECK constraint, so narrowing back to raw-only will
+            // fail with a check violation for as long as an imported
+            // adjusted-mode row is on file. That failure is the wanted
+            // behavior -- it stops a rollback from silently leaving data on
+            // disk that the narrower constraint would then forbid having ever
+            // been written. Delete or migrate those rows first if a genuine
+            // rollback is needed.
             migrationBuilder.Sql(@"
                 ALTER TABLE ""DataLakeArtifacts""
                 DROP CONSTRAINT IF EXISTS ck_raw_only_for_canonical_data_root;
