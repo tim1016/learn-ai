@@ -33,11 +33,14 @@ from app.data_lake import catalog_client
 from app.data_lake.cache_import import (
     ClaimDecision,
     CorruptCacheZipError,
+    DestinationDecision,
     LakeRootModeConflictError,
     MissingProvenanceError,
+    UnrecognizedCacheEntry,
     build_provider_params,
     check_lake_root_mode,
     decide_claim_outcome,
+    decide_destination_outcome,
     discover_cache_zips,
     import_cache_root,
     load_symbol_provenance,
@@ -155,6 +158,28 @@ def test_discover_cache_zips_surfaces_invalid_calendar_date_as_unrecognized(tmp_
     assert len(unrecognized) == 1
     assert unrecognized[0].symbol == "SPY"
     assert "20241332" in unrecognized[0].detail
+
+
+# ---------------------------------------------------------------------------
+# _unrecognized_to_failures (pure translation; the only producer of a
+# FailedArtifact with trading_date=None)
+# ---------------------------------------------------------------------------
+
+
+def test_unrecognized_to_failures_produces_reason_and_no_trading_date():
+    from app.data_lake.cache_import import _unrecognized_to_failures
+
+    entries = [
+        UnrecognizedCacheEntry(symbol="SPY", path=Path("/whatever/spy_2024-05-21_trade.zip"), detail="bad filename")
+    ]
+
+    failures = _unrecognized_to_failures(entries)
+
+    assert len(failures) == 1
+    assert failures[0].symbol == "SPY"
+    assert failures[0].trading_date is None
+    assert failures[0].reason == "unrecognized_filename"
+    assert failures[0].detail == "bad filename"
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +431,30 @@ def test_decide_claim_outcome_refuses_conflict_on_hash_mismatch():
 def test_decide_claim_outcome_flags_in_flight_when_no_existing_complete_row():
     decision = decide_claim_outcome(claim_result=None, existing=None, content_hash="deadbeef")
     assert decision.action == "in_flight_or_incomplete"
+
+
+# ---------------------------------------------------------------------------
+# decide_destination_outcome (layer 2: file-level guard, pure -- no fixtures,
+# no Postgres. This is the CI-executed coverage for the guard that otherwise
+# only lived in Postgres-gated orchestration tests the PR gate never runs.)
+# ---------------------------------------------------------------------------
+
+
+def test_decide_destination_outcome_writes_when_nothing_at_destination():
+    decision = decide_destination_outcome(existing_dest_hash=None, content_hash="deadbeef")
+    assert decision == DestinationDecision(action="write")
+
+
+def test_decide_destination_outcome_already_present_when_hash_matches():
+    decision = decide_destination_outcome(existing_dest_hash="deadbeef", content_hash="deadbeef")
+    assert decision.action == "already_present"
+
+
+def test_decide_destination_outcome_conflict_when_hash_differs():
+    decision = decide_destination_outcome(existing_dest_hash="aaaa", content_hash="bbbb")
+    assert decision.action == "conflict"
+    assert "aaaa" in decision.detail
+    assert "bbbb" in decision.detail
 
 
 # ---------------------------------------------------------------------------

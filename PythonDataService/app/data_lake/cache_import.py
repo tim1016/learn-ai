@@ -62,9 +62,11 @@ in two independent layers:
      assertion ("I have verified this root's true mode is `<mode>`") that
      stamps the marker and proceeds. An unmarked **empty** root keeps
      today's default behavior: the first import stamps it.
-  2. **File-level guard** (in ``_import_one_zip``, independent of the
-     marker — protects even if the marker is wrong or was bypassed).
-     Before promoting any zip, if a file already sits at the destination
+  2. **File-level guard** (``decide_destination_outcome``, pure and
+     unit-tested like ``decide_claim_outcome``; ``_import_one_zip`` does the
+     surrounding I/O and the ``fail_artifact`` side effect) — independent of
+     the marker, protects even if it's wrong or was bypassed. Before
+     promoting any zip, if a file already sits at the destination
      ``LeanMinuteBarPath``: identical content hash → treated as an
      idempotent no-op (the freshly-claimed row is still completed, just
      without rewriting the bytes); *different* hash → a typed refusal
@@ -224,6 +226,12 @@ class VerifiedZip:
 @dataclass(frozen=True)
 class ClaimDecision:
     action: Literal["proceed", "skip_duplicate", "conflict", "in_flight_or_incomplete"]
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class DestinationDecision:
+    action: Literal["write", "already_present", "conflict"]
     detail: str | None = None
 
 
@@ -485,6 +493,40 @@ def decide_claim_outcome(
     )
 
 
+def decide_destination_outcome(
+    existing_dest_hash: str | None,
+    content_hash: str,
+) -> DestinationDecision:
+    """Pure decision: what should happen to the on-disk destination file?
+
+    Mirrors ``decide_claim_outcome``'s shape deliberately: the layer-2
+    file-level guard (independent of ``check_lake_root_mode`` -- protects
+    even if that marker layer is missing, stale, or was overridden by
+    mistake) is a "gather I/O results, then decide" seam just like the
+    catalog-claim one, so it gets the same pure, database-free, CI-executed
+    unit tests instead of living only in the two Postgres-gated
+    orchestration tests that exercise ``_import_one_zip`` end to end.
+
+    ``existing_dest_hash`` is the sha256 of the bytes currently at the
+    destination path, or ``None`` when nothing is there yet.
+
+    Never overwrites: a destination file with a different content hash is a
+    ``conflict`` -- the caller must not call ``atomic_write_and_promote``
+    (hence ``os.replace``) for it.
+    """
+    if existing_dest_hash is None:
+        return DestinationDecision(action="write")
+    if existing_dest_hash == content_hash:
+        return DestinationDecision(action="already_present")
+    return DestinationDecision(
+        action="conflict",
+        detail=(
+            f"existing destination file has content hash {existing_dest_hash!r}; "
+            f"cache zip hashes to {content_hash!r}. Refusing to overwrite."
+        ),
+    )
+
+
 async def _import_one_zip(
     ref: CacheZipRef,
     price_adjustment_mode: str,
@@ -564,28 +606,28 @@ async def _import_one_zip(
     # --claim-unmarked-root-as, a real file already sitting at this exact
     # destination must never be silently clobbered by atomic_write_and_promote's
     # unconditional os.replace. Checked for every zip, not just when the
-    # marker layer had something to say.
+    # marker layer had something to say. The I/O (does the file exist? what's
+    # its hash?) and the fail_artifact side effect stay here; the decision
+    # itself is decide_destination_outcome, pure and unit-tested on its own.
     dest_path = lake_dir / Path(*rel_path.parts)
-    already_present = False
-    if dest_path.is_file():
-        existing_dest_hash = hashlib.sha256(dest_path.read_bytes()).hexdigest()
-        if existing_dest_hash != content_hash:
-            detail = (
-                f"a file already exists at {dest_path} with a different content hash "
-                f"({existing_dest_hash!r}) than the cache zip being imported "
-                f"({content_hash!r}); refusing to overwrite it -- atomic_write_and_promote "
-                f"was never called. This can happen when a lake root's adjustment-mode "
-                f"marker doesn't (or didn't used to) match what's physically on disk."
-            )
-            await catalog_client.fail_artifact(artifact_id=claim_result, last_error="io_error", error_message=detail)
-            logger.error("cache_import: %s %s: %s", ref.symbol, ref.trading_date, detail)
-            return FailedArtifact(
-                symbol=ref.symbol, trading_date=ref.trading_date, reason="destination_file_conflict", detail=detail
-            )
-        # Identical bytes already at the destination: nothing to write, but
-        # the row we just claimed still needs completing, not left in
-        # 'fetching'.
-        already_present = True
+    existing_dest_hash = hashlib.sha256(dest_path.read_bytes()).hexdigest() if dest_path.is_file() else None
+    dest_decision = decide_destination_outcome(existing_dest_hash, content_hash)
+
+    if dest_decision.action == "conflict":
+        detail = (
+            f"{dest_path}: {dest_decision.detail} This can happen when a lake root's "
+            f"adjustment-mode marker doesn't (or didn't used to) match what's physically "
+            f"on disk."
+        )
+        await catalog_client.fail_artifact(artifact_id=claim_result, last_error="io_error", error_message=detail)
+        logger.error("cache_import: %s %s: %s", ref.symbol, ref.trading_date, detail)
+        return FailedArtifact(
+            symbol=ref.symbol, trading_date=ref.trading_date, reason="destination_file_conflict", detail=detail
+        )
+    # Identical bytes already at the destination ("already_present"): nothing
+    # to write, but the row we just claimed still needs completing, not left
+    # in 'fetching'.
+    already_present = dest_decision.action == "already_present"
 
     try:
         file_sha = (
@@ -725,6 +767,31 @@ def check_lake_root_mode(
         )
 
 
+def _unrecognized_to_failures(entries: list[UnrecognizedCacheEntry]) -> list[FailedArtifact]:
+    """Pure translation: every unrecognized cache-tree entry becomes a
+    FailedArtifact with reason="unrecognized_filename" and no trading_date --
+    there's no date to report, since the filename itself didn't parse to
+    one. The only producer of ``trading_date=None`` in this module.
+    """
+    return [
+        FailedArtifact(symbol=entry.symbol, trading_date=None, reason="unrecognized_filename", detail=entry.detail)
+        for entry in entries
+    ]
+
+
+def _fail_all(
+    report: ImportReport,
+    refs: list[CacheZipRef],
+    reason: ImportFailureReason,
+    detail: str,
+) -> None:
+    """Append a FailedArtifact for every ref, sharing one reason/detail --
+    the shape both "refuse this whole symbol" call sites in
+    import_cache_root need (missing provenance, a lake-root mode conflict)."""
+    for ref in refs:
+        report.failed.append(FailedArtifact(symbol=ref.symbol, trading_date=ref.trading_date, reason=reason, detail=detail))
+
+
 async def import_cache_root(
     cache_root: Path, lake_root: Path, *, claim_unmarked_root_as: str | None = None
 ) -> ImportReport:
@@ -761,29 +828,23 @@ async def import_cache_root(
 
     report = ImportReport()
     run_id = uuid4()
+    # Committed at most once per run: check_lake_root_mode already guarantees
+    # every symbol group that gets past it shares one mode, so re-stamping
+    # the marker with identical content on every subsequent symbol is pure
+    # waste. Starts True when the root already carries a (matching) marker
+    # from a prior run -- nothing to (re)write in that case either.
+    marker_committed = _read_lake_root_mode(lake_root) is not None
 
     for entry in unrecognized:
-        report.failed.append(
-            FailedArtifact(
-                symbol=entry.symbol, trading_date=None, reason="unrecognized_filename", detail=entry.detail
-            )
-        )
         logger.warning("cache_import: %s", entry.detail)
+    report.failed.extend(_unrecognized_to_failures(unrecognized))
 
     for symbol in sorted(by_symbol):
         try:
             provenance = load_symbol_provenance(cache_root, symbol)
         except MissingProvenanceError as exc:
             logger.warning("cache_import: %s", exc)
-            for ref in by_symbol[symbol]:
-                report.failed.append(
-                    FailedArtifact(
-                        symbol=symbol,
-                        trading_date=ref.trading_date,
-                        reason="missing_provenance",
-                        detail=str(exc),
-                    )
-                )
+            _fail_all(report, by_symbol[symbol], "missing_provenance", str(exc))
             continue
 
         adjusted = provenance["policy"]["adjusted"]
@@ -795,24 +856,24 @@ async def import_cache_root(
             )
         except LakeRootModeConflictError as exc:
             logger.error("cache_import: %s", exc)
-            for ref in by_symbol[symbol]:
-                report.failed.append(
-                    FailedArtifact(
-                        symbol=symbol,
-                        trading_date=ref.trading_date,
-                        reason="lake_root_mode_conflict",
-                        detail=str(exc),
-                    )
-                )
+            _fail_all(report, by_symbol[symbol], "lake_root_mode_conflict", str(exc))
             continue
-        _commit_lake_root_mode(lake_root, price_adjustment_mode)
+        if not marker_committed:
+            _commit_lake_root_mode(lake_root, price_adjustment_mode)
+            marker_committed = True
 
         dch = _import_minute_trade_dch(adjusted)
         provider_params = build_provider_params(cache_root, provenance)
 
         for ref in by_symbol[symbol]:
             outcome = await _import_one_zip(
-                ref, price_adjustment_mode, dch, provider_params, lake_dir, staging_dir, run_id
+                ref=ref,
+                price_adjustment_mode=price_adjustment_mode,
+                dch=dch,
+                provider_params=provider_params,
+                lake_dir=lake_dir,
+                staging_dir=staging_dir,
+                run_id=run_id,
             )
             if isinstance(outcome, ImportedArtifact):
                 report.imported.append(outcome)
