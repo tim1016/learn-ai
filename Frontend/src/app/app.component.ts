@@ -1,17 +1,15 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
 import { Title } from '@angular/platform-browser';
-import { ActivatedRouteSnapshot, NavigationEnd, Router, RouterOutlet } from '@angular/router';
+import { ActivatedRouteSnapshot, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
-import { filter, map, startWith } from 'rxjs';
-import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { BrokerBannerComponent } from './shell/broker-banner.component';
-import { BreadcrumbComponent } from './shell/breadcrumb.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
 import { pageTitleFor } from './shell/app-menu';
+import { CurrentUrlService } from './shell/current-url.service';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -22,9 +20,8 @@ import { pageTitleFor } from './shell/app-menu';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterOutlet,
-    AppSidebarComponent,
+    AppMenubarComponent,
     BrokerBannerComponent,
-    BreadcrumbComponent,
     TopBarComponent,
     PageBodyComponent,
     MarkdownDrawerHostComponent,
@@ -69,10 +66,9 @@ import { pageTitleFor } from './shell/app-menu';
     }
   `],
   template: `
-    <app-sidebar />
     <div class="shell">
-      <app-top-bar [pageTitle]="pageTitle()">
-        <app-breadcrumb shell-breadcrumbs />
+      <app-top-bar>
+        <app-menubar shell-nav />
         <app-broker-banner shell-connection />
       </app-top-bar>
       <main class="main">
@@ -91,14 +87,7 @@ export class AppComponent {
   private readonly brokerHealth = inject(BrokerHealthService);
   private readonly title = inject(Title);
   private readonly router = inject(Router);
-  private readonly currentUrl = toSignal(
-    this.router.events.pipe(
-      filter((event): event is NavigationEnd => event instanceof NavigationEnd),
-      map((event) => event.urlAfterRedirects),
-      startWith(this.router.url),
-    ),
-    { initialValue: this.router.url },
-  );
+  private readonly currentUrl = inject(CurrentUrlService).url;
   protected readonly pageTitle = computed(() => pageTitleFor(this.currentUrl()));
   protected readonly isFullBleedRoute = computed(() => {
     this.currentUrl();
