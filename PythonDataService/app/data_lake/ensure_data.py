@@ -513,12 +513,20 @@ async def _process_minute_trade_artifact(
     )
     if artifact_id is None:
         # Already complete (or in-flight); read the existing complete row.
+        # price_adjustment_mode is passed explicitly (not left to the
+        # query's "match any mode" default): app.data_lake.cache_import can
+        # now put a 'polygon_split_adjusted' row in the catalog for the same
+        # (market, symbol, date, data_type) this 'raw' identity claims, and
+        # picking the wrong one here would silently launder into a
+        # nondeterministic downstream quote data_contract_hash (_quote_dch
+        # below keys off this record's id/file_sha256).
         existing = await catalog_client.select_coverage_minute_bars(
             market=identity.market,  # type: ignore[arg-type]
             symbol=identity.symbol,  # type: ignore[arg-type]
             data_type="trade",
             start_trading_date=identity.trading_date,  # type: ignore[arg-type]
             end_trading_date=identity.trading_date,  # type: ignore[arg-type]
+            price_adjustment_mode=identity.price_adjustment_mode,
         )
         if existing:
             return existing[0], None, True  # cache hit
