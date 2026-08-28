@@ -992,12 +992,16 @@ async def _process_minute_quote_artifact(
         file_path=file_path,
     )
     if artifact_id is None:
+        # price_adjustment_mode scoped explicitly for the same reason as the
+        # minute-trade lookup above: a coexisting different-mode row for
+        # this (market, symbol, date, data_type) must never be picked here.
         existing = await catalog_client.select_coverage_minute_bars(
             market=identity.market,  # type: ignore[arg-type]
             symbol=identity.symbol,  # type: ignore[arg-type]
             data_type="quote",
             start_trading_date=identity.trading_date,  # type: ignore[arg-type]
             end_trading_date=identity.trading_date,  # type: ignore[arg-type]
+            price_adjustment_mode=identity.price_adjustment_mode,
         )
         if existing:
             return existing[0], None, True  # cache hit
