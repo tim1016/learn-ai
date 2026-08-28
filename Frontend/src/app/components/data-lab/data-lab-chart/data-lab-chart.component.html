@@ -55,6 +55,14 @@
     </div>
   }
 
+  <!-- Data-source notice: part of this range was provider-served, not lake-backed -->
+  @if (sourceNotice(); as notice) {
+    <div class="source-notice" role="status">
+      <i class="pi pi-database" aria-hidden="true"></i>
+      <span>{{ notice }}</span>
+    </div>
+  }
+
   <!-- Error display -->
   @if (error()) {
     <div class="chart-error">

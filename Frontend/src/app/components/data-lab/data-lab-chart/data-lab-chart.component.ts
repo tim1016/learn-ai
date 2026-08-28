@@ -60,6 +60,23 @@ export interface QualityReport {
   out_of_order_fixed?: number;
 }
 
+export interface BarSourceSpan {
+  source: string;
+  reason: string;
+  from_session_open_ms_utc: number;
+  to_session_open_ms_utc: number;
+  session_count: number;
+  bar_count: number;
+}
+
+/** Which portion of the series each source served. Present only while the
+ *  data lake is in the chart's read path; absent otherwise. */
+export interface BarSources {
+  boundary_ms_utc: number | null;
+  notice_code: string | null;
+  spans: BarSourceSpan[];
+}
+
 export interface ChartDataResponse {
   bars: ChartBar[];
   indicators: ChartIndicatorResult[];
@@ -68,7 +85,24 @@ export interface ChartDataResponse {
   estimated_bars_per_timeframe: Record<string, number>;
   recommended_timeframe: string;
   meta: { cached_resample: boolean; cached_indicators: boolean };
+  bar_sources?: BarSources;
 }
+
+/** Closed operator-copy map for the chart's data-source notice.
+ *
+ *  The backend sends a machine code; that code is never rendered. A code with
+ *  no entry here produces no notice at all rather than leaking a raw
+ *  identifier into the UI. */
+const BAR_SOURCE_NOTICE_COPY = new Map<string, string>([
+  [
+    'history_provider_fallback',
+    'Some sessions in this range are not in the data lake yet and came straight from the market-data provider.',
+  ],
+  [
+    'adjusted_prices_provider_only',
+    'Split- and dividend-adjusted prices come straight from the market-data provider. The data lake holds unadjusted prices only.',
+  ],
+]);
 
 interface SubPanel {
   id: string;
@@ -224,6 +258,15 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   quality = signal<QualityReport | null>(null);
   qualityModalOpen = signal(false);
 
+  private barSources = signal<BarSources | null>(null);
+
+  /** Non-intrusive notice when part of the range was provider-served rather
+   *  than lake-backed. Null when there is nothing to say. */
+  sourceNotice = computed(() => {
+    const code = this.barSources()?.notice_code;
+    return code ? BAR_SOURCE_NOTICE_COPY.get(code) ?? null : null;
+  });
+
   // Chart data
   private bars = signal<ChartBar[]>([]);
   indicatorResults = signal<ChartIndicatorResult[]>([]);
@@ -302,6 +345,9 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     this.bars.set(snapshot.bars);
     this.indicatorResults.set(snapshot.indicators);
     this.quality.set(snapshot.quality);
+    // A persisted snapshot carries no source receipt, so say nothing rather
+    // than leaving the previous fetch's notice standing over other bars.
+    this.barSources.set(null);
     this.allowedTimeframes.set(snapshot.allowedTimeframes);
     this.estimatedBars.set(snapshot.estimatedBarsPerTimeframe);
     this.recommendedTimeframe.set(snapshot.recommendedTimeframe);
@@ -365,6 +411,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       this.bars.set(resp.bars);
       this.indicatorResults.set(resp.indicators);
       this.quality.set(resp.quality);
+      this.barSources.set(resp.bar_sources ?? null);
       this.allowedTimeframes.set(resp.allowed_timeframes);
       this.estimatedBars.set(resp.estimated_bars_per_timeframe);
       this.recommendedTimeframe.set(resp.recommended_timeframe);
