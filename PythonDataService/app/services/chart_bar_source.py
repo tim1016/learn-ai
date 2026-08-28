@@ -412,6 +412,11 @@ def _execute_plan(
         session="extended",
     )
 
+    # Invariant since #1839, but kept named rather than inlined at its three
+    # use sites: `_plan_segments` takes the reason as a parameter, and a lake
+    # that cannot serve a mode would want to say so again here (the retained
+    # `price_adjustment_unsupported` reason is that shape). One name is
+    # cheaper than three literals and a re-widened signature.
     history_fallback_reason: SpanReason = "lake_gap"
     lake_dates: frozenset[date] = frozenset()
     if completed:
@@ -422,9 +427,10 @@ def _execute_plan(
         # Nothing to stitch. Composing anyway would split the window into a
         # history segment and a live segment — two provider fetches where the
         # flag-off path makes one, and only two runs, so the fan-out cap would
-        # never notice. This is the *common* shape, not an edge case: an
-        # adjusted chart (the chart's default) can never read the raw-only
-        # lake, and a not-yet-backfilled lake holds nothing at all.
+        # never notice. This is the *common* shape, not an edge case: only a
+        # run that materialized this symbol and window puts bytes in the lake,
+        # and the adjusted root (the chart's default mode) is populated later
+        # and more sparsely than the raw one.
         return _whole_window_from_provider(
             from_date=from_date,
             to_date=to_date,

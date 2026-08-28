@@ -33,9 +33,11 @@ rows are root-relative (``FilePath`` carries no root identity of its own), so
 importing into any other root would produce rows the live ``ensure_data``
 pipeline can never actually find once it resolves coverage under the real
 configured root ("phantom coverage"). Artifacts land under
-``<canonical-root>/lake/...`` (same relative layout as
-``app.data_lake.path_policy.LeanMinuteBarPath``), staged through
-``<canonical-root>/staging/...`` per ``app.data_lake.atomic``.
+``<canonical-root>/lake/<price-adjustment-mode>/...`` (the LEAN-relative tail
+is ``app.data_lake.path_policy.LeanMinuteBarPath`` unchanged; the mode segment
+sits above it), staged through ``<canonical-root>/staging/...`` per
+``app.data_lake.atomic``. Staging is deliberately not mode-keyed: its paths
+are already unique per ``(request_id, worker_id, attempt)``.
 
 Idempotency and no-overwrite are decided by ``decide_claim_outcome`` (pure,
 unit-tested in isolation): re-running the import re-derives the same content
@@ -927,10 +929,13 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
     ``lake_root`` must equal the canonical configured write root
     (``settings.LEAN_DATA_WRITE_ROOT``, the parent ``resolve_lake_root()``
     and ``resolve_staging_root()`` resolve under) -- or this raises
-    ``LakeRootIdentityError`` before touching anything. Artifacts land under
-    ``lake_root/lake/...``, staged through ``lake_root/staging/...``. Both
-    are created if missing. Makes zero provider calls — every byte written
-    comes from the cache zips already on disk.
+    ``LakeRootIdentityError`` before touching anything — its one remaining job
+    is to make the operator state which root they mean and refuse a wrong
+    answer loudly, since a root-relative catalog cannot detect the mistake
+    later. Artifacts land under ``lake_root/lake/<price-adjustment-mode>/...``,
+    staged through ``lake_root/staging/...``; both are created if missing.
+    Makes zero provider calls — every byte written comes from the cache zips
+    already on disk.
 
     Each symbol's adjustment mode comes from its own provenance document and
     selects its own lake root, so one invocation can import a mixture of raw

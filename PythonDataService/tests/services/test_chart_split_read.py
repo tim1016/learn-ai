@@ -32,6 +32,8 @@ from app.lean_sidecar.trading_calendar import (
 from app.services import chart_bar_source, chart_service
 from app.services.chart_bar_source import (
     _MAX_PROVIDER_RUNS,
+    BarSourceSpan,
+    ComposedBars,
     compose_chart_bars,
     split_sessions_at_boundary,
 )
@@ -845,3 +847,35 @@ def test_get_chart_data_carries_the_source_indicator_when_history_is_lake_backed
     # one of those sessions came out of the lake: the provider saw the current
     # session only.
     assert chart_provider.calls == [(LIVE_SESSION.isoformat(), LIVE_SESSION.isoformat())]
+
+
+def test_the_adjusted_prices_notice_stays_in_the_contract_though_nothing_emits_it() -> None:
+    """`price_adjustment_unsupported` is retained, unproduced, on purpose.
+
+    Before #1839 the lake stored raw bytes only, so an adjusted chart fell
+    back wholesale with this reason and the Angular chart rendered its
+    `adjusted_prices_provider_only` notice. The lake now has a root per
+    adjustment mode, so nothing produces the reason any more — but the code
+    is still in the response contract that
+    `Frontend/src/app/components/data-lab/data-lab-chart` switches on, and
+    deleting it is a cross-stack change, not a data-plane one.
+
+    Pinning the mapping directly keeps the retained branch covered; without
+    this, removing it would break the frontend with no failing test.
+    """
+    composed = ComposedBars(
+        bars=(),
+        spans=(
+            BarSourceSpan(
+                source="provider",
+                reason="price_adjustment_unsupported",
+                from_session_open_ms_utc=0,
+                to_session_open_ms_utc=0,
+                session_count=1,
+                bar_count=0,
+            ),
+        ),
+        boundary_ms_utc=None,
+    )
+
+    assert composed.notice_code == "adjusted_prices_provider_only"

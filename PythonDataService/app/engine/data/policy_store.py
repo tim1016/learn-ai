@@ -116,10 +116,10 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     unchanged. The reference mount is deliberately dropped rather than
     stacked in front — a run must be able to say which bytes it consumed,
     and a fixture silently outranking the lake would make the manifest
-    fingerprint recorded on the run a lie. The policy key stops applying
-    too: the lake stores raw bars under one identity, and the adjustment
-    mode is carried by the catalog's data contract, not by the directory
-    name.
+    fingerprint recorded on the run a lie. The policy key does not carry
+    over either: the pre-lake cache keys its subtree by ``source`` *and*
+    adjustment, while the lake is single-source and keys only by adjustment
+    (``path_policy.resolve_lake_root``).
 
     ``adjusted`` selects the lake root rather than being refused by it. It
     used to raise ``LakeAdjustmentUnsupportedError`` here, because the lake
