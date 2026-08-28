@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import app.routers.data_lake as data_lake_router
-from app.data_lake.backfill import BackfillDayProgress, BackfillResult
+from app.data_lake.backfill import BackfillDayProgress, BackfillResult, BackfillWaitProgress
 from app.data_lake.types import ArtifactFailure
 from app.routers.data_lake import router as data_lake_router_instance
 
@@ -135,8 +135,27 @@ async def test_start_backfill_job_returns_202_and_streams_per_day_progress(monke
         attempt_count=1,
     )
 
-    async def fake_run_backfill(spec: Any, *, on_day_progress: Any = None, cancel_check: Any = None, ensure_fn: Any = None) -> BackfillResult:
+    async def fake_run_backfill(
+        spec: Any,
+        *,
+        on_day_progress: Any = None,
+        on_wait: Any = None,
+        cancel_check: Any = None,
+        ensure_fn: Any = None,
+        status_fn: Any = None,
+    ) -> BackfillResult:
         assert cancel_check is not None
+        if on_wait is not None:
+            # Exercise the lease-wait relay too — a slow coalesce must keep
+            # the SSE stream informative, not silent.
+            on_wait(
+                BackfillWaitProgress(
+                    trading_date=date(2024, 5, 20),
+                    symbol="SPY",
+                    data_type="trade",
+                    attempt=1,
+                )
+            )
         if on_day_progress is not None:
             on_day_progress(
                 BackfillDayProgress(
@@ -216,3 +235,7 @@ async def test_start_backfill_job_returns_202_and_streams_per_day_progress(monke
     final_result = captured["result"]
     assert final_result["overall_status"] == "partial"
     assert final_result["failures"][0]["reason"] == "provider_auth_error"
+
+    # A lease-wait tick relays as an info-level log line, keeping the SSE
+    # stream informative during a slow coalesce instead of going silent.
+    assert any(level == "info" and "waiting on another worker" in message for level, message in emitter.logs)

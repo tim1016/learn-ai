@@ -20,7 +20,7 @@ import logging
 from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.data_lake.backfill import BackfillDayProgress, run_backfill
+from app.data_lake.backfill import BackfillDayProgress, BackfillWaitProgress, run_backfill
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.types import DataAvailabilityResult, DataRunSpec
 from app.jobs.progress import ProgressEmitter
@@ -43,11 +43,13 @@ async def post_ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
 class BackfillJobRequest(BaseModel):
     """Body of POST /api/data-lake/backfill.
 
-    Wraps the existing DataRunSpec ensure contract as a job submission: the
-    same field validation, plus the job_id the caller (the established job
-    pattern in app/routers/jobs.py: the .NET JobsController mints job_id
-    and writes the initial Redis state record before Python does the work)
-    mints ahead of dispatch.
+    Wraps the existing DataRunSpec ensure contract as a job submission:
+    the same snake_case fields and validation as /ensure-data's body
+    (this router isn't behind the .NET-forwards-camelCase-verbatim
+    convention app/routers/jobs.py uses — it's called the same direct way
+    /ensure-data already is), plus a job_id the caller mints ahead of
+    dispatch, per the established job pattern's convention of the caller
+    minting the id before the worker starts writing progress against it.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -93,6 +95,25 @@ def _emit_day_progress(emit: ProgressEmitter, progress: BackfillDayProgress) -> 
         )
 
 
+def _emit_wait_progress(emit: ProgressEmitter, progress: BackfillWaitProgress) -> None:
+    """Keep the SSE stream informative while a day coalesces on another
+    worker's in-flight claim, instead of going silent for the wait.
+
+    run_backfill calls this on every poll (every
+    backfill._LEASE_POLL_INTERVAL_SECONDS); only the first attempt and
+    every tenth one after that are actually surfaced, so a long wait
+    (bounded by the winner's own lease TTL) doesn't flood the stream with
+    a line every half second.
+    """
+    if progress.attempt != 1 and progress.attempt % 10 != 0:
+        return
+    emit.log(
+        f"{progress.trading_date.isoformat()} {progress.symbol} {progress.data_type}: "
+        f"waiting on another worker's in-flight fetch (attempt {progress.attempt})",
+        level="info",
+    )
+
+
 @router.post("/backfill", status_code=status.HTTP_202_ACCEPTED)
 async def start_backfill_job(req: BackfillJobRequest) -> dict:
     """Kick off a data-lake backfill in a worker thread. Returns 202.
@@ -103,6 +124,12 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
     a data_lake.backfill_day event after each one.
     """
     spec = req.spec
+    logger.info(
+        "[STEP 1] /api/data-lake/backfill received: job_id=%s, request_id=%s, symbols=%s",
+        req.job_id,
+        spec.request_id,
+        spec.symbols,
+    )
 
     def work(emit: ProgressEmitter, cancel) -> dict:
         cancel.raise_if_cancelled()
@@ -115,10 +142,15 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
             cancel.raise_if_cancelled()
             _emit_day_progress(emit, progress)
 
+        def on_wait(progress: BackfillWaitProgress) -> None:
+            cancel.raise_if_cancelled()
+            _emit_wait_progress(emit, progress)
+
         async def _do() -> dict:
             result = await run_backfill(
                 spec,
                 on_day_progress=on_day_progress,
+                on_wait=on_wait,
                 cancel_check=cancel.raise_if_cancelled,
             )
             return result.model_dump(mode="json")
