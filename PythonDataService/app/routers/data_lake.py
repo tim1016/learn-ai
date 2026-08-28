@@ -13,6 +13,7 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.3
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 from typing import Literal
@@ -20,25 +21,23 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 
 from app.data_lake import catalog_client
+from app.data_lake.catalog_client import session_open_ms_or_none
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.types import (
+    MAX_TRADING_RANGE_DAYS,
     ArtifactDetail,
     CoverageDay,
     CoverageResponse,
     DataAvailabilityResult,
     DataRunSpec,
-    StorageKindTotal,
+    PriceAdjustmentMode,
     StorageSummaryResponse,
-    SymbolCoverageSpan,
+    trading_range_span_days,
 )
-from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
+from app.lean_sidecar.trading_calendar import expected_sessions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-lake", tags=["data-lake"])
-
-# Mirrors DataRunSpec's _MAX_RANGE_YEARS cap (types.py) — bounds the coverage
-# endpoint's per-day calendar walk against an accidental multi-decade query.
-_MAX_COVERAGE_RANGE_DAYS = 5 * 366
 
 
 @router.post("/ensure-data", response_model=DataAvailabilityResult)
@@ -59,7 +58,7 @@ async def get_coverage(
     market: Literal["usa"] = "usa",
     data_type: Literal["trade", "quote"] = "trade",
     provider: Literal["polygon"] = "polygon",
-    price_adjustment_mode: Literal["raw", "polygon_split_adjusted", "lean_adjusted"] = "raw",
+    price_adjustment_mode: PriceAdjustmentMode = "raw",
 ) -> CoverageResponse:
     """Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.
 
@@ -76,13 +75,16 @@ async def get_coverage(
                 "message": f"start_trading_date {start_trading_date} is after end_trading_date {end_trading_date}",
             },
         )
-    span_days = (end_trading_date - start_trading_date).days + 1
-    if span_days > _MAX_COVERAGE_RANGE_DAYS:
+    # Same computation DataRunSpec's validator uses (types.py) — one shared
+    # cap, one shared formula, so a write-window accepted by POST
+    # /ensure-data can never be a read-window GET /coverage rejects.
+    span_days = trading_range_span_days(start_trading_date, end_trading_date)
+    if span_days > MAX_TRADING_RANGE_DAYS:
         raise HTTPException(
             status_code=422,
             detail={
                 "reason": "range_too_large",
-                "message": f"range is {span_days} days; max is {_MAX_COVERAGE_RANGE_DAYS}",
+                "message": f"range is {span_days} days; max is {MAX_TRADING_RANGE_DAYS}",
             },
         )
 
@@ -105,14 +107,16 @@ async def get_coverage(
             end_trading_date=end_trading_date,
         )
     }
-    days = [
-        CoverageDay(
-            trading_date_ms=session_open_ms_utc(session_date),
-            status=rows_by_date[session_date].status if session_date in rows_by_date else "missing",
-            artifact_id=rows_by_date[session_date].artifact_id if session_date in rows_by_date else None,
+    days = []
+    for session_date in sessions:
+        row = rows_by_date.get(session_date)
+        days.append(
+            CoverageDay(
+                trading_date_ms=session_open_ms_or_none(session_date),
+                status=row.status if row is not None else "missing",
+                artifact_id=row.artifact_id if row is not None else None,
+            )
         )
-        for session_date in sessions
-    ]
     return CoverageResponse(
         market=market,
         symbol=symbol,
@@ -128,8 +132,8 @@ async def get_coverage(
 async def get_artifact_detail(artifact_id: int) -> ArtifactDetail:
     """Return the full receipt for one catalog row: hashes, size, provider params."""
     logger.info("[STEP 1] /api/data-lake/artifacts/%s requested", artifact_id)
-    row = await catalog_client.select_artifact_by_id(artifact_id)
-    if row is None:
+    detail = await catalog_client.select_artifact_by_id(artifact_id)
+    if detail is None:
         raise HTTPException(
             status_code=404,
             detail={
@@ -137,50 +141,15 @@ async def get_artifact_detail(artifact_id: int) -> ArtifactDetail:
                 "message": f"artifact {artifact_id} not found",
             },
         )
-    return ArtifactDetail(
-        id=row.id,
-        artifact_kind=row.artifact_kind,
-        market=row.market,
-        symbol=row.symbol,
-        trading_date_ms=session_open_ms_utc(row.trading_date) if row.trading_date is not None else None,
-        resolution=row.resolution,
-        data_type=row.data_type,
-        provider=row.provider,
-        provider_params=row.provider_params,
-        price_adjustment_mode=row.price_adjustment_mode,
-        data_contract_hash=row.data_contract_hash,
-        content_hash=row.content_hash,
-        file_path=row.file_path,
-        file_size_bytes=row.file_size_bytes,
-        status=row.status,
-        row_count=row.row_count,
-        first_bar_start_ms=row.first_bar_start_ms,
-        last_bar_start_ms=row.last_bar_start_ms,
-        fetched_at_ms=row.fetched_at_ms,
-        completed_at_ms=row.completed_at_ms,
-    )
+    return detail
 
 
 @router.get("/storage-summary", response_model=StorageSummaryResponse)
 async def get_storage_summary(market: Literal["usa"] = "usa") -> StorageSummaryResponse:
     """Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span."""
     logger.info("[STEP 1] /api/data-lake/storage-summary requested: market=%s", market)
-    kinds = [
-        StorageKindTotal(
-            artifact_kind=row.artifact_kind,
-            resolution=row.resolution,
-            artifact_count=row.artifact_count,
-            total_bytes=row.total_bytes,
-        )
-        for row in await catalog_client.select_storage_totals_by_kind(market)
-    ]
-    symbols = [
-        SymbolCoverageSpan(
-            symbol=row.symbol,
-            first_trading_date_ms=session_open_ms_utc(row.first_trading_date) if row.first_trading_date else None,
-            last_trading_date_ms=session_open_ms_utc(row.last_trading_date) if row.last_trading_date else None,
-            artifact_count=row.artifact_count,
-        )
-        for row in await catalog_client.select_symbol_coverage_spans(market)
-    ]
+    kinds, symbols = await asyncio.gather(
+        catalog_client.select_storage_totals_by_kind(market),
+        catalog_client.select_symbol_coverage_spans(market),
+    )
     return StorageSummaryResponse(market=market, kinds=kinds, symbols=symbols)

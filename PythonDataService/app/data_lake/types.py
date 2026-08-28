@@ -22,6 +22,30 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
 _MAX_RANGE_YEARS = 5
+# Shared by DataRunSpec's write-window validator and the coverage endpoint's
+# read-window validator (app/routers/data_lake.py) — one constant, one
+# computation (trading_range_span_days below), so the two can't silently
+# drift on what counts as "in range" the way they did before (#1835 review).
+MAX_TRADING_RANGE_DAYS = _MAX_RANGE_YEARS * 366
+
+# Mirrors the shared DataLakeArtifacts.PriceAdjustmentMode CHECK constraint
+# (ck_price_adjustment_mode_enum, Backend/Migrations/20260521033222_...).
+# DataRunSpec deliberately narrows to "raw" below — the only mode the v1
+# fetch pipeline can produce — rather than accepting the full vocabulary;
+# the coverage endpoint (a read over whatever the catalog actually holds)
+# uses the full set.
+PriceAdjustmentMode = Literal["raw", "polygon_split_adjusted", "lean_adjusted"]
+
+# Mirrors the shared DataLakeArtifacts.Status CHECK constraint
+# (ck_status_enum) — Python and the .NET side must not drift on what this
+# column can hold. ``"missing"`` is NOT a DB value: the coverage endpoint
+# synthesizes it for a calendar session with no matching catalog row.
+ArtifactStatus = Literal["fetching", "complete", "stale", "failed"]
+
+
+def trading_range_span_days(start: date, end: date) -> int:
+    """Inclusive day count of a closed ``[start, end]`` trading-date window."""
+    return (end - start).days + 1
 
 
 class DataRunSpec(BaseModel):
@@ -38,6 +62,8 @@ class DataRunSpec(BaseModel):
 
     resolution: Literal["minute"] = "minute"
     data_types: list[Literal["trade", "quote"]] = ["trade"]
+    # Deliberate subset of PriceAdjustmentMode (above) — the only mode the
+    # v1 fetch pipeline can produce, not an independent copy of the vocabulary.
     price_adjustment_mode: Literal["raw"] = "raw"
     provider: Literal["polygon"] = "polygon"
 
@@ -60,9 +86,9 @@ class DataRunSpec(BaseModel):
         if self.start_trading_date > self.end_trading_date:
             raise ValueError(f"start_trading_date {self.start_trading_date} > end_trading_date {self.end_trading_date}")
         # Range cap.
-        delta_days = (self.end_trading_date - self.start_trading_date).days
-        if delta_days > _MAX_RANGE_YEARS * 366:
-            raise ValueError(f"range exceeds {_MAX_RANGE_YEARS}-year cap ({delta_days} days requested)")
+        span_days = trading_range_span_days(self.start_trading_date, self.end_trading_date)
+        if span_days > MAX_TRADING_RANGE_DAYS:
+            raise ValueError(f"range exceeds {_MAX_RANGE_YEARS}-year cap ({span_days} days requested)")
         # Quote requires trade: quote artifacts are derived from same-day trade
         # bytes; without a source trade artifact, quote synthesis cannot proceed.
         if "quote" in self.data_types and "trade" not in self.data_types:
@@ -158,8 +184,10 @@ class DataAvailabilityResult(BaseModel):
 #
 # Thin projections of the catalog for the future Observatory UI. All
 # timestamps are int64 ms UTC; a ``TradingDate`` column value is converted to
-# its canonical ET session-open anchor (see temporal-rigor.md) by the router,
-# not here — these models only describe the wire shape.
+# its canonical ET session-open anchor (see temporal-rigor.md) by
+# catalog_client (ArtifactDetail, SymbolCoverageSpan) or the router
+# (CoverageDay, which merges catalog rows with the calendar's own session
+# walk) — not here. These models only describe the wire shape.
 # ---------------------------------------------------------------------------
 
 
@@ -174,7 +202,7 @@ class CoverageDay(BaseModel):
     """
 
     trading_date_ms: int
-    status: Literal["complete", "fetching", "failed", "missing"]
+    status: ArtifactStatus | Literal["missing"]
     artifact_id: int | None = None
 
 
@@ -202,10 +230,13 @@ class ArtifactDetail(BaseModel):
     provider_params: dict[str, object]
     price_adjustment_mode: str | None
     data_contract_hash: str
-    content_hash: str
+    # None (not "") until the artifact reaches Status='complete' and its
+    # FileSha256 column is actually populated — an empty string on a
+    # fetching/failed row would read as a real hash on a documented receipt.
+    content_hash: str | None
     file_path: str
     file_size_bytes: int | None
-    status: str
+    status: ArtifactStatus
     row_count: int | None
     first_bar_start_ms: int | None
     last_bar_start_ms: int | None
