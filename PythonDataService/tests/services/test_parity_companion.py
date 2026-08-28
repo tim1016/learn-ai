@@ -13,6 +13,7 @@ from app.routers.engine import EngineBacktestRequest
 from app.services.parity_companion import (
     REASON_EXECUTION_PROFILE,
     REASON_NO_TWIN,
+    REASON_PARAMETERS_UNREPRESENTABLE,
     REASON_WINDOW,
     companion_ineligibility_reason,
     dispatch_parity_companion,
@@ -25,7 +26,7 @@ BACKEND = "http://localhost:5000"
 
 def _request(**overrides) -> EngineBacktestRequest:
     payload = {
-        "strategy_name": "spy_ema_crossover",
+        "strategy_name": "ema_crossover_signal",
         "params": {"symbol": "SPY"},
         "from_date": "2026-01-05",
         "to_date": "2026-01-06",
@@ -55,12 +56,19 @@ def test_new_parity_group_id_is_run_id_safe():
     [
         ("spy_orb", {}, REASON_NO_TWIN),
         (
-            "spy_ema_crossover",
+            "ema_crossover_signal",
             {"compatibility_profile": None},
             REASON_EXECUTION_PROFILE,
         ),
-        ("spy_ema_crossover", {"from_date": None, "to_date": None, "params": {"symbol": "SPY"}}, REASON_WINDOW),
-        ("spy_ema_crossover", {}, None),
+        ("ema_crossover_signal", {"from_date": None, "to_date": None, "params": {"symbol": "SPY"}}, REASON_WINDOW),
+        # An overridden tunable the twin is never told about would have the
+        # two engines run different rules and call the difference a finding.
+        (
+            "ema_crossover_signal",
+            {"params": {"symbol": "SPY", "gap_bps": 4.0}},
+            REASON_PARAMETERS_UNREPRESENTABLE,
+        ),
+        ("ema_crossover_signal", {}, None),
     ],
 )
 def test_companion_ineligibility_reasons(strategy, overrides, expected):
@@ -87,7 +95,7 @@ def test_dispatch_eligible_creates_pending_row_and_launches_job():
     respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
 
     dispatch_parity_companion(
-        registration=_STRATEGY_REGISTRY["spy_ema_crossover"],
+        registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
         request=_request(),
         parity_group_id="pg-testgroup",
         left_execution_id=42,
@@ -97,7 +105,7 @@ def test_dispatch_eligible_creates_pending_row_and_launches_job():
     assert created["leftExecutionId"] == 42
     body = launched["request"]
     assert body["run_id"] == "companion-pg-testgroup"
-    assert body["template"] == "ema_crossover"
+    assert body["template"] == "ema_crossover_signal"
     assert body["parity_group_id"] == "pg-testgroup"
     assert body["data_policy"]["adjusted"] is False
     assert body["data_policy"]["strategy_bars"] == {"timespan": "minute", "multiplier": 15}
@@ -129,44 +137,25 @@ def test_dispatch_migrated_signal_launches_its_named_lean_template():
 
 
 @respx.mock
-@pytest.mark.parametrize(
-    ("params", "expected"),
-    [
-        (
-            {"symbol": "SPY"},
-            {"gap_bps": 2.0, "rsi_min": 50.0, "rsi_max": 70.0},
-        ),
-        (
-            {"symbol": "SPY", "gap_bps": 4.0, "rsi_min": 52.0, "rsi_max": 68.0},
-            {"gap_bps": 4.0, "rsi_min": 52.0, "rsi_max": 68.0},
-        ),
-    ],
-)
-def test_dispatch_two_bps_companion_carries_resolved_strategy_parameters(params, expected):
-    """A paired run must execute the same configured rules in both engines."""
-    launched: dict = {}
+def test_companion_is_refused_when_a_tunable_cannot_reach_the_twin() -> None:
+    """A paired run must execute the same configured rules in both engines.
 
-    def _capture_job(request: httpx.Request) -> httpx.Response:
-        launched.update(json.loads(request.content))
-        return httpx.Response(202, json={"id": "job-two-bps"})
+    ``ema_crossover_signal`` forwards no ``lean_parameter_names``, so an
+    overridden ``gap_bps`` would run a normalized entry gate on the Python
+    side while the LEAN twin kept its own hardcoded gates. Dispatching that
+    pair would manufacture a disagreement and present it as a parity finding,
+    which is worse than declining to compare -- so it is declined.
 
-    respx.post(f"{BACKEND}/api/parity-verdicts").mock(return_value=httpx.Response(200, json={"id": 1}))
-    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
-
-    dispatch_parity_companion(
-        registration=_STRATEGY_REGISTRY["ema_crossover_2_bps"],
-        request=_request(strategy_name="ema_crossover_2_bps", params=params),
-        parity_group_id="pg-two-bps-params",
-        left_execution_id=44,
-        validated_parameters=(
-            _STRATEGY_REGISTRY["ema_crossover_2_bps"]
-            .param_schema.model_validate(params)
-            .model_dump(mode="json")
-        ),
+    This replaces the former ``ema_crossover_2_bps`` companion test: that
+    strategy was folded into this one's ``gap_bps`` parameter, and the
+    registration that carried its LEAN twin went with it.
+    """
+    reason = companion_ineligibility_reason(
+        registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
+        request=_request(params={"symbol": "SPY", "gap_bps": 4.0}),
     )
 
-    assert launched["request"]["template"] == "ema_crossover_2_bps"
-    assert launched["request"]["strategy_parameters"] == expected
+    assert reason == REASON_PARAMETERS_UNREPRESENTABLE
 
 
 @respx.mock
@@ -207,7 +196,7 @@ def test_dispatch_marks_run_failed_when_job_submission_rejected():
     respx.post(f"{BACKEND}/api/parity-verdicts/pg-reject/mark-failed").mock(side_effect=_capture_mark)
 
     dispatch_parity_companion(
-        registration=_STRATEGY_REGISTRY["spy_ema_crossover"],
+        registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
         request=_request(),
         parity_group_id="pg-reject",
         left_execution_id=42,

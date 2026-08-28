@@ -1,7 +1,7 @@
 """Trade-level parity for the normalized-gap (2 bps) EMA crossover against a pinned LEAN run.
 
 The 2 bps point is no longer a separate strategy: it is
-``EmaCrossoverSignalAlgorithm`` driven with ``gap_mode='bps', gap_bps=2``.
+``EmaCrossoverSignalAlgorithm`` driven with ``gap=0, gap_bps=2``.
 This fixture is the proof that folding the former ``EmaCrossover2BpsAlgorithm``
 subclass into that parameter preserved its trade-for-trade behaviour."""
 
@@ -69,7 +69,7 @@ def test_ema_crossover_2_bps_matches_lean_fills_and_equity(implementation: str) 
 
 def _strategy(implementation: str) -> EmaCrossoverSignalAlgorithm | SpecAlgorithm:
     if implementation == "hand_coded":
-        base = EmaCrossoverSignalAlgorithm(symbol="SPY", gap_mode="bps", gap_bps=2)
+        base = EmaCrossoverSignalAlgorithm(symbol="SPY", gap=0, gap_bps=2)
         base_class = EmaCrossoverSignalAlgorithm
     else:
         spec = load_spec_from_path(SPEC_PATH)

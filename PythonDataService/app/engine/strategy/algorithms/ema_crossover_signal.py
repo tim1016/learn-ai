@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.engine.live.indicator_state import ValidationResult
@@ -92,18 +92,30 @@ class EmaCrossoverSignalAlgorithm(Strategy):
     CONSOLIDATOR_PERIOD_MIN = 15
 
     def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
-        """Apply the configured entry threshold in the configured unit.
+        """Apply both entry floors: absolute price gap and normalized gap.
 
-        ``absolute`` (default) is the validated LEAN-parity point: a raw
-        EMA(5) - EMA(10) dollar gap. ``bps`` measures the same spread
-        normalized against EMA(10), so the gate scales with price level
-        instead of drifting as the underlying moves. The normalized branch
-        was formerly the separate ``ema_crossover_2_bps`` strategy; its
-        trade-for-trade behaviour is pinned by the ENG-007 golden fixture.
+        ``gap`` is the raw ``EMA(5) - EMA(10)`` dollar spread; ``gap_bps`` is
+        that same spread normalized against EMA(10), which scales with price
+        level instead of drifting as the underlying moves. Both are *minimums*,
+        so ``0`` means that floor imposes no constraint -- there is no sentinel
+        value and no mode flag. The validated LEAN-parity point is
+        ``gap=0.20, gap_bps=0``; the normalized point that was formerly the
+        separate ``ema_crossover_2_bps`` strategy is ``gap=0, gap_bps=2``.
+
+        A vacuous floor really is vacuous here: this runs only on a fresh
+        crossover, where ``ema_fast > ema_slow`` strictly holds, so a ``0``
+        floor admits every candidate the crossover itself already produced.
+
+        Keeping both floors numeric is load-bearing, not incidental. The
+        Recency Chart sweeps a strategy only when every non-``symbol``
+        parameter is ``int`` or ``float``
+        (``app/research/recency/eligibility.py``), so expressing this as a
+        categorical ``gap_mode`` would have silently dropped this strategy out
+        of recency sweeps.
         """
-        if self._gap_mode == "bps":
-            return difference_bps(ema_fast, ema_slow) >= self._gap_bps
-        return ema_fast - ema_slow >= self._gap
+        if ema_fast - ema_slow < self._gap:
+            return False
+        return not (self._gap_bps > 0 and difference_bps(ema_fast, ema_slow) < self._gap_bps)
 
     def _rsi_gate_bounds(self) -> tuple[Decimal, Decimal]:
         """Return the configured inclusive RSI entry band (default 50–70)."""
@@ -116,8 +128,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         gap: Decimal | float = Decimal("0.20"),
         rsi_min: Decimal | float = Decimal(50),
         rsi_max: Decimal | float = Decimal(70),
-        gap_mode: Literal["absolute", "bps"] = "absolute",
-        gap_bps: Decimal | float = Decimal("2"),
+        gap_bps: Decimal | float = Decimal("0"),
     ) -> None:
         super().__init__()
         # This is the signal stream, not an execution target. The Action Plan
@@ -130,7 +141,6 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # sweeps these as parameters. Coerced through str() so a float from
         # the JSON param layer lands as an exact Decimal.
         self._gap = Decimal(str(gap))
-        self._gap_mode: Literal["absolute", "bps"] = gap_mode
         self._gap_bps = Decimal(str(gap_bps))
         self._rsi_min = Decimal(str(rsi_min))
         self._rsi_max = Decimal(str(rsi_max))

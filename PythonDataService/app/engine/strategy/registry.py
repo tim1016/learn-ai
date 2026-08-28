@@ -473,10 +473,20 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             parameter_units={
                 "symbol": "ticker",
                 "gap": "quote_currency",
+                "gap_bps": "basis_points",
                 "rsi_min": "rsi_points",
                 "rsi_max": "rsi_points",
             },
-            validated_settings={"gap": 0.20, "rsi_min": 50.0, "rsi_max": 70.0},
+            # ``gap_bps: 0.0`` is part of the validated point: the corpus was
+            # qualified with no normalized floor. A non-zero ``gap_bps`` deploy
+            # is still sealed, just not claimed as golden-validated -- only the
+            # ENG-007 LEAN fixture pins that configuration.
+            validated_settings={
+                "gap": 0.20,
+                "gap_bps": 0.0,
+                "rsi_min": 50.0,
+                "rsi_max": 70.0,
+            },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
             # Issue #1728 defect 2: this is not "every file the module
             # graph reaches" — it is that transitive first-party import

@@ -49,6 +49,7 @@ REASON_ADJUSTMENT = "adjustment_unsupported"
 REASON_EXECUTION_PROFILE = "execution_profile_unsupported"
 REASON_RESOLUTION = "resolution_unsupported"
 REASON_WINDOW = "window_unsupported"
+REASON_PARAMETERS_UNREPRESENTABLE = "parameters_unrepresentable_by_twin"
 
 
 def new_parity_group_id() -> str:
@@ -76,7 +77,30 @@ def companion_ineligibility_reason(
         return REASON_RESOLUTION
     if not request.from_date or not request.to_date:
         return REASON_WINDOW
+    if _parameters_the_twin_cannot_see(registration, request):
+        return REASON_PARAMETERS_UNREPRESENTABLE
     return None
+
+
+def _parameters_the_twin_cannot_see(
+    registration: StrategyRegistration,
+    request: EngineBacktestRequest,
+) -> frozenset[str]:
+    """Overridden tunables the LEAN companion would never be told about.
+
+    Only ``registration.lean_parameter_names`` are forwarded to the twin
+    (see ``dispatch_parity_companion``); every other tunable runs at
+    whatever the LEAN algorithm hardcodes. So an overridden parameter
+    outside that set means the two engines are running *different
+    strategies*, and any disagreement they produce is manufactured by the
+    dispatch rather than observed in the math -- the worst possible output
+    from a parity harness, because it looks like a finding.
+
+    ``symbol`` is excluded: it reaches the twin through the data policy, not
+    through ``strategy_parameters``.
+    """
+    overridden = set(request.params or {}) - {"symbol"}
+    return frozenset(overridden - set(registration.lean_parameter_names or ()))
 
 
 def dispatch_parity_companion(

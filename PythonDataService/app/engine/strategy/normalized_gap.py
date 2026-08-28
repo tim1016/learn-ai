@@ -11,7 +11,7 @@ and its exact-Decimal golden fixture ``tests/fixtures/golden/spy-ema-difference-
 
 This module deliberately imports nothing but ``Decimal``. It is inside the
 sealed signal-decision closure of every program whose entry gate is
-normalized (``EmaCrossoverSignalParams.gap_mode == "bps"``), and that closure
+normalized (``EmaCrossoverSignalParams.gap_bps > 0``), and that closure
 is re-qualified whenever a file in it changes. Living in ``spec.primitives``
 -- which reaches the spec evaluator, schema, indicator adapters, and the ML
 artifact loader -- would have put all of those inside the seal, so an

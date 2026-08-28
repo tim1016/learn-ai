@@ -14,7 +14,7 @@ _DATA_POLICY = "polygon-adjusted-regular-minute"
 
 
 def _strategy(**param_ranges: object) -> StrategyGridConfig:
-    return StrategyGridConfig(strategy_key="ema_crossover_2_bps", param_ranges=param_ranges)
+    return StrategyGridConfig(strategy_key="ema_crossover_signal", param_ranges=param_ranges)
 
 
 class TestValidateRecencyRequest:

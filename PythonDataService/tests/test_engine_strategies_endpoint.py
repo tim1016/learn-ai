@@ -33,9 +33,7 @@ EXPECTED_STRATEGY_KEYS = {
     # VCR-0004 / Phase 2 — registry keys are now module names so the runner
     # can import every registered strategy by ``app.engine.strategy.algorithms.{key}``.
     "ema_crossover_signal",
-    "ema_crossover_2_bps",
     "sma_crossover",
-    "daily_sma_crossover",
     "rsi_mean_reversion",
     "spy_orb",
     "deployment_validation",
@@ -157,33 +155,30 @@ def test_ema_signal_advertises_its_matching_lean_validation_template():
     assert strategy["lean_twin"] == "ema_crossover_signal"
 
 
-def test_ema_two_bps_is_a_selectable_default_spy_strategy_with_a_lean_twin():
-    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "ema_crossover_2_bps")
+def test_ema_signal_exposes_the_normalized_gap_mode_as_a_parameter() -> None:
+    """The former ``ema_crossover_2_bps`` strategy is now a parameter mode.
 
-    assert strategy["display_name"] == "EMA Crossover 2 bps"
-    assert strategy["lean_twin"] == "ema_crossover_2_bps"
-    assert strategy["params_schema"]["properties"]["symbol"]["default"] == "SPY"
-    assert strategy["params_schema"]["properties"]["gap_bps"] == {
-        "default": 2.0,
-        "description": "Minimum EMA(5) minus EMA(10) crossover gap, measured in basis points of EMA(10).",
-        "maximum": 100.0,
-        "minimum": 0.0,
-        "title": "Crossover gap (bps)",
-        "type": "number",
-    }
-    assert strategy["params_schema"]["properties"]["rsi_min"]["default"] == 50.0
-    assert strategy["params_schema"]["properties"]["rsi_max"]["default"] == 70.0
-    assert strategy["strategy_bars"] == {
-        "timespan": "minute",
-        "multiplier": 15,
-        "parameter": None,
-    }
+    Its normalized-gap gate survives the signal/asset decoupling sweep as
+    ``gap_bps`` on the canonical registration, so the knob stays
+    reachable from Strategy Lab without a second registry entry whose only
+    difference was one predicate.
+    """
+    strategy = next(s for s in _list_strategies() if s["name"] == "ema_crossover_signal")
+    properties = strategy["params_schema"]["properties"]
+
+    assert properties["gap_bps"]["default"] == 0.0
+    assert properties["gap_bps"]["minimum"] == 0.0
+    assert properties["gap_bps"]["maximum"] == 100.0
+    # The validated LEAN-parity point is untouched by the fold.
+    assert properties["gap"]["default"] == 0.20
+    assert properties["rsi_min"]["default"] == 50.0
+    assert properties["rsi_max"]["default"] == 70.0
 
 
-def test_ema_two_bps_parameter_model_rejects_invalid_rsi_band() -> None:
+def test_ema_signal_parameter_model_rejects_invalid_rsi_band() -> None:
     from pydantic import ValidationError
 
-    registration = _STRATEGY_REGISTRY["ema_crossover_2_bps"]
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
 
     with pytest.raises(ValidationError, match="rsi_min must be less than rsi_max"):
         registration.param_schema.model_validate(
@@ -191,10 +186,10 @@ def test_ema_two_bps_parameter_model_rejects_invalid_rsi_band() -> None:
         )
 
 
-def test_ema_two_bps_registry_build_forwards_validated_parameters() -> None:
-    registration = _STRATEGY_REGISTRY["ema_crossover_2_bps"]
+def test_ema_signal_registry_build_forwards_the_normalized_gap_parameters() -> None:
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     params = registration.param_schema.model_validate(
-        {"symbol": "SPY", "gap_bps": 4, "rsi_min": 52, "rsi_max": 68}
+        {"symbol": "SPY", "gap": 0, "gap_bps": 4, "rsi_min": 52, "rsi_max": 68}
     )
 
     strategy = registration.build(params)
@@ -248,11 +243,6 @@ def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics(
         "timespan": "minute",
         "multiplier": 15,
         "parameter": "resolution_minutes",
-    }
-    assert strategies["daily_sma_crossover"]["strategy_bars"] == {
-        "timespan": "day",
-        "multiplier": 1,
-        "parameter": None,
     }
 
 

@@ -8,7 +8,7 @@ nothing else. Held in the registry, an edit here moved no digest.
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 from pydantic import Field, model_validator
 
@@ -23,7 +23,7 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
     Defaults preserve the validated LEAN-parity point exactly (absolute gap
     0.20, RSI band 50–70); the Recency Chart sweeps them. The former
     ``ema_crossover_2_bps`` strategy is now this schema with
-    ``gap_mode='bps', gap_bps=2`` — see the ENG-007 golden fixture.
+    ``gap=0, gap_bps=2`` — see the ENG-007 golden fixture.
     """
 
     # FR-002: versions this schema's own legal type/unit/range contract —
@@ -39,24 +39,15 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
         ge=0.0,
         allow_inf_nan=False,
         title="Crossover gap",
-        description="Minimum EMA(5) − EMA(10) gap, in absolute price, required for entry. Consulted only when gap_mode is 'absolute'.",
-    )
-    gap_mode: Literal["absolute", "bps"] = Field(
-        "absolute",
-        title="Crossover gap unit",
-        description=(
-            "Unit the entry gap is measured in: 'absolute' price (the validated "
-            "LEAN-parity default) or 'bps', the same spread normalized against "
-            "EMA(10) so the gate scales with price level."
-        ),
+        description="Minimum EMA(5) − EMA(10) gap, in absolute price, required for entry. 0 imposes no absolute floor.",
     )
     gap_bps: float = Field(
-        2.0,
+        0.0,
         ge=0.0,
         le=100.0,
         allow_inf_nan=False,
         title="Crossover gap (bps)",
-        description="Minimum 10,000 × (EMA(5) − EMA(10)) / EMA(10), in basis points, required for entry. Consulted only when gap_mode is 'bps'.",
+        description="Minimum 10,000 × (EMA(5) − EMA(10)) / EMA(10), in basis points, required for entry. 0 imposes no normalized floor; both this and `gap` are minimums and both apply.",
     )
     rsi_min: float = Field(
         50.0,
@@ -94,7 +85,6 @@ def build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalProg
         gap=params.gap,
         rsi_min=params.rsi_min,
         rsi_max=params.rsi_max,
-        gap_mode=params.gap_mode,
         gap_bps=params.gap_bps,
     )
     program = SignalProgram.create(
