@@ -75,6 +75,18 @@ class DataRunSpec(BaseModel):
 
     include_factor_files: bool = True
     include_map_files: bool = True
+    # Daily-trade (resolution="daily") is a whole-range, per-symbol rollup
+    # derived from every minute-trade artifact in [start_trading_date,
+    # end_trading_date] — see ensure_data._process_daily_trade_artifact.
+    # A caller that ensures the same symbol in successive narrower
+    # sub-ranges (e.g. the Task 6 backfill job, one day at a time) must
+    # opt out of it per sub-range call: recomputing it from a smaller
+    # source set than a prior call collides with the already-completed
+    # wider/narrower rollup and reports a spurious data_contract_mismatch
+    # (re-aggregation is intentionally out of scope for Slice 1c — see the
+    # docstring on _process_daily_trade_artifact). Default True preserves
+    # existing single-shot-ensure behavior.
+    include_daily_trade: bool = True
     # lean_image_digest is required — source of the LEAN-image-extracted
     # session calendar used by ensure_data's Phase 0 bootstrap.
     lean_image_digest: str
@@ -160,6 +172,9 @@ class ArtifactFailure(BaseModel):
         "corp_action_revision_mismatch",
         "data_contract_mismatch",
         "internal_error",
+        # Added for the backfill job (#1836, review round 3):
+        "session_not_produced",  # canonical calendar disagrees with ensure_data's own — see app.data_lake.backfill
+        "run_aborted",  # a globally-fatal failure stopped the remaining range before it was attempted
     ]
     detail: str | None = None
     provider_status_code: int | None = None
@@ -172,9 +187,28 @@ class NonSessionRecord(BaseModel):
     reason: Literal["weekend", "market_holiday"]
 
 
+OverallStatus = Literal["complete", "partial", "failed"]
+
+
+def classify_overall_status(*, has_failures: bool, has_success: bool) -> OverallStatus:
+    """Shared complete/partial/failed classification.
+
+    Any success at all downgrades a failure-bearing result from 'failed'
+    to 'partial'. Single source of truth: ensure_data.ensure_data and the
+    backfill job's day- and whole-range rollups (app.data_lake.backfill)
+    all apply this identically rather than each re-deriving the same
+    three-way branch.
+    """
+    if has_failures and has_success:
+        return "partial"
+    if has_failures:
+        return "failed"
+    return "complete"
+
+
 class DataAvailabilityResult(BaseModel):
     request_id: UUID
-    overall_status: Literal["complete", "partial", "failed"]
+    overall_status: OverallStatus
     lean_data_root_path: str
     data_availability_hash: str
     artifacts: list[ArtifactRecord] = []
