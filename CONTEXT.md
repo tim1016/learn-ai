@@ -1910,3 +1910,13 @@ proves its running build at Start/Resume.
 - **Safe flatten** — the two-step operator capability over a prepared `SafeFlattenPlan`: `prepare_safe_flatten` (view) builds the versioned exact-close plan; `execute_safe_flatten` (mutation) submits it as recovery EXITs, re-deriving quantities from durable attributed positions and re-asserting no-active-run inside the capture transaction. Execution is gated to a single strategy-owned leg; account-wide and manual custody stay prepare-only.
 - **Redrive** — the watchdog's bounded automatic re-submission of a reduction for a stale `EXIT_NOT_FLAT` episode; identity `exit-redrive-<episode-hex12>-<attempt>`, at most 3 per episode, counted by the command namespace (not a mutable timestamp).
 - **`EXIT_STUCK`** — the durable custody-subject escalation raised when redrives exhaust; blocks new exposure, allows reduction toward zero, and clears on the same attributed-flat proof that clears `EXIT_NOT_FLAT`.
+
+## Data lake (resolved 2026-08-27)
+
+**Lineage: live.**
+
+- **Data lake** — the authority for historical bar data: immutable LEAN-format files hold the canonical bytes, with Postgres as a catalog and coordination plane over them. Replaces the policy-keyed cache, which had bytes but no catalog. Governs *historical* bars only; the live broker feed is a separate concern and is not a market-data source (ADR 0049).
+- **Catalog** — the Postgres side of the lake: rows describing which artifacts exist, their hashes, provenance, and outstanding claims. It holds statements *about* market data, never market data. Losing it loses the index, not the bytes — it is rebuildable by walking the lake and re-hashing, which is what keeps the lake inside ADR 0001's files-canonical doctrine.
+- **Artifact** — one catalogued unit of bar data (a symbol's trading day at a resolution and adjustment mode), identified with its adjustment mode in the identity so adjusted and raw coexist without collision, and carrying the hash of the bytes on disk.
+- **Coverage** — what the catalog says is owned for a symbol over a span, measured against trading days from the canonical calendar module. Distinct from the retired cache's completeness test, which counted exchange holidays as days it should have and so could never report complete (issue #1830).
+- **Claim / lease** — the coordination rows that make two concurrent ensures for one artifact produce one fetch. Replaces the cache's filesystem advisory lock; the mechanism ADR 0001 anticipated under its third projection-layer trigger.
