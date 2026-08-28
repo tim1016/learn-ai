@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import logging
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Container, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Literal
 
@@ -39,9 +40,14 @@ logger = logging.getLogger(__name__)
 Resolution = Literal["minute", "daily"]
 
 # US equities open Monday–Friday. This filter is deliberately naive: it
-# ignores exchange holidays because the downstream reader already skips
-# dates with no zip file. The goal here is only to avoid reporting Sundays
-# as "missing" and confusing users.
+# ignores exchange holidays. That is harmless for *reporting* — the
+# downstream reader already skips dates with no zip file — but not for
+# the completeness test `ensure_range` builds on it: a holiday is an
+# expected day the provider will never supply, so a window containing
+# one can never report complete and re-fetches on every call. That is
+# the leak #1830 bounded (to the holiday itself) and could not close;
+# closing it needs a holiday-aware expected-day set, which the data lake
+# owns (#1825), not this store, which is due for retirement (#1840).
 _WEEKEND = {5, 6}
 
 
@@ -54,32 +60,22 @@ def _iter_weekdays(start: date, end: date):
         current += one_day
 
 
-def _missing_spans(missing: Sequence[date]) -> list[tuple[date, date]]:
-    """Group ascending missing days into contiguous fetch spans.
+def _missing_spans(start: date, end: date, missing: Container[date]) -> list[tuple[date, date]]:
+    """Group missing days into contiguous fetch spans.
 
-    Adjacency is measured in *expected trading days*, not calendar days:
-    a Friday and the following Monday belong to one span because no
-    expected weekday separates them. Grouping on calendar adjacency
-    instead would split every missing month into four weekly requests,
-    which is the per-request cost this batching exists to respect.
-
-    ``missing`` must be ascending, which is what ``check_availability``
-    produces -- it builds the list by walking the expected days in order.
+    Adjacency is read off the expected-day walk itself: two missing days
+    share a span when no expected day between them was covered, so a
+    Friday and the following Monday are one span. Deriving it any other
+    way would restate ``_iter_weekdays``'s rule for what the next
+    expected day is, and the two would silently disagree the moment that
+    rule learns about exchange holidays.
     """
     spans: list[tuple[date, date]] = []
-    for day in missing:
-        if spans and day == _next_weekday(spans[-1][1]):
-            spans[-1] = (spans[-1][0], day)
-        else:
-            spans.append((day, day))
+    for is_missing, days in groupby(_iter_weekdays(start, end), key=lambda day: day in missing):
+        if is_missing:
+            run = list(days)
+            spans.append((run[0], run[-1]))
     return spans
-
-
-def _next_weekday(day: date) -> date:
-    following = day + timedelta(days=1)
-    while following.weekday() in _WEEKEND:
-        following += timedelta(days=1)
-    return following
 
 
 def _minute_zip_filename(trading_date: date) -> str:
@@ -260,16 +256,12 @@ def ensure_range(
 
     Only the *missing* spans of the window are fetched, not the whole
     window (issue #1830). The Polygon aggregates endpoint is billed per
-    request, so contiguous missing days are batched into one request each
-    rather than issued per day; a window that is wholly new, or extended
-    at either end, still costs a single request. The accepted trade-off is
-    that alternating coverage costs one request per gap, which is far
-    cheaper than the re-export it replaces: because ``_iter_weekdays``
-    counts exchange holidays as expected days, a window containing one
-    holiday can never report complete, and every call over it used to
-    re-export the entire range -- one symbol had accumulated 43 such
-    fetches, the same two years twice within three days. Such a window
-    still re-fetches on every call; it now re-fetches only the holiday.
+    request, so contiguous missing days are batched into one request
+    each; a window that is wholly new, or extended at either end, still
+    costs a single request, and alternating coverage costs one per gap.
+    A window that can never report complete -- see the note on
+    ``_WEEKEND`` -- still re-fetches on every call, but re-fetches only
+    the days it is missing rather than re-exporting the whole range.
     """
     all_roots = [*reference_roots, cache_root]
     pre = check_availability(all_roots, symbol, start, end, resolution=resolution)
@@ -305,7 +297,7 @@ def ensure_range(
             )
             return pre
 
-        spans = _missing_spans(pre.missing_days)
+        spans = _missing_spans(start, end, set(pre.missing_days))
         logger.info(
             "[ENGINE] Materializing %s %s %s..%s into cache — %d/%d weekdays missing in %d span(s)",
             resolution,
