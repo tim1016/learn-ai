@@ -29,6 +29,7 @@ import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -173,6 +174,19 @@ def _daily_dch(source_artifact_ids: list[int], source_file_sha256s: list[str]) -
     )
 
 
+def provider_for_data_type(data_type: Literal["trade", "quote"]) -> str:
+    """Return the catalog Provider identity for a minute-bar data_type.
+
+    Trade minute-bars come straight from Polygon. Quote minute-bars are
+    synthesized in-process from same-day trade bytes (DataRunSpec requires
+    'trade' whenever 'quote' is requested) and are catalogued under
+    'learn_ai_derived' rather than 'polygon' — this is the single source
+    for that mapping; expand_required_artifacts below and the coverage
+    endpoint (app/routers/data_lake.py) both call it so they cannot drift.
+    """
+    return "polygon" if data_type == "trade" else "learn_ai_derived"
+
+
 def expand_required_artifacts(
     spec: DataRunSpec,
     market_hours_db_path: Path | None = None,
@@ -198,7 +212,7 @@ def expand_required_artifacts(
         # Per-day minute bars.
         for trading_date in sessions:
             for data_type in spec.data_types:
-                provider = "polygon" if data_type == "trade" else "learn_ai_derived"
+                provider = provider_for_data_type(data_type)
                 required.append(
                     ArtifactIdentity(
                         artifact_kind="time_series_bars",
