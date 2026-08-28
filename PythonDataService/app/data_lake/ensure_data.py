@@ -32,7 +32,7 @@ from pathlib import Path, PurePosixPath
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, path_policy
 from app.data_lake.atomic import atomic_write_and_promote
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
@@ -312,9 +312,12 @@ def _polygon_bar_to_minute_trade_bar(pb: PolygonBar) -> MinuteTradeBar:
 
 
 def _lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
-    """Return (lake_root, staging_root) for the current spec."""
-    write_root = Path(settings.LEAN_DATA_WRITE_ROOT)
-    return write_root / "lake", write_root / "staging"
+    """Return (lake_root, staging_root) for the current spec.
+
+    Both roots come from ``path_policy`` so writer and readers resolve the
+    same tree — see ``app.engine.data.policy_store.resolve_data_roots``.
+    """
+    return path_policy.lake_root(), path_policy.staging_root()
 
 
 def _read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeBar]:
@@ -390,12 +393,19 @@ async def _bootstrap_metadata_artifact(
     spec: DataRunSpec,
     lake_root: Path,
     staging_root: Path,
-) -> tuple[ArtifactRecord | None, bool]:
+) -> tuple[ArtifactRecord | None, bool, str | None]:
     """Claim, extract, write, and complete one LEAN metadata artifact.
 
-    Returns (record, is_reused). is_reused=True when the artifact already existed
-    in the catalog (cache hit). Returns (None, False) when in-flight elsewhere or
-    extraction failed.
+    Returns ``(record, is_reused, failure_reason)``. ``is_reused`` is True when
+    the artifact already existed in the catalog (cache hit). On failure the
+    record is None and ``failure_reason`` names *why*, because the two failure
+    modes need different handling by the caller:
+
+    - ``"lease_timeout"`` — another worker holds the claim and has not
+      completed yet. Transient: retrying the whole spec once the winner
+      finishes turns this into a cache hit.
+    - ``"io_error"`` — the launcher could not produce the bytes. Not
+      contention; retrying will not help until the launcher is fixed.
     """
     dch = _metadata_dch(lean_image_digest, file_name)
     file_path = str(rel_path)
@@ -420,14 +430,14 @@ async def _bootstrap_metadata_artifact(
         # Already exists (complete or in-flight). Try to return the complete row.
         existing = await catalog_client.select_complete_metadata_artifact(dch)
         if existing is not None:
-            return existing, True  # cache hit
+            return existing, True, None  # cache hit
         # In-flight elsewhere; skip (non-blocking in Slice 1c).
         logger.warning(
             "data_lake.ensure_data: metadata artifact %s is in-flight elsewhere; "
             "Phase 0 may use fallback holiday list for sessions.",
             file_name,
         )
-        return None, False
+        return None, False, "lease_timeout"
 
     # Fetch from launcher.
     try:
@@ -439,7 +449,7 @@ async def _bootstrap_metadata_artifact(
     except LeanMetadataExtractionError as e:
         await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e))
         logger.warning("data_lake.ensure_data: metadata extraction failed: %s", e)
-        return None, False
+        return None, False, "io_error"
 
     content = mh_bytes if metadata_kind == "market_hours" else sp_bytes
     file_sha = atomic_write_and_promote(
@@ -478,6 +488,7 @@ async def _bootstrap_metadata_artifact(
             last_bar_start_ms=0,
         ),
         False,  # freshly fetched
+        None,
     )
 
 
@@ -1243,7 +1254,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     mh_rel = LeanMetadataPath(kind="market_hours").relative_path()
     sp_rel = LeanMetadataPath(kind="symbol_properties").relative_path()
 
-    mh_record, mh_reused = await _bootstrap_metadata_artifact(
+    mh_record, mh_reused, mh_failure_reason = await _bootstrap_metadata_artifact(
         file_name="market-hours-database.json",
         metadata_kind="market_hours",
         rel_path=mh_rel,
@@ -1252,7 +1263,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
         lake_root=lake_root,
         staging_root=staging_root,
     )
-    sp_record, sp_reused = await _bootstrap_metadata_artifact(
+    sp_record, sp_reused, sp_failure_reason = await _bootstrap_metadata_artifact(
         file_name="symbol-properties-database.csv",
         metadata_kind="symbol_properties",
         rel_path=sp_rel,
@@ -1282,7 +1293,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 symbol=None,
                 trading_date=None,
                 data_type=None,
-                reason="io_error",
+                reason=mh_failure_reason or "io_error",
                 detail="market-hours metadata bootstrap failed; see launcher logs",
                 attempt_count=1,
             )
@@ -1301,7 +1312,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 symbol=None,
                 trading_date=None,
                 data_type=None,
-                reason="io_error",
+                reason=sp_failure_reason or "io_error",
                 detail="symbol-properties metadata bootstrap failed; see launcher logs",
                 attempt_count=1,
             )

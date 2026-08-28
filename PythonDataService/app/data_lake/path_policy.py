@@ -12,14 +12,37 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import UUID
+
+from app.config import settings
 
 Market = Literal["usa"]
 Resolution = Literal["minute", "hour", "daily"]
 DataType = Literal["trade", "quote"]
 MetadataKind = Literal["market_hours", "symbol_properties"]
+
+
+def lake_root() -> Path:
+    """Absolute root of the immutable LEAN-format lake tree.
+
+    Every relative path built by this module is resolved against this root.
+    Readers (the LEAN readers in ``app.engine.data.lean_format``) and the
+    writer (``ensure_data``) must agree byte-for-byte on where the tree
+    lives, so both resolve it here rather than re-deriving it from
+    ``LEAN_DATA_WRITE_ROOT``.
+    """
+    return Path(settings.LEAN_DATA_WRITE_ROOT) / "lake"
+
+
+def staging_root() -> Path:
+    """Absolute root of the per-attempt staging tree.
+
+    Must sit on the same filesystem as :func:`lake_root` so promoting a
+    staged file into the lake is a POSIX atomic ``rename(2)``.
+    """
+    return Path(settings.LEAN_DATA_WRITE_ROOT) / "staging"
 
 
 @dataclass(frozen=True)

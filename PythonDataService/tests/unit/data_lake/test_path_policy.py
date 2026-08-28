@@ -6,16 +6,19 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
 from __future__ import annotations
 
 from datetime import date
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from uuid import UUID
 
+from app.config import settings
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
     LeanFactorFilePath,
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    lake_root,
     staging_path_for,
+    staging_root,
 )
 
 
@@ -96,3 +99,41 @@ class TestStagingPathFor:
         a1 = staging_path_for(rel, request_id, "worker-1", 1)
         a2 = staging_path_for(rel, request_id, "worker-1", 2)
         assert a1 != a2
+
+
+class TestLakeRoots:
+    """The absolute roots writer and readers must agree on."""
+
+    def test_lake_root_derives_from_write_root(self, monkeypatch):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert lake_root() == Path("/mnt/writer/lake")
+
+    def test_staging_root_derives_from_write_root(self, monkeypatch):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert staging_root() == Path("/mnt/writer/staging")
+
+    def test_staging_shares_a_filesystem_with_the_lake(self, monkeypatch):
+        """Atomic promotion is a rename(2), so both roots share a parent."""
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert lake_root().parent == staging_root().parent
+
+    def test_ensure_data_writes_where_path_policy_points(self, monkeypatch):
+        """One answer to "where is the lake?" — ensure_data must not re-derive it."""
+        from app.data_lake.ensure_data import _lake_roots
+
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        spec = _minimal_spec()
+        assert _lake_roots(spec) == (lake_root(), staging_root())
+
+
+def _minimal_spec():
+    from app.data_lake.types import DataRunSpec
+
+    return DataRunSpec(
+        request_id=UUID("12345678-1234-5678-1234-567812345678"),
+        run_type="python_lab",
+        symbols=["SPY"],
+        start_trading_date=date(2024, 5, 20),
+        end_trading_date=date(2024, 5, 20),
+        lean_image_digest="sha256:test",
+    )
