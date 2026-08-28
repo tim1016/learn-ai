@@ -104,7 +104,11 @@ class Settings(BaseSettings):
     # engine's own default DataPolicy -- which is adjusted -- is unchanged
     # by the flip. Turning this off remains a complete rollback: every seam
     # asks one predicate and every one of them falls back to the path it
-    # used before.
+    # used before, demonstrated by
+    # tests/engine/test_policy_store.py::test_turning_the_flag_off_returns_a_reader_to_the_policy_bars.
+    # One cost, not a correctness gap: bars fetched while the flag was on
+    # landed only in the lake, so a rollback re-fetches those windows from
+    # Polygon on first use. The policy cache is never stale, only behind.
     #
     # postgres://user:pass@host:5432/dbname — required when DATA_LAKE_ENABLED
     # is true, which is now the default. A deployment with no POSTGRES_URL
