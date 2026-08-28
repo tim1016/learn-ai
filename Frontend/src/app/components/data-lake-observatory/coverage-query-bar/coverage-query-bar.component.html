@@ -1,0 +1,68 @@
+<form class="query" (submit)="$event.preventDefault(); apply()">
+  <div class="field">
+    <label for="lake-symbols">Symbols</label>
+    <input
+      id="lake-symbols"
+      class="field__input field__input--wide"
+      type="text"
+      autocomplete="off"
+      placeholder="SPY, AAPL"
+      [value]="draft().symbolsText"
+      (input)="onSymbols($event)"
+    />
+  </div>
+  <div class="field">
+    <label for="lake-start">Start trading date</label>
+    <input
+      id="lake-start"
+      class="field__input"
+      type="date"
+      [value]="draft().startTradingDate"
+      (input)="onStart($event)"
+    />
+  </div>
+  <div class="field">
+    <label for="lake-end">End trading date</label>
+    <input
+      id="lake-end"
+      class="field__input"
+      type="date"
+      [value]="draft().endTradingDate"
+      (input)="onEnd($event)"
+    />
+  </div>
+  <div class="field">
+    <label for="lake-data-type">Data type</label>
+    <select id="lake-data-type" class="field__input" (change)="onDataType($event)">
+      @for (option of dataTypeOptions; track option) {
+        <option [value]="option" [selected]="option === draft().dataType">
+          {{ option | receiptLabel }}
+        </option>
+      }
+    </select>
+  </div>
+  <div class="field">
+    <label for="lake-adjustment">Price adjustment</label>
+    <select
+      id="lake-adjustment"
+      class="field__input field__input--wide"
+      (change)="onPriceAdjustment($event)"
+    >
+      @for (option of priceAdjustmentOptions; track option) {
+        <option [value]="option" [selected]="option === draft().priceAdjustmentMode">
+          {{ option | receiptLabel }}
+        </option>
+      }
+    </select>
+  </div>
+  <button type="submit" class="query__apply" [disabled]="!canApply() || busy()">
+    {{ busy() ? 'Loading…' : 'Load coverage' }}
+  </button>
+</form>
+
+@if (parsed().invalid.length > 0) {
+  <p class="query__note" role="status">Not a storable symbol: {{ parsed().invalid.join(', ') }}</p>
+}
+@if (rangeRejection(); as reason) {
+  <p class="query__note" role="status">{{ reason }}</p>
+}

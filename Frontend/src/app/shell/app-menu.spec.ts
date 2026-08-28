@@ -77,6 +77,21 @@ describe('app menu projections', () => {
     expect(menuItemsFor('/jobs-demo').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
+  it('reaches the Data Lake Observatory from the Data Lab group', () => {
+    const entry = menuItemsFor('/data-lake')
+      .find((group) => group.label === 'Data Lab')
+      ?.items?.find((item) => item.label === 'Data Lake Observatory');
+
+    expect(entry?.routerLink).toBe('/data-lake');
+    expect(entry?.styleClass).toBe(ACTIVE_ITEM_CLASS);
+    expect(pageTitleFor('/data-lake')).toBe('Data Lake Observatory');
+  });
+
+  it('keeps Data Lab and Data Lake as separate destinations', () => {
+    expect(pageTitleFor('/data-lab')).toBe('Data Lab');
+    expect(activeMenuNodeFor('/data-lab')?.item.route).toBe('/data-lab');
+  });
+
   it('omits the retired Indicator Report and Design Lab surfaces', () => {
     const groups = menuItemsFor('/data-lab');
     const entries = groups.flatMap((group) => group.items ?? []);

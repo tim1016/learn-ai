@@ -1,0 +1,74 @@
+<app-page-header title="Data Lake Observatory" eyebrow="Market Scope" icon="pi-database" />
+
+<p class="lake__lead">
+  What the data lake owns, session by session: every artifact's state, its receipt, and a backfill
+  for whatever is missing.
+</p>
+
+<app-coverage-query-bar
+  [initial]="query()"
+  [maxSymbolLength]="maxSymbolLength()"
+  [maxTradingRangeDays]="maxTradingRangeDays()"
+  [busy]="coverage.isLoading()"
+  (applied)="apply($event)"
+/>
+
+@if (notEnabled()) {
+  <p class="lake__dark" role="status">
+    The data lake is not enabled on this data plane, so none of its routes answer. Set
+    <span class="lake__flag">DATA_LAKE_ENABLED</span> to turn the catalog on.
+  </p>
+} @else {
+  <section class="panel" aria-labelledby="lake-storage-heading">
+    <h2 class="panel__title" id="lake-storage-heading">Storage</h2>
+    @if (storageSummary(); as summary) {
+      <app-lake-storage-summary [summary]="summary" />
+    } @else if (storageProblem(); as issue) {
+      <p class="panel__problem" role="alert">
+        <span class="panel__reason">{{ issue.reason | receiptLabel }}</span>
+        <span>{{ issue.message }}</span>
+      </p>
+    } @else {
+      <p class="panel__state" aria-live="polite" aria-busy="true">Reading the catalog…</p>
+    }
+  </section>
+
+  <section class="panel" aria-labelledby="lake-coverage-heading">
+    <h2 class="panel__title" id="lake-coverage-heading">Coverage</h2>
+    @for (issue of board().problems; track issue.symbol) {
+      <p class="panel__problem" role="alert">
+        <span class="panel__reason">{{ issue.symbol }} · {{ issue.reason | receiptLabel }}</span>
+        <span>{{ issue.message }}</span>
+      </p>
+    }
+    @if (coverage.isLoading()) {
+      <p class="panel__state" aria-live="polite" aria-busy="true">Walking the calendar…</p>
+    } @else if (!hasSymbols()) {
+      <p class="panel__state">Name a symbol above to see which sessions are on disk.</p>
+    } @else if (board().rows.length === 0) {
+      <p class="panel__state">No coverage rows came back for this window.</p>
+    } @else if (board().sessionCount === 0) {
+      <p class="panel__state">The exchange calendar has no sessions in this window.</p>
+    } @else {
+      <app-coverage-heatmap
+        [board]="board()"
+        [selectedArtifactId]="selection()?.cell?.artifactId ?? null"
+        (cellSelected)="openInspector($event)"
+      />
+    }
+  </section>
+
+  <section class="panel" aria-labelledby="lake-backfill-heading">
+    <h2 class="panel__title" id="lake-backfill-heading">Backfill</h2>
+    <app-lake-backfill-panel
+      [defaults]="backfillDefaults()"
+      [seedSymbols]="query().symbolsText"
+      [seedStartTradingDate]="query().startTradingDate"
+      [seedEndTradingDate]="query().endTradingDate"
+      [priceAdjustmentMode]="query().priceAdjustmentMode"
+      (runFinished)="onRunFinished()"
+    />
+  </section>
+}
+
+<app-artifact-inspector-drawer [selection]="selection()" (closed)="closeInspector()" />

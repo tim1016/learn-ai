@@ -11,6 +11,11 @@ ProgressEmitter) so progress streams over the same Redis-backed SSE channel
 every other job type uses. No new job infrastructure; the per-day loop over
 ensure_data lives in app.data_lake.backfill.run_backfill.
 
+GET /api/data-lake/backfill-defaults — the handful of DataRunSpec values a
+browser cannot derive (the pinned LEAN image digest, the symbol/range caps).
+Added for the Observatory UI (#1838) so its backfill form composes a valid
+spec instead of asking an operator to hand-type a container digest.
+
 
 Behind the DATA_LAKE_ENABLED feature flag; routes return 404 when the flag is off
 (via main.py wiring, not this module).
@@ -57,6 +62,7 @@ from app.data_lake.types import (
 )
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
+from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
 from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windows_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -209,6 +215,39 @@ async def get_storage_summary(market: Literal["usa"] = "usa") -> StorageSummaryR
         catalog_client.select_symbol_coverage_spans(market),
     )
     return StorageSummaryResponse(market=market, kinds=kinds, symbols=symbols)
+
+
+class BackfillDefaults(BaseModel):
+    """The parts of a ``DataRunSpec`` only the data plane knows (#1838).
+
+    ``lean_image_digest`` is required by ``DataRunSpec`` and has no default;
+    a browser has no way to derive the pinned LEAN image, and hand-typing a
+    container digest into a form is not a receipt anybody could audit. The
+    caps come from ``app.data_lake.types`` so the Observatory rejects an
+    over-wide window in the form rather than by round-tripping a 422.
+
+    ``lean_image_digest`` is ``None`` when the data plane has no pin
+    configured — reported honestly rather than as an empty string, so the
+    UI can say backfill is unavailable instead of submitting a spec that
+    would fail deep inside Phase 0.
+    """
+
+    market: Literal["usa"] = "usa"
+    lean_image_digest: str | None
+    max_trading_range_days: int
+    max_symbol_length: int
+
+
+@router.get("/backfill-defaults", response_model=BackfillDefaults)
+async def get_backfill_defaults(market: Literal["usa"] = "usa") -> BackfillDefaults:
+    """Spec constants for a backfill form. Reads no catalog state."""
+    return BackfillDefaults(
+        market=market,
+        lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
+        max_trading_range_days=MAX_TRADING_RANGE_DAYS,
+        max_symbol_length=MAX_SYMBOL_LENGTH,
+    )
+
 
 class BackfillJobRequest(BaseModel):
     """Body of POST /api/data-lake/backfill.

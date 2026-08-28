@@ -1,0 +1,70 @@
+@if (isEmpty()) {
+  <p class="storage__empty" role="status">
+    The catalog holds no artifacts yet. Run a backfill below to put the first session on disk.
+  </p>
+} @else {
+  <div class="storage">
+    <dl class="storage__totals">
+      <div class="storage__total">
+        <dt>Artifacts</dt>
+        <dd>{{ totalArtifacts() }}</dd>
+      </div>
+      <div class="storage__total">
+        <dt>On disk</dt>
+        <dd>{{ bytes(totalBytes()) }}</dd>
+      </div>
+      <div class="storage__total">
+        <dt>Symbols</dt>
+        <dd>{{ summary().symbols.length }}</dd>
+      </div>
+    </dl>
+
+    @if (summary().kinds.length > 0) {
+      <table class="storage__table">
+        <caption>Artifacts by kind</caption>
+        <thead>
+          <tr>
+            <th scope="col">Kind</th>
+            <th scope="col">Resolution</th>
+            <th scope="col" class="numeric">Count</th>
+            <th scope="col" class="numeric">Bytes</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (kind of summary().kinds; track kind.artifact_kind + '/' + kind.resolution) {
+            <tr>
+              <td>{{ kind.artifact_kind | receiptLabel }}</td>
+              <td>{{ kind.resolution === null ? '—' : (kind.resolution | receiptLabel) }}</td>
+              <td class="numeric">{{ kind.artifact_count }}</td>
+              <td class="numeric">{{ bytes(kind.total_bytes) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+
+    @if (summary().symbols.length > 0) {
+      <table class="storage__table">
+        <caption>Coverage span by symbol</caption>
+        <thead>
+          <tr>
+            <th scope="col">Symbol</th>
+            <th scope="col">First session</th>
+            <th scope="col">Last session</th>
+            <th scope="col" class="numeric">Artifacts</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of summary().symbols; track row.symbol) {
+            <tr>
+              <th scope="row">{{ row.symbol }}</th>
+              <td><app-timestamp-display [value]="row.first_trading_date_ms" mode="date-et" /></td>
+              <td><app-timestamp-display [value]="row.last_trading_date_ms" mode="date-et" /></td>
+              <td class="numeric">{{ row.artifact_count }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </div>
+}

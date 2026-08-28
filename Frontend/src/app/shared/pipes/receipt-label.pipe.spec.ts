@@ -69,6 +69,15 @@ describe('formatReceiptLabel', () => {
     );
   });
 
+  it('preserves a content-addressed digest instead of title-casing its hex', () => {
+    expect(formatReceiptValue('lean_image_digest', 'bdb7c7aa3bd5f19690544270')).toBe(
+      'bdb7c7aa3bd5f19690544270',
+    );
+    expect(formatReceiptValue('content_digest', 'sha256:3dd003372f1ef1981b4e')).toBe(
+      'sha256:3dd003372f1ef1981b4e',
+    );
+  });
+
   it('formats code-like receipt values when the label is not opaque', () => {
     expect(formatReceiptValue('state', 'NO_LIVE_BINDING')).toBe('No Live Binding');
     expect(formatReceiptValue('source', 'readiness')).toBe('Readiness');

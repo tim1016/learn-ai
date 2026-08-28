@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
+import { DataLakeObservatoryComponent } from './components/data-lake-observatory/data-lake-observatory.component';
 import { StrategyLabResultsComponent } from './components/strategy-lab/results-page/strategy-lab-results.component';
 import { routes } from './app.routes';
 
@@ -84,5 +85,13 @@ describe('routes', () => {
     if (route?.loadComponent === undefined) throw new Error('Alpaca bot control example route is missing.');
 
     expect(await route.loadComponent()).toBe(AlpacaBotControlExampleComponent);
+  });
+
+  it('lazily loads the Data Lake Observatory and keeps it distinct from Data Lab', async () => {
+    const route = routes.find((candidate) => candidate.path === 'data-lake');
+    if (route?.loadComponent === undefined) throw new Error('Data Lake Observatory route is missing.');
+
+    expect(await route.loadComponent()).toBe(DataLakeObservatoryComponent);
+    expect(routes.find((candidate) => candidate.path === 'data-lab')?.loadComponent).toBeDefined();
   });
 });

@@ -47,6 +47,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     icon: 'pi pi-database',
     items: [
       { title: 'Data Lab', route: '/data-lab' },
+      { title: 'Data Lake Observatory', route: '/data-lake' },
     ],
   },
   {
