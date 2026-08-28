@@ -2,8 +2,8 @@
 
 The engine has always ensured its bars exist before reading them. With
 ``DATA_LAKE_ENABLED`` that job moves from the policy store's ``ensure_range``
-to the lake's ``ensure_data``, and the run comes back carrying the
-fingerprint of the bytes it consumed. With the flag off — the default —
+to the lake's ``ensure_data``, and the run comes back carrying the lake's
+fingerprint for what it materialized. With the flag off — the default —
 nothing about the run changes.
 
 The lake itself is exercised in ``tests/unit/data_lake/test_run_materialization.py``;
@@ -13,6 +13,7 @@ engine's choice of it and what the run does with the answer.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
@@ -21,7 +22,8 @@ import pytest
 
 from app.config import settings
 from app.data_lake import run_materialization
-from app.data_lake.types import DataAvailabilityResult
+from app.data_lake.ensure_data import _compute_data_availability_hash
+from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult
 from app.routers import engine as engine_router
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
@@ -30,21 +32,54 @@ DAY_ONE = date(2026, 1, 5)  # Monday
 DAY_THREE = date(2026, 1, 7)
 SEEDED_DAYS = (DAY_ONE, date(2026, 1, 6), DAY_THREE)
 
-LAKE_MANIFEST = "f" * 64
-
 
 def _noop(_: str) -> None:
     return None
 
 
-def _availability(manifest: str, lake_dir: Path) -> DataAvailabilityResult:
+def _lake_artifacts(lake_dir: Path) -> list[ArtifactRecord]:
+    """One catalog record per seeded zip, hashed from the bytes on disk.
+
+    The fingerprint under test is content-derived, so the stub result carries
+    records that describe real files rather than invented ones — otherwise the
+    assertion could not tell a plumbed hash from a hard-coded one.
+    """
+    records: list[ArtifactRecord] = []
+    for artifact_id, day in enumerate(SEEDED_DAYS, start=1):
+        rel = f"equity/usa/minute/spy/{day:%Y%m%d}_trade.zip"
+        payload = (lake_dir / rel).read_bytes()
+        records.append(
+            ArtifactRecord(
+                id=artifact_id,
+                artifact_kind="time_series_bars",
+                market="usa",
+                symbol="SPY",
+                trading_date=day,
+                resolution="minute",
+                data_type="trade",
+                provider="polygon",
+                price_adjustment_mode="raw",
+                data_contract_hash="c" * 64,
+                file_path=rel,
+                file_sha256=hashlib.sha256(payload).hexdigest(),
+                row_count=390,
+                first_bar_start_ms=0,
+                last_bar_start_ms=0,
+            )
+        )
+    return records
+
+
+def _availability(lake_dir: Path, *, artifacts: list[ArtifactRecord] | None = None) -> DataAvailabilityResult:
+    records = _lake_artifacts(lake_dir) if artifacts is None else artifacts
     return DataAvailabilityResult(
         request_id=uuid4(),
         overall_status="complete",
         lean_data_root_path=str(lake_dir),
-        data_availability_hash=manifest,
-        fetched_artifact_count=3,
-        reused_artifact_count=1,
+        data_availability_hash=_compute_data_availability_hash(records),
+        artifacts=records,
+        fetched_artifact_count=len(records),
+        reused_artifact_count=0,
         completed_at_ms=0,
         duration_ms=0,
     )
@@ -119,7 +154,7 @@ def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
 
     def _fake_materialize(**kwargs):
         calls.append(kwargs)
-        return _availability(LAKE_MANIFEST, seeded_roots["lake"])
+        return _availability(seeded_roots["lake"])
 
     monkeypatch.setattr(run_materialization, "materialize_engine_run", _fake_materialize)
 
@@ -136,23 +171,72 @@ def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
             "symbol": "SPY",
             "start": DAY_ONE,
             "end": DAY_THREE,
+            # The lake's partial-coverage gate is resolution-specific: a daily
+            # run must refuse a stale daily zip that a minute run may ignore.
+            "resolution": "minute",
             "requester": "sma_crossover",
         }
     ]
 
 
-def test_flag_on_run_records_the_manifest_of_the_bytes_it_consumed(seeded_roots, monkeypatch):
+def test_flag_on_run_records_the_manifest_of_what_it_materialized(seeded_roots, monkeypatch):
+    """The response carries the content-derived fingerprint, not a placeholder."""
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(
-        run_materialization,
-        "materialize_engine_run",
-        lambda **kwargs: _availability(LAKE_MANIFEST, seeded_roots["lake"]),
-    )
+    availability = _availability(seeded_roots["lake"])
+    monkeypatch.setattr(run_materialization, "materialize_engine_run", lambda **kwargs: availability)
 
     response = _run()
 
     assert response.success, response.error
-    assert response.lake_data_availability_hash == LAKE_MANIFEST
+    assert response.lake_data_availability_hash == _compute_data_availability_hash(availability.artifacts)
+    # And it really is derived from the artifact content: change one byte hash
+    # and the fingerprint the run would have carried is a different one.
+    mutated = [
+        availability.artifacts[0].model_copy(update={"file_sha256": "0" * 64}),
+        *availability.artifacts[1:],
+    ]
+    assert response.lake_data_availability_hash != _compute_data_availability_hash(mutated)
+
+
+def test_flag_on_run_surfaces_incomplete_coverage_to_the_operator(seeded_roots, monkeypatch):
+    """A run reading a lake that reports itself incomplete must say so in the log."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    partial = _availability(seeded_roots["lake"]).model_copy(
+        update={
+            "overall_status": "partial",
+            "failures": [
+                ArtifactFailure(
+                    artifact_kind="metadata",
+                    symbol=None,
+                    trading_date=None,
+                    data_type=None,
+                    reason="io_error",
+                )
+            ],
+        }
+    )
+    monkeypatch.setattr(run_materialization, "materialize_engine_run", lambda **kwargs: partial)
+    log: list[str] = []
+
+    execute_engine_backtest(request=_request(), on_phase=_noop, on_log=log.append)
+
+    assert any("incomplete" in line and "metadata/io_error" in line for line in log), log
+
+
+def test_a_lake_refusal_reaches_the_operator_log(seeded_roots, monkeypatch):
+    """The reason the lake refused must not be buried in the service log."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    def _refuse(**kwargs):
+        raise run_materialization.LakeMaterializationError("incomplete minute coverage for SPY")
+
+    monkeypatch.setattr(run_materialization, "materialize_engine_run", _refuse)
+    log: list[str] = []
+
+    response = execute_engine_backtest(request=_request(), on_phase=_noop, on_log=log.append)
+
+    assert response.success is False
+    assert any("Lake refused this run" in line and "incomplete minute coverage" in line for line in log), log
 
 
 def test_flag_on_run_reads_the_lake_tree_and_nothing_else(seeded_roots, monkeypatch):
@@ -167,7 +251,7 @@ def test_flag_on_run_reads_the_lake_tree_and_nothing_else(seeded_roots, monkeypa
     monkeypatch.setattr(
         run_materialization,
         "materialize_engine_run",
-        lambda **kwargs: _availability(LAKE_MANIFEST, seeded_roots["lake"]),
+        lambda **kwargs: _availability(seeded_roots["lake"]),
     )
 
     with_lake = _run()

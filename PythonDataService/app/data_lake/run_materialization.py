@@ -31,12 +31,12 @@ import asyncio
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import date
 from uuid import UUID, uuid4
 
 from app.data_lake.ensure_data import ensure_data
-from app.data_lake.types import DataAvailabilityResult, DataRunSpec
+from app.data_lake.types import ArtifactFailure, DataAvailabilityResult, DataRunSpec
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,13 @@ _CONTENTION_REASONS = frozenset({"lease_timeout"})
 # daily bars aggregated from the day's minute bars) and says so. These clear
 # when the lease does, so they must not abort the wait — but on their own,
 # with nothing leased elsewhere, they are a real failure.
+#
+# Known trade-off, accepted for this slice: pairing ``lease_timeout`` with a
+# cascade keeps the wait going until ``fetch_timeout_seconds`` runs out, even
+# when the lease belongs to a worker that has died — this wait is wall-clock
+# bounded, not TTL-aware, so it does not read ``LeaseExpiresAtMs`` and cannot
+# short-circuit on an expired lease. Consolidating it with the catalog's own
+# lease classifier is booked for the integration slice.
 _CASCADED_REASONS = frozenset({"internal_error"})
 
 _CONTENTION_POLL_INTERVAL_S = 0.5
@@ -205,7 +212,35 @@ def materialize_run_data_sync(spec: DataRunSpec) -> DataAvailabilityResult:
     # The coroutine's own deadline is fetch_timeout_seconds; allow a small
     # margin so the wait unwinds through the coroutine's return path rather
     # than being cancelled here.
+    #
+    # Known trade-off, accepted for this slice: if that margin is exceeded the
+    # TimeoutError propagates but the coroutine is NOT cancelled — it keeps
+    # running on the shared loop until its own deadline, and any artifact it
+    # then completes lands in the catalog with no caller waiting for it. That
+    # is harmless (the work is idempotent and the row is correct) but it means
+    # a timed-out run can still be holding a lease for a while afterwards.
     return future.result(timeout=spec.fetch_timeout_seconds + 30)
+
+
+def describe_failures(failures: Iterable[ArtifactFailure]) -> str:
+    """One short ``kind/reason`` summary of what the lake could not produce."""
+    return "; ".join(sorted({f"{f.artifact_kind}/{f.reason}" for f in failures}))
+
+
+def _withholds_bars_the_run_reads(failure: ArtifactFailure, *, resolution: str) -> bool:
+    """Does this failure hold back bars the run's reader will actually open?
+
+    ``ArtifactFailure`` carries no resolution, but within ``time_series_bars``
+    the spec makes the discriminator exact: per-day minute artifacts carry a
+    ``trading_date``, and the per-symbol aggregated (daily) artifact does not.
+    A minute-resolution run opens the former, a daily-resolution run the
+    latter. Metadata failures mean the lake fell back to its hardcoded
+    calendar — bad, and logged — but they withhold no bars.
+    """
+    if failure.artifact_kind != "time_series_bars":
+        return False
+    is_aggregated = failure.trading_date is None
+    return is_aggregated if resolution == "daily" else not is_aggregated
 
 
 def materialize_engine_run(
@@ -213,31 +248,58 @@ def materialize_engine_run(
     symbol: str,
     start: date,
     end: date,
+    resolution: str = "minute",
     requester: str | None = None,
 ) -> DataAvailabilityResult:
     """Put a backtest run's bars in the lake and report what it will read.
 
-    Raises :class:`LakeMaterializationError` when the lake produced nothing
-    at all — there is no run to attempt. A partial result is returned: the
-    engine reads whatever days exist, exactly as it did before the lake, and
-    the returned fingerprint covers precisely those bytes.
+    Raises :class:`LakeMaterializationError` rather than returning a result the
+    run would silently misread. Two cases:
+
+    - Nothing materialized at all (``overall_status == "failed"``).
+    - Partial coverage that withholds the artifact class this resolution
+      reads. This is the gate, and it is not hypothetical: the derived daily
+      artifact's data contract is keyed by the *set* of minute artifacts it
+      aggregated, so a second run over a different window gets
+      ``data_contract_mismatch`` on it — a partial result whose daily zip on
+      disk is the previous window's. Proceeding would feed a daily-resolution
+      run stale bars with a fingerprint that says everything was fine. (The
+      deeper fix — having ``ensure_data`` re-aggregate instead of reporting a
+      mismatch — is the integration slice's.)
+
+    Failures that withhold nothing this run reads are logged and allowed
+    through; the returned fingerprint then covers whatever did materialize.
+
+    The fingerprint is the lake's ``data_availability_hash``, which covers a
+    **superset** of what the Python engine opens: the Phase-0 metadata
+    artifacts and the derived daily zip are in it whether or not this run's
+    reader touches them. Treat it as "the lake state this run materialized
+    against", not as a byte-exact receipt for the bars it consumed.
     """
     spec = build_engine_run_spec(symbol=symbol, start=start, end=end, requester=requester)
     result = materialize_run_data_sync(spec)
 
     if result.overall_status == "failed":
         raise LakeMaterializationError(
-            f"the lake could not materialize {symbol} {start}..{end}: "
-            + "; ".join(sorted({f"{f.artifact_kind}/{f.reason}" for f in result.failures}))
+            f"the lake could not materialize {symbol} {start}..{end}: {describe_failures(result.failures)}"
         )
+
+    withheld = [f for f in result.failures if _withholds_bars_the_run_reads(f, resolution=resolution)]
+    if withheld:
+        raise LakeMaterializationError(
+            f"the lake has incomplete {resolution} coverage for {symbol} {start}..{end}: "
+            f"{describe_failures(withheld)} — refusing rather than running on bars "
+            "that do not match the request"
+        )
+
     if result.failures:
         logger.warning(
-            "data_lake.run_materialization: partial coverage for %s %s..%s — %d artifact(s) missing: %s",
+            "data_lake.run_materialization: partial coverage for %s %s..%s (%s run) — %s",
             symbol,
             start,
             end,
-            len(result.failures),
-            sorted({f"{f.artifact_kind}/{f.reason}" for f in result.failures}),
+            resolution,
+            describe_failures(result.failures),
         )
     logger.info(
         "data_lake.run_materialization: %s %s..%s fetched=%d reused=%d manifest=%s",

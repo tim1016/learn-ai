@@ -311,8 +311,8 @@ def _polygon_bar_to_minute_trade_bar(pb: PolygonBar) -> MinuteTradeBar:
     )
 
 
-def _lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
-    """Return (lake_root, staging_root) for the current spec.
+def _lake_roots() -> tuple[Path, Path]:
+    """Return the (lake_root, staging_root) pair every writer promotes through.
 
     Both roots come from ``path_policy`` so writer and readers resolve the
     same tree — see ``app.engine.data.policy_store.resolve_data_roots``.
@@ -656,7 +656,7 @@ async def _process_minute_trade_artifact(
         trading_date_yyyymmdd=identity.trading_date.strftime("%Y%m%d"),  # type: ignore[union-attr]
         bars=minute_bars,
     )
-    lake_root, staging_root = _lake_roots(spec)
+    lake_root, staging_root = _lake_roots()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -815,7 +815,7 @@ async def _process_factor_file_artifact(
             ),
             False,
         )
-    _, staging_root = _lake_roots(spec)
+    _, staging_root = _lake_roots()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -922,7 +922,7 @@ async def _process_map_file_artifact(
         history_end=spec.end_trading_date,
         exchange="nyse",
     )
-    lake_root, staging_root = _lake_roots(spec)
+    lake_root, staging_root = _lake_roots()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1042,7 +1042,7 @@ async def _process_minute_quote_artifact(
         trading_date_yyyymmdd=identity.trading_date.strftime("%Y%m%d"),  # type: ignore[union-attr]
         bars=trade_bars,
     )
-    _, staging_root = _lake_roots(spec)
+    _, staging_root = _lake_roots()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1177,7 +1177,7 @@ async def _process_daily_trade_artifact(
 
     aggregates = aggregate_minute_to_daily(all_bars)
     payload = build_daily_zip_bytes(symbol=identity.symbol or "", aggregates=aggregates)
-    _, staging_root = _lake_roots(spec)
+    _, staging_root = _lake_roots()
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1238,7 +1238,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     daily-trade (from all same-symbol trade artifacts). Runs after Pass 1.
     """
     started_ms = int(time.time() * 1000)
-    lake_root, staging_root = _lake_roots(spec)
+    lake_root, staging_root = _lake_roots()
 
     # Ensure pool exists. init_pool is idempotent; pool stays alive across calls.
     await catalog_client.init_pool()

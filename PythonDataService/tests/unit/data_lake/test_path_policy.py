@@ -122,18 +122,4 @@ class TestLakeRoots:
         from app.data_lake.ensure_data import _lake_roots
 
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        spec = _minimal_spec()
-        assert _lake_roots(spec) == (lake_root(), staging_root())
-
-
-def _minimal_spec():
-    from app.data_lake.types import DataRunSpec
-
-    return DataRunSpec(
-        request_id=UUID("12345678-1234-5678-1234-567812345678"),
-        run_type="python_lab",
-        symbols=["SPY"],
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 20),
-        lean_image_digest="sha256:test",
-    )
+        assert _lake_roots() == (lake_root(), staging_root())
