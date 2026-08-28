@@ -37,6 +37,34 @@ the **Python data service's** read mount, not the LEAN container's. The
 spec assigns the LEAN container no target other than ``/lean-run/data``,
 so this is a new target chosen for symmetry with the reader's — not one
 the spec sanctions for this container.
+
+Known properties of this design, recorded not hidden
+----------------------------------------------------
+**Manifest fidelity covers declared inputs; the mount does not prevent
+undeclared reads.** The whole lake is mounted, so an arbitrary
+``algorithm_source`` can subscribe to symbols and dates the run never
+declared, while the manifest hashes only the declared inputs
+(:func:`resolve_lake_artifacts`'s result). Staging mode did not have
+this property: each run got a private data folder containing exactly
+its own bytes, so "what the manifest hashes" and "what LEAN could read"
+were the same set.
+
+This is inherent to the spec's zero-copy mount-table design, not an
+oversight in this module, and per-run scoped mounts are explicitly *not*
+the fix — they would reintroduce the per-run copy the lake exists to
+eliminate. It is a deliberate trade: reproducibility evidence for
+declared inputs, in exchange for the copy. Recorded for the integration
+slice, which owns whether an undeclared-read *detection* (rather than
+prevention) is warranted.
+
+**Lake metadata bytes are not verified against the pinned LEAN image
+digest.** ``ensure_data`` records the ``lean_image_digest`` its
+market-hours / symbol-properties bytes came from in the *catalog*
+(``data_contract_hash``), not beside the files, so a lake bootstrapped
+under image A can serve a run pinned to image B and this module cannot
+tell. Detecting it needs a catalog read this module deliberately does
+not do — the sidecar's lake access is filesystem-only. Recorded for the
+integration slice, which already talks to the catalog.
 """
 
 from __future__ import annotations
@@ -44,11 +72,18 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from app.data_lake.path_policy import LeanDailyBarPath, LeanMetadataPath, LeanMinuteBarPath
+from app.data_lake.path_policy import (
+    LeanDailyBarPath,
+    LeanFactorFilePath,
+    LeanMapFilePath,
+    LeanMetadataPath,
+    LeanMinuteBarPath,
+)
+from app.lean_sidecar.trading_calendar import expected_sessions
 from app.lean_sidecar.workspace import validate_symbol
 
 logger = logging.getLogger(__name__)
@@ -149,7 +184,22 @@ def launcher_host_lake_root() -> Path | None:
     raw = os.environ.get(LAKE_VOLUME_HOST_PATH_ENV)
     if not raw:
         return None
-    return Path(raw).resolve() / LAKE_SUBDIR
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        # A relative value is not merely awkward, it is ambiguous
+        # between two readers that both look correct: podman resolves
+        # it against the launcher process's cwd, while compose resolves
+        # it against the directory holding compose.yaml. The two
+        # disagree in exactly the deployments where the lake matters,
+        # and the symptom (an empty or wrong data folder) does not point
+        # back at the setting. Refuse rather than pick one.
+        raise LakeMountError(
+            f"lake_volume_host_path_not_absolute: {LAKE_VOLUME_HOST_PATH_ENV}={raw!r} is relative. "
+            f"Podman would resolve it against the launcher's working directory "
+            f"({Path.cwd()}), compose against the directory holding compose.yaml; "
+            "set an absolute path so both agree."
+        )
+    return candidate.resolve() / LAKE_SUBDIR
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +220,8 @@ class LakeArtifacts:
     daily_zip_path: Path
     market_hours_path: Path
     symbol_properties_path: Path
+    factor_file_paths: tuple[Path, ...]
+    map_file_paths: tuple[Path, ...]
 
 
 def resolve_lake_artifacts(
@@ -181,54 +233,70 @@ def resolve_lake_artifacts(
 ) -> LakeArtifacts:
     """Resolve the lake artifacts for ``symbol`` over ``[start, end]``.
 
-    Purely a read, and not even a decode: the lake is never written,
-    never fetched into, and never copied out of.
+    Purely a read, and not even a decode of the minute artifacts: the
+    lake is never written, never fetched into, and never copied out of.
 
-    Partial coverage is allowed — days the lake does not cover are
-    simply absent from the result, and the caller decides whether that
-    is acceptable, matching what the staging path does. Everything LEAN
-    *cannot start without* fails loud instead: no trade artifact at all
-    in the window, a missing daily artifact, or a missing required
-    metadata database each raise :class:`LakeMountError` here, before a
-    container is launched.
+    **The materialization seam refuses what it cannot fully serve.**
+    Every NYSE session in the requested window must have both a trade
+    and a quote artifact, the daily artifact must actually span the
+    window, and both required metadata databases must be present.
+    Anything short of that raises :class:`LakeMountError` naming the
+    shortfall, before a container is launched.
+
+    Silently narrowing to the sessions that happen to be present is the
+    failure mode this exists to prevent: the rendered ``config.json``
+    still declares the full requested window, so LEAN would run a
+    shorter backtest than the manifest, the UI, and the operator all
+    believe it ran. A gap in the lake is a coverage bug to fix upstream,
+    not a window to quietly trim.
 
     Note the deliberate asymmetry with the staging path, which may run
     with no metadata databases at all and let LEAN fall back to the
-    image defaults. That fallback does not exist here: lake mode
-    re-points ``data-folder`` away from the image-extracted workspace
-    copy, so absent metadata in the lake is a hard stop, not a
-    degraded-but-working run.
+    image defaults, and which synthesizes quote zips on the fly. Neither
+    fallback exists here: lake mode re-points ``data-folder`` away from
+    the image-extracted workspace copy and the mount is read-only, so
+    what the lake lacks cannot be conjured for this run.
     """
     safe_symbol = validate_symbol(symbol)
+    required_sessions = expected_sessions(start, end)
+    if not required_sessions:
+        raise LakeMountError(
+            f"lake_window_has_no_sessions: {start.isoformat()}..{end.isoformat()} contains no NYSE trading sessions"
+        )
 
-    trading_dates: list[date] = []
     trade_zip_paths: list[Path] = []
     quote_zip_paths: list[Path] = []
-    trading_date = start
-    one_day = timedelta(days=1)
-    while trading_date <= end:
-        trade_path = _lake_minute_path(lake_root, safe_symbol, trading_date, "trade")
+    missing_trade: list[date] = []
+    missing_quote: list[date] = []
+    for session in required_sessions:
+        trade_path = _lake_minute_path(lake_root, safe_symbol, session, "trade")
         if trade_path.exists():
-            trading_dates.append(trading_date)
             trade_zip_paths.append(trade_path)
-            quote_path = _lake_minute_path(lake_root, safe_symbol, trading_date, "quote")
-            if quote_path.exists():
-                quote_zip_paths.append(quote_path)
-        trading_date += one_day
+        else:
+            missing_trade.append(session)
+        quote_path = _lake_minute_path(lake_root, safe_symbol, session, "quote")
+        if quote_path.exists():
+            quote_zip_paths.append(quote_path)
+        else:
+            missing_quote.append(session)
 
-    if not trade_zip_paths:
+    if missing_trade:
         raise LakeMountError(
-            f"lake_window_empty: no minute-trade artifacts for {safe_symbol} in "
-            f"{start.isoformat()}..{end.isoformat()} under {lake_root}"
+            f"lake_incomplete_trade_coverage: {safe_symbol} is missing minute-trade artifacts "
+            f"for {_render_sessions(missing_trade)} of the {len(required_sessions)} NYSE "
+            f"sessions in {start.isoformat()}..{end.isoformat()} under {lake_root}"
+        )
+    if missing_quote:
+        # LEAN's default minute subscription requests trade AND quote;
+        # staging synthesizes the quote zips for exactly this reason.
+        # Launching without them guarantees failed_data_requests.
+        raise LakeMountError(
+            f"lake_incomplete_quote_coverage: {safe_symbol} is missing minute-quote artifacts "
+            f"for {_render_sessions(missing_quote)}; LEAN's default minute subscription "
+            "requests quotes and the read-only mount cannot synthesize them"
         )
 
-    daily_zip_path = _lake_daily_path(lake_root, safe_symbol)
-    if not daily_zip_path.exists():
-        raise LakeMountError(
-            f"lake_missing_daily_artifact: {daily_zip_path} is absent; LEAN needs the "
-            "daily artifact for benchmark resolution"
-        )
-
+    daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
     market_hours_path, symbol_properties_path = require_lake_metadata(lake_root)
 
     logger.info(
@@ -236,19 +304,91 @@ def resolve_lake_artifacts(
         extra={
             "symbol": safe_symbol,
             "lake_root": str(lake_root),
-            "trading_days": len(trading_dates),
-            "quote_artifacts": len(quote_zip_paths),
+            "trading_days": len(required_sessions),
         },
     )
     return LakeArtifacts(
         lake_root=lake_root,
-        trading_dates=tuple(trading_dates),
+        trading_dates=tuple(required_sessions),
         trade_zip_paths=tuple(trade_zip_paths),
         quote_zip_paths=tuple(quote_zip_paths),
         daily_zip_path=daily_zip_path,
         market_hours_path=market_hours_path,
         symbol_properties_path=symbol_properties_path,
+        factor_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "factor"),
+        map_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "map"),
     )
+
+
+_MAX_RENDERED_SESSIONS = 5
+
+
+def _render_sessions(sessions: list[date]) -> str:
+    """Name the missing sessions without pasting a two-year window into a log."""
+    shown = ", ".join(d.isoformat() for d in sessions[:_MAX_RENDERED_SESSIONS])
+    if len(sessions) > _MAX_RENDERED_SESSIONS:
+        return f"{len(sessions)} sessions ({shown}, ...)"
+    return f"{len(sessions)} sessions ({shown})"
+
+
+def _require_daily_artifact_covering(
+    lake_root: Path,
+    symbol: str,
+    required_sessions: list[date],
+) -> Path:
+    """Return the daily artifact, or raise if it does not span the window.
+
+    Existence alone is not coverage. The daily zip holds a symbol's
+    whole history in one file, so a zip written for an earlier, shorter
+    window survives a later window extension untouched and passes any
+    ``exists()`` check while silently lacking the new dates. LEAN would
+    resolve its benchmark against a truncated equity history.
+
+    This is the one artifact worth decoding: it is a single file per
+    symbol, not one per session, so reading it costs a single unzip
+    rather than O(window).
+    """
+    from app.engine.data.lean_format import LeanDailyDataReader
+
+    daily_zip_path = _lake_daily_path(lake_root, symbol)
+    if not daily_zip_path.exists():
+        raise LakeMountError(
+            f"lake_missing_daily_artifact: {daily_zip_path} is absent; LEAN needs the "
+            "daily artifact for benchmark resolution"
+        )
+
+    covered = set(LeanDailyDataReader([lake_root]).available_dates(symbol))
+    missing = [session for session in required_sessions if session not in covered]
+    if missing:
+        raise LakeMountError(
+            f"lake_daily_artifact_does_not_cover_window: {daily_zip_path} is missing "
+            f"{_render_sessions(missing)} of the requested window; it predates a window "
+            "extension and must be rebuilt before this run can be served"
+        )
+    return daily_zip_path
+
+
+def _existing_corporate_action_files(
+    lake_root: Path,
+    symbol: str,
+    kind: Literal["factor", "map"],
+) -> tuple[Path, ...]:
+    """Return the symbol's factor or map file if the lake carries one.
+
+    Unlike bars and metadata these are genuinely optional — a symbol
+    with no corporate actions in the window has nothing to declare — so
+    absence is not an error. Presence, however, is load-bearing: LEAN
+    reads these off the mount and they change split/dividend-adjusted
+    results, so whatever is there must reach the manifest hash. See
+    ``lean_sidecar_service._build_manifest``.
+    """
+    relative = (
+        LeanFactorFilePath(market="usa", symbol=symbol).relative_path()
+        if kind == "factor"
+        else LeanMapFilePath(market="usa", symbol=symbol).relative_path()
+    )
+    candidate = lake_root / Path(*relative.parts)
+    return (candidate,) if candidate.exists() else ()
 
 
 # Every metadata kind the lake bootstraps is one LEAN refuses to
