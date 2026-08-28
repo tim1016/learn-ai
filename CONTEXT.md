@@ -1910,3 +1910,11 @@ proves its running build at Start/Resume.
 - **Safe flatten** — the two-step operator capability over a prepared `SafeFlattenPlan`: `prepare_safe_flatten` (view) builds the versioned exact-close plan; `execute_safe_flatten` (mutation) submits it as recovery EXITs, re-deriving quantities from durable attributed positions and re-asserting no-active-run inside the capture transaction. Execution is gated to a single strategy-owned leg; account-wide and manual custody stay prepare-only.
 - **Redrive** — the watchdog's bounded automatic re-submission of a reduction for a stale `EXIT_NOT_FLAT` episode; identity `exit-redrive-<episode-hex12>-<attempt>`, at most 3 per episode, counted by the command namespace (not a mutable timestamp).
 - **`EXIT_STUCK`** — the durable custody-subject escalation raised when redrives exhaust; blocks new exposure, allows reduction toward zero, and clears on the same attributed-flat proof that clears `EXIT_NOT_FLAT`.
+
+## Data lake (resolved 2026-08-27)
+
+**Lineage: live.**
+
+- **Data lake** — the single authority for historical bar data (ADR 0049): immutable, hash-receipted LEAN-format files under `lake/`, canonical for every bar the backtest engines and, per the same PRD, the chart/indicator read path consume for completed sessions. Not a live-feed store — live ticks never enter it; recording a live feed is a separate future decision.
+- **Artifact** — one file the lake tracks: a minute-bar trading day, a daily-bar history, a factor file, a map file, or metadata, identified by symbol/date/kind and backed by exactly one `data_lake_artifacts` catalog row.
+- **Catalog** — the Postgres `data_lake_artifacts` / `data_lake_runs` tables: coordination and metadata only (claim/lease, coverage, path, hash, status). Never holds a bar; deleting every row and rebuilding by re-hashing `lake/` loses no data.
