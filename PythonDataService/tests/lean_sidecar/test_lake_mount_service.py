@@ -266,7 +266,12 @@ async def test_lake_refusal_leaves_the_run_id_reusable(
     from app.services import lean_sidecar_service as service
 
     write_root = tmp_path / "lean-data-writer"
-    (write_root / LAKE_SUBDIR).mkdir(parents=True)  # a lake with nothing in it
+    # ``exist_ok`` because tests/conftest.py's autouse
+    # ``_isolate_data_lake_write_root`` already created this root under the
+    # same tmp_path — the flag is on by default now, so every test gets an
+    # isolated lake whether it asked for one or not. What this test needs is
+    # that the lake is *empty*, which it is either way.
+    (write_root / LAKE_SUBDIR).mkdir(parents=True, exist_ok=True)  # a lake with nothing in it
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
