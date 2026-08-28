@@ -80,6 +80,16 @@ describe('artifactReceiptSections', () => {
     expect(rowFor(detail, 'status')?.kind).toBe('code');
   });
 
+  it('reproduces the catalog symbol and market exactly, never title-cased', () => {
+    // The receipt pipe would render "AAPL" as "Aapl" and "usa" as "Usa" —
+    // neither is what the catalog holds, and both disagree with the heatmap
+    // row header and the storage-summary table naming the same values.
+    const detail = fakeDetail({ symbol: 'AAPL', market: 'usa' });
+
+    expect(rowFor(detail, 'symbol')).toEqual({ kind: 'exact', label: 'symbol', value: 'AAPL' });
+    expect(rowFor(detail, 'market')).toEqual({ kind: 'exact', label: 'market', value: 'usa' });
+  });
+
   it('says an absent content hash is absent instead of showing an empty token', () => {
     const detail = fakeDetail({ content_hash: null, status: 'fetching' });
 

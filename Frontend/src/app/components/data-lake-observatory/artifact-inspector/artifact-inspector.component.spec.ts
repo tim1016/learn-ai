@@ -48,6 +48,15 @@ async function renderInspector(read: DataLakeRead<ArtifactDetail>, artifactId = 
   return { ...view, artifact };
 }
 
+/** The rendered value of one receipt row, found by its visible label. */
+function receiptValue(container: Element, label: string): string {
+  const term = Array.from(container.querySelectorAll('.receipt__label')).find(
+    (node) => node.textContent?.trim() === label,
+  );
+  if (term === undefined) throw new Error(`no receipt row labelled ${label}`);
+  return term.nextElementSibling?.textContent?.trim() ?? '';
+}
+
 describe('ArtifactInspectorComponent', () => {
   it('shows the hashes and the path verbatim', async () => {
     await renderInspector({ kind: 'ok', value: fakeDetail() });
@@ -55,6 +64,20 @@ describe('ArtifactInspectorComponent', () => {
     expect(await screen.findByText('dch-aaaabbbbccccdddd')).toBeTruthy();
     expect(screen.getByText('sha256-eeeeffff00001111')).toBeTruthy();
     expect(screen.getByText('/lake/usa/minute/spy/20260520_trade.zip')).toBeTruthy();
+  });
+
+  it('names the symbol and market exactly as the catalog holds them', async () => {
+    // The receipt pipe title-cases a code-like value, which would print
+    // "Spy" and "Usa" here while the heatmap row header and the panel's own
+    // eyebrow print "SPY". A receipt that disagrees with the grid above it
+    // about which symbol it describes is worse than no receipt.
+    const { container } = await renderInspector({ kind: 'ok', value: fakeDetail() });
+    await screen.findByText('dch-aaaabbbbccccdddd');
+
+    expect(receiptValue(container, 'Symbol')).toBe('SPY');
+    expect(receiptValue(container, 'Market')).toBe('usa');
+    expect(screen.queryByText('Spy')).toBeNull();
+    expect(screen.queryByText('Usa')).toBeNull();
   });
 
   it('reports size in both human and exact byte terms', async () => {

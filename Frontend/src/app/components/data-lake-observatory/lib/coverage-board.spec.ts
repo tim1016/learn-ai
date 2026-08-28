@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCoverageBoard, coverageGlyph, parseSymbols } from './coverage-board';
+import { SYMBOL_PATTERN, buildCoverageBoard, coverageGlyph, parseSymbols } from './coverage-board';
 import type { CoverageResponse, CoverageStatus, DataLakeRead } from './data-lake.types';
+
+/**
+ * `SYMBOL_RE` as `PythonDataService/app/data_lake/types.py` declares it.
+ *
+ * Transcribed once, here, so the client copy of the grammar is pinned to
+ * the catalog's own. Change one side and this fails; that is the point —
+ * a silently diverged copy would start rejecting symbols the catalog
+ * accepts, or waving through ones the `character varying(20)` column and
+ * the write-path validator would refuse.
+ */
+const BACKEND_SYMBOL_RE_PATTERN = '^[A-Z][A-Z0-9.]*$';
+/** `MAX_SYMBOL_LENGTH` from the same module — the catalog's column width. */
+const BACKEND_MAX_SYMBOL_LENGTH = 20;
 
 /** 09:30 America/New_York on the given 2026 date, as int64 ms UTC (EDT, UTC-4). */
 function sessionOpenMs(day: number): number {
@@ -128,6 +141,52 @@ describe('coverageGlyph', () => {
     );
 
     expect(new Set(glyphs).size).toBe(glyphs.length);
+  });
+});
+
+describe('symbol grammar parity with the catalog', () => {
+  it('uses the backend pattern character for character', () => {
+    expect(SYMBOL_PATTERN.source).toBe(BACKEND_SYMBOL_RE_PATTERN);
+    expect(SYMBOL_PATTERN.flags).toBe('');
+  });
+
+  it.each([
+    ['SPY', true],
+    ['BRK.B', true],
+    ['A', true],
+    ['X1', true],
+    ['spy', false],
+    ['9X', false],
+    ['.SPY', false],
+    ['SP-Y', false],
+    ['', false],
+  ])('accepts %s exactly as the catalog does: %s', (symbol, storable) => {
+    expect(SYMBOL_PATTERN.test(symbol)).toBe(storable);
+  });
+
+  it('validates only after upper-casing, so an operator may type lower case', () => {
+    // The pattern itself rejects `spy`; `parseSymbols` canonicalises first,
+    // which is why a lower-case entry is accepted and sent as `SPY`.
+    expect(SYMBOL_PATTERN.test('spy')).toBe(false);
+    expect(parseSymbols('spy', BACKEND_MAX_SYMBOL_LENGTH)).toEqual({
+      symbols: ['SPY'],
+      invalid: [],
+    });
+  });
+
+  it.each(['9X', '.SPY', 'SP-Y'])('refuses %s, which the catalog could not store', (symbol) => {
+    expect(parseSymbols(symbol, BACKEND_MAX_SYMBOL_LENGTH)).toEqual({
+      symbols: [],
+      invalid: [symbol],
+    });
+  });
+
+  it('rejects a symbol one character past the catalog column width', () => {
+    const atCap = 'A'.repeat(BACKEND_MAX_SYMBOL_LENGTH);
+    const overCap = 'A'.repeat(BACKEND_MAX_SYMBOL_LENGTH + 1);
+
+    expect(parseSymbols(atCap, BACKEND_MAX_SYMBOL_LENGTH).symbols).toEqual([atCap]);
+    expect(parseSymbols(overCap, BACKEND_MAX_SYMBOL_LENGTH).invalid).toEqual([overCap]);
   });
 });
 

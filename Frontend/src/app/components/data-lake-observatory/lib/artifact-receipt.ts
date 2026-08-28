@@ -42,6 +42,10 @@ function code(label: string, value: string | null): ReceiptRow[] {
   return value === null || value === '' ? [] : [{ kind: 'code', label, value }];
 }
 
+function exact(label: string, value: string | null): ReceiptRow[] {
+  return value === null || value === '' ? [] : [{ kind: 'exact', label, value }];
+}
+
 function instant(label: string, value: number | null): ReceiptRow[] {
   return value === null ? [] : [{ kind: 'instant', label, value }];
 }
@@ -74,8 +78,13 @@ export function artifactReceiptSections(detail: ArtifactDetail): readonly Receip
     { kind: 'exact', label: 'artifact_id', value: String(detail.id) },
     { kind: 'code', label: 'artifact_kind', value: detail.artifact_kind },
     { kind: 'code', label: 'status', value: detail.status },
-    ...code('market', detail.market),
-    ...code('symbol', detail.symbol),
+    // `market` and `symbol` are catalog values, not vocabulary: the pipe's
+    // title-casing turns "SPY" into "Spy" and "usa" into "Usa", neither of
+    // which is what the catalog holds. Every other surface in this feature
+    // (heatmap row header, storage-summary table, this panel's own eyebrow)
+    // already renders them raw; the receipt must agree with them.
+    ...exact('market', detail.market),
+    ...exact('symbol', detail.symbol),
     ...(detail.trading_date_ms === null
       ? []
       : [{ kind: 'date' as const, label: 'trading_date', value: detail.trading_date_ms }]),

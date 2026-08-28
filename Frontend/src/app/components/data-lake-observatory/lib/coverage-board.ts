@@ -124,8 +124,16 @@ export function buildCoverageBoard(
   };
 }
 
-/** Mirrors `SYMBOL_RE` in `PythonDataService/app/data_lake/types.py`. */
-const SYMBOL_PATTERN = /^[A-Z][A-Z0-9.]*$/;
+/**
+ * Mirrors `SYMBOL_RE` in `PythonDataService/app/data_lake/types.py`.
+ *
+ * Exported so `coverage-board.spec.ts` can pin its source against the
+ * backend pattern character for character. A duplicated grammar that
+ * drifted would start rejecting symbols the catalog accepts, or waving
+ * through ones it cannot store — the parity test makes that a failure
+ * rather than a silent divergence.
+ */
+export const SYMBOL_PATTERN = /^[A-Z][A-Z0-9.]*$/;
 
 export interface ParsedSymbols {
   readonly symbols: readonly string[];
