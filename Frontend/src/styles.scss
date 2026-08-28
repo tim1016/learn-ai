@@ -266,6 +266,22 @@ code {
   color: var(--accent-text);
 }
 
+/* Collapsed, PrimeNG sizes this panel `width: 100%` of `.p-menubar`,
+   assuming the menubar is a full-width bar. Here it sits in the top
+   bar's `justify-self: start` column, so it wraps only the toggle and
+   the panel opens at ~26px with every label squeezed to nothing.
+
+   Pin a width. `max-content` does not work — PrimeNG sizes the entries
+   `width: 100%` and that cycle overflows an expanded group — and the
+   doubled class is deliberate: PrimeNG injects its component CSS into
+   <head> at runtime, after this file, so an override that only matches
+   its specificity loses on source order.
+
+   Covered by Frontend/tests/e2e/shell-menubar.spec.ts. */
+.p-menubar.p-menubar-mobile .p-menubar-root-list {
+  width: 16rem;
+}
+
 /* ═══════════════════════════════════════════════════════════
    IDE layout primitives
 

@@ -100,3 +100,7 @@ PythonDataService/.cutover/
 PythonDataService/var/broker_captures/
 # Optional local working notes and handoff artifacts.
 .scratch/
+
+# Playwright local run output (CI uploads these as artifacts).
+Frontend/test-results/
+Frontend/playwright-report/
