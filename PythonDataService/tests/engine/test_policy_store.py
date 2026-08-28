@@ -275,19 +275,24 @@ def test_symbol_write_lock_serializes_writers(tmp_path: Path):
 class _FakePolygon:
     """Deterministic minute-bar source counting how often it is fetched."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, blackout: set[date] | None = None) -> None:
         self.calls = 0
         self.adjusted_seen: list[bool] = []
+        self.ranges: list[tuple[str, str]] = []
+        # Dates the provider has no bars for — a market holiday, say. The
+        # exporter writes no zip for them, so they stay missing forever.
+        self.blackout = blackout or set()
 
     def fetch_aggregates(self, **kwargs) -> list[dict]:
         self.calls += 1
         self.adjusted_seen.append(kwargs["adjusted"])
+        self.ranges.append((kwargs["from_date"], kwargs["to_date"]))
         start = date.fromisoformat(kwargs["from_date"])
         end = date.fromisoformat(kwargs["to_date"])
         bars: list[dict] = []
         current = start
         while current <= end:
-            if current.weekday() < 5:
+            if current.weekday() < 5 and current not in self.blackout:
                 open_ms = int(datetime(current.year, current.month, current.day, 14, 30, tzinfo=UTC).timestamp() * 1000)
                 for i in range(30):
                     bars.append(
@@ -382,3 +387,117 @@ def test_ensure_range_concurrent_runs_fetch_once(tmp_path: Path):
     assert polygon.calls == 1
     zips = sorted(p.name for p in (policy_root / "equity" / "usa" / "minute" / "spy").glob("*_trade.zip"))
     assert zips == ["20260105_trade.zip", "20260106_trade.zip"]
+
+
+def _minute_zip(policy_root: Path, trading_date: date) -> Path:
+    return policy_root / "equity" / "usa" / "minute" / "spy" / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
+
+
+def _ensure_spy(polygon: _FakePolygon, policy_root: Path, start: date, end: date):
+    return ensure_range(
+        reference_roots=[],
+        cache_root=policy_root,
+        symbol="SPY",
+        start=start,
+        end=end,
+        polygon=polygon,
+        adjusted=False,
+        resolution="minute",
+    )
+
+
+def test_ensure_range_fetches_only_the_missing_day(tmp_path: Path):
+    """One hole in a covered window costs one one-day request, not a re-export.
+
+    Before #1830 the whole window was re-exported whenever any single day
+    was missing, which is how one symbol's provenance accumulated 43
+    fetches of the same two years.
+    """
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    _minute_zip(policy_root, date(2026, 1, 8)).unlink()
+    polygon.ranges.clear()
+
+    report = _ensure_spy(polygon, policy_root, *window)
+
+    assert report.is_complete
+    assert polygon.ranges == [("2026-01-08", "2026-01-08")]
+
+
+def test_ensure_range_batches_days_a_weekend_apart_into_one_request(tmp_path: Path):
+    """Adjacency is in trading days: Friday and Monday are one span.
+
+    Calendar adjacency would split a missing month into weekly requests,
+    which is the per-request cost the batching exists to respect.
+    """
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    for hole in (date(2026, 1, 9), date(2026, 1, 12)):
+        _minute_zip(policy_root, hole).unlink()
+    polygon.ranges.clear()
+
+    _ensure_spy(polygon, policy_root, *window)
+
+    assert polygon.ranges == [("2026-01-09", "2026-01-12")]
+
+
+def test_ensure_range_splits_gaps_separated_by_a_covered_day(tmp_path: Path):
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    for hole in (date(2026, 1, 6), date(2026, 1, 8)):
+        _minute_zip(policy_root, hole).unlink()
+    polygon.ranges.clear()
+
+    _ensure_spy(polygon, policy_root, *window)
+
+    assert polygon.ranges == [("2026-01-06", "2026-01-06"), ("2026-01-08", "2026-01-08")]
+
+
+def test_ensure_range_records_only_the_delta_in_provenance(tmp_path: Path):
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    _minute_zip(policy_root, date(2026, 1, 13)).unlink()
+
+    _ensure_spy(polygon, policy_root, *window)
+
+    fetches = json.loads((policy_root / "provenance" / "spy.json").read_text())["fetches"]
+    assert [(f["from_date"], f["to_date"]) for f in fetches] == [
+        ("2026-01-05", "2026-01-16"),
+        ("2026-01-13", "2026-01-13"),
+    ]
+
+
+def test_ensure_range_over_a_provider_blackout_refetches_only_that_day(tmp_path: Path):
+    """A day the provider has no bars for never becomes available.
+
+    ``_iter_weekdays`` counts exchange holidays as expected days, so such
+    a window can never report complete and re-fetches on every call. This
+    pins that the repeated fetch is now the one blacked-out day rather
+    than the whole window — the leak is bounded, not closed. Closing it
+    needs a holiday-aware expected-day set, which is the data lake's job
+    (parent #1825), not this store's.
+    """
+    holiday = date(2026, 1, 8)
+    polygon = _FakePolygon(blackout={holiday})
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+    window = (date(2026, 1, 5), date(2026, 1, 16))
+    _ensure_spy(polygon, policy_root, *window)
+    polygon.ranges.clear()
+
+    report = _ensure_spy(polygon, policy_root, *window)
+
+    assert report.missing_days == [holiday]
+    assert polygon.ranges == [("2026-01-08", "2026-01-08")]
