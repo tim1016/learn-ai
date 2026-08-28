@@ -86,3 +86,67 @@ def test_live_run_decision_evidence_from_rows_flags_truncation_by_pruning_not_fu
         for seq in range(2, MAX_DECISION_RECEIPTS_PER_STRATEGY + 2)
     ]
     assert live_run_decision_evidence_from_rows(pruned, "run-1").truncated is True
+
+
+def _quarantine_row(seq: int, *, run_id: str) -> DecisionReceiptResource:
+    """A quarantine receipt exactly as `bot_decision_quarantine` writes it.
+
+    Deliberately built by hand rather than borrowing ``_row``: the point of
+    these tests is the two fields ``_row`` always supplies and this row never
+    has -- ``intent_id`` and ``evaluation_id``.
+    """
+    return DecisionReceiptResource(
+        strategy_instance_id="bot-a",
+        seq=seq,
+        outcome="decision_bar_quarantined",
+        symbol="SPY",
+        intent_id=None,
+        order_ref=None,
+        observed_at_ms=1_700_000_000_000 + seq,
+        facts_json=json.dumps(
+            {
+                "run_id": run_id,
+                "reason_code": "TIMEFRAME_MISMATCH",
+                "bar_ref": "quarantined-bar:SPY:1700000000000-1700000060000",
+                "retention_class": "protected_quarantine",
+                "first_of_reason": True,
+            }
+        ),
+    )
+
+
+def test_a_quarantine_receipt_does_not_make_the_whole_run_unalignable() -> None:
+    """Issue #1827's sharpest hazard, pinned.
+
+    A row for this run carrying no evaluation identity raises
+    ``RunReplayUnavailableError`` -- correctly, for a *decision*, since
+    replay alignment is keyed on that identity. A quarantined bar is not a
+    decision and legitimately has no identity, so reaching that guard would
+    let one refused bar deny replay proof to the entire run.
+    """
+    rows = [
+        _quarantine_row(1, run_id="run-1"),
+        _row(2, outcome="no_action", run_id="run-1", evaluation_id="e1", reason_code="NO_ACTION"),
+    ]
+
+    evidence = live_run_decision_evidence_from_rows(rows, "run-1")
+
+    assert [record.evaluation_id for record in evidence.records] == ["e1"]
+
+
+def test_a_quarantine_receipt_is_neither_a_decision_nor_a_disposition() -> None:
+    """It must not align, and it must not answer for any bucket.
+
+    In ``records`` it would be a permanent unmatched divergence -- replaying
+    the same bar refuses it again and produces no evaluation to match. In
+    ``captured_decisions`` it would be offered to FR-016 warmup replay as
+    some bucket's known outcome, which it never is.
+    """
+    rows = [_quarantine_row(1, run_id="run-1")]
+
+    evidence = live_run_decision_evidence_from_rows(rows, "run-1")
+
+    assert evidence.records == ()
+    assert evidence.crash_records == ()
+    assert evidence.captured_decisions == {}
+

@@ -39,12 +39,12 @@ from app.engine.strategy.signal_program import (
     EvaluationTrace,
     Settlement,
     SignalProgram,
-    StageQuarantine,
     trace_root,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
 from app.schemas.market_liveness import MarketLivenessFact
+from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
@@ -121,70 +121,13 @@ class _LiveSignalStrategy(Protocol):
     def on_force_flat(self) -> None: ...
 
 
-# A systematically mis-shaped feed -- a program whose decision clock never
-# matches the bucket width it is fed -- refuses *every* bar, so one warning
-# per refusal would be one line per bar forever. Log the first of each reason
-# immediately, then every _QUARANTINE_LOG_EVERY-th, always carrying the
-# running count so the intervening refusals are represented rather than lost.
-_QUARANTINE_LOG_EVERY = 50
-
-# The one refusal reason for which the decision-clock pair means anything.
-# ``SignalSession.advance`` owns these strings; its other two reasons
-# (UNSETTLED_STAGE, NON_MONOTONIC_DECISION_CLOCK) refuse a bucket of exactly
-# the right width, so reporting expected/observed alongside them is noise.
-_TIMEFRAME_MISMATCH_REASON = "TIMEFRAME_MISMATCH"
-
-
-class _QuarantineLog:
-    """Operator-visible record of decision bars the sealed session refused.
-
-    ``SignalProgram.on_consolidated_bar`` only *retains* a
-    ``StageQuarantine``: ``app/engine/strategy/signal_program.py`` is listed
-    in every registered program's ``artifact_paths``
-    (``app.engine.strategy.registry``), so its bytes are the sealed decision
-    identity and a log level or payload tweak there would invalidate every
-    qualification receipt. Counting and logging live here, on the side of the
-    boundary that already owns this run's operator surface.
-    """
-
-    def __init__(self) -> None:
-        self._counts: dict[str, int] = {}
-
-    def record(
-        self,
-        quarantine: StageQuarantine,
-        *,
-        binding: BrokerBotBinding,
-        expected_timeframe_ms: int,
-    ) -> None:
-        seen = self._counts.get(quarantine.reason, 0) + 1
-        self._counts[quarantine.reason] = seen
-        if seen > 1 and seen % _QUARANTINE_LOG_EVERY != 0:
-            return
-        payload: dict[str, object] = {
-            "action": "bot_decision_bar_quarantined",
-            "strategy_instance_id": binding.strategy_instance_id,
-            "strategy_key": binding.strategy_key,
-            "symbol": binding.symbol,
-            "reason": quarantine.reason,
-            "status": quarantine.status.value,
-            "bar_start_ms": quarantine.bar_start_ms,
-            "bar_end_ms": quarantine.bar_end_ms,
-            "quarantined_so_far": seen,
-        }
-        if quarantine.reason == _TIMEFRAME_MISMATCH_REASON:
-            payload["expected_timeframe_ms"] = expected_timeframe_ms
-            payload["observed_timeframe_ms"] = quarantine.observed_timeframe_ms
-        logger.warning("Trade bot quarantined a decision bar", extra=payload)
-
-
 @dataclass(frozen=True)
 class _LiveSignalRuntime:
     """Typed program/strategy composition for one runner-owned instance."""
 
     strategy: _LiveSignalStrategy
     program: SignalProgram
-    quarantine_log: _QuarantineLog = field(default_factory=_QuarantineLog)
+    quarantine: QuarantineJournal = field(default_factory=QuarantineJournal)
 
     def capture_source_bar(self, bar: TradeBar, *, mode: EvaluationMode) -> None:
         self.program.capture_source_bar(bar, mode=mode)
@@ -211,7 +154,7 @@ class _LiveSignalRuntime:
     def surface_quarantines(self, binding: BrokerBotBinding) -> None:
         """Log every decision bar the session refused since the last drain."""
         while (quarantine := self.program.take_quarantine()) is not None:
-            self.quarantine_log.record(
+            self.quarantine.record(
                 quarantine,
                 binding=binding,
                 expected_timeframe_ms=self.program.session.timeframe_ms,
@@ -379,6 +322,7 @@ def _build_signal_strategy(
     strategy_key: str,
     symbol: str,
     strategy_params: dict[str, Any] | None,
+    quarantine_receipts: QuarantineReceiptSink | None = None,
 ) -> _LiveSignalRuntime:
     """Construct one registered strategy through its canonical registry `build`.
 
@@ -406,7 +350,11 @@ def _build_signal_strategy(
     params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})  # type: ignore[arg-type]
     program = registration.signal_program_factory(params)
     program.activate_for_runner()
-    return _LiveSignalRuntime(strategy=program.strategy, program=program)  # type: ignore[arg-type]
+    return _LiveSignalRuntime(
+        strategy=program.strategy,  # type: ignore[arg-type]
+        program=program,
+        quarantine=QuarantineJournal(quarantine_receipts),
+    )
 
 
 def _drain_bar(strategy: _LiveSignalStrategy, context: StrategyContext, bar: TradeBar) -> None:
@@ -469,9 +417,12 @@ async def _signal_strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
     captured_decisions: Mapping[str, str] | None,
+    quarantine_receipts: QuarantineReceiptSink | None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
-    runtime = _build_signal_strategy(binding.strategy_key, binding.symbol, binding.strategy_params)
+    runtime = _build_signal_strategy(
+        binding.strategy_key, binding.symbol, binding.strategy_params, quarantine_receipts
+    )
     strategy = runtime.strategy
     context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
     strategy.ctx = context
@@ -591,6 +542,7 @@ async def strategy_evaluations(
     feed: MarketDataFeed,
     *,
     captured_decisions: Mapping[str, str] | None = None,
+    quarantine_receipts: QuarantineReceiptSink | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
@@ -601,10 +553,19 @@ async def strategy_evaluations(
     default) means no such recovery is attempted, which is correct for
     :func:`strategy_intents`, a read-only stream with no custody seam to
     record or discard a recovered candidate through.
+
+    ``quarantine_receipts`` is where a refused decision bar becomes durable
+    evidence rather than only a log line (issue #1827). Pass a custody
+    runner's own receipt journal; omitting it leaves the refusal logged and
+    counted but unreceipted, which is correct for the read-only replay and
+    qualification callers -- they re-drive bars a live run already judged,
+    so a receipt from them would be a second, spurious record of one event.
     """
     if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
-    async for evaluation in _signal_strategy_evaluations(binding, feed, captured_decisions):
+    async for evaluation in _signal_strategy_evaluations(
+        binding, feed, captured_decisions, quarantine_receipts
+    ):
         yield evaluation
 
 
@@ -700,6 +661,7 @@ async def run_trade_bot(
         binding,
         run_feed,
         captured_decisions=captured_decision_outcomes(decision_receipts),
+        quarantine_receipts=decision_receipts,
     ):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
@@ -975,6 +937,7 @@ async def run_dry_run_bot(
         binding,
         retained_feed,
         captured_decisions=captured_decision_outcomes(decision_receipts),
+        quarantine_receipts=decision_receipts,
     ):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")

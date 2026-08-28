@@ -23,7 +23,7 @@ from app.broker.alpaca.clerk.account_authority import (
     paper_evidence_account_id_for_strategy,
     synthetic_account_id_for_strategy,
 )
-from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+from app.broker.alpaca.clerk.sqlite.decision_receipts import QUARANTINE_OUTCOME, SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.qualification_shadow_trace import (
     ShadowTraceDivergence,
@@ -149,6 +149,12 @@ def replay_provider_for(ledger: SourceBarLedger, symbol: str) -> str:
 
 
 _CRASH_OUTCOME = "candidate_uncaptured_at_crash"
+# Issue #1827. A quarantined decision bar never became an evaluation, so it
+# has no identity to align on and its replay produces no bucket to align it
+# with. Excluded before the identity requirement below, which would otherwise
+# read a legitimate quarantine receipt as an unalignable journal and make
+# replay proof unavailable for the entire run.
+_QUARANTINE_OUTCOME = QUARANTINE_OUTCOME
 
 
 @dataclass(frozen=True)
@@ -187,11 +193,22 @@ def live_run_decision_evidence_from_rows(
     replayed live bucket. They are reported as expected live effects instead.
     ``captured_decisions`` deliberately spans every run -- it is the same
     map ``captured_decision_outcomes`` builds for the live warmup replay.
+
+    Quarantine receipts (issue #1827) are skipped entirely, before anything
+    else reads the row. They are not decisions: the session refused the bar,
+    so no evaluation was created, and a replay of the same bar refuses it
+    again and yields nothing to align against. They must not enter
+    ``records`` (a permanent unmatched divergence), must not enter
+    ``captured_decisions`` (they are no bucket's disposition), and must not
+    reach the missing-identity guard below, which would otherwise reject the
+    whole run's journal as unalignable.
     """
     records: list[LiveDecisionRecord] = []
     crash_records: list[LiveDecisionRecord] = []
     captured: dict[str, str] = {}
     for row in rows:  # retained_window() yields ascending seq order
+        if row.outcome == _QUARANTINE_OUTCOME:
+            continue
         facts = json.loads(row.facts_json) if row.facts_json else {}
         evaluation_id = row.intent_id or str(facts.get("evaluation_id") or "")
         if evaluation_id:

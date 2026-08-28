@@ -15004,7 +15004,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "enter_intent" | "exit_intent" | "entered" | "exited" | "no_action" | "blocked" | "candidate_uncaptured_at_crash";
+            outcome: "enter_intent" | "exit_intent" | "entered" | "exited" | "no_action" | "blocked" | "candidate_uncaptured_at_crash" | "decision_bar_quarantined";
             /** Reason Code */
             reason_code: string;
             /** Recorded At Ms */

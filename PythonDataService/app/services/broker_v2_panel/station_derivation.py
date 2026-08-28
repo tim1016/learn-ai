@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
-from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
+from app.broker.alpaca.clerk.sqlite.decision_receipts import QUARANTINE_OUTCOME, DecisionReceipt
 from app.broker.v2panel.vocabulary import STATION_IDS, StationId, StationState, copy_for
 from app.engine.live.order_identity import build_bot_order_namespace, parse_order_ref
 from app.schemas.broker_v2_panel import StationView
@@ -157,6 +157,20 @@ def _signal_station(
                 "No decision in the retained evidence window is linked to "
                 f"transaction {transaction_ref!r}.",
             )
+    if latest_decision.outcome == QUARANTINE_OUTCOME:
+        # A refused decision bar is not a decision (issue #1827). Rendering it
+        # as `satisfied` would be at its most wrong exactly when it matters:
+        # a systematically mis-shaped feed produces no *other* receipt, so the
+        # quarantine row is the whole window, and SIGNAL would report a
+        # satisfied station for a bot that is deciding nothing at all.
+        return _station(
+            "SIGNAL",
+            "blocked",
+            f"The sealed decision session refused this bot's last decision bar "
+            f"({latest_decision.reason_code}); no decision was evaluated on "
+            f"bar {latest_decision.bar_ref}.",
+            evidence_at_ms=latest_decision.ts_ms,
+        )
     state = _freshness("satisfied", latest_decision.ts_ms, now_ms)
     receipt = (
         f"Latest decision: {latest_decision.outcome} "
