@@ -85,41 +85,26 @@ def test_signal_program_contract_and_factory_are_set_or_cleared_together() -> No
         )
 
 
-# Strategies whose signal is still fused to the asset they trade. The
-# platform rule is that a strategy separates *when* to act (the signal) from
-# *what* is traded (the asset the execution boundary selects) -- see
-# ``app.engine.strategy.signal_intent.SignalIntent``, which carries neither a
-# symbol nor a quantity. Anything listed here has not been converted yet and
-# is not permitted to grow: adding a key requires a deliberate edit, so a new
-# coupled strategy cannot arrive unnoticed.
-COUPLED_STRATEGIES_PENDING_DISPOSITION = frozenset(
-    {
-        # Signals on SPY but executes option legs; SignalIntentKind is
-        # explicitly "the two long-only lifecycle decisions supported by the
-        # stock runtime", so converting this needs the intent vocabulary
-        # widened beyond long-only stock first.
-        "spy_ema_crossover_options",
-        # Opening-range breakout; SetHoldings(SPY, 1.0) is fused into the
-        # algorithm. Convertible, but not yet converted.
-        "spy_orb",
-    }
-)
-
-
 def test_every_registered_strategy_decouples_signal_from_traded_asset() -> None:
-    """Every registration either owns a Signal Program or is a named exception.
+    """Every registration owns a Signal Program. No exceptions, by design.
 
-    A registration with a ``signal_program_factory`` emits instrument-free
-    ``SignalIntent``; the execution boundary picks and sizes the asset. One
-    without it decides *and* names its own traded symbol, which is the
-    coupling this rule exists to remove. Asserting set equality (rather than
-    a subset) means the allowlist also cannot silently outlive the strategies
-    it excuses.
+    The platform rule is that a strategy separates *when* to act (the signal)
+    from *what* is traded (the asset the execution boundary selects) -- see
+    ``app.engine.strategy.signal_intent.SignalIntent``, which carries neither
+    a symbol nor a quantity. A registration without a
+    ``signal_program_factory`` decides *and* names its own traded symbol,
+    which is exactly the coupling this rule exists to remove.
+
+    There is deliberately no allowlist. The sweep that established this rule
+    removed the last five coupled registrations rather than excusing them, so
+    the honest assertion is that the set is empty -- an allowlist here would
+    only be a place for the next one to hide.
     """
-    coupled = {
+    coupled = sorted(
         key for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is None
-    }
-    assert coupled == COUPLED_STRATEGIES_PENDING_DISPOSITION
+    )
+
+    assert coupled == []
 
 
 def test_every_factory_built_program_carries_its_registration_identity() -> None:

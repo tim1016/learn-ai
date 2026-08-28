@@ -337,7 +337,17 @@ def _build_signal_strategy(
     live-adapter-private construction path — a strategy is only
     live-executable if its registry registration builds it.
     """
-    registration = _STRATEGY_REGISTRY[strategy_key]
+    registration = _STRATEGY_REGISTRY.get(strategy_key)
+    if registration is None:
+        # A durable binding outlives the build that created it, so a retired
+        # strategy key reaches this seam as ordinary input, not as a
+        # programming error. Left as a bare KeyError it escapes the adapter
+        # untyped and surfaces to the operator as an internal fault; the
+        # honest answer is the same refusal an unsealed strategy gets, since
+        # the outcome is identical -- this build cannot run that bot.
+        raise ValueError(
+            f"strategy is not live-executable (not registered in this build): {strategy_key}"
+        )
     if registration.signal_program_factory is None:
         # Refused where the impossibility is constructed rather than tolerated
         # downstream. The live adapter's decision cycle *is* the SignalSession:

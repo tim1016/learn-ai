@@ -184,25 +184,22 @@ describe("StrategyLab configuration and runner", () => {
     );
   });
 
-  it("forwards configurable gap and RSI gates to the aligned LEAN template", async () => {
+  it("never sends template parameters, because no LEAN twin accepts them", async () => {
+    // The parameterized LEAN twin went away with the `ema_crossover_2_bps`
+    // registration in the signal/asset decoupling sweep. A partial parameter
+    // set would have the two engines run different rules and report the
+    // difference as a parity finding, so the Python side refuses that pairing
+    // (`parameters_unrepresentable_by_twin`) and the client no longer builds one.
     config.strategies.set([PARAMETERIZED_STRATEGY]);
     config.selectStrategy(PARAMETERIZED_STRATEGY.name);
     config.updateParameter("gap_bps", "4", "number");
-    config.updateParameter("rsi_min", "52", "number");
-    config.updateParameter("rsi_max", "68", "number");
     config.engine.set("lean");
 
     await runner.run();
 
-    expect(startJob).toHaveBeenCalledWith(
-      "lean_engine_run",
-      expect.objectContaining({
-        request: expect.objectContaining({
-          template: "ema_crossover_2_bps",
-          strategy_parameters: { gap_bps: 4, rsi_min: 52, rsi_max: 68 },
-        }),
-      }),
-    );
+    const request = startJob.mock.calls[0]?.[1]?.request;
+    expect(request).toHaveProperty("template");
+    expect(request).not.toHaveProperty("strategy_parameters");
   });
 
   it("runs browser-edited QCAlgorithm source without requiring template parameters", async () => {

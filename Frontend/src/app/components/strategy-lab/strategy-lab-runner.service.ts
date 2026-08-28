@@ -169,14 +169,13 @@ export class StrategyLabRunner {
       ]);
       const configuredSource = this.config.customLeanSource();
       const customSource = configuredSource?.trim() ? configuredSource : null;
-      const strategyParameters = customSource === null
-        ? leanStrategyParameters(template, this.config.paramValues())
-        : undefined;
+      // No registered strategy declares a LEAN twin that takes runtime
+      // parameters any more, so the companion always runs the twin's own
+      // defaults. Sending a partial parameter set would have the two engines
+      // run different rules; the Python side refuses that pairing outright
+      // (parity_companion's `parameters_unrepresentable_by_twin`).
       const algorithm = customSource === null
-        ? {
-            template,
-            ...(strategyParameters === undefined ? {} : { strategy_parameters: strategyParameters }),
-          }
+        ? { template }
         : { algorithm_source: customSource };
       this.leanJobId.set(
         await this.jobs.startJob("lean_engine_run", {
@@ -386,25 +385,7 @@ export class StrategyLabRunner {
   }
 }
 
-function leanStrategyParameters(
-  template: string,
-  values: Record<string, unknown>,
-): { gap_bps: number; rsi_min: number; rsi_max: number } | undefined {
-  if (template !== "ema_crossover_2_bps") return undefined;
-  return {
-    gap_bps: requiredFiniteNumber(values, "gap_bps"),
-    rsi_min: requiredFiniteNumber(values, "rsi_min"),
-    rsi_max: requiredFiniteNumber(values, "rsi_max"),
-  };
-}
 
-function requiredFiniteNumber(values: Record<string, unknown>, field: string): number {
-  const value = values[field];
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${field} must be a finite number`);
-  }
-  return value;
-}
 
 function httpErrorDetail(error: unknown): unknown {
   if (!(error instanceof HttpErrorResponse) || typeof error.error !== "object" || error.error === null) {

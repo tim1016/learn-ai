@@ -54,7 +54,7 @@ def test_new_parity_group_id_is_run_id_safe():
 @pytest.mark.parametrize(
     ("strategy", "overrides", "expected"),
     [
-        ("spy_orb", {}, REASON_NO_TWIN),
+        ("sma_crossover", {}, REASON_NO_TWIN),
         (
             "ema_crossover_signal",
             {"compatibility_profile": None},
@@ -172,8 +172,8 @@ def test_dispatch_ineligible_records_unavailable_and_launches_nothing():
     )
 
     dispatch_parity_companion(
-        registration=_STRATEGY_REGISTRY["spy_orb"],
-        request=_request(strategy_name="spy_orb"),
+        registration=_STRATEGY_REGISTRY["sma_crossover"],
+        request=_request(strategy_name="sma_crossover"),
         parity_group_id="pg-notwin",
         left_execution_id=7,
     )

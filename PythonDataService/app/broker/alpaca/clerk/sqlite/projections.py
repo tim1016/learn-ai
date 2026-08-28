@@ -55,7 +55,10 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_projection_guidance,
     build_recovery_catalog,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    DatabaseMissingAfterEstablishment,
+)
 from app.broker.alpaca.clerk.sqlite.timeline_query import (
     TimelineFilters,
     read_timeline_page,
@@ -95,6 +98,17 @@ class SqliteClerkProjectionReader:
         self._db_identity_token = db_identity_token
         self._clock = clock
         self._lock = threading.Lock()
+        if not db_path.is_file():
+            # A resolvable broker account whose local authority is absent is a
+            # real operator state (post-reset, pre-cutover), not a programming
+            # error. Left to sqlite it surfaces as a bare OperationalError and
+            # the app's catch-all turns that into a 500 -- including on
+            # /clerk/status, whose entire job is to report this. Fail in the
+            # Clerk's own vocabulary so the boundary can answer honestly.
+            raise DatabaseMissingAfterEstablishment(
+                f"{db_path} does not exist; this account has no activated SQLite "
+                "authority. Complete the paper cutover before reading projections."
+            )
         self._conn = sqlite3.connect(
             f"{db_path.resolve().as_uri()}?mode=ro",
             uri=True,
