@@ -9,16 +9,25 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.4
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
 import asyncpg
 
 from app.config import settings
-from app.data_lake.types import ArtifactIdentity, ArtifactRecord
+from app.data_lake.types import (
+    ArtifactDetail,
+    ArtifactIdentity,
+    ArtifactRecord,
+    StorageKindTotal,
+    SymbolCoverageSpan,
+)
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +288,63 @@ async def select_coverage_minute_bars(
         )
         for r in rows
     ]
+
+
+@dataclass(frozen=True)
+class MinuteBarLeaseStatus:
+    """Current row state for one minute-bar claim, independent of Status.
+
+    ``select_coverage_minute_bars`` above only ever answers "is it
+    complete?" — the caller can't tell an in-flight claim from one that
+    has already permanently failed. This lets a caller (the backfill
+    job's lease-wait loop, #1836) distinguish the two without re-running
+    ensure_data's whole per-day pipeline on every poll.
+    """
+
+    status: Literal["fetching", "complete", "failed"]
+    lease_expires_at_ms: int | None
+    last_error: str | None
+    error_message: str | None
+
+
+async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBarLeaseStatus | None:
+    """Return the current row state for one minute-bar identity, or None
+    if no row exists for it yet. A single indexed SELECT — no join, no
+    aggregation; cheap to poll.
+    """
+    if identity.artifact_kind != "time_series_bars" or identity.resolution != "minute":
+        raise ValueError(f"select_minute_bar_lease_status called with non-minute-bar identity: {identity!r}")
+    query = """
+        SELECT "Status", "LeaseExpiresAtMs", "LastError", "ErrorMessage"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Market" = $1
+           AND "Symbol" = $2
+           AND "TradingDate" = $3
+           AND "DataType" = $4
+           AND "Provider" = $5
+           AND "PriceAdjustmentMode" = $6
+         LIMIT 1
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            query,
+            identity.market,
+            identity.symbol,
+            identity.trading_date,
+            identity.data_type,
+            identity.provider,
+            identity.price_adjustment_mode,
+        )
+    if row is None:
+        return None
+    return MinuteBarLeaseStatus(
+        status=row["Status"],
+        lease_expires_at_ms=row["LeaseExpiresAtMs"],
+        last_error=row["LastError"],
+        error_message=row["ErrorMessage"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -685,3 +751,188 @@ async def refresh_complete_minute_bar(
         prior_file_path=row["FilePath"],
         prior_file_sha256=row["FileSha256"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 5 observatory read projections
+#
+# Thin, read-only SELECTs backing the Observatory endpoints in
+# app/routers/data_lake.py. Unlike the ensure_data-facing selects above
+# (which only ever want 'complete' rows to decide what's reusable), these
+# return every status — an operator view needs to see fetching/failed rows
+# too, not just what's usable.
+#
+# Where a projection's shape matches a wire response one-for-one, the SELECT
+# returns the types.py Pydantic model directly (matching the convention
+# select_coverage_minute_bars already sets with ArtifactRecord above) — SQL
+# column aliases do the field-name mapping, and session_open_ms_or_none is
+# the one shared helper for the lone TradingDate -> trading_date_ms
+# transform, so there's exactly one place that does that conversion.
+# ---------------------------------------------------------------------------
+
+
+def session_open_ms_or_none(trading_date: date | None) -> int | None:
+    """Project an optional TradingDate column to its canonical ET session-open
+    anchor (int64 ms UTC), or None when there's no date to convert."""
+    return session_open_ms_utc(trading_date) if trading_date is not None else None
+
+
+@dataclass(frozen=True)
+class ArtifactCoverageRow:
+    """Kept as an internal row type (not a types.py model): the coverage
+    endpoint merges these by date against the canonical calendar's session
+    list, which is router-side request-shaping, not a catalog projection."""
+
+    trading_date: date
+    status: str
+    artifact_id: int
+
+
+async def select_artifact_coverage(
+    market: str,
+    symbol: str,
+    data_type: str,
+    provider: str,
+    price_adjustment_mode: str,
+    start_trading_date: date,
+    end_trading_date: date,
+) -> list[ArtifactCoverageRow]:
+    """Return per-day minute-bar artifact status in the window, any status.
+
+    Only 'time_series_bars'/'minute' rows carry a per-day TradingDate —
+    hour/daily aggregated-bar artifacts cover a symbol's whole history in one
+    row (see uq_data_lake_artifacts_aggregated_bars), so day-keyed coverage
+    is meaningful only at minute resolution.
+    """
+    query = """
+        SELECT "TradingDate" AS trading_date, "Status" AS status, "Id" AS artifact_id
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Market" = $1
+           AND "Symbol" = $2
+           AND "DataType" = $3
+           AND "Provider" = $4
+           AND "PriceAdjustmentMode" = $5
+           AND "TradingDate" BETWEEN $6 AND $7
+         ORDER BY "TradingDate"
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(
+            query,
+            market,
+            symbol,
+            data_type,
+            provider,
+            price_adjustment_mode,
+            start_trading_date,
+            end_trading_date,
+        )
+    return [ArtifactCoverageRow(**dict(r)) for r in rows]
+
+
+async def select_artifact_by_id(artifact_id: int) -> ArtifactDetail | None:
+    """Return the full receipt for one catalog row, or None when it doesn't exist.
+
+    ``content_hash`` is None (not the empty string) until the row reaches
+    Status='complete' and FileSha256 is actually populated — no COALESCE
+    here, unlike select_coverage_minute_bars, which is allowed to default
+    the column because its Status='complete' filter guarantees a real hash.
+
+    Includes the failure diagnostics fail_artifact() persists (AttemptCount,
+    LastError, ErrorMessage) — a 'failed' row's receipt is not "full"
+    without them.
+    """
+    query = """
+        SELECT "Id" AS id, "ArtifactKind" AS artifact_kind, "Market" AS market,
+               "Symbol" AS symbol, "TradingDate" AS trading_date,
+               "Resolution" AS resolution, "DataType" AS data_type,
+               "Provider" AS provider, "ProviderParams" AS provider_params,
+               "PriceAdjustmentMode" AS price_adjustment_mode,
+               "DataContractHash" AS data_contract_hash,
+               "FileSha256" AS content_hash,
+               "FilePath" AS file_path, "FileSizeBytes" AS file_size_bytes,
+               "Status" AS status, "RowCount" AS row_count,
+               "FirstBarStartMs" AS first_bar_start_ms,
+               "LastBarStartMs" AS last_bar_start_ms,
+               "FetchedAtMs" AS fetched_at_ms, "CompletedAtMs" AS completed_at_ms,
+               "AttemptCount" AS attempt_count, "LastError" AS last_error,
+               "ErrorMessage" AS error_message
+          FROM "DataLakeArtifacts"
+         WHERE "Id" = $1
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(query, artifact_id)
+    if row is None:
+        return None
+    data = dict(row)
+    trading_date = data.pop("trading_date")
+    raw_provider_params = data.pop("provider_params")
+    return ArtifactDetail(
+        **data,
+        trading_date_ms=session_open_ms_or_none(trading_date),
+        # asyncpg returns jsonb as raw text unless a codec is registered; no
+        # codec is registered here (see init_pool), so decode explicitly.
+        provider_params=json.loads(raw_provider_params) if raw_provider_params else {},
+    )
+
+
+async def select_storage_totals_by_kind(market: str) -> list[StorageKindTotal]:
+    """Complete-artifact counts and bytes, grouped by kind (+ resolution).
+
+    Scoped to Status='complete': only completed artifacts have bytes on
+    disk to count; fetching/failed rows have no FileSizeBytes. Every column
+    is an identity projection, so the aliased row maps straight onto the
+    model.
+    """
+    query = """
+        SELECT "ArtifactKind" AS artifact_kind, "Resolution" AS resolution,
+               COUNT(*) AS artifact_count,
+               COALESCE(SUM("FileSizeBytes"), 0) AS total_bytes
+          FROM "DataLakeArtifacts"
+         WHERE "Market" = $1
+           AND "Status" = 'complete'
+         GROUP BY "ArtifactKind", "Resolution"
+         ORDER BY "ArtifactKind", "Resolution" NULLS FIRST
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(query, market)
+    return [StorageKindTotal(**dict(r)) for r in rows]
+
+
+async def select_symbol_coverage_spans(market: str) -> list[SymbolCoverageSpan]:
+    """Per-symbol day-keyed coverage span over complete minute-bar artifacts.
+
+    Resolution='minute' is the filter, not just ArtifactKind='time_series_bars':
+    hour/daily aggregated-bar rows carry TradingDate=NULL (one row per
+    symbol's whole history — see uq_data_lake_artifacts_aggregated_bars), so
+    without this filter a symbol with ONLY aggregated data would still
+    produce a row here (MIN/MAX NULL, artifact_count=0 since COUNT ignores
+    NULLs) — a fabricated placeholder for a symbol with no day-keyed
+    coverage at all, not the honest absence the "span" concept documents.
+    """
+    query = """
+        SELECT "Symbol" AS symbol,
+               MIN("TradingDate") AS first_trading_date,
+               MAX("TradingDate") AS last_trading_date,
+               COUNT("TradingDate") AS artifact_count
+          FROM "DataLakeArtifacts"
+         WHERE "Market" = $1
+           AND "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Status" = 'complete'
+           AND "Symbol" IS NOT NULL
+         GROUP BY "Symbol"
+         ORDER BY "Symbol"
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(query, market)
+    return [
+        SymbolCoverageSpan(
+            symbol=r["symbol"],
+            first_trading_date_ms=session_open_ms_or_none(r["first_trading_date"]),
+            last_trading_date_ms=session_open_ms_or_none(r["last_trading_date"]),
+            artifact_count=r["artifact_count"],
+        )
+        for r in rows
+    ]
