@@ -281,14 +281,8 @@ def _mock_polygon(ticker: str = "SPY"):
     )
 
 
-def _spec(request_id: UUID | None = None) -> DataRunSpec:
-    return build_engine_run_spec(
-        symbol="SPY",
-        start=TRADING_DAY,
-        end=TRADING_DAY,
-        requester="test",
-        request_id=request_id,
-    )
+def _spec() -> DataRunSpec:
+    return build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="test")
 
 
 # ---------------------------------------------------------------------------
