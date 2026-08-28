@@ -121,16 +121,20 @@ def test_sma_discarded_exit_stays_reproposable() -> None:
     """A DISCARDED death-cross EXIT must be re-proposed while the cross holds.
 
     ``evaluate_signal_bar`` advances ``_prev_short_above_long`` to describe
-    the bar it just read. Before ``discard_signal_decision`` restored it, that
-    advance consumed the death cross even when the EXIT was never acted on:
+    the bar it just read, consuming the death cross whether or not the EXIT
+    was acted on. While the exit was edge-triggered that advance was fatal:
     the next clock computed ``fresh_death_cross = False`` and the strategy
     kept its position -- real broker exposure -- until an entire
     golden-cross/death-cross cycle completed. Pausing a bot across a death
     cross therefore silently turned a decided exit into a held position.
 
+    Two compensating restores held this up until issue #1736 stated the exit
+    as the level it always closed (``not current_above``), which makes the
+    re-proposal structural: the advance still happens and no longer matters.
+    Both restores are gone; this test is unchanged, which is the point.
+
     This asserts the behaviour, not the attribute: the attribute is *supposed*
-    to move on every ordinary bar, so only its value across a discarded EXIT
-    is invariant.
+    to move on every ordinary bar, so only the re-proposal is invariant.
     """
     program, params, _executor, _context = build_program("sma_crossover")
     strategy = program.strategy

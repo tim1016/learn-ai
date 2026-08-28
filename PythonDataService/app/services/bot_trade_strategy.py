@@ -82,6 +82,18 @@ class StrategyEvaluation:
     # Never optional: an evaluation exists only because a bucket closed and
     # staged one, so there is always exactly one transaction to settle.
     settle_stage: Callable[[Settlement], None]
+    # The full canonical trace this evaluation staged. Never optional, for
+    # the same reason `settle_stage` is not: an evaluation exists only
+    # because a SignalSession bucket closed and staged one, and
+    # `_build_signal_strategy` refuses a program-less strategy outright
+    # rather than letting it reach this dataclass traceless. Both were
+    # optional until issue #1736 removed the state; the guard that made it
+    # unreachable already existed. Lets a caller that needs the complete
+    # decision-meaning payload -- not just the identity/intents subset above
+    # -- read it without re-deriving strategy state. Shadow-mode
+    # trace-parity comparison (issue #1729 AC #2) is the first such caller;
+    # see `app/broker/alpaca/clerk/sqlite/qualification_shadow_trace.py`.
+    trace: EvaluationTrace
     # This mode was captured with the source bar before a consolidator could
     # turn it into a semantic decision. It must never be sampled later.
     evaluation_mode: EvaluationMode = EvaluationMode.DECIDE
@@ -91,19 +103,6 @@ class StrategyEvaluation:
     # record `CANDIDATE_UNCAPTURED_AT_CRASH` and discard; it must never be
     # routed through the ordinary no-action/blocked/effect branches.
     crash_recovered: bool = False
-    # The full canonical trace this evaluation staged, when the strategy is
-    # a registered Signal Program (`registration.signal_program_factory` is
-    # not `None`). `None` for a compatibility-mode strategy with no
-    # SignalSession. Every key `supported_alpaca_paper_strategy_keys()`
-    # admits is a
-    # registered Signal Program (issue #1730 Slice 5), so this is `None`
-    # only for a compatibility-mode strategy reaching this dataclass by
-    # another route. Lets a caller that needs
-    # the complete decision-meaning payload -- not just the identity/intents
-    # subset above -- read it without re-deriving strategy state. Shadow-mode
-    # trace-parity comparison (issue #1729 AC #2) is the first such caller;
-    # see `app/broker/alpaca/clerk/sqlite/qualification_shadow_trace.py`.
-    trace: EvaluationTrace | None = None
 
 
 class _EffectReceipt(Protocol):
@@ -658,7 +657,7 @@ def supported_alpaca_paper_strategy_keys() -> frozenset[str]:
 def alpaca_paper_strategy_default_symbol(strategy_key: str) -> str:
     """Return the registered parameter schema's default symbol for one strategy."""
     registration = _STRATEGY_REGISTRY[strategy_key]
-    return registration.param_schema().symbol  # type: ignore[attr-defined]
+    return registration.param_schema().symbol
 
 
 async def run_trade_bot(
@@ -848,15 +847,15 @@ _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
 }
 
 
-def _evaluation_trace_digest(evaluation: StrategyEvaluation) -> str | None:
-    """The canonical per-bucket trace digest, or None for a traceless evaluation.
+def _evaluation_trace_digest(evaluation: StrategyEvaluation) -> str:
+    """The canonical per-bucket trace digest.
 
     Direction 2 (run-scoped replay proof): captured on every decision receipt at
     live time so a replay can compare decision CONTENT, not just intent
-    direction. ``None`` for a compatibility-mode strategy with no SignalSession.
+    direction. Total since issue #1736 narrowed ``StrategyEvaluation.trace``;
+    the durable ``trace_digest`` column stays nullable for rows written before
+    every live strategy was a Signal Program.
     """
-    if evaluation.trace is None:
-        return None
     return trace_root([evaluation.trace])
 
 
@@ -880,9 +879,12 @@ def _append_decision_receipt(
         "retention_class": _PROTECTED_RETENTION_CLASS_BY_OUTCOME.get(outcome, "tail"),
     }
     facts["decision_bar_close_ms"] = evaluation.decision_bar_close_ms
-    trace_digest = _evaluation_trace_digest(evaluation)
-    if trace_digest is not None:
-        facts["trace_digest"] = trace_digest
+    # Unconditional since issue #1736: every live evaluation carries a trace,
+    # so a receipt written now is always content-verifiable. Rows written
+    # before that hold no `trace_digest` key at all, which is what
+    # `run_replay_proof` still reads for when it may fall back to
+    # intent-kind comparison.
+    facts["trace_digest"] = _evaluation_trace_digest(evaluation)
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
     receipts.append(

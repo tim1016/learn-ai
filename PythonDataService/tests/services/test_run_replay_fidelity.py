@@ -34,7 +34,7 @@ async def _record_live_pass(bars: Sequence[MarketDataBar], *, block_first_enter:
     async for evaluation in strategy_evaluations(binding, _PhaseFeed(live_bars=list(bars))):
         staged = evaluation.intents[0].kind.value if evaluation.intents else None
         seq = len(records) + 1
-        digest = trace_root([evaluation.trace]) if evaluation.trace is not None else ""
+        digest = trace_root([evaluation.trace])
         close_ms = evaluation.decision_bar_close_ms
         if staged is None:
             records.append(LiveDecisionRecord(seq=seq, evaluation_id=evaluation.evaluation_id,

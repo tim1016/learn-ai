@@ -36,6 +36,41 @@ not as "this program matches an independent implementation". Only
 receipt, at
 [`reconciliations/ema-crossover-signal-lean-2026-07-18.md`](reconciliations/ema-crossover-signal-lean-2026-07-18.md).
 
+## Exit reformulation (issue #1736)
+
+The exit was edge-triggered (`fresh_death_cross`) while the position it
+closes is a level, and while this program's own contract already sealed
+`exit_eligibility.rule = "level_true"`. Because `evaluate_signal_bar`
+advances `_prev_short_above_long` while merely *describing* a bar, the
+death cross was consumed whether or not the EXIT was acted on — so a
+discarded or Clerk-refused EXIT could not re-propose until a whole
+golden-cross/death-cross cycle completed, leaving real broker exposure the
+strategy had already decided to close. Two compensating restores
+(`discard_signal_decision`, `rollback_blocked_exit`) existed solely to
+paper over that.
+
+The condition is now the level it always closed:
+
+```python
+if self._in_position:
+    if not current_above:   # was: if fresh_death_cross
+```
+
+Both restores are deleted; `discard_signal_decision` is gone entirely and
+the strategy uses `base.py`'s "nothing to unwind" default, which is the
+documented correct behaviour for a program that mutates custody only in
+`commit_signal_decision`.
+
+**Trace-equivalent on the qualified corpus.** `golden_trace_root` is
+unchanged at `b0a136f7b485…` across the reformulation: a position can only
+have been opened on a golden cross, so the first in-position bar on which
+the level is false *is* the fresh death cross. The two formulations can only
+diverge on a bar the edge form could never reach — which is exactly the
+refused-exit retry this change exists to fix. The receipt's
+`artifact_digest` moved (the file changed) while its `golden_trace_root` did
+not, and that pair is the evidence that the code moved and the decisions did
+not.
+
 ## Validated settings
 
   - `short_window` = `10`

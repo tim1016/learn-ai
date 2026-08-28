@@ -451,7 +451,7 @@ async def run_fidelity_over_bars(
     digest_verified = 0
     unverified_crash = 0
 
-    def _digest_mismatch(record: LiveDecisionRecord, replay_digest: str | None, *, staged: str | None) -> None:
+    def _digest_mismatch(record: LiveDecisionRecord, replay_digest: str, *, staged: str | None) -> None:
         divergences.append(
             RunFidelityDivergence(
                 evaluation_id=record.evaluation_id,
@@ -471,7 +471,7 @@ async def run_fidelity_over_bars(
         binding, feed, captured_decisions=dict(captured_decisions)
     ):
         eval_id = evaluation.evaluation_id
-        replay_digest = None if evaluation.trace is None else trace_root([evaluation.trace])
+        replay_digest = trace_root([evaluation.trace])
         if evaluation.crash_recovered:
             # Crash-window candidate (FR-016). It carries the same live-time
             # trace digest as an ordinary decision, so verify it -- a tampered
@@ -493,7 +493,7 @@ async def run_fidelity_over_bars(
                 )
                 continue
             matched_crash.add(eval_id)
-            digest_checked = bool(crash_record.trace_digest) and replay_digest is not None
+            digest_checked = bool(crash_record.trace_digest)
             if digest_checked and crash_record.trace_digest != replay_digest:
                 _digest_mismatch(crash_record, replay_digest, staged=None)
                 continue
@@ -558,7 +558,9 @@ async def run_fidelity_over_bars(
         # hashes identity, not decision content -- only the digest proves the
         # replayed trace IS the live trace. Digest-less legacy rows fall back
         # to intent-kind comparison and are excluded from digest_verified.
-        digest_checked = bool(record.trace_digest) and replay_digest is not None
+        # The replay side always has a digest (issue #1736), so only the
+        # durable row's own nullability is still worth guarding.
+        digest_checked = bool(record.trace_digest)
         if digest_checked and record.trace_digest != replay_digest:
             _digest_mismatch(record, replay_digest, staged=staged)
             evaluation.settle_stage(settlement)

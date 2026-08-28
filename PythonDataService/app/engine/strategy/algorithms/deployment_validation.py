@@ -394,9 +394,18 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         this, a rejected EXIT leaves the strategy believing it is flat while
         the broker still holds the position. Restoring
         ``_bars_until_exit_signal`` to the pre-decrement value means the next
-        bar re-fires EXIT rather than silently dropping the retry."""
+        bar re-fires EXIT rather than silently dropping the retry.
+
+        The restore assigns rather than increments (issue #1736). An EXIT is
+        proposed only once ``prior_countdown - 1 <= 0``, so the value being
+        restored is always ``1``, and ``commit_signal_decision`` zeroed the
+        field immediately before. ``+= 1`` reached the same number by relying
+        on both of those facts at once; a second invocation for one refused
+        EXIT would have silently restored ``2`` and delayed the retry by a
+        bar. Assignment states the intended countdown directly and is
+        idempotent, which is the property a custody-restore path needs."""
         self._in_position = True
-        self._bars_until_exit_signal += 1
+        self._bars_until_exit_signal = 1
 
     def on_order_event(self, event: OrderEvent) -> None:
         if event.direction == Direction.LONG:

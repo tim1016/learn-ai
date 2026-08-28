@@ -15,11 +15,25 @@ from pydantic import BaseModel, Field
 class StrategyParamsBase(BaseModel):
     """Base for every strategy's parameter model.
 
-    Subclasses declare the strategy's own fields. A strategy with no
-    parameters can simply reuse this class directly.
+    Subclasses declare the strategy's own fields on top of ``symbol``.
+
+    ``symbol`` is declared here rather than restated by each subclass
+    (issue #1736) because every strategy names a signal stream and every
+    caller reads it -- ``bot_trade_strategy`` to resolve a binding's default
+    symbol, ``paper_deploy_service`` to exclude it from the deploy form's
+    defaults. Declared only on the subclasses, those reads were
+    ``# type: ignore[attr-defined]`` on an attribute that always existed,
+    applied inconsistently across otherwise identical accesses.
+
+    Deliberately required and un-defaulted: subclasses supply the default
+    that makes sense for their own qualified corpus, and a new parameter
+    model that forgets ``symbol`` should fail loudly at construction rather
+    than silently inherit some other strategy's ticker.
     """
 
     model_config = {"extra": "forbid"}
+
+    symbol: str
 
 
 _DECISION_CLOCK_FIELD = "resolution_minutes"

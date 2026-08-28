@@ -36,8 +36,7 @@ async def _run_and_receipt_live_pass(receipts: SqliteDecisionReceipts, *, block_
             "run_id": "run-1",
             "decision_bar_close_ms": evaluation.decision_bar_close_ms,
         }
-        if evaluation.trace is not None:
-            facts["trace_digest"] = trace_root([evaluation.trace])
+        facts["trace_digest"] = trace_root([evaluation.trace])
         if staged is None:
             receipts.append(outcome="no_action", symbol="SPY", observed_at_ms=evaluation.decision_bar_close_ms,
                             facts={**facts, "reason_code": "NO_ACTION"}, intent_id=evaluation.evaluation_id)
