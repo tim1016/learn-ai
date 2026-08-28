@@ -248,6 +248,25 @@ code {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   Shell menubar active state
+
+   PrimeNG renders the menubar with ViewEncapsulation.None and
+   attaches a MenuItem's styleClass to its <li>, so the classes
+   menuItemsFor() emits (see app/shell/app-menu.ts) are styled
+   here rather than from a scoped component stylesheet. Every
+   other menubar affordance is a design token in app.config.ts.
+   ═══════════════════════════════════════════════════════════ */
+
+.app-menubar-group--active > .p-menubar-item-content {
+  color: var(--accent-text);
+}
+
+.app-menubar-item--active > .p-menubar-item-content {
+  background: var(--accent-faint);
+  color: var(--accent-text);
+}
+
+/* ═══════════════════════════════════════════════════════════
    IDE layout primitives
 
    Sticky-main + two-rail layout, driven by container queries

@@ -139,13 +139,6 @@ export const routes: Routes = [
       ).then((m) => m.DataLabDocsComponent),
   },
   {
-    path: "indicator-report",
-    loadComponent: () =>
-      import(
-        "./components/indicator-report/indicator-report.component"
-      ).then((m) => m.IndicatorReportComponent),
-  },
-  {
     path: "data-quality",
     redirectTo: "data-lab",
     pathMatch: "full",
@@ -306,20 +299,6 @@ export const routes: Routes = [
       ).then((m) => m.BrokerOptionsSurfaceComponent),
   },
   ...RETIRED_IBKR_NAVIGATION_ROUTES,
-  {
-    path: "broker/desert-oasis",
-    loadComponent: () =>
-      import(
-        "./components/broker/desert-oasis-showcase/desert-oasis-showcase.component"
-      ).then((m) => m.DesertOasisShowcaseComponent),
-  },
-  {
-    path: "broker/bot-sprites",
-    loadComponent: () =>
-      import(
-        "./components/broker/bot-sprite-gallery/bot-sprite-gallery.component"
-      ).then((m) => m.BotSpriteGalleryComponent),
-  },
   {
     path: "edge",
     loadComponent: () =>

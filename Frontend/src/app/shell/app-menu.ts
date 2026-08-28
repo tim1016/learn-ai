@@ -1,3 +1,5 @@
+import type { MenuItem } from 'primeng/api';
+
 export interface AppMenuItem {
   /** The single display name for every navigation projection. */
   readonly title: string;
@@ -14,22 +16,22 @@ export interface AppMenuGroup {
   readonly title: string;
   /** PrimeIcons class, e.g. `pi pi-chart-line`. */
   readonly icon: string;
-  /** The first item is the group default and is guaranteed to exist. */
+  /** Non-empty: every group trigger opens onto at least one destination. */
   readonly items: readonly [AppMenuItem, ...AppMenuItem[]];
 }
 
 export interface ActiveMenuNode {
   readonly group: AppMenuGroup;
   readonly item: AppMenuItem;
-  /** The route key the rail uses for its active highlight. */
+  /** The route key the menubar uses for its active highlight. */
   readonly activePath: string;
 }
 
-export interface Crumb {
-  readonly title: string;
-  readonly route: string;
-  readonly queryParams?: Readonly<Record<string, string>>;
-}
+/** Applied to the menubar trigger whose group owns the current route. */
+export const ACTIVE_GROUP_CLASS = 'app-menubar-group--active';
+
+/** Applied to the menu entry that is the current route. */
+export const ACTIVE_ITEM_CLASS = 'app-menubar-item--active';
 
 /**
  * Canonical application information architecture.
@@ -45,7 +47,6 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     icon: 'pi pi-database',
     items: [
       { title: 'Data Lab', route: '/data-lab' },
-      { title: 'Indicator Report', route: '/indicator-report' },
     ],
   },
   {
@@ -96,15 +97,6 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     ],
   },
   {
-    id: 'design-lab',
-    title: 'Design Lab',
-    icon: 'pi pi-palette',
-    items: [
-      { title: 'Desert Oasis', route: '/broker/desert-oasis' },
-      { title: 'Bot Sprites', route: '/broker/bot-sprites' },
-    ],
-  },
-  {
     id: 'strategy-tools',
     title: 'Strategy Tools',
     icon: 'pi pi-briefcase',
@@ -137,15 +129,10 @@ const ACTIVE_MENU_ITEMS = APP_MENU.flatMap((group) =>
   })),
 ).sort((left, right) => right.activePath.length - left.activePath.length);
 
-/** Resolves the group default from its ordered, non-empty item list. */
-export function defaultMenuItemFor(group: AppMenuGroup): AppMenuItem {
-  return group.items[0];
-}
-
 /**
  * Resolves the single active menu node for a URL.
  *
- * It deliberately owns the rail's original longest-match behavior and the
+ * It deliberately owns the menubar's longest-match behavior and the
  * account/deploy aliases, so every navigation projection agrees with it.
  */
 export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
@@ -166,28 +153,35 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
   return ACTIVE_MENU_ITEMS.find(({ activePath }) => path === activePath || path.startsWith(`${activePath}/`)) ?? null;
 }
 
-/** Resolves the page title from the same active node used by the navigation rail. */
+/** Resolves the document title from the same active node the menubar highlights. */
 export function pageTitleFor(url: string): string | null {
   return activeMenuNodeFor(url)?.item.title ?? null;
 }
 
-/** Pure breadcrumb projection of the active menu node. */
-export function breadcrumbTrailFor(url: string): readonly Crumb[] {
-  const node = activeMenuNodeFor(url);
-  if (node === null) return [];
-
-  const groupDefault = defaultMenuItemFor(node.group);
-  return [crumbFor(node.group.title, groupDefault)];
+/**
+ * PrimeNG projection of the canonical menu, rebuilt per URL.
+ *
+ * ``MenuItem`` carries no URL-driven active concept, so the active group and
+ * entry are marked here with the classes the shell stylesheet targets. Every
+ * group is a trigger — no group label navigates.
+ */
+export function menuItemsFor(url: string): MenuItem[] {
+  const active = activeMenuNodeFor(url);
+  return APP_MENU.map((group) => ({
+    label: group.title,
+    icon: group.icon,
+    styleClass: group === active?.group ? ACTIVE_GROUP_CLASS : undefined,
+    items: group.items.map((item) => ({
+      label: item.title,
+      routerLink: item.route,
+      queryParams: item.queryParams,
+      styleClass: item === active?.item ? ACTIVE_ITEM_CLASS : undefined,
+    })),
+  }));
 }
 
 function nodeForActivePath(activePath: string): ActiveMenuNode | null {
   return ACTIVE_MENU_ITEMS.find((node) => node.activePath === activePath) ?? null;
-}
-
-function crumbFor(title: string, item: AppMenuItem): Crumb {
-  return item.queryParams === undefined
-    ? { title, route: item.route }
-    : { title, route: item.route, queryParams: item.queryParams };
 }
 
 function splitUrl(url: string): { path: string; query: string } {

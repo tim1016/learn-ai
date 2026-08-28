@@ -51,8 +51,9 @@ describe('AppComponent', () => {
     expect(fixture.componentInstance).toBeTruthy();
   });
 
-  it('should render the app sidebar', () => {
-    expect(fixture.nativeElement.querySelector('app-sidebar')).toBeTruthy();
+  it('should render the app menubar inside the top bar', () => {
+    const nav = fixture.nativeElement.querySelector('[data-shell-slot="nav"]');
+    expect(nav?.querySelector('app-menubar')).toBeTruthy();
   });
 
   it('renders the universal top bar and applies the fallback browser title', () => {
@@ -111,9 +112,9 @@ describe('AppComponent', () => {
   });
 
   it('renders the global broker banner in the top-bar connection region', () => {
-    const sidebar = fixture.nativeElement.querySelector('app-sidebar');
+    const nav = fixture.nativeElement.querySelector('[data-shell-slot="nav"]');
     const connection = fixture.nativeElement.querySelector('[data-shell-slot="connection"]');
-    expect(sidebar?.querySelector('app-broker-banner')).toBeNull();
+    expect(nav?.querySelector('app-broker-banner')).toBeNull();
     expect(connection?.querySelector('app-broker-banner')).toBeTruthy();
   });
 

@@ -4,11 +4,10 @@ import { Title } from '@angular/platform-browser';
 import { ActivatedRouteSnapshot, NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { filter, map, startWith } from 'rxjs';
-import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { BrokerBannerComponent } from './shell/broker-banner.component';
-import { BreadcrumbComponent } from './shell/breadcrumb.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
 import { pageTitleFor } from './shell/app-menu';
@@ -22,9 +21,8 @@ import { pageTitleFor } from './shell/app-menu';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterOutlet,
-    AppSidebarComponent,
+    AppMenubarComponent,
     BrokerBannerComponent,
-    BreadcrumbComponent,
     TopBarComponent,
     PageBodyComponent,
     MarkdownDrawerHostComponent,
@@ -69,10 +67,9 @@ import { pageTitleFor } from './shell/app-menu';
     }
   `],
   template: `
-    <app-sidebar />
     <div class="shell">
-      <app-top-bar [pageTitle]="pageTitle()">
-        <app-breadcrumb shell-breadcrumbs />
+      <app-top-bar>
+        <app-menubar shell-nav />
         <app-broker-banner shell-connection />
       </app-top-bar>
       <main class="main">

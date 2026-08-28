@@ -9,7 +9,7 @@
 
 .top-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   min-height: 48px;
   box-sizing: border-box;
   align-items: center;
@@ -33,24 +33,8 @@
 }
 
 .top-bar__right {
-  grid-column: 3;
-  justify-self: end;
-}
-
-.top-bar__page-title {
   grid-column: 2;
-  max-inline-size: 40vw;
-  overflow: hidden;
-  color: $text-subtle;
-  font-family: $font-mono;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semi);
-  letter-spacing: 0.12em;
-  line-height: 1;
-  text-align: center;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
+  justify-self: end;
 }
 
 .top-bar__wordmark {
@@ -72,8 +56,7 @@
   }
 }
 
-.top-bar__breadcrumbs,
-.top-bar__account-cluster,
+.top-bar__nav,
 .top-bar__connection {
   min-width: 0;
 }
