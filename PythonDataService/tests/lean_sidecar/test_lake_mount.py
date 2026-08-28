@@ -121,11 +121,12 @@ class TestReadOnlyMountIsRendered:
         assert not lake_volume.endswith(":rw")
 
     def test_lake_mount_has_no_writable_form(self, fixture_lake: Path) -> None:
-        """A caller cannot ask for a writable lake: mode is not an input."""
-        mount = LakeMount(host_lake_root=fixture_lake)
+        """A caller cannot ask for a writable lake: mode is not an input.
 
-        assert mount.mode == "ro"
-        assert mount.container_target == CONTAINER_LAKE_DATA_MOUNT
+        The target and mode it *does* render are asserted by
+        ``test_rendered_lake_volume_is_read_only`` above, on the argv
+        podman actually receives.
+        """
         with pytest.raises(TypeError):
             LakeMount(host_lake_root=fixture_lake, mode="rw")  # type: ignore[call-arg]
 
@@ -380,18 +381,18 @@ class TestSameBytesAsThePythonReaders:
 
     def test_exposed_files_are_the_lake_files_themselves(self, fixture_lake: Path) -> None:
         """No copy, no re-encode: the sidecar exposes the lake's inodes."""
-        stream = resolve_lake_artifacts(
+        artifacts = resolve_lake_artifacts(
             lake_root=fixture_lake,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
         )
 
-        assert [p.name for p in stream.trade_zip_paths] == [
+        assert [p.name for p in artifacts.trade_zip_paths] == [
             "20260105_trade.zip",
             "20260106_trade.zip",
         ]
-        for path in stream.trade_zip_paths:
+        for path in artifacts.trade_zip_paths:
             assert path.is_relative_to(fixture_lake)
             # The bytes on disk are exactly what the lake writer produced.
             trading_date = date(int(path.name[:4]), int(path.name[4:6]), int(path.name[6:8]))
@@ -403,14 +404,14 @@ class TestSameBytesAsThePythonReaders:
             assert path.read_bytes() == expected
 
     def test_quote_artifacts_are_reported_when_the_lake_has_them(self, fixture_lake: Path) -> None:
-        stream = resolve_lake_artifacts(
+        artifacts = resolve_lake_artifacts(
             lake_root=fixture_lake,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
         )
 
-        assert [p.name for p in stream.quote_zip_paths] == [
+        assert [p.name for p in artifacts.quote_zip_paths] == [
             "20260105_quote.zip",
             "20260106_quote.zip",
         ]
@@ -419,22 +420,22 @@ class TestSameBytesAsThePythonReaders:
             DAY_ONE.strftime("%Y%m%d"),
             to_lake_bars(make_minute_bars("SPY", DAY_ONE)),
         )
-        assert _sha256(stream.quote_zip_paths[0]) == hashlib.sha256(expected).hexdigest()
+        assert _sha256(artifacts.quote_zip_paths[0]) == hashlib.sha256(expected).hexdigest()
 
     def test_trade_only_lake_reports_no_quote_artifacts(self, tmp_path: Path) -> None:
         """``data_types=['trade']`` is a valid lake spec; absence is honest."""
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", WINDOW, with_quote=False)
 
-        stream = resolve_lake_artifacts(
+        artifacts = resolve_lake_artifacts(
             lake_root=lake_root,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
         )
 
-        assert stream.quote_zip_paths == ()
-        assert len(stream.trade_zip_paths) == 2
+        assert artifacts.quote_zip_paths == ()
+        assert len(artifacts.trade_zip_paths) == 2
 
 
 class TestLakeCoverageFailsLoudly:
@@ -469,14 +470,14 @@ class TestLakeCoverageFailsLoudly:
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", [DAY_ONE])
 
-        stream = resolve_lake_artifacts(
+        artifacts = resolve_lake_artifacts(
             lake_root=lake_root,
             symbol="SPY",
             start=DAY_ONE,
             end=DAY_TWO,
         )
 
-        assert stream.trading_dates == (DAY_ONE,)
+        assert artifacts.trading_dates == (DAY_ONE,)
 
     def test_path_unsafe_symbol_is_rejected_before_any_path_join(self, fixture_lake: Path) -> None:
         with pytest.raises(SymbolValidationError):
@@ -514,7 +515,6 @@ class TestRequiredLakeMetadata:
     def test_partially_absent_metadata_names_only_the_missing_kind(self, tmp_path: Path) -> None:
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", WINDOW)
-        require_lake_metadata(lake_root)  # both present to start with
         market_hours, _symbol_properties = require_lake_metadata(lake_root)
         market_hours.unlink()
 
@@ -537,13 +537,13 @@ class TestRequiredLakeMetadata:
 
 def test_lake_artifacts_are_immutable(fixture_lake: Path) -> None:
     """A frozen record of what LEAN was given, not a working buffer."""
-    stream = resolve_lake_artifacts(
+    artifacts = resolve_lake_artifacts(
         lake_root=fixture_lake,
         symbol="SPY",
         start=DAY_ONE,
         end=DAY_TWO,
     )
 
-    assert isinstance(stream, LakeArtifacts)
+    assert isinstance(artifacts, LakeArtifacts)
     with pytest.raises(AttributeError):
-        stream.lake_root = fixture_lake  # type: ignore[misc]
+        artifacts.lake_root = fixture_lake  # type: ignore[misc]

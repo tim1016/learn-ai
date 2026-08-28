@@ -105,17 +105,9 @@ class LakeMount:
 
     host_lake_root: Path
 
-    @property
-    def container_target(self) -> str:
-        return CONTAINER_LAKE_DATA_MOUNT
-
-    @property
-    def mode(self) -> Literal["ro"]:
-        return "ro"
-
     def volume_argument(self) -> str:
         """Render the ``-v`` value podman receives."""
-        return f"{self.host_lake_root}:{self.container_target}:{self.mode}"
+        return f"{self.host_lake_root}:{CONTAINER_LAKE_DATA_MOUNT}:ro"
 
 
 def lake_mount_enabled() -> bool:
