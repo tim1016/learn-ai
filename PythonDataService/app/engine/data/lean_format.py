@@ -19,6 +19,12 @@ entire history:
 
 See Lean/Common/Data/Market/TradeBar.cs (_scaleFactor = 1/10000m) and
 Lean/Common/Util/LeanData.cs (GenerateZipFilePath / GenerateZipEntryName).
+
+This module imports the canonical price encoder from ``app.data_lake`` (#1839),
+which points the engine layer at the lake rather than the other way round —
+accepted rather than inverted, because the alternative is a second copy of the
+rounding rule, and the dependency self-liquidates when #1840 retires the
+policy-store writers this module exists for.
 """
 
 from __future__ import annotations

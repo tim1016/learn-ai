@@ -1096,8 +1096,9 @@ def _materialize_missing_bars(
     seam.
     """
     if lake_serves(adjusted=_policy_adjusted(request.data_policy)):
-        # Lazy for the same reason as the Polygon client below: the flag is
-        # off by default and the lake pulls in the catalog + provider stack.
+        # Lazy for the same reason as the Polygon client below: the lake
+        # pulls in the catalog + provider stack, and this module is imported
+        # by surfaces that never materialize anything.
         from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
 
         try:

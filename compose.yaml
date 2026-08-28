@@ -164,17 +164,24 @@ services:
       # see it, and can turn it off in one place. Off falls every seam back to
       # the pre-lake policy store.
       - DATA_LAKE_ENABLED=${DATA_LAKE_ENABLED:-true}
-      # DEPLOY PREREQUISITE for flag-on LEAN sidecar runs. The launcher is a
-      # HOST process, not a compose service, so it does not inherit this
-      # block: it must have LEAN_DATA_VOLUME_HOST_PATH exported in its own
-      # environment, pointing at the same host directory the mount above
-      # uses, or every lake-mode sidecar run rejects with
-      # ``lake_mount_not_configured``. The value must be an absolute path --
-      # podman resolves a relative one against the launcher's cwd and compose
-      # against this file's directory, and they disagree exactly where it
-      # matters (``lake_mount.launcher_host_lake_root`` refuses rather than
-      # picking one).
-      - LEAN_DATA_VOLUME_HOST_PATH=${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}
+      # DEPLOY PREREQUISITE for flag-on LEAN sidecar runs, and deliberately
+      # NOT an entry in this block. The launcher is a HOST process, not a
+      # compose service; only it reads LEAN_DATA_VOLUME_HOST_PATH
+      # (app/lean_sidecar/launcher/), so setting the variable here would be
+      # inert while implying compose configures the launcher -- the exact
+      # misconception this note exists to prevent. Export it in the shell
+      # that starts the launcher, as an ABSOLUTE path to the same host
+      # directory the /lean-data-writer mount above uses:
+      #
+      #     export LEAN_DATA_VOLUME_HOST_PATH=/absolute/path/to/data-lake-volume
+      #
+      # Without it every lake-mode sidecar run rejects with
+      # ``lake_mount_not_configured``. Absolute because podman resolves a
+      # relative value against the launcher's cwd and compose against this
+      # file's directory, and they disagree exactly where it matters
+      # (``lake_mount.launcher_host_lake_root`` refuses rather than picking
+      # one). The mount above may keep its repo-relative default; it is the
+      # launcher-side value that must be absolute.
       # Polygon paid plans (Starter / Developer / Advanced) all have no
       # per-minute cap; only the free Basic tier is 5/min. Set to a
       # positive integer here only if you're on the free tier.
