@@ -227,7 +227,6 @@ def minute_bar_identity(
 
 def expand_required_artifacts(
     spec: DataRunSpec,
-    market_hours_db_path: Path | None = None,
 ) -> tuple[list[ArtifactIdentity], list[NonSessionRecord]]:
     """Compute the list of artifacts the spec requires and the calendar gaps it skips.
 
@@ -242,7 +241,6 @@ def expand_required_artifacts(
         spec.market,
         spec.start_trading_date,
         spec.end_trading_date,
-        market_hours_db_path=market_hours_db_path,
     )
     required: list[ArtifactIdentity] = []
 
@@ -1330,9 +1328,10 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     """Full Slice 1c pipeline: Phase 0 metadata bootstrap + Pass 1 + Pass 2.
 
     Phase 0: Extract LEAN metadata (market-hours + symbol-properties) from the
-    launcher. The market-hours path is passed into expand_required_artifacts so
-    trading_sessions_for can use the real calendar instead of the hardcoded
-    holiday list.
+    launcher and publish both as lake artifacts. LEAN reads them off the mount
+    and refuses to initialize without them. They are not this pipeline's
+    calendar -- session enumeration goes through the canonical NYSE calendar
+    (``app.lean_sidecar.trading_calendar``, via ``app.data_lake.sessions``).
 
     Pass 1: Polygon-sourced artifacts — minute-trade, factor_file, map_file.
 
@@ -1375,20 +1374,22 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
         staging_root=staging_root,
     )
 
-    # If market-hours was successfully written (or already existed), pass the
-    # on-disk path to expand_required_artifacts so sessions use the real calendar.
-    mh_db_path: Path | None = None
+    # The market-hours database is bootstrapped for LEAN, which reads it off
+    # the mount and refuses to initialize without it. It is deliberately NOT
+    # this pipeline's calendar: which days are sessions comes from the
+    # canonical NYSE calendar via ``trading_sessions_for``, the same one the
+    # sidecar's coverage demand and the backfill job's iteration already use.
     if mh_record is not None:
         artifacts.append(mh_record)
         if mh_reused:
             reused_count += 1
         else:
             fetched_count += 1
-        mh_db_path = lake_root / Path(*mh_rel.parts)
     else:
-        # Bootstrap failure — surface as ArtifactFailure so Backend's
-        # partial-coverage policy can gate. Sessions will fall back to the
-        # hardcoded calendar; the caller can decide whether that is acceptable.
+        # Bootstrap failure — surface as ArtifactFailure so the run-
+        # materialization seam's partial-coverage policy can gate (ADR 0049
+        # §3a). Session enumeration is unaffected; what a run loses is the
+        # metadata artifact LEAN itself needs.
         failures.append(
             ArtifactFailure(
                 artifact_kind="metadata",
@@ -1423,7 +1424,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     # -----------------------------------------------------------------------
     # Expand required artifacts (now with real calendar if available)
     # -----------------------------------------------------------------------
-    required, non_sessions = expand_required_artifacts(spec, market_hours_db_path=mh_db_path)
+    required, non_sessions = expand_required_artifacts(spec)
 
     # -----------------------------------------------------------------------
     # Pass 1: Polygon-sourced artifacts (minute-trade + factor_file + map_file)
