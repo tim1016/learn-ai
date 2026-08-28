@@ -41,6 +41,14 @@ DecisionOutcome = Literal[
     # created; see `docs/prds/sealed-signal-program-to-governed-alpaca-bot.md`
     # section 13.4 and the `CANDIDATE_UNCAPTURED_AT_CRASH` reason code.
     "candidate_uncaptured_at_crash",
+    # Issue #1827: `SignalSession.advance` refused a decision bar outright
+    # (TIMEFRAME_MISMATCH / NON_MONOTONIC_DECISION_CLOCK / UNSETTLED_STAGE),
+    # so no decision cycle ran at all. Distinct from `no_action`, where a
+    # cycle ran and decided nothing: this row has no evaluation identity
+    # because no evaluation exists. Written once per reason per runtime and
+    # excluded from replay alignment -- see
+    # `app/services/bot_decision_quarantine.py`.
+    "decision_bar_quarantined",
 ]
 
 

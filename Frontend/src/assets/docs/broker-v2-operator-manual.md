@@ -358,8 +358,9 @@ and needs a reviewed rollover, never a silent deletion. Decision receipts
 keep the most recent 1,000 ordinary rows per strategy instance — every
 decision clock writes one, `no_action` included — while rows in a
 `protected_*` retention class (effects, refusals, crash evidence, competing
-exits) are exempt from pruning entirely. Crash replay reads that whole
-1,000-row window, not the 500-row cap that bounds the panel's receipt reads.
+exits, quarantined decision bars) are exempt from pruning entirely. Crash
+replay reads that whole 1,000-row window, not the 500-row cap that bounds
+the panel's receipt reads.
 A registry-parameterized test pins that both budgets exceed every sealed
 program's declared warmup plus one full open session at its qualified
 decision clock; the tightest margin today is Deployment

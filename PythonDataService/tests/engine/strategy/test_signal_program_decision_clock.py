@@ -30,11 +30,11 @@ from app.engine.strategy.signal_program import (
     StageStatus,
 )
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-from app.services.bot_trade_strategy import (
+from app.services.bot_decision_quarantine import (
     _QUARANTINE_LOG_EVERY,
-    _build_signal_strategy,
-    _LiveSignalRuntime,
+    QUARANTINE_OUTCOME,
 )
+from app.services.bot_trade_strategy import _build_signal_strategy, _LiveSignalRuntime
 from tests._helpers.signal_program import bind_strategy_context, bucket, sealed_programs
 
 _RESOLUTIONS_TO_PROVE = (1, 5, 15, 30)
@@ -131,7 +131,9 @@ def test_configurable_resolution_programs_track_the_resolved_decision_clock() ->
 _QUARANTINE_KEY = "sma_crossover"
 _QUARANTINE_SYMBOL = "SPY"
 _SEALED_LOGGER = "app.engine.strategy.signal_program"
-_RUNNER_LOGGER = "app.services.bot_trade_strategy"
+# Counting, logging, and receipting moved out of `bot_trade_strategy` into
+# their own module (issue #1827); the seam these tests exercise did not.
+_RUNNER_LOGGER = "app.services.bot_decision_quarantine"
 # Arbitrary well-formed epoch anchor; only the relative order matters here.
 _BASE_MS = 1_700_000_000_000
 
@@ -156,9 +158,14 @@ def _mis_shaped(width_ms: int, index: int = 0) -> TradeBar:
     return bucket(_QUARANTINE_SYMBOL, start, start + width_ms - 60_000, "100")
 
 
-def _runner_runtime() -> _LiveSignalRuntime:
+def _runner_runtime(quarantine_receipts: object | None = None) -> _LiveSignalRuntime:
     """The real live composition: ``_build_signal_strategy`` and nothing else."""
-    runtime = _build_signal_strategy(_QUARANTINE_KEY, _QUARANTINE_SYMBOL, None)
+    runtime = _build_signal_strategy(
+        _QUARANTINE_KEY,
+        _QUARANTINE_SYMBOL,
+        None,
+        quarantine_receipts,  # type: ignore[arg-type]  -- duck-typed capture double
+    )
     bind_strategy_context(runtime.strategy)
     return runtime
 
@@ -290,3 +297,80 @@ def test_a_refusal_that_is_not_a_clock_mismatch_omits_the_decision_clock_pair(
         "an UNSETTLED_STAGE refusal reported a decision-clock comparison that did not happen"
     )
     assert not hasattr(record, "observed_timeframe_ms")
+
+
+class _CapturingReceipts:
+    """The ``SqliteDecisionReceipts.append`` surface a custody runner passes in."""
+
+    def __init__(self) -> None:
+        self.appended: list[dict] = []
+
+    def append(self, **kwargs: object) -> object:
+        self.appended.append(dict(kwargs))
+        return object()
+
+
+def test_a_mis_shaped_feed_leaves_a_durable_receipt_not_only_a_warning() -> None:
+    """Issue #1827, end to end through the real live composition.
+
+    A bot fed the wrong bucket width decides nothing, forever. #1733 made
+    that visible as a throttled warning; a warning is not evidence an
+    operator can find after the fact. This drives the mismatch through
+    ``_build_signal_strategy`` -- the actual runner seam, not a stub -- and
+    asserts the receipt rather than the log line.
+    """
+    receipts = _CapturingReceipts()
+    runtime = _runner_runtime(receipts)
+    program = runtime.program
+    assert program is not None
+    width = program.session.timeframe_ms
+    mis_shaped = _mis_shaped(width)
+
+    _feed(program, mis_shaped)
+    runtime.surface_quarantines(_binding())
+
+    assert len(receipts.appended) == 1, "a refused decision bar left no durable evidence"
+    row = receipts.appended[0]
+    assert row["outcome"] == QUARANTINE_OUTCOME
+    facts = row["facts"]
+    assert facts["reason_code"] == "TIMEFRAME_MISMATCH"
+    assert facts["run_id"] == _binding().run_id
+    assert facts["expected_timeframe_ms"] == width
+    assert facts["observed_timeframe_ms"] == mis_shaped.end_ms - mis_shaped.start_ms
+
+
+def test_the_receipt_is_written_once_however_long_the_feed_stays_mis_shaped() -> None:
+    """The log throttles; the receipt does not repeat at all.
+
+    Decision receipts are pruned oldest-first against a per-instance cap, so
+    one row per refused bar would evict real decisions. The throttled log
+    already carries the running count.
+    """
+    receipts = _CapturingReceipts()
+    runtime = _runner_runtime(receipts)
+    program = runtime.program
+    assert program is not None
+    width = program.session.timeframe_ms
+
+    for index in range(3 * _QUARANTINE_LOG_EVERY):
+        _feed(program, _mis_shaped(width, index))
+        runtime.surface_quarantines(_binding())
+
+    assert len(receipts.appended) == 1
+
+
+def test_a_runtime_built_without_a_sink_still_drains_and_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The read-only replay and qualification callers build exactly this way."""
+    runtime = _runner_runtime()
+    program = runtime.program
+    assert program is not None
+    _feed(program, _mis_shaped(program.session.timeframe_ms))
+
+    with caplog.at_level(logging.WARNING, logger=_RUNNER_LOGGER):
+        runtime.surface_quarantines(_binding())
+
+    assert len(_quarantine_records(caplog)) == 1
+    assert program.take_quarantine() is None, "the runner left the refusal undrained"
+

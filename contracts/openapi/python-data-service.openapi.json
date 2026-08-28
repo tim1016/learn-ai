@@ -23442,7 +23442,8 @@
               "exited",
               "no_action",
               "blocked",
-              "candidate_uncaptured_at_crash"
+              "candidate_uncaptured_at_crash",
+              "decision_bar_quarantined"
             ],
             "title": "Outcome",
             "type": "string"

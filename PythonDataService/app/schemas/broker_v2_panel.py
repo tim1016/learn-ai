@@ -368,6 +368,10 @@ class RecentDecisionView(BaseModel):
         # intake); DISCARD applied, no effect created. Mirrors
         # `DecisionOutcome` in app/broker/alpaca/clerk/sqlite/decision_receipts.py.
         "candidate_uncaptured_at_crash",
+        # Issue #1827: the sealed session refused this decision bar, so no
+        # decision cycle ran. Carries no `decision_id` -- there is no
+        # evaluation to point at.
+        "decision_bar_quarantined",
     ]
     reason_code: str
     bar_ref: str
