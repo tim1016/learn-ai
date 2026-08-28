@@ -17,12 +17,16 @@ the composed stream goes through :func:`assert_canonical_bar_stream`, the same
 fail-fast ingestion gate the provider path uses, so any overlap surfaces as an
 error instead of being silently repaired.
 
-Two things fall back to the provider and say so in the response:
+Three things fall back to the provider and say so in the response:
 
 * a completed session the lake does not hold yet (``lake_gap``);
 * any split/dividend-adjusted request, because the lake stores raw
   (unadjusted) bytes only — serving those for an adjusted chart would be a
-  silent numerical error (``price_adjustment_unsupported``).
+  silent numerical error (``price_adjustment_unsupported``);
+* a ticker the lake cannot address — an index or option prefix such as
+  ``I:SPX``, or a path-unsafe string — which is rejected here, before any
+  filesystem path is built, and served by the identical provider call the
+  flag-off path makes (``symbol_not_lake_addressable``).
 
 Resampling and indicator math sit above this module and are untouched: what
 comes back is the same list-of-dicts a provider fetch returns.
@@ -40,7 +44,7 @@ from typing import Any, Literal
 from app.data_lake.path_policy import resolve_lake_root
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import SessionWindow, session_windows_ms_utc
-from app.lean_sidecar.workspace import validate_symbol
+from app.lean_sidecar.workspace import SymbolValidationError, validate_symbol
 from app.services.dataset_service import assert_canonical_bar_stream
 from app.utils.timestamps import now_ms_utc
 
@@ -55,12 +59,17 @@ SpanReason = Literal[
     "current_session",
     "lake_gap",
     "price_adjustment_unsupported",
+    "symbol_not_lake_addressable",
 ]
 
 #: Closed vocabulary the UI maps to a non-intrusive notice. ``None`` means the
 #: composed range needs no notice: history came from the lake and only the
 #: still-forming session came from the provider, which is the design, not a gap.
-NoticeCode = Literal["history_provider_fallback", "adjusted_prices_provider_only"]
+NoticeCode = Literal[
+    "history_provider_fallback",
+    "adjusted_prices_provider_only",
+    "symbol_provider_only",
+]
 
 #: ``(from_date, to_date)`` as ISO day strings -> canonical bar dicts. Bound by
 #: the caller to the very same provider fetch the flag-off path uses, so the
@@ -103,6 +112,8 @@ class ComposedBars:
     @property
     def notice_code(self) -> NoticeCode | None:
         reasons = {span.reason for span in self.spans}
+        if "symbol_not_lake_addressable" in reasons:
+            return "symbol_provider_only"
         if "price_adjustment_unsupported" in reasons:
             return "adjusted_prices_provider_only"
         if "lake_gap" in reasons:
@@ -167,6 +178,47 @@ def _plan_segments(
     return segments
 
 
+def _serve_unaddressable_symbol(
+    *,
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    fetch_provider: ProviderFetch,
+    now_ms: int,
+) -> ComposedBars:
+    """Serve the whole window from the provider, exactly as the flag-off path does.
+
+    A ticker the lake cannot address — an index or option prefix such as
+    ``I:SPX``, or a path-unsafe string — must never reach a filesystem join.
+    Rejecting it must not change the *answer* either: the single fetch below is
+    the identical call, over the identical range, that ``chart_service`` makes
+    with the flag off, so both modes yield the same bars for the same input —
+    including the typed ``NO_DATA`` the router maps to 404 when the provider has
+    nothing to give. The rejection is logged, never silent.
+    """
+    logger.warning(
+        "[CHART] %r is not addressable in the lake; serving the whole window from the provider",
+        ticker,
+        extra={"ticker": ticker, "from_date": from_date, "to_date": to_date},
+    )
+    completed, live, boundary_ms_utc = split_sessions_at_boundary(from_date, to_date, now_ms)
+    windows = [*completed, *live]
+    bars = fetch_provider(from_date, to_date)
+    if not windows:
+        # No scheduled session in the window: there is no session anchor to
+        # report a span against, and nothing to say about where bars came from.
+        return ComposedBars(bars=bars, spans=(), boundary_ms_utc=boundary_ms_utc)
+    span = BarSourceSpan(
+        source="provider",
+        reason="symbol_not_lake_addressable",
+        from_session_open_ms_utc=windows[0].open_ms_utc,
+        to_session_open_ms_utc=windows[-1].open_ms_utc,
+        session_count=len(windows),
+        bar_count=len(bars),
+    )
+    return ComposedBars(bars=bars, spans=(span,), boundary_ms_utc=boundary_ms_utc)
+
+
 def _read_lake_bars(
     reader: LeanMinuteDataReader,
     symbol: str,
@@ -212,9 +264,25 @@ def compose_chart_bars(
     vocabulary (``from_date`` is already warmup-adjusted by the caller).
     ``now_ms`` and ``lake_root`` exist so tests can pin the boundary and the
     fixture root; production leaves both at their defaults.
+
+    A ticker the lake cannot address never reaches the reader — see
+    :func:`_serve_unaddressable_symbol` — so this function raises nothing the
+    flag-off path would not also raise for the same input.
     """
-    symbol = validate_symbol(ticker)
     at_ms = now_ms_utc() if now_ms is None else now_ms
+    try:
+        # The boundary guard: the LEAN reader joins the symbol straight into a
+        # path, so anything that is not a lake-addressable ticker stops here.
+        symbol = validate_symbol(ticker)
+    except SymbolValidationError:
+        return _serve_unaddressable_symbol(
+            ticker=ticker,
+            from_date=from_date,
+            to_date=to_date,
+            fetch_provider=fetch_provider,
+            now_ms=at_ms,
+        )
+
     completed, live, boundary_ms_utc = split_sessions_at_boundary(from_date, to_date, at_ms)
 
     reader = LeanMinuteDataReader(

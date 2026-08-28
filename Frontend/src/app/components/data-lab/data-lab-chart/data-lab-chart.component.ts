@@ -102,6 +102,10 @@ const BAR_SOURCE_NOTICE_COPY = new Map<string, string>([
     'adjusted_prices_provider_only',
     'Split- and dividend-adjusted prices come straight from the market-data provider. The data lake holds unadjusted prices only.',
   ],
+  [
+    'symbol_provider_only',
+    'The data lake does not carry this symbol, so its bars came straight from the market-data provider.',
+  ],
 ]);
 
 interface SubPanel {

@@ -365,6 +365,41 @@ def test_compose_chart_bars_never_reads_the_raw_lake_for_an_adjusted_request(lak
     assert composed.notice_code == "adjusted_prices_provider_only"
 
 
+@pytest.mark.parametrize(
+    "unaddressable_ticker",
+    [
+        pytest.param("I:SPX", id="index_prefix"),
+        pytest.param("../../etc/passwd", id="path_traversal"),
+    ],
+)
+def test_compose_chart_bars_serves_a_lake_unaddressable_symbol_from_the_provider(
+    lake_root: Path, unaddressable_ticker: str
+) -> None:
+    """A ticker the lake cannot address never reaches a filesystem join, and
+    gets the identical single provider fetch the flag-off path would make."""
+    _write_lake_day(lake_root, REGULAR_BEFORE)
+    _write_lake_day(lake_root, HALF_DAY)
+    provider = _ProviderSpy()
+
+    composed = compose_chart_bars(
+        ticker=unaddressable_ticker,
+        from_date=REGULAR_BEFORE.isoformat(),
+        to_date=LIVE_SESSION.isoformat(),
+        adjusted=False,
+        fetch_provider=provider,
+        now_ms=_during(LIVE_SESSION),
+        lake_root=lake_root,
+    )
+
+    # One call over the whole requested range — not the composed split — so the
+    # flag-on answer is the flag-off answer for the same input.
+    assert provider.calls == [(REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat())]
+    assert [(span.source, span.reason) for span in composed.spans] == [
+        ("provider", "symbol_not_lake_addressable"),
+    ]
+    assert composed.notice_code == "symbol_provider_only"
+
+
 def test_compose_chart_bars_rejects_a_provider_range_that_overlaps_the_lake(lake_root: Path) -> None:
     """A stitch that would duplicate a bar must fail loudly, never repair itself."""
     _write_lake_day(lake_root, REGULAR_BEFORE)
