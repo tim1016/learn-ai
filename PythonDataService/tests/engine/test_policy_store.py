@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from app.config import settings
+from app.data_lake import path_policy
 from app.engine.data.availability import _missing_spans, ensure_range
 from app.engine.data.policy_store import (
     policy_key,
@@ -60,6 +62,49 @@ def test_resolve_data_roots_skips_missing_reference(monkeypatch, tmp_path: Path)
     roots = resolve_data_roots(source="polygon", adjusted=False)
 
     assert roots == [tmp_path / "store" / "polygon-raw"]
+
+
+def test_resolve_data_roots_ignores_the_lake_while_the_flag_is_off(monkeypatch, tmp_path: Path):
+    """Default posture: the lake may exist on disk, but nothing reads it."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
+
+    roots = resolve_data_roots(source="polygon", adjusted=False)
+
+    assert roots == [tmp_path / "store" / "polygon-raw"]
+
+
+def test_resolve_data_roots_returns_the_lake_alone_when_the_flag_is_on(monkeypatch, tmp_path: Path):
+    """Flag on: the lake is the authority, so it is the only root."""
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(reference))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
+
+    roots = resolve_data_roots(source="polygon", adjusted=True)
+
+    assert roots == [tmp_path / "writer" / "lake"]
+    assert roots[0].is_dir()
+
+
+def test_resolve_data_roots_lake_is_the_tree_ensure_data_writes(monkeypatch, tmp_path: Path):
+    """Reader and writer must not disagree about where the lake is."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+
+    assert resolve_data_roots(source="polygon", adjusted=True) == [path_policy.lake_root()]
+
+
+def test_resolve_data_roots_lake_does_not_split_by_adjustment(monkeypatch, tmp_path: Path):
+    """The lake keys bytes by data contract, not by a policy directory name."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+
+    assert resolve_data_roots(source="polygon", adjusted=True) == resolve_data_roots(source="polygon", adjusted=False)
 
 
 def test_snapshot_minute_trade_zips_is_path_independent_and_reference_first(tmp_path: Path):

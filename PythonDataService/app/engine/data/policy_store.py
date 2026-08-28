@@ -47,6 +47,9 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from app.config import settings
+from app.data_lake import path_policy
+
 logger = logging.getLogger(__name__)
 
 PROVENANCE_SCHEMA_VERSION = 1
@@ -107,7 +110,22 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     The policy cache root is created if missing. Both engines and the
     bars endpoint must resolve roots through this single function so
     they always observe the same bytes.
+
+    With ``DATA_LAKE_ENABLED`` the lake is the market-data authority and
+    the sole root: its tree is already LEAN-format, so the readers are
+    unchanged. The reference mount is deliberately dropped rather than
+    stacked in front — a run must be able to say which bytes it consumed,
+    and a fixture silently outranking the lake would make the manifest
+    fingerprint recorded on the run a lie. The policy key stops applying
+    too: the lake stores raw bars under one identity, and the adjustment
+    mode is carried by the catalog's data contract, not by the directory
+    name.
     """
+    if settings.DATA_LAKE_ENABLED:
+        root = path_policy.lake_root()
+        root.mkdir(parents=True, exist_ok=True)
+        return [root]
+
     roots: list[Path] = []
     ref = resolve_reference_root()
     if ref.exists():
