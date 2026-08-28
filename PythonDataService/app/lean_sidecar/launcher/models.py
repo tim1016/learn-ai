@@ -38,12 +38,35 @@ class LauncherImageReadiness(BaseModel):
     detail: str = Field(..., description="Operator-facing readiness detail.")
 
 
+# Capability tokens a launcher advertises on ``/healthz``. The data
+# plane and the launcher are deployed separately — the launcher is a
+# long-lived host process an operator restarts by hand — so the data
+# plane can be newer than the launcher it talks to. Pydantic ignores
+# unknown request fields by default, which means a stale launcher
+# accepts ``mount_lake_read_only=True`` and silently runs the container
+# with no lake volume: LEAN then reads an empty data folder and fails in
+# a way that points nowhere near the real cause. An explicit capability
+# list turns that into a refusal that names the fix.
+LAUNCHER_CAPABILITY_LAKE_MOUNT = "lake_read_only_mount"
+
+LAUNCHER_CAPABILITIES: tuple[str, ...] = (LAUNCHER_CAPABILITY_LAKE_MOUNT,)
+
+
 class LauncherHealthResponse(BaseModel):
     """Read-only launcher health and pinned-image readiness response."""
 
     status: Literal["ok", "degraded"]
     version: str
     image: LauncherImageReadiness
+    capabilities: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional behaviors this launcher build supports. Additive and "
+            "default-empty, so a launcher predating the field reads as "
+            "'supports nothing optional' rather than as an error — which is "
+            "exactly right, because it does."
+        ),
+    )
 
 
 class LaunchRequest(BaseModel):

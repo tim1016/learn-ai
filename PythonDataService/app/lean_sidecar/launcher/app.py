@@ -32,6 +32,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
 from app.lean_sidecar.lake_mount import launcher_host_lake_root
 from app.lean_sidecar.launcher.models import (
+    LAUNCHER_CAPABILITIES,
     ExtractMetadataRequest,
     ExtractMetadataResponse,
     LauncherHealthResponse,
@@ -148,6 +149,7 @@ async def healthz() -> LauncherHealthResponse:
         status="ok" if image.available else "degraded",
         version=LAUNCHER_VERSION,
         image=image,
+        capabilities=list(LAUNCHER_CAPABILITIES),
     )
 
 

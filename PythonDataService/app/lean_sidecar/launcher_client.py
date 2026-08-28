@@ -67,6 +67,16 @@ class LauncherProtocolError(LauncherClientError):
     """Launcher returned an unexpected status or body shape."""
 
 
+class LauncherCapabilityUnsupported(LauncherClientError):
+    """The launcher is running an older build than this data plane.
+
+    Distinct from :class:`LauncherRejected` because the launcher never
+    saw the request: the mismatch is detected from ``/healthz`` before
+    anything is submitted, and the remedy is an operator action
+    (restart the launcher), not a change to the run.
+    """
+
+
 def _launcher_url() -> str:
     """The launcher base URL the data plane uses, env-overridable."""
     return os.environ.get("LEAN_LAUNCHER_URL", DEFAULT_LAUNCHER_URL).rstrip("/")
@@ -202,9 +212,32 @@ def post_extract_metadata_sync(run_id: str, image_digest: str) -> dict[str, str]
     try:
         return response.json()
     except ValueError as e:
-        raise LauncherProtocolError(
-            f"launcher /extract-metadata returned a non-JSON body: {e}"
-        ) from e
+        raise LauncherProtocolError(f"launcher /extract-metadata returned a non-JSON body: {e}") from e
+
+
+async def assert_launcher_supports(capability: str) -> None:
+    """Raise unless the launcher advertises ``capability`` on ``/healthz``.
+
+    The launcher is a separately-deployed host process, so it can be
+    older than the data plane calling it. Pydantic drops unknown request
+    fields silently, which makes "this launcher does not understand the
+    field you just sent" indistinguishable from "it understood and
+    complied" — the failure then surfaces inside LEAN, far from the
+    cause. Checking the advertised capability up front turns that into
+    an operator-actionable refusal before a workspace is created.
+
+    A launcher predating the ``capabilities`` field returns no list at
+    all, which reads as "supports nothing optional" — correct, and it
+    lands in the same refusal.
+    """
+    health = await get_healthz()
+    advertised = health.get("capabilities") or []
+    if capability not in advertised:
+        raise LauncherCapabilityUnsupported(
+            f"launcher at {_launcher_url()} does not advertise {capability!r} "
+            f"(advertises {sorted(advertised)}); it is running an older build than this "
+            "data plane. Restart the launcher process to pick up the current code."
+        )
 
 
 async def get_healthz() -> dict[str, Any]:
