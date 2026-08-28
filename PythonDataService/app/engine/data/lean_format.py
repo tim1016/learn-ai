@@ -34,11 +34,17 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.data_lake.lean_writer import to_deci_cent
 from app.engine.data.path_safety import ensure_within_root
 from app.engine.data.trade_bar import TradeBar
 from app.utils.timestamps import datetime_at_ms, to_ms_utc
 
 # LEAN's price scale factor: prices on disk are multiplied by 10000.
+# Read path only: the writers below encode through the canonical
+# ``app.data_lake.lean_writer.to_deci_cent`` rather than scaling here, so
+# there is exactly one answer in this repo to "which integer represents
+# this price on disk". See that function's docstring for the rounding rule
+# and :mod:`app.data_lake.lean_writer` for why it is the canonical one.
 PRICE_SCALE = Decimal(10000)
 
 
@@ -509,10 +515,10 @@ def write_lean_daily_zip(
         ts = f"{bar_date.strftime('%Y%m%d')} 00:00"
         lines.append(
             f"{ts},"
-            f"{int(bar.open * PRICE_SCALE)},"
-            f"{int(bar.high * PRICE_SCALE)},"
-            f"{int(bar.low * PRICE_SCALE)},"
-            f"{int(bar.close * PRICE_SCALE)},"
+            f"{to_deci_cent(bar.open)},"
+            f"{to_deci_cent(bar.high)},"
+            f"{to_deci_cent(bar.low)},"
+            f"{to_deci_cent(bar.close)},"
             f"{bar.volume}"
         )
 
@@ -565,7 +571,7 @@ def write_lean_quote_day_zip(
         # Bid = ask = trade close. The zero-spread synthesis is the
         # smallest data shape that satisfies LEAN's quote subscription
         # without claiming bid/ask information we don't have.
-        close_scaled = int(bar.close * PRICE_SCALE)
+        close_scaled = to_deci_cent(bar.close)
         lines.append(
             f"{ms},"
             f"{close_scaled},{close_scaled},{close_scaled},{close_scaled},0,"
@@ -612,10 +618,10 @@ def write_lean_day_zip(
         ms = int((bar_time_et - midnight).total_seconds() * 1000)
         lines.append(
             f"{ms},"
-            f"{int(bar.open * PRICE_SCALE)},"
-            f"{int(bar.high * PRICE_SCALE)},"
-            f"{int(bar.low * PRICE_SCALE)},"
-            f"{int(bar.close * PRICE_SCALE)},"
+            f"{to_deci_cent(bar.open)},"
+            f"{to_deci_cent(bar.high)},"
+            f"{to_deci_cent(bar.low)},"
+            f"{to_deci_cent(bar.close)},"
             f"{bar.volume}"
         )
     buf = io.BytesIO()

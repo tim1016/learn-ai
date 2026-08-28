@@ -56,10 +56,37 @@ class MinuteTradeBar:
 
 
 def to_deci_cent(price: Decimal) -> int:
-    """Multiply by 10_000 and round half-up to integer.
+    """Encode a price as LEAN's on-disk integer. **Canonical for this repo.**
+
+    Formula: ``round_half_up(price * 10_000)``.
+    Reference: LEAN's on-disk equity format, where a bar's stored integer is
+    the price on a fixed 1/10,000 grid (``TradeBar._scaleFactor = 1/10000m``);
+    the decode is ``stored / 10_000``.
+    Canonical implementation: this function. Every writer in the tree encodes
+    through it — the lake's own zip builders (``build_minute_trade_zip_bytes``,
+    ``app.data_lake.derived_daily``, ``app.data_lake.derived_quote``) and the
+    pre-lake policy-store writers in ``app.engine.data.lean_format``.
+    Validated against: ``tests/unit/data_lake/test_deci_cent_canonical.py``,
+    which pins the rule and asserts both writers agree bar-for-bar on prices
+    finer than the deci-cent grid.
+
+    **Why half-up rather than truncation.** Encoding is a quantization onto
+    the deci-cent grid, so the only defensible target is the nearest
+    representable value. ``int(price * 10_000)`` truncates toward zero, which
+    is not a rounding rule but a systematic downward bias: its error is
+    uniform on ``[0, 1)`` deci-cents with expected value ``-0.5`` on every
+    OHLC field of every bar, where half-up's error is symmetric on
+    ``[-0.5, 0.5]`` with expected value ``0``. A bias that never changes sign
+    accumulates through the strategy; symmetric error does not. The magnitude
+    is one deci-cent ($0.0001) and it can only appear on a price finer than
+    the grid, which for US equities means a sub-$1.00 name (Reg NMS permits a
+    $0.0001 tick below $1.00) or a provider revision carrying more precision
+    than the tape — narrow, but real, and it is the difference between two
+    writers that agree by construction and two that agree by luck.
 
     Rejects negative prices (LEAN never serializes them; a negative would
-    indicate upstream data corruption).
+    indicate upstream data corruption). ``app.data_lake.cache_import`` mirrors
+    the refusal at its own decode boundary.
     """
     if price < 0:
         raise ValueError(f"deci-cent encoding refuses negative price: {price}")
