@@ -27,11 +27,12 @@ from app.config import settings
 from app.data_lake import catalog_client, run_materialization
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.run_materialization import (
+    EngineRunMaterialization,
     LakeMaterializationError,
-    build_engine_run_spec,
+    _build_engine_run_spec,
+    _materialize_run_data,
+    _materialize_run_data_sync,
     materialize_engine_run,
-    materialize_run_data,
-    materialize_run_data_sync,
 )
 from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
 
@@ -325,15 +326,15 @@ def _mock_polygon(ticker: str = "SPY", *, latency_s: float = 0.0):
 
 
 def _spec() -> DataRunSpec:
-    return build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="test")
+    return _build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="test")
 
 
 def _narrow_spec() -> DataRunSpec:
-    return build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY)
+    return _build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY)
 
 
 def _wide_spec() -> DataRunSpec:
-    return build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END)
+    return _build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END)
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +355,7 @@ def test_build_engine_run_spec_asks_only_for_trade_bars():
 
 
 def test_build_engine_run_spec_uppercases_the_symbol():
-    spec = build_engine_run_spec(symbol="spy", start=TRADING_DAY, end=TRADING_DAY)
+    spec = _build_engine_run_spec(symbol="spy", start=TRADING_DAY, end=TRADING_DAY)
 
     assert spec.symbols == ["SPY"]
 
@@ -388,7 +389,7 @@ async def test_materialize_run_data_fetches_the_missing_day(fake_catalog, tmp_la
     _mock_launcher()
     polygon = _mock_polygon()
 
-    result = await materialize_run_data(_spec())
+    result = await _materialize_run_data(_spec())
 
     assert result.overall_status == "complete", result.failures
     assert polygon.call_count == 1
@@ -401,7 +402,7 @@ async def test_materialize_run_data_writes_lean_bytes_into_the_lake(fake_catalog
     _mock_launcher()
     _mock_polygon()
 
-    result = await materialize_run_data(_spec())
+    result = await _materialize_run_data(_spec())
 
     minute = [a for a in result.artifacts if a.resolution == "minute"]
     assert len(minute) == 1
@@ -417,8 +418,8 @@ async def test_materialize_run_data_reuses_the_bytes_on_a_second_run(fake_catalo
     _mock_launcher()
     polygon = _mock_polygon()
 
-    first = await materialize_run_data(_spec())
-    second = await materialize_run_data(_spec())
+    first = await _materialize_run_data(_spec())
+    second = await _materialize_run_data(_spec())
 
     assert polygon.call_count == 1
     assert second.overall_status == "complete", second.failures
@@ -441,8 +442,8 @@ async def test_two_concurrent_runs_coalesce_onto_one_fetch(fake_catalog, tmp_lak
     polygon = _mock_polygon(latency_s=0.05)
 
     first, second = await asyncio.gather(
-        materialize_run_data(_spec(), poll_interval_s=0.01),
-        materialize_run_data(_spec(), poll_interval_s=0.01),
+        _materialize_run_data(_spec(), poll_interval_s=0.01),
+        _materialize_run_data(_spec(), poll_interval_s=0.01),
     )
 
     assert polygon.call_count == 1, "the same trading day was fetched twice"
@@ -465,8 +466,8 @@ async def test_concurrent_runs_record_one_artifact_per_identity(fake_catalog, tm
     _mock_polygon(latency_s=0.05)
 
     await asyncio.gather(
-        materialize_run_data(_spec(), poll_interval_s=0.01),
-        materialize_run_data(_spec(), poll_interval_s=0.01),
+        _materialize_run_data(_spec(), poll_interval_s=0.01),
+        _materialize_run_data(_spec(), poll_interval_s=0.01),
     )
 
     minute_rows = [
@@ -491,8 +492,8 @@ async def test_a_sequential_second_run_never_needs_a_retry(fake_catalog, tmp_lak
     _mock_launcher()
     polygon = _mock_polygon()
 
-    await materialize_run_data(_spec())
-    await materialize_run_data(_spec())
+    await _materialize_run_data(_spec())
+    await _materialize_run_data(_spec())
 
     assert polygon.call_count == 1
     assert len(ensure_attempts) == 2
@@ -507,9 +508,9 @@ async def test_materialize_run_data_returns_a_real_failure_without_waiting(fake_
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/NODATA/range/1/minute/.*").mock(
         return_value=httpx.Response(200, json={"ticker": "NODATA", "status": "OK", "results": []})
     )
-    spec = build_engine_run_spec(symbol="NODATA", start=TRADING_DAY, end=TRADING_DAY)
+    spec = _build_engine_run_spec(symbol="NODATA", start=TRADING_DAY, end=TRADING_DAY)
 
-    result = await asyncio.wait_for(materialize_run_data(spec, poll_interval_s=0.01), timeout=10)
+    result = await asyncio.wait_for(_materialize_run_data(spec, poll_interval_s=0.01), timeout=10)
 
     assert result.overall_status in {"partial", "failed"}
     assert any(f.reason == "provider_no_data" for f in result.failures)
@@ -537,7 +538,7 @@ async def test_materialize_run_data_stops_waiting_at_the_fetch_deadline(
     # then past it. Without the deadline this loop would never terminate.
     ticks = iter([0.0, 0.0, 11.0])
 
-    result = await materialize_run_data(spec, poll_interval_s=0.0, now=lambda: next(ticks))
+    result = await _materialize_run_data(spec, poll_interval_s=0.0, now=lambda: next(ticks))
 
     assert result.overall_status in {"partial", "failed"}
     assert any(f.reason == "lease_timeout" for f in result.failures)
@@ -604,8 +605,8 @@ async def test_a_second_window_leaves_the_daily_artifact_contract_mismatched(fak
     _mock_launcher()
     _mock_polygon()
 
-    await materialize_run_data(_narrow_spec())
-    wider = await materialize_run_data(_wide_spec())
+    await _materialize_run_data(_narrow_spec())
+    wider = await _materialize_run_data(_wide_spec())
 
     assert wider.overall_status == "partial"
     stale_daily = [
@@ -620,7 +621,7 @@ def test_materialize_engine_run_refuses_when_the_daily_bars_it_reads_are_stale(m
     """A daily-resolution run must not read the previous window's zip."""
     monkeypatch.setattr(
         run_materialization,
-        "materialize_run_data_sync",
+        "_materialize_run_data_sync",
         lambda spec: _partial_with_stale_daily(spec),
     )
 
@@ -632,13 +633,14 @@ def test_materialize_engine_run_ignores_a_stale_daily_for_a_minute_run(monkeypat
     """The same partial is harmless to a run that never opens the daily zip."""
     monkeypatch.setattr(
         run_materialization,
-        "materialize_run_data_sync",
+        "_materialize_run_data_sync",
         lambda spec: _partial_with_stale_daily(spec),
     )
 
     result = materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
 
-    assert result.overall_status == "partial"
+    # Reported to the caller, not raised: the minute run reads none of it.
+    assert result.incomplete_summary == "time_series_bars/data_contract_mismatch"
 
 
 def test_materialize_engine_run_refuses_a_missing_session_for_a_minute_run(monkeypatch):
@@ -656,7 +658,7 @@ def test_materialize_engine_run_refuses_a_missing_session_for_a_minute_run(monke
             ),
         )
 
-    monkeypatch.setattr(run_materialization, "materialize_run_data_sync", _missing_day)
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _missing_day)
 
     with pytest.raises(LakeMaterializationError, match="incomplete minute coverage"):
         materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
@@ -677,9 +679,36 @@ def test_materialize_engine_run_lets_a_metadata_note_through(monkeypatch):
             ),
         )
 
-    monkeypatch.setattr(run_materialization, "materialize_run_data_sync", _metadata_only)
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _metadata_only)
 
-    assert materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY).overall_status == "partial"
+    result = materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY)
+
+    assert result.incomplete_summary == "metadata/io_error"
+
+
+def test_materialize_engine_run_hands_back_only_what_a_run_may_act_on(monkeypatch):
+    """The four facts, and no failure list left for a caller to re-judge."""
+
+    def _clean(spec: DataRunSpec) -> DataAvailabilityResult:
+        return DataAvailabilityResult(
+            request_id=spec.request_id,
+            overall_status="complete",
+            lean_data_root_path="/lean-data-writer/lake",
+            data_availability_hash="d" * 64,
+            fetched_artifact_count=3,
+            reused_artifact_count=1,
+            completed_at_ms=0,
+            duration_ms=0,
+        )
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _clean)
+
+    assert materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY) == EngineRunMaterialization(
+        availability_hash="d" * 64,
+        fetched_artifact_count=3,
+        reused_artifact_count=1,
+        incomplete_summary=None,
+    )
 
 
 def _partial(spec: DataRunSpec, *failures: ArtifactFailure) -> DataAvailabilityResult:
@@ -732,9 +761,9 @@ def test_materialize_run_data_sync_runs_the_coroutine_off_thread(monkeypatch):
         seen.append(passed_spec.request_id)
         return _sentinel_result(passed_spec)
 
-    monkeypatch.setattr(run_materialization, "materialize_run_data", _fake)
+    monkeypatch.setattr(run_materialization, "_materialize_run_data", _fake)
 
-    result = materialize_run_data_sync(spec)
+    result = _materialize_run_data_sync(spec)
 
     assert seen == [spec.request_id]
     assert result.data_availability_hash == "a" * 64
@@ -746,11 +775,11 @@ def test_materialize_run_data_sync_reuses_one_loop_for_the_process(monkeypatch):
     async def _fake(passed_spec, **kwargs):
         return _sentinel_result(passed_spec)
 
-    monkeypatch.setattr(run_materialization, "materialize_run_data", _fake)
+    monkeypatch.setattr(run_materialization, "_materialize_run_data", _fake)
 
-    materialize_run_data_sync(_spec())
+    _materialize_run_data_sync(_spec())
     first_loop = run_materialization._materialization_loop()
-    materialize_run_data_sync(_spec())
+    _materialize_run_data_sync(_spec())
 
     assert run_materialization._materialization_loop() is first_loop
     assert not first_loop.is_closed()
@@ -759,4 +788,4 @@ def test_materialize_run_data_sync_reuses_one_loop_for_the_process(monkeypatch):
 @pytest.mark.asyncio
 async def test_materialize_run_data_sync_refuses_to_block_an_event_loop():
     with pytest.raises(RuntimeError, match="running event loop"):
-        materialize_run_data_sync(_spec())
+        _materialize_run_data_sync(_spec())

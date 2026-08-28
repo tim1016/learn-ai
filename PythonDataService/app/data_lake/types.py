@@ -105,28 +105,33 @@ class ArtifactRecord(BaseModel):
     last_bar_start_ms: int | None
 
 
+# Named so producers upstream of ``ArtifactFailure`` can carry a reason with
+# the same type the failure will be built from, instead of a bare ``str``.
+ArtifactFailureReason = Literal[
+    "provider_auth_error",
+    "provider_entitlement_error",
+    "provider_rate_limited",
+    "provider_api_error",
+    "provider_no_data",
+    "unknown_symbol",
+    "validation_failed",
+    "io_error",
+    "lease_timeout",
+    "fetch_timeout",
+    "unsupported_resolution",
+    "unsupported_artifact_kind",
+    "corp_action_revision_mismatch",
+    "data_contract_mismatch",
+    "internal_error",
+]
+
+
 class ArtifactFailure(BaseModel):
     artifact_kind: str
     symbol: str | None
     trading_date: date | None
     data_type: str | None
-    reason: Literal[
-        "provider_auth_error",
-        "provider_entitlement_error",
-        "provider_rate_limited",
-        "provider_api_error",
-        "provider_no_data",
-        "unknown_symbol",
-        "validation_failed",
-        "io_error",
-        "lease_timeout",
-        "fetch_timeout",
-        "unsupported_resolution",
-        "unsupported_artifact_kind",
-        "corp_action_revision_mismatch",
-        "data_contract_mismatch",
-        "internal_error",
-    ]
+    reason: ArtifactFailureReason
     detail: str | None = None
     provider_status_code: int | None = None
     attempt_count: int = 0

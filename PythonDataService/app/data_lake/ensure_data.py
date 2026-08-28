@@ -29,6 +29,7 @@ import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -66,6 +67,7 @@ from app.data_lake.polygon_ticker_events import fetch_ticker_events
 from app.data_lake.sessions import trading_sessions_for
 from app.data_lake.types import (
     ArtifactFailure,
+    ArtifactFailureReason,
     ArtifactIdentity,
     ArtifactRecord,
     DataAvailabilityResult,
@@ -385,6 +387,15 @@ def _read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTrade
 # ---------------------------------------------------------------------------
 
 
+class MetadataBootstrap(NamedTuple):
+    """Outcome of one Phase-0 artifact: the row, whether it was a cache hit,
+    and — when there is no row — the reason, typed as the failure it becomes."""
+
+    record: ArtifactRecord | None
+    is_reused: bool
+    failure_reason: ArtifactFailureReason | None
+
+
 async def _bootstrap_metadata_artifact(
     file_name: str,
     metadata_kind: str,
@@ -393,13 +404,11 @@ async def _bootstrap_metadata_artifact(
     spec: DataRunSpec,
     lake_root: Path,
     staging_root: Path,
-) -> tuple[ArtifactRecord | None, bool, str | None]:
+) -> MetadataBootstrap:
     """Claim, extract, write, and complete one LEAN metadata artifact.
 
-    Returns ``(record, is_reused, failure_reason)``. ``is_reused`` is True when
-    the artifact already existed in the catalog (cache hit). On failure the
-    record is None and ``failure_reason`` names *why*, because the two failure
-    modes need different handling by the caller:
+    On failure ``record`` is None and ``failure_reason`` names *why*, because
+    the two failure modes need different handling by the caller:
 
     - ``"lease_timeout"`` — another worker holds the claim and has not
       completed yet. Transient: retrying the whole spec once the winner
@@ -430,14 +439,14 @@ async def _bootstrap_metadata_artifact(
         # Already exists (complete or in-flight). Try to return the complete row.
         existing = await catalog_client.select_complete_metadata_artifact(dch)
         if existing is not None:
-            return existing, True, None  # cache hit
+            return MetadataBootstrap(existing, True, None)  # cache hit
         # In-flight elsewhere; skip (non-blocking in Slice 1c).
         logger.warning(
             "data_lake.ensure_data: metadata artifact %s is in-flight elsewhere; "
             "Phase 0 may use fallback holiday list for sessions.",
             file_name,
         )
-        return None, False, "lease_timeout"
+        return MetadataBootstrap(None, False, "lease_timeout")
 
     # Fetch from launcher.
     try:
@@ -449,7 +458,7 @@ async def _bootstrap_metadata_artifact(
     except LeanMetadataExtractionError as e:
         await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e))
         logger.warning("data_lake.ensure_data: metadata extraction failed: %s", e)
-        return None, False, "io_error"
+        return MetadataBootstrap(None, False, "io_error")
 
     content = mh_bytes if metadata_kind == "market_hours" else sp_bytes
     file_sha = atomic_write_and_promote(
@@ -469,7 +478,7 @@ async def _bootstrap_metadata_artifact(
         file_size_bytes=len(content),
         file_sha256=file_sha,
     )
-    return (
+    return MetadataBootstrap(
         ArtifactRecord(
             id=artifact_id,
             artifact_kind="metadata",
@@ -1293,7 +1302,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 symbol=None,
                 trading_date=None,
                 data_type=None,
-                reason=mh_failure_reason or "io_error",
+                reason=mh_failure_reason,
                 detail="market-hours metadata bootstrap failed; see launcher logs",
                 attempt_count=1,
             )
@@ -1312,7 +1321,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 symbol=None,
                 trading_date=None,
                 data_type=None,
-                reason=sp_failure_reason or "io_error",
+                reason=sp_failure_reason,
                 detail="symbol-properties metadata bootstrap failed; see launcher logs",
                 attempt_count=1,
             )

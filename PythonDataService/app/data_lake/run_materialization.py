@@ -6,22 +6,23 @@ exported Polygon aggregates into a policy-keyed cache directory. With
 ``DATA_LAKE_ENABLED`` the same question is answered by the lake:
 ``ensure_data`` materializes exactly the missing artifacts, the catalog
 arbitrates who fetches what, and every run leaves with a fingerprint of the
-lake state it materialized against (a superset of the bars it then reads —
-see :func:`materialize_engine_run`).
+lake state it materialized against — whose scope :func:`materialize_engine_run`
+states canonically.
 
-This module is only the bridge. Callers want one call —
-:func:`materialize_engine_run` — and it composes three things none of them
-should have to solve for themselves:
+This module is only the bridge, and its public surface is two symbols:
+:func:`materialize_engine_run` and the :class:`LakeMaterializationError` it
+raises. Everything else is private, because the call composes three things no
+caller should have to solve — or be able to second-guess — for itself:
 
 1. **The spec.** What a Python-engine run actually needs from the lake —
    minute and daily trade bars, and nothing else (see
-   :func:`build_engine_run_spec`).
+   :func:`_build_engine_run_spec`).
 2. **Contention.** Two runs wanting the same day is normal, not an error.
    The catalog hands the fetch to one of them; the other waits and takes
-   the winner's bytes (see :func:`materialize_run_data`).
+   the winner's bytes (see :func:`_materialize_run_data`).
 3. **The sync boundary.** Backtests run on worker threads with no event
    loop, and the catalog's connection pool is bound to the loop that
-   created it (see :func:`materialize_run_data_sync`).
+   created it (see :func:`_materialize_run_data_sync`).
 
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4
 """
@@ -33,13 +34,39 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 from uuid import UUID, uuid4
 
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.types import ArtifactFailure, DataAvailabilityResult, DataRunSpec
 
 logger = logging.getLogger(__name__)
+
+# Mirrors ``EngineBacktestRequest.resolution``: which reader the run will use,
+# and therefore which artifact class the coverage gate must insist on.
+EngineResolution = Literal["minute", "daily"]
+
+
+@dataclass(frozen=True, slots=True)
+class EngineRunMaterialization:
+    """What a backtest run may know about the lake it is about to read.
+
+    Deliberately narrower than ``DataAvailabilityResult``. The failure list is
+    judged once, by the coverage gate in :func:`materialize_engine_run`; a run
+    that received the raw result could re-derive its own answer from
+    ``.failures`` and disagree with the gate about whether it should proceed.
+    What is left is the fingerprint to record, two counts worth logging, and a
+    pre-rendered line for the operator when the lake reports itself incomplete.
+    """
+
+    availability_hash: str
+    fetched_artifact_count: int
+    reused_artifact_count: int
+    # None when the lake produced everything; otherwise a ``kind/reason``
+    # summary of what it could not, already judged harmless for this run.
+    incomplete_summary: str | None
 
 # "Another worker holds the claim and has not finished yet." Clears by itself.
 _CONTENTION_REASONS = frozenset({"lease_timeout"})
@@ -65,7 +92,7 @@ class LakeMaterializationError(RuntimeError):
     """The lake cannot give this run the bytes it asked for."""
 
 
-def build_engine_run_spec(
+def _build_engine_run_spec(
     *,
     symbol: str,
     start: date,
@@ -117,7 +144,7 @@ def _is_blocked_by_a_sibling_fetch(result: DataAvailabilityResult) -> bool:
     return not (reasons - _CONTENTION_REASONS - _CASCADED_REASONS)
 
 
-async def materialize_run_data(
+async def _materialize_run_data(
     spec: DataRunSpec,
     *,
     poll_interval_s: float = _CONTENTION_POLL_INTERVAL_S,
@@ -198,18 +225,18 @@ def _materialization_loop() -> asyncio.AbstractEventLoop:
         return _loop
 
 
-def materialize_run_data_sync(spec: DataRunSpec) -> DataAvailabilityResult:
-    """Blocking :func:`materialize_run_data` for callers without an event loop."""
+def _materialize_run_data_sync(spec: DataRunSpec) -> DataAvailabilityResult:
+    """Blocking :func:`_materialize_run_data` for callers without an event loop."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         pass
     else:
         raise RuntimeError(
-            "materialize_run_data_sync was called from a running event loop; await materialize_run_data instead"
+            "_materialize_run_data_sync was called from a running event loop; await _materialize_run_data instead"
         )
 
-    future = asyncio.run_coroutine_threadsafe(materialize_run_data(spec), _materialization_loop())
+    future = asyncio.run_coroutine_threadsafe(_materialize_run_data(spec), _materialization_loop())
     # The coroutine's own deadline is fetch_timeout_seconds; allow a small
     # margin so the wait unwinds through the coroutine's return path rather
     # than being cancelled here.
@@ -223,12 +250,12 @@ def materialize_run_data_sync(spec: DataRunSpec) -> DataAvailabilityResult:
     return future.result(timeout=spec.fetch_timeout_seconds + 30)
 
 
-def describe_failures(failures: Iterable[ArtifactFailure]) -> str:
+def _describe_failures(failures: Iterable[ArtifactFailure]) -> str:
     """One short ``kind/reason`` summary of what the lake could not produce."""
     return "; ".join(sorted({f"{f.artifact_kind}/{f.reason}" for f in failures}))
 
 
-def _withholds_bars_the_run_reads(failure: ArtifactFailure, *, resolution: str) -> bool:
+def _withholds_bars_the_run_reads(failure: ArtifactFailure, *, resolution: EngineResolution) -> bool:
     """Does this failure hold back bars the run's reader will actually open?
 
     ``ArtifactFailure`` carries no resolution, but within ``time_series_bars``
@@ -249,10 +276,15 @@ def materialize_engine_run(
     symbol: str,
     start: date,
     end: date,
-    resolution: str = "minute",
+    resolution: EngineResolution = "minute",
     requester: str | None = None,
-) -> DataAvailabilityResult:
+) -> EngineRunMaterialization:
     """Put a backtest run's bars in the lake and report what it will read.
+
+    Returns an :class:`EngineRunMaterialization` — the four facts a run has any
+    business acting on — rather than the raw ``DataAvailabilityResult``. The
+    gate below is the only place the failure list is judged, and handing that
+    list onward would invite a second caller to judge it differently.
 
     Raises :class:`LakeMaterializationError` rather than returning a result the
     run would silently misread. Two cases:
@@ -268,39 +300,41 @@ def materialize_engine_run(
       deeper fix — having ``ensure_data`` re-aggregate instead of reporting a
       mismatch — is the integration slice's.)
 
-    Failures that withhold nothing this run reads are logged and allowed
-    through; the returned fingerprint then covers whatever did materialize.
+    Failures that withhold nothing this run reads do not stop it; they come
+    back as ``incomplete_summary`` so the caller can say so to the operator.
 
-    The fingerprint is the lake's ``data_availability_hash``, which covers a
-    **superset** of what the Python engine opens: the Phase-0 metadata
+    **The fingerprint's scope — canonical statement, referenced elsewhere.**
+    ``availability_hash`` is the lake's ``data_availability_hash``, and it
+    covers a **superset** of what the Python engine opens: the Phase-0 metadata
     artifacts and the derived daily zip are in it whether or not this run's
     reader touches them. Treat it as "the lake state this run materialized
     against", not as a byte-exact receipt for the bars it consumed.
     """
-    spec = build_engine_run_spec(symbol=symbol, start=start, end=end, requester=requester)
-    result = materialize_run_data_sync(spec)
+    spec = _build_engine_run_spec(symbol=symbol, start=start, end=end, requester=requester)
+    result = _materialize_run_data_sync(spec)
 
     if result.overall_status == "failed":
         raise LakeMaterializationError(
-            f"the lake could not materialize {symbol} {start}..{end}: {describe_failures(result.failures)}"
+            f"the lake could not materialize {symbol} {start}..{end}: {_describe_failures(result.failures)}"
         )
 
     withheld = [f for f in result.failures if _withholds_bars_the_run_reads(f, resolution=resolution)]
     if withheld:
         raise LakeMaterializationError(
             f"the lake has incomplete {resolution} coverage for {symbol} {start}..{end}: "
-            f"{describe_failures(withheld)} — refusing rather than running on bars "
+            f"{_describe_failures(withheld)} — refusing rather than running on bars "
             "that do not match the request"
         )
 
-    if result.failures:
+    incomplete_summary = _describe_failures(result.failures) if result.failures else None
+    if incomplete_summary:
         logger.warning(
             "data_lake.run_materialization: partial coverage for %s %s..%s (%s run) — %s",
             symbol,
             start,
             end,
             resolution,
-            describe_failures(result.failures),
+            incomplete_summary,
         )
     logger.info(
         "data_lake.run_materialization: %s %s..%s fetched=%d reused=%d manifest=%s",
@@ -311,4 +345,9 @@ def materialize_engine_run(
         result.reused_artifact_count,
         result.data_availability_hash,
     )
-    return result
+    return EngineRunMaterialization(
+        availability_hash=result.data_availability_hash,
+        fetched_artifact_count=result.fetched_artifact_count,
+        reused_artifact_count=result.reused_artifact_count,
+        incomplete_summary=incomplete_summary,
+    )

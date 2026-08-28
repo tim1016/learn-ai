@@ -16,14 +16,14 @@ from __future__ import annotations
 import hashlib
 from datetime import date
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
 from app.config import settings
 from app.data_lake import run_materialization
 from app.data_lake.ensure_data import _compute_data_availability_hash
-from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult
+from app.data_lake.run_materialization import EngineRunMaterialization
+from app.data_lake.types import ArtifactRecord
 from app.routers import engine as engine_router
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
@@ -70,18 +70,19 @@ def _lake_artifacts(lake_dir: Path) -> list[ArtifactRecord]:
     return records
 
 
-def _availability(lake_dir: Path, *, artifacts: list[ArtifactRecord] | None = None) -> DataAvailabilityResult:
-    records = _lake_artifacts(lake_dir) if artifacts is None else artifacts
-    return DataAvailabilityResult(
-        request_id=uuid4(),
-        overall_status="complete",
-        lean_data_root_path=str(lake_dir),
-        data_availability_hash=_compute_data_availability_hash(records),
-        artifacts=records,
+def _materialization(lake_dir: Path, *, incomplete_summary: str | None = None) -> EngineRunMaterialization:
+    """What the bridge hands a run for the seeded tree.
+
+    Note what the run does *not* receive: the failure list. Whether the run may
+    proceed was decided inside ``materialize_engine_run``; all that survives is
+    a line to show the operator.
+    """
+    records = _lake_artifacts(lake_dir)
+    return EngineRunMaterialization(
+        availability_hash=_compute_data_availability_hash(records),
         fetched_artifact_count=len(records),
         reused_artifact_count=0,
-        completed_at_ms=0,
-        duration_ms=0,
+        incomplete_summary=incomplete_summary,
     )
 
 
@@ -154,7 +155,7 @@ def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
 
     def _fake_materialize(**kwargs):
         calls.append(kwargs)
-        return _availability(seeded_roots["lake"])
+        return _materialization(seeded_roots["lake"])
 
     monkeypatch.setattr(run_materialization, "materialize_engine_run", _fake_materialize)
 
@@ -182,39 +183,27 @@ def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
 def test_flag_on_run_records_the_manifest_of_what_it_materialized(seeded_roots, monkeypatch):
     """The response carries the content-derived fingerprint, not a placeholder."""
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    availability = _availability(seeded_roots["lake"])
-    monkeypatch.setattr(run_materialization, "materialize_engine_run", lambda **kwargs: availability)
+    records = _lake_artifacts(seeded_roots["lake"])
+    monkeypatch.setattr(
+        run_materialization,
+        "materialize_engine_run",
+        lambda **kwargs: _materialization(seeded_roots["lake"]),
+    )
 
     response = _run()
 
     assert response.success, response.error
-    assert response.lake_data_availability_hash == _compute_data_availability_hash(availability.artifacts)
+    assert response.lake_data_availability_hash == _compute_data_availability_hash(records)
     # And it really is derived from the artifact content: change one byte hash
     # and the fingerprint the run would have carried is a different one.
-    mutated = [
-        availability.artifacts[0].model_copy(update={"file_sha256": "0" * 64}),
-        *availability.artifacts[1:],
-    ]
+    mutated = [records[0].model_copy(update={"file_sha256": "0" * 64}), *records[1:]]
     assert response.lake_data_availability_hash != _compute_data_availability_hash(mutated)
 
 
 def test_flag_on_run_surfaces_incomplete_coverage_to_the_operator(seeded_roots, monkeypatch):
     """A run reading a lake that reports itself incomplete must say so in the log."""
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    partial = _availability(seeded_roots["lake"]).model_copy(
-        update={
-            "overall_status": "partial",
-            "failures": [
-                ArtifactFailure(
-                    artifact_kind="metadata",
-                    symbol=None,
-                    trading_date=None,
-                    data_type=None,
-                    reason="io_error",
-                )
-            ],
-        }
-    )
+    partial = _materialization(seeded_roots["lake"], incomplete_summary="metadata/io_error")
     monkeypatch.setattr(run_materialization, "materialize_engine_run", lambda **kwargs: partial)
     log: list[str] = []
 
@@ -251,7 +240,7 @@ def test_flag_on_run_reads_the_lake_tree_and_nothing_else(seeded_roots, monkeypa
     monkeypatch.setattr(
         run_materialization,
         "materialize_engine_run",
-        lambda **kwargs: _availability(seeded_roots["lake"]),
+        lambda **kwargs: _materialization(seeded_roots["lake"]),
     )
 
     with_lake = _run()

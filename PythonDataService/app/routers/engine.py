@@ -443,12 +443,8 @@ class EngineBacktestResponse(BaseModel):
     data_policy: _EngineDataPolicyModel | None = None
     run_verdict: RunVerdict | None = None
     validation_analytics: EngineValidationAnalyticsResponse | None = None
-    # The lake's ``data_availability_hash`` for what this run materialized: a
-    # digest over every artifact's path, byte hash, row count and bar range.
-    # It covers a SUPERSET of what the engine actually opens — the Phase-0
-    # metadata artifacts and the derived daily zip are in it whether or not
-    # this run's reader touches them — so read it as "the lake state this run
-    # materialized against", not as a byte-exact receipt of the bars consumed.
+    # The lake state this run materialized against. For exactly what the hash
+    # covers, see ``app.data_lake.run_materialization.materialize_engine_run``.
     # Null when the data lake is off, or when the run materialized nothing:
     # a run that read the pre-lake policy cache has no lake bytes to name.
     lake_data_availability_hash: str | None = None
@@ -1086,22 +1082,18 @@ def _materialize_missing_bars(
 
     Two materializers, one question. The lake answers it when
     ``DATA_LAKE_ENABLED`` is set — it fetches only the missing days, records
-    every artifact in the catalog, and returns a fingerprint of the lake state
-    the run materialized against, which is what this function passes back.
-    Otherwise the pre-lake policy store exports the range into its cache and
-    there is no such fingerprint to give.
+    every artifact in the catalog, and hands back the fingerprint this
+    function passes on (see ``materialize_engine_run`` for what that
+    fingerprint does and does not cover). Otherwise the pre-lake policy store
+    exports the range into its cache and there is no such fingerprint to give.
     """
     if settings.DATA_LAKE_ENABLED:
         # Lazy for the same reason as the Polygon client below: the flag is
         # off by default and the lake pulls in the catalog + provider stack.
-        from app.data_lake.run_materialization import (
-            LakeMaterializationError,
-            describe_failures,
-            materialize_engine_run,
-        )
+        from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
 
         try:
-            availability = materialize_engine_run(
+            materialized = materialize_engine_run(
                 symbol=symbol,
                 start=start,
                 end=end,
@@ -1115,18 +1107,18 @@ def _materialize_missing_bars(
             on_log(f"Lake refused this run: {exc}")
             raise
         on_log(
-            f"Lake: fetched {availability.fetched_artifact_count}, "
-            f"reused {availability.reused_artifact_count} artifact(s)"
+            f"Lake: fetched {materialized.fetched_artifact_count}, "
+            f"reused {materialized.reused_artifact_count} artifact(s)"
         )
-        if availability.failures:
-            # Not blocking at this resolution — but the run is reading a lake
-            # that reports itself incomplete, and the operator should see that
-            # beside the numbers rather than only in the service log.
+        if materialized.incomplete_summary:
+            # The lake judged this harmless for the run's resolution, but the
+            # operator should still see it beside the numbers rather than only
+            # in the service log.
             on_log(
-                f"Lake: incomplete — {describe_failures(availability.failures)}; "
+                f"Lake: incomplete — {materialized.incomplete_summary}; "
                 f"the {request.resolution} bars this run reads did materialize"
             )
-        return availability.data_availability_hash
+        return materialized.availability_hash
 
     from app.services.polygon_client import PolygonClientService
 
