@@ -20,6 +20,7 @@ from app.engine.data.policy_store import (
     snapshot_minute_trade_zips,
     symbol_write_lock,
 )
+from app.lean_sidecar.trading_calendar import expected_sessions, is_trading_day
 from app.lean_sidecar.workspace import SymbolValidationError
 
 FETCHED_AT_MS = 1783958400000
@@ -473,6 +474,64 @@ def test_ensure_range_refetches_only_the_missing_day_not_the_whole_window(tmp_pa
         "20260108_trade.zip",
         "20260109_trade.zip",
     ]
+
+
+def test_ensure_range_holiday_only_gap_makes_zero_provider_calls(tmp_path: Path):
+    """Regression for the ensure_range-level early return added alongside
+    _missing_fetch_ranges(): once every *real* trading day in a window is
+    cached, a re-check whose only naively-"missing" day is an NYSE
+    holiday must make ZERO provider calls — there is nothing to fetch
+    for a day the market never opened. This exercises the integration
+    seam (ensure_range's ``if not fetch_ranges: ... return pre`` branch),
+    not just the pure-function unit tests on _missing_fetch_ranges above."""
+    window = {"start": date(2025, 12, 30), "end": date(2026, 1, 2)}
+    holiday = date(2026, 1, 1)  # New Year's Day, observed Thursday
+
+    # Derive/assert the holiday's status from the canonical calendar —
+    # never hardcode "this date is a non-session" as a bare fact.
+    assert holiday.weekday() < 5  # passes check_availability's naive weekday filter
+    assert not is_trading_day(holiday)  # ...but is not a real NYSE session
+    assert holiday not in expected_sessions(window["start"], window["end"])
+
+    polygon = _FakePolygon()
+    policy_root = tmp_path / "polygon-raw"
+    policy_root.mkdir()
+
+    ensure_range(
+        reference_roots=[],
+        cache_root=policy_root,
+        symbol="SPY",
+        polygon=polygon,
+        adjusted=False,
+        resolution="minute",
+        **window,
+    )
+    calls_after_first = polygon.calls
+    assert calls_after_first >= 1
+
+    # _FakePolygon (unlike the real Polygon feed) doesn't know about
+    # holidays, so it wrote a zip for the holiday too. Delete it so the
+    # cache honestly reflects what a real fetch would leave behind: no
+    # bars, ever, for a day the market never opened.
+    zip_dir = policy_root / "equity" / "usa" / "minute" / "spy"
+    (zip_dir / f"{holiday.strftime('%Y%m%d')}_trade.zip").unlink()
+
+    report = ensure_range(
+        reference_roots=[],
+        cache_root=policy_root,
+        symbol="SPY",
+        polygon=polygon,
+        adjusted=False,
+        resolution="minute",
+        **window,
+    )
+
+    # check_availability's weekday-only filter still can't see the
+    # holiday, so it's reported "missing" and the window "incomplete" —
+    # but nothing was fetched for it.
+    assert report.missing_days == [holiday]
+    assert not report.is_complete
+    assert polygon.calls == calls_after_first
 
 
 def test_ensure_range_fetches_disjoint_missing_subranges_separately(tmp_path: Path):
