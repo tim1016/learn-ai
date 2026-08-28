@@ -417,8 +417,10 @@ def program_build_view_from_run_evidence(
     ``BotBindingRepository._ensure_program_build_evidence`` after the same
     canonical ``prove_running_program_build`` closed ``state="PROVEN"``, so
     reconstructing that state here replays that verdict rather than making a
-    new proof. One field does not survive the round trip: the run evidence
-    records no wiring digest, so ``wiring`` replays as ``NOT_CHECKED``.
+    new proof. Since #1828 the record also carries the wiring verdict, so the
+    round trip is complete for any run started after that; a record written
+    before it replays ``NOT_CHECKED``, which is a true statement about a run
+    whose wiring was never written down rather than a claim about the wiring.
     """
     return ProgramBuildAdmissionFact(
         state="PROVEN",
@@ -428,12 +430,12 @@ def program_build_view_from_run_evidence(
         running_artifact_digest=evidence.running_artifact_digest,
         qualification_receipt_hash=evidence.qualification_receipt_hash,
         verified_at_ms=evidence.verified_at_ms,
-        # The durable run evidence predates the wiring half (#1735) and does
-        # not record it, so this replay cannot claim one either way. Stated
-        # explicitly rather than left to the field default: a frozen replay
-        # silently reporting MATCHED would be the exact false assurance the
-        # split was added to prevent. Recording it at Start is the follow-up.
-        wiring="NOT_CHECKED",
+        # The verdict this run actually started under (#1828). Evidence
+        # written before it was recorded carries `NOT_CHECKED`, which is a
+        # true statement about that run rather than a claim about its wiring
+        # -- a frozen replay silently reporting MATCHED would be the exact
+        # false assurance the #1735 split was added to prevent.
+        wiring=evidence.wiring,
         evidence_refs=(
             f"signal-program-seal:{evidence.sealed_program_hash}",
             f"program-build-receipt:{evidence.qualification_receipt_hash}",
@@ -442,6 +444,22 @@ def program_build_view_from_run_evidence(
         explanation=(
             "The Signal Program build proven and recorded when this run started "
             "matches its golden qualification receipt."
+            if evidence.wiring != "DRIFTED"
+            else (
+                "The Signal Program math proven and recorded when this run started "
+                "matches its golden qualification receipt, but its strategy wiring "
+                "had already changed since that receipt was minted."
+            )
+        ),
+        # `ProgramBuildAdmissionFact` refuses a PROVEN fact that reports drift
+        # without a next step, and rightly: a replay that shows drift and no
+        # remedy is a worse artifact than one that shows nothing. The live
+        # proof's own remedy still applies to a frozen run -- re-qualifying is
+        # what makes the *next* start clean.
+        next_step=(
+            None
+            if evidence.wiring != "DRIFTED"
+            else "Re-run golden qualification for this program so its receipt covers the current wiring."
         ),
         verification="frozen_run_evidence",
     )
