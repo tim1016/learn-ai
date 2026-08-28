@@ -313,6 +313,55 @@ async def test_stale_launcher_refuses_before_the_workspace_exists(
 
 
 @pytest.mark.asyncio
+async def test_unreachable_launcher_refuses_before_the_workspace_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+) -> None:
+    """A launcher that is down must fail the run without consuming the ID.
+
+    Sibling of the stale-launcher case above, and the distinction is the
+    point: "reachable but too old" is a data-plane refusal
+    (``LeanSidecarServiceError``), whereas "not reachable at all" is a
+    transport failure the preflight deliberately does NOT translate — it
+    propagates as ``LauncherUnreachable`` so the router's existing
+    mapping renders a 503, rather than dressing an outage up as a lake
+    coverage problem.
+
+    That 503 mapping was already covered, but only on the non-lake
+    ``/launch`` path, where the workspace is fully staged by the time
+    the launcher is called. Reaching it from the lake preflight happens
+    *before* the workspace exists — so this pins that an outage leaves
+    the run_id reusable too.
+    """
+    from app.config import settings
+    from app.lean_sidecar import launcher_client
+    from app.lean_sidecar.launcher_client import LauncherUnreachable
+    from app.services import lean_sidecar_service as service
+
+    async def unreachable() -> dict[str, Any]:
+        raise LauncherUnreachable("launcher at http://127.0.0.1:8090/healthz unreachable: connection refused")
+
+    monkeypatch.setattr(launcher_client, "get_healthz", unreachable)
+
+    write_root = tmp_path / "lean-data-writer"
+    seed_lake_window(write_root / LAKE_SUBDIR, SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    with pytest.raises(LauncherUnreachable, match="unreachable"):
+        await service.run_trusted_sample(_request("unreachable-launcher-run"))
+
+    # Must not be swallowed into the service's own error type: the
+    # router keys its 503 arm off this class, and anything caught into
+    # LeanSidecarServiceError would render as a run-level failure instead.
+    assert not issubclass(LauncherUnreachable, service.LeanSidecarServiceError)
+
+    assert orchestrator.launch_requests == []
+    assert not (orchestrator.artifacts_root / "unreachable-launcher-run").exists()
+
+
+@pytest.mark.asyncio
 async def test_factor_files_move_the_input_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
