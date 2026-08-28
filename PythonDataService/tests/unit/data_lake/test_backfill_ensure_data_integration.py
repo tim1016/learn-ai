@@ -14,10 +14,12 @@ Postgres-backed test in this package.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 import re
+import threading
 from datetime import date
 from pathlib import Path
 from uuid import UUID
@@ -31,6 +33,7 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.backfill import BackfillDayProgress, run_backfill
 from app.data_lake.types import DataRunSpec
+from app.routers.data_lake import _bridge_ensure_fn, _bridge_status_fn
 
 pytestmark = pytest.mark.asyncio
 
@@ -147,3 +150,73 @@ async def test_run_backfill_against_real_ensure_data_reports_per_day_progress(cl
     # sub-calls (they opt out per _day_sub_spec) — every artifact is a
     # per-day minute-trade or quote bar.
     assert result.fetched_artifact_count >= 2  # at least the two successful days' minute bars
+
+
+@respx.mock
+async def test_backfill_survives_a_pool_initialized_on_a_different_loop(clean_artifacts, pool, tmp_lake):
+    """P1-1 regression (review round 3).
+
+    ensure_data's asyncpg pool is a process-global bound to whichever
+    event loop first awaits catalog_client.init_pool() — the `pool`
+    fixture above already did that on THIS test's own loop. This test
+    then runs run_backfill on a genuinely separate thread with its own
+    fresh loop (mirroring app/routers/data_lake.py's
+    work()/asyncio.run(_do()) inside run_in_thread's worker thread),
+    wiring ensure_fn/status_fn through the exact same
+    _bridge_ensure_fn/_bridge_status_fn the real job path uses to route
+    every pool-touching call back onto this test's loop. Without that
+    bridge, asyncpg raises a cross-loop RuntimeError the moment the
+    worker thread's own loop tries to use a pool bound to a different,
+    already-running one — this proves it doesn't.
+    """
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(200, json=_launcher_response())
+    )
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-20.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload(1716211800000))
+    )
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-21.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload(1716298200000))
+    )
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-22.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload(1716470400000))
+    )
+
+    this_loop = asyncio.get_running_loop()
+    bridged_ensure_fn = _bridge_ensure_fn(this_loop)
+    bridged_status_fn = _bridge_status_fn(this_loop)
+
+    outcome: dict[str, object] = {}
+    job_done = threading.Event()
+
+    def worker() -> None:
+        async def _do():
+            return await run_backfill(_spec(), ensure_fn=bridged_ensure_fn, status_fn=bridged_status_fn)
+
+        try:
+            outcome["result"] = asyncio.run(_do())
+        except Exception as exc:  # the exact failure mode this test guards against
+            outcome["error"] = exc
+        finally:
+            job_done.set()
+
+    threading.Thread(target=worker, name="test-cross-loop-backfill").start()
+
+    # Poll with awaited sleeps rather than a blocking thread.join(): the
+    # bridge's run_coroutine_threadsafe calls need THIS loop to keep
+    # spinning (processing its scheduled-callback queue) to ever run —
+    # a synchronous join() here would freeze the very loop the worker
+    # thread is waiting on.
+    for _ in range(1000):  # up to ~10s
+        if job_done.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert job_done.is_set(), "background job did not finish in time"
+
+    if "error" in outcome:
+        raise outcome["error"]  # type: ignore[misc]
+
+    result = outcome["result"]
+    assert result.overall_status == "complete"
+    assert result.days_completed == 3
+    assert result.failures == []

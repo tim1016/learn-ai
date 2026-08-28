@@ -16,15 +16,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.data_lake.backfill import BackfillDayProgress, BackfillWaitProgress, run_backfill
+from app.data_lake.backfill import (
+    BackfillDayProgress,
+    BackfillResult,
+    BackfillWaitProgress,
+    EnsureFn,
+    LeaseStatusFn,
+    run_backfill,
+)
+from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar_lease_status
 from app.data_lake.ensure_data import ensure_data
-from app.data_lake.types import DataAvailabilityResult, DataRunSpec
+from app.data_lake.types import ArtifactFailure, ArtifactIdentity, DataAvailabilityResult, DataRunSpec, NonSessionRecord
 from app.jobs.progress import ProgressEmitter
 from app.jobs.runner import run_in_thread
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-lake", tags=["data-lake"])
@@ -57,6 +67,41 @@ class BackfillJobRequest(BaseModel):
     spec: DataRunSpec
 
 
+# ---------------------------------------------------------------------------
+# Wire serialization — temporal-rigor.md: every wire temporal value is
+# int64 ms UTC, never an ISO date string. ArtifactFailure/NonSessionRecord
+# stay plain `date`-typed Pydantic models (they're a shared contract
+# /ensure-data's own response also uses, out of scope here); the
+# conversion happens only at this router's own SSE/job-result boundary.
+# "Trading date" is anchored at the session open (09:30 ET), per
+# temporal-rigor.md's date-anchored-value rule.
+# ---------------------------------------------------------------------------
+
+
+def _failure_to_wire(failure: ArtifactFailure) -> dict[str, Any]:
+    payload = failure.model_dump(mode="json", exclude={"trading_date"})
+    payload["trading_date_ms"] = session_open_ms_utc(failure.trading_date) if failure.trading_date is not None else None
+    return payload
+
+
+def _non_session_to_wire(record: NonSessionRecord) -> dict[str, Any]:
+    payload = record.model_dump(mode="json", exclude={"trading_date"})
+    payload["trading_date_ms"] = session_open_ms_utc(record.trading_date)
+    return payload
+
+
+def _backfill_result_to_wire(result: BackfillResult) -> dict[str, Any]:
+    payload = result.model_dump(
+        mode="json",
+        exclude={"start_trading_date", "end_trading_date", "failures", "skipped_non_sessions"},
+    )
+    payload["start_trading_date_ms"] = session_open_ms_utc(result.start_trading_date)
+    payload["end_trading_date_ms"] = session_open_ms_utc(result.end_trading_date)
+    payload["failures"] = [_failure_to_wire(f) for f in result.failures]
+    payload["skipped_non_sessions"] = [_non_session_to_wire(r) for r in result.skipped_non_sessions]
+    return payload
+
+
 def _emit_day_progress(emit: ProgressEmitter, progress: BackfillDayProgress) -> None:
     """Surface one day's outcome as both a coarse progress tick and a
     structured domain event.
@@ -78,13 +123,13 @@ def _emit_day_progress(emit: ProgressEmitter, progress: BackfillDayProgress) -> 
     emit.emit_event(
         "data_lake.backfill_day",
         {
-            "trading_date": progress.trading_date.isoformat(),
+            "trading_date_ms": session_open_ms_utc(progress.trading_date),
             "day_index": progress.day_index,
             "total_days": progress.total_days,
             "days_remaining": progress.total_days - progress.day_index,
             "fetched_count": progress.fetched_count,
             "reused_count": progress.reused_count,
-            "failures": [f.model_dump(mode="json") for f in progress.failures],
+            "failures": [_failure_to_wire(f) for f in progress.failures],
         },
     )
     for failure in progress.failures:
@@ -102,13 +147,58 @@ def _emit_wait_progress(emit: ProgressEmitter, progress: BackfillWaitProgress) -
     run_backfill already decides which polls are worth surfacing
     (backfill._WAIT_NOTIFY_EVERY, next to the poll interval it's derived
     from) — every on_wait callback that reaches this router is relayed
-    verbatim, with no second throttling decision duplicated here.
+    verbatim, with no second throttling decision duplicated here. This is
+    a free-text log line, not a structured wire field, so the trading
+    date renders as prose (matching the "Backfilling ... from ... to ..."
+    line above) rather than needing the ms-UTC treatment.
     """
     emit.log(
         f"{progress.trading_date.isoformat()} {progress.symbol} {progress.data_type}: "
         f"waiting on another worker's in-flight fetch (attempt {progress.attempt})",
         level="info",
     )
+
+
+def _bridge_ensure_fn(loop: asyncio.AbstractEventLoop) -> EnsureFn:
+    """Route every ensure_data() call back onto the loop this HTTP
+    request is already running on.
+
+    ensure_data's asyncpg pool (app.data_lake.catalog_client) is a
+    process-global bound to whichever event loop first awaits
+    catalog_client.init_pool() — using it from a different loop raises
+    asyncpg's cross-loop error. run_in_thread's worker thread has no loop
+    of its own; work()'s asyncio.run(_do()) below spins up a brand-new,
+    throwaway loop per job, which IS a different loop the moment the pool
+    was already initialized elsewhere — a prior /ensure-data call on this
+    request's own loop (the common case, since /ensure-data is a plain
+    async handler that always runs there), or a prior backfill job's
+    now-closed one. Bridging every ensure_data() call through
+    run_coroutine_threadsafe onto the loop captured here — before the
+    worker thread starts — keeps every data-lake asyncpg operation on one
+    consistent loop for the life of the process. Only the pool-touching
+    call is bridged; run_backfill's own orchestration and the emitter's
+    synchronous Redis calls (progress/log/cancel-check) stay on the
+    worker thread exactly as before, so this doesn't reintroduce blocking
+    work onto the shared app loop.
+    """
+
+    async def _ensure_on_request_loop(day_spec: DataRunSpec) -> DataAvailabilityResult:
+        future = asyncio.run_coroutine_threadsafe(ensure_data(day_spec), loop)
+        return await asyncio.wrap_future(future)
+
+    return _ensure_on_request_loop
+
+
+def _bridge_status_fn(loop: asyncio.AbstractEventLoop) -> LeaseStatusFn:
+    """Same bridge as _bridge_ensure_fn, for the lease-status poll — it
+    reads the same pool-backed catalog table and must run on the same
+    loop the pool is bound to."""
+
+    async def _status_on_request_loop(identity: ArtifactIdentity) -> MinuteBarLeaseStatus | None:
+        future = asyncio.run_coroutine_threadsafe(select_minute_bar_lease_status(identity), loop)
+        return await asyncio.wrap_future(future)
+
+    return _status_on_request_loop
 
 
 @router.post("/backfill", status_code=status.HTTP_202_ACCEPTED)
@@ -127,6 +217,9 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
         spec.request_id,
         spec.symbols,
     )
+    # Captured on this request's own running loop (the FastAPI app loop),
+    # before the worker thread starts — see _bridge_ensure_fn.
+    loop = asyncio.get_running_loop()
 
     def work(emit: ProgressEmitter, cancel) -> dict:
         cancel.raise_if_cancelled()
@@ -149,13 +242,17 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
                 on_day_progress=on_day_progress,
                 on_wait=on_wait,
                 cancel_check=cancel.raise_if_cancelled,
+                ensure_fn=_bridge_ensure_fn(loop),
+                status_fn=_bridge_status_fn(loop),
             )
-            return result.model_dump(mode="json")
+            return _backfill_result_to_wire(result)
 
-        # run_backfill is async (ensure_data awaits asyncpg + httpx calls);
-        # run_in_thread executes work() on a plain worker thread, so this
-        # thread gets its own event loop — matching the lean-engine-run job's
-        # asyncio.run(_do()) pattern in app/routers/jobs.py.
+        # run_backfill's own orchestration (the per-day loop, progress/log
+        # emission, cancellation checks) runs entirely on this worker
+        # thread's own throwaway loop, matching the lean-engine-run job's
+        # asyncio.run(_do()) pattern in app/routers/jobs.py — only the
+        # ensure_data()/catalog calls bridged above cross back onto the
+        # request's loop.
         return asyncio.run(_do())
 
     run_in_thread(
