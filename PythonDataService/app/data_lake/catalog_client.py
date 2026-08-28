@@ -9,11 +9,13 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.4
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 import asyncpg
 
@@ -234,12 +236,21 @@ async def select_coverage_minute_bars(
     data_type: str,
     start_trading_date: date,
     end_trading_date: date,
+    price_adjustment_mode: str | None = None,
 ) -> list[ArtifactRecord]:
     """Return all complete minute-bar artifacts for the given window.
 
     Used by ensure_data to compute which dates already exist on disk before
     deciding what to fetch. In Slice 1a there are no rows; this returns an
     empty list and exercises the schema/query end-to-end.
+
+    ``price_adjustment_mode`` narrows the match to one adjustment mode when
+    given. Omitted (``None``), the query matches every mode on file for the
+    window — the pre-existing behavior, safe for the live-fetch pipeline
+    because it only ever writes 'raw' rows. Callers where more than one mode
+    can coexist for the same day (e.g. ``app.data_lake.cache_import``) must
+    pass this explicitly; otherwise a match against the wrong mode's row
+    would be picked arbitrarily.
     """
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
@@ -254,11 +265,14 @@ async def select_coverage_minute_bars(
            AND "Symbol" = $2
            AND "DataType" = $3
            AND "TradingDate" BETWEEN $4 AND $5
+           AND ($6::character varying IS NULL OR "PriceAdjustmentMode" = $6)
            AND "Status" = 'complete'
          ORDER BY "TradingDate"
     """
     async with connection() as conn:
-        rows = await conn.fetch(query, market, symbol, data_type, start_trading_date, end_trading_date)
+        rows = await conn.fetch(
+            query, market, symbol, data_type, start_trading_date, end_trading_date, price_adjustment_mode
+        )
     return [
         ArtifactRecord(
             id=r["Id"],
@@ -292,6 +306,7 @@ async def claim_minute_bar(
     lease_ttl_ms: int,
     data_contract_hash: str,
     file_path: str,
+    provider_params: dict[str, Any] | None = None,
 ) -> int | None:
     """Atomic claim for a minute-resolution time_series_bars artifact.
 
@@ -303,6 +318,12 @@ async def claim_minute_bar(
        WHERE ArtifactKind='time_series_bars' AND Resolution='minute'
     The ON CONFLICT clause repeats the partial index's WHERE predicate, per
     Postgres' requirement for partial-index conflict targets.
+
+    ``provider_params`` is stored verbatim as the row's ``ProviderParams``
+    jsonb column. Defaults to ``{}`` (unchanged behavior for the live-fetch
+    pipeline's existing callers); ``app.data_lake.cache_import`` passes the
+    original per-symbol provenance so it survives on the row itself as an
+    audit trail, rather than being fetched-and-discarded.
     """
     if identity.artifact_kind != "time_series_bars" or identity.resolution != "minute":
         raise ValueError(f"claim_minute_bar called with non-minute-bar identity: {identity!r}")
@@ -335,7 +356,7 @@ async def claim_minute_bar(
             identity.resolution,
             identity.data_type,
             identity.provider,
-            "{}",  # ProviderParams (jsonb; populated by fetcher in 1c)
+            json.dumps(provider_params or {}),
             identity.price_adjustment_mode,
             data_contract_hash,
             file_path,
