@@ -82,3 +82,13 @@ def test_factor_and_map_excluded_when_disabled():
     kinds = {a.artifact_kind for a in required}
     assert "factor_file" not in kinds
     assert "map_file" not in kinds
+
+
+def test_daily_trade_excluded_when_disabled():
+    required, _ = expand_required_artifacts(_base_spec(include_daily_trade=False))
+    daily = [a for a in required if a.artifact_kind == "time_series_bars" and a.resolution == "daily"]
+    assert daily == []
+    # Minute-trade artifacts are untouched by the flag — only the
+    # whole-range rollup is opted out.
+    minute_bars = [a for a in required if a.artifact_kind == "time_series_bars" and a.resolution == "minute"]
+    assert len(minute_bars) == 5
