@@ -9,8 +9,7 @@ import { TopBarComponent } from './top-bar.component';
   imports: [TopBarComponent],
   template: `
     <app-top-bar>
-      <span shell-breadcrumbs>Breadcrumbs</span>
-      <span shell-account-cluster>Account context</span>
+      <span shell-nav>Primary navigation</span>
       <span shell-connection>Connection control</span>
     </app-top-bar>
   `,
@@ -25,32 +24,24 @@ describe('TopBarComponent', () => {
     expect(screen.getByRole('link', { name: 'Market Scope home' }).getAttribute('href')).toBe('/data-lab');
   });
 
-  it('renders the current page title as a non-heading centered element', async () => {
-    const { container } = await render(TopBarComponent, {
-      inputs: { pageTitle: 'Pricing Lab' },
-      providers: [provideRouter([])],
-    });
-
-    const title = screen.getByText('Pricing Lab');
-    expect(title.classList.contains('top-bar__page-title')).toBe(true);
-    expect(title.tagName).toBe('SPAN');
-    expect(screen.queryByRole('heading', { name: 'Pricing Lab' })).toBeNull();
-    expect(container.querySelector('.top-bar')?.children[1]).toBe(title);
-  });
-
   it('provides named regions for shell extensions', async () => {
     const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
 
-    expect(container.querySelector('[data-shell-slot="breadcrumbs"]')).toBeTruthy();
-    expect(container.querySelector('[data-shell-slot="account-cluster"]')).toBeTruthy();
+    expect(container.querySelector('[data-shell-slot="nav"]')).toBeTruthy();
     expect(container.querySelector('[data-shell-slot="connection"]')).toBeTruthy();
+  });
+
+  it('no longer carries the retired breadcrumb and account-cluster regions', async () => {
+    const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
+
+    expect(container.querySelector('[data-shell-slot="breadcrumbs"]')).toBeNull();
+    expect(container.querySelector('[data-shell-slot="account-cluster"]')).toBeNull();
   });
 
   it('projects each shell extension through its named region', async () => {
     const { container } = await render(TopBarProjectionHostComponent, { providers: [provideRouter([])] });
 
-    expect(container.querySelector('[data-shell-slot="breadcrumbs"]')?.textContent).toContain('Breadcrumbs');
-    expect(container.querySelector('[data-shell-slot="account-cluster"]')?.textContent).toContain('Account context');
+    expect(container.querySelector('[data-shell-slot="nav"]')?.textContent).toContain('Primary navigation');
     expect(container.querySelector('[data-shell-slot="connection"]')?.textContent).toContain('Connection control');
   });
 

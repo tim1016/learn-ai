@@ -38,9 +38,17 @@ from app.lean_sidecar.config import (
     PINNED_LEAN_IMAGE_DIGEST,
     runtime_provenance_for_digest,
 )
+from app.lean_sidecar.lake_mount import (
+    CONTAINER_LAKE_DATA_MOUNT,
+    LakeArtifacts,
+    LakeMountError,
+    data_plane_lake_root,
+    lake_mount_enabled,
+    resolve_lake_artifacts,
+)
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
 from app.lean_sidecar.launcher_client import post_launch
-from app.lean_sidecar.lean_config import LeanConfig
+from app.lean_sidecar.lean_config import CONTAINER_DATA_FOLDER, LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
     P2_5_DATE_SEMANTICS_NOTE,
@@ -183,8 +191,8 @@ class TrustedRunRequest:
     the bundled trusted sample; when ``None`` (default), the trusted sample
     selected by ``template`` is used. The Phase 1c sandbox shape
     (``--read-only``, ``--user=<non-root>``, ``--cap-drop=ALL``,
-    ``--network=none``, workspace-only mount) is what makes accepting
-    arbitrary source safe.
+    ``--network=none``, and no read-write mount beyond the workspace) is
+    what makes accepting arbitrary source safe.
 
     ``start_ms_utc`` and ``end_ms_utc`` are int64 ms UTC per the repo's
     timestamp rigor rule. They are converted to ``date`` *inside this
@@ -465,8 +473,7 @@ def _assert_compatibility_fixture_receipt(
     """Fail closed when the LEAN side no longer sees Python's pinned bytes."""
     if actual.get("fixture_id") != expected_id or actual.get("fixture_sha256") != expected_sha256:
         raise LeanSidecarServiceError(
-            f"compatibility_fixture_{phase}_mismatch: expected={expected_id!r} "
-            f"actual={actual.get('fixture_id')!r}"
+            f"compatibility_fixture_{phase}_mismatch: expected={expected_id!r} actual={actual.get('fixture_id')!r}"
         )
 
 
@@ -522,9 +529,105 @@ def _iter_trading_dates(start: date, end: date) -> list[date]:
     return out
 
 
-def _hash_paths_in_workspace(workspace: Workspace, paths: list[Path]) -> tuple:
-    """Hash a list of paths relative to the workspace data dir."""
-    return hash_staged_files(workspace.data_dir, paths)
+async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeArtifacts:
+    """Resolve the run's lake artifacts, or refuse with a typed error.
+
+    Two failure classes, both translated into
+    :class:`LeanSidecarServiceError` so the routers' existing mapping
+    applies instead of the raw exception escaping as an unstructured
+    500:
+
+    * the launcher is too old to mount the lake at all — checked first,
+      because no amount of lake coverage rescues a launcher that will
+      silently drop the mount;
+    * the lake cannot fully serve the requested window.
+
+    Called before the workspace is created, so a refusal leaves the
+    ``run_id`` unused and the operator's retry with the same id works.
+    """
+    from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITY_LAKE_MOUNT
+    from app.lean_sidecar.launcher_client import (
+        LauncherCapabilityUnsupported,
+        assert_launcher_supports,
+    )
+
+    try:
+        await assert_launcher_supports(LAUNCHER_CAPABILITY_LAKE_MOUNT)
+    except LauncherCapabilityUnsupported as e:
+        raise LeanSidecarServiceError(f"lake_mount_unsupported_by_launcher: {e}") from e
+
+    try:
+        return resolve_lake_artifacts(
+            lake_root=data_plane_lake_root(),
+            symbol=request.symbol,
+            start=request.start_date,
+            end=request.end_date,
+        )
+    except LakeMountError as e:
+        raise LeanSidecarServiceError(str(e)) from e
+
+
+def _stage_workspace_data(
+    *,
+    request: TrustedRunRequest,
+    workspace: Workspace,
+    trading_dates: list[date],
+    bars_by_date: list[tuple[date, list[TradeBar]]],
+    store_roots: list[Path] | None,
+    compatibility_fixture: bool,
+) -> tuple[list[Path], list[Path], Path]:
+    """Materialize LEAN's data folder inside the run's workspace.
+
+    The pre-data-lake path: every run owns a private copy of the bars,
+    the synthesized quote/daily zips, the image-extracted metadata
+    databases, and the empty corporate-action directories. Returns
+    ``(bar_zip_paths, quote_zip_paths, daily_path)``.
+
+    A ``DATA_LAKE_ENABLED`` run bypasses this function entirely — the
+    lake mount replaces the copies — which is why the whole staging
+    sequence lives here as one named unit rather than inline in the
+    orchestrator.
+    """
+    if store_roots is not None:
+        bar_zip_paths = list(
+            stage_minute_zips_from_store(
+                workspace,
+                symbol=request.symbol,
+                trading_dates=trading_dates,
+                roots=store_roots,
+            )
+        )
+    else:
+        bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
+    if compatibility_fixture:
+        from app.engine.data.policy_store import snapshot_minute_trade_zips
+
+        staged_receipt = snapshot_minute_trade_zips(
+            [workspace.data_dir],
+            symbol=request.symbol,
+            start=request.start_date,
+            end=request.end_date,
+            adjusted=request.data_policy.adjusted,
+            session=request.data_policy.session,
+        )
+        _assert_compatibility_fixture_receipt(
+            expected_id=request.data_policy.fixture_id,
+            expected_sha256=request.data_policy.fixture_sha256,
+            actual=staged_receipt,
+            phase="staging",
+        )
+    # Phase 5c: stage synthetic minute QUOTE zips alongside the trade
+    # zips. LEAN's default minute subscription requests both; without
+    # the quote zip the log carries known-noise ``Cannot find file:
+    # ...quote.zip`` warnings classified as ``failed_data_requests``.
+    quote_zip_paths = list(stage_quote_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
+    # Real OHLCV daily bars (open-of-first, high-max, low-min,
+    # close-of-last, sum-of-volume), not the last minute bar copied.
+    daily_bars = [_aggregate_daily_bar(request.symbol, day) for (_, day) in bars_by_date]
+    daily_path = stage_daily_bars(workspace, symbol=request.symbol, bars=daily_bars)
+    stage_lean_metadata_from_image(workspace, PINNED_LEAN_IMAGE_DIGEST)
+    stage_empty_corporate_action_dirs(workspace)
+    return bar_zip_paths, quote_zip_paths, daily_path
 
 
 async def run_trusted_sample(
@@ -567,6 +670,19 @@ async def run_trusted_sample(
             "PINNED_LEAN_IMAGE_DIGEST is not set; run scripts/lean_sidecar_pin_image.py first"
         )
 
+    # Lake-mode preflight, deliberately BEFORE the workspace exists.
+    # Resolving the lake can refuse the run (incomplete coverage, stale
+    # daily artifact, missing metadata, launcher too old), and every one
+    # of those refusals is a "fix the lake, then re-submit" condition.
+    # Doing it after ``ensure_layout`` would burn the run_id on the way
+    # out — the workspace directory survives the failure and the
+    # duplicate-run_id guard below then rejects the operator's retry
+    # with the *same* id, which is not a fresh-id problem and reads like
+    # one. Failing here leaves the id reusable.
+    lake_artifacts: LakeArtifacts | None = None
+    if request.data_policy.source == "polygon" and lake_mount_enabled():
+        lake_artifacts = await _resolve_lake_artifacts_or_refuse(request)
+
     workspace = resolve_workspace(request.run_id, DEFAULT_ARTIFACTS_ROOT)
     # Reviewer P1: reject a reused run_id BEFORE staging touches the
     # workspace. Without this guard, ``ensure_layout`` silently no-ops
@@ -605,6 +721,10 @@ async def run_trusted_sample(
     # Roots of the shared bar store when the run stages from it. ``None``
     # for synthetic and standalone recorded-fixture replays.
     store_roots: list[Path] | None = None
+    # Decoded bars. Only the staging path needs them — it re-encodes
+    # quote and daily zips from them — so lake mode leaves this empty
+    # rather than unzipping a window it is not going to write.
+    bars_by_date: list[tuple[date, list[TradeBar]]] = []
     compatibility_fixture = bool(
         request.data_policy.provider_kind == "fixture"
         and request.data_policy.fixture_id
@@ -640,9 +760,7 @@ async def run_trusted_sample(
         ]
         bars_by_date = [(trading_date, bars) for trading_date, bars in bars_by_date if bars]
         if not bars_by_date:
-            raise LeanSidecarServiceError(
-                f"compatibility_fixture_empty: {request.data_policy.fixture_id}"
-            )
+            raise LeanSidecarServiceError(f"compatibility_fixture_empty: {request.data_policy.fixture_id}")
         trading_dates = [d for d, _ in bars_by_date]
     elif data_source == "polygon" and request.data_policy.provider_kind == "fixture":
         # Fixture replay (parity tests / freshness canary): stage the
@@ -668,6 +786,19 @@ async def run_trusted_sample(
                 f"{request.end_date.isoformat()}; symbol={request.symbol}"
             )
         trading_dates = [d for d, _ in bars_by_date]
+    elif lake_artifacts is not None:
+        # DATA_LAKE_ENABLED: the lake is the market-data authority. Its
+        # artifacts were already resolved (and the run already refused
+        # if they were not serveable) in the preflight above, before the
+        # workspace existed. Nothing to do here but record the window —
+        # no ``ensure_range``, no Polygon call, no byte-copy into the
+        # workspace. Fixture replays above are deliberately unaffected:
+        # their frozen recordings are the data authority for those runs,
+        # and the lake has nothing to say about them.
+        trading_dates = list(lake_artifacts.trading_dates)
+        _emit_log(
+            f"Lake coverage for {request.symbol}: {len(trading_dates)} trading days under {lake_artifacts.lake_root}"
+        )
     elif data_source == "polygon":
         # Live polygon runs stage from the shared policy-keyed bar store —
         # the same zips the Python engine reads — so both engines consume
@@ -711,53 +842,29 @@ async def run_trusted_sample(
         # Defense-in-depth — Pydantic Literal already rejects unknown values.
         raise LeanSidecarServiceError(f"unknown data_source: {data_source!r}")
 
-    if store_roots is not None:
-        bar_zip_paths = list(
-            stage_minute_zips_from_store(
-                workspace,
-                symbol=request.symbol,
-                trading_dates=trading_dates,
-                roots=store_roots,
-            )
-        )
+    if lake_artifacts is not None:
+        # Lake mode stages nothing: LEAN reads these exact artifacts in
+        # place through the read-only lake mount the launcher adds, so
+        # the paths recorded here are lake paths, not workspace paths.
+        bar_zip_paths = list(lake_artifacts.trade_zip_paths)
+        quote_zip_paths = list(lake_artifacts.quote_zip_paths)
+        daily_path = lake_artifacts.daily_zip_path
     else:
-        bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
-    if compatibility_fixture:
-        from app.engine.data.policy_store import snapshot_minute_trade_zips
-
-        staged_receipt = snapshot_minute_trade_zips(
-            [workspace.data_dir],
-            symbol=request.symbol,
-            start=request.start_date,
-            end=request.end_date,
-            adjusted=request.data_policy.adjusted,
-            session=request.data_policy.session,
+        bar_zip_paths, quote_zip_paths, daily_path = _stage_workspace_data(
+            request=request,
+            workspace=workspace,
+            trading_dates=trading_dates,
+            bars_by_date=bars_by_date,
+            store_roots=store_roots,
+            compatibility_fixture=compatibility_fixture,
         )
-        _assert_compatibility_fixture_receipt(
-            expected_id=request.data_policy.fixture_id,
-            expected_sha256=request.data_policy.fixture_sha256,
-            actual=staged_receipt,
-            phase="staging",
-        )
-    # Phase 5c: stage synthetic minute QUOTE zips alongside the trade
-    # zips. LEAN's default minute subscription requests both; without
-    # the quote zip the log carries known-noise ``Cannot find file:
-    # ...quote.zip`` warnings classified as ``failed_data_requests``.
-    quote_zip_paths = list(stage_quote_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
-    # Real OHLCV daily bars (open-of-first, high-max, low-min,
-    # close-of-last, sum-of-volume), not the last minute bar copied.
-    daily_bars = [_aggregate_daily_bar(request.symbol, day) for (_, day) in bars_by_date]
-    daily_path = stage_daily_bars(workspace, symbol=request.symbol, bars=daily_bars)
-    stage_lean_metadata_from_image(workspace, PINNED_LEAN_IMAGE_DIGEST)
-    stage_empty_corporate_action_dirs(workspace)
     # Phase 4c: ``algorithm_source`` overrides the bundled trusted
     # sample when present. The Phase 1c sandbox shape (--read-only,
-    # --user=<non-root>, --cap-drop=ALL, --network=none, workspace-
-    # only mount) is what makes accepting arbitrary source safe.
+    # --user=<non-root>, --cap-drop=ALL, --network=none, and no
+    # read-write mount beyond the workspace) is what makes accepting
+    # arbitrary source safe.
     source_to_stage = (
-        request.algorithm_source
-        if request.algorithm_source
-        else trusted_template_definition(request.template).source
+        request.algorithm_source if request.algorithm_source else trusted_template_definition(request.template).source
     )
     source_path = stage_algorithm_source(workspace, source_to_stage)
     # PR B: ``bar_minutes`` for the LEAN config is derived from
@@ -766,6 +873,9 @@ async def run_trusted_sample(
     # and ignores this parameter.
     bar_minutes_for_config = request.data_policy.strategy_bars.multiplier
     config = LeanConfig(
+        # Lake mode re-points LEAN's data folder at the read-only lake
+        # mount; every other run keeps the staged workspace subtree.
+        data_folder=(CONTAINER_LAKE_DATA_MOUNT if lake_artifacts is not None else CONTAINER_DATA_FOLDER),
         parameters={
             "start_date": request.start_date.isoformat(),
             "end_date": request.end_date.isoformat(),
@@ -775,7 +885,7 @@ async def run_trusted_sample(
             "session": request.data_policy.session,
             "adjustment": polygon_adjustment,
             **{name: str(value) for name, value in request.strategy_parameters},
-        }
+        },
     )
     config_path = stage_lean_config(workspace, config)
 
@@ -789,6 +899,10 @@ async def run_trusted_sample(
         wall_clock_timeout_s=DEFAULT_RUN_LIMITS.wall_clock_timeout_s,
         workspace_max_mb=DEFAULT_RUN_LIMITS.workspace_max_mb,
         log_tail_bytes=DEFAULT_RUN_LIMITS.log_tail_bytes,
+        # Ask for the lake's read-only mount only when this run actually
+        # read the lake. The launcher resolves the host path itself and
+        # rejects the launch if it has none configured.
+        mount_lake_read_only=lake_artifacts is not None,
         # Intentionally NOT setting hardening_profile until we have a
         # verified fix for the wide-window SIGILL. The plumbing is in
         # place (HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX
@@ -882,6 +996,7 @@ async def run_trusted_sample(
         # staged window match (or surface that they don't).
         staged_trading_dates=trading_dates,
         failure_reason=failure_reason,
+        lake_artifacts=lake_artifacts,
     )
     write_manifest(manifest, workspace.manifest_path)
 
@@ -966,6 +1081,7 @@ def _build_manifest(
     normalized: NormalizedResult | None,
     staged_trading_dates: list[date],
     failure_reason: str | None = None,
+    lake_artifacts: LakeArtifacts | None = None,
 ) -> RunManifest:
     """Construct the full reproducibility manifest from the run.
 
@@ -979,7 +1095,18 @@ def _build_manifest(
     actually staged + a ``failure_reason`` note so the run remains
     auditable and shows up in the sidebar instead of vanishing.
     """
-    market_hours, symbol_properties = _list_metadata(workspace)
+    # The LEAN data root of this run: the staged workspace subtree, or
+    # the lake itself when the launcher mounted it read-only. Every hash
+    # below is taken relative to whichever one LEAN actually read, so
+    # ``path_in_workspace`` means the same thing to a manifest reader in
+    # both modes.
+    if lake_artifacts is None:
+        data_root = workspace.data_dir
+        market_hours, symbol_properties = _list_metadata(workspace)
+    else:
+        data_root = lake_artifacts.lake_root
+        market_hours = lake_artifacts.market_hours_path
+        symbol_properties = lake_artifacts.symbol_properties_path
     if response is not None:
         exit_code = response.exit_code
         is_clean_note = f"is_clean={response.is_clean}"
@@ -989,30 +1116,39 @@ def _build_manifest(
         is_clean_note = "is_clean=False"
         error_cats_note = "lean_error_categories=[]"
     failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
-    bar_zips = _hash_paths_in_workspace(workspace, [*bar_zip_paths, *quote_zip_paths, daily_path])
+    bar_zips = hash_staged_files(data_root, [*bar_zip_paths, *quote_zip_paths, daily_path])
     # PR A hardening: flatten the staged-zip hashes into a path-keyed
     # dict. The ``StagedDataManifest.bar_zips`` tuple is the
     # authoritative form; this index is a convenience for consumers
     # that want "what's the sha for this path?" without traversing
     # the tuple.
     staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in bar_zips}
+    # Corporate actions are inputs, not decoration: LEAN reads factor
+    # and map files off the data root and they change split/dividend
+    # handling, so a factor-file update must move
+    # ``input_snapshot_sha256``. Lake mode is where this bites — the
+    # mounted lake carries real files whose contents can change under a
+    # rerun. (Staging mode creates these directories empty, so the
+    # staged run keeps hashing nothing, exactly as before.)
     staged_data = StagedDataManifest(
         # Phase 5c: include the quote zips alongside trade + daily
         # in the manifest's staged-data hash list. Reproducibility
         # requires every byte LEAN saw to be hashed.
         bar_zips=bar_zips,
-        market_hours_database=(
-            _hash_paths_in_workspace(workspace, [market_hours])[0] if market_hours is not None else None
+        factor_files=(
+            hash_staged_files(data_root, list(lake_artifacts.factor_file_paths)) if lake_artifacts is not None else ()
         ),
+        map_files=(
+            hash_staged_files(data_root, list(lake_artifacts.map_file_paths)) if lake_artifacts is not None else ()
+        ),
+        market_hours_database=(hash_staged_files(data_root, [market_hours])[0] if market_hours is not None else None),
         symbol_properties_database=(
-            _hash_paths_in_workspace(workspace, [symbol_properties])[0] if symbol_properties is not None else None
+            hash_staged_files(data_root, [symbol_properties])[0] if symbol_properties is not None else None
         ),
     )
     runtime_provenance = runtime_provenance_for_digest(PINNED_LEAN_IMAGE_DIGEST)
     if runtime_provenance is None:
-        raise LeanSidecarServiceError(
-            f"lean_runtime_provenance_unpinned: digest={PINNED_LEAN_IMAGE_DIGEST!r}"
-        )
+        raise LeanSidecarServiceError(f"lean_runtime_provenance_unpinned: digest={PINNED_LEAN_IMAGE_DIGEST!r}")
     return RunManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
         run_id=request.run_id,

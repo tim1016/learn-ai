@@ -38,12 +38,35 @@ class LauncherImageReadiness(BaseModel):
     detail: str = Field(..., description="Operator-facing readiness detail.")
 
 
+# Capability tokens a launcher advertises on ``/healthz``. The data
+# plane and the launcher are deployed separately — the launcher is a
+# long-lived host process an operator restarts by hand — so the data
+# plane can be newer than the launcher it talks to. Pydantic ignores
+# unknown request fields by default, which means a stale launcher
+# accepts ``mount_lake_read_only=True`` and silently runs the container
+# with no lake volume: LEAN then reads an empty data folder and fails in
+# a way that points nowhere near the real cause. An explicit capability
+# list turns that into a refusal that names the fix.
+LAUNCHER_CAPABILITY_LAKE_MOUNT = "lake_read_only_mount"
+
+LAUNCHER_CAPABILITIES: tuple[str, ...] = (LAUNCHER_CAPABILITY_LAKE_MOUNT,)
+
+
 class LauncherHealthResponse(BaseModel):
     """Read-only launcher health and pinned-image readiness response."""
 
     status: Literal["ok", "degraded"]
     version: str
     image: LauncherImageReadiness
+    capabilities: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional behaviors this launcher build supports. Additive and "
+            "default-empty, so a launcher predating the field reads as "
+            "'supports nothing optional' rather than as an error — which is "
+            "exactly right, because it does."
+        ),
+    )
 
 
 class LaunchRequest(BaseModel):
@@ -72,6 +95,18 @@ class LaunchRequest(BaseModel):
             "Mutually exclusive with ``hardening_profile``."
         ),
     )
+    mount_lake_read_only: bool = Field(
+        default=False,
+        description=(
+            "Request the data lake's read-only mount for this run "
+            "(``DATA_LAKE_ENABLED`` runs). The data plane states the "
+            "intent; the launcher resolves the host path from its own "
+            "deploy-time configuration, so this stays consistent with "
+            "'the data plane never sends paths and cannot widen the "
+            "mount'. The launcher refuses the launch when it has no "
+            "lake root configured."
+        ),
+    )
     hardening_profile: str | None = Field(
         default=None,
         description=(
@@ -96,9 +131,7 @@ class LaunchRequest(BaseModel):
 
         valid = {p.value for p in HardeningProfile}
         if v not in valid:
-            raise ValueError(
-                f"hardening_profile must be one of {sorted(valid)}, got {v!r}"
-            )
+            raise ValueError(f"hardening_profile must be one of {sorted(valid)}, got {v!r}")
         return v
 
     @field_validator("run_id")
@@ -123,9 +156,7 @@ class LaunchRequest(BaseModel):
         concatenate? does profile win? does flags win?). Reject up
         front so the caller picks one."""
         if self.hardening_profile is not None and self.hardening_flags:
-            raise ValueError(
-                "hardening_profile and hardening_flags are mutually exclusive; pick one"
-            )
+            raise ValueError("hardening_profile and hardening_flags are mutually exclusive; pick one")
         return self
 
 
@@ -187,8 +218,7 @@ class ExtractMetadataRequest(BaseModel):
     image_digest: str = Field(
         ...,
         description=(
-            "Pinned image digest (``sha256:...``). Must be in the "
-            "launcher's allow-list, same as for ``/launch``."
+            "Pinned image digest (``sha256:...``). Must be in the launcher's allow-list, same as for ``/launch``."
         ),
     )
 

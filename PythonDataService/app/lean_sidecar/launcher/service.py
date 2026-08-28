@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 from app.lean_sidecar.config import LEAN_IMAGE_REPO, PINNED_LEAN_IMAGE_DIGEST, RunLimits
+from app.lean_sidecar.lake_mount import LAKE_VOLUME_HOST_PATH_ENV, LakeMount
 from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
@@ -141,6 +142,7 @@ def launch(
     request: LaunchRequest,
     *,
     artifacts_root: Path,
+    lake_root: Path | None = None,
     allowed_image_digests: frozenset[str] | None = None,
 ) -> LaunchResponse:
     """Validate, plan, execute, and persist the launcher log.
@@ -158,6 +160,12 @@ def launch(
     exactly this". HTTP callers never supply ``allowed_image_digests``;
     the explicit override exists only for the developer-only reconciliation
     fixture generator, whose historical pins are isolated from live requests.
+
+    ``lake_root`` is the launcher's deploy-time host path for the data
+    lake, resolved by the transport layer — never by the request. A
+    request asking for the lake mount when the launcher has no lake root
+    configured is rejected rather than silently launched without it,
+    which would run LEAN against an empty data folder.
     """
     try:
         workspace = resolve_workspace(request.run_id, artifacts_root)
@@ -169,6 +177,16 @@ def launch(
             "workspace_not_staged",
             f"{workspace.workspace_dir} does not exist; stage data, config, and source before launching",
         )
+
+    lake_mount: LakeMount | None = None
+    if request.mount_lake_read_only:
+        if lake_root is None:
+            raise LaunchRejectedError(
+                "lake_mount_not_configured",
+                f"run requested the read-only lake mount but the launcher has no "
+                f"{LAKE_VOLUME_HOST_PATH_ENV} configured",
+            )
+        lake_mount = LakeMount(host_lake_root=lake_root)
 
     limits = RunLimits(
         cpus=request.cpus,
@@ -191,6 +209,7 @@ def launch(
                 limits=limits,
                 hardening_profile=HardeningProfile(request.hardening_profile),
                 allowed_image_digests=allowed_image_digests,
+                lake_mount=lake_mount,
             )
         else:
             plan = build_command(
@@ -199,6 +218,7 @@ def launch(
                 limits=limits,
                 hardening_flags=tuple(request.hardening_flags),
                 allowed_image_digests=allowed_image_digests,
+                lake_mount=lake_mount,
             )
     except RunnerConfigurationError as e:
         # The runner itself decides which configuration is acceptable
