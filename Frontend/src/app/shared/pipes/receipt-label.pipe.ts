@@ -17,7 +17,19 @@ const ACRONYMS = new Map<string, string>([
 ]);
 
 const CODE_SEGMENT_PATTERN = /^[A-Za-z0-9_.-]+$/;
-const OPAQUE_RECEIPT_VALUE_LABEL_TOKENS = new Set(['id', 'hash', 'path', 'ref', 'url']);
+// A label ending in one of these names a value that is an audit token, not
+// a vocabulary word: it must reach the reader byte-for-byte. `digest` joins
+// the set for content-addressed image and artifact digests, which are
+// hex-only often enough that the title-case formatter would silently
+// rewrite one (`bdb7c7aa…` → `Bdb7c7aa…`) and break the receipt.
+const OPAQUE_RECEIPT_VALUE_LABEL_TOKENS = new Set([
+  'digest',
+  'hash',
+  'id',
+  'path',
+  'ref',
+  'url',
+]);
 const LABEL_OVERRIDES = new Map<string, string>([
   ['clerk', 'Account service'],
   ['account_clerk', 'Account service'],
