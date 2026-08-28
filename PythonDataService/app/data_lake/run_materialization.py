@@ -189,6 +189,12 @@ async def _materialize_run_data(
     Waiting is bounded by ``spec.fetch_timeout_seconds``. A result carrying
     a failure a retry cannot fix is returned immediately: polling on a
     missing symbol or a dead launcher only wastes the run's clock.
+
+    ``resolution`` is what makes "a failure a retry cannot fix" answerable
+    without waiting: it lets :func:`_is_blocked_by_a_sibling_fetch` ask
+    whether a contended artifact is one this run's reader will even open.
+    Contention on something the coverage gate is about to wave through is not
+    worth a single poll, let alone the full budget.
     """
     deadline = now() + spec.fetch_timeout_seconds
     while True:
