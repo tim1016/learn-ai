@@ -4,6 +4,7 @@
     "/api/alpaca-clerk-sqlite",
     "/api/broker",
     "/api/brokers",
+    "/api/data-lake",
     "/api/strategy-validation"
   ],
   "protected_read_prefixes": [

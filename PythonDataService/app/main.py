@@ -605,10 +605,26 @@ app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE
 
 # Data lake (Slice 1a) — gated by DATA_LAKE_ENABLED.
 # When disabled, the prefix has no registered routes; clients get 404.
+#
+# DATA_PLANE_CONTROL_DEPENDENCIES (mutating-only), not the always-on
+# PROTECTED_DATA_PLANE_READ_DEPENDENCIES its neighbours above carry. Those
+# neighbours are the broker/clerk control plane, where a GET returns
+# positions, holds, order identities and recovery tokens; the lake's GETs
+# return market-data metadata — which symbol-days exist, their hashes and
+# sizes — which is the same class of thing /api/aggregates and /api/engine
+# already serve unauthenticated. Protecting them would be a posture this
+# service does not hold anywhere else for market data.
+#
+# The POSTs are a different question and get the secret: /ensure-data and
+# /backfill spend Polygon quota, write to the shared lake volume, and spawn
+# a background job. Every other mutating data-plane route is behind this
+# dependency and there is no argument for these two being the exception.
+# Decided at the flag flip (#1839, carry-forward A6) rather than inherited
+# from the flag-dark slice that first registered the router.
 if settings.DATA_LAKE_ENABLED:
     from app.routers import data_lake as data_lake_router
 
-    app.include_router(data_lake_router.router)
+    app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
     logger.info("data lake routes ENABLED")
 else:
     logger.info("data lake routes disabled (set DATA_LAKE_ENABLED=true to enable)")
