@@ -23,7 +23,7 @@ used by Start/Resume build-proof admission.
 - Canonical implementation:
   `app/engine/strategy/algorithms/deployment_validation.py::DeploymentValidationConsecutiveGreen`
 - Sole public construction seam:
-  `app/engine/strategy/registry.py::_build_deployment_validation_signal_program`
+  `app/engine/strategy/programs/deployment_validation.py::build_deployment_validation_signal_program`
 
 ## What the promotion changed in the program itself
 

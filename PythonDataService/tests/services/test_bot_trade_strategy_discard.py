@@ -43,6 +43,7 @@ from app.services.bot_trade_strategy import (
     _discard_evaluation,
     supported_alpaca_paper_strategy_keys,
 )
+from tests._helpers.signal_program import placeholder_evaluation_trace
 
 _BAR_END_MS = 1_711_641_600_000
 
@@ -71,6 +72,12 @@ def _evaluation(settle_stage: object) -> StrategyEvaluation:
             ),
         ),
         settle_stage=settle_stage,  # type: ignore[arg-type]
+        # Non-optional since issue #1736 -- the type-level statement of the
+        # invariant this module's docstring already argues in prose. These
+        # tests are about settlement, not decision content.
+        trace=placeholder_evaluation_trace(
+            evaluation_id="evaluation-under-test", bar_close_ms=_BAR_END_MS
+        ),
     )
 
 
@@ -129,9 +136,13 @@ class _StubEvaluation:
     evaluation_id = "eval-refusal-1"
     decision_bar_close_ms = 1_700_000_000_000
     bar = _StubBar()
-    # Matches StrategyEvaluation.trace (default None): _append_decision_receipt
-    # reads it to capture the per-bucket trace digest (Direction 2).
-    trace = None
+    # Matches StrategyEvaluation.trace, which _append_decision_receipt reads to
+    # capture the per-bucket trace digest (Direction 2). Non-optional since
+    # issue #1736; a stub that kept `None` here would be asserting a state the
+    # real dataclass can no longer hold.
+    trace = placeholder_evaluation_trace(
+        evaluation_id="eval-refusal-1", bar_close_ms=1_700_000_000_000
+    )
 
     def __init__(self) -> None:
         self.settlements: list[object] = []

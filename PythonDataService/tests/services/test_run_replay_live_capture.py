@@ -37,7 +37,7 @@ def _trace() -> EvaluationTrace:
     )
 
 
-def _evaluation(trace: EvaluationTrace | None) -> StrategyEvaluation:
+def _evaluation(trace: EvaluationTrace) -> StrategyEvaluation:
     bar = MarketDataBar(
         symbol="SPY", start_ms=_T0, end_ms=_T0 + 60_000,
         open=Decimal("400"), high=Decimal("401"), low=Decimal("399"), close=Decimal("400.5"),
@@ -76,20 +76,6 @@ def test_append_decision_receipt_captures_trace_digest_and_bucket_close() -> Non
     facts = receipts.appended[0]["facts"]
     assert facts["trace_digest"] == trace_root([trace])
     assert facts["decision_bar_close_ms"] == _T0 + 900_000
-
-
-def test_append_decision_receipt_omits_digest_for_a_traceless_evaluation() -> None:
-    receipts = _CapturingReceipts()
-
-    _append_decision_receipt(
-        receipts,  # type: ignore[arg-type]
-        binding=_binding(run_id="run-1"),
-        evaluation=_evaluation(None),
-        outcome="no_action",
-        reason_code="NO_ACTION",
-    )
-
-    assert "trace_digest" not in receipts.appended[0]["facts"]
 
 
 def test_pre_custody_refusal_receipt_carries_the_evidence_digest(tmp_path: Path) -> None:

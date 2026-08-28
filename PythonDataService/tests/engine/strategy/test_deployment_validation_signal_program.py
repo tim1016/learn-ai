@@ -261,3 +261,29 @@ def test_rollback_blocked_exit_restores_in_position_and_retriggers_next_bar() ->
 
     retrigger = _advance(program, context, _minute_bar(10, 1, "green"))
     assert retrigger.trace.staged_candidate == "EXIT"
+
+
+def test_rollback_blocked_exit_is_idempotent_for_one_refused_exit() -> None:
+    """A second rollback for the same refused EXIT must not delay the retry.
+
+    Issue #1736. The restore used to increment, which reached the right
+    number only because ``commit_signal_decision`` had just zeroed the
+    field. Invoked twice for one refused EXIT it restored ``2``, and the
+    next bar spent that extra count on a HOLD instead of re-proposing --
+    the strategy would keep real exposure for a bar longer than the retry
+    it was asked to preserve, with nothing in the trace looking wrong.
+    """
+    program, strategy, context = _prepared_program()
+    _enter_in_position(program, strategy, context, bars_until_exit=1)
+    stage = _advance(program, context, _minute_bar(10, 0, "green"))
+    assert stage.trace.staged_candidate == "EXIT"
+    program.session.settle(Settlement.COMMIT)
+
+    strategy.rollback_blocked_exit()
+    strategy.rollback_blocked_exit()
+
+    assert strategy._in_position is True
+    assert strategy._bars_until_exit_signal == 1
+
+    retrigger = _advance(program, context, _minute_bar(10, 1, "green"))
+    assert retrigger.trace.staged_candidate == "EXIT"

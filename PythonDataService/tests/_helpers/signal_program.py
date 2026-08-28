@@ -27,6 +27,7 @@ from app.engine.execution.signal_intent_executor import SignalIntentExecutionCon
 from app.engine.strategy.base import Strategy, StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
 from app.engine.strategy.signal_intent import SignalIntent
+from app.engine.strategy.signal_program import EvaluationMode, EvaluationTrace
 from app.lean_sidecar import trading_calendar
 
 # ---------------------------------------------------------------------------
@@ -347,3 +348,39 @@ def custody_snapshot(strategy: object, surface: frozenset[str]) -> dict[str, obj
     # have is itself a defect, and silently skipping it is how an earlier
     # version of this reflection lost coverage.
     return {name: repr(getattr(strategy, name)) for name in sorted(surface)}
+
+
+def placeholder_evaluation_trace(
+    *,
+    evaluation_id: str,
+    bar_close_ms: int,
+    program_key: str = "ema_crossover_signal",
+    program_version: str = "v1",
+    staged_candidate: str | None = None,
+) -> EvaluationTrace:
+    """A structurally valid trace for a test that needs one but asserts nothing on it.
+
+    ``StrategyEvaluation.trace`` is non-optional (issue #1736), so a test
+    constructing an evaluation by hand has to supply a trace even when the
+    behaviour under test is about settlement or receipts rather than decision
+    content. Shared rather than re-inlined per file so the shape follows
+    ``EvaluationTrace`` when a field is added, instead of N copies drifting.
+
+    Not for tests that assert on trace *content* -- those should build the
+    trace they mean, so the values under assertion are visible in the test.
+    """
+    return EvaluationTrace(
+        program_key=program_key,
+        program_version=program_version,
+        evaluation_id=evaluation_id,
+        bar_close_ms=bar_close_ms,
+        bar_qualified=True,
+        bucket_closed=True,
+        ready=True,
+        relation_facts={},
+        signal_facts={},
+        staged_candidate=staged_candidate,
+        reason_evidence={},
+        action_plan_request=None,
+        evaluation_mode=EvaluationMode.DECIDE,
+    )

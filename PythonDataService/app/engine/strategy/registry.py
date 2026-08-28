@@ -728,9 +728,12 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # SmaCrossoverAlgorithm.evaluate_signal_bar exits the instant its
-            # relation (a fresh death cross) is true on a decision clock --
-            # there is no held countdown the way EMA's fixed 5-bar exit
-            # timer works, so this seals as "level_true"
+            # relation (SMA(short) no longer above SMA(long)) is true on a
+            # decision clock while in position -- there is no held countdown
+            # the way EMA's fixed 5-bar exit timer works, so this seals as
+            # "level_true". Until issue #1736 the code tested the *fresh*
+            # death cross while this contract already claimed the level; the
+            # code now states the level it always closed
             # (ExitEligibilityContract's second rule, added for this
             # promotion) rather than restating EMA's countdown rule
             # dishonestly. countdown_state_persistable=False for the
@@ -746,8 +749,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             numerical_provenance=NumericalProvenanceContract(
                 formula=(
                     "Long-only golden-cross / death-cross. Enter long on a fresh SMA(short_window) "
-                    "> SMA(long_window) crossover; exit on a fresh SMA(short_window) < "
-                    "SMA(long_window) crossover."
+                    "> SMA(long_window) crossover; exit while in position on the level "
+                    "SMA(short_window) <= SMA(long_window)."
                 ),
                 reference=(
                     "Internal strategy retained from the retired pandas-ta service implementation; "
@@ -948,7 +951,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         strategy_bars=StrategyBarCadence("day", 1),
         build=lambda p: SmaCrossoverAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
+            symbol=p.symbol,
             short_window=p.short_window,  # type: ignore[attr-defined]
             long_window=p.long_window,  # type: ignore[attr-defined]
             # 1440 min = 1 day. TradeBarConsolidator is reference-rounded
@@ -1231,7 +1234,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         param_schema=OrbParams,
         strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: SpyOpeningRangeBreakout(
-            symbol=p.symbol,  # type: ignore[attr-defined]
+            symbol=p.symbol,
             orb_bars=p.orb_bars,  # type: ignore[attr-defined]
             hold_bars=p.hold_bars,  # type: ignore[attr-defined]
             min_range_pct=p.min_range_pct,  # type: ignore[attr-defined]
@@ -1555,7 +1558,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("timeframe_minutes")),
         build=lambda p: SpyEmaCrossoverOptionsAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
+            symbol=p.symbol,
             ema_fast_period=p.ema_fast_period,  # type: ignore[attr-defined]
             ema_slow_period=p.ema_slow_period,  # type: ignore[attr-defined]
             rsi_period=p.rsi_period,  # type: ignore[attr-defined]
@@ -2330,7 +2333,7 @@ _STRATEGY_REGISTRY["ema_crossover_2_bps"] = replace(
     ],
     param_schema=EmaCrossover2BpsParams,
     build=lambda p: EmaCrossover2BpsAlgorithm(
-        symbol=p.symbol,  # type: ignore[attr-defined]
+        symbol=p.symbol,
         gap_bps=p.gap_bps,  # type: ignore[attr-defined]
         rsi_min=p.rsi_min,  # type: ignore[attr-defined]
         rsi_max=p.rsi_max,  # type: ignore[attr-defined]
@@ -2361,7 +2364,7 @@ _STRATEGY_REGISTRY["spy_ema_crossover"] = replace(
     _STRATEGY_REGISTRY["ema_crossover_signal"],
     display_name="EMA Crossover (legacy compatibility)",
     class_name="SpyEmaCrossoverAlgorithm",
-    build=lambda p: SpyEmaCrossoverAlgorithm(symbol=p.symbol),  # type: ignore[attr-defined]
+    build=lambda p: SpyEmaCrossoverAlgorithm(symbol=p.symbol),
     instrument_surface="explicit",
     action_plan_contract="none",
     signal_intent_binding="signal_symbol",
