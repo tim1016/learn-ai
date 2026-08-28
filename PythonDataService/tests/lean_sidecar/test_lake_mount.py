@@ -39,7 +39,7 @@ from app.lean_sidecar.lake_mount import (
     require_lake_metadata,
     resolve_lake_artifacts,
 )
-from app.lean_sidecar.launcher.models import LaunchRequest
+from app.lean_sidecar.launcher.models import LauncherImageReadiness, LaunchRequest
 from app.lean_sidecar.launcher.service import LaunchRejectedError, launch
 from app.lean_sidecar.lean_config import CONTAINER_DATA_FOLDER, LeanConfig
 from app.lean_sidecar.runner import (
@@ -50,6 +50,7 @@ from app.lean_sidecar.runner import (
 from app.lean_sidecar.staging import stage_minute_zips_from_store
 from app.lean_sidecar.workspace import SymbolValidationError, resolve_workspace
 from tests._helpers.lake_fixture import (
+    seed_lake_daily,
     seed_lake_metadata,
     seed_lake_minute_day,
     seed_lake_window,
@@ -266,6 +267,41 @@ class TestLauncherResolvesTheHostPath:
         monkeypatch.setenv(LAKE_VOLUME_HOST_PATH_ENV, str(volume))
         assert launcher_host_lake_root() == volume.resolve() / LAKE_SUBDIR
 
+    def test_relative_host_lake_root_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Two readers resolve a relative path differently; pick neither.
+
+        Podman resolves it against the launcher process's cwd, compose
+        against the directory holding compose.yaml. Both look correct
+        and they disagree, so the error names both interpretations
+        rather than silently picking one.
+        """
+        monkeypatch.setenv(LAKE_VOLUME_HOST_PATH_ENV, "var/lib/learn_ai_lean_data")
+
+        with pytest.raises(LakeMountError, match="lake_volume_host_path_not_absolute") as excinfo:
+            launcher_host_lake_root()
+
+        message = str(excinfo.value)
+        assert "working directory" in message
+        assert "compose.yaml" in message
+
+    def test_launcher_advertises_the_lake_mount_capability(self) -> None:
+        """The health response is where a stale launcher is detectable."""
+        from app.lean_sidecar.launcher.models import (
+            LAUNCHER_CAPABILITIES,
+            LAUNCHER_CAPABILITY_LAKE_MOUNT,
+            LauncherHealthResponse,
+        )
+
+        assert LAUNCHER_CAPABILITY_LAKE_MOUNT in LAUNCHER_CAPABILITIES
+        # A launcher predating the field reads as "supports nothing
+        # optional" rather than erroring — which is exactly right.
+        legacy = LauncherHealthResponse(
+            status="ok",
+            version="old",
+            image=LauncherImageReadiness(reference=None, available=False, detail="n/a"),
+        )
+        assert legacy.capabilities == []
+
     def test_data_plane_lake_root_matches_the_writers_lake_root(self) -> None:
         """Reader and writer must name the same directory.
 
@@ -308,18 +344,20 @@ class TestSameBytesAsThePythonReaders:
     ``iter_dates`` predicate, so such a test cannot fail.
     """
 
-    def test_resolution_does_not_decode_the_artifacts(self, tmp_path: Path) -> None:
-        """Lake mode never unzips: resolution is ``exists()`` checks only.
+    def test_resolution_does_not_decode_the_minute_artifacts(self, tmp_path: Path) -> None:
+        """Resolution stays O(1) unzips, not O(window).
 
-        Proven by handing it a lake whose zips are not zips. A decoding
-        resolver would raise ``BadZipFile``; this one does not care,
+        Proven by corrupting every *minute* zip: a resolver that decoded
+        them would raise ``BadZipFile``, and this one does not care,
         because LEAN decodes from the mount and the run has no use for
-        the bars. That is what keeps a long window off the "unzip every
-        day on the event loop" path.
+        the bars. The daily artifact is the deliberate exception — one
+        file per symbol, and its date range is the only way to catch a
+        zip that predates a window extension — so it is left intact
+        here and covered by ``test_stale_daily_artifact_is_refused``.
         """
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", WINDOW)
-        for corrupt in lake_root.rglob("*.zip"):
+        for corrupt in lake_root.rglob("*/minute/*/*.zip"):
             corrupt.write_bytes(b"not a zip at all")
 
         artifacts = resolve_lake_artifacts(
@@ -424,20 +462,25 @@ class TestSameBytesAsThePythonReaders:
         )
         assert _sha256(artifacts.quote_zip_paths[0]) == hashlib.sha256(expected).hexdigest()
 
-    def test_trade_only_lake_reports_no_quote_artifacts(self, tmp_path: Path) -> None:
-        """``data_types=['trade']`` is a valid lake spec; absence is honest."""
+    def test_trade_only_lake_is_refused(self, tmp_path: Path) -> None:
+        """A trade-only lake would launch LEAN into failed_data_requests.
+
+        ``data_types=['trade']`` is a legal lake spec, and staging mode
+        coped by synthesizing quote zips per run. The read-only mount
+        cannot, and LEAN's default minute subscription asks for quotes
+        regardless — so serving such a lake means a guaranteed-noisy
+        run. Refuse instead.
+        """
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", WINDOW, with_quote=False)
 
-        artifacts = resolve_lake_artifacts(
-            lake_root=lake_root,
-            symbol="SPY",
-            start=DAY_ONE,
-            end=DAY_TWO,
-        )
-
-        assert artifacts.quote_zip_paths == ()
-        assert len(artifacts.trade_zip_paths) == 2
+        with pytest.raises(LakeMountError, match="lake_incomplete_quote_coverage"):
+            resolve_lake_artifacts(
+                lake_root=lake_root,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
 
 
 class TestLakeCoverageFailsLoudly:
@@ -447,7 +490,7 @@ class TestLakeCoverageFailsLoudly:
         lake_root = tmp_path / LAKE_SUBDIR
         lake_root.mkdir(parents=True)
 
-        with pytest.raises(LakeMountError, match="lake_window_empty"):
+        with pytest.raises(LakeMountError, match="lake_incomplete_trade_coverage"):
             resolve_lake_artifacts(
                 lake_root=lake_root,
                 symbol="SPY",
@@ -457,7 +500,8 @@ class TestLakeCoverageFailsLoudly:
 
     def test_missing_daily_artifact_raises(self, tmp_path: Path) -> None:
         lake_root = tmp_path / LAKE_SUBDIR
-        seed_lake_minute_day(lake_root, "SPY", DAY_ONE)
+        for session in WINDOW:
+            seed_lake_minute_day(lake_root, "SPY", session)
         seed_lake_metadata(lake_root)
 
         with pytest.raises(LakeMountError, match="lake_missing_daily_artifact"):
@@ -468,18 +512,69 @@ class TestLakeCoverageFailsLoudly:
                 end=DAY_TWO,
             )
 
-    def test_partial_coverage_returns_only_the_days_present(self, tmp_path: Path) -> None:
+    def test_partially_covered_window_is_refused_not_narrowed(self, tmp_path: Path) -> None:
+        """Two requested sessions, one zip present -> refusal.
+
+        Silently narrowing is the dangerous outcome: ``config.json``
+        still declares the full window, so LEAN would run a shorter
+        backtest than the manifest, the UI, and the operator believe.
+        The error names the session that is missing.
+        """
         lake_root = tmp_path / LAKE_SUBDIR
         seed_lake_window(lake_root, "SPY", [DAY_ONE])
+
+        with pytest.raises(LakeMountError, match="lake_incomplete_trade_coverage") as excinfo:
+            resolve_lake_artifacts(
+                lake_root=lake_root,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
+
+        assert DAY_TWO.isoformat() in str(excinfo.value)
+        assert "1 sessions" in str(excinfo.value)
+
+    def test_stale_daily_artifact_is_refused(self, tmp_path: Path) -> None:
+        """A daily zip written for a shorter window must not pass.
+
+        The daily artifact holds a symbol's whole history in one file,
+        so one written before a window extension survives untouched and
+        satisfies any existence check while lacking the new dates.
+        """
+        lake_root = tmp_path / LAKE_SUBDIR
+        seed_lake_window(lake_root, "SPY", WINDOW)
+        # Rebuild the daily artifact as if only the first session existed.
+        seed_lake_daily(lake_root, "SPY", [DAY_ONE])
+
+        with pytest.raises(LakeMountError, match="lake_daily_artifact_does_not_cover_window") as excinfo:
+            resolve_lake_artifacts(
+                lake_root=lake_root,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
+
+        assert DAY_TWO.isoformat() in str(excinfo.value)
+
+    def test_non_session_dates_in_the_window_are_not_required(self, tmp_path: Path) -> None:
+        """Coverage is judged against NYSE sessions, not calendar days.
+
+        The window below spans a weekend; demanding artifacts for
+        Saturday and Sunday would make every multi-week run unservable.
+        """
+        friday, monday = date(2026, 1, 2), date(2026, 1, 5)
+        sessions = [friday, monday]
+        lake_root = tmp_path / LAKE_SUBDIR
+        seed_lake_window(lake_root, "SPY", sessions)
 
         artifacts = resolve_lake_artifacts(
             lake_root=lake_root,
             symbol="SPY",
-            start=DAY_ONE,
-            end=DAY_TWO,
+            start=friday,
+            end=monday,
         )
 
-        assert artifacts.trading_dates == (DAY_ONE,)
+        assert artifacts.trading_dates == (friday, monday)
 
     def test_path_unsafe_symbol_is_rejected_before_any_path_join(self, fixture_lake: Path) -> None:
         with pytest.raises(SymbolValidationError):

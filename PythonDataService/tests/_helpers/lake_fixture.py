@@ -22,6 +22,8 @@ from app.data_lake.derived_quote import build_minute_quote_zip_bytes
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
+    LeanFactorFilePath,
+    LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
 )
@@ -148,6 +150,32 @@ def seed_lake_metadata(lake_root: Path) -> tuple[Path, Path]:
         b"usa,spy,equity,SPY,USD,1,0.01,1\n",
     )
     return market_hours, symbol_properties
+
+
+def seed_lake_corporate_actions(
+    lake_root: Path,
+    symbol: str,
+    *,
+    factor_rows: str = "20260105,1,1\n",
+    map_rows: str | None = None,
+) -> tuple[Path, Path]:
+    """Write the symbol's factor and map files at their lake paths.
+
+    The contents are only ever hashed by the tests that use this, never
+    parsed, so the rows stay minimally plausible rather than realistic.
+    Returns ``(factor_file_path, map_file_path)``.
+    """
+    factor = _write(
+        lake_root,
+        Path(*LeanFactorFilePath(market="usa", symbol=symbol).relative_path().parts),
+        factor_rows.encode("ascii"),
+    )
+    mapping = _write(
+        lake_root,
+        Path(*LeanMapFilePath(market="usa", symbol=symbol).relative_path().parts),
+        (map_rows if map_rows is not None else f"19980102,{symbol.lower()}\n").encode("ascii"),
+    )
+    return factor, mapping
 
 
 def seed_lake_window(
