@@ -29,7 +29,6 @@ import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
-from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -72,6 +71,7 @@ from app.data_lake.types import (
     DataAvailabilityResult,
     DataRunSpec,
     NonSessionRecord,
+    classify_overall_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,6 +174,36 @@ def _daily_dch(source_artifact_ids: list[int], source_file_sha256s: list[str]) -
     )
 
 
+def minute_bar_identity(
+    spec: DataRunSpec,
+    *,
+    symbol: str | None,
+    trading_date: date | None,
+    data_type: str | None,
+) -> ArtifactIdentity:
+    """Canonical minute-bar ArtifactIdentity builder.
+
+    Single source of truth for the (provider, price_adjustment_mode) pair
+    a minute-bar identity carries: polygon-sourced trade bars vs
+    learn_ai_derived quote bars, at the spec's own price-adjustment mode
+    (never a hardcoded literal that could drift from it). Both
+    expand_required_artifacts's inner loop (below) and the backfill job's
+    lease-wait poll (app.data_lake.backfill._wait_for_lease_resolution)
+    call this so they can't independently drift on the provider ternary.
+    """
+    provider = "polygon" if data_type == "trade" else "learn_ai_derived"
+    return ArtifactIdentity(
+        artifact_kind="time_series_bars",
+        market=spec.market,
+        symbol=symbol,
+        trading_date=trading_date,
+        resolution="minute",
+        data_type=data_type,
+        provider=provider,
+        price_adjustment_mode=spec.price_adjustment_mode,
+    )
+
+
 def expand_required_artifacts(
     spec: DataRunSpec,
     market_hours_db_path: Path | None = None,
@@ -199,19 +229,7 @@ def expand_required_artifacts(
         # Per-day minute bars.
         for trading_date in sessions:
             for data_type in spec.data_types:
-                provider = "polygon" if data_type == "trade" else "learn_ai_derived"
-                required.append(
-                    ArtifactIdentity(
-                        artifact_kind="time_series_bars",
-                        market=spec.market,
-                        symbol=symbol,
-                        trading_date=trading_date,
-                        resolution="minute",
-                        data_type=data_type,
-                        provider=provider,
-                        price_adjustment_mode="raw",
-                    )
-                )
+                required.append(minute_bar_identity(spec, symbol=symbol, trading_date=trading_date, data_type=data_type))
 
         # Corp-action artifacts.
         if spec.include_factor_files:
@@ -274,22 +292,6 @@ def _compute_data_availability_hash(artifacts: list[ArtifactRecord]) -> str:
     fingerprints.sort(key=lambda t: tuple("" if v is None else str(v) for v in t))
     blob = json.dumps(fingerprints, default=str, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
-
-
-def classify_overall_status(*, has_failures: bool, has_success: bool) -> Literal["complete", "partial", "failed"]:
-    """Shared complete/partial/failed classification.
-
-    Any success at all downgrades a failure-bearing result from 'failed'
-    to 'partial'. Single source of truth for this rule — both ensure_data
-    (below) and the backfill job's per-day/whole-range rollups
-    (app.data_lake.backfill) apply it identically rather than each
-    re-deriving the same three-way branch.
-    """
-    if has_failures and has_success:
-        return "partial"
-    if has_failures:
-        return "failed"
-    return "complete"
 
 
 def _is_minute_trade(identity: ArtifactIdentity) -> bool:
