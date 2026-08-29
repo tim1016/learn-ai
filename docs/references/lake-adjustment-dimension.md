@@ -16,7 +16,7 @@ as HTTP 409.
 
 After, against the live containerized data plane with the flag on:
 
-```
+```http
 POST /api/engine/backtest
 {"strategy_name":"ema_crossover_signal","params":{"symbol":"SPY"},
  "from_date":"2025-06-02","to_date":"2025-06-06","auto_fetch":true}

@@ -30,7 +30,7 @@ So this issue is not "add adjusted support". It is **replace a whole-root mutual
 
 Give the lake root the dimension, **above** the LEAN tree:
 
-```
+```text
 <LEAN_DATA_WRITE_ROOT>/lake/<price_adjustment_mode>/equity/usa/minute/<symbol>/<date>_trade.zip
 ```
 

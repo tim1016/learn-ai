@@ -114,39 +114,50 @@ def resolve_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
 
 
 def _lake_root_within_container(price_adjustment_mode: str) -> Path:
-    """Build the mode root, refusing anything that escapes the lake.
+    return _mode_subdir_within(resolve_lake_container(), price_adjustment_mode)
+
+
+def _mode_subdir_within(container: Path, price_adjustment_mode: str) -> Path:
+    """Build a mode-keyed subdirectory, refusing anything that escapes it.
 
     Two checks, because they fail differently. The membership test rejects
     the value; the containment test proves the *path* it produced is still
-    inside the lake, which is the property that actually matters and the one
-    a future third mode could break by accident.
+    inside its container, which is the property that actually matters and the
+    one a future third mode could break by accident.
+
+    Shared by the lake root and the staging root so the two cannot drift on
+    what a mode segment is allowed to be.
     """
     if price_adjustment_mode not in _ADJUSTMENT_MODES:
         raise ValueError(
             f"{price_adjustment_mode!r} is not a price adjustment mode; expected one of "
             f"{', '.join(sorted(_ADJUSTMENT_MODES))}"
         )
-    container = os.path.realpath(os.fspath(resolve_lake_container()))
-    root = os.path.realpath(os.path.join(container, price_adjustment_mode))
-    if not root.startswith(container.rstrip(os.sep) + os.sep):
-        raise ValueError(f"lake root {root!r} escapes the lake container {container!r}")
+    base = os.path.realpath(os.fspath(container))
+    root = os.path.realpath(os.path.join(base, price_adjustment_mode))
+    if not root.startswith(base.rstrip(os.sep) + os.sep):
+        raise ValueError(f"{root!r} escapes its container {base!r}")
     return Path(root)
 
 
-def resolve_staging_root() -> Path:
+def resolve_staging_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
     """Return the per-attempt staging root that promotes into a lake root.
 
     Must share a filesystem with :func:`resolve_lake_root` so the promote is
     a rename (see ``app.data_lake.atomic.assert_same_filesystem``); both live
     under ``LEAN_DATA_WRITE_ROOT``, so they always do.
 
-    Deliberately *not* keyed by adjustment mode. Staging paths are already
-    collision-free by ``(request_id, worker_id, attempt)`` — see
-    :func:`staging_path_for` — and a run carries a single mode, so a second
-    dimension here would partition nothing. The mode belongs to the durable
-    tree, not to per-attempt scratch.
+    Keyed by adjustment mode for the same reason the lake root is. A staged
+    file is named by ``(request_id, worker_id, attempt)`` plus its
+    root-relative destination path — and that relative path carries no mode
+    (``LeanMinuteBarPath.relative_path`` deliberately does not), so raw and
+    adjusted bytes for the same symbol and date name the *same* staging file.
+    That was safe only while no caller reused a ``request_id`` across two
+    concurrent modes. Partitioning here makes staging mirror the destination
+    it promotes into, so the guarantee stops resting on an invariant
+    maintained somewhere else (#1866 review).
     """
-    return Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR
+    return _mode_subdir_within(Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR, price_adjustment_mode)
 
 
 def minute_bar_market_root(market: Market) -> PurePosixPath:

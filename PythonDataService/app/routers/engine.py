@@ -1098,6 +1098,7 @@ def _materialize_missing_bars(
         # Lazy for the same reason as the Polygon client below: the flag is
         # off by default and the lake pulls in the catalog + provider stack.
         from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
+        from app.data_lake.types import polygon_mode_for
 
         try:
             materialized = materialize_engine_run(
@@ -1106,7 +1107,7 @@ def _materialize_missing_bars(
                 end=end,
                 resolution=request.resolution,
                 price_adjustment_mode=(
-                    "polygon_split_adjusted" if _policy_adjusted(request.data_policy) else "raw"
+                    polygon_mode_for(_policy_adjusted(request.data_policy))
                 ),
                 requester=request.strategy_name,
             )

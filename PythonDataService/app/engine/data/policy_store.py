@@ -49,6 +49,7 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.data_lake import path_policy
+from app.data_lake.types import polygon_mode_for
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     different directory instead of a refusal.
     """
     if settings.DATA_LAKE_ENABLED:
-        root = path_policy.resolve_lake_root("polygon_split_adjusted" if adjusted else "raw")
+        root = path_policy.resolve_lake_root(polygon_mode_for(adjusted))
         root.mkdir(parents=True, exist_ok=True)
         return [root]
 

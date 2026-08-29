@@ -853,7 +853,9 @@ async def test_import_cache_root_creates_complete_rows_under_true_adjustment_mod
     # The physical zip bytes were placed under the lake's canonical layout,
     # untouched.
     for a in report.imported:
-        lake_zip = lake_root / lake_subpath("raw") / "equity" / "usa" / "minute" / "spy" / f"{a.trading_date.strftime('%Y%m%d')}_trade.zip"
+        lake_zip = (
+            lake_root / lake_subpath(expected_mode) / "equity" / "usa" / "minute" / "spy" / f"{a.trading_date.strftime('%Y%m%d')}_trade.zip"
+        )
         assert lake_zip.is_file()
         cache_zip = cache_root / "equity" / "usa" / "minute" / "spy" / f"{a.trading_date.strftime('%Y%m%d')}_trade.zip"
         assert lake_zip.read_bytes() == cache_zip.read_bytes()
@@ -916,7 +918,11 @@ async def test_import_cache_root_refuses_overwrite_on_hash_mismatch(
     finally:
         await conn.close()
     assert row["FileSha256"] == original_hash
-    lake_zip = lake_root / lake_subpath("raw") / "equity" / "usa" / "minute" / "spy" / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
+    lake_zip = (
+        lake_root
+        / lake_subpath("polygon_split_adjusted" if adjusted else "raw")
+        / "equity" / "usa" / "minute" / "spy" / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
+    )
     assert hashlib.sha256(lake_zip.read_bytes()).hexdigest() == original_hash
 
 
@@ -1019,38 +1025,6 @@ async def test_import_cache_root_makes_zero_provider_calls(clean_artifacts, pool
         report = await import_cache_root(cache_root=cache_root, lake_root=lake_root)
 
     assert len(report.imported) == 1
-
-
-@pytest.mark.asyncio
-async def test_import_cache_root_refuses_second_mode_into_same_lake_root(
-    clean_artifacts, pool, lake_root: Path, tmp_path: Path
-):
-    """Raw + adjusted zips for the same (symbol, date) resolve to the same
-    on-disk path (LeanMinuteBarPath carries no adjustment-mode component).
-    Importing a 'raw' cache into a lake root and then an adjusted cache
-    into the *same* root must refuse the second mode wholesale, never
-    silently overwrite the first mode's bytes."""
-    raw_cache = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
-    adjusted_cache = _build_cache(tmp_path / "adjusted-src", "QQQ", [date(2024, 5, 21)], adjusted=True)
-
-    first = await import_cache_root(cache_root=raw_cache, lake_root=lake_root)
-    assert len(first.imported) == 1
-    assert first.imported[0].price_adjustment_mode == "raw"
-
-    second = await import_cache_root(cache_root=adjusted_cache, lake_root=lake_root)
-
-    assert second.imported == []
-    assert len(second.failed) == 1
-    assert second.failed[0].reason == "lake_root_mode_conflict"
-    assert second.failed[0].symbol == "QQQ"
-
-    # The raw row from the first run is untouched, and no QQQ row exists.
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        rows = await conn.fetch('SELECT "Symbol", "PriceAdjustmentMode" FROM "DataLakeArtifacts"')
-    finally:
-        await conn.close()
-    assert [(r["Symbol"], r["PriceAdjustmentMode"]) for r in rows] == [("SPY", "raw")]
 
 
 @pytest.mark.asyncio

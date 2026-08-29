@@ -355,5 +355,8 @@ async def test_daily_artifact_dch_mismatch_returns_failure(clean_artifacts, pool
         for a in result_wide.artifacts
         if a.artifact_kind == "time_series_bars" and a.resolution == "minute" and a.symbol == "SPY"
     ]
-    h2 = _daily_dch(wide_source_ids, wide_source_shas)
+    # The mode participates in the hash, so recompute with the wide run's own
+    # mode rather than a literal — a fixture that changes mode must not
+    # silently turn this sanity check into a comparison of two modes.
+    h2 = _daily_dch(wide_source_ids, wide_source_shas, _spec_wide(["SPY"]).price_adjustment_mode)
     assert h1 != h2, "narrow and wide daily DCHs must differ for this test to be meaningful"

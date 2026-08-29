@@ -89,6 +89,32 @@ def test_apply_refuses_to_merge_onto_an_existing_tree(write_root: Path) -> None:
         migrate(apply=True)
 
 
+def test_a_conflict_on_a_later_entry_moves_nothing_at_all(write_root: Path) -> None:
+    """The refusal must leave the tree exactly as it found it.
+
+    Regression for #1866 review: the conflict check used to run inside the
+    move loop, so a clash on the second entry aborted *after* the first had
+    already been renamed. That left a half-migrated lake a re-run could not
+    finish, because the moved entry was no longer in the container for
+    ``plan_moves`` to see.
+    """
+    _seed_legacy_tree(write_root)
+    legacy_metadata = write_root / "lake" / "market-hours" / "market-hours-database.json"
+    legacy_metadata.parent.mkdir(parents=True)
+    legacy_metadata.write_bytes(b"{}")
+
+    # Only the *second* entry (sorted: equity, then market-hours) collides.
+    (write_root / lake_subpath("raw") / "market-hours").mkdir(parents=True)
+
+    with pytest.raises(SystemExit, match="refusing to merge"):
+        migrate(apply=True)
+
+    # Nothing moved: both legacy entries are still where they were.
+    assert (write_root / "lake" / "equity").is_dir()
+    assert legacy_metadata.is_file()
+    assert not (write_root / lake_subpath("raw") / "equity").exists()
+
+
 def test_a_missing_lake_is_not_an_error(write_root: Path) -> None:
     """A deployment that has never written to the lake has nothing to move."""
     assert plan_moves(resolve_lake_container()) == []

@@ -73,7 +73,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.data_lake.path_policy import resolve_lake_root
-from app.data_lake.types import PriceAdjustmentMode, is_lake_addressable_symbol
+from app.data_lake.types import PriceAdjustmentMode, is_lake_addressable_symbol, polygon_mode_for
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import (
     SessionWindow,
@@ -404,7 +404,7 @@ def _execute_plan(
     # never materializes, so an empty root simply means "the lake holds
     # nothing for this window" and every day falls back to the provider --
     # the same answer an unpopulated raw root has always given.
-    requested_mode: PriceAdjustmentMode = "polygon_split_adjusted" if adjusted else "raw"
+    requested_mode: PriceAdjustmentMode = polygon_mode_for(adjusted)
     reader = LeanMinuteDataReader(
         [lake_root if lake_root is not None else resolve_lake_root(requested_mode)],
         # The lake holds the whole trading day; the chart applies its own

@@ -156,7 +156,7 @@ from app.data_lake.path_policy import (
     resolve_lake_root,
     resolve_staging_root,
 )
-from app.data_lake.types import ArtifactIdentity, ArtifactRecord
+from app.data_lake.types import ArtifactIdentity, ArtifactRecord, polygon_mode_for
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.utils.timestamps import now_ms_utc, to_ms_utc
 
@@ -423,7 +423,7 @@ def load_symbol_provenance(cache_root: Path, symbol: str) -> dict[str, Any]:
 
 def price_adjustment_mode_for(provenance: dict[str, Any]) -> str:
     """Map a provenance file's ``policy.adjusted`` to the catalog's enum value."""
-    return "polygon_split_adjusted" if provenance["policy"]["adjusted"] else "raw"
+    return polygon_mode_for(bool(provenance["policy"]["adjusted"]))
 
 
 def provenance_covers_date(provenance: dict[str, Any], trading_date: date) -> bool:
@@ -452,7 +452,7 @@ def _import_minute_trade_dch(adjusted: bool) -> str:
     return _dch(
         provider="polygon",
         provider_params=_IMPORT_MINUTE_TRADE_PARAMS_ADJUSTED if adjusted else _IMPORT_MINUTE_TRADE_PARAMS_RAW,
-        price_adjustment_mode="polygon_split_adjusted" if adjusted else "raw",
+        price_adjustment_mode=polygon_mode_for(adjusted),
         session_policy="full",
         lean_format_version=1,
     )
@@ -779,7 +779,6 @@ async def _import_one_zip(
                     request_id=run_id,
                     worker_id=_WORKER_ID,
                     attempt=1,
-                    price_adjustment_mode=price_adjustment_mode,
                 )
                 logger.info(
                     "cache_import: restored missing destination file for %s %s from cache zip",
@@ -850,7 +849,6 @@ async def _import_one_zip(
                 request_id=run_id,
                 worker_id=_WORKER_ID,
                 attempt=1,
-                price_adjustment_mode=price_adjustment_mode,
             )
         )
         await catalog_client.complete_artifact(
@@ -957,13 +955,10 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
             f"equal the canonical root."
         )
 
-    # The same setting the canonical helpers wrap, so these cannot diverge
-    # from where ensure_data's live pipeline reads and writes. The lake root
-    # itself is resolved per symbol, below: it is keyed by adjustment mode,
-    # and the mode comes from each symbol's own provenance document.
-    staging_dir = resolve_staging_root()
-    staging_dir.mkdir(parents=True, exist_ok=True)
-
+    # Both roots are resolved per symbol, below: each is keyed by adjustment
+    # mode, and the mode comes from that symbol's own provenance document.
+    # They come from the canonical helpers so they cannot diverge from where
+    # ensure_data's live pipeline reads and writes.
     await catalog_client.init_pool()
 
     refs, unrecognized = discover_cache_zips(cache_root)
@@ -1028,6 +1023,8 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
         # so they cannot collide and there is nothing to serialize: two
         # concurrent imports of different modes touch disjoint trees.
         lake_dir = resolve_lake_root(price_adjustment_mode)
+        staging_dir = resolve_staging_root(price_adjustment_mode)
+        staging_dir.mkdir(parents=True, exist_ok=True)
         lake_dir.mkdir(parents=True, exist_ok=True)
 
         dch = _import_minute_trade_dch(adjusted)

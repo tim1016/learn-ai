@@ -89,17 +89,27 @@ def migrate(*, apply: bool) -> int:
         return 0
 
     destination.mkdir(parents=True, exist_ok=True)
+
+    # Check every target before moving anything. Checking inside the move loop
+    # would let a conflict on the Nth entry abort a migration that had already
+    # renamed the first N-1 — a half-migrated lake that a re-run cannot finish
+    # (the moved entries are gone from the container, so ``plan_moves`` no
+    # longer sees them) and that needs manual repair. The refusal promised
+    # below is only honest if it leaves the tree untouched (#1866 review).
+    conflicts = [destination / entry.name for entry in moves if (destination / entry.name).exists()]
+    if conflicts:
+        listed = ", ".join(str(c) for c in conflicts)
+        raise SystemExit(
+            f"{listed} already exist(s); refusing to merge two trees, and nothing has been "
+            "moved. Resolve by hand — silently merging could pair a catalog row with bytes "
+            "it does not describe."
+        )
+
     for entry in moves:
-        target = destination / entry.name
-        if target.exists():
-            raise SystemExit(
-                f"{target} already exists; refusing to merge two trees. Resolve by hand — "
-                "silently merging could pair a catalog row with bytes it does not describe."
-            )
         # Same filesystem by construction (both under the lake container), so
         # this is a rename, not a copy: no window where an artifact is half
         # present, and no second copy of the bytes on disk.
-        entry.rename(target)
+        entry.rename(destination / entry.name)
     (container / LEGACY_MODE_MARKER).unlink(missing_ok=True)
     logger.info("done; %s now holds mode roots only", container)
     return 0

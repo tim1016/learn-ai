@@ -138,7 +138,7 @@ def _writable_lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
     existed, not merely an empty one.
     """
     lake_root = resolve_lake_root(spec.price_adjustment_mode)
-    staging_root = resolve_staging_root()
+    staging_root = resolve_staging_root(spec.price_adjustment_mode)
     lake_root.mkdir(parents=True, exist_ok=True)
     staging_root.mkdir(parents=True, exist_ok=True)
     return lake_root, staging_root
@@ -977,7 +977,7 @@ async def _process_factor_file_artifact(
             ),
             False,
         )
-    staging_root = resolve_staging_root()
+    staging_root = resolve_staging_root(spec.price_adjustment_mode)
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1210,7 +1210,7 @@ async def _process_minute_quote_artifact(
         trading_date_yyyymmdd=identity.trading_date.strftime("%Y%m%d"),  # type: ignore[union-attr]
         bars=trade_bars,
     )
-    staging_root = resolve_staging_root()
+    staging_root = resolve_staging_root(spec.price_adjustment_mode)
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,
@@ -1346,7 +1346,7 @@ async def _process_daily_trade_artifact(
 
     aggregates = aggregate_minute_to_daily(all_bars)
     payload = build_daily_zip_bytes(symbol=identity.symbol or "", aggregates=aggregates)
-    staging_root = resolve_staging_root()
+    staging_root = resolve_staging_root(spec.price_adjustment_mode)
     file_sha = atomic_write_and_promote(
         content=payload,
         lake_root=lake_root,

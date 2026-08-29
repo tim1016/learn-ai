@@ -54,6 +54,19 @@ PriceAdjustmentMode = Literal["raw", "polygon_split_adjusted", "lean_adjusted"]
 ArtifactStatus = Literal["fetching", "complete", "stale", "failed"]
 
 
+def polygon_mode_for(adjusted: bool) -> Literal["raw", "polygon_split_adjusted"]:
+    """The lake adjustment mode a Polygon run's ``adjusted`` flag selects.
+
+    One canonical answer to "which mode does this boolean mean". Five call
+    sites had each spelled the conditional out inline and #1839 was about to
+    add a sixth, so the mapping lives here beside the vocabulary it maps into.
+
+    ``lean_adjusted`` is unreachable from a boolean by construction: it would
+    be derived from raw bars plus factor files, and no such producer exists.
+    """
+    return "polygon_split_adjusted" if adjusted else "raw"
+
+
 def trading_range_span_days(start: date, end: date) -> int:
     """Inclusive day count of a closed ``[start, end]`` trading-date window."""
     return (end - start).days + 1

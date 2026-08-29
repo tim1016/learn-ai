@@ -487,11 +487,13 @@ def test_compose_chart_bars_reads_the_adjusted_root_for_an_adjusted_request(
     root holds nothing, so every day still comes from the provider; what
     changed is *why* — an ordinary ``lake_gap``, not an unsupported request.
 
-    The bytes written here go to the raw root, which is the point: reading
-    the adjusted root must not find them.
+    The bytes written here go to the *raw* root, which is the point: reading
+    the adjusted root must not find them. Seeding the bare container instead
+    would leave both mode roots empty and the test would pass even if the
+    request wrongly resolved raw (#1866 review).
     """
-    _write_lake_day(lake_root, REGULAR_BEFORE)
-    _write_lake_day(lake_root, HALF_DAY)
+    _write_lake_day(lake_root / "raw", REGULAR_BEFORE)
+    _write_lake_day(lake_root / "raw", HALF_DAY)
     provider = _ProviderSpy()
 
     # No explicit lake_root, so the service resolves per mode from settings.
