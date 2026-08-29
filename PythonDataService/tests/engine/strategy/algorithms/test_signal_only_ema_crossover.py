@@ -14,7 +14,6 @@ from app.engine.execution.signal_intent_executor import (
     SignalIntentExecutionContext,
 )
 from app.engine.live.action_plan_signal_executor import StockActionPlanSignalExecutor
-from app.engine.strategy.algorithms.ema_crossover_2_bps import EmaCrossover2BpsAlgorithm
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
@@ -105,7 +104,7 @@ def test_two_bps_variant_changes_only_the_gap_gate() -> None:
     original_context.set_signal_intent_executor(original_executor)
     original_context.current_time_ms = bar.end_ms
 
-    two_bps = EmaCrossover2BpsAlgorithm(symbol="SPY")
+    two_bps = EmaCrossoverSignalAlgorithm(symbol="SPY", gap=0, gap_bps=2)
     two_bps_context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
     two_bps.ctx = two_bps_context
     two_bps.initialize()
@@ -142,8 +141,9 @@ def test_two_bps_variant_applies_configured_gap_and_inclusive_rsi_gates(
     rsi: str,
     should_enter: bool,
 ) -> None:
-    strategy = EmaCrossover2BpsAlgorithm(
+    strategy = EmaCrossoverSignalAlgorithm(
         symbol="SPY",
+        gap=0,
         gap_bps=gap_bps,
         rsi_min=rsi_min,
         rsi_max=rsi_max,

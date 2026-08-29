@@ -42,9 +42,9 @@ async def test_deploy_with_no_parameters_resolves_registered_defaults(
 
     assert response.status_code == 201
     body = response.json()
-    assert body["parameters"] == {"gap": 0.20, "rsi_min": 50.0, "rsi_max": 70.0}
+    assert body["parameters"] == {"gap": 0.20, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
     assert body["parameters_diverge_from_defaults"] == []
-    assert registry.deploy_calls[0]["strategy_params"] == {"gap": 0.20, "rsi_min": 50.0, "rsi_max": 70.0}
+    assert registry.deploy_calls[0]["strategy_params"] == {"gap": 0.20, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
 
 
 @pytest.mark.asyncio
@@ -69,7 +69,7 @@ async def test_deploy_with_an_override_resolves_full_set_and_flags_divergence(
     # The full resolved set, not a sparse diff: unset fields still carry
     # their registered defaults, so a later default change can never
     # silently alter this already-deployed instance's behavior.
-    assert body["parameters"] == {"gap": 5.0, "rsi_min": 50.0, "rsi_max": 70.0}
+    assert body["parameters"] == {"gap": 5.0, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
     assert body["parameters_diverge_from_defaults"] == ["gap"]
     assert registry.deploy_calls[0]["strategy_params"]["gap"] == 5.0
 

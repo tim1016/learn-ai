@@ -21,7 +21,9 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
     """EMA-crossover *signal* strategy gates, exposed as parameters.
 
     Defaults preserve the validated LEAN-parity point exactly (absolute gap
-    0.20, RSI band 50–70); the Recency Chart sweeps them.
+    0.20, RSI band 50–70); the Recency Chart sweeps them. The former
+    ``ema_crossover_2_bps`` strategy is now this schema with
+    ``gap=0, gap_bps=2`` — see the ENG-007 golden fixture.
     """
 
     # FR-002: versions this schema's own legal type/unit/range contract —
@@ -30,14 +32,22 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
     # change without duplicating every bound into the seal itself. A
     # ``ClassVar`` is invisible to Pydantic's field machinery, so it never
     # becomes part of the JSON schema or a constructor argument.
-    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "ema-crossover-signal-params/v1"
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "ema-crossover-signal-params/v2"
 
     gap: float = Field(
         0.20,
         ge=0.0,
         allow_inf_nan=False,
         title="Crossover gap",
-        description="Minimum EMA(5) − EMA(10) gap, in absolute price, required for entry.",
+        description="Minimum EMA(5) − EMA(10) gap, in absolute price, required for entry. 0 imposes no absolute floor.",
+    )
+    gap_bps: float = Field(
+        0.0,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
+        title="Crossover gap (bps)",
+        description="Minimum 10,000 × (EMA(5) − EMA(10)) / EMA(10), in basis points, required for entry. 0 imposes no normalized floor; both this and `gap` are minimums and both apply.",
     )
     rsi_min: float = Field(
         50.0,
@@ -75,6 +85,7 @@ def build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalProg
         gap=params.gap,
         rsi_min=params.rsi_min,
         rsi_max=params.rsi_max,
+        gap_bps=params.gap_bps,
     )
     program = SignalProgram.create(
         strategy,

@@ -160,3 +160,46 @@ def test_entry_check_honors_a_configured_rsi_band_the_default_would_reject() -> 
         rsi=Decimal(80),
     )
     assert [i.kind for i in intents] == [SignalIntentKind.ENTER]
+
+
+@pytest.mark.parametrize("tunable", ["gap", "gap_bps", "rsi_min", "rsi_max"])
+def test_every_tunable_refuses_a_non_finite_value(tunable: str) -> None:
+    """NaN must raise, not silently disable the gate it configures.
+
+    ``Decimal(str(float("nan")))`` is a valid Decimal, and every comparison
+    against it is False -- so an unguarded NaN threshold does not fail loudly,
+    it turns its entry floor off. The refusal covers all four tunables rather
+    than only the most recently added one.
+    """
+    with pytest.raises(ValueError, match=f"{tunable} must be a finite number"):
+        EmaCrossoverSignalAlgorithm(**{tunable: float("nan")})
+
+
+def test_gap_bps_range_is_enforced_by_the_params_model_not_the_algorithm() -> None:
+    """The validating boundary is the Pydantic params model, deliberately.
+
+    The algorithm accepts any finite ``gap_bps``; the 0–100 bound lives in
+    ``EmaCrossoverSignalParams`` so there is exactly one place to change it.
+    """
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+
+    with pytest.raises(ValidationError):
+        registration.param_schema(symbol="SPY", gap_bps=101.0)
+
+    assert EmaCrossoverSignalAlgorithm(gap_bps=101.0) is not None
+
+
+def test_gap_bps_participates_in_evaluation_identity() -> None:
+    """Two programs that can decide differently must not share an identity.
+
+    ``signal_program_settings()`` is hashed into ``evaluation_id``, which is
+    also the Clerk ``decision_id``, the crash-recovery key, and the receipt
+    identity. Omitting ``gap_bps`` gave two configurations with different
+    entry floors the same identity for a given bar (#1865 review).
+    """
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    loose = registration.build(registration.param_schema(symbol="SPY", gap_bps=0.0))
+    strict = registration.build(registration.param_schema(symbol="SPY", gap_bps=4.0))
+
+    assert loose.signal_program_settings() != strict.signal_program_settings()
+    assert strict.signal_program_settings()["gap_bps"] == "4.0"

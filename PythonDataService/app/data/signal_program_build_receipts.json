@@ -16,12 +16,12 @@
       "schema_version": 2,
       "program_key": "ema_crossover_signal",
       "program_version": "ema-crossover-signal/v1",
-      "golden_trace_root": "82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
-      "artifact_digest": "3600bc88977d44433495943569039f9065525e1a92fdff9851b296388c9e6df9",
-      "wiring_digest": "a5c9c7caa012ad04b313419f73eb4c21dfb2db9760ea253c808ee04e4b7bcf0c",
+      "golden_trace_root": "16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
+      "artifact_digest": "352f3d03d89c8d629d271bcc7c1a6cc6a20377cb365216e4f7d1b3b4d56491ac",
+      "wiring_digest": "c9ae1a6b2a97fdf8426f4eac827cb883fac862a33c1d9d05a20e81ebde5859fc",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]",
-      "qualified_at_ms": 1787880082914,
-      "receipt_hash": "b0981f0a5212b16eaa069a12d8d320e5eded76f31e6befd116ef60aa3b0b5070"
+      "qualified_at_ms": 1787962687987,
+      "receipt_hash": "dbba4ea2d9c241a02c56636782e121c9330612adde244bbde8a394e00144bf2d"
     },
     {
       "schema_version": 2,

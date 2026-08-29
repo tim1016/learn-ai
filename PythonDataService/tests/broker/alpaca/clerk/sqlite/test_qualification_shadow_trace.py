@@ -146,13 +146,24 @@ async def test_shadow_trace_reproduces_the_first_ema_round_trip() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shadow_trace_evaluation_rejects_a_compatibility_mode_strategy() -> None:
-    """`spy_orb` has no registered Signal Program (no SignalSession), so it
-    has no trace to shadow. `deployment_validation` used to be this file's
-    example of such a strategy; it was promoted through the governed Signal
-    Program seam (issue #1730 Slice 5) and no longer illustrates this case."""
-    with pytest.raises(UnsupportedShadowProgramError):
-        await run_shadow_trace_evaluation("spy_orb", "SPY", None, [])
+async def test_shadow_trace_evaluation_rejects_a_key_this_build_retired() -> None:
+    """A durable binding outlives the build that created it, so a retired
+    strategy key reaches this seam as ordinary input and must be refused in
+    the shadow-trace vocabulary rather than as a bare lookup failure.
+
+    This test used to pin the *other* refusal arm -- a strategy registered
+    without a Signal Program -- via `deployment_validation`, then `spy_orb`.
+    Both are gone: `deployment_validation` was promoted through the governed
+    Signal Program seam (#1730 Slice 5), and `spy_orb` was deleted with the
+    coupled strategies. Since `test_registry_signal_program_identity` now
+    asserts unconditionally that no registered strategy lacks a program,
+    that arm is unreachable from the registry and only this one is
+    exercisable -- hence the assertion on the message, so a future collapse
+    of the two branches cannot silently re-point this test."""
+    with pytest.raises(UnsupportedShadowProgramError) as excinfo:
+        await run_shadow_trace_evaluation("retired-strategy-not-in-this-build", "SPY", None, [])
+
+    assert "is not registered in this build" in str(excinfo.value)
 
 
 def test_compare_canonical_traces_accepts_identical_sequences() -> None:
