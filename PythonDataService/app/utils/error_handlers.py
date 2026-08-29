@@ -43,3 +43,45 @@ async def polygon_exception_handler(request: Request, exc: Exception) -> JSONRes
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"success": False, "error": str(exc), "detail": "An error occurred while processing your request"},
     )
+
+
+async def clerk_sqlite_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer an unusable Clerk authority in the Clerk's own vocabulary.
+
+    ``ClerkSqliteError`` means the SQLite authority cannot serve this request --
+    absent, wrong identity, wrong schema, lease held elsewhere. That is a
+    *state of the system*, not an unexpected fault, so it must not fall through
+    to the catch-all 500: an operator staring at a post-reset account was being
+    shown ``sqlite3.OperationalError: unable to open database file`` on the very
+    endpoint that exists to explain the situation. 503 with a typed
+    ``reason_code`` says "this authority is not currently usable", which is both
+    true and actionable.
+    """
+    logger.warning(
+        "Clerk SQLite authority unusable for this request",
+        extra={
+            "action": "clerk_authority_unusable",
+            "error_type": type(exc).__name__,
+            # The detail stays server-side. Some members of this family
+            # interpolate the raw driver error and the database path --
+            # ``IntegrityCheckFailed(f"{db_path} is corrupt: {exc}")`` -- so
+            # returning ``str(exc)`` re-published the very
+            # ``sqlite3.OperationalError`` text this handler exists to stop
+            # showing, plus a filesystem path (#1865 review).
+            "error_detail": str(exc),
+        },
+    )
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "success": False,
+            "detail": {
+                "reason_code": "clerk_authority_unusable",
+                "error_type": type(exc).__name__,
+                "message": (
+                    "This account's Clerk authority is not currently usable. "
+                    "Check the data plane logs for the specific cause."
+                ),
+            },
+        },
+    )

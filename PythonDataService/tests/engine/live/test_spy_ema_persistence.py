@@ -1,4 +1,4 @@
-"""Tests for SpyEmaCrossoverAlgorithm persistence hooks.
+"""Tests for EmaCrossoverSignalAlgorithm persistence hooks.
 
 The strategy exposes three methods consumed by LiveContext:
   - report_state_for_persistence() -> dict | None
@@ -15,13 +15,13 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
-from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.utils.timestamps import to_ms_utc
 
 
-def _build_warmed_strategy() -> SpyEmaCrossoverAlgorithm:
+def _build_warmed_strategy() -> EmaCrossoverSignalAlgorithm:
     """Construct a strategy with indicators forced past warmup, flat lifecycle."""
-    strat = SpyEmaCrossoverAlgorithm()
+    strat = EmaCrossoverSignalAlgorithm()
     # Stand-alone construction (no LiveEngine.run) — drive initialize()
     # manually with a minimal fake context.
     strat.ctx = MagicMock()
@@ -41,7 +41,7 @@ def _build_warmed_strategy() -> SpyEmaCrossoverAlgorithm:
 
 
 def test_report_state_returns_none_when_indicators_not_ready() -> None:
-    strat = SpyEmaCrossoverAlgorithm()
+    strat = EmaCrossoverSignalAlgorithm()
     strat.ctx = MagicMock()
     strat.ctx.add_equity.return_value = "SPY"
     strat.initialize()
@@ -57,7 +57,7 @@ def test_report_state_returns_none_when_in_position() -> None:
 
 def test_report_state_returns_none_when_pending_entry() -> None:
     strat = _build_warmed_strategy()
-    from app.engine.strategy.algorithms.spy_ema_crossover import _PendingEntry
+    from app.engine.strategy.algorithms.ema_crossover_signal import _PendingEntry
 
     strat._pending_entry = _PendingEntry(ema5=Decimal("400"), ema10=Decimal("399"), rsi=Decimal("60"))
     assert strat.report_state_for_persistence() is None
@@ -65,7 +65,7 @@ def test_report_state_returns_none_when_pending_entry() -> None:
 
 def test_report_state_returns_none_when_open_trade() -> None:
     """The state between entry fill and exit fill — _open_trade is set."""
-    from app.engine.strategy.algorithms.spy_ema_crossover import _OpenTrade
+    from app.engine.strategy.algorithms.ema_crossover_signal import _OpenTrade
 
     strat = _build_warmed_strategy()
     strat._open_trade = _OpenTrade(
@@ -109,7 +109,7 @@ def test_restore_state_round_trip_produces_bit_identical_next_value() -> None:
     expected = (src._ema5.current_value, src._ema10.current_value, src._rsi14.current_value)
 
     # Path B: fresh strategy + restore + feed the same bar.
-    dst = SpyEmaCrossoverAlgorithm()
+    dst = EmaCrossoverSignalAlgorithm()
     dst.ctx = MagicMock()
     dst.ctx.add_equity.return_value = "SPY"
     dst.initialize()
@@ -132,7 +132,7 @@ def test_validate_state_payload_accepts_well_formed_payload() -> None:
 
 
 def test_validate_state_payload_rejects_missing_keys() -> None:
-    strat = SpyEmaCrossoverAlgorithm()
+    strat = EmaCrossoverSignalAlgorithm()
     bad = {"ema5": {}}  # missing ema10, rsi14, _prev_ema5_above_ema10, lifecycle
     result = strat.validate_state_payload(bad)
     assert result.failure_reason == "payload_mismatch"
@@ -140,14 +140,14 @@ def test_validate_state_payload_rejects_missing_keys() -> None:
 
 
 def test_strategy_key_and_period_constants() -> None:
-    assert SpyEmaCrossoverAlgorithm.STRATEGY_KEY == "spy_ema_crossover"
-    assert SpyEmaCrossoverAlgorithm.CONSOLIDATOR_PERIOD_MIN == 15
+    assert EmaCrossoverSignalAlgorithm.STRATEGY_KEY == "ema_crossover_signal"
+    assert EmaCrossoverSignalAlgorithm.CONSOLIDATOR_PERIOD_MIN == 15
 
 
 def test_validate_state_payload_rejects_string_for_prev_above() -> None:
     """A persisted 'false' string for _prev_ema5_above_ema10 must fail validation,
     not silently coerce to bool('false')==True."""
-    strat = SpyEmaCrossoverAlgorithm()
+    strat = EmaCrossoverSignalAlgorithm()
     bad = {
         "ema5": {},
         "ema10": {},
@@ -161,7 +161,7 @@ def test_validate_state_payload_rejects_string_for_prev_above() -> None:
 
 def test_validate_state_payload_rejects_non_int_lifecycle() -> None:
     """Lifecycle counters must be ints — non-int values fail validation."""
-    strat = SpyEmaCrossoverAlgorithm()
+    strat = EmaCrossoverSignalAlgorithm()
     bad = {
         "ema5": {},
         "ema10": {},

@@ -1,4 +1,9 @@
-"""Trade-level parity for EMA Crossover 2 bps against a pinned LEAN run."""
+"""Trade-level parity for the normalized-gap (2 bps) EMA crossover against a pinned LEAN run.
+
+The 2 bps point is no longer a separate strategy: it is
+``EmaCrossoverSignalAlgorithm`` driven with ``gap=0, gap_bps=2``.
+This fixture is the proof that folding the former ``EmaCrossover2BpsAlgorithm``
+subclass into that parameter preserved its trade-for-trade behaviour."""
 
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction
 from app.engine.execution.sizing import LeanSetHoldingsSizing
-from app.engine.strategy.algorithms.ema_crossover_2_bps import EmaCrossover2BpsAlgorithm
+from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.spec import SpecAlgorithm, load_spec_from_path
 from app.services.spec_strategy_runner import InMemoryDataReader
 
@@ -62,10 +67,10 @@ def test_ema_crossover_2_bps_matches_lean_fills_and_equity(implementation: str) 
     assert abs(result.final_equity - Decimal(expected["final_equity"])) <= PNL_ATOL
 
 
-def _strategy(implementation: str) -> EmaCrossover2BpsAlgorithm | SpecAlgorithm:
+def _strategy(implementation: str) -> EmaCrossoverSignalAlgorithm | SpecAlgorithm:
     if implementation == "hand_coded":
-        base = EmaCrossover2BpsAlgorithm(symbol="SPY")
-        base_class = EmaCrossover2BpsAlgorithm
+        base = EmaCrossoverSignalAlgorithm(symbol="SPY", gap=0, gap_bps=2)
+        base_class = EmaCrossoverSignalAlgorithm
     else:
         spec = load_spec_from_path(SPEC_PATH)
         base = SpecAlgorithm(spec)

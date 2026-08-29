@@ -180,9 +180,18 @@ class _QualifiedBarFeed:
 
 def _registered_signal_program(strategy_key: str) -> StrategyRegistration:
     registration = _STRATEGY_REGISTRY.get(strategy_key)
-    if registration is None or registration.signal_program_factory is None:
+    # Two distinct facts, deliberately not collapsed into one branch. A
+    # durable binding can name a key this build retired, and a registration
+    # can exist without a Signal Program. Both are refused identically, but
+    # the messages differ so a caller -- and a test -- can tell which held.
+    if registration is None:
         raise UnsupportedShadowProgramError(
-            f"{strategy_key!r} has no registered Signal Program to shadow-evaluate"
+            f"{strategy_key!r} is not registered in this build, so it has no "
+            "Signal Program to shadow-evaluate"
+        )
+    if registration.signal_program_factory is None:
+        raise UnsupportedShadowProgramError(
+            f"{strategy_key!r} is registered without a Signal Program to shadow-evaluate"
         )
     return registration
 

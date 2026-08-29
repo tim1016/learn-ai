@@ -9,31 +9,19 @@ router symbols just to answer deploy/start safety questions.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from app.engine.pine_generators import (
     generate_strategy_a_pine,
     generate_strategy_b_pine,
     generate_strategy_c_pine,
 )
-from app.engine.strategy.algorithms.ema_crossover_2_bps import (
-    EmaCrossover2BpsAlgorithm,
-)
-from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
-from app.engine.strategy.algorithms.spy_ema_crossover import (
-    SpyEmaCrossoverAlgorithm,
-)
-from app.engine.strategy.algorithms.spy_ema_crossover_options import (
-    SpyEmaCrossoverOptionsAlgorithm,
-)
-from app.engine.strategy.algorithms.spy_orb import SpyOpeningRangeBreakout
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.params import (
-    EmaCrossoverParams,
     StrategyParamsBase,
 )
 from app.engine.strategy.programs.deployment_validation import (
@@ -84,92 +72,6 @@ from app.schemas.signal_program_seal import (
     SignalSeriesContract,
 )
 from app.schemas.strategy_validation import StrategyCategory
-
-
-class EmaCrossover2BpsParams(EmaCrossoverParams):
-    """Configurable gates shared by the Python strategy and its LEAN twin."""
-
-    gap_bps: float = Field(
-        2.0,
-        ge=0.0,
-        le=100.0,
-        allow_inf_nan=False,
-        title="Crossover gap (bps)",
-        description="Minimum EMA(5) minus EMA(10) crossover gap, measured in basis points of EMA(10).",
-    )
-    rsi_min: float = Field(
-        50.0,
-        ge=0.0,
-        le=100.0,
-        allow_inf_nan=False,
-        title="RSI lower gate",
-        description="Inclusive lower RSI(14) value allowed for entry.",
-    )
-    rsi_max: float = Field(
-        70.0,
-        ge=0.0,
-        le=100.0,
-        allow_inf_nan=False,
-        title="RSI upper gate",
-        description="Inclusive upper RSI(14) value allowed for entry.",
-    )
-
-    @model_validator(mode="after")
-    def _validate_rsi_band(self) -> EmaCrossover2BpsParams:
-        if self.rsi_min >= self.rsi_max:
-            raise ValueError("rsi_min must be less than rsi_max")
-        return self
-
-
-
-
-class DailySmaCrossoverParams(StrategyParamsBase):
-    """Daily-resolution SMA crossover — no ``resolution_minutes`` field.
-
-    The bar cadence is fixed to 1 day by the registry's build function
-    (which sets ``resolution_minutes=1440`` on the underlying algorithm)
-    because the strategy runs directly against LEAN daily zips. Window
-    sizes are in *days* here: a 50/200 is the classic long-term golden
-    cross.
-    """
-
-    symbol: str = Field("AAPL", min_length=1, max_length=20)
-    short_window: int = Field(50, ge=2, le=500)
-    long_window: int = Field(200, ge=3, le=1000)
-
-    @model_validator(mode="after")
-    def _validate_window_order(self) -> DailySmaCrossoverParams:
-        if self.long_window <= self.short_window:
-            raise ValueError("long_window must be strictly greater than short_window")
-        return self
-
-
-
-
-class OrbParams(StrategyParamsBase):
-    """Opening Range Breakout parameters — dynamic ticker.
-
-    Zero-warmup, price-action-only strategy. Each trading day resets
-    independently so the parameter set carries over cleanly between
-    tickers (SPY, QQQ, IWM, etc.) without re-tuning.
-
-    * ``orb_bars`` — number of 15-min bars forming the opening range
-      (3 = 45 minutes, the default).
-    * ``hold_bars`` — bars to hold after entry before flattening
-      (5 = 75 minutes, the default).
-    * ``min_range_pct`` / ``max_range_pct`` — accept only days whose
-      opening-range size, expressed as a percentage of the range-low
-      price, falls inside this band. Filters out both flat-open days
-      (nothing to break out of) and gap-open days (too stretched).
-    """
-
-    symbol: str = Field("SPY", min_length=1, max_length=20)
-    orb_bars: int = Field(3, ge=1, le=6)
-    hold_bars: int = Field(5, ge=1, le=50)
-    min_range_pct: float = Field(0.30, ge=0.0, le=10.0)
-    max_range_pct: float = Field(1.50, ge=0.1, le=20.0)
-
-
 
 
 class EmaCrossoverOptionsParams(StrategyParamsBase):
@@ -457,7 +359,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=EMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
+            golden_trace_root="16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
@@ -541,10 +443,20 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             parameter_units={
                 "symbol": "ticker",
                 "gap": "quote_currency",
+                "gap_bps": "basis_points",
                 "rsi_min": "rsi_points",
                 "rsi_max": "rsi_points",
             },
-            validated_settings={"gap": 0.20, "rsi_min": 50.0, "rsi_max": 70.0},
+            # ``gap_bps: 0.0`` is part of the validated point: the corpus was
+            # qualified with no normalized floor. A non-zero ``gap_bps`` deploy
+            # is still sealed, just not claimed as golden-validated -- only the
+            # ENG-007 LEAN fixture pins that configuration.
+            validated_settings={
+                "gap": 0.20,
+                "gap_bps": 0.0,
+                "rsi_min": 50.0,
+                "rsi_max": 70.0,
+            },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
             # Issue #1728 defect 2: this is not "every file the module
             # graph reaches" — it is that transitive first-party import
@@ -562,6 +474,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             artifact_paths=(
                 "app/engine/strategy/algorithms/ema_crossover_signal.py",
                 "app/engine/strategy/base.py",
+                "app/engine/strategy/normalized_gap.py",
                 "app/engine/strategy/signal_intent.py",
                 "app/engine/strategy/signal_program.py",
                 "app/engine/indicators/base.py",
@@ -868,9 +781,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "Same TV timestamp conventions as other strategies: viewer's "
             "local timezone in TV exports, proper UTC in Engine Lab, "
             "bar-start vs bar-end labeling differs by the bar length.",
-            "On the daily variant (see daily_sma_crossover) a 50/200 "
-            "cross produces very few signals per year — 1-year backtests "
-            "will often show only 1–4 trades.",
+            "A 50/200 cross produces very few signals per year — 1-year "
+            "backtests will often show only 1–4 trades.",
         ],
         param_schema=SmaCrossoverParams,
         chart_indicators=(
@@ -883,84 +795,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
-    ),
-    "daily_sma_crossover": StrategyRegistration(
-        display_name="Daily SMA Crossover",
-        class_name="SmaCrossoverAlgorithm",
-        description=(
-            "Long-term golden-cross / death-cross run against LEAN daily "
-            "bars (one daily zip per symbol). Defaults "
-            "to the classic 50/200 on AAPL. Same SmaCrossoverAlgorithm as "
-            "the intraday variant - only the bar cadence differs."
-        ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default AAPL)\n"
-            "    resolution = daily (read from the LEAN daily equity zip for the symbol)\n"
-            "\n"
-            "Indicators (Alpha - updated each daily bar close)\n"
-            "    SMA_short = SimpleMovingAverage(short_window days, default 50)\n"
-            "    SMA_long  = SimpleMovingAverage(long_window  days, default 200)\n"
-            "\n"
-            "Warmup\n"
-            "    no signals until both SMAs have window-size samples\n"
-            "    (typically ~200 trading days for the 50/200 default).\n"
-            "\n"
-            "Alpha - bar entry conditions (evaluated while flat)\n"
-            "    golden_cross = SMA_short > SMA_long\n"
-            "                   AND SMA_short[-1] <= SMA_long[-1]\n"
-            "    ⇒ if golden_cross: emit Insight(UP); enter long\n"
-            "\n"
-            "Alpha - bar exit conditions (evaluated while in trade)\n"
-            "    death_cross = SMA_short < SMA_long\n"
-            "    ⇒ if death_cross: Liquidate(symbol)\n"
-            "\n"
-            "Risk Management - position survival rules\n"
-            "    none - overnight gap risk is not modeled by the fill model;\n"
-            "    holding through earnings, splits, and dividends is the\n"
-            "    intended behavior of the long-term cross.\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = signal_bar_close (end-of-day fill at the\n"
-            "    cross bar's close)"
-        ),
-        gotchas=[
-            "Uses the LEAN daily-bar reader, not a consolidator. Bars come "
-            "one-per-day from the LEAN daily equity zip - make sure "
-            "those files exist for your chosen symbol.",
-            "resolution_minutes is hardcoded to 1440 in the registry's "
-            "build function; exposing it as a parameter would let users "
-            "break parity with the intended daily cadence.",
-            "Classic 50/200 on liquid US equities produces ~1–4 crosses "
-            "per year. Choose a 5–10 year window for enough trades to "
-            "evaluate performance meaningfully.",
-            "No intraday timing — fills are at each signal bar's close "
-            "(end of trading day). Slippage/overnight-gap risk is real "
-            "but not modeled by the fill model.",
-            "Because bars are daily, timezone reporting conventions don't "
-            "apply the same way as intraday strategies — TradingView "
-            "exports a date (no time) for daily fills.",
-        ],
-        param_schema=DailySmaCrossoverParams,
-        chart_indicators=(
-            StrategyChartIndicator("sma", {"length": ChartParamRef("short_window")}),
-            StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
-        ),
-        strategy_bars=StrategyBarCadence("day", 1),
-        build=lambda p: SmaCrossoverAlgorithm(
-            symbol=p.symbol,
-            short_window=p.short_window,  # type: ignore[attr-defined]
-            long_window=p.long_window,  # type: ignore[attr-defined]
-            # 1440 min = 1 day. TradeBarConsolidator is reference-rounded
-            # to midnight ET and passes daily bars through 1:1 as long as
-            # consecutive inputs are separated by >= 1 day, which is
-            # always true for LEAN daily zip rows.
-            resolution_minutes=1440,
-        ),
-        supported_resolutions={"daily"},
     ),
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
@@ -1142,104 +976,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
-    ),
-    "spy_orb": StrategyRegistration(
-        display_name="Opening Range Breakout",
-        class_name="SpyOpeningRangeBreakout",
-        description=(
-            "Pure price-action Opening Range Breakout — zero indicator "
-            "warmup. The opening range (default: first 3 fifteen-minute "
-            "bars of the regular session, i.e. 9:30–10:15 ET) defines a "
-            "high/low channel. The first bar that closes above the ORB "
-            "high triggers a long entry, provided the range size as a "
-            "percent of price falls inside [min_range_pct, max_range_pct]. "
-            "Position is held for exactly hold_bars bars (default 5 = 75 "
-            "minutes), then flattened. One trade per day max. "
-            "\n\n"
-            "Designed as a cross-system validation primitive: because "
-            "every day starts with no carried state, two implementations "
-            "of the same rules cannot drift the way recursive-indicator "
-            "strategies (EMA, RSI, MACD) do. Symbol-parameterized, so the "
-            "same code runs against SPY, QQQ, IWM, etc."
-        ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default SPY; SPY/QQQ/IWM trade cleanly)\n"
-            "    resolution = 15-minute bars consolidated from minute data\n"
-            "    session    = RTH only (09:30–16:00 America/New_York)\n"
-            "\n"
-            "Indicators\n"
-            "    none — pure price action, zero recursive state across days\n"
-            "\n"
-            "Warmup\n"
-            "    none — every trading day starts with no carried state, which\n"
-            "    is what makes ORB ideal as a cross-system validation primitive\n"
-            "    (no chance of indicator-state drift between implementations).\n"
-            "\n"
-            "Alpha — opening-range construction (first orb_bars of each RTH day)\n"
-            "    bar_of_day in [1..orb_bars]:\n"
-            "        orb_high = max(orb_high, bar.high)\n"
-            "        orb_low  = min(orb_low,  bar.low)\n"
-            "    on the orb_bars-th bar:\n"
-            "        range_pct = (orb_high - orb_low) / orb_low * 100\n"
-            "        orb_valid = min_range_pct <= range_pct <= max_range_pct\n"
-            "\n"
-            "Alpha — bar entry conditions (evaluated while flat, after ORB completes)\n"
-            "    breakout = bar.close > orb_high\n"
-            "    ⇒ if orb_valid AND breakout AND NOT traded_today:\n"
-            "        emit Insight(UP); enter long; traded_today = True\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    bars_held += 1 each new bar\n"
-            "    ⇒ when bars_held == hold_bars: Liquidate(symbol)\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    one trade per day — traded_today flag prevents re-entry\n"
-            "    after the time-stop exit (regression test:\n"
-            "    test_spy_orb_one_trade_per_day.py).\n"
-            "    On days where the hold window crosses 16:00 ET, the exit\n"
-            "    bar is the next session's first RTH bar (overnight hold).\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = signal_bar_close (matches LEAN-style entries)"
-        ),
-        gotchas=[
-            "ONE trade per day. The _traded_today flag was added to the "
-            "Python port on 2026-04-18 — prior versions re-entered after "
-            "every 5-bar hold exit, producing ~3× the intended trade "
-            "count. Regression test: test_spy_orb_one_trade_per_day.py.",
-            "RTH-only. The strategy filters on _is_rth(bar.end_time) "
-            "against 9:30–16:00 ET hardcoded. If feeding extended-hours "
-            "data the pre/post-market bars are ignored by the algorithm "
-            "but may show up in data availability checks.",
-            "15-min consolidator alignment must be wall-clock / epoch-"
-            "anchored (bars at :00 :15 :30 :45) so that the first 3 bars "
-            "of each day reliably correspond to 9:30–10:15.",
-            "Range filter is percentage-based ((high - low) / low × 100), "
-            "so it ports cleanly across tickers — 0.30–1.50% works for "
-            "both SPY and QQQ without re-tuning.",
-            "On days where a late entry's 5-bar hold crosses the 16:00 ET "
-            "close, the exit bar is the next day's first RTH bar. Engine "
-            "Lab handles this cleanly; some brokerages would reject the "
-            "overnight hold.",
-            "Pine Script port: `time(tf, session, tz)` returns the CURRENT "
-            "bar's timestamp when in session, not the session's start. "
-            'Use `time("D")` change-detection for new-day reset, NOT '
-            "change-detection on the session-time value. Earlier Pine "
-            "versions had this bug and produced 0 ORBs completed.",
-        ],
-        param_schema=OrbParams,
-        strategy_bars=StrategyBarCadence("minute", 15),
-        build=lambda p: SpyOpeningRangeBreakout(
-            symbol=p.symbol,
-            orb_bars=p.orb_bars,  # type: ignore[attr-defined]
-            hold_bars=p.hold_bars,  # type: ignore[attr-defined]
-            min_range_pct=p.min_range_pct,  # type: ignore[attr-defined]
-            max_range_pct=p.max_range_pct,  # type: ignore[attr-defined]
-        ),
     ),
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",
@@ -1440,158 +1176,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         action_plan_contract="single_long_stock",
         build=lambda p: build_deployment_validation_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_deployment_validation_signal_program,
-    ),
-    "spy_ema_crossover_options": StrategyRegistration(
-        display_name="EMA Crossover Options",
-        class_name="SpyEmaCrossoverOptionsAlgorithm",
-        description=(
-            "This strategy uses the exact same EMA crossover signal as the equity version "
-            "— same entry times, same exit times, same 5-bar hold — but instead of buying "
-            "the stock, it opens an options spread on each signal. "
-            "\n\n"
-            "HOW IT WORKS: Every 15-minute bar, EMA(5) and EMA(10) are computed. When "
-            "EMA(5) crosses above EMA(10) with at least a 0.20 gap and RSI(14) is between "
-            "50-70, the signal fires. The strategy then builds a bull call spread (or bull "
-            "put spread, configurable) by selecting two option contracts by delta targeting: "
-            "a long leg near 0.60 delta and a short leg near 0.30 delta. The spread is held "
-            "for exactly 5 bars (75 minutes) and then closed. "
-            "\n\n"
-            "BULL CALL SPREAD: Buy the lower-strike call (higher delta, more expensive), "
-            "sell the higher-strike call (lower delta, cheaper). You pay a net debit. "
-            "Max profit = spread width minus debit. Max loss = the debit paid. Profits "
-            "when the underlying moves up. "
-            "\n\n"
-            "BULL PUT SPREAD: Sell the higher-strike put, buy the lower-strike put. You "
-            "receive a net credit. Max profit = the credit received. Max loss = spread "
-            "width minus credit. Also profits when the underlying stays flat or moves up. "
-            "\n\n"
-            "PRICING: In QuantLib-only mode (default), option prices and Greeks are computed "
-            "synthetically using Black-Scholes via QuantLib — no market data needed, fast to "
-            "backtest. Market-preferred mode uses real Polygon option snapshots when available, "
-            "falling back to QuantLib. Market-required mode only trades when real data exists. "
-            "\n\n"
-            "TRADE PARITY: Signal timing is identical to the equity EMA Crossover strategy. "
-            "Every entry and exit bar matches 1:1. The only difference is what is traded — "
-            "a defined-risk options spread instead of the underlying stock."
-        ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    underlying     = configurable (default SPY)\n"
-            "    derivative set = same-underlying option chain, calls & puts\n"
-            "    resolution     = 15-min bars consolidated from minute data\n"
-            "\n"
-            "Indicators (Alpha — identical to ema_crossover, on the underlying)\n"
-            "    EMA_fast = ExponentialMovingAverage(ema_fast_period)\n"
-            "    EMA_slow = ExponentialMovingAverage(ema_slow_period)\n"
-            "    RSI      = RelativeStrengthIndex(rsi_period, Wilders smoothing)\n"
-            "\n"
-            "Warmup\n"
-            "    same as ema_crossover — wait for all three to be is_ready,\n"
-            "    prime the prev-cross flag during warmup bars.\n"
-            "\n"
-            "Alpha — bar entry conditions (evaluated while flat)\n"
-            "    fresh_cross = EMA_fast > EMA_slow\n"
-            "                  AND EMA_fast[-1] <= EMA_slow[-1]\n"
-            "    gap_ok      = (EMA_fast - EMA_slow) >= ema_gap_min\n"
-            "    rsi_ok      = rsi_min <= RSI <= rsi_max\n"
-            "    ⇒ if all three: emit Insight(UP); proceed to spread selection\n"
-            "\n"
-            "Universe Selection (per signal — narrow the chain)\n"
-            "    candidates = chain.filter(min_dte <= DTE <= max_dte,\n"
-            "                              open_interest >= min_open_interest,\n"
-            "                              volume >= min_volume,\n"
-            "                              bid_ask_spread_pct <= max_bid_ask_spread_pct)\n"
-            "    if no liquid contract: skip signal (logged)\n"
-            "\n"
-            "Portfolio Construction (per spread_type)\n"
-            "    BULL_CALL: long  call ≈ long_call_delta_target  (0.60)\n"
-            "               short call ≈ short_call_delta_target (0.30)\n"
-            "               net debit; max profit = width − debit\n"
-            "    BULL_PUT:  short put  ≈ short_put_delta_target  (-0.30)\n"
-            "               long  put  ≈ long_put_delta_target   (-0.15)\n"
-            "               net credit; max profit = credit\n"
-            "    sizing = contracts_per_trade (default 1) × contract_multiplier (100)\n"
-            "    cap    = max_positions concurrently open\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    bars_held += 1 each new 15-min bar\n"
-            "    ⇒ when bars_held == bars_to_hold: close BOTH legs\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    none — defined-risk by construction (max loss = debit\n"
-            "    paid for bull-call, width − credit for bull-put). No early\n"
-            "    assignment handling; assumes European-style settlement for\n"
-            "    the backtest window (acceptable for 7–30 DTE SPY options).\n"
-            "\n"
-            "Execution / Pricing\n"
-            "    pricing_mode = quantlib_only      (synthetic BS via QuantLib)\n"
-            "                 | market_preferred   (Polygon snapshot if available)\n"
-            "                 | market_required    (skip if no market data)\n"
-            "    fills land at the spread's mid ± half_spread_pct"
-        ),
-        gotchas=[
-            "Signal timing is BIT-IDENTICAL to ema_crossover (same EMAs, "
-            "same RSI, same gap filter). Differences in trade outcomes vs "
-            "the equity strategy come purely from option pricing and "
-            "spread mechanics, not from signal differences.",
-            "QuantLib-only pricing mode is the default — option prices "
-            "and Greeks are computed synthetically via Black-Scholes "
-            "with default_iv and risk_free_rate. Switch to "
-            "market_preferred or market_required to use real Polygon "
-            "option snapshots when available.",
-            "Bull-call spread: pay net debit upfront. Max profit = spread width − debit. Max loss = the debit paid.",
-            "Bull-put spread: receive net credit upfront. Max profit = the credit. Max loss = spread width − credit.",
-            "Delta targeting picks the closest available strike — exact "
-            "delta values won't match the targets exactly. The "
-            "long_call_delta_target=0.60 / short_call_delta_target=0.30 "
-            "defaults give a roughly 1:2 risk:reward profile.",
-            "min_open_interest, min_volume, and max_bid_ask_spread_pct "
-            "filters can cause some signals to skip if no liquid contract "
-            "is available. The skip count is reported in the engine logs.",
-            "All EMA/RSI gotchas from ema_crossover apply here unchanged.",
-        ],
-        param_schema=EmaCrossoverOptionsParams,
-        chart_indicators=(
-            StrategyChartIndicator("ema", {"length": ChartParamRef("ema_fast_period")}),
-            StrategyChartIndicator("ema", {"length": ChartParamRef("ema_slow_period")}),
-            StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
-        ),
-        strategy_bars=StrategyBarCadence("minute", ChartParamRef("timeframe_minutes")),
-        build=lambda p: SpyEmaCrossoverOptionsAlgorithm(
-            symbol=p.symbol,
-            ema_fast_period=p.ema_fast_period,  # type: ignore[attr-defined]
-            ema_slow_period=p.ema_slow_period,  # type: ignore[attr-defined]
-            rsi_period=p.rsi_period,  # type: ignore[attr-defined]
-            ema_gap_min=p.ema_gap_min,  # type: ignore[attr-defined]
-            rsi_min=p.rsi_min,  # type: ignore[attr-defined]
-            rsi_max=p.rsi_max,  # type: ignore[attr-defined]
-            timeframe_minutes=p.timeframe_minutes,  # type: ignore[attr-defined]
-            bars_to_hold=p.bars_to_hold,  # type: ignore[attr-defined]
-            spread_type=p.spread_type,  # type: ignore[attr-defined]
-            min_dte=p.min_dte,  # type: ignore[attr-defined]
-            max_dte=p.max_dte,  # type: ignore[attr-defined]
-            long_call_delta_target=p.long_call_delta_target,  # type: ignore[attr-defined]
-            short_call_delta_target=p.short_call_delta_target,  # type: ignore[attr-defined]
-            short_put_delta_target=p.short_put_delta_target,  # type: ignore[attr-defined]
-            long_put_delta_target=p.long_put_delta_target,  # type: ignore[attr-defined]
-            min_open_interest=p.min_open_interest,  # type: ignore[attr-defined]
-            min_volume=p.min_volume,  # type: ignore[attr-defined]
-            max_bid_ask_spread_pct=p.max_bid_ask_spread_pct,  # type: ignore[attr-defined]
-            contracts_per_trade=p.contracts_per_trade,  # type: ignore[attr-defined]
-            max_positions=p.max_positions,  # type: ignore[attr-defined]
-            contract_multiplier=p.contract_multiplier,  # type: ignore[attr-defined]
-            pricing_mode=p.pricing_mode,  # type: ignore[attr-defined]
-            pricing_engine=p.pricing_engine,  # type: ignore[attr-defined]
-            risk_free_rate=p.risk_free_rate,  # type: ignore[attr-defined]
-            dividend_yield=p.dividend_yield,  # type: ignore[attr-defined]
-            default_iv=p.default_iv,  # type: ignore[attr-defined]
-            half_spread_pct=p.half_spread_pct,  # type: ignore[attr-defined]
-        ),
-        # ADR 0009 § 6 — this strategy sizes itself via
-        # ``contracts_per_trade`` (an internal options-accounting surface);
-        # ``live_config.sizing`` cannot meaningfully override it. The deploy
-        # form disables the sizing control + labels it "self-sized".
-        sizing_surface="explicit",
     ),
     "spy_strategy_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
@@ -2309,80 +1893,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         signal_intent_binding="action_plan_stock",
     ),
 }
-
-# Keep the new strategy structurally coupled to the canonical EMA signal
-# registration. Only its gap rule, names, and LEAN twin identity differ.
-_ema_signal_registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
-_STRATEGY_REGISTRY["ema_crossover_2_bps"] = replace(
-    _ema_signal_registration,
-    display_name="EMA Crossover 2 bps",
-    class_name="EmaCrossover2BpsAlgorithm",
-    description=_ema_signal_registration.description.replace(
-        "a 0.20 minimum gap",
-        "a configurable relative gap (2 basis points by default)",
-    ),
-    algorithm_pseudocode=_ema_signal_registration.algorithm_pseudocode.replace(
-        "gap_ok      = (EMA_fast - EMA_slow) >= 0.20",
-        "gap_bps     = 10,000 * (EMA_fast - EMA_slow) / EMA_slow\n"
-        "    gap_ok      = gap_bps >= gap_bps_parameter (default 2)",
-    ),
-    gotchas=[
-        *_ema_signal_registration.gotchas,
-        "The gap threshold is relative to EMA(10): 2 bps means 0.02%, "
-        "not $0.02 and not 2%. At a $500 slow EMA, the boundary is $0.10.",
-    ],
-    param_schema=EmaCrossover2BpsParams,
-    build=lambda p: EmaCrossover2BpsAlgorithm(
-        symbol=p.symbol,
-        gap_bps=p.gap_bps,  # type: ignore[attr-defined]
-        rsi_min=p.rsi_min,  # type: ignore[attr-defined]
-        rsi_max=p.rsi_max,  # type: ignore[attr-defined]
-    ),
-    lean_twin="ema_crossover_2_bps",
-    lean_parameter_names=("gap_bps", "rsi_min", "rsi_max"),
-    # Issue #1728 defect 1: dataclasses.replace() shallow-copies every field
-    # not explicitly overridden, including signal_program_contract and
-    # signal_program_factory. This strategy uses a relative basis-point gap
-    # (EmaCrossover2BpsAlgorithm, param gap_bps) — genuinely different math
-    # from the canonical EMA Signal Program's absolute-price gap — and has
-    # never been through its own golden qualification. Left inherited, both
-    # bots on this key falsely claimed EMA's golden_trace_root as proof of
-    # their own build, AND signal_program_factory would hand
-    # build_ema_crossover_signal_program a params instance it isn't typed
-    # for. Clearing both routes admission's prove_running_program_build to
-    # its NOT_APPLICABLE state (no registered Signal Program), which
-    # run_admission.py does not gate on, keeping this strategy's existing
-    # execution path working. Promoting it to a real sealed Signal Program
-    # is issue #1730 / Slice 5.
-    signal_program_contract=None,
-    signal_program_factory=None,
-)
-
-# Historical ledgers use this key and import path. Keep it executable but do
-# not offer it as a second picker option beside the migrated signal strategy.
-_STRATEGY_REGISTRY["spy_ema_crossover"] = replace(
-    _STRATEGY_REGISTRY["ema_crossover_signal"],
-    display_name="EMA Crossover (legacy compatibility)",
-    class_name="SpyEmaCrossoverAlgorithm",
-    build=lambda p: SpyEmaCrossoverAlgorithm(symbol=p.symbol),
-    instrument_surface="explicit",
-    action_plan_contract="none",
-    signal_intent_binding="signal_symbol",
-    catalog_visible=False,
-    lean_twin="ema_crossover",
-    # Issue #1728 defect 1: see the identical comment on ema_crossover_2_bps
-    # above. This legacy-compatibility key builds SpyEmaCrossoverAlgorithm
-    # (action_plan_contract="none"), not the canonical EMA Signal Program —
-    # inheriting its contract/factory via dataclasses.replace() let bots on
-    # this key falsely claim EMA's golden_trace_root, and
-    # prove_running_program_build's receipt lookup (keyed on
-    # binding.strategy_key) could never match, permanently bricking Start
-    # and Resume for every such bot. Clearing both is what routes it back to
-    # NOT_APPLICABLE — no registered Signal Program — instead of UNPROVEN.
-    signal_program_contract=None,
-    signal_program_factory=None,
-)
-
 
 __all__ = [
     "_STRATEGY_REGISTRY",

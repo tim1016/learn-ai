@@ -169,14 +169,25 @@ export class StrategyLabRunner {
       ]);
       const configuredSource = this.config.customLeanSource();
       const customSource = configuredSource?.trim() ? configuredSource : null;
-      const strategyParameters = customSource === null
-        ? leanStrategyParameters(template, this.config.paramValues())
-        : undefined;
+      // No registered strategy declares a LEAN twin that takes runtime
+      // parameters any more: the bundled template hardcodes its own gates.
+      // So a changed parameter cannot reach LEAN, and running anyway would
+      // persist an experiment whose results describe different rules than
+      // the configuration on screen. Refuse instead — a custom source is the
+      // one way to express parameters the template cannot take.
+      const changed = this.config.changedParameterNames();
+      if (customSource === null && changed.length > 0) {
+        this.fail(
+          "LEAN cannot run these parameters",
+          `The bundled LEAN template hardcodes its own gates, so ${changed.join(", ")} ` +
+            "would not reach it. Restore the defaults, or supply a custom LEAN source " +
+            "that takes them.",
+        );
+        this.updateRunningState();
+        return;
+      }
       const algorithm = customSource === null
-        ? {
-            template,
-            ...(strategyParameters === undefined ? {} : { strategy_parameters: strategyParameters }),
-          }
+        ? { template }
         : { algorithm_source: customSource };
       this.leanJobId.set(
         await this.jobs.startJob("lean_engine_run", {
@@ -386,25 +397,7 @@ export class StrategyLabRunner {
   }
 }
 
-function leanStrategyParameters(
-  template: string,
-  values: Record<string, unknown>,
-): { gap_bps: number; rsi_min: number; rsi_max: number } | undefined {
-  if (template !== "ema_crossover_2_bps") return undefined;
-  return {
-    gap_bps: requiredFiniteNumber(values, "gap_bps"),
-    rsi_min: requiredFiniteNumber(values, "rsi_min"),
-    rsi_max: requiredFiniteNumber(values, "rsi_max"),
-  };
-}
 
-function requiredFiniteNumber(values: Record<string, unknown>, field: string): number {
-  const value = values[field];
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${field} must be a finite number`);
-  }
-  return value;
-}
 
 function httpErrorDetail(error: unknown): unknown {
   if (!(error instanceof HttpErrorResponse) || typeof error.error !== "object" || error.error === null) {

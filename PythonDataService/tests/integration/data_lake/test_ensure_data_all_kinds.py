@@ -39,6 +39,7 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
+from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import DataRunSpec
 
 pytestmark = pytest.mark.asyncio
@@ -238,8 +239,10 @@ async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake):
     assert len(factor_files) == 1, f"expected 1 factor_file, got {len(factor_files)}"
     assert len(map_files) == 1, f"expected 1 map_file, got {len(map_files)}"
 
-    # All files must exist on disk.
-    lake_root = tmp_lake / "lake"
+    # All files must exist on disk. ``FilePath`` is relative to the *mode*
+    # root, not the lake container -- #1839 put an adjustment segment above
+    # the LEAN tree, and this spec is the default "raw".
+    lake_root = tmp_lake / lake_subpath("raw")
     for art in result.artifacts:
         on_disk = lake_root / Path(*art.file_path.replace("\\", "/").split("/"))
         assert on_disk.is_file(), f"missing on disk: {art.file_path}"

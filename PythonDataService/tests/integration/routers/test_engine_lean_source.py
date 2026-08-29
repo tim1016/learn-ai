@@ -31,7 +31,7 @@ async def test_get_lean_source_does_not_require_a_launcher(client: AsyncClient) 
 
 
 async def test_get_lean_source_returns_404_when_strategy_has_no_twin(client: AsyncClient) -> None:
-    response = await client.get("/api/engine/strategies/spy_orb/lean-source")
+    response = await client.get("/api/engine/strategies/sma_crossover/lean-source")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "Strategy 'spy_orb' has no registered LEAN validation source"
+    assert response.json()["detail"] == "Strategy 'sma_crossover' has no registered LEAN validation source"

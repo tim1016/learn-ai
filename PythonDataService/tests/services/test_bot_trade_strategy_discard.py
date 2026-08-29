@@ -113,13 +113,26 @@ def test_discard_settles_the_staged_candidate_as_discarded() -> None:
 
 
 def _key_without_a_signal_program() -> str:
-    """Derive a program-less key from the registry rather than naming one.
+    """Return a key the live adapter cannot build a Signal Program for.
 
-    Hand-naming a strategy here would make this test quietly stop covering
-    anything the day that strategy is promoted to a Signal Program.
+    This used to derive one from the registry, precisely so it would not
+    quietly stop covering anything when a strategy got promoted. Every
+    registered strategy now owns a Signal Program (the signal/asset decoupling
+    sweep removed the last that did not), so the registry no longer supplies a
+    subject -- and that is the rule holding, not the test rotting.
+
+    An unregistered key still exercises the refusal, and it is the case that
+    now actually occurs in the field: a durable binding can name a strategy a
+    later build no longer registers, and the live adapter must refuse it
+    rather than run something else.
     """
     live = supported_alpaca_paper_strategy_keys()
-    return next(key for key in sorted(_STRATEGY_REGISTRY) if key not in live)
+    candidate = next(
+        (key for key in sorted(_STRATEGY_REGISTRY) if key not in live),
+        "retired-strategy-not-in-this-build",
+    )
+    assert candidate not in live
+    return candidate
 
 
 def test_building_a_live_runtime_refuses_a_strategy_with_no_signal_program() -> None:

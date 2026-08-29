@@ -32,12 +32,12 @@ from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode, OrderEvent
-from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import DecisionSnapshot
 from tests._helpers.parity_fixture import PARITY_FIXTURE_NAME, parity_fixture_dir
 
 
-class _RecordingAlgorithm(SpyEmaCrossoverAlgorithm):
+class _RecordingAlgorithm(EmaCrossoverSignalAlgorithm):
     """Subclass that records per-bar decision snapshots AND per-trade entry quantities.
 
     Overrides ``_on_fifteen_minute_bar`` so the recording wrapper runs

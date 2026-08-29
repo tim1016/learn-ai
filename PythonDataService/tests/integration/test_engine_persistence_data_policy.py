@@ -41,7 +41,7 @@ async def test_engine_backtest_request_accepts_data_policy_block() -> None:
     from app.routers.engine import EngineBacktestRequest
 
     req = EngineBacktestRequest(
-        strategy_name="spy_ema_crossover",
+        strategy_name="ema_crossover_signal",
         params={"symbol": "SPY"},
         from_date="2025-01-13",
         to_date="2025-01-17",
@@ -74,14 +74,14 @@ def test_engine_backtest_request_pins_requested_engine_vocabulary() -> None:
     from app.routers.engine import EngineBacktestRequest
 
     request = EngineBacktestRequest(
-        strategy_name="spy_ema_crossover",
+        strategy_name="ema_crossover_signal",
         requested_engine="both",
     )
     assert request.requested_engine == "both"
 
     with pytest.raises(ValidationError, match="requested_engine"):
         EngineBacktestRequest(
-            strategy_name="spy_ema_crossover",
+            strategy_name="ema_crossover_signal",
             requested_engine="lean",  # type: ignore[arg-type]
         )
 
@@ -131,7 +131,7 @@ async def test_engine_backtest_synthesizes_data_policy_from_legacy_fields() -> N
     from app.routers.engine import EngineBacktestRequest
 
     req = EngineBacktestRequest(
-        strategy_name="spy_ema_crossover",
+        strategy_name="ema_crossover_signal",
         params={"symbol": "spy"},  # lowercase → uppercased by synthesizer
         from_date="2025-01-13",
         to_date="2025-01-17",
@@ -181,7 +181,7 @@ async def test_engine_backtest_defers_data_policy_when_symbol_absent() -> None:
     from app.routers.engine import EngineBacktestRequest
 
     req = EngineBacktestRequest(
-        strategy_name="spy_ema_crossover",
+        strategy_name="ema_crossover_signal",
         params={},
         from_date="2025-01-13",
         to_date="2025-01-17",
@@ -221,7 +221,13 @@ def test_resolved_snapshot_freezes_strategy_defaults_for_history() -> None:
 
     assert snapshot.start_date == "2024-03-28"
     assert snapshot.end_date == "2026-03-27"
-    assert snapshot.parameters == {"symbol": "SPY", "gap": 0.2, "rsi_min": 50.0, "rsi_max": 70.0}
+    assert snapshot.parameters == {
+        "symbol": "SPY",
+        "gap": 0.2,
+        "gap_bps": 0.0,
+        "rsi_min": 50.0,
+        "rsi_max": 70.0,
+    }
     assert request.data_policy is not None
     assert request.data_policy.symbol == "SPY"
 

@@ -32,6 +32,8 @@ from app.lean_sidecar.trading_calendar import (
 from app.services import chart_bar_source, chart_service
 from app.services.chart_bar_source import (
     _MAX_PROVIDER_RUNS,
+    BarSourceSpan,
+    ComposedBars,
     compose_chart_bars,
     split_sessions_at_boundary,
 )
@@ -472,12 +474,30 @@ def test_compose_chart_bars_serves_an_empty_lake_entirely_from_the_provider(lake
     assert composed.notice_code == "history_provider_fallback"
 
 
-def test_compose_chart_bars_never_reads_the_raw_lake_for_an_adjusted_request(lake_root: Path) -> None:
-    """The lake stores unadjusted bytes only; an adjusted chart must not be
-    served from it, and must say why."""
-    _write_lake_day(lake_root, REGULAR_BEFORE)
-    _write_lake_day(lake_root, HALF_DAY)
+def test_compose_chart_bars_reads_the_adjusted_root_for_an_adjusted_request(
+    lake_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An adjusted chart reads the adjusted root, and misses there are ordinary.
+
+    This used to assert the opposite: the lake stored raw bytes only, so an
+    adjusted request fell back wholesale with
+    ``reason="price_adjustment_unsupported"`` — serving raw bytes for an
+    adjusted chart would have been a silent numerical error. #1839 gave the
+    lake a root per mode, so the request now resolves the adjusted root. This
+    root holds nothing, so every day still comes from the provider; what
+    changed is *why* — an ordinary ``lake_gap``, not an unsupported request.
+
+    The bytes written here go to the *raw* root, which is the point: reading
+    the adjusted root must not find them. Seeding the bare container instead
+    would leave both mode roots empty and the test would pass even if the
+    request wrongly resolved raw (#1866 review).
+    """
+    _write_lake_day(lake_root / "raw", REGULAR_BEFORE)
+    _write_lake_day(lake_root / "raw", HALF_DAY)
     provider = _ProviderSpy()
+
+    # No explicit lake_root, so the service resolves per mode from settings.
+    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root / mode)
 
     composed = compose_chart_bars(
         ticker=_SYMBOL,
@@ -486,15 +506,12 @@ def test_compose_chart_bars_never_reads_the_raw_lake_for_an_adjusted_request(lak
         adjusted=True,
         fetch_provider=provider,
         now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
     )
 
-    # The raw-only lake can serve nothing here, so this is the flag-off path
-    # exactly: one fetch, one span, no stitch.
     assert provider.calls == [(REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat())]
     assert {span.source for span in composed.spans} == {"provider"}
-    assert [span.reason for span in composed.spans] == ["price_adjustment_unsupported"]
-    assert composed.notice_code == "adjusted_prices_provider_only"
+    assert [span.reason for span in composed.spans] == ["lake_gap"]
+    assert composed.notice_code == "history_provider_fallback"
 
 
 @pytest.mark.parametrize(
@@ -801,7 +818,7 @@ def test_get_chart_data_flag_on_matches_flag_off_bars_and_indicators(
     _write_lake_day(lake_root, REGULAR_BEFORE)
     _write_lake_day(lake_root, HALF_DAY)
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda: lake_root)
+    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root)
     monkeypatch.setattr(chart_bar_source, "now_ms_utc", lambda: _during(LIVE_SESSION))
     flag_on = _run_chart()
 
@@ -820,7 +837,7 @@ def test_get_chart_data_carries_the_source_indicator_when_history_is_lake_backed
     for window in session_windows_ms_utc(date(2025, 10, 1), HALF_DAY):
         _write_lake_day(lake_root, window.session_date)
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda: lake_root)
+    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root)
     monkeypatch.setattr(chart_bar_source, "now_ms_utc", lambda: _during(LIVE_SESSION))
 
     result = _run_chart()
@@ -832,3 +849,35 @@ def test_get_chart_data_carries_the_source_indicator_when_history_is_lake_backed
     # one of those sessions came out of the lake: the provider saw the current
     # session only.
     assert chart_provider.calls == [(LIVE_SESSION.isoformat(), LIVE_SESSION.isoformat())]
+
+
+def test_the_adjusted_prices_notice_stays_in_the_contract_though_nothing_emits_it() -> None:
+    """`price_adjustment_unsupported` is retained, unproduced, on purpose.
+
+    Before #1839 the lake stored raw bytes only, so an adjusted chart fell
+    back wholesale with this reason and the Angular chart rendered its
+    `adjusted_prices_provider_only` notice. The lake now has a root per
+    adjustment mode, so nothing produces the reason any more — but the code
+    is still in the response contract that
+    `Frontend/src/app/components/data-lab/data-lab-chart` switches on, and
+    deleting it is a cross-stack change, not a data-plane one.
+
+    Pinning the mapping directly keeps the retained branch covered; without
+    this, removing it would break the frontend with no failing test.
+    """
+    composed = ComposedBars(
+        bars=(),
+        spans=(
+            BarSourceSpan(
+                source="provider",
+                reason="price_adjustment_unsupported",
+                from_session_open_ms_utc=0,
+                to_session_open_ms_utc=0,
+                session_count=1,
+                bar_count=0,
+            ),
+        ),
+        boundary_ms_utc=None,
+    )
+
+    assert composed.notice_code == "adjusted_prices_provider_only"

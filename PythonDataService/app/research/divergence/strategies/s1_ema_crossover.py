@@ -1,6 +1,6 @@
 """S1 — EMA(5)/EMA(10) crossover + RSI(14) filter. 5-bar hold.
 
-Mirrors the rule-set of ``app.engine.strategy.algorithms.spy_ema_crossover``
+Mirrors the rule-set of ``app.engine.strategy.algorithms.ema_crossover_signal``
 but in a vectorized pandas form so we can drive it against TV, native,
 and engine indicator columns without touching the LEAN streaming loop.
 
