@@ -339,6 +339,7 @@ async def test_a_fixture_replay_never_consults_the_lake_even_when_it_has_no_cove
             return bars
 
     monkeypatch.setattr(polygon_canonical, "get_default_provider", lambda: _FakeFixtureProvider())
+    monkeypatch.setattr(service, "stage_lean_metadata_from_image", lambda *_a, **_k: None)
 
     resolved: list[object] = []
     real_resolve = service._resolve_lake_artifacts_or_refuse
