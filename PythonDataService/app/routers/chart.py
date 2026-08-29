@@ -69,6 +69,7 @@ async def chart_data(request: ChartDataRequest):
     - NO_DATA: no bars returned from Polygon
     - INVALID_RANGE: bad timeframe or date range
     - RATE_LIMITED: Polygon rate limit hit
+    - PROVIDER_UNREACHABLE: a lake gap needed Polygon and Polygon could not be reached
     - INTERNAL_ERROR: unexpected failure
     """
     try:
@@ -111,6 +112,11 @@ async def chart_data(request: ChartDataRequest):
             elif error_code == "INVALID_RANGE":
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=result,
+                )
+            elif error_code == "PROVIDER_UNREACHABLE":
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail=result,
                 )
             else:

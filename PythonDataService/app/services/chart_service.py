@@ -21,6 +21,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import urllib3.exceptions
 
 from app.config import settings
 from app.lean_sidecar.trading_calendar import session_window_for_date, session_windows_ms_utc
@@ -1017,7 +1018,31 @@ def get_chart_data(
             fetch_from = compute_warmup_start_date(from_date, max_lookback)
             logger.info(f"[CHART] Warmup: fetching from {fetch_from} (requested {from_date})")
 
-        bars, bar_sources = _fetch_chart_bars(ticker, fetch_from, to_date, adjusted, from_date, session)
+        # A lake gap (or the flag-off path outright) falls back to Polygon.
+        # `PolygonClientService` re-raises whatever its underlying
+        # `urllib3.PoolManager` raised without translation, so an unreachable
+        # provider surfaces here as a raw `urllib3.exceptions.HTTPError`
+        # (`MaxRetryError`, `NewConnectionError`, a read timeout, ...) —
+        # every one of those is this module's ceiling, not a bug in the
+        # request. Left uncaught it reaches the router's generic handler as
+        # an opaque `INTERNAL_ERROR` whose `detail` is that exception's raw
+        # repr; a typed, plain-language refusal here matches how
+        # `data_lake.run_materialization.LakeMaterializationError` reports a
+        # coverage gap it cannot fill, instead of crashing.
+        try:
+            bars, bar_sources = _fetch_chart_bars(ticker, fetch_from, to_date, adjusted, from_date, session)
+        except urllib3.exceptions.HTTPError as exc:
+            logger.error(
+                f"[CHART] Provider unreachable while fetching {ticker} ({from_date} to {to_date}): {exc}"
+            )
+            return {
+                "error_code": "PROVIDER_UNREACHABLE",
+                "detail": (
+                    f"Could not reach the market-data provider to fetch {ticker} bars "
+                    f"for {from_date} to {to_date}. The data lake did not already hold "
+                    "every session in this range."
+                ),
+            }
         if not bars:
             return {
                 "error_code": "NO_DATA",
