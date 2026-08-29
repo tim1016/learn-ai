@@ -25,6 +25,7 @@ from app.data_lake.ensure_data import _compute_data_availability_hash
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.run_materialization import EngineRunMaterialization
 from app.data_lake.types import ArtifactRecord
+from app.routers import engine as engine_router
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
 

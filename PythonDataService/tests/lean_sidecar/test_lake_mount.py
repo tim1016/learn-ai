@@ -653,8 +653,8 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
         it instead — an empty directory says "no corporate actions", a missing
         one says "no idea", and the run classifier counts the difference.
         """
-        lake_root = tmp_path / LAKE_SUBDIR
-        lake_root.mkdir()
+        lake_root = tmp_path / lake_subpath("raw")
+        lake_root.mkdir(parents=True)
 
         ensure_lean_readable_layout(lake_root)
 
@@ -662,8 +662,8 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
         assert (lake_root / "equity" / "usa" / "map_files").is_dir()
 
     def test_bootstrapping_the_layout_twice_is_harmless(self, tmp_path: Path) -> None:
-        lake_root = tmp_path / LAKE_SUBDIR
-        lake_root.mkdir()
+        lake_root = tmp_path / lake_subpath("raw")
+        lake_root.mkdir(parents=True)
         ensure_lean_readable_layout(lake_root)
         (lake_root / "equity" / "usa" / "factor_files" / "spy.csv").write_text("kept\n")
 
@@ -717,7 +717,7 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
         provider call, or an operator reads "the lake cannot synthesize them"
         as a dead end.
         """
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW, with_quote=False)
 
         with pytest.raises(LakeMountError, match="lake_incomplete_quote_coverage") as exc_info:

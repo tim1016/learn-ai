@@ -44,6 +44,7 @@ def test_resolve_cache_root_honors_env(monkeypatch, tmp_path: Path):
 
 
 def test_resolve_data_roots_reference_first_and_creates_policy_root(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
     ref = tmp_path / "reference"
     ref.mkdir()
     monkeypatch.setenv("LEAN_DATA_ROOT", str(ref))
@@ -116,7 +117,7 @@ def test_turning_the_flag_off_returns_a_reader_to_the_policy_bars(monkeypatch, t
 
     assert roots == [policy_root]
     assert lake_root not in roots
-    assert path_policy.resolve_lake_root() not in roots
+    assert path_policy.resolve_lake_root("raw") not in roots
 
     from app.engine.data.lean_format import LeanMinuteDataReader
 
