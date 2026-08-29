@@ -40,12 +40,12 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 > `docs/architecture/engine-authority-map.md` plus this explicit note.
 >
 > **Amended by #1839 (the flag flip).** `DATA_LAKE_ENABLED` now defaults ON, so
-> the lake path above is the shipped one for a **raw** request. An *adjusted*
-> request still resolves through `ensure_range` and the policy store, because
-> the lake's live pipeline produces raw bars only
-> (`app/data_lake/path_policy.py::lake_serves`). The no-new-concept finding is
-> unchanged either way: both paths still resolve which bytes the reader opens,
-> not a formula over them.
+> the lake path above is the shipped one for both a **raw** and an *adjusted*
+> request — since #1866, each price-adjustment mode resolves to its own root
+> under the lake (`app/data_lake/path_policy.py::resolve_lake_root`), so
+> adjusted requests are no longer carved out to the policy store. The
+> no-new-concept finding is unchanged either way: both paths still resolve
+> which bytes the reader opens, not a formula over them.
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
 |---|---|---|---|---|---|

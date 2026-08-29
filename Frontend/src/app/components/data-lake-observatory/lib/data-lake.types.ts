@@ -177,8 +177,8 @@ export interface DataRunSpec {
  *
  * `not_enabled` is a first-class outcome, not an error: `DATA_LAKE_ENABLED`
  * defaults on since #1839, but a deployment can still turn it off (it is the
- * rollback), and a dark router answers a bare 404 on every route. `rejected` carries the
- * endpoint's own typed `{reason, message}` body verbatim so the reason
+ * rollback), and a dark router answers a bare 404 on every route. `rejected`
+ * carries the endpoint's own typed `{reason, message}` body verbatim so the reason
  * renders through the receipt-label pipe instead of being re-worded here —
  * that covers both the 422 validators and the `artifact_not_found` 404.
  *

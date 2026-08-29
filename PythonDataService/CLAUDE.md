@@ -55,11 +55,13 @@ hardening pass.
 ### Deploy prerequisite: `LEAN_DATA_VOLUME_HOST_PATH`
 
 `DATA_LAKE_ENABLED` defaults **on** (#1839), so a Polygon-sourced sidecar
-run with a raw `DataPolicy` reads the lake through a read-only bind mount
-instead of staging its own bars. The launcher builds that mount, and it is
-a host process: it does **not** inherit `compose.yaml`'s environment. Export
-the variable in the shell that starts it, pointing at the same host
-directory the `python-service` lake mount uses:
+run reads the lake through a read-only bind mount instead of staging its
+own bars — for both a raw and an adjusted `DataPolicy` alike, since #1866
+gave each price-adjustment mode its own root under the lake. The launcher
+builds that mount, and it is a host process: it does **not** inherit
+`compose.yaml`'s environment. Export the variable in the shell that starts
+it, pointing at the same host directory the `python-service` lake mount
+uses:
 
 ```bash
 export LEAN_DATA_VOLUME_HOST_PATH=/absolute/path/to/data-lake-volume
@@ -70,10 +72,6 @@ The path must be **absolute** — podman resolves a relative one against the
 launcher's working directory and compose against the directory holding
 `compose.yaml`, and the two disagree exactly where it matters, so
 `lake_mount.launcher_host_lake_root` refuses rather than picking one.
-
-An adjusted-`DataPolicy` sidecar run is unaffected: it keeps the pre-lake
-staging path (`path_policy.lake_serves`), needs no mount, and therefore
-does not need this variable.
 
 ## File Structure
 
