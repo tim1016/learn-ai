@@ -56,19 +56,31 @@ class MinuteTradeBar:
 
 
 def to_deci_cent(price: Decimal) -> int:
-    """Encode a price as LEAN's on-disk integer. **Canonical for this repo.**
+    """Encode a price as our on-disk integer, on LEAN's 1/10,000 grid.
+    **Canonical for this repo.**
 
     Formula: ``round_half_up(price * 10_000)``.
-    Reference: LEAN's on-disk equity format, where a bar's stored integer is
-    the price on a fixed 1/10,000 grid (``TradeBar._scaleFactor = 1/10000m``);
-    the decode is ``stored / 10_000``.
+    Reference: LEAN's scale factor (``TradeBar._scaleFactor = 1/10000m`` in
+    ``Common/Data/Market/TradeBar.cs``) fixes the grid; LEAN's writer
+    (``LeanData.Scale`` in ``Common/Util/LeanData.cs``) does ``value *
+    10_000m`` and formats it with trailing zeros stripped — **it does not
+    round or truncate to an integer**. So a price already on the grid (true
+    for the overwhelming majority of Polygon-sourced data) round-trips
+    byte-identical either way; a price finer than the grid is where our port
+    diverges from a literal replication, because our on-disk format requires
+    an integer field and LEAN's does not. The half-up rule below is
+    therefore our own quantization decision, not a proven LEAN behavior —
+    see ``docs/references/lean-deci-cent-encoding.md`` for the source read
+    and the full reasoning.
     Canonical implementation: this function. Every writer in the tree encodes
     through it — the lake's own zip builders (``build_minute_trade_zip_bytes``,
     ``app.data_lake.derived_daily``, ``app.data_lake.derived_quote``) and the
     pre-lake policy-store writers in ``app.engine.data.lean_format``.
     Validated against: ``tests/unit/data_lake/test_deci_cent_canonical.py``,
     which pins the rule and asserts both writers agree bar-for-bar on prices
-    finer than the deci-cent grid.
+    finer than the deci-cent grid — an internal cross-writer-consistency
+    proof, not a LEAN-equivalence proof (there is no LEAN rounding rule to
+    be equivalent to).
 
     **Why half-up rather than truncation.** Encoding is a quantization onto
     the deci-cent grid, so the only defensible target is the nearest
