@@ -310,19 +310,30 @@ def resolve_lake_artifacts(
         # staging synthesizes the quote zips for exactly this reason.
         # Launching without them guarantees failed_data_requests.
         #
-        # The message names the remedy because there is exactly one, and
-        # because the common way to arrive here is not a bug: ``cache_import``
-        # imports the legacy cache's trade-only zips, so a freshly imported
-        # lake has every trade artifact and no quote artifact. ``ensure_data``
-        # derives quotes from the same-day trade artifact it already holds, so
-        # the backfill costs no provider call — it reuses the trade rows and
+        # The message names a remedy for the quote gap specifically, because
+        # the common way to arrive here is not a bug: ``cache_import`` imports
+        # the legacy cache's trade-only zips, so a freshly imported lake has
+        # every trade artifact and no quote artifact. ``ensure_data`` derives
+        # quotes from the same-day trade artifact it already holds, so that
+        # backfill costs no provider call — it reuses the trade rows and
         # writes the derived quotes beside them.
+        #
+        # It is NOT the only remedy a freshly cache_import'd lake may need:
+        # ``run_backfill`` deliberately opts out of the whole-history daily
+        # artifact per day (see its own module docstring), so a lake that
+        # never had one still lacks it after this backfill completes, and
+        # the next call here will raise ``lake_missing_daily_artifact``
+        # separately — that one does need a full-range ``ensure_data`` call
+        # (a provider call, since the daily artifact is not derivable from
+        # per-day trade zips alone). Tracked as #1869.
         raise LakeMountError(
             f"lake_incomplete_quote_coverage: {safe_symbol} is missing minute-quote artifacts "
             f"for {_render_sessions(missing_quote)}; LEAN's default minute subscription "
             "requests quotes and the read-only mount cannot synthesize them — run the lake "
             "backfill over this window with data_types=['trade','quote'] to derive them from "
-            "the trade artifacts already present (no provider call)"
+            "the trade artifacts already present (no provider call). If the daily artifact is "
+            "also missing, a separate lake_missing_daily_artifact error follows and needs its "
+            "own full-range backfill (see #1869)"
         )
 
     daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
