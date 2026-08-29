@@ -454,15 +454,18 @@ async def claim_minute_bar(
 
 
 @dataclass(frozen=True)
-class MinuteBarClaimState:
-    """The existing row's claim state, for a caller that lost ``claim_minute_bar``.
+class ArtifactClaimState:
+    """The existing row's claim state, for a caller that lost a claim insert.
 
-    ``claim_minute_bar``'s ``ON CONFLICT ... DO NOTHING`` returns nothing when
-    a row already exists, and ``select_coverage_minute_bars`` only sees
-    ``'complete'`` rows — so a caller that lost the race to a ``'failed'`` or
-    lease-expired ``'fetching'`` row has no way to find its ``Id`` (needed by
-    :func:`steal_or_retry_minute_bar`) or to tell that case apart from a live,
-    actively-leased fetch. This is that lookup's result.
+    A ``claim_*`` function's ``ON CONFLICT ... DO NOTHING`` returns nothing
+    when a row already exists, and the matching ``select_complete_*`` /
+    ``select_coverage_*`` only sees ``'complete'`` rows — so a caller that
+    lost the race to a ``'failed'`` or lease-expired ``'fetching'`` row has
+    no way to find its ``Id`` (needed by :func:`steal_or_retry_minute_bar`,
+    itself generic over artifact kind) or to tell that case apart from a
+    live, actively-leased fetch. This is that lookup's result — shared by
+    :func:`select_minute_bar_claim_state` and :func:`select_metadata_claim_state`
+    since the shape carries no kind-specific field.
     """
 
     id: int
@@ -471,7 +474,7 @@ class MinuteBarClaimState:
     last_error: str | None
 
 
-async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> MinuteBarClaimState | None:
+async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> ArtifactClaimState | None:
     """Look up the existing minute-bar row's claim state, at any status.
 
     Matches the same identity tuple as ``claim_minute_bar``'s partial unique
@@ -502,7 +505,38 @@ async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> MinuteBar
         )
     if row is None:
         return None
-    return MinuteBarClaimState(
+    return ArtifactClaimState(
+        id=row["Id"],
+        status=row["Status"],
+        attempt_count=row["AttemptCount"],
+        last_error=row["LastError"],
+    )
+
+
+async def select_metadata_claim_state(data_contract_hash: str) -> ArtifactClaimState | None:
+    """Look up the existing metadata row's claim state, at any status.
+
+    ``claim_metadata_artifact``'s ``ON CONFLICT ... DO NOTHING`` returns
+    nothing when a row already exists, and ``select_complete_metadata_artifact``
+    only sees ``'complete'`` rows — the same gap ``select_minute_bar_claim_state``
+    closes for bars, reused here (the returned shape carries no bar-specific
+    field). Without this lookup, a settled ``'failed'`` row — e.g. from a
+    launcher outage — reads identically to live contention forever: every
+    future bootstrap attempt sees "not complete" and reports lease_timeout,
+    even though nothing is actually in flight and :func:`steal_or_retry_minute_bar`
+    could reclaim it immediately.
+    """
+    query = """
+        SELECT "Id", "Status", "AttemptCount", "LastError"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = 'metadata'
+           AND "DataContractHash" = $1
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(query, data_contract_hash)
+    if row is None:
+        return None
+    return ArtifactClaimState(
         id=row["Id"],
         status=row["Status"],
         attempt_count=row["AttemptCount"],
