@@ -52,6 +52,27 @@ covers URL config, token resolution, and a live `/healthz` probe.
 Containerizing the launcher itself is the Phase 2b / Phase 1c
 hardening pass.
 
+### Deploy prerequisite: `LEAN_DATA_VOLUME_HOST_PATH`
+
+`DATA_LAKE_ENABLED` defaults **on** (#1839), so a Polygon-sourced sidecar
+run reads the lake through a read-only bind mount instead of staging its
+own bars — for both a raw and an adjusted `DataPolicy` alike, since #1866
+gave each price-adjustment mode its own root under the lake. The launcher
+builds that mount, and it is a host process: it does **not** inherit
+`compose.yaml`'s environment. Export the variable in the shell that starts
+it, pointing at the same host directory the `python-service` lake mount
+uses:
+
+```bash
+export LEAN_DATA_VOLUME_HOST_PATH=/absolute/path/to/data-lake-volume
+```
+
+Without it every lake-mode run rejects with `lake_mount_not_configured`.
+The path must be **absolute** — podman resolves a relative one against the
+launcher's working directory and compose against the directory holding
+`compose.yaml`, and the two disagree exactly where it matters, so
+`lake_mount.launcher_host_lake_root` refuses rather than picking one.
+
 ## File Structure
 
 ```

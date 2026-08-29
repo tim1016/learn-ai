@@ -36,13 +36,13 @@ WINDOW = [DAY_ONE, DAY_TWO]
 SYMBOL = "SPY"
 
 
-def _polygon_live_policy() -> Any:
+def _polygon_live_policy(*, adjusted: bool = False) -> Any:
     from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
 
     return DataPolicy(
         source="polygon",
         symbol=SYMBOL,
-        adjusted=False,
+        adjusted=adjusted,
         session="regular",
         input_bars=BarsSpec(timespan="minute", multiplier=1),
         strategy_bars=BarsSpec(timespan="minute", multiplier=15),
@@ -54,7 +54,7 @@ def _polygon_live_policy() -> Any:
     )
 
 
-def _request(run_id: str) -> Any:
+def _request(run_id: str, *, adjusted: bool = False) -> Any:
     from app.services.lean_sidecar_service import TrustedRunRequest
 
     return TrustedRunRequest(
@@ -65,7 +65,7 @@ def _request(run_id: str) -> Any:
         start_ms_utc=session_open_ms_utc(DAY_ONE),
         end_ms_utc=session_open_ms_utc(next_trading_day(DAY_TWO)),
         starting_cash=100_000.0,
-        data_policy=_polygon_live_policy(),
+        data_policy=_polygon_live_policy(adjusted=adjusted),
     )
 
 
@@ -267,7 +267,12 @@ async def test_lake_refusal_leaves_the_run_id_reusable(
     from app.services import lean_sidecar_service as service
 
     write_root = tmp_path / "lean-data-writer"
-    (write_root / lake_subpath("raw")).mkdir(parents=True)  # a lake with nothing in it
+    # ``exist_ok`` because tests/conftest.py's autouse
+    # ``_isolate_data_lake_write_root`` already created this root under the
+    # same tmp_path — the flag is on by default now, so every test gets an
+    # isolated lake whether it asked for one or not. What this test needs is
+    # that the lake is *empty*, which it is either way.
+    (write_root / lake_subpath("raw")).mkdir(parents=True, exist_ok=True)  # a lake with nothing in it
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
@@ -281,6 +286,172 @@ async def test_lake_refusal_leaves_the_run_id_reusable(
     seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     result = await service.run_trusted_sample(_request("reusable-run-id"))
     assert result.workspace_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_fixture_replay_never_consults_the_lake_even_when_it_has_no_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """A frozen fixture replay's recording is the data authority — the lake
+    preflight must never run for it, regardless of coverage.
+
+    Before this guard, the preflight checked only ``data_policy.source ==
+    "polygon"`` and the flag, so with the flag default-on (#1839) a fixture
+    replay (parity tests / freshness canary, ``provider_kind="fixture"``)
+    over a window the lake has no coverage for refused with
+    ``lake_incomplete_trade_coverage`` before ever reaching the fixture
+    branch, discarding its frozen bars for an unrelated lake gap.
+    """
+    from app.config import settings
+    from app.lean_sidecar import polygon_canonical
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    (write_root / lake_subpath("raw")).mkdir(parents=True, exist_ok=True)  # empty lake
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    class _FakeFixtureProvider:
+        fixture_id = "fake-fixture-v1"
+        fixture_sha256 = None
+
+        def fetch_minute_bars(
+            self, *, symbol: str, start_date: date, end_date: date, adjusted: bool
+        ) -> list[dict[str, Any]]:
+            price = 100.0
+            bars = []
+            for trading_date in WINDOW:
+                bars.append(
+                    {
+                        "timestamp": session_open_ms_utc(trading_date),
+                        "open": price,
+                        "high": price + 0.5,
+                        "low": price - 0.5,
+                        "close": price + 0.1,
+                        "volume": 1_000,
+                    }
+                )
+                price += 1.0
+            return bars
+
+    monkeypatch.setattr(polygon_canonical, "get_default_provider", lambda: _FakeFixtureProvider())
+    monkeypatch.setattr(service, "stage_lean_metadata_from_image", lambda *_a, **_k: None)
+
+    resolved: list[object] = []
+    real_resolve = service._resolve_lake_artifacts_or_refuse
+
+    async def _spy(request):
+        outcome = await real_resolve(request)
+        resolved.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(service, "_resolve_lake_artifacts_or_refuse", _spy)
+
+    data_policy = DataPolicy(
+        source="polygon",
+        symbol=SYMBOL,
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="fixture",
+        fixture_id="fake-fixture-v1",
+        fixture_sha256=None,
+    )
+    request = service.TrustedRunRequest(
+        run_id="fixture-skips-lake-preflight",
+        start_ms_utc=session_open_ms_utc(DAY_ONE),
+        end_ms_utc=session_open_ms_utc(next_trading_day(DAY_TWO)),
+        starting_cash=100_000.0,
+        data_policy=data_policy,
+    )
+
+    result = await service.run_trusted_sample(request)
+
+    assert not resolved, "a fixture replay must never consult the lake"
+    assert result.workspace_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_an_adjusted_request_also_reaches_the_lake_with_the_flag_on(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """An adjusted run mounts the lake too, asserted at the service seam.
+
+    This used to assert the opposite: before #1866 the lake's live pipeline
+    was raw-only, so an adjusted run stayed on the pre-lake staging path
+    (bug #1839 found and fixed a case where that fell through and served raw
+    bytes under an adjusted policy). #1866 made the adjustment mode a path
+    segment, so the lake now holds a real ``polygon_split_adjusted`` root and
+    an adjusted run resolves it exactly like a raw run resolves its own.
+
+    The lake here is fully serveable in the adjusted mode, so a run that
+    consulted it should succeed and mount it: ``mount_lake_read_only`` on the
+    launch request, which is what a lake-mode run sets and a staging run
+    leaves alone.
+    """
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    (write_root / lake_subpath("polygon_split_adjusted")).mkdir(parents=True, exist_ok=True)
+    seed_lake_window(write_root / lake_subpath("polygon_split_adjusted"), SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    resolved: list[object] = []
+    real_resolve = service._resolve_lake_artifacts_or_refuse
+
+    async def _spy(request):
+        outcome = await real_resolve(request)
+        resolved.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(service, "_resolve_lake_artifacts_or_refuse", _spy)
+
+    await service.run_trusted_sample(_request("adjusted-reaches-the-lake", adjusted=True))
+
+    assert resolved, "an adjusted run never consulted the lake"
+    assert orchestrator.launch_requests
+    assert orchestrator.launch_requests[-1].mount_lake_read_only
+
+
+@pytest.mark.asyncio
+async def test_a_raw_request_does_reach_the_lake_with_the_flag_on(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """The counterpart, pinning that raw resolves its own root, not the adjusted one.
+
+    Identical setup, raw policy, against a lake that only holds an adjusted
+    root: this one must still mount the lake once its own raw root is
+    seeded, and the two tests together pin that each mode resolves its own
+    root rather than one mode leaking into the other's.
+    """
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    (write_root / lake_subpath("raw")).mkdir(parents=True, exist_ok=True)
+    seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    await service.run_trusted_sample(_request("raw-reaches-the-lake", adjusted=False))
+
+    assert orchestrator.launch_requests
+    assert orchestrator.launch_requests[-1].mount_lake_read_only
 
 
 @pytest.mark.asyncio

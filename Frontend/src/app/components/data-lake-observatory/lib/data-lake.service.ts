@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
+import { tradingDateToMs } from './trading-range';
 import type {
   ArtifactDetail,
   BackfillDefaults,
@@ -16,7 +17,11 @@ import type {
 
 export interface CoverageQuery {
   readonly symbol: string;
-  /** `YYYY-MM-DD`, the shape the coverage endpoint's `date` query params take. */
+  /**
+   * `YYYY-MM-DD` — what `<input type="date">` produces and what the operator
+   * reads. The wire takes `int64 ms UTC`; `coverage()` converts at the HTTP
+   * seam via `tradingDateToMs`, so the ISO form never leaves the browser.
+   */
   readonly startTradingDate: string;
   readonly endTradingDate: string;
   readonly market?: string;
@@ -45,13 +50,27 @@ export class DataLakeService {
   private readonly base = `${environment.pythonServiceUrl}/api/data-lake`;
 
   async coverage(query: CoverageQuery): Promise<DataLakeRead<CoverageResponse>> {
+    const startMs = tradingDateToMs(query.startTradingDate);
+    const endMs = tradingDateToMs(query.endTradingDate);
+    if (startMs === null || endMs === null) {
+      // Named locally rather than sent. A fallback anchor here (epoch 0, say)
+      // would turn an unparseable date into a *valid* request for a window in
+      // 1970 -- the endpoint would answer it, and the operator would read a
+      // successful empty heatmap as "the lake holds nothing" instead of "that
+      // date does not parse".
+      return {
+        kind: 'rejected',
+        reason: 'invalid_trading_date',
+        message: 'Pick a start and end date in YYYY-MM-DD form.',
+      };
+    }
     return this.read(() =>
       firstValueFrom(
         this.http.get<CoverageResponse>(`${this.base}/coverage`, {
           params: {
             symbol: query.symbol,
-            start_trading_date: query.startTradingDate,
-            end_trading_date: query.endTradingDate,
+            start_trading_date_ms: startMs,
+            end_trading_date_ms: endMs,
             market: query.market ?? 'usa',
             data_type: query.dataType ?? 'trade',
             price_adjustment_mode: query.priceAdjustmentMode ?? 'raw',

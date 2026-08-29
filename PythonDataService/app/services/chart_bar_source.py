@@ -412,7 +412,7 @@ def _execute_plan(
         session="extended",
     )
 
-    # Invariant since #1839, but kept named rather than inlined at its three
+    # Invariant since #1866, but kept named rather than inlined at its three
     # use sites: `_plan_segments` takes the reason as a parameter, and a lake
     # that cannot serve a mode would want to say so again here (the retained
     # `price_adjustment_unsupported` reason is that shape). One name is

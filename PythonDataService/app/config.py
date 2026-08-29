@@ -94,10 +94,28 @@ class Settings(BaseSettings):
     # Rate limiting (optional)
     MAX_REQUESTS_PER_MINUTE: int = 100
 
-    # Data lake (Slice 1a)
-    # postgres://user:pass@host:5432/dbname — required when DATA_LAKE_ENABLED is true
+    # Data lake. Default-ON since #1839: the lake is the market-data
+    # authority for historical bars in both adjustment modes (ADR 0049),
+    # and the engines, the LEAN sidecar and the chart split-read all
+    # resolve through it.
+    #
+    # What "on" does NOT mean, because the blast radius of this default is
+    # the thing worth stating next to it: since #1866, each price-adjustment
+    # mode resolves to its own root under the lake
+    # (``path_policy.resolve_lake_root``), so an adjusted-bars request is
+    # served by the lake too -- it is not carved out. Turning this off
+    # remains a complete rollback: every seam asks one predicate and every
+    # one of them falls back to the path it used before, demonstrated by
+    # tests/engine/test_policy_store.py::test_turning_the_flag_off_returns_a_reader_to_the_policy_bars.
+    # One cost, not a correctness gap: bars fetched while the flag was on
+    # landed only in the lake, so a rollback re-fetches those windows from
+    # Polygon on first use. The policy cache is never stale, only behind.
+    #
+    # postgres://user:pass@host:5432/dbname — required when DATA_LAKE_ENABLED
+    # is true, which is now the default. A deployment with no POSTGRES_URL
+    # must set DATA_LAKE_ENABLED=false explicitly.
     POSTGRES_URL: str = ""
-    DATA_LAKE_ENABLED: bool = False
+    DATA_LAKE_ENABLED: bool = True
     # Rebuildable read model over canonical lifecycle/account artifacts.
     # Requires POSTGRES_URL when enabled; files remain canonical when disabled
     # or unavailable.

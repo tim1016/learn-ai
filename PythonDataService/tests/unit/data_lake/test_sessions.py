@@ -1,17 +1,22 @@
-"""Tests for the fixture-backed trading_sessions_for in Slice 1a.
+"""The lake's session adapter, and its parity with the canonical calendar.
 
-Slice 1c replaces this with a LEAN market-hours-database-driven implementation;
-the public function signature is stable.
+``trading_sessions_for`` is a thin adapter over
+``app.lean_sidecar.trading_calendar`` -- the canonical NYSE calendar and the
+only ``mcal`` construction in the repo. The parity test at the bottom is what
+makes that claim checkable rather than aspirational (CLAUDE.md
+guiding-philosophy #5, ``.claude/rules/temporal-rigor.md`` "Calendar
+authority").
 """
 
 from __future__ import annotations
 
-import json
 from datetime import date
-from pathlib import Path
+
+import pytest
 
 from app.data_lake.sessions import trading_sessions_for
 from app.data_lake.types import NonSessionRecord
+from app.lean_sidecar.trading_calendar import expected_sessions
 
 
 def test_weekday_non_holiday_is_a_session():
@@ -51,43 +56,52 @@ def test_week_spanning_a_holiday():
     assert date(2024, 5, 27) in holiday_dates
 
 
-def test_uses_staged_market_hours_when_provided(tmp_path: Path):
-    # Minimal market-hours-database.json in LEAN's native M/d/yyyy format with
-    # a full closure on 7/4/2024 (US Independence Day) and an early close on
-    # 7/3/2024.
-    mh_db = tmp_path / "market-hours-database.json"
-    mh_db.write_text(
-        json.dumps(
-            {
-                "entries": {
-                    "Equity-usa-[*]": {
-                        "exchange": "nyse",
-                        "timezone": "America/New_York",
-                        "holidays": ["7/4/2024"],
-                        "earlyCloses": {"7/3/2024": "13:00:00"},
-                    }
-                }
-            }
-        )
-    )
-    sessions, non_sessions = trading_sessions_for(
-        "usa",
-        date(2024, 7, 3),
-        date(2024, 7, 5),
-        market_hours_db_path=mh_db,
-    )
-    assert date(2024, 7, 4) not in sessions
-    assert any(n.trading_date == date(2024, 7, 4) and n.reason == "market_holiday" for n in non_sessions)
-    # Early-close day is still a session in v1 (full-minute coverage).
-    assert date(2024, 7, 3) in sessions
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (date(2020, 1, 1), date(2021, 12, 31)),
+        (date(2022, 1, 1), date(2023, 12, 31)),
+        (date(2024, 1, 1), date(2026, 12, 31)),
+    ],
+)
+def test_sessions_are_the_canonical_calendar_verbatim(start: date, end: date) -> None:
+    """The adapter adds a vocabulary, never a calendar opinion.
+
+    Required by guiding-philosophy #5: a duplicate that exists for a real
+    reason (here, layer-locality -- the lake's catalog wants a reason per
+    skipped day) carries a parity test naming the canonical file. That file is
+    ``app/lean_sidecar/trading_calendar.py``.
+    """
+    sessions, _ = trading_sessions_for("usa", start, end)
+
+    assert sessions == expected_sessions(start, end)
 
 
-def test_falls_back_to_hardcoded_when_no_path():
-    # Memorial Day 2024 is in the hardcoded list; should be a non-session.
-    sessions, _ = trading_sessions_for(
-        "usa",
-        date(2024, 5, 27),
-        date(2024, 5, 27),
-        market_hours_db_path=None,
-    )
+def test_every_day_in_the_window_is_either_a_session_or_a_reasoned_non_session() -> None:
+    """No day falls between the two lists, and none is in both."""
+    start, end = date(2024, 12, 20), date(2025, 1, 5)
+    sessions, non_sessions = trading_sessions_for("usa", start, end)
+
+    accounted = [*sessions, *(n.trading_date for n in non_sessions)]
+    assert sorted(accounted) == sorted(set(accounted))
+    assert len(accounted) == (end - start).days + 1
+
+
+def test_a_pre_2024_holiday_is_no_longer_treated_as_a_session() -> None:
+    """The regression the consolidation closes, pinned to a date.
+
+    The hand-maintained holiday list this module used to carry covered only
+    2024-2026, so every market holiday before 2024 read as a trading session:
+    the lake required artifacts for Christmas Day and recorded phantom
+    sessions in its catalog. Any backfill reaching back a few years -- well
+    inside the coverage endpoint's five-year cap -- hit it.
+    """
+    sessions, non_sessions = trading_sessions_for("usa", date(2020, 12, 25), date(2020, 12, 25))
+
     assert sessions == []
+    assert NonSessionRecord(market="usa", trading_date=date(2020, 12, 25), reason="market_holiday") in non_sessions
+
+
+def test_a_market_this_calendar_does_not_cover_is_refused() -> None:
+    with pytest.raises(ValueError, match="canonical calendar is NYSE"):
+        trading_sessions_for("eurex", date(2024, 5, 20), date(2024, 5, 20))

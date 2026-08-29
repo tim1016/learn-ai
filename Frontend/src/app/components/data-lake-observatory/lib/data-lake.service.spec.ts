@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { DataLakeService, classifyDataLakeError, describeFailure } from './data-lake.service';
+import { tradingDateToMs } from './trading-range';
 
 const BASE = `${environment.pythonServiceUrl}/api/data-lake`;
 
@@ -34,8 +35,15 @@ describe('DataLakeService', () => {
 
     const request = http.expectOne((candidate) => candidate.url === `${BASE}/coverage`);
     expect(request.request.params.get('symbol')).toBe('SPY');
-    expect(request.request.params.get('start_trading_date')).toBe('2026-05-18');
-    expect(request.request.params.get('end_trading_date')).toBe('2026-05-20');
+    // int64 ms UTC, never an ISO date: temporal-rigor allows one wire format
+    // and the response has always spoken ms (`trading_date_ms`).
+    expect(request.request.params.get('start_trading_date_ms')).toBe(
+      String(tradingDateToMs('2026-05-18')),
+    );
+    expect(request.request.params.get('end_trading_date_ms')).toBe(
+      String(tradingDateToMs('2026-05-20')),
+    );
+    expect(request.request.params.get('start_trading_date')).toBeNull();
     expect(request.request.params.get('data_type')).toBe('quote');
     expect(request.request.params.get('price_adjustment_mode')).toBe('lean_adjusted');
     expect(request.request.params.get('market')).toBe('usa');
@@ -72,6 +80,24 @@ describe('DataLakeService', () => {
       kind: 'rejected',
       reason: 'artifact_not_found',
       message: 'artifact 99 not found',
+    });
+    http.verify();
+  });
+
+  it('rejects an unparseable date locally instead of sending a fallback anchor', async () => {
+    const pending = service.coverage({
+      symbol: 'SPY',
+      startTradingDate: 'not-a-date',
+      endTradingDate: '2026-05-20',
+    });
+
+    // No request at all: a fallback anchor would make this a *valid* query
+    // for some other window, and the operator would read a successful empty
+    // heatmap as "the lake holds nothing".
+    http.expectNone((candidate) => candidate.url === `${BASE}/coverage`);
+    await expect(pending).resolves.toMatchObject({
+      kind: 'rejected',
+      reason: 'invalid_trading_date',
     });
     http.verify();
   });

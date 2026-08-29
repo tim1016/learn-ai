@@ -112,21 +112,20 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     bars endpoint must resolve roots through this single function so
     they always observe the same bytes.
 
-    With ``DATA_LAKE_ENABLED`` the lake is the market-data authority and
-    the sole root: its tree is already LEAN-format, so the readers are
-    unchanged. The reference mount is deliberately dropped rather than
-    stacked in front — a run must be able to say which bytes it consumed,
-    and a fixture silently outranking the lake would make the manifest
-    fingerprint recorded on the run a lie. The policy key does not carry
-    over either: the pre-lake cache keys its subtree by ``source`` *and*
-    adjustment, while the lake is single-source and keys only by adjustment
-    (``path_policy.resolve_lake_root``).
+    When the flag is on, the lake is the market-data authority and the sole
+    root: its tree is already LEAN-format, so the readers are unchanged. The
+    reference mount is deliberately dropped rather than stacked in front — a
+    run must be able to say which bytes it consumed, and a fixture silently
+    outranking the lake would make the manifest fingerprint recorded on the
+    run a lie. The policy key does not carry over either: the pre-lake cache
+    keys its subtree by ``source`` *and* adjustment, while the lake is
+    single-source and keys only by adjustment (``path_policy.resolve_lake_root``).
 
     ``adjusted`` selects the lake root rather than being refused by it. It
     used to raise ``LakeAdjustmentUnsupportedError`` here, because the lake
     held one data contract per bar and it was raw — returning the raw root to
     an adjusted request would have handed a run raw prices while it believed
-    it read adjusted ones, materially wrong across a split. #1839 made the
+    it read adjusted ones, materially wrong across a split. #1866 made the
     adjustment mode a segment of the root, so the honest answer is now a
     different directory instead of a refusal.
     """

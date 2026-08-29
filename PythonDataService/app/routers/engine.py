@@ -124,16 +124,17 @@ def _reject_hidden_params(reg: StrategyRegistration, params: dict[str, Any]) -> 
 def _resolve_lean_data_roots(*, adjusted: bool) -> list[Path]:
     """Return the ordered list of roots the reader should search.
 
-    Delegates to the policy-keyed bar store: reference mount first (so
-    the bit-exact SPY fixture always wins), then the policy cache root
-    for the requested adjustment mode. See
-    :mod:`app.engine.data.policy_store` for the layout and the
-    adjusted-vs-raw seam bug this keying fixes.
+    Delegates to the policy-keyed bar store: the lake alone when the flag is
+    on (its own root selected by adjustment mode), otherwise the reference
+    mount first (so the bit-exact SPY fixture always wins) then the policy
+    cache root for the requested adjustment mode. See
+    :mod:`app.engine.data.policy_store` for the layout and the adjusted-vs-raw
+    seam bug this keying fixes.
 
     This used to translate ``LakeAdjustmentUnsupportedError`` into a 409:
     with the lake on, an adjusted request had nowhere to go, and a default
     Strategy Lab backtest — which asks for adjusted bars — was refused
-    outright. #1839 gave the lake root an adjustment segment, so an adjusted
+    outright. #1866 gave the lake root an adjustment segment, so an adjusted
     request now resolves a different directory and there is no refusal left
     to translate.
     """
@@ -1087,16 +1088,24 @@ def _materialize_missing_bars(
 ) -> str | None:
     """Put the run's bars on disk before the reader looks for them.
 
-    Two materializers, one question. The lake answers it when
-    ``DATA_LAKE_ENABLED`` is set — it fetches only the missing days, records
-    every artifact in the catalog, and hands back the fingerprint this
-    function passes on (see ``materialize_engine_run`` for what that
-    fingerprint does and does not cover). Otherwise the pre-lake policy store
-    exports the range into its cache and there is no such fingerprint to give.
+    Two materializers, one question. The lake answers it when it serves this
+    request — it fetches only the missing days, records every artifact in the
+    catalog, and hands back the fingerprint this function passes on (see
+    ``materialize_engine_run`` for what that fingerprint does and does not
+    cover). Otherwise the pre-lake policy store exports the range into its
+    cache and there is no such fingerprint to give.
+
+    The branch below and ``_resolve_lean_data_roots`` above must agree, which
+    is why both ask the same flag rather than each testing it independently:
+    materializing into the lake while reading from the policy store would
+    fetch bars nobody reads and then read bars nobody fetched, and the
+    symptom (an empty backtest after a successful fetch) points at neither
+    seam.
     """
     if settings.DATA_LAKE_ENABLED:
-        # Lazy for the same reason as the Polygon client below: the flag is
-        # off by default and the lake pulls in the catalog + provider stack.
+        # Lazy for the same reason as the Polygon client below: the lake
+        # pulls in the catalog + provider stack, and this module is imported
+        # by surfaces that never materialize anything.
         from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
         from app.data_lake.types import polygon_mode_for
 

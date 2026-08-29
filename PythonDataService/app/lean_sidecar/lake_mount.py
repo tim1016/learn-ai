@@ -65,6 +65,31 @@ under image A can serve a run pinned to image B and this module cannot
 tell. Detecting it needs a catalog read this module deliberately does
 not do — the sidecar's lake access is filesystem-only. Recorded for the
 integration slice, which already talks to the catalog.
+
+**The lake has no ``alternative/interest-rate`` subtree, and staging
+does.** ``staging.stage_lean_metadata_from_image`` extracts that subtree
+out of the LEAN image alongside the two metadata databases, so a
+staging-mode run gives LEAN real risk-free-rate data and a lake-mode run
+gives it none — LEAN falls back to its built-in default. It is the one
+known input divergence between the two modes, and it is not fixable from
+inside the data plane: the launcher's ``/extract-metadata`` contract
+returns exactly two byte fields, so closing it needs a launcher-side
+contract change plus a third metadata artifact kind in the catalog's
+vocabulary. Booked rather than papered over, and
+:func:`log_lake_mode_input_divergences` says so once per lake-mode run so
+an operator chasing a rate-sensitive difference has the breadcrumb rather
+than a mystery.
+
+Materially it is narrow, for a reason worth stating precisely rather than
+by account type — three of the four trusted samples run
+``AccountType.Margin``, so "cash account" would be simply wrong. These are
+**equity-only backtests with no option pricing**: LEAN's risk-free rate
+feeds portfolio *statistics* (Sharpe and its relatives), never a fill, a
+commission, or a position size. Those statistics leave the sidecar as
+strings (``normalized_parser`` keeps ``statistics`` as ``dict[str, str]``,
+preserving LEAN's own formatting) and no category in the reconciliation
+taxonomy gates on them. So the divergence cannot move a trade, a price, or
+a P&L figure — it can only move a reported ratio, which nothing compares.
 """
 
 from __future__ import annotations
@@ -73,7 +98,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from app.data_lake.path_policy import (
@@ -155,7 +180,7 @@ def data_plane_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
 
     Delegates to the canonical writer-side resolver rather than rebuilding
     the path: this used to be a deliberate duplicate behind a ``LAKE_SUBDIR``
-    constant, kept honest only by a lockstep test, and #1839 collapsed both
+    constant, kept honest only by a lockstep test, and #1866 collapsed both
     onto ``path_policy`` as that duplicate's own comment asked.
     """
     return resolve_lake_root(price_adjustment_mode)
@@ -284,14 +309,36 @@ def resolve_lake_artifacts(
         # LEAN's default minute subscription requests trade AND quote;
         # staging synthesizes the quote zips for exactly this reason.
         # Launching without them guarantees failed_data_requests.
+        #
+        # The message names a remedy for the quote gap specifically, because
+        # the common way to arrive here is not a bug: ``cache_import`` imports
+        # the legacy cache's trade-only zips, so a freshly imported lake has
+        # every trade artifact and no quote artifact. ``ensure_data`` derives
+        # quotes from the same-day trade artifact it already holds, so that
+        # backfill costs no provider call — it reuses the trade rows and
+        # writes the derived quotes beside them.
+        #
+        # It is NOT the only remedy a freshly cache_import'd lake may need:
+        # ``run_backfill`` deliberately opts out of the whole-history daily
+        # artifact per day (see its own module docstring), so a lake that
+        # never had one still lacks it after this backfill completes, and
+        # the next call here will raise ``lake_missing_daily_artifact``
+        # separately — that one does need a full-range ``ensure_data`` call
+        # (a provider call, since the daily artifact is not derivable from
+        # per-day trade zips alone). Tracked as #1869.
         raise LakeMountError(
             f"lake_incomplete_quote_coverage: {safe_symbol} is missing minute-quote artifacts "
             f"for {_render_sessions(missing_quote)}; LEAN's default minute subscription "
-            "requests quotes and the read-only mount cannot synthesize them"
+            "requests quotes and the read-only mount cannot synthesize them — run the lake "
+            "backfill over this window with data_types=['trade','quote'] to derive them from "
+            "the trade artifacts already present (no provider call). If the daily artifact is "
+            "also missing, a separate lake_missing_daily_artifact error follows and needs its "
+            "own full-range backfill (see #1869)"
         )
 
     daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
     market_hours_path, symbol_properties_path = require_lake_metadata(lake_root)
+    log_lake_mode_input_divergences(lake_root)
 
     logger.info(
         "lean sidecar resolving lake artifacts",
@@ -311,6 +358,36 @@ def resolve_lake_artifacts(
         symbol_properties_path=symbol_properties_path,
         factor_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "factor"),
         map_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "map"),
+    )
+
+
+# LEAN's risk-free-rate subtree. Staging extracts it from the image
+# (``staging.IMAGE_INTEREST_RATE``); the lake has no producer for it. See the
+# module docstring's "known input divergence".
+_INTEREST_RATE_SUBTREE = PurePosixPath("alternative") / "interest-rate"
+
+
+def log_lake_mode_input_divergences(lake_root: Path) -> None:
+    """Say once, per run, where lake mode gives LEAN less than staging would.
+
+    Deliberately a log and not a refusal. Refusing would block every lake-mode
+    run over a gap that is a missing *producer*, not a missing *fetch* — no
+    operator action could clear it, so the refusal would be permanent and the
+    flag unusable. Deliberately not silent either: the whole claim of this
+    slice is that a flag-on run and a flag-off run read the same inputs, and
+    this is the one place they knowably do not.
+    """
+    interest_rate = lake_root / Path(*_INTEREST_RATE_SUBTREE.parts)
+    if interest_rate.is_dir():
+        return
+    logger.warning(
+        "lean sidecar lake-mode run has no interest-rate data",
+        extra={
+            "lake_root": str(lake_root),
+            "missing_subtree": _INTEREST_RATE_SUBTREE.as_posix(),
+            "consequence": "LEAN falls back to its built-in risk-free rate; a staging-mode "
+            "run would have read the image's interest-rate files",
+        },
     )
 
 

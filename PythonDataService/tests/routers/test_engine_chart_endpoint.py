@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.config import settings
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from app.schemas.engine_chart import EngineChartRequest
@@ -22,6 +23,7 @@ TO_MS = session_open_ms_utc(next_trading_day(DAY))
 
 @pytest.fixture
 def chart_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
     monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "no-reference-mount"))
     monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
     seed_store_day(tmp_path / "store" / "polygon-adjusted", "SPY", DAY)
