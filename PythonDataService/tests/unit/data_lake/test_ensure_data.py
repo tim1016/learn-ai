@@ -12,12 +12,11 @@ Tests updated to mock the launcher endpoint + corp-action endpoints.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from uuid import UUID
 
 import asyncpg
@@ -27,8 +26,10 @@ import respx
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.ensure_data import ensure_data
+from app.data_lake.catalog_client import ArtifactClaimState
+from app.data_lake.ensure_data import _bootstrap_metadata_artifact, ensure_data
 from app.data_lake.types import DataRunSpec
+from app.lean_sidecar import config as sidecar_config
 
 
 def _postgres_url() -> str:
@@ -64,7 +65,15 @@ async def pool():
 
 @pytest.fixture
 def tmp_lake(tmp_path: Path, monkeypatch):
-    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/."""
+    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/.
+
+    Also points app.lean_sidecar.config.DEFAULT_ARTIFACTS_ROOT at a sibling
+    tmp_path tree: Phase 0 reads the launcher's extracted metadata files back
+    off that root (see app.data_lake.lean_metadata — it does not trust the
+    launcher's HTTP response body, only its own view of the shared mount),
+    so tests must stage files there rather than under the real repo path.
+    Returns that artifacts root for tests to stage files into.
+    """
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
@@ -72,7 +81,17 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
-    return write_root
+    # Phase 0 resolves the token via app.lean_sidecar.launcher_auth.read_launcher_token
+    # (env-or-file, matching the launcher's mandatory-auth contract), not by
+    # reading settings.LEAN_LAUNCHER_TOKEN directly — so the env var is what
+    # actually needs to be set for that resolution to be deterministic here
+    # instead of falling through to whatever .launcher-token happens to sit
+    # on the machine running the test.
+    monkeypatch.setenv("LEAN_LAUNCHER_TOKEN", "test-token")
+    artifacts_root = tmp_path / "artifacts-root"
+    artifacts_root.mkdir(parents=True)
+    monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
+    return artifacts_root
 
 
 def _spec(symbols: list[str]) -> DataRunSpec:
@@ -108,25 +127,53 @@ def _polygon_ok_payload(ticker: str) -> dict:
     }
 
 
-def _launcher_response() -> dict:
-    mh = json.dumps(
-        {
-            "entries": {
-                "Equity-usa-[*]": {
-                    "exchange": "NYSE",
-                    "timezone": "America/New_York",
-                    "holidays": [],
-                    "earlyCloses": {},
-                }
+_MARKET_HOURS_JSON = json.dumps(
+    {
+        "entries": {
+            "Equity-usa-[*]": {
+                "exchange": "NYSE",
+                "timezone": "America/New_York",
+                "holidays": [],
+                "earlyCloses": {},
             }
         }
-    ).encode("utf-8")
-    sp = b"SPY,equity,usd,1,0\n"
-    return {
-        "market_hours_database_b64": base64.b64encode(mh).decode("ascii"),
-        "symbol_properties_database_b64": base64.b64encode(sp).decode("ascii"),
-        "image_digest_used": "sha256:test",
     }
+).encode("utf-8")
+_SYMBOL_PROPERTIES_CSV = b"SPY,equity,usd,1,0\n"
+
+
+def _stage_workspace_files(artifacts_root: Path, run_id: str) -> None:
+    """Pre-place the two files a real launcher run would have written.
+
+    Layout must match app.lean_sidecar.workspace.Workspace.data_dir and
+    staging.list_metadata_databases: <root>/<run_id>/workspace/data/...
+    """
+    data_dir = artifacts_root / run_id / "workspace" / "data"
+    (data_dir / "market-hours").mkdir(parents=True, exist_ok=True)
+    (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
+    (data_dir / "market-hours" / "market-hours-database.json").write_bytes(_MARKET_HOURS_JSON)
+    (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(_SYMBOL_PROPERTIES_CSV)
+
+
+def _launcher_side_effect(artifacts_root: Path):
+    """respx side_effect standing in for a real launcher: stages the files
+    app.data_lake.lean_metadata will read back, keyed by the run_id the
+    caller sent, then returns the launcher's actual (paths-only) response
+    shape — not the base64-bytes shape a prior version of the caller
+    expected but the launcher has never sent."""
+
+    def _mock(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        _stage_workspace_files(artifacts_root, body["run_id"])
+        return httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/launcher-side/market-hours-database.json",
+                "symbol_properties_db_path": "/launcher-side/symbol-properties-database.csv",
+            },
+        )
+
+    return _mock
 
 
 def _mock_corpus_actions_and_events() -> None:
@@ -147,7 +194,7 @@ def _mock_corpus_actions_and_events() -> None:
 async def test_known_symbol_produces_complete_result(clean_artifacts, pool, tmp_lake):
     # Slice 1c: mock launcher + corp-action endpoints in addition to Polygon aggs.
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(tmp_lake)
     )
     _mock_corpus_actions_and_events()
     # Catch-all mock: any Polygon aggs call for SPY returns 390 bars.
@@ -167,7 +214,7 @@ async def test_known_symbol_produces_complete_result(clean_artifacts, pool, tmp_
 async def test_unknown_symbol_produces_partial_with_failures(clean_artifacts, pool, tmp_lake):
     # Slice 1c: mock launcher + corp-action endpoints.
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(tmp_lake)
     )
     _mock_corpus_actions_and_events()
     # UNKNOWN symbol: Polygon returns no bars → provider_no_data failure.
@@ -186,7 +233,7 @@ async def test_unknown_symbol_produces_partial_with_failures(clean_artifacts, po
 @pytest.mark.asyncio
 async def test_two_identical_calls_produce_same_availability_hash(clean_artifacts, pool, tmp_lake):
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(tmp_lake)
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
@@ -226,6 +273,141 @@ async def test_metadata_bootstrap_failure_surfaces_as_artifact_failure(clean_art
     assert result.overall_status in {"partial", "failed"}
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(clean_artifacts, pool, tmp_lake):
+    """Regression: claim_metadata_artifact's ON CONFLICT DO NOTHING has no
+    reclaim path of its own (unlike claim_minute_bar), so a settled 'failed'
+    row used to look identical to live contention on every later call —
+    ensure_data would report lease_timeout on this data_contract_hash
+    forever, even once the launcher was healthy again. A second call must
+    reclaim the failed row via steal_or_retry_minute_bar and succeed."""
+    succeed_from_call = 2  # round 1 (calls 0, 1) fails; round 2 (calls 2, 3) succeeds
+    stage = _launcher_side_effect(tmp_lake)
+    calls = {"n": 0}
+
+    def _flaky_then_recovers(request: httpx.Request) -> httpx.Response:
+        n = calls["n"]
+        calls["n"] += 1
+        if n < succeed_from_call:
+            return httpx.Response(500, json={"detail": "launcher internal error"})
+        return stage(request)
+
+    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_flaky_then_recovers
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    first = await ensure_data(_spec(["SPY"]))
+    first_metadata_failures = [f for f in first.failures if f.artifact_kind == "metadata"]
+    assert len(first_metadata_failures) == 2, "both metadata files should fail while the launcher is down"
+
+    second = await ensure_data(_spec(["SPY"]))
+    second_metadata_failures = [f for f in second.failures if f.artifact_kind == "metadata"]
+    assert second_metadata_failures == [], (
+        f"expected the recovered launcher to be retried, not permanently jammed: {second_metadata_failures}"
+    )
+    assert launcher_route.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_metadata_bootstrap_does_not_misreport_a_lost_reclaim_race_as_exhausted(
+    monkeypatch,
+):
+    """Regression (review round on #1867): a caller that loses a reclaim race
+    used to trust `row_state` — a snapshot taken *before* the reclaim attempt
+    — instead of re-reading current state. Two callers can both see the same
+    settled 'failed' row, both attempt `steal_or_retry_minute_bar`, and only
+    one wins; the loser's `row_state.status` is still `'failed'` even though
+    the winner just flipped the real row to `'fetching'` under a live lease.
+    Trusting the stale snapshot reported a terminal, exhausted-retries
+    `fetch_timeout` for a row someone else was actively completing — this
+    must report the transient `lease_timeout` instead.
+
+    No Postgres needed: `catalog_client` is faked directly so the race is
+    deterministic rather than relying on real concurrent connections.
+    """
+    stale_snapshot = ArtifactClaimState(id=42, status="failed", attempt_count=1, last_error="boom")
+    fresh_after_race = ArtifactClaimState(id=42, status="fetching", attempt_count=2, last_error=None)
+    claim_state_calls = {"n": 0}
+
+    async def fake_claim_metadata_artifact(**_kwargs):
+        return None  # lost the initial insert — the row already exists
+
+    async def fake_select_complete_metadata_artifact(_dch):
+        return None  # not a cache hit
+
+    async def fake_select_metadata_claim_state(_dch):
+        claim_state_calls["n"] += 1
+        # 1st read: the stale snapshot both racing callers observe.
+        # 2nd read: this caller re-checking after losing the reclaim below —
+        # must see what the winner actually left behind.
+        return stale_snapshot if claim_state_calls["n"] == 1 else fresh_after_race
+
+    async def fake_steal_or_retry_minute_bar(**_kwargs):
+        return False  # this caller lost the race
+
+    monkeypatch.setattr(catalog_client, "claim_metadata_artifact", fake_claim_metadata_artifact)
+    monkeypatch.setattr(catalog_client, "select_complete_metadata_artifact", fake_select_complete_metadata_artifact)
+    monkeypatch.setattr(catalog_client, "select_metadata_claim_state", fake_select_metadata_claim_state)
+    monkeypatch.setattr(catalog_client, "steal_or_retry_minute_bar", fake_steal_or_retry_minute_bar)
+
+    record, is_reused, failure_reason = await _bootstrap_metadata_artifact(
+        file_name="market-hours-database.json",
+        metadata_kind="market_hours",
+        rel_path=PurePosixPath("metadata/market-hours-database.json"),
+        lean_image_digest="sha256:test",
+        spec=_spec(["SPY"]),
+        lake_root=Path("/unused-lake-root"),
+        staging_root=Path("/unused-staging-root"),
+    )
+
+    assert record is None
+    assert is_reused is False
+    assert failure_reason == "lease_timeout", (
+        f"lost a reclaim race must read as transient contention, not exhausted retries: got {failure_reason!r}"
+    )
+    assert claim_state_calls["n"] == 2, "must re-read claim state after losing the reclaim, not trust the stale snapshot"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_metadata_bootstrap_sends_the_resolved_launcher_token(
+    clean_artifacts, pool, tmp_lake, monkeypatch
+):
+    """Regression: Phase 0 used to read settings.LEAN_LAUNCHER_TOKEN directly,
+    which is empty unless an operator sets the env var — skipping the
+    launcher's auto-generated file-backed token entirely
+    (app.lean_sidecar.launcher_auth.read_launcher_token, the same resolution
+    app.lean_sidecar.launcher_client already uses). Every request under the
+    launcher's mandatory auth then got a 401 it could never recover from.
+
+    The realistic bug shape is settings empty / env set — the `tmp_lake`
+    fixture sets both to "test-token", which the old direct-settings-read
+    code would also send, so it would pass this test either way. Un-set
+    settings' copy here so the two implementations actually diverge: the old
+    code sends no header at all (settings.LEAN_LAUNCHER_TOKEN == ""), the
+    fixed one still resolves "test-token" from the environment.
+    """
+    monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "")
+    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake)
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    await ensure_data(_spec(["SPY"]))
+
+    assert launcher_route.call_count == 2  # market-hours + symbol-properties
+    for call in launcher_route.calls:
+        assert call.request.headers["X-Launcher-Token"] == "test-token"
+
+
 # ---------------------------------------------------------------------------
 # P1 #2: Factor-file DCH varies with history window
 # ---------------------------------------------------------------------------
@@ -235,8 +417,8 @@ def test_factor_file_dch_differs_across_windows():
     """Two ensure_data calls with different windows must produce different factor-file DCHs."""
     from app.data_lake.ensure_data import _factor_file_dch
 
-    dch_narrow = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 22))
-    dch_wide = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 24))
+    dch_narrow = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 22), "raw")
+    dch_wide = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 24), "raw")
     assert dch_narrow != dch_wide, "factor-file data_contract_hash must differ when history windows differ"
 
 
@@ -292,7 +474,7 @@ def _polygon_ok_payload_date(ticker: str, bar_start_ms: int) -> dict:
 async def test_daily_artifact_dch_mismatch_returns_failure(clean_artifacts, pool, tmp_lake):
     """Narrower window creates a daily artifact; wider window detects DCH mismatch."""
     launcher_mock = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(tmp_lake)
     )
     respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/splits.*")).mock(
         return_value=httpx.Response(200, json={"status": "OK", "results": []})
@@ -355,5 +537,8 @@ async def test_daily_artifact_dch_mismatch_returns_failure(clean_artifacts, pool
         for a in result_wide.artifacts
         if a.artifact_kind == "time_series_bars" and a.resolution == "minute" and a.symbol == "SPY"
     ]
-    h2 = _daily_dch(wide_source_ids, wide_source_shas)
+    # The mode participates in the hash, so recompute with the wide run's own
+    # mode rather than a literal — a fixture that changes mode must not
+    # silently turn this sanity check into a comparison of two modes.
+    h2 = _daily_dch(wide_source_ids, wide_source_shas, _spec_wide(["SPY"]).price_adjustment_mode)
     assert h1 != h2, "narrow and wide daily DCHs must differ for this test to be meaningful"

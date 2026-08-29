@@ -33,13 +33,9 @@ EXPECTED_STRATEGY_KEYS = {
     # VCR-0004 / Phase 2 — registry keys are now module names so the runner
     # can import every registered strategy by ``app.engine.strategy.algorithms.{key}``.
     "ema_crossover_signal",
-    "ema_crossover_2_bps",
     "sma_crossover",
-    "daily_sma_crossover",
     "rsi_mean_reversion",
-    "spy_orb",
     "deployment_validation",
-    "spy_ema_crossover_options",
     "spy_strategy_a",
     "spy_strategy_b",
     "spy_strategy_c",
@@ -54,26 +50,6 @@ def _list_strategies():
     from app.routers.engine import list_engine_strategies
 
     return [s.model_dump() for s in list_engine_strategies()]
-
-
-def test_orb_is_registered_with_correct_metadata():
-    """The orb strategy is present and carries the expected metadata.
-
-    VCR-0004 / Phase 2: the registry key is now the module name (``spy_orb``)
-    so the runner imports the same file the dropdown advertises."""
-    strategies = _list_strategies()
-    names = {s["name"] for s in strategies}
-    assert "spy_orb" in names, f"spy_orb strategy missing from registry; saw: {sorted(names)}"
-
-    orb = next(s for s in strategies if s["name"] == "spy_orb")
-    assert orb["display_name"] == "Opening Range Breakout"
-    assert "minute" in orb["supported_resolutions"]
-
-    # OrbParams contract — params_schema must expose the five knobs the
-    # frontend form renders against.
-    props = orb["params_schema"]["properties"]
-    for expected in ("symbol", "orb_bars", "hold_bars", "min_range_pct", "max_range_pct"):
-        assert expected in props, f"orb params_schema missing {expected!r}"
 
 
 def test_deployment_validation_is_registered_with_fixed_rule_metadata():
@@ -157,33 +133,30 @@ def test_ema_signal_advertises_its_matching_lean_validation_template():
     assert strategy["lean_twin"] == "ema_crossover_signal"
 
 
-def test_ema_two_bps_is_a_selectable_default_spy_strategy_with_a_lean_twin():
-    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "ema_crossover_2_bps")
+def test_ema_signal_exposes_the_normalized_gap_floor_as_a_parameter() -> None:
+    """The former ``ema_crossover_2_bps`` strategy is now a parameter mode.
 
-    assert strategy["display_name"] == "EMA Crossover 2 bps"
-    assert strategy["lean_twin"] == "ema_crossover_2_bps"
-    assert strategy["params_schema"]["properties"]["symbol"]["default"] == "SPY"
-    assert strategy["params_schema"]["properties"]["gap_bps"] == {
-        "default": 2.0,
-        "description": "Minimum EMA(5) minus EMA(10) crossover gap, measured in basis points of EMA(10).",
-        "maximum": 100.0,
-        "minimum": 0.0,
-        "title": "Crossover gap (bps)",
-        "type": "number",
-    }
-    assert strategy["params_schema"]["properties"]["rsi_min"]["default"] == 50.0
-    assert strategy["params_schema"]["properties"]["rsi_max"]["default"] == 70.0
-    assert strategy["strategy_bars"] == {
-        "timespan": "minute",
-        "multiplier": 15,
-        "parameter": None,
-    }
+    Its normalized-gap gate survives the signal/asset decoupling sweep as
+    ``gap_bps`` on the canonical registration, so the knob stays
+    reachable from Strategy Lab without a second registry entry whose only
+    difference was one predicate.
+    """
+    strategy = next(s for s in _list_strategies() if s["name"] == "ema_crossover_signal")
+    properties = strategy["params_schema"]["properties"]
+
+    assert properties["gap_bps"]["default"] == 0.0
+    assert properties["gap_bps"]["minimum"] == 0.0
+    assert properties["gap_bps"]["maximum"] == 100.0
+    # The validated LEAN-parity point is untouched by the fold.
+    assert properties["gap"]["default"] == 0.20
+    assert properties["rsi_min"]["default"] == 50.0
+    assert properties["rsi_max"]["default"] == 70.0
 
 
-def test_ema_two_bps_parameter_model_rejects_invalid_rsi_band() -> None:
+def test_ema_signal_parameter_model_rejects_invalid_rsi_band() -> None:
     from pydantic import ValidationError
 
-    registration = _STRATEGY_REGISTRY["ema_crossover_2_bps"]
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
 
     with pytest.raises(ValidationError, match="rsi_min must be less than rsi_max"):
         registration.param_schema.model_validate(
@@ -191,30 +164,16 @@ def test_ema_two_bps_parameter_model_rejects_invalid_rsi_band() -> None:
         )
 
 
-def test_ema_two_bps_registry_build_forwards_validated_parameters() -> None:
-    registration = _STRATEGY_REGISTRY["ema_crossover_2_bps"]
+def test_ema_signal_registry_build_forwards_the_normalized_gap_parameters() -> None:
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     params = registration.param_schema.model_validate(
-        {"symbol": "SPY", "gap_bps": 4, "rsi_min": 52, "rsi_max": 68}
+        {"symbol": "SPY", "gap": 0, "gap_bps": 4, "rsi_min": 52, "rsi_max": 68}
     )
 
     strategy = registration.build(params)
 
     assert strategy._gap_bps == Decimal("4")
     assert strategy._rsi_gate_bounds() == (Decimal("52"), Decimal("68"))
-
-
-def test_orb_gotchas_include_traded_today_guard():
-    """The ORB gotcha list must flag the one-trade-per-day invariant.
-
-    This is the bug the QQQ validation study surfaced; having it
-    permanently in the UI gotcha list is how we prevent the next
-    porter from overlooking it.
-    """
-    orb = next(s for s in _list_strategies() if s["name"] == "spy_orb")
-    combined = " ".join(orb["gotchas"]).lower()
-    assert "traded_today" in combined or "one trade per day" in combined, (
-        "ORB gotcha list should document the one-trade-per-day guard — the QQQ validation study's primary finding."
-    )
 
 
 def test_params_schema_is_round_trippable_json():
@@ -231,11 +190,6 @@ def test_recency_supported_flags_numeric_only_strategies_true():
         assert strategies[key]["recency_supported"] is True, key
 
 
-def test_recency_supported_flags_options_spread_strategy_false():
-    strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
-    assert strategies["spy_ema_crossover_options"]["recency_supported"] is False
-
-
 def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics():
     strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
 
@@ -249,30 +203,6 @@ def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics(
         "multiplier": 15,
         "parameter": "resolution_minutes",
     }
-    assert strategies["daily_sma_crossover"]["strategy_bars"] == {
-        "timespan": "day",
-        "multiplier": 1,
-        "parameter": None,
-    }
-
-
-def test_build_callable_constructs_orb_with_default_params():
-    """Smoke check: the registered build lambda accepts a default-params
-    instance and returns a SpyOpeningRangeBreakout.
-
-    This catches the common refactor regression of renaming a field in
-    OrbParams without updating the build lambda's type: ignore call.
-    """
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    reg = _STRATEGY_REGISTRY["spy_orb"]
-    default_params = reg.param_schema()
-    instance = reg.build(default_params)
-    assert instance.__class__.__name__ == "SpyOpeningRangeBreakout"
-    # The symbol override must round-trip through the build step
-    qqq_params = reg.param_schema(symbol="QQQ")
-    qqq_instance = reg.build(qqq_params)
-    assert qqq_instance._symbol_name == "QQQ"
 
 
 # ────────────────── VCR-0004 / Phase 2 — module-name contract ─────────
@@ -362,12 +292,9 @@ if __name__ == "__main__":
     import sys
 
     tests = [
-        test_orb_is_registered_with_correct_metadata,
         test_deployment_validation_has_matching_spec_fixture,
         test_all_registered_strategies_have_algorithm_and_gotchas,
-        test_orb_gotchas_include_traded_today_guard,
         test_params_schema_is_round_trippable_json,
-        test_build_callable_constructs_orb_with_default_params,
     ]
     failed = 0
     for t in tests:

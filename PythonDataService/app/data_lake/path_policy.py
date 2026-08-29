@@ -5,28 +5,27 @@ of LEAN paths is permitted anywhere else in the codebase; a lint test enforces
 that the substrings ``equity/usa/``, ``market-hours/``, ``symbol-properties/``
 appear only in this module and its tests.
 
-The two lake roots (``resolve_lake_root`` / ``resolve_staging_root``) live here
-for the same reason: one canonical answer to "where is the lake on disk", so
-its two direct consumers — ``ensure_data``, which writes the artifacts, and the
-chart split-read, which reads them — resolve the identical directory instead of
-each re-deriving it from ``settings``.
-
-:func:`lake_serves` is here on the same principle: one canonical answer to
-"is the lake the authority for *this* request", so the four read seams that
-must agree cannot drift apart.
+The lake roots (``resolve_lake_container`` / ``resolve_lake_root`` /
+``resolve_staging_root``) live here for the same reason: one canonical answer
+to "where is the lake on disk", so every consumer — ``ensure_data``, which
+writes the artifacts, ``cache_import``, which imports them, the chart
+split-read, and the sidecar mount — resolves the identical directory instead
+of each re-deriving it from ``settings``.
 
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 5.3
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, get_args
 from uuid import UUID
 
 from app.config import settings
+from app.data_lake.types import PriceAdjustmentMode
 
 Market = Literal["usa"]
 Resolution = Literal["minute", "hour", "daily"]
@@ -35,96 +34,130 @@ MetadataKind = Literal["market_hours", "symbol_properties"]
 
 _LAKE_DIR = "lake"
 _STAGING_DIR = "staging"
+# The closed set of directory names a lake root may have. Mirrors
+# ``types.PriceAdjustmentMode``; restated as a runtime value because this
+# module turns the mode into a filesystem path and a typing Literal does not
+# survive to runtime.
+_ADJUSTMENT_MODES: frozenset[str] = frozenset(get_args(PriceAdjustmentMode))
 
 
-def lake_holds_adjustment_mode(*, adjusted: bool) -> bool:
-    """Can the lake hold bars for a request in this adjustment mode?
+def lake_subpath(price_adjustment_mode: PriceAdjustmentMode) -> PurePosixPath:
+    """Return the lake root's path *relative to the write root*.
 
-    **The lake's live materialization pipeline produces raw bars only.** That
-    is a type, not a policy: ``DataRunSpec.price_adjustment_mode`` is
-    ``Literal["raw"]``, so ``ensure_data`` cannot be asked for anything else.
-    This function is where that fact is written down once, so the four read
-    seams below encode it in one place rather than four.
-
-    A tree that ``cache_import`` stamped ``polygon_split_adjusted`` does not
-    widen the answer, deliberately. Such a tree is *frozen*: readable, but not
-    extendable by any live run, because the shared write seam
-    (``atomic.check_write_mode_compatible``) refuses a raw write into it.
-    Serving adjusted requests from it would hand out a lake that silently
-    stops covering any window past the import date — a worse failure than not
-    serving them at all, because it looks like success.
-
-    Adjusted-from-the-lake is real work, not a flag: LEAN's own model is raw
-    bytes plus factor files with the adjustment applied at read time, and the
-    Python engine's reader does not apply factor files today. It is booked as
-    the successor to this slice — and it is a prerequisite for ADR 0049's
-    obligation on #1840, which cannot delete the policy tree while that tree
-    is still the only answer for an adjusted request.
+    Exists for the one caller that cannot use :func:`resolve_lake_root`:
+    ``app.lean_sidecar.lake_mount.launcher_host_lake_root`` builds the same
+    location against the launcher **host**'s view of the volume, which is a
+    different base than ``settings.LEAN_DATA_WRITE_ROOT``. Sharing the suffix
+    here is what keeps the container-side and host-side answers from drifting
+    -- they used to drift behind a duplicated ``LAKE_SUBDIR`` constant and a
+    test pinning the two in lockstep.
     """
-    return not adjusted
+    return PurePosixPath(_LAKE_DIR) / price_adjustment_mode
 
 
-def lake_serves(*, adjusted: bool) -> bool:
-    """Is the lake the authority for this request right now?
+def resolve_lake_container() -> Path:
+    """Return the directory holding every per-mode lake root.
 
-    :func:`lake_holds_adjustment_mode` and the flag. The three seams that
-    must agree on a *live* request ask this one: the engine's root resolver
-    (``policy_store.resolve_data_roots``), the engine's materializer
-    (``routers.engine``), and the LEAN sidecar's preflight
-    (``lean_sidecar.lake_mount.lake_mount_enabled``). The chart split-read
-    asks :func:`lake_holds_adjustment_mode` directly instead, because
-    ``chart_service`` has already checked the flag before calling it and a
-    second check there would only make the module's unit behaviour depend on
-    a global its caller owns.
-
-    The first two are load-bearing in a way that stays invisible until it
-    breaks: a run that materializes into the lake but reads from the policy
-    store fetches bars nobody reads and then reads bars nobody fetched, and
-    the symptom — an empty backtest after a successful fetch — points at
-    neither seam.
-
-    **What an adjusted request gets instead** is what it got yesterday: the
-    pre-lake policy store, unchanged. That is the deliberate choice of
-    carry-forward item A2, and the two alternatives are both worse. Refusing
-    outright — what the tree did before this slice — turns every default
-    backtest into a 409 the moment the flag flips, because the engine's
-    synthesized default ``DataPolicy`` is ``adjusted=True``; a flag flip that
-    bricks the primary surface is an outage, not a rollout. Flipping that
-    default to raw instead would silently change the numbers every existing
-    caller gets, which is the exact silent swap this design refuses
-    everywhere else. Serving the mode the lake actually holds, and leaving
-    the other where it already worked, is the only option that neither breaks
-    a caller nor lies to one.
-    """
-    return bool(settings.DATA_LAKE_ENABLED) and lake_holds_adjustment_mode(adjusted=adjusted)
-
-
-def resolve_lake_root() -> Path:
-    """Return the immutable-artifact root of the data lake.
-
-    This is the directory the LEAN readers are pointed at when
-    ``DATA_LAKE_ENABLED`` is on. It is not created here — a missing root
-    means "the lake holds nothing yet", which every reader must already
-    handle as a per-day miss.
-
-    Catalog rows are root-relative: ``FilePath`` carries no root identity of
-    its own, so every lake writer must resolve the root here — a writer using
-    a different root produces "phantom coverage": rows that look complete in
-    the catalog but have no bytes where anything else looks. The full
-    root-identity (``data_root_id``) design that would let more than one
-    physical root coexist honestly is ledgered for the flag-flip slice
-    (#1839); until then there is exactly one canonical root, and this is it.
+    Not itself a readable data root — LEAN is never pointed here, because
+    ``equity/`` lives one level further down, inside a mode. Its one job is
+    to answer "is this path part of the lake at all?" for callers that must
+    refuse to treat any lake tree as their own writable store.
     """
     return Path(settings.LEAN_DATA_WRITE_ROOT) / _LAKE_DIR
 
 
-def resolve_staging_root() -> Path:
-    """Return the per-attempt staging root that promotes into the lake root.
+def resolve_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
+    """Return the immutable-artifact root of the lake for one adjustment mode.
 
-    Must share a filesystem with :func:`resolve_lake_root` so the promote
-    is a rename (see ``app.data_lake.atomic.assert_same_filesystem``).
+    This is the directory the LEAN readers are pointed at when
+    ``DATA_LAKE_ENABLED`` is on. It is not created here — a missing root
+    means "the lake holds nothing yet for this mode", which every reader must
+    already handle as a per-day miss.
+
+    **The mode is a path segment above the LEAN tree**, so ``equity/usa/...``
+    still sits directly inside whatever root a reader is handed and the LEAN
+    format is untouched. That placement is what lets raw and adjusted bytes
+    for the same ``(market, symbol, trading_date, data_type)`` coexist: they
+    resolve to different absolute paths while their catalog ``FilePath``
+    stays byte-identical, because ``FilePath`` is root-relative and carries
+    no root identity of its own. It also means the mode a run reads is
+    structural rather than advisory — a reader cannot accidentally observe
+    the other mode's bytes, because they are not in its tree.
+
+    This replaces the whole-root mutual exclusion that stood here before
+    (a ``.cache_import_adjustment_mode`` marker committing an entire tree to
+    one mode and refusing the other, with a per-mode ``--lake-root`` as the
+    operator's only way to hold both). That mechanism guarded a collision
+    that this path shape makes structurally impossible; issue #1839 deleted
+    it rather than teaching it a second mode.
+
+    Every lake writer must still resolve its root here. A writer using a
+    different root produces "phantom coverage": rows that look complete in
+    the catalog but have no bytes where anything else looks.
+
+    The mode passed here is the **run's** mode, not the artifact's. Artifact
+    kinds with no adjustment mode of their own — factor files, map files, the
+    market-hours and symbol-properties metadata — are adjustment-independent
+    and are written into each mode root that needs them, because LEAN takes
+    exactly one data root and must resolve them inside it. Their duplicated
+    bytes are CSVs and one JSON; the minute-bar zips are the volume.
+
+    The mode is validated here rather than trusted. It reaches this function
+    from request input (``DataRunSpec.price_adjustment_mode``, and the
+    coverage endpoint's query parameter), and it is now a path segment, so an
+    unchecked value would be a traversal away from the lake. Pydantic's
+    ``Literal`` already constrains both callers, but a type annotation is not
+    a runtime boundary and this is the one place the segment is constructed —
+    it is where the check belongs.
     """
-    return Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR
+    return _lake_root_within_container(price_adjustment_mode)
+
+
+def _lake_root_within_container(price_adjustment_mode: str) -> Path:
+    return _mode_subdir_within(resolve_lake_container(), price_adjustment_mode)
+
+
+def _mode_subdir_within(container: Path, price_adjustment_mode: str) -> Path:
+    """Build a mode-keyed subdirectory, refusing anything that escapes it.
+
+    Two checks, because they fail differently. The membership test rejects
+    the value; the containment test proves the *path* it produced is still
+    inside its container, which is the property that actually matters and the
+    one a future third mode could break by accident.
+
+    Shared by the lake root and the staging root so the two cannot drift on
+    what a mode segment is allowed to be.
+    """
+    if price_adjustment_mode not in _ADJUSTMENT_MODES:
+        raise ValueError(
+            f"{price_adjustment_mode!r} is not a price adjustment mode; expected one of "
+            f"{', '.join(sorted(_ADJUSTMENT_MODES))}"
+        )
+    base = os.path.realpath(os.fspath(container))
+    root = os.path.realpath(os.path.join(base, price_adjustment_mode))
+    if not root.startswith(base.rstrip(os.sep) + os.sep):
+        raise ValueError(f"{root!r} escapes its container {base!r}")
+    return Path(root)
+
+
+def resolve_staging_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
+    """Return the per-attempt staging root that promotes into a lake root.
+
+    Must share a filesystem with :func:`resolve_lake_root` so the promote is
+    a rename (see ``app.data_lake.atomic.assert_same_filesystem``); both live
+    under ``LEAN_DATA_WRITE_ROOT``, so they always do.
+
+    Keyed by adjustment mode for the same reason the lake root is. A staged
+    file is named by ``(request_id, worker_id, attempt)`` plus its
+    root-relative destination path — and that relative path carries no mode
+    (``LeanMinuteBarPath.relative_path`` deliberately does not), so raw and
+    adjusted bytes for the same symbol and date name the *same* staging file.
+    That was safe only while no caller reused a ``request_id`` across two
+    concurrent modes. Partitioning here makes staging mirror the destination
+    it promotes into, so the guarantee stops resting on an invariant
+    maintained somewhere else (#1866 review).
+    """
+    return _mode_subdir_within(Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR, price_adjustment_mode)
 
 
 def minute_bar_market_root(market: Market) -> PurePosixPath:

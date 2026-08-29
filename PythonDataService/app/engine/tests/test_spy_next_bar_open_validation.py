@@ -39,8 +39,8 @@ from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.results.statistics import summarize
-from app.engine.strategy.algorithms.spy_ema_crossover import (
-    SpyEmaCrossoverAlgorithm,
+from app.engine.strategy.algorithms.ema_crossover_signal import (
+    EmaCrossoverSignalAlgorithm,
 )
 from app.utils.timestamps import ny_datetime
 
@@ -82,7 +82,7 @@ def run_engine_next_bar_open() -> tuple[list, float, float, float]:
         data_source=reader,
         fill_model=FillModel(mode=FillMode.NEXT_BAR_OPEN),
     )
-    strategy = SpyEmaCrossoverAlgorithm()
+    strategy = EmaCrossoverSignalAlgorithm()
     result = engine.run(strategy)
     return (
         list(strategy.trade_log),

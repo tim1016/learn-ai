@@ -116,7 +116,7 @@ async def test_bars_endpoint_equals_live_run_chart_bars(store):
         run = await client.post(
             "/api/engine/backtest",
             json={
-                "strategy_name": "spy_ema_crossover",
+                "strategy_name": "ema_crossover_signal",
                 "from_date": DAY_ONE.isoformat(),
                 "to_date": DAY_TWO.isoformat(),
                 "params": {"symbol": "SPY"},

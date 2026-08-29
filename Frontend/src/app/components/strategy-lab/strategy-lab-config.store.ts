@@ -95,6 +95,22 @@ export class StrategyLabConfigStore {
             leanValidationTemplateForStrategy(strategy.name, strategy.lean_twin) !== null,
         );
   });
+  /**
+   * Parameters the operator changed away from their schema default.
+   *
+   * `applyStrategy` materializes every default into `paramValues`, so
+   * presence alone says nothing about intent — only a differing value does.
+   * `symbol` is excluded: it reaches LEAN through the data policy rather
+   * than through the algorithm's parameters.
+   */
+  readonly changedParameterNames = computed<readonly string[]>(() => {
+    const properties = this.selectedStrategy()?.params_schema?.properties ?? {};
+    const values = this.paramValues();
+    return Object.entries(properties)
+      .filter(([field, property]) => field !== 'symbol' && values[field] !== property.default)
+      .map(([field]) => field);
+  });
+
   readonly selectedStrategy = computed(() => {
     const name = this.selectedStrategyName();
     return name ? this.strategies().find((strategy) => strategy.name === name) ?? null : null;

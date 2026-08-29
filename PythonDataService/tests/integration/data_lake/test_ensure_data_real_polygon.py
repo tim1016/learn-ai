@@ -13,7 +13,6 @@ so existing tests continue to pass after the ensure_data rewrite.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
@@ -29,7 +28,9 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
+from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import DataRunSpec
+from app.lean_sidecar import config as sidecar_config
 
 pytestmark = pytest.mark.asyncio
 
@@ -70,7 +71,13 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/.
 
     Also patches LEAN_LAUNCHER_URL and LEAN_LAUNCHER_TOKEN so Phase 0 metadata
-    bootstrap targets the respx mock rather than a real launcher process.
+    bootstrap targets the respx mock rather than a real launcher process, and
+    points app.lean_sidecar.config.DEFAULT_ARTIFACTS_ROOT at a sibling
+    tmp_path tree: Phase 0 reads the launcher's extracted metadata files back
+    off that root (app.data_lake.lean_metadata does not trust the launcher's
+    HTTP response body, only its own view of the shared mount — see that
+    module's docstring). The ``artifacts_root`` fixture below exposes the
+    same path to test bodies.
     """
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
@@ -79,10 +86,29 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-polygon-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
+    artifacts_root = tmp_path / "artifacts-root"
+    artifacts_root.mkdir(parents=True)
+    monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
     return write_root
 
 
-def _launcher_response() -> dict:
+@pytest.fixture
+def artifacts_root(tmp_lake: Path, tmp_path: Path) -> Path:
+    """The same path ``tmp_lake`` pointed ``DEFAULT_ARTIFACTS_ROOT`` at.
+
+    A separate fixture (rather than changing what ``tmp_lake`` returns) so
+    every existing ``tmp_lake / lake_subpath(...)`` on-disk assertion below
+    keeps working unchanged.
+    """
+    return tmp_path / "artifacts-root"
+
+
+def _stage_workspace_files(artifacts_root: Path, run_id: str) -> None:
+    """Pre-place the two files a real launcher run would have written.
+
+    Layout must match app.lean_sidecar.workspace.Workspace.data_dir and
+    staging.list_metadata_databases: <root>/<run_id>/workspace/data/...
+    """
     mh = json.dumps(
         {
             "entries": {
@@ -96,11 +122,32 @@ def _launcher_response() -> dict:
         }
     ).encode("utf-8")
     sp = b"SPY,equity,usd,1,0\n"
-    return {
-        "market_hours_database_b64": base64.b64encode(mh).decode("ascii"),
-        "symbol_properties_database_b64": base64.b64encode(sp).decode("ascii"),
-        "image_digest_used": "sha256:test",
-    }
+    data_dir = artifacts_root / run_id / "workspace" / "data"
+    (data_dir / "market-hours").mkdir(parents=True, exist_ok=True)
+    (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
+    (data_dir / "market-hours" / "market-hours-database.json").write_bytes(mh)
+    (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(sp)
+
+
+def _launcher_side_effect(artifacts_root: Path):
+    """respx side_effect standing in for a real launcher: stages the files
+    app.data_lake.lean_metadata will read back, keyed by the run_id the
+    caller sent, then returns the launcher's actual (paths-only) response
+    shape — not the base64-bytes shape a prior version of the caller
+    expected but the launcher has never sent."""
+
+    def _mock(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        _stage_workspace_files(artifacts_root, body["run_id"])
+        return httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/launcher-side/market-hours-database.json",
+                "symbol_properties_db_path": "/launcher-side/symbol-properties-database.csv",
+            },
+        )
+
+    return _mock
 
 
 def _mock_corp_actions_and_events() -> None:
@@ -138,10 +185,10 @@ def _polygon_payload_for(start: int, count: int) -> dict:
 
 
 @respx.mock
-async def test_ensure_data_writes_files_and_catalog_rows(clean_artifacts, pool, tmp_lake):
+async def test_ensure_data_writes_files_and_catalog_rows(clean_artifacts, pool, tmp_lake, artifacts_root):
     # Slice 1c: mock launcher + corp-action endpoints in addition to Polygon aggs.
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(artifacts_root)
     )
     _mock_corp_actions_and_events()
 
@@ -177,17 +224,18 @@ async def test_ensure_data_writes_files_and_catalog_rows(clean_artifacts, pool, 
     assert len(art.file_sha256) == 64
     assert art.file_sha256 != "0" * 64  # not the fake_polygon stub
 
-    # File exists on disk at the expected lake path.
-    final = tmp_lake / "lake" / art.file_path
+    # File exists on disk at the expected lake path. ``FilePath`` is relative
+    # to the mode root (#1839), and this spec is the default "raw".
+    final = tmp_lake / lake_subpath("raw") / art.file_path
     assert final.is_file()
     assert final.stat().st_size > 0
 
 
 @respx.mock
-async def test_second_call_is_cache_hit(clean_artifacts, pool, tmp_lake):
+async def test_second_call_is_cache_hit(clean_artifacts, pool, tmp_lake, artifacts_root):
     # Slice 1c: mock launcher + corp-action endpoints.
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(artifacts_root)
     )
     _mock_corp_actions_and_events()
 

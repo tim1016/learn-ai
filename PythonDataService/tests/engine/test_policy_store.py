@@ -140,7 +140,7 @@ def test_resolve_data_roots_returns_the_lake_alone_when_the_flag_is_on(monkeypat
 
     roots = resolve_data_roots(source="polygon", adjusted=False)
 
-    assert roots == [tmp_path / "writer" / "lake"]
+    assert roots == [tmp_path / "writer" / "lake" / "raw"]
     assert roots[0].is_dir()
 
 
@@ -149,50 +149,31 @@ def test_resolve_data_roots_lake_is_the_tree_ensure_data_writes(monkeypatch, tmp
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
 
-    assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root()]
+    assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root("raw")]
 
 
-def test_resolve_data_roots_keeps_the_policy_root_for_an_adjusted_request_when_the_flag_is_on(
-    monkeypatch, tmp_path: Path
-):
-    """The lake has one data contract per bar, and it is raw.
+def test_resolve_data_roots_serves_an_adjusted_request_from_its_own_root(monkeypatch, tmp_path: Path):
+    """An adjusted request resolves a different directory, not a refusal.
 
-    Handing an adjusted request the lake's raw root would be a run believing
-    it read adjusted bars while every price was raw — materially wrong across
-    a split or dividend. It gets the policy root instead: the tree that
-    actually holds adjusted bars, and the one it read before the flip
-    (carry-forward A2). The lake root must not appear at all, at any
-    position — a reader searching roots in order would otherwise find raw
-    bytes for any day the policy store happens to be missing.
+    This test used to assert the opposite: with one raw-only lake, an
+    adjusted request was refused (``LakeAdjustmentUnsupportedError`` → 409),
+    because returning the raw root would have handed a run raw prices while
+    it believed it read adjusted ones — materially wrong across a split.
+    #1866 made the mode a segment of the root, so the seam can now answer
+    honestly instead of refusing. The 409 that blocked a default Strategy Lab
+    backtest with the flag on is gone with it.
     """
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
     monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
     monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
 
-    roots = resolve_data_roots(source="polygon", adjusted=True)
+    adjusted_roots = resolve_data_roots(source="polygon", adjusted=True)
+    raw_roots = resolve_data_roots(source="polygon", adjusted=False)
 
-    assert roots == [tmp_path / "store" / "polygon-adjusted"]
-    assert path_policy.resolve_lake_root() not in roots
-
-
-def test_lake_serves_is_the_conjunction_of_the_flag_and_the_adjustment_mode(monkeypatch):
-    """The predicate every seam shares, pinned in isolation.
-
-    ``lake_holds_adjustment_mode`` is the flag-free half — the chart
-    split-read asks that one, because ``chart_service`` has already checked
-    the flag before calling in.
-    """
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    assert path_policy.lake_serves(adjusted=False) is True
-    assert path_policy.lake_serves(adjusted=True) is False
-
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    assert path_policy.lake_serves(adjusted=False) is False
-    assert path_policy.lake_serves(adjusted=True) is False
-
-    assert path_policy.lake_holds_adjustment_mode(adjusted=False) is True
-    assert path_policy.lake_holds_adjustment_mode(adjusted=True) is False
+    assert adjusted_roots == [tmp_path / "writer" / "lake" / "polygon_split_adjusted"]
+    assert raw_roots == [tmp_path / "writer" / "lake" / "raw"]
+    assert adjusted_roots != raw_roots
 
 
 def test_resolve_data_roots_flag_off_still_serves_adjusted(monkeypatch, tmp_path: Path):
@@ -206,13 +187,30 @@ def test_resolve_data_roots_flag_off_still_serves_adjusted(monkeypatch, tmp_path
     assert roots == [tmp_path / "store" / "polygon-adjusted"]
 
 
-def test_symbol_write_lock_refuses_the_lake_root(monkeypatch, tmp_path: Path):
-    """Only app.data_lake writes to the lake; a zip with no catalog row is invisible."""
+@pytest.mark.parametrize("mode", ["raw", "polygon_split_adjusted", "lean_adjusted"])
+def test_symbol_write_lock_refuses_any_lake_mode_root(monkeypatch, tmp_path: Path, mode: str):
+    """Only app.data_lake writes to the lake; a zip with no catalog row is invisible.
+
+    Parameterized over every mode because the refusal used to be an exact
+    match against the single lake root. Since #1839 the lake is a tree of
+    mode subtrees, so an exact match would have waved through a policy-store
+    write aimed at any mode the reader did not happen to be resolving.
+    """
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    lake = path_policy.resolve_lake_root()
+    lake = path_policy.resolve_lake_root(mode)
     lake.mkdir(parents=True)
 
-    with pytest.raises(ValueError, match="is the data lake"), symbol_write_lock(lake, "SPY"):
+    with pytest.raises(ValueError, match="is inside the data lake"), symbol_write_lock(lake, "SPY"):
+        pass
+
+
+def test_symbol_write_lock_refuses_the_lake_container_itself(monkeypatch, tmp_path: Path):
+    """The container is not a data root, but it is still not ours to write."""
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    container = path_policy.resolve_lake_container()
+    container.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="is inside the data lake"), symbol_write_lock(container, "SPY"):
         pass
 
 

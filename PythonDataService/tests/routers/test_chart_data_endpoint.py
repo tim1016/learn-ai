@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 import pytest
+import urllib3.exceptions
 from fastapi import FastAPI
 from httpx import ASGITransport
 
@@ -86,3 +87,42 @@ async def test_chart_data_path_unsafe_ticker_is_typed_no_data_not_a_server_error
 
         assert response.status_code == 404, f"DATA_LAKE_ENABLED={lake_enabled}"
         assert response.json()["detail"]["error_code"] == "NO_DATA"
+
+
+def _unreachable_provider(*_args: object, **_kwargs: object) -> list[dict[str, Any]]:
+    """Stands in for Polygon's SDK when the host is unreachable.
+
+    ``PolygonClientService`` re-raises whatever its underlying
+    ``urllib3.PoolManager`` raises without translation — confirmed by hand
+    against the real client with Polygon blocked at the container's
+    ``/etc/hosts`` (#1867 offline-lake validation): a connection refusal
+    surfaces as exactly this exception, not Python's builtin
+    ``ConnectionError``.
+    """
+    raise urllib3.exceptions.MaxRetryError(
+        pool=None,
+        url="https://api.polygon.io/v2/aggs/ticker/AAPL/range/1/minute/2025-11-26/2025-12-01",
+        reason=Exception("Connection refused"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_chart_data_provider_unreachable_is_typed_not_a_server_error(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lake gap that falls back to Polygon, with Polygon unreachable, must
+    answer a typed 503 — never leak urllib3's raw exception repr through an
+    unhandled 500 the way it did before this fix."""
+    monkeypatch.setattr(chart_service, "fetch_bars_chunked", _unreachable_provider)
+    request = {**_REQUEST, "ticker": "AAPL"}
+
+    for lake_enabled in (False, True):
+        monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", lake_enabled)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+            response = await client.post("/api/chart/data", json=request)
+
+        assert response.status_code == 503, f"DATA_LAKE_ENABLED={lake_enabled}"
+        detail = response.json()["detail"]
+        assert detail["error_code"] == "PROVIDER_UNREACHABLE"
+        assert "MaxRetryError" not in detail["detail"]

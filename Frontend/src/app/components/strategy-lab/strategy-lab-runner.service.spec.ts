@@ -184,25 +184,35 @@ describe("StrategyLab configuration and runner", () => {
     );
   });
 
-  it("forwards configurable gap and RSI gates to the aligned LEAN template", async () => {
+  it("refuses a LEAN run whose changed parameters the template cannot take", async () => {
+    // The parameterized LEAN twin went away with the `ema_crossover_2_bps`
+    // registration in the signal/asset decoupling sweep, so the bundled
+    // template hardcodes its own gates. Running anyway would persist an
+    // experiment whose results describe different rules than the screen
+    // (#1865 review) -- a silent misattribution, so refuse instead.
     config.strategies.set([PARAMETERIZED_STRATEGY]);
     config.selectStrategy(PARAMETERIZED_STRATEGY.name);
     config.updateParameter("gap_bps", "4", "number");
-    config.updateParameter("rsi_min", "52", "number");
-    config.updateParameter("rsi_max", "68", "number");
     config.engine.set("lean");
 
     await runner.run();
 
-    expect(startJob).toHaveBeenCalledWith(
-      "lean_engine_run",
-      expect.objectContaining({
-        request: expect.objectContaining({
-          template: "ema_crossover_2_bps",
-          strategy_parameters: { gap_bps: 4, rsi_min: 52, rsi_max: 68 },
-        }),
-      }),
-    );
+    expect(startJob).not.toHaveBeenCalled();
+    expect(runner.runError()).toContain("gap_bps");
+  });
+
+  it("still sends the template when every parameter is left at its default", async () => {
+    // Selecting a strategy materializes all defaults into paramValues, so a
+    // presence test here would refuse every unedited run.
+    config.strategies.set([PARAMETERIZED_STRATEGY]);
+    config.selectStrategy(PARAMETERIZED_STRATEGY.name);
+    config.engine.set("lean");
+
+    await runner.run();
+
+    const request = startJob.mock.calls[0]?.[1]?.request;
+    expect(request).toHaveProperty("template");
+    expect(request).not.toHaveProperty("strategy_parameters");
   });
 
   it("runs browser-edited QCAlgorithm source without requiring template parameters", async () => {

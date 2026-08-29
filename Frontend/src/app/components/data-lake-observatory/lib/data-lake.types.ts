@@ -162,6 +162,14 @@ export interface DataRunSpec {
   readonly data_types: readonly DataLakeDataType[];
   readonly lean_image_digest: string;
   readonly force_refresh: boolean;
+  /**
+   * Which adjustment mode the fetch writes. Omitted means `raw`, matching
+   * the data plane's own default. `lean_adjusted` is deliberately absent:
+   * it would be derived from raw bars plus factor files and no producer
+   * exists, so the panel refuses it rather than sending a mode the
+   * pipeline cannot fulfil.
+   */
+  readonly price_adjustment_mode?: 'raw' | 'polygon_split_adjusted';
 }
 
 /**

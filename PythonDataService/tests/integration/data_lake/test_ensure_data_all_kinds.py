@@ -24,7 +24,7 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.5,
 
 from __future__ import annotations
 
-import base64
+import json
 import os
 import re
 from datetime import date
@@ -39,7 +39,9 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
+from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import DataRunSpec
+from app.lean_sidecar import config as sidecar_config
 
 pytestmark = pytest.mark.asyncio
 
@@ -76,7 +78,16 @@ async def pool():
 
 @pytest.fixture
 def tmp_lake(tmp_path: Path, monkeypatch):
-    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/."""
+    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/.
+
+    Also points app.lean_sidecar.config.DEFAULT_ARTIFACTS_ROOT at a sibling
+    tmp_path tree: Phase 0 reads the launcher's extracted metadata files back
+    off that root (app.data_lake.lean_metadata does not trust the launcher's
+    HTTP response body, only its own view of the shared mount — see that
+    module's docstring), so the respx launcher mock must stage files there
+    rather than return them base64-encoded. The ``artifacts_root`` fixture
+    below exposes the same path to test bodies.
+    """
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
@@ -84,7 +95,21 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-polygon-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
+    artifacts_root = tmp_path / "artifacts-root"
+    artifacts_root.mkdir(parents=True)
+    monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
     return write_root
+
+
+@pytest.fixture
+def artifacts_root(tmp_lake: Path, tmp_path: Path) -> Path:
+    """The same path ``tmp_lake`` pointed ``DEFAULT_ARTIFACTS_ROOT`` at.
+
+    A separate fixture (rather than changing what ``tmp_lake`` returns) so
+    every existing ``tmp_lake / lake_subpath(...)`` on-disk assertion below
+    keeps working unchanged.
+    """
+    return tmp_path / "artifacts-root"
 
 
 # -----------------------------------------------------------------------
@@ -124,9 +149,7 @@ def _polygon_aggs_for(start_ms: int, count: int = 390) -> dict:
 
 def _minimal_market_hours_json() -> bytes:
     """Minimal LEAN market-hours-database.json with no extra holidays in the test window."""
-    import json as _json
-
-    return _json.dumps(
+    return json.dumps(
         {
             "entries": {
                 "Equity-usa-[*]": {
@@ -144,14 +167,38 @@ def _minimal_symbol_properties_csv() -> bytes:
     return b"SPY,equity,usd,1,0\n"
 
 
-def _launcher_response() -> dict:
-    mh = _minimal_market_hours_json()
-    sp = _minimal_symbol_properties_csv()
-    return {
-        "market_hours_database_b64": base64.b64encode(mh).decode("ascii"),
-        "symbol_properties_database_b64": base64.b64encode(sp).decode("ascii"),
-        "image_digest_used": "sha256:test-image-digest",
-    }
+def _stage_workspace_files(artifacts_root: Path, run_id: str) -> None:
+    """Pre-place the two files a real launcher run would have written.
+
+    Layout must match app.lean_sidecar.workspace.Workspace.data_dir and
+    staging.list_metadata_databases: <root>/<run_id>/workspace/data/...
+    """
+    data_dir = artifacts_root / run_id / "workspace" / "data"
+    (data_dir / "market-hours").mkdir(parents=True, exist_ok=True)
+    (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
+    (data_dir / "market-hours" / "market-hours-database.json").write_bytes(_minimal_market_hours_json())
+    (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(_minimal_symbol_properties_csv())
+
+
+def _launcher_side_effect(artifacts_root: Path):
+    """respx side_effect standing in for a real launcher: stages the files
+    app.data_lake.lean_metadata will read back, keyed by the run_id the
+    caller sent, then returns the launcher's actual (paths-only) response
+    shape — not the base64-bytes shape a prior version of the caller
+    expected but the launcher has never sent."""
+
+    def _mock(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        _stage_workspace_files(artifacts_root, body["run_id"])
+        return httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/launcher-side/market-hours-database.json",
+                "symbol_properties_db_path": "/launcher-side/symbol-properties-database.csv",
+            },
+        )
+
+    return _mock
 
 
 def _make_spec(request_id: str, include_quote: bool = True) -> DataRunSpec:
@@ -173,14 +220,14 @@ def _make_spec(request_id: str, include_quote: bool = True) -> DataRunSpec:
 
 
 @respx.mock
-async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake):
+async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake, artifacts_root):
     """Run ensure_data for SPY over 2024-05-20 to 2024-05-24.
 
     Expects 15 artifacts, all complete, all files on disk.
     """
     # Mock launcher /extract-metadata
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(artifacts_root)
     )
 
     # Mock Polygon aggregate fetches for all 5 days
@@ -238,8 +285,10 @@ async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake):
     assert len(factor_files) == 1, f"expected 1 factor_file, got {len(factor_files)}"
     assert len(map_files) == 1, f"expected 1 map_file, got {len(map_files)}"
 
-    # All files must exist on disk.
-    lake_root = tmp_lake / "lake"
+    # All files must exist on disk. ``FilePath`` is relative to the *mode*
+    # root, not the lake container -- #1839 put an adjustment segment above
+    # the LEAN tree, and this spec is the default "raw".
+    lake_root = tmp_lake / lake_subpath("raw")
     for art in result.artifacts:
         on_disk = lake_root / Path(*art.file_path.replace("\\", "/").split("/"))
         assert on_disk.is_file(), f"missing on disk: {art.file_path}"
@@ -262,11 +311,11 @@ async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake):
 
 
 @respx.mock
-async def test_ensure_data_second_call_is_cache_hit(clean_artifacts, pool, tmp_lake):
+async def test_ensure_data_second_call_is_cache_hit(clean_artifacts, pool, tmp_lake, artifacts_root):
     """Second ensure_data call with the same content spec is a pure cache hit."""
     # Mock launcher — called on first run; should not be called on second.
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(artifacts_root)
     )
 
     for trading_date, start_ms in _DAY_OFFSETS_MS.items():

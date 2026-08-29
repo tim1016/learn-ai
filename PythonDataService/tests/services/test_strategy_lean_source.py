@@ -22,4 +22,4 @@ def test_resolve_strategy_lean_source_returns_registered_qc_algorithm() -> None:
 
 def test_resolve_strategy_lean_source_rejects_strategy_without_lean_twin() -> None:
     with pytest.raises(StrategyLeanSourceNotFoundError, match="no registered LEAN"):
-        resolve_strategy_lean_source("spy_orb")
+        resolve_strategy_lean_source("sma_crossover")

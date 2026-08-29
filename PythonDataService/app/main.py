@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.ibkr.client import (
     BrokerError,
     ConnectionRefusedDueToSentinelError,
@@ -69,6 +70,7 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret_always,
 )
 from app.utils.error_handlers import (
+    clerk_sqlite_exception_handler,
     polygon_exception_handler,
     request_validation_exception_handler,
 )
@@ -652,6 +654,9 @@ app.add_exception_handler(
     RequestValidationError,
     request_validation_exception_handler,
 )
+# Ordered before the catch-all: an unusable Clerk authority is a state, not a
+# fault, and must not be reported as an internal error.
+app.add_exception_handler(ClerkSqliteError, clerk_sqlite_exception_handler)
 app.add_exception_handler(Exception, polygon_exception_handler)
 
 

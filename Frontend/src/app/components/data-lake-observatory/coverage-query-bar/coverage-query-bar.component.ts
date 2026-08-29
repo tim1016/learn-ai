@@ -39,11 +39,17 @@ function inputValue(event: Event): string {
 /**
  * The window the heatmap answers for.
  *
- * Edits stay local until "Load coverage" is pressed: the coverage endpoint
- * issues one request per symbol over a range capped at five years, so
- * re-querying on every keystroke would be a lot of traffic for a half-typed
- * ticker. The applied query is what the page — and the backfill form it
- * seeds — actually acts on.
+ * Free-text edits (symbols, dates) stay local until "Load coverage" is
+ * pressed: the coverage endpoint issues one request per symbol over a range
+ * capped at five years, so re-querying on every keystroke would be a lot of
+ * traffic for a half-typed ticker. A `<select>` has no half-typed state —
+ * choosing an option is one discrete action, the same shape as clicking
+ * "Load coverage" itself — so data type and price adjustment apply the
+ * instant they change. Without this, the backfill panel (seeded from the
+ * applied query, per its own doc comment) silently keeps backfilling the
+ * previously-applied mode while the dropdown already shows the new one.
+ * The applied query is what the page — and the backfill form it seeds —
+ * actually acts on.
  */
 @Component({
   selector: 'app-coverage-query-bar',
@@ -93,13 +99,19 @@ export class CoverageQueryBarComponent {
 
   protected onDataType(event: Event): void {
     this.patch({ dataType: selectValue(event) as DataLakeDataType });
+    this.applyIfReady();
   }
 
   protected onPriceAdjustment(event: Event): void {
     this.patch({ priceAdjustmentMode: selectValue(event) as PriceAdjustmentMode });
+    this.applyIfReady();
   }
 
   protected apply(): void {
+    this.applyIfReady();
+  }
+
+  private applyIfReady(): void {
     if (!this.canApply()) return;
     this.applied.emit({ ...this.draft(), symbolsText: this.parsed().symbols.join(', ') });
   }

@@ -268,19 +268,34 @@ describe('LakeBackfillPanelComponent', () => {
     ).toBeTruthy();
   });
 
-  it.each(['polygon_split_adjusted', 'lean_adjusted'] as const)(
-    'refuses to backfill while the %s view is selected',
+  it('refuses to backfill while the lean_adjusted view is selected', async () => {
+    // Nothing derives lean_adjusted — it would come from raw bars plus
+    // factor files and no producer exists — so the job would succeed and
+    // leave the selected view exactly as empty as it started.
+    const { startJob } = await renderPanel({ priceAdjustmentMode: 'lean_adjusted' });
+
+    expect(screen.getByText(/Nothing derives/)).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+    expect(startJob).not.toHaveBeenCalled();
+  });
+
+  it.each(['raw', 'polygon_split_adjusted'] as const)(
+    'backfills the %s view into that view, not into raw',
     async (mode) => {
-      // The fetch pipeline writes raw rows only, so the job would succeed
-      // and leave the selected view exactly as empty as it started.
+      // #1839 gave the lake a root per adjustment mode and widened the fetch
+      // pipeline to produce polygon_split_adjusted. An operator looking at
+      // missing adjusted coverage must be able to fill it from here, and the
+      // spec must name the mode or the rows would land in the raw tree.
       const { startJob } = await renderPanel({ priceAdjustmentMode: mode });
 
-      expect(screen.getByText(/writes raw bars only/)).toBeTruthy();
-      expect(
-        (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
-      ).toBe(true);
       fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
-      expect(startJob).not.toHaveBeenCalled();
+
+      await vi.waitFor(() => expect(startJob).toHaveBeenCalled());
+      const [, payload] = startJob.mock.calls[0] as [string, { spec: Record<string, unknown> }];
+      expect(payload.spec['price_adjustment_mode']).toBe(mode);
     },
   );
 

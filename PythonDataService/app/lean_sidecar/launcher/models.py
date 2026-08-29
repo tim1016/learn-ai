@@ -107,6 +107,17 @@ class LaunchRequest(BaseModel):
             "lake root configured."
         ),
     )
+    price_adjustment_mode: Literal["raw", "polygon_split_adjusted"] = Field(
+        default="raw",
+        description=(
+            "Which adjustment mode's lake subtree to mount, for "
+            "``mount_lake_read_only`` runs. Stated as intent for the same "
+            "reason as that flag: the data plane names the mode, the "
+            "launcher resolves the host path from its own deploy-time "
+            "configuration, so this cannot widen the mount. Defaults to "
+            "'raw' so a data plane that predates #1839 keeps its behavior."
+        ),
+    )
     hardening_profile: str | None = Field(
         default=None,
         description=(

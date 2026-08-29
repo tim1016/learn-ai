@@ -9,6 +9,8 @@ from datetime import date
 from pathlib import Path, PurePosixPath
 from uuid import UUID
 
+import pytest
+
 from app.config import settings
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
@@ -17,6 +19,7 @@ from app.data_lake.path_policy import (
     LeanMetadataPath,
     LeanMinuteBarPath,
     minute_bar_market_root,
+    resolve_lake_container,
     resolve_lake_root,
     resolve_staging_root,
     staging_path_for,
@@ -117,18 +120,53 @@ class TestStagingPathFor:
 class TestLakeRoots:
     """The absolute roots writer and readers must agree on."""
 
-    def test_lake_root_derives_from_write_root(self, monkeypatch):
+    def test_lake_root_derives_from_write_root_and_carries_the_mode(self, monkeypatch):
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert resolve_lake_root() == Path("/mnt/writer/lake")
+        assert resolve_lake_root("raw") == Path("/mnt/writer/lake/raw")
+        assert resolve_lake_root("polygon_split_adjusted") == Path("/mnt/writer/lake/polygon_split_adjusted")
 
-    def test_staging_root_derives_from_write_root(self, monkeypatch):
-        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert resolve_staging_root() == Path("/mnt/writer/staging")
+    def test_lake_container_is_the_parent_of_every_mode_root(self, monkeypatch):
+        """The container is what "is this path in the lake at all?" asks.
 
-    def test_staging_shares_a_filesystem_with_the_lake(self, monkeypatch):
-        """Atomic promotion is a rename(2), so both roots share a parent."""
+        ``policy_store``'s write refusal compares against it rather than
+        against one mode root: an exact match on a single root would wave
+        through a policy-store write aimed at a sibling mode's subtree.
+        """
         monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert resolve_lake_root().parent == resolve_staging_root().parent
+        container = resolve_lake_container()
+
+        assert container == Path("/mnt/writer/lake")
+        for mode in ("raw", "polygon_split_adjusted", "lean_adjusted"):
+            assert resolve_lake_root(mode).parent == container
+
+    def test_staging_root_derives_from_write_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_staging_root("raw") == Path("/mnt/writer/staging/raw")
+
+    def test_staging_shares_a_filesystem_with_the_lake(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Atomic promotion is a rename(2), so both roots share a filesystem.
+
+        The shared ancestor is ``<write root>``; same filesystem either way,
+        which is the invariant ``atomic.assert_same_filesystem`` needs.
+        """
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_lake_root("raw").parent.parent == resolve_staging_root("raw").parent.parent
+
+    def test_staging_is_partitioned_by_mode_like_the_lake_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Two modes must not name the same staged file.
+
+        The root-relative destination path carries no mode, so raw and
+        adjusted bytes for one (symbol, date) would otherwise stage to the
+        same ``.tmp`` under a shared ``request_id`` and one could promote the
+        other's bytes into the wrong tree.
+        """
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_staging_root("raw") != resolve_staging_root("polygon_split_adjusted")
+
+    def test_staging_root_refuses_a_mode_it_does_not_know(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        with pytest.raises(ValueError, match="is not a price adjustment mode"):
+            resolve_staging_root("../../etc")  # type: ignore[arg-type]
 
     def test_ensure_data_imports_the_same_functions_and_does_not_re_derive(self, monkeypatch):
         """One answer to "where is the lake?" — ensure_data must not re-derive it.
@@ -142,3 +180,28 @@ class TestLakeRoots:
 
         assert ensure_data.resolve_lake_root is resolve_lake_root
         assert ensure_data.resolve_staging_root is resolve_staging_root
+
+
+class TestLakeRootRefusesUntrustedModes:
+    """The mode reaches ``resolve_lake_root`` from request input and is now a
+    path segment, so it is validated at the one place the segment is built."""
+
+    @pytest.mark.parametrize(
+        "mode",
+        ["../../etc", "raw/../../..", "..", "/absolute", "nonsense", ""],
+    )
+    def test_a_mode_that_is_not_one_refuses(self, monkeypatch, mode: str):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+
+        with pytest.raises(ValueError):
+            resolve_lake_root(mode)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("mode", ["raw", "polygon_split_adjusted", "lean_adjusted"])
+    def test_every_real_mode_resolves_inside_the_container(self, monkeypatch, mode: str):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        container = resolve_lake_container()
+
+        root = resolve_lake_root(mode)  # type: ignore[arg-type]
+
+        assert root.parent == container
+        assert root != container

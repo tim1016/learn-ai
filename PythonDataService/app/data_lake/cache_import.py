@@ -33,9 +33,11 @@ rows are root-relative (``FilePath`` carries no root identity of its own), so
 importing into any other root would produce rows the live ``ensure_data``
 pipeline can never actually find once it resolves coverage under the real
 configured root ("phantom coverage"). Artifacts land under
-``<canonical-root>/lake/...`` (same relative layout as
-``app.data_lake.path_policy.LeanMinuteBarPath``), staged through
-``<canonical-root>/staging/...`` per ``app.data_lake.atomic``.
+``<canonical-root>/lake/<price-adjustment-mode>/...`` (the LEAN-relative tail
+is ``app.data_lake.path_policy.LeanMinuteBarPath`` unchanged; the mode segment
+sits above it), staged through ``<canonical-root>/staging/...`` per
+``app.data_lake.atomic``. Staging is deliberately not mode-keyed: its paths
+are already unique per ``(request_id, worker_id, attempt)``.
 
 Idempotency and no-overwrite are decided by ``decide_claim_outcome`` (pure,
 unit-tested in isolation): re-running the import re-derives the same content
@@ -63,62 +65,42 @@ redesign. That migration must be applied before this script's adjusted-mode
 path will insert successfully — a 'raw'-only cache (``policy.adjusted=false``)
 already works against the unmigrated schema.
 
-One lake root per adjustment mode (structural, enforced, not just advised),
-in three independent layers:
+One lake root per adjustment mode — structurally, since #1839. The mode is a
+path segment above the LEAN tree
+(``path_policy.resolve_lake_root(price_adjustment_mode)``), so a 'raw' and a
+'polygon_split_adjusted' artifact for the same (market, symbol, date, type)
+resolve to different absolute paths and simply cannot overwrite one another.
+Each symbol's mode comes from its own provenance document, so one invocation
+may import a mixture; the roots never meet.
 
-  1. **Marker + emptiness gate** (``check_lake_root_mode``, per symbol,
-     before any claim or write for it; the check+commit critical section is
-     held under an exclusive cross-process lock -- ``app.utils.advisory_lock``
-     -- so two concurrent importer invocations can't both pass the check
-     before either writes the marker). A small marker file
-     (``app.data_lake.atomic.lake_root_mode_marker_path``, inside the lake
-     tree) records the mode a given lake root is committed to. A later run
-     targeting the same root with a *different* mode is refused wholesale
-     (``LakeRootModeConflictError``). A root with **no marker but a
-     non-empty lake tree** — e.g. ``ensure_data``'s live pipeline already
-     populated it with real 'raw' fetches, which never write this
-     importer's marker — is *also* refused: this importer will not guess
-     that an unmarked, already-populated root happens to be safe. The
-     remedy is ``--claim-unmarked-root-as <mode>``, an explicit operator
-     assertion ("I have verified this root's true mode is `<mode>`") that
-     stamps the marker and proceeds. An unmarked **empty** root keeps
-     today's default behavior: the first import stamps it.
-  2. **File-level guard** (``decide_destination_outcome``, pure and
-     unit-tested like ``decide_claim_outcome``; ``_import_one_zip`` does the
-     surrounding I/O and the ``fail_artifact`` side effect, all inside the
-     same guarded section a write failure uses -- an unreadable destination
-     refuses that one artifact and continues, it does not abort the whole
-     import) — independent of the marker, protects even if it's wrong or
-     was bypassed. Before promoting any zip, if a file already sits at the
-     destination ``LeanMinuteBarPath``: identical content hash → treated as
-     an idempotent no-op (the freshly-claimed row is still completed, just
-     without rewriting the bytes); *different* hash → a typed refusal
-     (``FailedArtifact`` with ``reason="destination_file_conflict"``) and
-     ``atomic_write_and_promote`` (hence ``os.replace``) is never called.
-     The same guard also runs on the idempotent re-run path (catalog
-     already complete with a matching hash): a missing physical file is
-     restored from the cache zip rather than trusted on the catalog's word
-     alone; a mismatched one is refused the same way.
-  3. **Shared low-level enforcement** (``app.data_lake.atomic.atomic_write_and_promote``,
-     via ``check_write_mode_compatible``) — every lake writer, this importer
-     and ``ensure_data``'s live fetch pipeline alike, passes its own
-     ``price_adjustment_mode`` through the one write seam they all share.
-     A write whose mode disagrees with the root's marker is refused there
-     too, so a caller cannot promote mode-mismatched bytes by skipping (or
-     never having) a caller-side check. An unmarked root stays permissive
-     for the normal raw path (the marker only exists once an import has run)
-     — backward compatible with every deployment that has never run one.
+Three layers used to stand where that sentence now does, because
+``LeanMinuteBarPath`` carried no mode component and both artifacts resolved to
+the *identical* path: a per-symbol marker-and-emptiness gate under a
+cross-process advisory lock, an operator ``--claim-unmarked-root-as`` escape
+hatch for an unmarked-but-populated root, and a shared low-level refusal in
+``atomic_write_and_promote``. All three are deleted. They guarded a collision
+the path shape now makes impossible, and the ``data_root_id`` redesign the
+schema note anticipates is no longer needed for this: catalog ``FilePath`` is
+root-relative, so the mode segment cost zero catalog rows.
 
-``LeanMinuteBarPath`` carries no adjustment-mode component — that's the root
-cause all three layers exist to guard: a 'raw' row and a 'polygon_split_adjusted'
-row for the same (market, symbol, date, type) resolve to the *identical*
-on-disk path, so importing both cache policy roots into the same lake root
-can otherwise silently overwrite one's bytes with the other's while the
-first row's catalog hash still describes the bytes that used to be there.
-The honest structural fix — an adjustment-mode-aware path, or the
-``data_root_id`` design the schema note above already anticipates — is
-deliberately deferred to the data-lake integration slice (T10); these
-layers are this importer's stopgap, not a replacement for it.
+What remains, and is not redundant with the above:
+
+  **File-level guard** (``decide_destination_outcome``, pure and unit-tested
+  like ``decide_claim_outcome``; ``_import_one_zip`` does the surrounding I/O
+  and the ``fail_artifact`` side effect, all inside the same guarded section
+  a write failure uses -- an unreadable destination refuses that one artifact
+  and continues, it does not abort the whole import). Before promoting any
+  zip, if a file already sits at the destination ``LeanMinuteBarPath``:
+  identical content hash → treated as an idempotent no-op (the freshly-claimed
+  row is still completed, just without rewriting the bytes); *different* hash
+  → a typed refusal (``FailedArtifact`` with
+  ``reason="destination_file_conflict"``) and ``atomic_write_and_promote``
+  (hence ``os.replace``) is never called. The same guard also runs on the
+  idempotent re-run path (catalog already complete with a matching hash): a
+  missing physical file is restored from the cache zip rather than trusted on
+  the catalog's word alone; a mismatched one is refused the same way. This
+  survives because it guards a different failure — two *same-mode* writers
+  disagreeing about content — which no path segment can prevent.
 
 Out of scope: the pre-policy legacy minute-bar tree directly under
 ``lean-cache/`` (no sibling ``provenance/``) is not a policy root this
@@ -165,11 +147,7 @@ from zoneinfo import ZoneInfo
 
 from app.data_lake import catalog_client
 from app.data_lake.atomic import (
-    LakeRootModeConflictError,
     atomic_write_and_promote,
-    commit_lake_root_mode,
-    lake_root_mode_marker_path,
-    read_lake_root_mode,
 )
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.path_policy import (
@@ -179,9 +157,8 @@ from app.data_lake.path_policy import (
     resolve_lake_root,
     resolve_staging_root,
 )
-from app.data_lake.types import ArtifactIdentity, ArtifactRecord
+from app.data_lake.types import ArtifactIdentity, ArtifactRecord, polygon_mode_for
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
-from app.utils.advisory_lock import advisory_file_lock
 from app.utils.timestamps import now_ms_utc, to_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -192,11 +169,6 @@ _LEASE_TTL_MS = 300_000
 _TRADE_ZIP_RE = re.compile(r"^(\d{8})_trade\.zip$")
 _SUPPORTED_PROVENANCE_SCHEMA_VERSION = 1
 _SUPPORTED_PROVENANCE_PROVIDER = "polygon"
-# Sibling of lake/ and staging/ at the write root -- deliberately NOT inside
-# lake_dir (see the lock's call site for why: advisory_file_lock's own
-# sibling ".lock" file must never land inside the tree check_lake_root_mode
-# scans for emptiness).
-_LAKE_ROOT_CRITICAL_SECTION_LOCK = ".cache_import_lock"
 
 # data_contract_hash provider params for an imported (not live-fetched)
 # minute-trade artifact. 'import_source' distinguishes these from a live
@@ -335,7 +307,6 @@ ImportFailureReason = Literal[
     "corrupt_zip",
     "hash_conflict",
     "in_flight_or_incomplete",
-    "lake_root_mode_conflict",
     "write_failed",
     "destination_file_conflict",
     "provenance_coverage_mismatch",
@@ -453,7 +424,7 @@ def load_symbol_provenance(cache_root: Path, symbol: str) -> dict[str, Any]:
 
 def price_adjustment_mode_for(provenance: dict[str, Any]) -> str:
     """Map a provenance file's ``policy.adjusted`` to the catalog's enum value."""
-    return "polygon_split_adjusted" if provenance["policy"]["adjusted"] else "raw"
+    return polygon_mode_for(bool(provenance["policy"]["adjusted"]))
 
 
 def provenance_covers_date(provenance: dict[str, Any], trading_date: date) -> bool:
@@ -482,7 +453,7 @@ def _import_minute_trade_dch(adjusted: bool) -> str:
     return _dch(
         provider="polygon",
         provider_params=_IMPORT_MINUTE_TRADE_PARAMS_ADJUSTED if adjusted else _IMPORT_MINUTE_TRADE_PARAMS_RAW,
-        price_adjustment_mode="polygon_split_adjusted" if adjusted else "raw",
+        price_adjustment_mode=polygon_mode_for(adjusted),
         session_policy="full",
         lean_format_version=1,
     )
@@ -682,11 +653,11 @@ def decide_destination_outcome(
 ) -> DestinationDecision:
     """Pure decision: what should happen to the on-disk destination file?
 
-    Mirrors ``decide_claim_outcome``'s shape deliberately: the layer-2
-    file-level guard (independent of ``check_lake_root_mode`` -- protects
-    even if that marker layer is missing, stale, or was overridden by
-    mistake) is a "gather I/O results, then decide" seam just like the
-    catalog-claim one, so it gets the same pure, database-free, CI-executed
+    Mirrors ``decide_claim_outcome``'s shape deliberately: the file-level
+    guard (two same-mode writers disagreeing about content -- the one
+    collision no path segment can prevent) is a "gather I/O results, then
+    decide" seam just like the catalog-claim one, so it gets the same pure,
+    database-free, CI-executed
     unit tests instead of living only in the two Postgres-gated
     orchestration tests that exercise ``_import_one_zip`` end to end.
 
@@ -809,7 +780,6 @@ async def _import_one_zip(
                     request_id=run_id,
                     worker_id=_WORKER_ID,
                     attempt=1,
-                    price_adjustment_mode=price_adjustment_mode,
                 )
                 logger.info(
                     "cache_import: restored missing destination file for %s %s from cache zip",
@@ -855,9 +825,9 @@ async def _import_one_zip(
 
         if dest_decision.action == "conflict":
             detail = (
-                f"{dest_path}: {dest_decision.detail} This can happen when a lake root's "
-                f"adjustment-mode marker doesn't (or didn't used to) match what's physically "
-                f"on disk."
+                f"{dest_path}: {dest_decision.detail} Both writers agree on the adjustment "
+                f"mode -- it is a segment of this path -- so they disagree about content: one "
+                f"of the two source caches is not what its provenance says it is."
             )
             await catalog_client.fail_artifact(artifact_id=claim_result, last_error="io_error", error_message=detail)
             logger.error("cache_import: %s %s: %s", ref.symbol, ref.trading_date, detail)
@@ -880,7 +850,6 @@ async def _import_one_zip(
                 request_id=run_id,
                 worker_id=_WORKER_ID,
                 attempt=1,
-                price_adjustment_mode=price_adjustment_mode,
             )
         )
         await catalog_client.complete_artifact(
@@ -928,72 +897,6 @@ async def _import_one_zip(
     )
 
 
-def _lake_tree_is_empty(lake_dir: Path) -> bool:
-    """True iff ``lake_dir`` contains no files at all, recursively.
-
-    ``import_cache_root`` always ``mkdir``s ``lake_dir`` before this runs, so
-    a brand-new lake root is an empty *directory*, not a missing one -- an
-    empty directory correctly reads as "safe to claim for any mode". Only
-    ever evaluated when no marker exists yet (see ``check_lake_root_mode``),
-    so a previously-committed marker file itself never counts against
-    emptiness.
-    """
-    if not lake_dir.is_dir():
-        return True
-    return not any(p.is_file() for p in lake_dir.rglob("*"))
-
-
-def check_lake_root_mode(
-    lake_dir: Path,
-    mode: str,
-    *,
-    claim_unmarked_root_as: str | None = None,
-) -> None:
-    """Raise ``LakeRootModeConflictError`` unless ``lake_dir`` is safe to
-    import ``mode`` into. Pure filesystem check, no DB access -- directly
-    unit-testable, and evaluated before any catalog claim or lake write
-    happens for the affected symbol.
-
-    Three cases:
-      * A marker already exists: it must match ``mode``, full stop.
-      * No marker, and ``lake_dir`` is empty: safe -- this is a fresh root,
-        and the caller stamps the marker right after this call returns
-        without error.
-      * No marker, and ``lake_dir`` is *non-empty*: this is exactly the
-        dangerous case a marker alone can't see -- e.g. ensure_data's live
-        pipeline already populated this root with real 'raw' fetches, which
-        never write this importer's marker. Refused unless the caller
-        passed ``claim_unmarked_root_as`` equal to ``mode``: an explicit,
-        one-time operator assertion ("I have verified this root's true mode
-        is `mode`"), which the caller then stamps as the marker.
-    """
-    existing = read_lake_root_mode(lake_dir)
-    if existing is not None:
-        if existing != mode:
-            raise LakeRootModeConflictError(
-                f"{lake_dir} is already committed to adjustment mode {existing!r}; "
-                f"refusing to also import {mode!r} into it -- they would collide at "
-                f"the same on-disk path. Use a separate --lake-root per adjustment "
-                f"mode (see the module docstring's \"One lake root per adjustment "
-                f"mode\" section)."
-            )
-        return
-
-    if _lake_tree_is_empty(lake_dir):
-        return
-
-    if claim_unmarked_root_as != mode:
-        raise LakeRootModeConflictError(
-            f"{lake_dir} already contains files but carries no adjustment-mode "
-            f"marker (nothing at {lake_root_mode_marker_path(lake_dir)}) -- "
-            f"refusing to guess its mode and import {mode!r} into it. It may be "
-            f"a root the live ensure_data pipeline already populated with 'raw' "
-            f"fetches. If you have verified this root's true adjustment mode is "
-            f"{mode!r}, pass --claim-unmarked-root-as {mode!r} to assert it "
-            f"explicitly and proceed."
-        )
-
-
 def _unrecognized_to_failures(entries: list[UnrecognizedCacheEntry]) -> list[FailedArtifact]:
     """Pure translation: every unrecognized cache-tree entry becomes a
     FailedArtifact with reason="unrecognized_filename" and no trading_date --
@@ -1019,23 +922,23 @@ def _fail_all(
         report.failed.append(FailedArtifact(symbol=ref.symbol, trading_date=ref.trading_date, reason=reason, detail=detail))
 
 
-async def import_cache_root(
-    cache_root: Path, lake_root: Path, *, claim_unmarked_root_as: str | None = None
-) -> ImportReport:
+async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
     """Import every trade zip under ``cache_root`` into the lake catalog.
 
     ``lake_root`` must equal the canonical configured write root
     (``settings.LEAN_DATA_WRITE_ROOT``, the parent ``resolve_lake_root()``
     and ``resolve_staging_root()`` resolve under) -- or this raises
-    ``LakeRootIdentityError`` before touching anything. Artifacts land under
-    ``lake_root/lake/...``, staged through ``lake_root/staging/...``. Both
-    are created if missing. Makes zero provider calls — every byte written
-    comes from the cache zips already on disk.
+    ``LakeRootIdentityError`` before touching anything — its one remaining job
+    is to make the operator state which root they mean and refuse a wrong
+    answer loudly, since a root-relative catalog cannot detect the mistake
+    later. Artifacts land under ``lake_root/lake/<price-adjustment-mode>/...``,
+    staged through ``lake_root/staging/...``; both are created if missing.
+    Makes zero provider calls — every byte written comes from the cache zips
+    already on disk.
 
-    ``claim_unmarked_root_as`` is the operator's explicit assertion that an
-    unmarked but non-empty lake tree (e.g. one ``ensure_data`` already
-    populated) truly is the given mode; see ``check_lake_root_mode`` and the
-    module docstring's "One lake root per adjustment mode" section.
+    Each symbol's adjustment mode comes from its own provenance document and
+    selects its own lake root, so one invocation can import a mixture of raw
+    and adjusted caches without them ever meeting on disk (#1839).
     """
     from app.config import settings
 
@@ -1053,13 +956,10 @@ async def import_cache_root(
             f"equal the canonical root."
         )
 
-    # The same setting the canonical helpers wrap, so these cannot diverge
-    # from where ensure_data's live pipeline reads and writes.
-    lake_dir = resolve_lake_root()
-    staging_dir = resolve_staging_root()
-    lake_dir.mkdir(parents=True, exist_ok=True)
-    staging_dir.mkdir(parents=True, exist_ok=True)
-
+    # Both roots are resolved per symbol, below: each is keyed by adjustment
+    # mode, and the mode comes from that symbol's own provenance document.
+    # They come from the canonical helpers so they cannot diverge from where
+    # ensure_data's live pipeline reads and writes.
     await catalog_client.init_pool()
 
     refs, unrecognized = discover_cache_zips(cache_root)
@@ -1076,13 +976,6 @@ async def import_cache_root(
 
     report = ImportReport()
     run_id = uuid4()
-    # Committed at most once per run: check_lake_root_mode already guarantees
-    # every symbol group that gets past it shares one mode, so re-stamping
-    # the marker with identical content on every subsequent symbol is pure
-    # waste. Starts True when the root already carries a (matching) marker
-    # from a prior run -- nothing to (re)write in that case either.
-    marker_committed = read_lake_root_mode(lake_dir) is not None
-
     for entry in unrecognized:
         logger.warning("cache_import: %s", entry.detail)
     report.failed.extend(_unrecognized_to_failures(unrecognized))
@@ -1122,34 +1015,22 @@ async def import_cache_root(
         adjusted = provenance["policy"]["adjusted"]
         price_adjustment_mode = price_adjustment_mode_for(provenance)
 
-        # The check+commit critical section is held under an exclusive
-        # cross-process lock: without it, two concurrent `cache_import`
-        # invocations targeting the same root could both pass
-        # check_lake_root_mode (neither has committed yet) before either
-        # writes the marker, defeating the whole point of the gate.
-        #
-        # Locked on a dedicated file at the *write root* (sibling to
-        # lake/ and staging/), deliberately NOT on the marker path itself:
-        # advisory_file_lock creates a sibling ".<name>.lock" file next to
-        # its target as a side effect of acquiring the lock, and the marker
-        # lives inside lake_dir -- locking on it would plant that lock file
-        # inside the very tree _lake_tree_is_empty scans, making a
-        # brand-new root look "non-empty" before check_lake_root_mode ever
-        # runs.
-        try:
-            with advisory_file_lock(lake_root / _LAKE_ROOT_CRITICAL_SECTION_LOCK):
-                check_lake_root_mode(lake_dir, price_adjustment_mode, claim_unmarked_root_as=claim_unmarked_root_as)
-                if not marker_committed:
-                    commit_lake_root_mode(lake_dir, price_adjustment_mode)
-                    marker_committed = True
-                # An imported-only lake is still a lake LEAN may be pointed
-                # at, so it needs the same corporate-action directories the
-                # live pipeline creates. See path_policy.
-                ensure_lean_readable_layout(lake_dir)
-        except LakeRootModeConflictError as exc:
-            logger.error("cache_import: %s", exc)
-            _fail_all(report, covered_refs, "lake_root_mode_conflict", str(exc))
-            continue
+        # This symbol's mode selects its own lake root. Where this used to
+        # sit there was a check-then-commit critical section under a
+        # cross-process advisory lock, guarding a marker that committed the
+        # whole tree to one mode -- because raw and adjusted bytes for the
+        # same (symbol, date) resolved to one path and either could
+        # overwrite the other. The mode is now a segment of the root itself,
+        # so they cannot collide and there is nothing to serialize: two
+        # concurrent imports of different modes touch disjoint trees.
+        lake_dir = resolve_lake_root(price_adjustment_mode)
+        staging_dir = resolve_staging_root(price_adjustment_mode)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        lake_dir.mkdir(parents=True, exist_ok=True)
+        # An imported-only lake is still a lake LEAN may be pointed at, so it
+        # needs the same corporate-action directories the live pipeline
+        # creates. See path_policy.
+        ensure_lean_readable_layout(lake_dir)
 
         dch = _import_minute_trade_dch(adjusted)
         provider_params = build_provider_params(cache_root, provenance)
@@ -1202,35 +1083,17 @@ def main() -> None:
             "Write root: must equal the canonical configured lake root "
             "(the canonical configured write root, settings.LEAN_DATA_WRITE_ROOT) "
             "or the import refuses (catalog rows are root-relative; any other root produces "
-            "'phantom coverage'). Artifacts land under <lake-root>/lake, staged through "
-            "<lake-root>/staging. One adjustment mode per lake root -- a second mode targeting "
-            "an already-committed root is refused, and so is an unmarked but non-empty root "
-            "(see --claim-unmarked-root-as and the module docstring)."
-        ),
-    )
-    parser.add_argument(
-        "--claim-unmarked-root-as",
-        choices=["raw", "polygon_split_adjusted"],
-        default=None,
-        help=(
-            "Explicit operator assertion that an unmarked, non-empty lake root "
-            "(e.g. one ensure_data's live pipeline already populated) truly is "
-            "this adjustment mode. Stamps the marker and proceeds. Has no effect "
-            "on an already-marked or genuinely empty root. Get this wrong and "
-            "the file-level guard is the only thing left standing between a "
-            "mismatched import and silently overwritten bytes -- verify the "
-            "root's true mode out-of-band before passing this."
+            "'phantom coverage'). Artifacts land under <lake-root>/lake/<adjustment-mode>, "
+            "staged through <lake-root>/staging. Each symbol's adjustment mode comes from its "
+            "own provenance document and selects its own subtree, so one invocation can import "
+            "a mixture without the modes ever meeting on disk."
         ),
     )
     args = parser.parse_args()
 
     try:
         report = asyncio.run(
-            import_cache_root(
-                cache_root=args.cache_root,
-                lake_root=args.lake_root,
-                claim_unmarked_root_as=args.claim_unmarked_root_as,
-            )
+            import_cache_root(cache_root=args.cache_root, lake_root=args.lake_root)
         )
     finally:
         # Closed in its own asyncio.run: the pool is bound to the event loop

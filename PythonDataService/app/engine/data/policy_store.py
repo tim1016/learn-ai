@@ -47,7 +47,9 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from app.config import settings
 from app.data_lake import path_policy
+from app.data_lake.types import polygon_mode_for
 
 logger = logging.getLogger(__name__)
 
@@ -110,25 +112,25 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     bars endpoint must resolve roots through this single function so
     they always observe the same bytes.
 
-    When the lake serves this request (:func:`path_policy.lake_serves` — the
-    flag is on and the request is raw) it is the market-data authority and
-    the sole root: its tree is already LEAN-format, so the readers are
-    unchanged. The reference mount is deliberately dropped rather than
-    stacked in front — a run must be able to say which bytes it consumed,
-    and a fixture silently outranking the lake would make the manifest
-    fingerprint recorded on the run a lie. The policy key stops applying
-    too: the lake stores raw bars under one identity, and the adjustment
-    mode is carried by the catalog's data contract, not by the directory
-    name.
+    When the flag is on, the lake is the market-data authority and the sole
+    root: its tree is already LEAN-format, so the readers are unchanged. The
+    reference mount is deliberately dropped rather than stacked in front — a
+    run must be able to say which bytes it consumed, and a fixture silently
+    outranking the lake would make the manifest fingerprint recorded on the
+    run a lie. The policy key does not carry over either: the pre-lake cache
+    keys its subtree by ``source`` *and* adjustment, while the lake is
+    single-source and keys only by adjustment (``path_policy.resolve_lake_root``).
 
-    An adjusted request keeps the policy-keyed roots below even with the flag
-    on, because the lake's live pipeline has no adjusted bars to give it.
-    ``lake_serves`` carries the reasoning; the short version is that the
-    alternatives are a 409 on every default backtest or a silent swap of raw
-    bytes under an adjusted policy.
+    ``adjusted`` selects the lake root rather than being refused by it. It
+    used to raise ``LakeAdjustmentUnsupportedError`` here, because the lake
+    held one data contract per bar and it was raw — returning the raw root to
+    an adjusted request would have handed a run raw prices while it believed
+    it read adjusted ones, materially wrong across a split. #1866 made the
+    adjustment mode a segment of the root, so the honest answer is now a
+    different directory instead of a refusal.
     """
-    if path_policy.lake_serves(adjusted=adjusted):
-        root = path_policy.resolve_lake_root()
+    if settings.DATA_LAKE_ENABLED:
+        root = path_policy.resolve_lake_root(polygon_mode_for(adjusted))
         root.mkdir(parents=True, exist_ok=True)
         return [root]
 
@@ -259,9 +261,15 @@ def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
     """
     safe = _safe_symbol(symbol)
     root_real = os.path.realpath(os.fspath(policy_root))
-    if root_real == os.path.realpath(os.fspath(path_policy.resolve_lake_root())):
+    # Compared against the container holding every per-mode lake root, not
+    # against one root: since #1839 the lake is a tree of mode subtrees, and
+    # an exact match on a single root would wave through a policy-store write
+    # aimed at any other mode's subtree. Prefix containment is also the more
+    # honest question — "is this path part of the lake at all?"
+    lake_container_real = os.path.realpath(os.fspath(path_policy.resolve_lake_container()))
+    if root_real == lake_container_real or root_real.startswith(lake_container_real.rstrip(os.sep) + os.sep):
         raise ValueError(
-            f"{policy_root} is the data lake; the policy store may not write there — "
+            f"{policy_root} is inside the data lake; the policy store may not write there — "
             "materialize through app.data_lake.run_materialization instead"
         )
     root_prefix = root_real.rstrip(os.sep) + os.sep

@@ -27,7 +27,7 @@ import pytest
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
-from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import DecisionSnapshot, StrategyContext
 
 
@@ -46,17 +46,17 @@ def _bar(minute_offset: int, close: float) -> TradeBar:
     )
 
 
-def _make_strategy() -> tuple[SpyEmaCrossoverAlgorithm, StrategyContext]:
+def _make_strategy() -> tuple[EmaCrossoverSignalAlgorithm, StrategyContext]:
     """Construct a strategy + context wired to a real Portfolio for set_holdings math."""
     portfolio = Portfolio(initial_cash=Decimal("100000"))
     ctx = StrategyContext(portfolio=portfolio)
-    strategy = SpyEmaCrossoverAlgorithm()
+    strategy = EmaCrossoverSignalAlgorithm()
     strategy.ctx = ctx
     strategy.initialize()
     return strategy, ctx
 
 
-def _drive(strategy: SpyEmaCrossoverAlgorithm, ctx: StrategyContext, bars: list[TradeBar]) -> None:
+def _drive(strategy: EmaCrossoverSignalAlgorithm, ctx: StrategyContext, bars: list[TradeBar]) -> None:
     """Replay 1-min bars through the consolidator (which fires the strategy bar handler at 15-min boundaries)."""
     for bar in bars:
         ctx.portfolio.update_reference_price(bar.symbol, bar.close)

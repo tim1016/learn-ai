@@ -287,9 +287,9 @@ def test_spy_ema_remains_warm_startable() -> None:
     # warm-startable, so `require` is still enforced for it (no regression to
     # the seed-day guarantee). Derived purely from the persistence-contract
     # override, so the two signals can never drift.
-    from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+    from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 
-    assert SpyEmaCrossoverAlgorithm().is_warm_startable() is True
+    assert EmaCrossoverSignalAlgorithm().is_warm_startable() is True
 
 
 def test_satisfies_live_persistence_contract() -> None:

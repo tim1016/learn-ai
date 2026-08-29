@@ -107,7 +107,10 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    lake_subpath,
+    resolve_lake_root,
 )
+from app.data_lake.types import PriceAdjustmentMode
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.lean_sidecar.workspace import validate_symbol
 
@@ -123,15 +126,6 @@ logger = logging.getLogger(__name__)
 # docstring for why it is not ``/lean-run/data`` and for what
 # ``/lean-data`` does and does not mean in the spec.
 CONTAINER_LAKE_DATA_MOUNT = "/lean-data"
-
-# Subdirectory of the deploy volume holding the immutable lake.
-#
-# Only :func:`launcher_host_lake_root` still needs it: that path is rooted at
-# the *host's* volume, which ``path_policy`` — a data-plane module reading
-# ``settings`` — cannot know. The data-plane-side root is no longer derived
-# here at all; :func:`data_plane_lake_root` delegates to the canonical
-# resolver, which is what the T4 ledger meant by collapsing the two.
-LAKE_SUBDIR = "lake"
 
 # Deploy-time env naming the **host** path of the lake volume. The
 # launcher (a host process with podman) resolves the mount source from
@@ -167,46 +161,32 @@ class LakeMount:
         return f"{self.host_lake_root}:{CONTAINER_LAKE_DATA_MOUNT}:ro"
 
 
-def lake_mount_enabled(*, adjusted: bool) -> bool:
-    """True when this run should read the lake instead of staging its own bars.
+def lake_mount_enabled() -> bool:
+    """True when sidecar runs should read the lake instead of staging."""
+    from app.config import settings
 
-    Delegates to :func:`app.data_lake.path_policy.lake_serves` — the one
-    predicate the engine's root resolver, the engine's materializer, this
-    preflight and the chart split-read all share.
+    return bool(settings.DATA_LAKE_ENABLED)
 
-    ``adjusted`` is not decoration. Before #1839 this function asked only
-    whether the flag was on, so a flag-on run whose ``DataPolicy`` said
-    ``adjusted=True`` was handed the raw lake mount and ran to completion:
-    every price in it raw, the manifest and the UI both reporting an adjusted
-    policy, and nothing anywhere to notice. That is the same silent swap the
-    engine's root resolver refuses, arriving through a different door. An
-    adjusted sidecar run therefore keeps the pre-lake staging path, which
-    still fetches and stages genuinely adjusted bars.
+
+def data_plane_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
+    """The lake root as *this* process sees it, for one adjustment mode.
+
+    Derived from ``LEAN_DATA_WRITE_ROOT`` because that is the mount the
+    data plane actually has: compose gives this container one
+    read-write mount of the volume, and the sidecar reads the lake
+    through it. The spec's separate read-only reader mount
+    (``LEAN_DATA_ROOT``) does not exist in this deployment yet; when it
+    does, this is the one function that changes.
+
+    Delegates to the canonical writer-side resolver rather than rebuilding
+    the path: this used to be a deliberate duplicate behind a ``LAKE_SUBDIR``
+    constant, kept honest only by a lockstep test, and #1866 collapsed both
+    onto ``path_policy`` as that duplicate's own comment asked.
     """
-    from app.data_lake.path_policy import lake_serves
-
-    return lake_serves(adjusted=adjusted)
+    return resolve_lake_root(price_adjustment_mode)
 
 
-def data_plane_lake_root() -> Path:
-    """The lake root as *this* process sees it.
-
-    The canonical resolver, verbatim. It stays as a named function because
-    the sidecar's vocabulary distinguishes this root from
-    :func:`launcher_host_lake_root` — the same directory seen from two
-    processes — and a bare ``resolve_lake_root()`` at the call site would
-    read like the launcher-side one.
-
-    The spec's separate read-only reader mount (``LEAN_DATA_ROOT``) does not
-    exist in this deployment yet; when it does, ``path_policy`` is where that
-    changes, not here.
-    """
-    from app.data_lake.path_policy import resolve_lake_root
-
-    return resolve_lake_root()
-
-
-def launcher_host_lake_root() -> Path | None:
+def launcher_host_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path | None:
     """The lake root as the *launcher host* sees it, or None if unset.
 
     Resolved from :data:`LAKE_VOLUME_HOST_PATH_ENV` exactly the way the
@@ -238,7 +218,7 @@ def launcher_host_lake_root() -> Path | None:
             f"({Path.cwd()}), compose against the directory holding compose.yaml; "
             "set an absolute path so both agree."
         )
-    return candidate.resolve() / LAKE_SUBDIR
+    return candidate.resolve() / lake_subpath(price_adjustment_mode)
 
 
 @dataclass(frozen=True, slots=True)

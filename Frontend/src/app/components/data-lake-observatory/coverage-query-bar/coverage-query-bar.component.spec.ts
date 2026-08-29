@@ -65,6 +65,33 @@ describe('CoverageQueryBarComponent', () => {
     );
   });
 
+  it('applies a data type or price adjustment change immediately, without Load coverage', async () => {
+    // A <select> has no half-typed state the way free-text symbols do, so it
+    // does not wait on the "Load coverage" click. Without this, the backfill
+    // panel below — seeded from the applied query, not the draft — would
+    // silently keep submitting the previously-applied mode while this
+    // dropdown already shows the new one.
+    const { applied } = await renderBar();
+
+    fireEvent.change(screen.getByLabelText('Price adjustment'), {
+      target: { value: 'polygon_split_adjusted' },
+    });
+
+    expect(applied).toHaveBeenCalledWith(
+      expect.objectContaining({ priceAdjustmentMode: 'polygon_split_adjusted' }),
+    );
+  });
+
+  it('does not apply a select change while the rest of the draft is invalid', async () => {
+    const { applied } = await renderBar({ ...INITIAL, symbolsText: '' });
+
+    fireEvent.change(screen.getByLabelText('Price adjustment'), {
+      target: { value: 'polygon_split_adjusted' },
+    });
+
+    expect(applied).not.toHaveBeenCalled();
+  });
+
   it('renders the adjustment vocabulary as operator language, not raw codes', async () => {
     await renderBar();
 

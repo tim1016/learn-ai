@@ -25,12 +25,11 @@ import pytest
 
 from app.data_lake.derived_quote import build_minute_quote_zip_bytes
 from app.data_lake.lean_writer import build_minute_trade_zip_bytes
-from app.data_lake.path_policy import ensure_lean_readable_layout
+from app.data_lake.path_policy import ensure_lean_readable_layout, lake_subpath
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.lake_mount import (
     CONTAINER_LAKE_DATA_MOUNT,
-    LAKE_SUBDIR,
     LAKE_VOLUME_HOST_PATH_ENV,
     LakeArtifacts,
     LakeMount,
@@ -82,7 +81,7 @@ def _allow_dummy_digest(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def fixture_lake(tmp_path: Path) -> Path:
     """A complete, runnable fixture lake: 2 days of SPY + daily + metadata."""
-    lake_root = tmp_path / "lean-data" / LAKE_SUBDIR
+    lake_root = tmp_path / "lean-data" / lake_subpath("raw")
     seed_lake_window(lake_root, "SPY", WINDOW)
     return lake_root
 
@@ -189,27 +188,10 @@ class TestFlagOffIsUnchanged:
         from app.config import settings
 
         monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-        assert lake_mount_enabled(adjusted=False) is False
+        assert lake_mount_enabled() is False
 
         monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-        assert lake_mount_enabled(adjusted=False) is True
-
-    def test_lake_mode_declines_an_adjusted_run_even_with_the_flag_on(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The sidecar's half of carry-forward A2.
-
-        Before #1839 this preflight asked only whether the flag was on, so a
-        flag-on run whose ``DataPolicy`` said ``adjusted=True`` was handed the
-        raw lake mount and ran to completion: every price raw, the manifest
-        and the UI both reporting an adjusted policy, nothing anywhere to
-        notice. The engine's root resolver already refused that swap; this is
-        the same swap arriving through the sidecar's door.
-        """
-        from app.config import settings
-
-        monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-        assert lake_mount_enabled(adjusted=True) is False
+        assert lake_mount_enabled() is True
 
     def test_launch_request_does_not_ask_for_the_lake_by_default(self) -> None:
         request = LaunchRequest(
@@ -282,12 +264,12 @@ class TestLauncherResolvesTheHostPath:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv(LAKE_VOLUME_HOST_PATH_ENV, raising=False)
-        assert launcher_host_lake_root() is None
+        assert launcher_host_lake_root("raw") is None
 
         volume = tmp_path / "learn_ai_lean_data"
         volume.mkdir()
         monkeypatch.setenv(LAKE_VOLUME_HOST_PATH_ENV, str(volume))
-        assert launcher_host_lake_root() == volume.resolve() / LAKE_SUBDIR
+        assert launcher_host_lake_root("raw") == volume.resolve() / lake_subpath("raw")
 
     def test_relative_host_lake_root_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Two readers resolve a relative path differently; pick neither.
@@ -300,7 +282,7 @@ class TestLauncherResolvesTheHostPath:
         monkeypatch.setenv(LAKE_VOLUME_HOST_PATH_ENV, "var/lib/learn_ai_lean_data")
 
         with pytest.raises(LakeMountError, match="lake_volume_host_path_not_absolute") as excinfo:
-            launcher_host_lake_root()
+            launcher_host_lake_root("raw")
 
         message = str(excinfo.value)
         assert "working directory" in message
@@ -324,17 +306,30 @@ class TestLauncherResolvesTheHostPath:
         )
         assert legacy.capabilities == []
 
-    def test_data_plane_lake_root_matches_the_writers_lake_root(self) -> None:
-        """Reader and writer must name the same directory.
+    def test_the_host_and_container_views_agree_on_the_lake_suffix(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The two views of the lake must differ only in their base.
 
-        ``app.data_lake.path_policy.resolve_lake_root`` is the writer-side
-        authority (#1832 consolidated ``ensure_data``'s private ``_lake_roots``
-        onto it); this pins the sidecar's read view to it so the two cannot
-        drift into pointing at different subdirectories of the same volume.
+        ``data_plane_lake_root`` now delegates to ``resolve_lake_root``, so
+        pinning those two to each other proves nothing. The pair that can
+        still drift is the container-side root and the *host*-side root the
+        launcher hands podman: they are built against different bases
+        (``LEAN_DATA_WRITE_ROOT`` vs. the deploy volume's host path), and a
+        mount whose source and target disagree on the suffix produces an
+        empty data folder rather than an error. Assert the suffix, per mode,
+        since #1839 made that suffix mode-dependent.
         """
-        from app.data_lake.path_policy import resolve_lake_root
+        volume = tmp_path / "volume"
+        volume.mkdir()
+        monkeypatch.setenv(LAKE_VOLUME_HOST_PATH_ENV, str(volume))
 
-        assert data_plane_lake_root() == resolve_lake_root()
+        for mode in ("raw", "polygon_split_adjusted"):
+            container = data_plane_lake_root(mode)
+            host = launcher_host_lake_root(mode)
+
+            assert host is not None
+            assert container.parts[-2:] == host.parts[-2:] == ("lake", mode)
 
 
 class TestSameBytesAsThePythonReaders:
@@ -364,7 +359,7 @@ class TestSameBytesAsThePythonReaders:
         zip that predates a window extension — so it is left intact
         here and covered by ``test_stale_daily_artifact_is_refused``.
         """
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW)
         for corrupt in lake_root.rglob("*/minute/*/*.zip"):
             corrupt.write_bytes(b"not a zip at all")
@@ -393,7 +388,7 @@ class TestSameBytesAsThePythonReaders:
         )
 
         # Lake mode: lake writer -> lake, read in place through the mount.
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW)
 
         staged_bars = list(
@@ -415,7 +410,7 @@ class TestSameBytesAsThePythonReaders:
         """
         store_root = tmp_path / "polygon-raw"
         staged_zip = seed_store_day(store_root, "SPY", DAY_ONE)
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         lake_zip, _quote = seed_lake_minute_day(lake_root, "SPY", DAY_ONE)
 
         csv_name = f"{DAY_ONE.strftime('%Y%m%d')}_spy_minute_trade.csv"
@@ -480,7 +475,7 @@ class TestSameBytesAsThePythonReaders:
         regardless — so serving such a lake means a guaranteed-noisy
         run. Refuse instead.
         """
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW, with_quote=False)
 
         with pytest.raises(LakeMountError, match="lake_incomplete_quote_coverage"):
@@ -496,7 +491,7 @@ class TestLakeCoverageFailsLoudly:
     """A gap in the lake must surface, never fall back to a Polygon fetch."""
 
     def test_empty_window_raises(self, tmp_path: Path) -> None:
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         lake_root.mkdir(parents=True)
 
         with pytest.raises(LakeMountError, match="lake_incomplete_trade_coverage"):
@@ -508,7 +503,7 @@ class TestLakeCoverageFailsLoudly:
             )
 
     def test_missing_daily_artifact_raises(self, tmp_path: Path) -> None:
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         for session in WINDOW:
             seed_lake_minute_day(lake_root, "SPY", session)
         seed_lake_metadata(lake_root)
@@ -529,7 +524,7 @@ class TestLakeCoverageFailsLoudly:
         backtest than the manifest, the UI, and the operator believe.
         The error names the session that is missing.
         """
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", [DAY_ONE])
 
         with pytest.raises(LakeMountError, match="lake_incomplete_trade_coverage") as excinfo:
@@ -550,7 +545,7 @@ class TestLakeCoverageFailsLoudly:
         so one written before a window extension survives untouched and
         satisfies any existence check while lacking the new dates.
         """
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW)
         # Rebuild the daily artifact as if only the first session existed.
         seed_lake_daily(lake_root, "SPY", [DAY_ONE])
@@ -573,7 +568,7 @@ class TestLakeCoverageFailsLoudly:
         """
         friday, monday = date(2026, 1, 2), date(2026, 1, 5)
         sessions = [friday, monday]
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", sessions)
 
         artifacts = resolve_lake_artifacts(
@@ -612,14 +607,14 @@ class TestRequiredLakeMetadata:
         assert symbol_properties.is_relative_to(fixture_lake)
 
     def test_absent_required_metadata_raises(self, tmp_path: Path) -> None:
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW, with_metadata=False)
 
         with pytest.raises(LakeMountError, match="lake_missing_required_metadata"):
             require_lake_metadata(lake_root)
 
     def test_partially_absent_metadata_names_only_the_missing_kind(self, tmp_path: Path) -> None:
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW)
         market_hours, _symbol_properties = require_lake_metadata(lake_root)
         market_hours.unlink()
@@ -629,7 +624,7 @@ class TestRequiredLakeMetadata:
 
     def test_resolution_fails_before_launch_not_at_manifest_time(self, tmp_path: Path) -> None:
         """The check lives on the pre-launch path, not in the manifest."""
-        lake_root = tmp_path / LAKE_SUBDIR
+        lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW, with_metadata=False)
 
         with pytest.raises(LakeMountError, match="lake_missing_required_metadata"):

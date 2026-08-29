@@ -43165,7 +43165,7 @@
     },
     "/api/chart/data": {
       "post": {
-        "description": "Fetch resampled OHLCV bars with computed indicators.\n\nTwo-layer caching:\n- Layer 1: resampled bars cached per (ticker, range, timeframe, session)\n- Layer 2: indicator results cached per (resample_key, canonical_indicators)\n\nReturns structured error codes on failure:\n- TIMEFRAME_NOT_ALLOWED: too many bars for requested timeframe\n- NO_DATA: no bars returned from Polygon\n- INVALID_RANGE: bad timeframe or date range\n- RATE_LIMITED: Polygon rate limit hit\n- INTERNAL_ERROR: unexpected failure",
+        "description": "Fetch resampled OHLCV bars with computed indicators.\n\nTwo-layer caching:\n- Layer 1: resampled bars cached per (ticker, range, timeframe, session)\n- Layer 2: indicator results cached per (resample_key, canonical_indicators)\n\nReturns structured error codes on failure:\n- TIMEFRAME_NOT_ALLOWED: too many bars for requested timeframe\n- NO_DATA: no bars returned from Polygon\n- INVALID_RANGE: bad timeframe or date range\n- RATE_LIMITED: Polygon rate limit hit\n- PROVIDER_UNREACHABLE: a lake gap needed Polygon and Polygon could not be reached\n- INTERNAL_ERROR: unexpected failure",
         "operationId": "chart_data_api_chart_data_post",
         "requestBody": {
           "content": {

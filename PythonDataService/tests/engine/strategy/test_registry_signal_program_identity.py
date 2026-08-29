@@ -85,18 +85,26 @@ def test_signal_program_contract_and_factory_are_set_or_cleared_together() -> No
         )
 
 
-def test_ema_crossover_derivatives_do_not_inherit_the_canonical_contract() -> None:
-    """Pin the actual fix: both known ``dataclasses.replace`` derivatives of the
-    canonical EMA Signal Program registration are explicitly unsealed, not
-    accidentally sealed with someone else's identity."""
-    canonical = _STRATEGY_REGISTRY["ema_crossover_signal"]
-    assert canonical.signal_program_contract is not None
-    assert canonical.signal_program_factory is not None
+def test_every_registered_strategy_decouples_signal_from_traded_asset() -> None:
+    """Every registration owns a Signal Program. No exceptions, by design.
 
-    for key in ("ema_crossover_2_bps", "spy_ema_crossover"):
-        reg = _STRATEGY_REGISTRY[key]
-        assert reg.signal_program_contract is None, f"'{key}' must not carry a signal_program_contract"
-        assert reg.signal_program_factory is None, f"'{key}' must not carry a signal_program_factory"
+    The platform rule is that a strategy separates *when* to act (the signal)
+    from *what* is traded (the asset the execution boundary selects) -- see
+    ``app.engine.strategy.signal_intent.SignalIntent``, which carries neither
+    a symbol nor a quantity. A registration without a
+    ``signal_program_factory`` decides *and* names its own traded symbol,
+    which is exactly the coupling this rule exists to remove.
+
+    There is deliberately no allowlist. The sweep that established this rule
+    removed the last five coupled registrations rather than excusing them, so
+    the honest assertion is that the set is empty -- an allowlist here would
+    only be a place for the next one to hide.
+    """
+    coupled = sorted(
+        key for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is None
+    )
+
+    assert coupled == []
 
 
 def test_every_factory_built_program_carries_its_registration_identity() -> None:
