@@ -289,6 +289,95 @@ async def test_lake_refusal_leaves_the_run_id_reusable(
 
 
 @pytest.mark.asyncio
+async def test_a_fixture_replay_never_consults_the_lake_even_when_it_has_no_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """A frozen fixture replay's recording is the data authority — the lake
+    preflight must never run for it, regardless of coverage.
+
+    Before this guard, the preflight checked only ``data_policy.source ==
+    "polygon"`` and the flag, so with the flag default-on (#1839) a fixture
+    replay (parity tests / freshness canary, ``provider_kind="fixture"``)
+    over a window the lake has no coverage for refused with
+    ``lake_incomplete_trade_coverage`` before ever reaching the fixture
+    branch, discarding its frozen bars for an unrelated lake gap.
+    """
+    from app.config import settings
+    from app.lean_sidecar import polygon_canonical
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    (write_root / lake_subpath("raw")).mkdir(parents=True, exist_ok=True)  # empty lake
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    class _FakeFixtureProvider:
+        fixture_id = "fake-fixture-v1"
+        fixture_sha256 = None
+
+        def fetch_minute_bars(
+            self, *, symbol: str, start_date: date, end_date: date, adjusted: bool
+        ) -> list[dict[str, Any]]:
+            price = 100.0
+            bars = []
+            for trading_date in WINDOW:
+                bars.append(
+                    {
+                        "timestamp": session_open_ms_utc(trading_date),
+                        "open": price,
+                        "high": price + 0.5,
+                        "low": price - 0.5,
+                        "close": price + 0.1,
+                        "volume": 1_000,
+                    }
+                )
+                price += 1.0
+            return bars
+
+    monkeypatch.setattr(polygon_canonical, "get_default_provider", lambda: _FakeFixtureProvider())
+
+    resolved: list[object] = []
+    real_resolve = service._resolve_lake_artifacts_or_refuse
+
+    async def _spy(request):
+        outcome = await real_resolve(request)
+        resolved.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(service, "_resolve_lake_artifacts_or_refuse", _spy)
+
+    data_policy = DataPolicy(
+        source="polygon",
+        symbol=SYMBOL,
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="fixture",
+        fixture_id="fake-fixture-v1",
+        fixture_sha256=None,
+    )
+    request = service.TrustedRunRequest(
+        run_id="fixture-skips-lake-preflight",
+        start_ms_utc=session_open_ms_utc(DAY_ONE),
+        end_ms_utc=session_open_ms_utc(next_trading_day(DAY_TWO)),
+        starting_cash=100_000.0,
+        data_policy=data_policy,
+    )
+
+    result = await service.run_trusted_sample(request)
+
+    assert not resolved, "a fixture replay must never consult the lake"
+    assert result.workspace_root.exists()
+
+
+@pytest.mark.asyncio
 async def test_an_adjusted_request_also_reaches_the_lake_with_the_flag_on(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
