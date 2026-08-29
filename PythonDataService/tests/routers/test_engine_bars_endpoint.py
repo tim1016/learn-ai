@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.config import settings
 from app.main import app
 from tests._helpers.lean_store import seed_store_day
 
@@ -25,6 +26,7 @@ DAY_TWO = date(2026, 1, 6)  # Tuesday
 @pytest.fixture
 def store(monkeypatch, tmp_path: Path) -> Path:
     """Point the bar store at a tmp cache with two seeded SPY days."""
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
     monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "no-reference-mount"))
     monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
     policy_root = tmp_path / "store" / "polygon-adjusted"

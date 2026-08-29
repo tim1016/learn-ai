@@ -38,6 +38,18 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 > which materializer supplied the underlying zip. This satisfies the AGENTS.md
 > "update both registries" rule via the new row in
 > `docs/architecture/engine-authority-map.md` plus this explicit note.
+>
+> **Amended by #1839 (the flag flip).** `DATA_LAKE_ENABLED` now defaults ON, so
+> the lake path above is the shipped one for both a **raw** and an *adjusted*
+> request — since #1866, each price-adjustment mode resolves to its own root
+> under the lake (`app/data_lake/path_policy.py::resolve_lake_root`), so
+> adjusted requests are no longer carved out to the policy store. The
+> no-new-concept finding is unchanged either way: both paths still resolve
+> which bytes the reader opens, not a formula over them.
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| LEAN deci-cent price encoding (`price → int`, the on-disk integer both engines read back as `stored / 10_000`) | `PythonDataService/app/data_lake/lean_writer.py::to_deci_cent` — `round_half_up(price * 10_000)`, refusing negatives | None. `app/data_lake/derived_daily.py`, `app/data_lake/derived_quote.py`, and all three writers in `app/engine/data/lean_format.py` call it; `app/data_lake/cache_import.py` mirrors only its negative-price refusal at the decode boundary. Before #1839 `lean_format` truncated via `int(price * PRICE_SCALE)` and could differ by one deci-cent on a sub-grid price. | LEAN's scale factor fixes the grid (`TradeBar._scaleFactor = 1/10000m`), but LEAN's own writer (`LeanData.Scale`) does not round or truncate — it formats `value * 10_000m` as-is. Integer quantization on a sub-grid price is therefore our own engineering decision (half-up: symmetric error, vs. truncation's systematic −0.5 deci-cent bias), not a literal LEAN behavior — see `docs/references/lean-deci-cent-encoding.md` for the source read. | `PythonDataService/tests/unit/data_lake/test_deci_cent_canonical.py` and `test_lean_writer.py::test_to_deci_cent_rounds_half_up` (rule pinned exactly; both writers asserted row-identical on sub-grid prices; the truncation divergence kept as a live assertion); `tests/integration/data_lake/test_flag_flip_parity.py` (bit-exact across the cache→lake import) | canonical — consolidated by #1839 (single implementation; rounding choice is a documented engineering decision, not a proven LEAN-equivalence claim) |
 
 ### Broker display read models
 

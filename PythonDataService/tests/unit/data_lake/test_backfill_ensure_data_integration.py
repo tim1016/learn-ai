@@ -15,7 +15,6 @@ Postgres-backed test in this package.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 import re
@@ -33,6 +32,7 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.backfill import BackfillDayProgress, run_backfill
 from app.data_lake.types import DataRunSpec
+from app.lean_sidecar import config as sidecar_config
 from app.routers.data_lake import _bridge_ensure_fn, _bridge_status_fn
 
 pytestmark = pytest.mark.asyncio
@@ -77,7 +77,15 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
-    return write_root
+    monkeypatch.setenv("LEAN_LAUNCHER_TOKEN", "test-token")
+    # Phase 0 reads the launcher's extracted metadata files back off its own
+    # view of the shared artifacts mount (app.data_lake.lean_metadata), not
+    # off the launcher's HTTP response body — point that root at a tmp_path
+    # tree so _launcher_side_effect below has somewhere real to stage into.
+    artifacts_root = tmp_path / "artifacts-root"
+    artifacts_root.mkdir(parents=True)
+    monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
+    return artifacts_root
 
 
 def _spec(symbol: str = "SPY") -> DataRunSpec:
@@ -91,16 +99,43 @@ def _spec(symbol: str = "SPY") -> DataRunSpec:
     )
 
 
-def _launcher_response() -> dict:
-    mh = json.dumps(
-        {"entries": {"Equity-usa-[*]": {"exchange": "NYSE", "timezone": "America/New_York", "holidays": [], "earlyCloses": {}}}}
-    ).encode("utf-8")
-    sp = b"SPY,equity,usd,1,0\n"
-    return {
-        "market_hours_database_b64": base64.b64encode(mh).decode("ascii"),
-        "symbol_properties_database_b64": base64.b64encode(sp).decode("ascii"),
-        "image_digest_used": "sha256:test",
-    }
+_MARKET_HOURS_JSON = json.dumps(
+    {"entries": {"Equity-usa-[*]": {"exchange": "NYSE", "timezone": "America/New_York", "holidays": [], "earlyCloses": {}}}}
+).encode("utf-8")
+_SYMBOL_PROPERTIES_CSV = b"SPY,equity,usd,1,0\n"
+
+
+def _stage_workspace_files(artifacts_root: Path, run_id: str) -> None:
+    """Pre-place the two files a real launcher run would have written.
+
+    Layout must match app.lean_sidecar.workspace.Workspace.data_dir and
+    staging.list_metadata_databases: <root>/<run_id>/workspace/data/...
+    """
+    data_dir = artifacts_root / run_id / "workspace" / "data"
+    (data_dir / "market-hours").mkdir(parents=True, exist_ok=True)
+    (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
+    (data_dir / "market-hours" / "market-hours-database.json").write_bytes(_MARKET_HOURS_JSON)
+    (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(_SYMBOL_PROPERTIES_CSV)
+
+
+def _launcher_side_effect(artifacts_root: Path):
+    """respx side_effect standing in for a real launcher: stages the files
+    app.data_lake.lean_metadata will read back, keyed by the run_id the
+    caller sent, then returns the launcher's actual (paths-only) response
+    shape."""
+
+    def _mock(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        _stage_workspace_files(artifacts_root, body["run_id"])
+        return httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/launcher-side/market-hours-database.json",
+                "symbol_properties_db_path": "/launcher-side/symbol-properties-database.csv",
+            },
+        )
+
+    return _mock
 
 
 def _polygon_ok_payload(bar_start_ms: int) -> dict:
@@ -117,7 +152,7 @@ def _polygon_ok_payload(bar_start_ms: int) -> dict:
 @respx.mock
 async def test_run_backfill_against_real_ensure_data_reports_per_day_progress(clean_artifacts, pool, tmp_lake):
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(tmp_lake)
     )
     # 2024-05-20/21/22 09:30 ET in ms UTC.
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-20.*").mock(
@@ -169,7 +204,7 @@ async def test_backfill_survives_a_pool_initialized_on_a_different_loop(clean_ar
     intended loop and the backfill still completes.
     """
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        return_value=httpx.Response(200, json=_launcher_response())
+        side_effect=_launcher_side_effect(tmp_lake)
     )
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-20.*").mock(
         return_value=httpx.Response(200, json=_polygon_ok_payload(1716211800000))

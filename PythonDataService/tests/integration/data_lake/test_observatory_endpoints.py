@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import asyncpg
 import pytest
@@ -31,11 +32,32 @@ from app.data_lake.types import (
     ArtifactDetail,
     StorageKindTotal,
     SymbolCoverageSpan,
+    trading_date_at_ms,
     trading_range_span_days,
 )
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 
 pytestmark = pytest.mark.asyncio
+
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _window(start: date, end: date) -> str:
+    """Render a trading-date window as the two ``int64 ms UTC`` query params.
+
+    Anchored at ET midnight rather than the session open, because a *window
+    boundary* need not be a trading day at all (several tests below start on
+    New Year's Day) and ``session_open_ms_utc`` has no answer for a closed
+    date. ``trading_date_at_ms`` resolves any instant inside the ET day to
+    that day, so both anchors agree wherever both exist -- which
+    ``test_coverage_window_accepts_any_anchor_inside_the_et_day`` pins.
+    """
+    return f"start_trading_date_ms={_ms(start)}&end_trading_date_ms={_ms(end)}"
+
+
+def _ms(day: date) -> int:
+    return int(datetime(day.year, day.month, day.day, tzinfo=_ET).timestamp() * 1000)
 
 # Captured before the autouse fixture below ever monkeypatches init_pool, so
 # the pool-lifecycle test can restore the real implementation for itself.
@@ -117,7 +139,7 @@ def _catalog_pool_already_initialized(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.parametrize(
     "url",
     [
-        "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
         "/api/data-lake/artifacts/1",
         "/api/data-lake/storage-summary",
     ],
@@ -136,7 +158,7 @@ async def test_observatory_routes_404_when_flag_off(url: str, make_data_lake_app
 @pytest.mark.parametrize(
     "url",
     [
-        "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
         "/api/data-lake/artifacts/1",
         "/api/data-lake/storage-summary",
     ],
@@ -339,7 +361,7 @@ async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatc
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-26",
+        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 26))}",
     )
 
     assert status_code == 200
@@ -375,7 +397,7 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
     assert status_code == 200
@@ -425,7 +447,7 @@ async def test_coverage_derives_provider_from_data_type(
     status_code, body = await _get(
         app,
         f"/api/data-lake/coverage?symbol=SPY&data_type={data_type}"
-        "&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        f"&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
     assert status_code == 200
@@ -452,7 +474,7 @@ async def test_coverage_finds_a_seeded_quote_artifact_as_complete(monkeypatch: p
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        "/api/data-lake/coverage?symbol=SPY&data_type=quote&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        f"/api/data-lake/coverage?symbol=SPY&data_type=quote&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
     assert status_code == 200
@@ -462,11 +484,65 @@ async def test_coverage_finds_a_seeded_quote_artifact_as_complete(monkeypatch: p
     assert quote_day["artifact_id"] == 55
 
 
+async def test_coverage_window_accepts_any_anchor_inside_the_et_day(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    """The ms window names a trading DATE, not one privileged instant.
+
+    Temporal-rigor carries a date on the wire as a single ms-UTC value
+    anchored somewhere in that ET day (the session open, canonically). A
+    caller that anchors at the close, or hands back a bar timestamp it read
+    off a chart, means the same day -- and gets the same window. Accepting
+    only the exact session open would make this parameter a checksum.
+    """
+
+    async def _empty_coverage(**kwargs) -> list[ArtifactCoverageRow]:
+        return []
+
+    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _empty_coverage)
+    app = make_data_lake_app(include_data_lake=True)
+
+    day = date(2024, 5, 20)
+    at_open = session_open_ms_utc(day)
+    at_midnight = _ms(day)
+    assert at_open != at_midnight
+    assert trading_date_at_ms(at_open) == trading_date_at_ms(at_midnight) == day
+
+    responses = []
+    for anchor in (at_open, at_midnight, at_open + 3 * 60 * 60 * 1000):
+        status_code, body = await _get(
+            app,
+            f"/api/data-lake/coverage?symbol=SPY&start_trading_date_ms={anchor}&end_trading_date_ms={anchor}",
+        )
+        assert status_code == 200
+        responses.append(body["days"])
+
+    assert responses[0] == responses[1] == responses[2]
+    assert [d["trading_date_ms"] for d in responses[0]] == [at_open]
+
+
+async def test_coverage_422_on_a_ms_value_that_is_not_a_representable_instant(make_data_lake_app):
+    """The likeliest way to get this parameter wrong is seconds-for-ms.
+
+    A caller sending an out-of-range magnitude must get the typed 422 that
+    names the unit, not a 500 from the timezone conversion underneath.
+    """
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        "/api/data-lake/coverage?symbol=SPY&start_trading_date_ms=999999999999999999"
+        "&end_trading_date_ms=999999999999999999",
+    )
+    assert status_code == 422
+    assert body["detail"]["reason"] == "invalid_trading_date_ms"
+    assert "milliseconds" in body["detail"]["message"]
+
+
 async def test_coverage_422_when_range_inverted(make_data_lake_app):
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-24&end_trading_date=2024-05-20",
+        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 24), date(2024, 5, 20))}",
     )
     assert status_code == 422
     assert body["detail"]["reason"] == "invalid_range"
@@ -492,7 +568,7 @@ async def test_coverage_422_when_symbol_invalid(symbol: str, make_data_lake_app)
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol={quote(symbol)}&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        f"/api/data-lake/coverage?symbol={quote(symbol)}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
     assert status_code == 422
     assert body["detail"]["reason"] == "invalid_symbol"
@@ -509,7 +585,7 @@ async def test_coverage_200_when_symbol_valid(monkeypatch: pytest.MonkeyPatch, m
     app = make_data_lake_app(include_data_lake=True)
     status_code, _ = await _get(
         app,
-        "/api/data-lake/coverage?symbol=BRK.B&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        f"/api/data-lake/coverage?symbol=BRK.B&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
     assert status_code == 200
 
@@ -536,7 +612,7 @@ async def test_coverage_422_when_range_exceeds_max_days(monkeypatch: pytest.Monk
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&start_trading_date={start.isoformat()}&end_trading_date={end.isoformat()}",
+        f"/api/data-lake/coverage?symbol=SPY&{_window(start, end)}",
     )
     assert status_code == 422
     assert body["detail"]["reason"] == "range_too_large"
@@ -572,7 +648,7 @@ async def test_coverage_200_at_exactly_max_range_days(monkeypatch: pytest.Monkey
     app = make_data_lake_app(include_data_lake=True)
     status_code, _ = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&start_trading_date={start.isoformat()}&end_trading_date={end.isoformat()}",
+        f"/api/data-lake/coverage?symbol=SPY&{_window(start, end)}",
     )
     assert status_code == 200
 
@@ -606,7 +682,7 @@ async def test_coverage_builds_one_schedule_for_the_whole_range(monkeypatch: pyt
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        "/api/data-lake/coverage?symbol=SPY&start_trading_date=2024-05-20&end_trading_date=2024-05-24",
+        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
     assert status_code == 200

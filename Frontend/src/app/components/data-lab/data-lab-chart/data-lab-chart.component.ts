@@ -479,6 +479,12 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
           case 'RATE_LIMITED':
             this.error.set('Rate limited — please wait a moment and try again');
             break;
+          case 'PROVIDER_UNREACHABLE':
+            this.error.set(
+              `${ticker} isn't fully covered by the data lake for this range, and the ` +
+              'market-data provider could not be reached to fill the gap.',
+            );
+            break;
           default:
             this.error.set(detailMessage);
         }

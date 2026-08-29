@@ -196,6 +196,39 @@ class LeanDailyBarPath:
         return PurePosixPath("equity") / self.market / "daily" / f"{self.symbol.lower()}.zip"
 
 
+def corporate_action_dirs(market: Market) -> tuple[PurePosixPath, ...]:
+    """The factor-file and map-file directories LEAN expects to find.
+
+    LEAN's ``LocalDiskMapFileProvider`` warns when these are absent, and the
+    sidecar's run classifier counts that warning against the run. The pre-lake
+    staging path therefore creates them empty on every run
+    (``staging.stage_empty_corporate_action_dirs``) even for a window with no
+    corporate actions — an empty directory says "no corporate actions here",
+    a missing one says "no idea".
+
+    Lake mode cannot do the same thing at run time: the mount is read-only and
+    LEAN's data folder *is* the lake. So the lake's writers create them
+    instead, which is why this returns directories rather than files — see
+    ``ensure_lean_readable_layout``.
+    """
+    return (
+        PurePosixPath("equity") / market / "factor_files",
+        PurePosixPath("equity") / market / "map_files",
+    )
+
+
+def ensure_lean_readable_layout(lake_root: Path, market: Market = "usa") -> None:
+    """Create the directories LEAN needs present but the lake may never fill.
+
+    Called by every writer that can bring a lake into existence — the live
+    ``ensure_data`` pipeline and ``cache_import`` — rather than by the
+    sidecar's preflight, which is a pure read of a read-only mount and must
+    stay one. Idempotent.
+    """
+    for relative in corporate_action_dirs(market):
+        (lake_root / Path(*relative.parts)).mkdir(parents=True, exist_ok=True)
+
+
 @dataclass(frozen=True)
 class LeanFactorFilePath:
     market: Market

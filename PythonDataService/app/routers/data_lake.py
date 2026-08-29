@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -58,6 +57,7 @@ from app.data_lake.types import (
     NonSessionRecord,
     PriceAdjustmentMode,
     StorageSummaryResponse,
+    trading_date_at_ms,
     trading_range_span_days,
 )
 from app.jobs.progress import ProgressEmitter
@@ -96,18 +96,27 @@ async def post_ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
 @router.get("/coverage", response_model=CoverageResponse, dependencies=[Depends(_ensure_catalog_pool)])
 async def get_coverage(
     symbol: str,
-    start_trading_date: date,
-    end_trading_date: date,
+    start_trading_date_ms: int,
+    end_trading_date_ms: int,
     market: Literal["usa"] = "usa",
     data_type: Literal["trade", "quote"] = "trade",
     price_adjustment_mode: PriceAdjustmentMode = "raw",
 ) -> CoverageResponse:
     """Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.
 
-    Days are the calendar's own sessions in ``[start_trading_date,
-    end_trading_date]`` — weekends and holidays are simply absent, never
-    listed and never invented. A session with no matching catalog row is
-    reported honestly as ``status="missing"`` rather than omitted.
+    Days are the calendar's own sessions in the requested window — weekends
+    and holidays are simply absent, never listed and never invented. A session
+    with no matching catalog row is reported honestly as ``status="missing"``
+    rather than omitted.
+
+    The window arrives as two ``int64 ms UTC`` values, not ISO dates.
+    ``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a
+    temporal value and a trading date is not an exception to it — it is a
+    date-anchored value, carried as the millisecond instant of that session's
+    open and resolved back through ``America/New_York``
+    (:func:`trading_date_at_ms`). The response has always spoken ms
+    (``CoverageDay.trading_date_ms``); before #1839 the request did not, which
+    left one endpoint with a temporal format in each direction.
 
     ``provider`` is not a caller-supplied parameter: it's derived from
     ``data_type`` via ``provider_for_data_type`` (the same rule
@@ -124,6 +133,24 @@ async def get_coverage(
                 "message": f"symbol must match {SYMBOL_RE.pattern} and be at most {MAX_SYMBOL_LENGTH} chars: {symbol!r}",
             },
         )
+    try:
+        start_trading_date = trading_date_at_ms(start_trading_date_ms)
+        end_trading_date = trading_date_at_ms(end_trading_date_ms)
+    except (OverflowError, OSError, ValueError) as exc:
+        # A ms value outside the representable instant range. Typed, because
+        # the alternative is a 500 on a caller sending seconds for ms -- the
+        # single likeliest way to get this parameter wrong.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "invalid_trading_date_ms",
+                "message": (
+                    f"trading-date window is not a representable ms-UTC instant "
+                    f"({start_trading_date_ms}..{end_trading_date_ms}); values are "
+                    f"milliseconds since the Unix epoch, anchored at the session open"
+                ),
+            },
+        ) from exc
     if start_trading_date > end_trading_date:
         raise HTTPException(
             status_code=422,

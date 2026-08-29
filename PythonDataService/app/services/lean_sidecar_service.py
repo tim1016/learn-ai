@@ -681,7 +681,11 @@ async def run_trusted_sample(
     # with the *same* id, which is not a fresh-id problem and reads like
     # one. Failing here leaves the id reusable.
     lake_artifacts: LakeArtifacts | None = None
-    if request.data_policy.source == "polygon" and lake_mount_enabled():
+    if (
+        request.data_policy.source == "polygon"
+        and request.data_policy.provider_kind != "fixture"
+        and lake_mount_enabled()
+    ):
         lake_artifacts = await _resolve_lake_artifacts_or_refuse(request)
 
     workspace = resolve_workspace(request.run_id, DEFAULT_ARTIFACTS_ROOT)

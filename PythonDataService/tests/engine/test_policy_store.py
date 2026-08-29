@@ -44,6 +44,7 @@ def test_resolve_cache_root_honors_env(monkeypatch, tmp_path: Path):
 
 
 def test_resolve_data_roots_reference_first_and_creates_policy_root(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
     ref = tmp_path / "reference"
     ref.mkdir()
     monkeypatch.setenv("LEAN_DATA_ROOT", str(ref))
@@ -56,6 +57,13 @@ def test_resolve_data_roots_reference_first_and_creates_policy_root(monkeypatch,
 
 
 def test_resolve_data_roots_skips_missing_reference(monkeypatch, tmp_path: Path):
+    """The reference mount is only stacked in front when it exists.
+
+    Flag explicitly off: the reference-vs-policy ordering is the policy
+    store's own concern, and since #1839 a raw request with the flag on
+    resolves the lake instead (which has no reference mount to skip).
+    """
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
     monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
     monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
 
@@ -65,7 +73,7 @@ def test_resolve_data_roots_skips_missing_reference(monkeypatch, tmp_path: Path)
 
 
 def test_resolve_data_roots_ignores_the_lake_while_the_flag_is_off(monkeypatch, tmp_path: Path):
-    """Default posture: the lake may exist on disk, but nothing reads it."""
+    """Opt-out posture: the lake may exist on disk, but nothing reads it."""
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
     monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
@@ -74,6 +82,52 @@ def test_resolve_data_roots_ignores_the_lake_while_the_flag_is_off(monkeypatch, 
     roots = resolve_data_roots(source="polygon", adjusted=False)
 
     assert roots == [tmp_path / "store" / "polygon-raw"]
+
+
+def test_turning_the_flag_off_returns_a_reader_to_the_policy_bars(monkeypatch, tmp_path: Path):
+    """The rollback, demonstrated rather than reasoned about.
+
+    #1839 made the lake the default, so "turn the flag off" is now the
+    rollback procedure and not merely the shipped state. Both trees hold the
+    same window here, which is the situation an actual rollback lands in --
+    the lake was written while the flag was on, and the policy cache is still
+    where it was. What must be true is that with the flag off the reader sees
+    the *policy* bars and the lake root is absent from the search order
+    entirely: present-but-lower-priority would let a day the policy cache
+    happens to lack be served out of the lake, which is exactly the silent
+    cross-tree read the policy keying exists to prevent.
+    """
+    from tests._helpers.lake_fixture import seed_lake_minute_day
+    from tests._helpers.lean_store import seed_store_day
+
+    trading_date = date(2026, 1, 5)  # Monday
+    write_root = tmp_path / "writer"
+    lake_root = write_root / "lake"
+    policy_root = tmp_path / "store" / "polygon-raw"
+
+    seed_lake_minute_day(lake_root, "SPY", trading_date, count=3, with_quote=False)
+    seed_store_day(policy_root, "SPY", trading_date, count=3)
+
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
+
+    roots = resolve_data_roots(source="polygon", adjusted=False)
+
+    assert roots == [policy_root]
+    assert lake_root not in roots
+    assert path_policy.resolve_lake_root("raw") not in roots
+
+    from app.engine.data.lean_format import LeanMinuteDataReader
+
+    rolled_back = list(LeanMinuteDataReader(roots, session="extended").read_day("SPY", trading_date))
+    from_policy = list(
+        LeanMinuteDataReader([policy_root], session="extended").read_day("SPY", trading_date)
+    )
+
+    assert rolled_back == from_policy
+    assert len(rolled_back) == 3
 
 
 def test_resolve_data_roots_returns_the_lake_alone_when_the_flag_is_on(monkeypatch, tmp_path: Path):
@@ -106,12 +160,14 @@ def test_resolve_data_roots_serves_an_adjusted_request_from_its_own_root(monkeyp
     adjusted request was refused (``LakeAdjustmentUnsupportedError`` → 409),
     because returning the raw root would have handed a run raw prices while
     it believed it read adjusted ones — materially wrong across a split.
-    #1839 made the mode a segment of the root, so the seam can now answer
+    #1866 made the mode a segment of the root, so the seam can now answer
     honestly instead of refusing. The 409 that blocked a default Strategy Lab
     backtest with the flag on is gone with it.
     """
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
 
     adjusted_roots = resolve_data_roots(source="polygon", adjusted=True)
     raw_roots = resolve_data_roots(source="polygon", adjusted=False)

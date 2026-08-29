@@ -152,6 +152,7 @@ from app.data_lake.atomic import (
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.path_policy import (
     LeanMinuteBarPath,
+    ensure_lean_readable_layout,
     minute_bar_market_root,
     resolve_lake_root,
     resolve_staging_root,
@@ -1026,6 +1027,10 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
         staging_dir = resolve_staging_root(price_adjustment_mode)
         staging_dir.mkdir(parents=True, exist_ok=True)
         lake_dir.mkdir(parents=True, exist_ok=True)
+        # An imported-only lake is still a lake LEAN may be pointed at, so it
+        # needs the same corporate-action directories the live pipeline
+        # creates. See path_policy.
+        ensure_lean_readable_layout(lake_dir)
 
         dch = _import_minute_trade_dch(adjusted)
         provider_params = build_provider_params(cache_root, provenance)

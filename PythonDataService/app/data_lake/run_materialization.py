@@ -145,9 +145,34 @@ def _build_engine_run_spec(
     )
 
 
-def _is_blocked_by_a_sibling_fetch(result: DataAvailabilityResult) -> bool:
-    """True when the only thing standing between this run and its bytes is a lease."""
-    reasons = {f.reason for f in result.failures}
+def _is_blocked_by_a_sibling_fetch(
+    result: DataAvailabilityResult,
+    *,
+    resolution: EngineResolution,
+) -> bool:
+    """True when the only thing standing between this run and its bytes is a lease.
+
+    Scoped to the failures that withhold bars **this** run reads, which is the
+    same question :func:`materialize_engine_run`'s coverage gate asks. Waiting
+    is only ever worth doing for an artifact whose absence would stop the run;
+    for anything else the wait buys nothing and the gate is about to wave it
+    through anyway.
+
+    That scoping is not a refinement, it is a bug fix, and the bug is easy to
+    hit. The Phase-0 metadata artifacts are a process-global identity in the
+    catalog -- no symbol, no trading date, one row shared by every run. A
+    worker that dies mid-bootstrap leaves that row ``fetching``, and every
+    subsequent engine run saw ``lease_timeout`` on it, concluded it was
+    blocked by a sibling, and slept out its entire ``fetch_timeout_seconds``
+    (600s by default) before proceeding -- to then pass the coverage gate
+    immediately, because metadata withholds no bars. One crashed bootstrap
+    wedged every backtest on the deployment for ten minutes each. Reproduced
+    on scratch Postgres while writing the parity suite for #1839.
+    """
+    withholding = [f for f in result.failures if _withholds_bars_the_run_reads(f, resolution=resolution)]
+    if not withholding:
+        return False
+    reasons = {f.reason for f in withholding}
     if not reasons & _CONTENTION_REASONS:
         return False
     return not (reasons - _CONTENTION_REASONS - _CASCADED_REASONS)
@@ -156,6 +181,7 @@ def _is_blocked_by_a_sibling_fetch(result: DataAvailabilityResult) -> bool:
 async def _materialize_run_data(
     spec: DataRunSpec,
     *,
+    resolution: EngineResolution,
     poll_interval_s: float = _CONTENTION_POLL_INTERVAL_S,
     now: Callable[[], float] = time.monotonic,
 ) -> DataAvailabilityResult:
@@ -171,11 +197,19 @@ async def _materialize_run_data(
     Waiting is bounded by ``spec.fetch_timeout_seconds``. A result carrying
     a failure a retry cannot fix is returned immediately: polling on a
     missing symbol or a dead launcher only wastes the run's clock.
+
+    ``resolution`` is what makes "a failure a retry cannot fix" answerable
+    without waiting: it lets :func:`_is_blocked_by_a_sibling_fetch` ask
+    whether a contended artifact is one this run's reader will even open.
+    Contention on something the coverage gate is about to wave through is not
+    worth a single poll, let alone the full budget.
     """
     deadline = now() + spec.fetch_timeout_seconds
     while True:
         result = await ensure_data(spec)
-        if result.overall_status == "complete" or not _is_blocked_by_a_sibling_fetch(result):
+        if result.overall_status == "complete" or not _is_blocked_by_a_sibling_fetch(
+            result, resolution=resolution
+        ):
             return result
 
         remaining = deadline - now()
@@ -241,7 +275,7 @@ def _materialization_loop() -> asyncio.AbstractEventLoop:
         return _loop
 
 
-def _materialize_run_data_sync(spec: DataRunSpec) -> DataAvailabilityResult:
+def _materialize_run_data_sync(spec: DataRunSpec, *, resolution: EngineResolution) -> DataAvailabilityResult:
     """Blocking :func:`_materialize_run_data` for callers without an event loop."""
     try:
         asyncio.get_running_loop()
@@ -252,7 +286,9 @@ def _materialize_run_data_sync(spec: DataRunSpec) -> DataAvailabilityResult:
             "_materialize_run_data_sync was called from a running event loop; await _materialize_run_data instead"
         )
 
-    future = asyncio.run_coroutine_threadsafe(_materialize_run_data(spec), _materialization_loop())
+    future = asyncio.run_coroutine_threadsafe(
+        _materialize_run_data(spec, resolution=resolution), _materialization_loop()
+    )
     # The coroutine's own deadline is fetch_timeout_seconds; allow a small
     # margin so the wait unwinds through the coroutine's return path rather
     # than being cancelled here.
@@ -422,6 +458,24 @@ def materialize_engine_run(
     Failures that withhold nothing this run reads do not stop it; they come
     back as ``incomplete_summary`` so the caller can say so to the operator.
 
+    **This gate is stricter than the path it replaces, deliberately**
+    (carry-forward A7, decided at the flag flip). The pre-lake
+    ``ensure_range`` treated a session the provider could not supply as
+    simply fewer bars: the run proceeded, the series had a hole in it, and
+    the reported numbers looked exactly like numbers from a complete series.
+    The lake refuses instead, naming the sessions. That is the posture
+    ``.claude/rules/numerical-rigor.md`` already takes everywhere else --
+    "if two series have different timestamps, that is data telling you
+    something, do not silence it" -- applied to the one place it was not.
+
+    The cost is real and lands at the flip: a delisted or thin symbol whose
+    window the provider cannot fully supply used to "work" and now refuses.
+    That is the intended outcome, not a regression to soften. A run over
+    such a window was never producing a result worth trusting, and the
+    refusal says which sessions are missing, so the operator can narrow the
+    window, backfill, or accept a different symbol -- all of which are
+    decisions they could not previously have known they were making.
+
     **The fingerprint's scope — canonical statement, referenced elsewhere.**
     ``availability_hash`` is the lake's ``data_availability_hash``, and it
     covers a **superset** of what the Python engine opens: the Phase-0 metadata
@@ -436,7 +490,7 @@ def materialize_engine_run(
         price_adjustment_mode=price_adjustment_mode,
         requester=requester,
     )
-    result = _materialize_run_data_sync(spec)
+    result = _materialize_run_data_sync(spec, resolution=resolution)
 
     if result.overall_status == "failed":
         raise LakeMaterializationError(

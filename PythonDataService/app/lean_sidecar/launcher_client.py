@@ -36,6 +36,14 @@ DEFAULT_LAUNCHER_URL = "http://127.0.0.1:8090"
 _LAUNCH_HTTP_TIMEOUT_S = 300.0
 _OTHER_HTTP_TIMEOUT_S = 15.0
 
+# ``/extract-metadata`` HTTP timeout — not module-private because
+# ``app.data_lake.lean_metadata`` (the surviving canonical caller of this
+# same launcher endpoint post-Slice-1d) must budget the identical ceiling.
+# See ``post_extract_metadata_sync`` below for how 360s is derived; if the
+# subprocess ceilings it cites move, this constant is the one place both
+# callers need to change.
+EXTRACT_METADATA_HTTP_TIMEOUT_S = 360.0
+
 
 class LauncherClientError(RuntimeError):
     """Base class for launcher-side failures the data plane should
@@ -195,7 +203,7 @@ def post_extract_metadata_sync(run_id: str, image_digest: str) -> dict[str, str]
     # data plane masks a clean ``metadata_staging_failed`` as a generic
     # ``LauncherUnreachable: timed out`` (PR #348 P1 review).
     # 360s = 300s subprocess worst-case + 60s margin.
-    timeout = httpx.Timeout(360.0)
+    timeout = httpx.Timeout(EXTRACT_METADATA_HTTP_TIMEOUT_S)
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(url, json=payload, headers=_auth_headers())

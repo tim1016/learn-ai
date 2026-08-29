@@ -1645,6 +1645,7 @@ export interface paths {
          *     - NO_DATA: no bars returned from Polygon
          *     - INVALID_RANGE: bad timeframe or date range
          *     - RATE_LIMITED: Polygon rate limit hit
+         *     - PROVIDER_UNREACHABLE: a lake gap needed Polygon and Polygon could not be reached
          *     - INTERNAL_ERROR: unexpected failure
          */
         post: operations["chart_data_api_chart_data_post"];
@@ -1706,6 +1707,149 @@ export interface paths {
          * @description Return all supported timeframes with metadata.
          */
         get: operations["list_timeframes_api_chart_timeframes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-lake/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Artifact Detail
+         * @description Return the full receipt for one catalog row: hashes, size, provider params.
+         */
+        get: operations["get_artifact_detail_api_data_lake_artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-lake/backfill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Backfill Job
+         * @description Kick off a data-lake backfill in a worker thread. Returns 202.
+         *
+         *     The work iterates the requested range's canonical NYSE sessions and
+         *     calls the existing ensure_data() seam once per day
+         *     (app.data_lake.backfill.run_backfill), emitting a job.progress tick and
+         *     a data_lake.backfill_day event after each one.
+         */
+        post: operations["start_backfill_job_api_data_lake_backfill_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-lake/backfill-defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Backfill Defaults
+         * @description Spec constants for a backfill form. Reads no catalog state.
+         */
+        get: operations["get_backfill_defaults_api_data_lake_backfill_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-lake/coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Coverage
+         * @description Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.
+         *
+         *     Days are the calendar's own sessions in the requested window — weekends
+         *     and holidays are simply absent, never listed and never invented. A session
+         *     with no matching catalog row is reported honestly as ``status="missing"``
+         *     rather than omitted.
+         *
+         *     The window arrives as two ``int64 ms UTC`` values, not ISO dates.
+         *     ``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a
+         *     temporal value and a trading date is not an exception to it — it is a
+         *     date-anchored value, carried as the millisecond instant of that session's
+         *     open and resolved back through ``America/New_York``
+         *     (:func:`trading_date_at_ms`). The response has always spoken ms
+         *     (``CoverageDay.trading_date_ms``); before #1839 the request did not, which
+         *     left one endpoint with a temporal format in each direction.
+         *
+         *     ``provider`` is not a caller-supplied parameter: it's derived from
+         *     ``data_type`` via ``provider_for_data_type`` (the same rule
+         *     ``expand_required_artifacts`` uses to write these rows) — trade bars are
+         *     Polygon's, quote bars are ``learn_ai_derived``. A fixed ``provider="polygon"``
+         *     parameter made quote coverage unfindable, since quote rows are never
+         *     catalogued under that provider.
+         */
+        get: operations["get_coverage_api_data_lake_coverage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-lake/ensure-data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Ensure Data */
+        post: operations["post_ensure_data_api_data_lake_ensure_data_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-lake/storage-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Storage Summary
+         * @description Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.
+         */
+        get: operations["get_storage_summary_api_data_lake_storage_summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5188,6 +5332,121 @@ export interface components {
              */
             worst_slices?: Record<string, never>[];
         };
+        /**
+         * ArtifactDetail
+         * @description Full receipt for one catalog row: identity, hashes, and byte metadata.
+         */
+        ArtifactDetail: {
+            /** Artifact Kind */
+            artifact_kind: string;
+            /** Attempt Count */
+            attempt_count: number;
+            /** Completed At Ms */
+            completed_at_ms: number | null;
+            /** Content Hash */
+            content_hash: string | null;
+            /** Data Contract Hash */
+            data_contract_hash: string;
+            /** Data Type */
+            data_type: string | null;
+            /** Error Message */
+            error_message: string | null;
+            /** Fetched At Ms */
+            fetched_at_ms: number;
+            /** File Path */
+            file_path: string;
+            /** File Size Bytes */
+            file_size_bytes: number | null;
+            /** First Bar Start Ms */
+            first_bar_start_ms: number | null;
+            /** Id */
+            id: number;
+            /** Last Bar Start Ms */
+            last_bar_start_ms: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Market */
+            market: string | null;
+            /** Price Adjustment Mode */
+            price_adjustment_mode: string | null;
+            /** Provider */
+            provider: string;
+            /** Provider Params */
+            provider_params: Record<string, never>;
+            /** Resolution */
+            resolution: string | null;
+            /** Row Count */
+            row_count: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "fetching" | "complete" | "stale" | "failed";
+            /** Symbol */
+            symbol: string | null;
+            /** Trading Date Ms */
+            trading_date_ms: number | null;
+        };
+        /** ArtifactFailure */
+        ArtifactFailure: {
+            /** Artifact Kind */
+            artifact_kind: string;
+            /**
+             * Attempt Count
+             * @default 0
+             */
+            attempt_count?: number;
+            /** Data Type */
+            data_type: string | null;
+            /** Detail */
+            detail?: string | null;
+            /** Provider Status Code */
+            provider_status_code?: number | null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted";
+            /** Symbol */
+            symbol: string | null;
+            /** Trading Date */
+            trading_date: string | null;
+        };
+        /** ArtifactRecord */
+        ArtifactRecord: {
+            /** Artifact Kind */
+            artifact_kind: string;
+            /** Data Contract Hash */
+            data_contract_hash: string;
+            /** Data Type */
+            data_type: string | null;
+            /** File Path */
+            file_path: string;
+            /** File Sha256 */
+            file_sha256: string;
+            /** File Size Bytes */
+            file_size_bytes?: number | null;
+            /** First Bar Start Ms */
+            first_bar_start_ms: number | null;
+            /** Id */
+            id: number;
+            /** Last Bar Start Ms */
+            last_bar_start_ms: number | null;
+            /** Market */
+            market: string | null;
+            /** Price Adjustment Mode */
+            price_adjustment_mode: string | null;
+            /** Provider */
+            provider: string;
+            /** Resolution */
+            resolution: string | null;
+            /** Row Count */
+            row_count: number | null;
+            /** Symbol */
+            symbol: string | null;
+            /** Trading Date */
+            trading_date: string | null;
+        };
         /** AtmOffsetStrike */
         AtmOffsetStrike: {
             /** Offset */
@@ -5241,6 +5500,52 @@ export interface components {
             start: string;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * BackfillDefaults
+         * @description The parts of a ``DataRunSpec`` only the data plane knows (#1838).
+         *
+         *     ``lean_image_digest`` is required by ``DataRunSpec`` and has no default;
+         *     a browser has no way to derive the pinned LEAN image, and hand-typing a
+         *     container digest into a form is not a receipt anybody could audit. The
+         *     caps come from ``app.data_lake.types`` so the Observatory rejects an
+         *     over-wide window in the form rather than by round-tripping a 422.
+         *
+         *     ``lean_image_digest`` is ``None`` when the data plane has no pin
+         *     configured — reported honestly rather than as an empty string, so the
+         *     UI can say backfill is unavailable instead of submitting a spec that
+         *     would fail deep inside Phase 0.
+         */
+        BackfillDefaults: {
+            /** Lean Image Digest */
+            lean_image_digest: string | null;
+            /**
+             * Market
+             * @default usa
+             * @constant
+             */
+            market?: "usa";
+            /** Max Symbol Length */
+            max_symbol_length: number;
+            /** Max Trading Range Days */
+            max_trading_range_days: number;
+        };
+        /**
+         * BackfillJobRequest
+         * @description Body of POST /api/data-lake/backfill.
+         *
+         *     Wraps the existing DataRunSpec ensure contract as a job submission:
+         *     the same snake_case fields and validation as /ensure-data's body
+         *     (this router isn't behind the .NET-forwards-camelCase-verbatim
+         *     convention app/routers/jobs.py uses — it's called the same direct way
+         *     /ensure-data already is), plus a job_id the caller mints ahead of
+         *     dispatch, per the established job pattern's convention of the caller
+         *     minting the id before the worker starts writing progress against it.
+         */
+        BackfillJobRequest: {
+            /** Job Id */
+            job_id: string;
+            spec: components["schemas"]["DataRunSpec"];
         };
         /**
          * BacktestResultResponse
@@ -7780,6 +8085,44 @@ export interface components {
              */
             viable_at_assumption?: boolean;
         };
+        /**
+         * CoverageDay
+         * @description One calendar session's artifact status for a symbol/data-type window.
+         *
+         *     ``trading_date_ms`` is the session's 09:30 ET open, expressed as
+         *     int64 ms UTC — the canonical anchor for a date-only value. Sessions with
+         *     no matching catalog row report ``status="missing"``; this is never
+         *     emitted for a non-session date, since the router only iterates the
+         *     canonical calendar's sessions in the first place.
+         */
+        CoverageDay: {
+            /** Artifact Id */
+            artifact_id?: number | null;
+            /** Status */
+            status: ("fetching" | "complete" | "stale" | "failed") | "missing";
+            /** Trading Date Ms */
+            trading_date_ms: number;
+        };
+        /** CoverageResponse */
+        CoverageResponse: {
+            /** Data Type */
+            data_type: string;
+            /**
+             * Days
+             * @default []
+             */
+            days?: components["schemas"]["CoverageDay"][];
+            /** Market */
+            market: string;
+            /** Price Adjustment Mode */
+            price_adjustment_mode: string;
+            /** Provider */
+            provider: string;
+            /** Resolution */
+            resolution: string;
+            /** Symbol */
+            symbol: string;
+        };
         /** CrossAssetBars */
         CrossAssetBars: {
             /** Bars */
@@ -8238,6 +8581,57 @@ export interface components {
              */
             surface_id: string;
         };
+        /** DataAvailabilityResult */
+        DataAvailabilityResult: {
+            /**
+             * Artifacts
+             * @default []
+             */
+            artifacts?: components["schemas"]["ArtifactRecord"][];
+            /** Completed At Ms */
+            completed_at_ms: number;
+            /** Data Availability Hash */
+            data_availability_hash: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /**
+             * Failures
+             * @default []
+             */
+            failures?: components["schemas"]["ArtifactFailure"][];
+            /**
+             * Fetched Artifact Count
+             * @default 0
+             */
+            fetched_artifact_count?: number;
+            /** Lean Data Root Path */
+            lean_data_root_path: string;
+            /**
+             * Overall Status
+             * @enum {string}
+             */
+            overall_status: "complete" | "partial" | "failed";
+            /**
+             * Refreshed Artifact Count
+             * @default 0
+             */
+            refreshed_artifact_count?: number;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Reused Artifact Count
+             * @default 0
+             */
+            reused_artifact_count?: number;
+            /**
+             * Skipped Non Sessions
+             * @default []
+             */
+            skipped_non_sessions?: components["schemas"]["NonSessionRecord"][];
+        };
         /**
          * DataFiltersModel
          * @description Data quality filters for option contracts.
@@ -8347,6 +8741,93 @@ export interface components {
              * @default round
              */
             volume_fix?: string;
+        };
+        /** DataRunSpec */
+        DataRunSpec: {
+            /**
+             * Data Types
+             * @default [
+             *       "trade"
+             *     ]
+             */
+            data_types?: ("trade" | "quote")[];
+            /**
+             * End Trading Date
+             * Format: date
+             */
+            end_trading_date: string;
+            /**
+             * Fetch Timeout Seconds
+             * @default 600
+             */
+            fetch_timeout_seconds?: number;
+            /**
+             * Force Refresh
+             * @default false
+             */
+            force_refresh?: boolean;
+            /**
+             * Include Daily Trade
+             * @default true
+             */
+            include_daily_trade?: boolean;
+            /**
+             * Include Factor Files
+             * @default true
+             */
+            include_factor_files?: boolean;
+            /**
+             * Include Map Files
+             * @default true
+             */
+            include_map_files?: boolean;
+            /** Lean Image Digest */
+            lean_image_digest: string;
+            /**
+             * Market
+             * @default usa
+             * @constant
+             */
+            market?: "usa";
+            /**
+             * Price Adjustment Mode
+             * @default raw
+             * @enum {string}
+             */
+            price_adjustment_mode?: "raw" | "polygon_split_adjusted";
+            /**
+             * Provider
+             * @default polygon
+             * @constant
+             */
+            provider?: "polygon";
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Requester */
+            requester?: string | null;
+            /**
+             * Resolution
+             * @default minute
+             * @constant
+             */
+            resolution?: "minute";
+            /**
+             * Run Type
+             * @enum {string}
+             */
+            run_type: "python_lab" | "lean_lab";
+            /**
+             * Start Trading Date
+             * Format: date
+             */
+            start_trading_date: string;
+            /** Strategy Execution Id */
+            strategy_execution_id?: number | null;
+            /** Symbols */
+            symbols: string[];
         };
         /**
          * DataSufficiencyResponse
@@ -13090,6 +13571,21 @@ export interface components {
              * @enum {string}
              */
             selector: "nearest_weekly";
+        };
+        /** NonSessionRecord */
+        NonSessionRecord: {
+            /** Market */
+            market: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "weekend" | "market_holiday";
+            /**
+             * Trading Date
+             * Format: date
+             */
+            trading_date: string;
         };
         /**
          * NullDistribution
@@ -17840,6 +18336,32 @@ export interface components {
             /** Operator Reason */
             operator_reason?: string | null;
         };
+        /** StorageKindTotal */
+        StorageKindTotal: {
+            /** Artifact Count */
+            artifact_count: number;
+            /** Artifact Kind */
+            artifact_kind: string;
+            /** Resolution */
+            resolution: string | null;
+            /** Total Bytes */
+            total_bytes: number;
+        };
+        /** StorageSummaryResponse */
+        StorageSummaryResponse: {
+            /**
+             * Kinds
+             * @default []
+             */
+            kinds?: components["schemas"]["StorageKindTotal"][];
+            /** Market */
+            market: string;
+            /**
+             * Symbols
+             * @default []
+             */
+            symbols?: components["schemas"]["SymbolCoverageSpan"][];
+        };
         /**
          * StrategyAnalyzeRequest
          * @description Request to analyze an options strategy.
@@ -18844,6 +19366,17 @@ export interface components {
             /** Name */
             name: string;
             when: components["schemas"]["LogicNodeOrConditions-Output"];
+        };
+        /** SymbolCoverageSpan */
+        SymbolCoverageSpan: {
+            /** Artifact Count */
+            artifact_count: number;
+            /** First Trading Date Ms */
+            first_trading_date_ms: number | null;
+            /** Last Trading Date Ms */
+            last_trading_date_ms: number | null;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * TargetMetadataResponse
@@ -23628,6 +24161,213 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_artifact_detail_api_data_lake_artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                artifact_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_backfill_job_api_data_lake_backfill_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackfillJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_backfill_defaults_api_data_lake_backfill_defaults_get: {
+        parameters: {
+            query?: {
+                market?: "usa";
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillDefaults"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_coverage_api_data_lake_coverage_get: {
+        parameters: {
+            query: {
+                symbol: string;
+                start_trading_date_ms: number;
+                end_trading_date_ms: number;
+                market?: "usa";
+                data_type?: "trade" | "quote";
+                price_adjustment_mode?: "raw" | "polygon_split_adjusted" | "lean_adjusted";
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoverageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_ensure_data_api_data_lake_ensure_data_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DataRunSpec"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataAvailabilityResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_storage_summary_api_data_lake_storage_summary_get: {
+        parameters: {
+            query?: {
+                market?: "usa";
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -58,6 +58,35 @@ export function tradingRangeRejection(
   return null;
 }
 
+/**
+ * A `YYYY-MM-DD` trading date as the `int64 ms UTC` value the wire carries.
+ *
+ * `.claude/rules/temporal-rigor.md` allows one representation on the wire and
+ * a trading date is not an exception to it: `GET /coverage` takes
+ * `start_trading_date_ms` / `end_trading_date_ms`, never an ISO date. The
+ * `YYYY-MM-DD` strings stay on this side of that boundary because they are
+ * what `<input type="date">` produces and what the operator reads — the
+ * conversion happens once, here, at the HTTP seam.
+ *
+ * Anchored at **noon UTC** on the calendar date. The backend resolves the ms
+ * value in `America/New_York` and accepts any instant inside that ET day
+ * (`trading_date_at_ms`), so the anchor only has to be unambiguous, and noon
+ * UTC is: ET runs UTC-5 or UTC-4, which puts it at 07:00 or 08:00 ET on the
+ * intended date under either offset, with eleven hours of margin on both
+ * sides of the DST question. Midnight UTC — the obvious choice, and what
+ * `tradingRangeSpanDays` uses for its calendar arithmetic — would be 19:00 or
+ * 20:00 ET on the *previous* day, and would silently shift every window back
+ * one date.
+ *
+ * Returns `null` for anything that is not a `YYYY-MM-DD` date.
+ */
+export function tradingDateToMs(value: string): number | null {
+  const midnightUtc = parseIsoDateUtc(value);
+  return midnightUtc === null ? null : midnightUtc + NOON_UTC_OFFSET_MS;
+}
+
+const NOON_UTC_OFFSET_MS = 12 * 60 * 60 * 1000;
+
 function parseIsoDateUtc(value: string): number | null {
   const match = ISO_DATE.exec(value);
   if (match === null) return null;

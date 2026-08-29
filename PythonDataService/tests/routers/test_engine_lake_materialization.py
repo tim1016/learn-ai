@@ -94,11 +94,11 @@ def _request() -> EngineBacktestRequest:
         from_date=DAY_ONE.isoformat(),
         to_date=DAY_THREE.isoformat(),
         auto_fetch=True,
-        # The lake serves raw bars only (LakeAdjustmentUnsupportedError gates
-        # anything else); every test in this file exercises materialization
-        # mechanics, not the adjustment gate, so it asks for what the lake can
-        # actually give it. See test_flag_on_run_refuses_the_legacy_adjusted_default
-        # below for what an unmodified (implicitly adjusted) request now gets.
+        # The lake's live pipeline serves raw bars only; every test in this
+        # file exercises materialization mechanics rather than the adjustment
+        # seam, so it asks for what the lake can actually give it. See
+        # test_flag_on_run_keeps_the_policy_store_for_the_legacy_adjusted_default
+        # below for what an unmodified (implicitly adjusted) request gets.
         data_policy={
             "source": "polygon",
             "symbol": "SPY",
@@ -309,10 +309,11 @@ def test_flag_on_run_materializes_the_legacy_adjusted_default_into_its_own_root(
     """A request with no explicit ``data_policy`` defaults to adjusted=True.
 
     This is the default Strategy Lab backtest, and it is the request that
-    #1839 exists for. It used to be refused with a 409 — the lake served raw
-    bars only, so root resolution refused rather than hand a caller raw
-    prices it believed were adjusted. The mode is now a segment of the root,
-    so the same request materializes the adjusted root instead of failing.
+    #1839's flip exists to prove out. It used to be refused with a 409 — the
+    lake served raw bars only, so root resolution refused rather than hand a
+    caller raw prices it believed were adjusted. #1866 made the mode a
+    segment of the root, so the same request materializes the adjusted root
+    instead of failing.
     """
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     calls: list[dict] = []

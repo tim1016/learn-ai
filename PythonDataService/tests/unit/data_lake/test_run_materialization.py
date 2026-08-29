@@ -11,13 +11,13 @@ needs the lake to have been imported first.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import re
 from collections import Counter
 from datetime import date
 from pathlib import Path
-from uuid import UUID
+from unittest import mock
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -36,6 +36,7 @@ from app.data_lake.run_materialization import (
     materialize_engine_run,
 )
 from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
+from app.lean_sidecar import config as sidecar_config
 
 # 2024-05-20 is a Monday and a full NYSE session; 09:30 ET == 13:30 UTC.
 TRADING_DAY = date(2024, 5, 20)
@@ -133,6 +134,18 @@ class FakeCatalog:
                 return self._record(row)
         return None
 
+    async def select_metadata_claim_state(self, data_contract_hash: str) -> catalog_client.ArtifactClaimState | None:
+        artifact_id = self.keys.get(("metadata", data_contract_hash))
+        if artifact_id is None:
+            return None
+        row = self.rows[artifact_id]
+        return catalog_client.ArtifactClaimState(
+            id=artifact_id,
+            status=row["status"],
+            attempt_count=row["attempt_count"],
+            last_error=row["last_error"],
+        )
+
     @staticmethod
     def _minute_key(identity) -> tuple:
         return (
@@ -148,12 +161,12 @@ class FakeCatalog:
     async def claim_minute_bar(self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path) -> int | None:
         return self._claim(self._minute_key(identity), self._identity_row(identity, data_contract_hash, file_path))
 
-    async def select_minute_bar_claim_state(self, identity) -> catalog_client.MinuteBarClaimState | None:
+    async def select_minute_bar_claim_state(self, identity) -> catalog_client.ArtifactClaimState | None:
         artifact_id = self.keys.get(self._minute_key(identity))
         if artifact_id is None:
             return None
         row = self.rows[artifact_id]
-        return catalog_client.MinuteBarClaimState(
+        return catalog_client.ArtifactClaimState(
             id=artifact_id,
             status=row["status"],
             attempt_count=row["attempt_count"],
@@ -244,6 +257,7 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "init_pool",
         "claim_metadata_artifact",
         "select_complete_metadata_artifact",
+        "select_metadata_claim_state",
         "claim_minute_bar",
         "select_minute_bar_claim_state",
         "steal_or_retry_minute_bar",
@@ -278,7 +292,15 @@ def ensure_attempts(monkeypatch) -> list[UUID]:
 
 @pytest.fixture
 def tmp_lake(tmp_path: Path, monkeypatch) -> Path:
-    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/."""
+    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/.
+
+    Also points app.lean_sidecar.config.DEFAULT_ARTIFACTS_ROOT at a sibling
+    tmp_path tree: Phase 0 reads the launcher's extracted metadata files back
+    off that root (app.data_lake.lean_metadata does not trust the launcher's
+    HTTP response body, only its own view of the shared mount), so
+    _mock_launcher below stages files there instead of under the real repo
+    path.
+    """
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
@@ -286,6 +308,10 @@ def tmp_lake(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
+    monkeypatch.setenv("LEAN_LAUNCHER_TOKEN", "test-token")
+    artifacts_root = tmp_path / "artifacts-root"
+    artifacts_root.mkdir(parents=True)
+    monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
     return write_root
 
 
@@ -294,28 +320,32 @@ def tmp_lake(tmp_path: Path, monkeypatch) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _launcher_payload() -> dict:
-    from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
-
-    market_hours = json.dumps(
-        {
-            "entries": {
-                "Equity-usa-[*]": {
-                    "exchange": "NYSE",
-                    "timezone": "America/New_York",
-                    "holidays": [],
-                    "earlyCloses": {},
-                }
+_MARKET_HOURS_JSON = json.dumps(
+    {
+        "entries": {
+            "Equity-usa-[*]": {
+                "exchange": "NYSE",
+                "timezone": "America/New_York",
+                "holidays": [],
+                "earlyCloses": {},
             }
         }
-    ).encode("utf-8")
-    return {
-        "market_hours_database_b64": base64.b64encode(market_hours).decode("ascii"),
-        "symbol_properties_database_b64": base64.b64encode(b"SPY,equity,usd,1,0\n").decode("ascii"),
-        # The extractor rejects a launcher that ran a different image than the
-        # spec pinned, so the mock must echo the digest the spec carries.
-        "image_digest_used": PINNED_LEAN_IMAGE_DIGEST,
     }
+).encode("utf-8")
+_SYMBOL_PROPERTIES_CSV = b"SPY,equity,usd,1,0\n"
+
+
+def _stage_workspace_files(artifacts_root: Path, run_id: str) -> None:
+    """Pre-place the two files a real launcher run would have written.
+
+    Layout must match app.lean_sidecar.workspace.Workspace.data_dir and
+    staging.list_metadata_databases: <root>/<run_id>/workspace/data/...
+    """
+    data_dir = artifacts_root / run_id / "workspace" / "data"
+    (data_dir / "market-hours").mkdir(parents=True, exist_ok=True)
+    (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
+    (data_dir / "market-hours" / "market-hours-database.json").write_bytes(_MARKET_HOURS_JSON)
+    (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(_SYMBOL_PROPERTIES_CSV)
 
 
 def _polygon_payload(ticker: str) -> dict:
@@ -356,9 +386,31 @@ def _responder(payload: dict, *, latency_s: float):
     return _respond
 
 
+def _launcher_responder(*, latency_s: float = 0.0):
+    """Stand-in for the launcher: stages the files app.data_lake.lean_metadata
+    will read back (keyed by the run_id the caller sent), then returns the
+    launcher's actual paths-only response shape — see module docstring on
+    _stage_workspace_files for the layout contract."""
+
+    async def _respond(request: httpx.Request) -> httpx.Response:
+        if latency_s:
+            await asyncio.sleep(latency_s)
+        body = json.loads(request.content)
+        _stage_workspace_files(sidecar_config.DEFAULT_ARTIFACTS_ROOT, body["run_id"])
+        return httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/launcher-side/market-hours-database.json",
+                "symbol_properties_db_path": "/launcher-side/symbol-properties-database.csv",
+            },
+        )
+
+    return _respond
+
+
 def _mock_launcher(*, latency_s: float = 0.0):
     return respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        side_effect=_responder(_launcher_payload(), latency_s=latency_s)
+        side_effect=_launcher_responder(latency_s=latency_s)
     )
 
 
@@ -432,7 +484,7 @@ async def test_materialize_run_data_fetches_the_missing_day(fake_catalog, tmp_la
     _mock_launcher()
     polygon = _mock_polygon()
 
-    result = await _materialize_run_data(_spec())
+    result = await _materialize_run_data(_spec(), resolution="minute")
 
     assert result.overall_status == "complete", result.failures
     assert polygon.call_count == 1
@@ -445,7 +497,7 @@ async def test_materialize_run_data_writes_lean_bytes_into_the_lake(fake_catalog
     _mock_launcher()
     _mock_polygon()
 
-    result = await _materialize_run_data(_spec())
+    result = await _materialize_run_data(_spec(), resolution="minute")
 
     minute = [a for a in result.artifacts if a.resolution == "minute"]
     assert len(minute) == 1
@@ -461,8 +513,8 @@ async def test_materialize_run_data_reuses_the_bytes_on_a_second_run(fake_catalo
     _mock_launcher()
     polygon = _mock_polygon()
 
-    first = await _materialize_run_data(_spec())
-    second = await _materialize_run_data(_spec())
+    first = await _materialize_run_data(_spec(), resolution="minute")
+    second = await _materialize_run_data(_spec(), resolution="minute")
 
     assert polygon.call_count == 1
     assert second.overall_status == "complete", second.failures
@@ -485,8 +537,8 @@ async def test_two_concurrent_runs_coalesce_onto_one_fetch(fake_catalog, tmp_lak
     polygon = _mock_polygon(latency_s=0.05)
 
     first, second = await asyncio.gather(
-        _materialize_run_data(_spec(), poll_interval_s=0.01),
-        _materialize_run_data(_spec(), poll_interval_s=0.01),
+        _materialize_run_data(_spec(), resolution="minute", poll_interval_s=0.01),
+        _materialize_run_data(_spec(), resolution="minute", poll_interval_s=0.01),
     )
 
     assert polygon.call_count == 1, "the same trading day was fetched twice"
@@ -509,8 +561,8 @@ async def test_concurrent_runs_record_one_artifact_per_identity(fake_catalog, tm
     _mock_polygon(latency_s=0.05)
 
     await asyncio.gather(
-        _materialize_run_data(_spec(), poll_interval_s=0.01),
-        _materialize_run_data(_spec(), poll_interval_s=0.01),
+        _materialize_run_data(_spec(), resolution="minute", poll_interval_s=0.01),
+        _materialize_run_data(_spec(), resolution="minute", poll_interval_s=0.01),
     )
 
     minute_rows = [
@@ -535,8 +587,8 @@ async def test_a_sequential_second_run_never_needs_a_retry(fake_catalog, tmp_lak
     _mock_launcher()
     polygon = _mock_polygon()
 
-    await _materialize_run_data(_spec())
-    await _materialize_run_data(_spec())
+    await _materialize_run_data(_spec(), resolution="minute")
+    await _materialize_run_data(_spec(), resolution="minute")
 
     assert polygon.call_count == 1
     assert len(ensure_attempts) == 2
@@ -553,7 +605,7 @@ async def test_materialize_run_data_returns_a_real_failure_without_waiting(fake_
     )
     spec = _build_engine_run_spec(symbol="NODATA", start=TRADING_DAY, end=TRADING_DAY)
 
-    result = await asyncio.wait_for(_materialize_run_data(spec, poll_interval_s=0.01), timeout=10)
+    result = await asyncio.wait_for(_materialize_run_data(spec, resolution="minute", poll_interval_s=0.01), timeout=10)
 
     assert result.overall_status in {"partial", "failed"}
     assert any(f.reason == "provider_no_data" for f in result.failures)
@@ -633,7 +685,118 @@ async def test_ensure_data_reports_a_terminal_failure_once_retries_are_exhausted
     assert "exhausted" in (minute_failure.detail or "")
     # The terminal reason must not be read as contention, or the bridge would
     # poll a row that will never change again.
-    assert not run_materialization._is_blocked_by_a_sibling_fetch(third)
+    assert not run_materialization._is_blocked_by_a_sibling_fetch(third, resolution="minute")
+
+
+@pytest.mark.asyncio
+async def test_a_wedged_metadata_lease_does_not_stall_a_run_that_reads_no_metadata():
+    """Regression: one crashed bootstrap must not cost every run 600 seconds.
+
+    The Phase-0 metadata artifacts are a process-global catalog identity --
+    no symbol, no trading date, one row shared by every run on the
+    deployment. A worker that dies mid-bootstrap leaves it ``fetching``, and
+    before this fix every later engine run classified the resulting
+    ``lease_timeout`` as sibling contention and slept out its whole
+    ``fetch_timeout_seconds`` before proceeding -- only to pass the coverage
+    gate immediately, because metadata withholds no bars at any resolution.
+
+    Reproduced for real on scratch Postgres while writing #1839's parity
+    suite: a metadata row left ``fetching`` by an earlier failed run hung the
+    next run for the full ten minutes.
+    """
+    metadata_contention = DataAvailabilityResult(
+        request_id=uuid4(),
+        overall_status="partial",
+        lean_data_root_path="/lake",
+        data_availability_hash="a" * 64,
+        artifacts=[],
+        failures=[
+            ArtifactFailure(
+                artifact_kind="metadata",
+                symbol=None,
+                trading_date=None,
+                data_type=None,
+                reason="lease_timeout",
+                detail="another worker holds the metadata claim",
+                attempt_count=1,
+            )
+        ],
+        non_sessions=[],
+        fetched_artifact_count=0,
+        reused_artifact_count=3,
+        started_at_ms=0,
+        completed_at_ms=1,
+        duration_ms=1,
+    )
+
+    assert not run_materialization._is_blocked_by_a_sibling_fetch(metadata_contention, resolution="minute")
+    assert not run_materialization._is_blocked_by_a_sibling_fetch(metadata_contention, resolution="daily")
+
+    # And the wait loop therefore returns on the first pass rather than
+    # polling: one ensure_data call, no sleep.
+    calls: list[DataRunSpec] = []
+
+    async def _one_pass(spec: DataRunSpec) -> DataAvailabilityResult:
+        calls.append(spec)
+        return metadata_contention
+
+    with mock.patch.object(run_materialization, "ensure_data", _one_pass):
+        result = await run_materialization._materialize_run_data(_spec(), resolution="minute")
+
+    assert result is metadata_contention
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_wedged_lease_on_a_bar_the_run_reads_is_still_waited_on():
+    """The counterpart, so the fix above is a narrowing and not a removal.
+
+    Contention on a minute artifact this run's reader will actually open is
+    exactly what the wait exists for, and it must still poll.
+    """
+    bar_contention = DataAvailabilityResult(
+        request_id=uuid4(),
+        overall_status="partial",
+        lean_data_root_path="/lake",
+        data_availability_hash="b" * 64,
+        artifacts=[],
+        failures=[
+            ArtifactFailure(
+                artifact_kind="time_series_bars",
+                symbol="SPY",
+                trading_date=TRADING_DAY,
+                data_type="trade",
+                reason="lease_timeout",
+                detail="another worker holds this day's claim",
+                attempt_count=1,
+            )
+        ],
+        non_sessions=[],
+        fetched_artifact_count=0,
+        reused_artifact_count=0,
+        started_at_ms=0,
+        completed_at_ms=1,
+        duration_ms=1,
+    )
+
+    assert run_materialization._is_blocked_by_a_sibling_fetch(bar_contention, resolution="minute")
+
+    calls: list[DataRunSpec] = []
+
+    async def _always_contended(spec: DataRunSpec) -> DataAvailabilityResult:
+        calls.append(spec)
+        return bar_contention
+
+    ticks = iter([0.0, 0.0, 99.0])
+    with mock.patch.object(run_materialization, "ensure_data", _always_contended):
+        await run_materialization._materialize_run_data(
+            _spec().model_copy(update={"fetch_timeout_seconds": 10}),
+            resolution="minute",
+            poll_interval_s=0.0,
+            now=lambda: next(ticks),
+        )
+
+    assert len(calls) == 2
 
 
 @respx.mock
@@ -658,7 +821,7 @@ async def test_materialize_run_data_stops_waiting_at_the_fetch_deadline(
     # then past it. Without the deadline this loop would never terminate.
     ticks = iter([0.0, 0.0, 11.0])
 
-    result = await _materialize_run_data(spec, poll_interval_s=0.0, now=lambda: next(ticks))
+    result = await _materialize_run_data(spec, resolution="minute", poll_interval_s=0.0, now=lambda: next(ticks))
 
     assert result.overall_status in {"partial", "failed"}
     assert any(f.reason == "lease_timeout" for f in result.failures)
@@ -725,8 +888,8 @@ async def test_a_second_window_leaves_the_daily_artifact_contract_mismatched(fak
     _mock_launcher()
     _mock_polygon()
 
-    await _materialize_run_data(_narrow_spec())
-    wider = await _materialize_run_data(_wide_spec())
+    await _materialize_run_data(_narrow_spec(), resolution="minute")
+    wider = await _materialize_run_data(_wide_spec(), resolution="minute")
 
     assert wider.overall_status == "partial"
     stale_daily = [
@@ -742,7 +905,7 @@ def test_materialize_engine_run_refuses_when_the_daily_bars_it_reads_are_stale(m
     monkeypatch.setattr(
         run_materialization,
         "_materialize_run_data_sync",
-        lambda spec: _partial_with_stale_daily(spec),
+        lambda spec, **_kwargs: _partial_with_stale_daily(spec),
     )
 
     with pytest.raises(LakeMaterializationError, match="incomplete daily coverage"):
@@ -754,7 +917,7 @@ def test_materialize_engine_run_ignores_a_stale_daily_for_a_minute_run(monkeypat
     monkeypatch.setattr(
         run_materialization,
         "_materialize_run_data_sync",
-        lambda spec: _partial_with_stale_daily(spec),
+        lambda spec, **_kwargs: _partial_with_stale_daily(spec),
     )
 
     result = materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
@@ -766,7 +929,7 @@ def test_materialize_engine_run_ignores_a_stale_daily_for_a_minute_run(monkeypat
 def test_materialize_engine_run_refuses_a_missing_session_for_a_minute_run(monkeypatch):
     """A day the provider could not supply is a hole in the backtest, not a note."""
 
-    def _missing_day(spec: DataRunSpec) -> DataAvailabilityResult:
+    def _missing_day(spec: DataRunSpec, **_kwargs) -> DataAvailabilityResult:
         return _partial(
             spec,
             ArtifactFailure(
@@ -797,7 +960,7 @@ def test_materialize_engine_run_refuses_a_missing_session_for_a_daily_run(monkey
     the aggregate to notice on its own.
     """
 
-    def _missing_day(spec: DataRunSpec) -> DataAvailabilityResult:
+    def _missing_day(spec: DataRunSpec, **_kwargs) -> DataAvailabilityResult:
         return _partial(
             spec,
             ArtifactFailure(
@@ -822,7 +985,7 @@ def test_materialize_engine_run_refuses_a_missing_session_for_a_daily_run(monkey
 def test_materialize_engine_run_lets_a_metadata_note_through(monkeypatch):
     """Metadata failures degrade the calendar; they withhold no bars."""
 
-    def _metadata_only(spec: DataRunSpec) -> DataAvailabilityResult:
+    def _metadata_only(spec: DataRunSpec, **_kwargs) -> DataAvailabilityResult:
         return _partial(
             spec,
             ArtifactFailure(
@@ -898,7 +1061,7 @@ def test_materialize_engine_run_refuses_when_a_reused_artifacts_file_is_gone(mon
     monkeypatch.setattr(
         run_materialization,
         "_materialize_run_data_sync",
-        lambda spec: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[record]),
+        lambda spec, **_kwargs: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[record]),
     )
 
     file_path.unlink()  # the gap this check exists to catch
@@ -920,7 +1083,7 @@ def test_materialize_engine_run_refuses_when_a_reused_artifacts_size_has_drifted
     monkeypatch.setattr(
         run_materialization,
         "_materialize_run_data_sync",
-        lambda spec: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[record]),
+        lambda spec, **_kwargs: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[record]),
     )
 
     with pytest.raises(LakeMaterializationError, match="the catalog recorded"):
@@ -960,7 +1123,7 @@ def test_materialize_engine_run_does_not_verify_a_file_this_run_never_opens(monk
     monkeypatch.setattr(
         run_materialization,
         "_materialize_run_data_sync",
-        lambda spec: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[minute_record, daily_record]),
+        lambda spec, **_kwargs: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[minute_record, daily_record]),
     )
 
     result = materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
@@ -971,7 +1134,7 @@ def test_materialize_engine_run_does_not_verify_a_file_this_run_never_opens(monk
 def test_materialize_engine_run_hands_back_only_what_a_run_may_act_on(monkeypatch):
     """The four facts, and no failure list left for a caller to re-judge."""
 
-    def _clean(spec: DataRunSpec) -> DataAvailabilityResult:
+    def _clean(spec: DataRunSpec, **_kwargs) -> DataAvailabilityResult:
         return DataAvailabilityResult(
             request_id=spec.request_id,
             overall_status="complete",
@@ -1045,7 +1208,7 @@ def test_materialize_run_data_sync_runs_the_coroutine_off_thread(monkeypatch):
 
     monkeypatch.setattr(run_materialization, "_materialize_run_data", _fake)
 
-    result = _materialize_run_data_sync(spec)
+    result = _materialize_run_data_sync(spec, resolution="minute")
 
     assert seen == [spec.request_id]
     assert result.data_availability_hash == "a" * 64
@@ -1059,9 +1222,9 @@ def test_materialize_run_data_sync_reuses_one_loop_for_the_process(monkeypatch):
 
     monkeypatch.setattr(run_materialization, "_materialize_run_data", _fake)
 
-    _materialize_run_data_sync(_spec())
+    _materialize_run_data_sync(_spec(), resolution="minute")
     first_loop = run_materialization._materialization_loop()
-    _materialize_run_data_sync(_spec())
+    _materialize_run_data_sync(_spec(), resolution="minute")
 
     assert run_materialization._materialization_loop() is first_loop
     assert not first_loop.is_closed()
@@ -1070,4 +1233,4 @@ def test_materialize_run_data_sync_reuses_one_loop_for_the_process(monkeypatch):
 @pytest.mark.asyncio
 async def test_materialize_run_data_sync_refuses_to_block_an_event_loop():
     with pytest.raises(RuntimeError, match="running event loop"):
-        _materialize_run_data_sync(_spec())
+        _materialize_run_data_sync(_spec(), resolution="minute")

@@ -491,6 +491,44 @@ async def test_claim_metadata_artifact_inserts_and_conflicts(clean_artifacts, po
     assert b is None  # second claim loses
 
 
+async def test_select_metadata_claim_state_returns_none_for_no_row(clean_artifacts, pool):
+    assert await catalog_client.select_metadata_claim_state("d" * 64) is None
+
+
+async def test_select_metadata_claim_state_finds_a_failed_row_reclaimable_by_steal_or_retry(clean_artifacts, pool):
+    """The lookup a caller that lost claim_metadata_artifact's conflict needs.
+
+    Unlike claim_minute_bar, claim_metadata_artifact's ON CONFLICT DO NOTHING
+    has no reclaim path of its own — this is the id + status lookup that lets
+    a caller reclaim a settled failure via steal_or_retry_minute_bar (which
+    operates purely on Id/Status/AttemptCount, so it works for any artifact
+    kind) instead of reporting contention on it forever.
+    """
+    identity = _metadata_identity()
+    artifact_id = await catalog_client.claim_metadata_artifact(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="d" * 64,
+        file_path="market-hours-database.json",
+    )
+    await catalog_client.fail_artifact(artifact_id=artifact_id, last_error="provider_api_error")
+
+    state = await catalog_client.select_metadata_claim_state("d" * 64)
+    assert state is not None
+    assert state.id == artifact_id
+    assert state.status == "failed"
+    assert state.attempt_count == 1
+
+    reclaimed = await catalog_client.steal_or_retry_minute_bar(
+        artifact_id=state.id,
+        worker_id="w-2",
+        lease_ttl_ms=300_000,
+        max_retries=3,
+    )
+    assert reclaimed is True
+
+
 async def test_claim_aggregated_bar_artifact_inserts_and_conflicts(clean_artifacts, pool):
     identity = _aggregated_bar_identity()
     a = await catalog_client.claim_aggregated_bar_artifact(

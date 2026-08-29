@@ -24,7 +24,7 @@ from app.data_lake.lean_writer import (
 ET = ZoneInfo("America/New_York")
 
 
-def test_to_deci_cent_rounds_half_to_even():
+def test_to_deci_cent_rounds_half_up():
     assert to_deci_cent(Decimal("499.5")) == 4_995_000
     assert to_deci_cent(Decimal("500.00005")) == 5_000_001
     assert to_deci_cent(Decimal("0")) == 0

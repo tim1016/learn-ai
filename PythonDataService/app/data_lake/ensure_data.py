@@ -52,6 +52,7 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    ensure_lean_readable_layout,
     resolve_lake_root,
     resolve_staging_root,
 )
@@ -299,7 +300,6 @@ def minute_bar_identity(
 
 def expand_required_artifacts(
     spec: DataRunSpec,
-    market_hours_db_path: Path | None = None,
 ) -> tuple[list[ArtifactIdentity], list[NonSessionRecord]]:
     """Compute the list of artifacts the spec requires and the calendar gaps it skips.
 
@@ -314,7 +314,6 @@ def expand_required_artifacts(
         spec.market,
         spec.start_trading_date,
         spec.end_trading_date,
-        market_hours_db_path=market_hours_db_path,
     )
     required: list[ArtifactIdentity] = []
 
@@ -509,13 +508,17 @@ async def _bootstrap_metadata_artifact(
     """Claim, extract, write, and complete one LEAN metadata artifact.
 
     On failure ``record`` is None and ``failure_reason`` names *why*, because
-    the two failure modes need different handling by the caller:
+    the failure modes need different handling by the caller:
 
-    - ``"lease_timeout"`` — another worker holds the claim and has not
+    - ``"lease_timeout"`` — another worker holds a live lease and has not
       completed yet. Transient: retrying the whole spec once the winner
       finishes turns this into a cache hit.
-    - ``"io_error"`` — the launcher could not produce the bytes. Not
-      contention; retrying will not help until the launcher is fixed.
+    - ``"fetch_timeout"`` — the existing row is a settled ``'failed'`` claim
+      that has exhausted its retries. Terminal, not contention.
+    - ``"io_error"`` — the launcher could not produce the bytes on *this*
+      attempt. The row is left ``'failed'`` with attempts remaining, so a
+      later call reclaims and retries it via ``steal_or_retry_minute_bar``
+      instead of jamming on this data_contract_hash forever.
     """
     dch = _metadata_dch(lean_image_digest, file_name, spec.price_adjustment_mode)
     file_path = str(rel_path)
@@ -537,24 +540,74 @@ async def _bootstrap_metadata_artifact(
     )
 
     if artifact_id is None:
-        # Already exists (complete or in-flight). Try to return the complete row.
+        # Already exists (complete, in-flight, or a settled failure). Try
+        # the complete row first.
         existing = await catalog_client.select_complete_metadata_artifact(dch)
         if existing is not None:
             return MetadataBootstrap(existing, True, None)  # cache hit
-        # In-flight elsewhere; skip (non-blocking in Slice 1c).
-        logger.warning(
-            "data_lake.ensure_data: metadata artifact %s is in-flight elsewhere; "
-            "Phase 0 may use fallback holiday list for sessions.",
-            file_name,
-        )
-        return MetadataBootstrap(None, False, "lease_timeout")
 
-    # Fetch from launcher.
+        # Not complete. Unlike claim_minute_bar, claim_metadata_artifact's
+        # ON CONFLICT DO NOTHING has no reclaim path of its own, so a
+        # settled 'failed' or lease-expired 'fetching' row would otherwise
+        # look identical to live contention on every future call. Reclaim
+        # it here via the same primitive claim_minute_bar's callers use —
+        # it operates purely on Id/Status/LeaseExpiresAtMs/AttemptCount,
+        # which every artifact kind shares, so it needs no bar-specific
+        # variant.
+        row_state = await catalog_client.select_metadata_claim_state(dch)
+        if row_state is not None:
+            reclaimed = await catalog_client.steal_or_retry_minute_bar(
+                artifact_id=row_state.id,
+                worker_id=_WORKER_ID,
+                lease_ttl_ms=_LEASE_TTL_MS,
+                max_retries=_MAX_CLAIM_RETRIES,
+            )
+            if reclaimed:
+                artifact_id = row_state.id
+                # Falls through to the launcher call below, exactly as a
+                # fresh claim would.
+            else:
+                # `row_state` is a snapshot from *before* the reclaim attempt
+                # above — trusting its `status` here would misreport a lost
+                # race. A concurrent caller can win the identical reclaim
+                # between that snapshot and this check, flipping the row to
+                # 'fetching' under its own live lease; this stale snapshot
+                # would still read 'failed' and this caller would wrongly
+                # report a terminal, exhausted-retries `fetch_timeout` while
+                # the winner is actively fetching. Re-read before deciding.
+                current = await catalog_client.select_metadata_claim_state(dch)
+                if current is not None and current.status == "failed":
+                    # Retries exhausted: a real, terminal failure, not contention.
+                    return MetadataBootstrap(None, False, "fetch_timeout")
+                # Otherwise another worker's reclaim landed between the
+                # snapshot and this check — fall through to the
+                # "genuinely fetching elsewhere" branch below.
+
+        if artifact_id is None:
+            # Genuinely fetching under a live lease elsewhere.
+            logger.warning(
+                "data_lake.ensure_data: metadata artifact %s is in-flight elsewhere; "
+                "Phase 0 may use fallback holiday list for sessions.",
+                file_name,
+            )
+            return MetadataBootstrap(None, False, "lease_timeout")
+
+    # Fetch from launcher. Token resolution mirrors
+    # app.lean_sidecar.launcher_client._auth_headers: env override first,
+    # then the launcher's auto-generated file-backed token, shared over the
+    # same artifacts bind mount both processes already see. Reading
+    # settings.LEAN_LAUNCHER_TOKEN directly (empty unless an operator sets
+    # the env) skips that fallback entirely, so every request the launcher's
+    # mandatory auth wasn't opted out of gets a 401 it can never recover
+    # from on its own.
+    from app.lean_sidecar.launcher_auth import read_launcher_token
+
     try:
         mh_bytes, sp_bytes = await extract_lean_metadata(
             image_digest=lean_image_digest,
             launcher_url=settings.LEAN_LAUNCHER_URL,
-            launcher_token=settings.LEAN_LAUNCHER_TOKEN,
+            launcher_token=read_launcher_token() or "",
+            run_id=f"metadata-{spec.request_id}",
         )
     except LeanMetadataExtractionError as e:
         await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e))
@@ -1398,9 +1451,10 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     """Full Slice 1c pipeline: Phase 0 metadata bootstrap + Pass 1 + Pass 2.
 
     Phase 0: Extract LEAN metadata (market-hours + symbol-properties) from the
-    launcher. The market-hours path is passed into expand_required_artifacts so
-    trading_sessions_for can use the real calendar instead of the hardcoded
-    holiday list.
+    launcher and publish both as lake artifacts. LEAN reads them off the mount
+    and refuses to initialize without them. They are not this pipeline's
+    calendar -- session enumeration goes through the canonical NYSE calendar
+    (``app.lean_sidecar.trading_calendar``, via ``app.data_lake.sessions``).
 
     Pass 1: Polygon-sourced artifacts — minute-trade, factor_file, map_file.
 
@@ -1409,6 +1463,11 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     """
     started_ms = int(time.time() * 1000)
     lake_root, staging_root = _writable_lake_roots(spec)
+    # LEAN reads the lake as its data folder in sidecar mode, and it expects
+    # the corporate-action directories to exist even when a window has no
+    # corporate actions. The read-only mount cannot create them at run time,
+    # so a writer does it here. Idempotent; see path_policy.
+    ensure_lean_readable_layout(lake_root, spec.market)
 
     # Ensure pool exists. init_pool is idempotent; pool stays alive across calls.
     await catalog_client.init_pool()
@@ -1443,20 +1502,22 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
         staging_root=staging_root,
     )
 
-    # If market-hours was successfully written (or already existed), pass the
-    # on-disk path to expand_required_artifacts so sessions use the real calendar.
-    mh_db_path: Path | None = None
+    # The market-hours database is bootstrapped for LEAN, which reads it off
+    # the mount and refuses to initialize without it. It is deliberately NOT
+    # this pipeline's calendar: which days are sessions comes from the
+    # canonical NYSE calendar via ``trading_sessions_for``, the same one the
+    # sidecar's coverage demand and the backfill job's iteration already use.
     if mh_record is not None:
         artifacts.append(mh_record)
         if mh_reused:
             reused_count += 1
         else:
             fetched_count += 1
-        mh_db_path = lake_root / Path(*mh_rel.parts)
     else:
-        # Bootstrap failure — surface as ArtifactFailure so Backend's
-        # partial-coverage policy can gate. Sessions will fall back to the
-        # hardcoded calendar; the caller can decide whether that is acceptable.
+        # Bootstrap failure — surface as ArtifactFailure so the run-
+        # materialization seam's partial-coverage policy can gate (ADR 0049
+        # §3a). Session enumeration is unaffected; what a run loses is the
+        # metadata artifact LEAN itself needs.
         failures.append(
             ArtifactFailure(
                 artifact_kind="metadata",
@@ -1491,7 +1552,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     # -----------------------------------------------------------------------
     # Expand required artifacts (now with real calendar if available)
     # -----------------------------------------------------------------------
-    required, non_sessions = expand_required_artifacts(spec, market_hours_db_path=mh_db_path)
+    required, non_sessions = expand_required_artifacts(spec)
 
     # -----------------------------------------------------------------------
     # Pass 1: Polygon-sourced artifacts (minute-trade + factor_file + map_file)
