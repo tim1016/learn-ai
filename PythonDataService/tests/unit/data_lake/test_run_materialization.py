@@ -11,7 +11,6 @@ needs the lake to have been imported first.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import re
 from collections import Counter
@@ -36,6 +35,7 @@ from app.data_lake.run_materialization import (
     materialize_engine_run,
 )
 from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
+from app.lean_sidecar import config as sidecar_config
 
 # 2024-05-20 is a Monday and a full NYSE session; 09:30 ET == 13:30 UTC.
 TRADING_DAY = date(2024, 5, 20)
@@ -133,6 +133,18 @@ class FakeCatalog:
                 return self._record(row)
         return None
 
+    async def select_metadata_claim_state(self, data_contract_hash: str) -> catalog_client.ArtifactClaimState | None:
+        artifact_id = self.keys.get(("metadata", data_contract_hash))
+        if artifact_id is None:
+            return None
+        row = self.rows[artifact_id]
+        return catalog_client.ArtifactClaimState(
+            id=artifact_id,
+            status=row["status"],
+            attempt_count=row["attempt_count"],
+            last_error=row["last_error"],
+        )
+
     @staticmethod
     def _minute_key(identity) -> tuple:
         return (
@@ -148,12 +160,12 @@ class FakeCatalog:
     async def claim_minute_bar(self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path) -> int | None:
         return self._claim(self._minute_key(identity), self._identity_row(identity, data_contract_hash, file_path))
 
-    async def select_minute_bar_claim_state(self, identity) -> catalog_client.MinuteBarClaimState | None:
+    async def select_minute_bar_claim_state(self, identity) -> catalog_client.ArtifactClaimState | None:
         artifact_id = self.keys.get(self._minute_key(identity))
         if artifact_id is None:
             return None
         row = self.rows[artifact_id]
-        return catalog_client.MinuteBarClaimState(
+        return catalog_client.ArtifactClaimState(
             id=artifact_id,
             status=row["status"],
             attempt_count=row["attempt_count"],
@@ -244,6 +256,7 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "init_pool",
         "claim_metadata_artifact",
         "select_complete_metadata_artifact",
+        "select_metadata_claim_state",
         "claim_minute_bar",
         "select_minute_bar_claim_state",
         "steal_or_retry_minute_bar",
@@ -278,7 +291,15 @@ def ensure_attempts(monkeypatch) -> list[UUID]:
 
 @pytest.fixture
 def tmp_lake(tmp_path: Path, monkeypatch) -> Path:
-    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/."""
+    """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/.
+
+    Also points app.lean_sidecar.config.DEFAULT_ARTIFACTS_ROOT at a sibling
+    tmp_path tree: Phase 0 reads the launcher's extracted metadata files back
+    off that root (app.data_lake.lean_metadata does not trust the launcher's
+    HTTP response body, only its own view of the shared mount), so
+    _mock_launcher below stages files there instead of under the real repo
+    path.
+    """
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
@@ -286,6 +307,10 @@ def tmp_lake(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
+    monkeypatch.setenv("LEAN_LAUNCHER_TOKEN", "test-token")
+    artifacts_root = tmp_path / "artifacts-root"
+    artifacts_root.mkdir(parents=True)
+    monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
     return write_root
 
 
@@ -294,28 +319,32 @@ def tmp_lake(tmp_path: Path, monkeypatch) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _launcher_payload() -> dict:
-    from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
-
-    market_hours = json.dumps(
-        {
-            "entries": {
-                "Equity-usa-[*]": {
-                    "exchange": "NYSE",
-                    "timezone": "America/New_York",
-                    "holidays": [],
-                    "earlyCloses": {},
-                }
+_MARKET_HOURS_JSON = json.dumps(
+    {
+        "entries": {
+            "Equity-usa-[*]": {
+                "exchange": "NYSE",
+                "timezone": "America/New_York",
+                "holidays": [],
+                "earlyCloses": {},
             }
         }
-    ).encode("utf-8")
-    return {
-        "market_hours_database_b64": base64.b64encode(market_hours).decode("ascii"),
-        "symbol_properties_database_b64": base64.b64encode(b"SPY,equity,usd,1,0\n").decode("ascii"),
-        # The extractor rejects a launcher that ran a different image than the
-        # spec pinned, so the mock must echo the digest the spec carries.
-        "image_digest_used": PINNED_LEAN_IMAGE_DIGEST,
     }
+).encode("utf-8")
+_SYMBOL_PROPERTIES_CSV = b"SPY,equity,usd,1,0\n"
+
+
+def _stage_workspace_files(artifacts_root: Path, run_id: str) -> None:
+    """Pre-place the two files a real launcher run would have written.
+
+    Layout must match app.lean_sidecar.workspace.Workspace.data_dir and
+    staging.list_metadata_databases: <root>/<run_id>/workspace/data/...
+    """
+    data_dir = artifacts_root / run_id / "workspace" / "data"
+    (data_dir / "market-hours").mkdir(parents=True, exist_ok=True)
+    (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
+    (data_dir / "market-hours" / "market-hours-database.json").write_bytes(_MARKET_HOURS_JSON)
+    (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(_SYMBOL_PROPERTIES_CSV)
 
 
 def _polygon_payload(ticker: str) -> dict:
@@ -356,9 +385,31 @@ def _responder(payload: dict, *, latency_s: float):
     return _respond
 
 
+def _launcher_responder(*, latency_s: float = 0.0):
+    """Stand-in for the launcher: stages the files app.data_lake.lean_metadata
+    will read back (keyed by the run_id the caller sent), then returns the
+    launcher's actual paths-only response shape — see module docstring on
+    _stage_workspace_files for the layout contract."""
+
+    async def _respond(request: httpx.Request) -> httpx.Response:
+        if latency_s:
+            await asyncio.sleep(latency_s)
+        body = json.loads(request.content)
+        _stage_workspace_files(sidecar_config.DEFAULT_ARTIFACTS_ROOT, body["run_id"])
+        return httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/launcher-side/market-hours-database.json",
+                "symbol_properties_db_path": "/launcher-side/symbol-properties-database.csv",
+            },
+        )
+
+    return _respond
+
+
 def _mock_launcher(*, latency_s: float = 0.0):
     return respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        side_effect=_responder(_launcher_payload(), latency_s=latency_s)
+        side_effect=_launcher_responder(latency_s=latency_s)
     )
 
 

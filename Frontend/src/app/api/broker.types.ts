@@ -1645,6 +1645,7 @@ export interface paths {
          *     - NO_DATA: no bars returned from Polygon
          *     - INVALID_RANGE: bad timeframe or date range
          *     - RATE_LIMITED: Polygon rate limit hit
+         *     - PROVIDER_UNREACHABLE: a lake gap needed Polygon and Polygon could not be reached
          *     - INTERNAL_ERROR: unexpected failure
          */
         post: operations["chart_data_api_chart_data_post"];

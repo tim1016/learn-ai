@@ -8,22 +8,46 @@ POST /extract-metadata; this module is the data-lake-side caller.
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.5
 Existing reference implementation:
   app/lean_sidecar/launcher_client.py — original caller for the lean-sidecar flow
+  app/lean_sidecar/staging.py::_stage_lean_metadata_via_launcher — how that
+    caller actually consumes the response (below)
   app/lean_sidecar/launcher/service.py::extract_metadata — launcher endpoint impl
 
 NB: this is intentional duplication of the call path. app/lean_sidecar/ is
 retired in Slice 1d; this module is the surviving canonical caller.
+
+The launcher's response carries the paths it wrote *as it sees them* on the
+launcher host — not portable to this container's view, and
+``ExtractMetadataResponse``'s own docstring says the data plane should not
+use them. The actual contract is: the launcher writes files into the run's
+workspace under the shared artifacts bind mount, and the caller re-resolves
+that same workspace locally (``resolve_workspace`` + ``list_metadata_databases``,
+the same primitives the launcher used server-side) and reads the bytes off
+its own view of the identical mount. This mirrors
+``_stage_lean_metadata_via_launcher`` exactly; a prior version of this
+function instead expected a base64-encoded-bytes response the launcher has
+never sent.
 """
 
 from __future__ import annotations
 
-import base64
 import logging
+from pathlib import Path
 
 import httpx
 
+from app.lean_sidecar import config as sidecar_config
+from app.lean_sidecar.launcher_client import EXTRACT_METADATA_HTTP_TIMEOUT_S
+from app.lean_sidecar.staging import list_metadata_databases
+from app.lean_sidecar.workspace import resolve_workspace
+
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMEOUT_S = 60.0
+# Shared with app.lean_sidecar.launcher_client.post_extract_metadata_sync —
+# both callers hit the identical launcher endpoint, so both must budget the
+# identical worst case (a cold `podman create + cp x3 + rm` sequence) rather
+# than this caller timing out a legitimate slow extraction that the other
+# caller would have waited out.
+_DEFAULT_TIMEOUT_S = EXTRACT_METADATA_HTTP_TIMEOUT_S
 
 
 class LeanMetadataExtractionError(RuntimeError):
@@ -34,16 +58,29 @@ async def extract_lean_metadata(
     image_digest: str,
     launcher_url: str,
     launcher_token: str,
+    run_id: str,
     *,
     timeout_s: float = _DEFAULT_TIMEOUT_S,
+    artifacts_root: Path | None = None,
 ) -> tuple[bytes, bytes]:
     """Fetch (market_hours_database_bytes, symbol_properties_database_bytes).
 
-    The launcher does the subprocess work; we just transport the bytes. The
-    response is base64-encoded JSON to keep the launcher contract a simple
-    POST/JSON pair (no multipart, no binary boundary parsing).
+    The launcher does the subprocess work and writes the two files into the
+    ``run_id`` workspace under the shared artifacts bind mount; this function
+    then reads them back through this container's own view of that mount
+    (see module docstring for why the HTTP response body isn't the transport).
 
-    Raises LeanMetadataExtractionError on any failure or digest mismatch.
+    ``run_id`` names that workspace (``ExtractMetadataRequest.run_id`` in
+    app.lean_sidecar.launcher.models, validated there against
+    ``^[a-z0-9][a-z0-9_-]{2,63}$``) — the launcher has no notion of a
+    bootstrap call with no run behind it, so the caller must always supply
+    one. A lowercase UUID (optionally prefixed) satisfies that pattern.
+
+    ``artifacts_root`` overrides the default artifacts root; tests use this
+    to point at a tmp_path instead of the real shared mount. Production
+    callers leave it at its default.
+
+    Raises LeanMetadataExtractionError on any failure.
     """
     url = launcher_url.rstrip("/") + "/extract-metadata"
     headers = {"X-Launcher-Token": launcher_token} if launcher_token else {}
@@ -51,7 +88,7 @@ async def extract_lean_metadata(
         try:
             resp = await client.post(
                 url,
-                json={"image_digest": image_digest},
+                json={"run_id": run_id, "image_digest": image_digest},
                 headers=headers,
             )
         except httpx.RequestError as e:
@@ -60,16 +97,27 @@ async def extract_lean_metadata(
     if resp.status_code != 200:
         raise LeanMetadataExtractionError(f"launcher /extract-metadata returned {resp.status_code}: {resp.text[:200]}")
 
-    payload = resp.json()
-    used = payload.get("image_digest_used")
-    if used and used != image_digest:
-        raise LeanMetadataExtractionError(f"launcher used image_digest={used!r} but {image_digest!r} was requested")
-
+    root = artifacts_root if artifacts_root is not None else sidecar_config.DEFAULT_ARTIFACTS_ROOT
+    workspace = resolve_workspace(run_id, root)
+    mh_path, sp_path = list_metadata_databases(workspace)
+    if mh_path is None or sp_path is None:
+        raise LeanMetadataExtractionError(
+            f"launcher reported success but the workspace is missing the extracted "
+            f"databases; market-hours={mh_path!r}, symbol-properties={sp_path!r}"
+        )
+    # The workspace is a shared bind mount the launcher just wrote into: an
+    # unreadable mount, a permissions mismatch, or a file that vanishes
+    # between `list_metadata_databases`' `exists()` check and this read all
+    # raise plain `OSError`, not `LeanMetadataExtractionError`. Left
+    # untranslated, that `OSError` would skip
+    # `_bootstrap_metadata_artifact`'s `except LeanMetadataExtractionError`
+    # handling entirely and abort the whole `ensure_data` request instead of
+    # cleanly failing this one claimed artifact with `io_error`.
     try:
-        mh = base64.b64decode(payload["market_hours_database_b64"])
-        sp = base64.b64decode(payload["symbol_properties_database_b64"])
-    except (KeyError, ValueError) as e:
-        raise LeanMetadataExtractionError(f"launcher returned malformed payload: {e}") from e
+        mh = mh_path.read_bytes()
+        sp = sp_path.read_bytes()
+    except OSError as e:
+        raise LeanMetadataExtractionError(f"failed to read extracted metadata from workspace: {e}") from e
     logger.info(
         "data_lake.lean_metadata: extracted %d bytes market-hours + %d bytes symbol-properties for %s",
         len(mh),
