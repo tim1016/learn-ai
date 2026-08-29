@@ -259,6 +259,18 @@ jobs:
   python-test:
     name: Python Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     env:
       # `tests/broker` is in the baseline deliberately. It was omitted until
       # #1728, and the diff-driven "extra" step below could not compensate: it
@@ -272,6 +284,10 @@ jobs:
         tests/unit tests/indicators tests/edge tests/utils
         tests/engine tests/routers tests/schemas tests/services tests/operator
         tests/contracts tests/broker
+      # asyncpg DSN — see `POSTGRES_URL` in `PythonDataService/app/config.py`
+      # and `catalog_client.init_pool`. Same postgres:16 service as
+      # `backend-test`, same credentials, so both jobs' migrated schemas agree.
+      POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
     defaults:
       run:
         working-directory: PythonDataService
@@ -279,6 +295,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      # The lake's Postgres schema is EF Core migrations owned by Backend/ —
+      # PythonDataService/app/data_lake/catalog_schema.py is a read-only
+      # mirror, not a DDL source (see its own module docstring, and
+      # test_schema_drift.py which pins the two together). Apply the same
+      # migrations backend-test applies, against the same service container,
+      # before any Postgres-gated Python test can collect.
+      - name: Migrate the data-lake schema (EF Core owns it)
+        working-directory: ${{ github.workspace }}
+        env:
+          DOTNET_NOLOGO: true
+          ConnectionStrings__DefaultConnection: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres
+        run: |
+          dotnet tool install --global dotnet-ef --version 10.0.2
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef database update --project Backend/Backend.csproj
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -366,11 +400,28 @@ jobs:
       # session- or module-scoped fixture, so per-test round-robin is safe,
       # and it measured faster than `--dist loadfile` (94s vs 127s on a local
       # 4-worker reproduction of the same 5,815-test baseline).
+      #
+      # `tests/unit/data_lake` is excluded here and run separately below: its
+      # `clean_artifacts` fixture does `TRUNCATE TABLE "DataLakeArtifacts"`
+      # against the one shared Postgres service, which races across xdist
+      # workers (verified locally — 100% pass serial, ~14% fail under -n
+      # auto, confined entirely to that directory).
       - name: Run fast baseline + change-driven tests
         run: |
           read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
           extra="${{ steps.changed.outputs.extra }}"
-          python -m pytest "${baseline_dirs[@]}" $extra -n auto -v -m "not slow" --tb=short
+          python -m pytest "${baseline_dirs[@]}" $extra --ignore=tests/unit/data_lake -n auto -v -m "not slow" --tb=short
+
+      # Postgres-gated lake tests (catalog write ops, cache import, ensure_data,
+      # schema drift) — see #1862. These skipped in CI for lack of POSTGRES_URL
+      # until this job gained a database above. Run serially (no -n auto): the
+      # shared TRUNCATE-based cleanup fixture is not safe under concurrent
+      # xdist workers hitting one Postgres instance. Both directories run
+      # unconditionally, not diff-driven, so this step's coverage doesn't
+      # depend on the change-detection heuristic above matching correctly.
+      - name: Run Postgres-gated data-lake tests (serial)
+        run: |
+          python -m pytest tests/unit/data_lake tests/integration/data_lake -v -m "not slow" --tb=short
 
   alpaca-sqlite-qualification-smoke:
     name: Alpaca SQLite Qualification Smoke
