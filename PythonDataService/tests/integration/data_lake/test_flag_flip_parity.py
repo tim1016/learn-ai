@@ -57,8 +57,8 @@ from app.data_lake.atomic import atomic_write_and_promote
 from app.data_lake.cache_import import verify_and_read_zip
 from app.data_lake.ensure_data import _compute_data_availability_hash
 from app.data_lake.lean_writer import build_minute_trade_zip_bytes
-from app.data_lake.path_policy import LeanMinuteBarPath
-from app.data_lake.types import ArtifactRecord
+from app.data_lake.path_policy import LeanMinuteBarPath, resolve_lake_root, resolve_staging_root
+from app.data_lake.types import ArtifactRecord, PriceAdjustmentMode
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots, snapshot_minute_trade_zips
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
@@ -104,11 +104,31 @@ def imported_lake(tmp_path: Path, cache_root: Path, monkeypatch: pytest.MonkeyPa
     # fixture reads on its own terms rather than depending on a default two
     # files away.
     write_root = tmp_path / "lean-data-writer"
-    lake_dir = write_root / "lake"
-    staging_dir = write_root / "staging"
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    return _import_cache_bytes(cache_root, "raw")
+
+
+@pytest.fixture
+def imported_lake_adjusted(tmp_path: Path, cache_root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The same window, imported into the adjusted-mode root instead.
+
+    Since #1866 the mode is a segment of the root, so a symbol can be
+    imported into either root independently. This fixture reuses the raw
+    cache's bytes under the adjusted mode -- fine for what it proves (an
+    adjusted request resolves and reads its own root), and out of scope for
+    what it does not (whether Polygon's split adjustment matches LEAN's
+    factor-file one, which #1866 explicitly left unanswered).
+    """
+    write_root = tmp_path / "lean-data-writer"
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    return _import_cache_bytes(cache_root, "polygon_split_adjusted")
+
+
+def _import_cache_bytes(cache_root: Path, mode: PriceAdjustmentMode) -> Path:
+    lake_dir = resolve_lake_root(mode)
+    staging_dir = resolve_staging_root(mode)
     lake_dir.mkdir(parents=True, exist_ok=True)
     staging_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
 
     run_id = uuid4()
     for trading_date in WINDOW:
@@ -122,7 +142,6 @@ def imported_lake(tmp_path: Path, cache_root: Path, monkeypatch: pytest.MonkeyPa
             request_id=run_id,
             worker_id="parity-test",
             attempt=1,
-            price_adjustment_mode="raw",
         )
     return lake_dir
 
@@ -409,38 +428,38 @@ def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
     assert composed.notice_code is None
 
 
-def test_chart_falls_back_to_the_provider_for_an_adjusted_request(
-    imported_lake: Path, monkeypatch: pytest.MonkeyPatch
+def test_chart_serves_an_adjusted_request_from_its_own_imported_root(
+    imported_lake_adjusted: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The other half of A2, from the chart's side.
+    """The other half of the split-read claim, from the chart's side.
 
-    The same covered window, asked for adjusted: the lake holds raw bytes and
-    must not serve them. The provider answers instead and the receipt says
-    why, so the operator sees a named reason rather than silently different
-    prices.
+    This used to assert the opposite: the lake held raw bytes only, so an
+    adjusted chart request fell all the way back to the provider. #1866 made
+    the mode a segment of the root, so an adjusted request now resolves its
+    own imported root exactly like the raw test above resolves its -- same
+    zero-provider-calls claim, different root.
     """
     from app.services.chart_bar_source import compose_chart_bars
 
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    calls: list[tuple[str, str]] = []
 
-    def _provider(from_date: str, to_date: str):
-        calls.append((from_date, to_date))
-        return []
+    def _provider_must_not_be_called(from_date: str, to_date: str):
+        raise AssertionError(f"the provider was called for {from_date}..{to_date} over a fully-covered window")
 
     composed = compose_chart_bars(
         ticker=SYMBOL,
         from_date=DAY_ONE.isoformat(),
         to_date=DAY_THREE.isoformat(),
         adjusted=True,
-        fetch_provider=_provider,
+        fetch_provider=_provider_must_not_be_called,
         session="rth",
         now_ms=_ms_after_the_window(),
-        lake_root=imported_lake,
+        lake_root=imported_lake_adjusted,
     )
 
-    assert calls == [(DAY_ONE.isoformat(), DAY_THREE.isoformat())]
-    assert composed.notice_code == "adjusted_prices_provider_only"
+    assert len(composed.bars) == 3 * 390
+    assert [span.source for span in composed.spans] == ["lake"]
+    assert composed.notice_code is None
 
 
 def _ms_after_the_window() -> int:
