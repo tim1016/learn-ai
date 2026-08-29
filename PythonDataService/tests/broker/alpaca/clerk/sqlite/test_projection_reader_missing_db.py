@@ -13,6 +13,7 @@ looking at.
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -58,4 +59,59 @@ async def test_app_translates_clerk_errors_to_a_typed_503_not_a_500() -> None:
     assert body["success"] is False
     assert body["detail"]["reason_code"] == "clerk_authority_unusable"
     assert body["detail"]["error_type"] == "DatabaseMissingAfterEstablishment"
-    assert "no authority for PA-TEST" in body["detail"]["message"]
+    # The body carries a stable operator message, not the exception text.
+    # Members of this family interpolate the raw driver error and the db path
+    # (``IntegrityCheckFailed``), so echoing ``str(exc)`` re-published exactly
+    # what this handler exists to suppress (#1865 review). The detail is
+    # logged instead; ``error_type`` still distinguishes the cases.
+    assert "no authority for PA-TEST" not in body["detail"]["message"]
+    assert "not currently usable" in body["detail"]["message"]
+
+
+def test_a_database_removed_during_connect_is_still_a_clerk_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The file can vanish between the is_file check and the connect.
+
+    A reset running concurrently with a read leaves sqlite raising
+    OperationalError from a path that passed its existence check moments
+    earlier. Without reclassification the catch-all answers 500 on the very
+    endpoint that exists to report an absent authority (#1865 review).
+    """
+    db_path = tmp_path / "clerk.sqlite3"
+    db_path.write_bytes(b"")
+
+    def _vanish(*args: object, **kwargs: object) -> sqlite3.Connection:
+        db_path.unlink()
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(sqlite3, "connect", _vanish)
+
+    with pytest.raises(DatabaseMissingAfterEstablishment, match="was removed while opening"):
+        SqliteClerkProjectionReader(
+            db_path=db_path,
+            account_id="PA-TEST",
+            authority_generation=1,
+            db_identity_token="token",
+        )
+
+
+def test_an_unrelated_sqlite_failure_still_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the missing-database case is reclassified; a real fault is a fault."""
+    db_path = tmp_path / "clerk.sqlite3"
+    db_path.write_bytes(b"")
+
+    def _boom(*args: object, **kwargs: object) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(sqlite3, "connect", _boom)
+
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        SqliteClerkProjectionReader(
+            db_path=db_path,
+            account_id="PA-TEST",
+            authority_generation=1,
+            db_identity_token="token",
+        )

@@ -59,7 +59,17 @@ async def clerk_sqlite_exception_handler(request: Request, exc: Exception) -> JS
     """
     logger.warning(
         "Clerk SQLite authority unusable for this request",
-        extra={"action": "clerk_authority_unusable", "error_type": type(exc).__name__},
+        extra={
+            "action": "clerk_authority_unusable",
+            "error_type": type(exc).__name__,
+            # The detail stays server-side. Some members of this family
+            # interpolate the raw driver error and the database path --
+            # ``IntegrityCheckFailed(f"{db_path} is corrupt: {exc}")`` -- so
+            # returning ``str(exc)`` re-published the very
+            # ``sqlite3.OperationalError`` text this handler exists to stop
+            # showing, plus a filesystem path (#1865 review).
+            "error_detail": str(exc),
+        },
     )
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -68,7 +78,10 @@ async def clerk_sqlite_exception_handler(request: Request, exc: Exception) -> JS
             "detail": {
                 "reason_code": "clerk_authority_unusable",
                 "error_type": type(exc).__name__,
-                "message": str(exc),
+                "message": (
+                    "This account's Clerk authority is not currently usable. "
+                    "Check the data plane logs for the specific cause."
+                ),
             },
         },
     )

@@ -84,7 +84,8 @@ def evaluate_operand(operand, ctx: EvalContext) -> Decimal | None:
 
     Formula: Subtract(a,b)=a-b; DifferenceBps(a,b)=10,000*(a-b)/b.
     Reference: docs/references/spy-ema-normalized-gap-walk-forward.md.
-    Canonical implementation: this file.
+    Canonical implementation: app.engine.strategy.normalized_gap.difference_bps
+    (``DifferenceBps`` delegates to it below; this file owns only ``Subtract``).
     Validated against: tests/engine/strategy/spec/test_difference_bps_operand.py.
 
     Returns ``None`` if any referenced indicator is not ready. The caller

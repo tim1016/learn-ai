@@ -187,3 +187,19 @@ def test_gap_bps_range_is_enforced_by_the_params_model_not_the_algorithm() -> No
         registration.param_schema(symbol="SPY", gap_bps=101.0)
 
     assert EmaCrossoverSignalAlgorithm(gap_bps=101.0) is not None
+
+
+def test_gap_bps_participates_in_evaluation_identity() -> None:
+    """Two programs that can decide differently must not share an identity.
+
+    ``signal_program_settings()`` is hashed into ``evaluation_id``, which is
+    also the Clerk ``decision_id``, the crash-recovery key, and the receipt
+    identity. Omitting ``gap_bps`` gave two configurations with different
+    entry floors the same identity for a given bar (#1865 review).
+    """
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    loose = registration.build(registration.param_schema(symbol="SPY", gap_bps=0.0))
+    strict = registration.build(registration.param_schema(symbol="SPY", gap_bps=4.0))
+
+    assert loose.signal_program_settings() != strict.signal_program_settings()
+    assert strict.signal_program_settings()["gap_bps"] == "4.0"

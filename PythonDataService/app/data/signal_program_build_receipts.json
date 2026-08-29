@@ -16,12 +16,12 @@
       "schema_version": 2,
       "program_key": "ema_crossover_signal",
       "program_version": "ema-crossover-signal/v1",
-      "golden_trace_root": "82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
-      "artifact_digest": "89cda7f17c746d6d4c6985af641b6110bb8781f011a33ea263f9771baf385868",
+      "golden_trace_root": "16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
+      "artifact_digest": "352f3d03d89c8d629d271bcc7c1a6cc6a20377cb365216e4f7d1b3b4d56491ac",
       "wiring_digest": "c9ae1a6b2a97fdf8426f4eac827cb883fac862a33c1d9d05a20e81ebde5859fc",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]",
-      "qualified_at_ms": 1787944803867,
-      "receipt_hash": "b81eb55faa28aaeabb0efbea1a959c19b681bdda991dfa9d7c1bf6fa72ddc86d"
+      "qualified_at_ms": 1787962687987,
+      "receipt_hash": "dbba4ea2d9c241a02c56636782e121c9330612adde244bbde8a394e00144bf2d"
     },
     {
       "schema_version": 2,

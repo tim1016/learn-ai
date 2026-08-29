@@ -243,10 +243,18 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         return self.signal_program.on_consolidated_bar
 
     def signal_program_settings(self) -> dict[str, str]:
-        """Stable EMA settings which participate in evaluation identity."""
+        """Stable EMA settings which participate in evaluation identity.
+
+        Every tunable that can change a decision belongs here. ``gap_bps`` is
+        a second entry floor, so two programs differing only in it can emit
+        different intents on the same bar; omitting it gave them one
+        ``evaluation_id``, which is also the Clerk ``decision_id``, the
+        crash-recovery key, and the receipt identity (#1865 review).
+        """
         return {
             "symbol": self._symbol_name,
             "gap": str(self._gap),
+            "gap_bps": str(self._gap_bps),
             "rsi_min": str(self._rsi_min),
             "rsi_max": str(self._rsi_max),
         }

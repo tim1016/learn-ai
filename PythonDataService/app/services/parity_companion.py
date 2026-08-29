@@ -99,18 +99,40 @@ def _has_parameters_the_twin_cannot_see(
     ``symbol`` is excluded: it reaches the twin through the data policy, not
     through ``strategy_parameters``.
 
+    An *override* is a value that differs from the schema default, not merely
+    a key that was sent. Strategy Lab materializes every default into
+    ``paramValues`` when a strategy is selected and posts the complete object,
+    so a presence test would call every unedited run unrepresentable and the
+    companion would never launch again (#1865 review). A parameter left at its
+    default configures the same rules the LEAN twin hardcodes, so it is not a
+    divergence.
+
     Scope note, because this is broader than the parameter that motivated
     it: ``ema_crossover_signal`` forwards *no* ``lean_parameter_names``, so
-    this makes a companion unavailable for any override of ``gap``,
-    ``rsi_min``, or ``rsi_max`` too -- not just the new ``gap_bps``. That is
-    the honest disposition (the twin was never told about those either), but
-    it does retire parity coverage that previously ran and silently compared
+    this makes a companion unavailable for a *changed* ``gap``, ``rsi_min``,
+    or ``rsi_max`` too -- not just the new ``gap_bps``. That is the honest
+    disposition (the twin was never told about those either), but it does
+    retire parity coverage that previously ran and silently compared
     mismatched strategies. The verdict carries only the reason code, not the
     offending names; surfacing those would mean bumping
     ``PARITY_VERDICT_SCHEMA_VERSION`` and is deliberately left out of scope.
     """
-    overridden = set(request.params or {}) - {"symbol"}
-    return bool(overridden - set(registration.lean_parameter_names or ()))
+    forwarded = set(registration.lean_parameter_names or ())
+    supplied = request.params or {}
+    candidates = set(supplied) - {"symbol"} - forwarded
+    if not candidates:
+        return False
+
+    fields = registration.param_schema.model_fields
+    for name in sorted(candidates):
+        field = fields.get(name)
+        # A key the schema does not declare, or one with no default, cannot be
+        # "left at its default" -- treat it as a divergence rather than guess.
+        if field is None or field.is_required():
+            return True
+        if supplied[name] != field.default:
+            return True
+    return False
 
 
 def dispatch_parity_companion(

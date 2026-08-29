@@ -68,6 +68,21 @@ def test_new_parity_group_id_is_run_id_safe():
             {"params": {"symbol": "SPY", "gap_bps": 4.0}},
             REASON_PARAMETERS_UNREPRESENTABLE,
         ),
+        # Strategy Lab posts every schema default on an unedited run, so a
+        # parameter sent at its default value must stay eligible -- a presence
+        # test here would retire the companion entirely (#1865 review).
+        ("ema_crossover_signal", {"params": {"symbol": "SPY", "gap_bps": 0.0}}, None),
+        (
+            "ema_crossover_signal",
+            {"params": {"symbol": "SPY", "gap": 0.20, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}},
+            None,
+        ),
+        # ... and one changed value among the defaults still refuses.
+        (
+            "ema_crossover_signal",
+            {"params": {"symbol": "SPY", "gap": 0.20, "gap_bps": 0.0, "rsi_min": 55.0, "rsi_max": 70.0}},
+            REASON_PARAMETERS_UNREPRESENTABLE,
+        ),
         ("ema_crossover_signal", {}, None),
     ],
 )

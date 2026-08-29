@@ -207,7 +207,7 @@ history has the old bullet.*
   of their own.**~~ **Resolved 2026-08-28 by removal.** The signal/asset
   decoupling sweep deleted both registry entries: `spy_ema_crossover` was a
   compatibility wrapper for run ledgers that are themselves disposable, and
-  `ema_crossover_2_bps` was folded into `ema_crossover_signal`'s `gap_bps` parameter
+  `ema_crossover_2_bps` was folded into `ema_crossover_signal`'s `gap_bps`
   parameter — inheriting that program's real qualification instead of running
   `NOT_APPLICABLE` beside it. No unqualified registration remains on the EMA
   lineage.

@@ -109,11 +109,27 @@ class SqliteClerkProjectionReader:
                 f"{db_path} does not exist; this account has no activated SQLite "
                 "authority. Complete the paper cutover before reading projections."
             )
-        self._conn = sqlite3.connect(
-            f"{db_path.resolve().as_uri()}?mode=ro",
-            uri=True,
-            check_same_thread=False,
-        )
+        try:
+            self._conn = sqlite3.connect(
+                f"{db_path.resolve().as_uri()}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+            )
+        except sqlite3.OperationalError as exc:
+            # The file can vanish between the ``is_file`` check above and this
+            # connect -- a reset running concurrently with a read. Read-only
+            # ``mode=ro`` refuses to create it, so sqlite raises here and the
+            # app's catch-all would answer 500 on the endpoint whose job is to
+            # report exactly this state (#1865 review). Only the
+            # missing-database failure is reclassified; anything else is a
+            # genuine fault and must keep propagating.
+            if not db_path.is_file():
+                raise DatabaseMissingAfterEstablishment(
+                    f"{db_path} was removed while opening it; this account has no "
+                    "activated SQLite authority. Complete the paper cutover before "
+                    "reading projections."
+                ) from exc
+            raise
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA query_only = ON")
         with self._read_transaction():

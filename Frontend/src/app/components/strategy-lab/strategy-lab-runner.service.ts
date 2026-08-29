@@ -170,10 +170,22 @@ export class StrategyLabRunner {
       const configuredSource = this.config.customLeanSource();
       const customSource = configuredSource?.trim() ? configuredSource : null;
       // No registered strategy declares a LEAN twin that takes runtime
-      // parameters any more, so the companion always runs the twin's own
-      // defaults. Sending a partial parameter set would have the two engines
-      // run different rules; the Python side refuses that pairing outright
-      // (parity_companion's `parameters_unrepresentable_by_twin`).
+      // parameters any more: the bundled template hardcodes its own gates.
+      // So a changed parameter cannot reach LEAN, and running anyway would
+      // persist an experiment whose results describe different rules than
+      // the configuration on screen. Refuse instead — a custom source is the
+      // one way to express parameters the template cannot take.
+      const changed = this.config.changedParameterNames();
+      if (customSource === null && changed.length > 0) {
+        this.fail(
+          "LEAN cannot run these parameters",
+          `The bundled LEAN template hardcodes its own gates, so ${changed.join(", ")} ` +
+            "would not reach it. Restore the defaults, or supply a custom LEAN source " +
+            "that takes them.",
+        );
+        this.updateRunningState();
+        return;
+      }
       const algorithm = customSource === null
         ? { template }
         : { algorithm_source: customSource };

@@ -184,15 +184,28 @@ describe("StrategyLab configuration and runner", () => {
     );
   });
 
-  it("never sends template parameters, because no LEAN twin accepts them", async () => {
+  it("refuses a LEAN run whose changed parameters the template cannot take", async () => {
     // The parameterized LEAN twin went away with the `ema_crossover_2_bps`
-    // registration in the signal/asset decoupling sweep. A partial parameter
-    // set would have the two engines run different rules and report the
-    // difference as a parity finding, so the Python side refuses that pairing
-    // (`parameters_unrepresentable_by_twin`) and the client no longer builds one.
+    // registration in the signal/asset decoupling sweep, so the bundled
+    // template hardcodes its own gates. Running anyway would persist an
+    // experiment whose results describe different rules than the screen
+    // (#1865 review) -- a silent misattribution, so refuse instead.
     config.strategies.set([PARAMETERIZED_STRATEGY]);
     config.selectStrategy(PARAMETERIZED_STRATEGY.name);
     config.updateParameter("gap_bps", "4", "number");
+    config.engine.set("lean");
+
+    await runner.run();
+
+    expect(startJob).not.toHaveBeenCalled();
+    expect(runner.runError()).toContain("gap_bps");
+  });
+
+  it("still sends the template when every parameter is left at its default", async () => {
+    // Selecting a strategy materializes all defaults into paramValues, so a
+    // presence test here would refuse every unedited run.
+    config.strategies.set([PARAMETERIZED_STRATEGY]);
+    config.selectStrategy(PARAMETERIZED_STRATEGY.name);
     config.engine.set("lean");
 
     await runner.run();

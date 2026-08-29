@@ -24,9 +24,13 @@ def _committed(relative: str) -> dict[str, object]:
 
 
 def test_generator_reproduces_every_committed_ema_per_cell_trace_root() -> None:
-    """The independent-authorship check: EMA's corpus was hand-authored
-    before this generator existed, so reproducing its per-cell results is a
-    real test of the generator's replay math rather than a tautology.
+    """The generator must replay EMA to the committed per-cell results.
+
+    This was once the independent-authorship check -- EMA's corpus predated
+    the generator, so agreement proved the replay math rather than restating
+    it. #1865 moved every trace root (``gap_bps`` entered the evaluation
+    identity) and the corpus was regenerated, so that property is gone and
+    this now guards against replay drift only.
 
     Per-cell ``trace_root`` is the semantic commitment over one cell's
     ordered ``EvaluationTrace`` payloads, so equality here means the
@@ -49,27 +53,6 @@ def test_generator_reproduces_every_committed_ema_per_cell_trace_root() -> None:
         assert generated_by_cell[cell]["trace_count"] == entry["trace_count"]
 
 
-def test_ema_aggregate_root_stays_the_documented_non_regenerable_exception() -> None:
-    """EMA's *aggregate* root is knowingly not reproducible, because
-    ``trace_corpus_root`` hashes each entry's ``settings`` text and this
-    corpus was hand-authored with the settings as submitted (``"0.20"``)
-    rather than as the contract stores them (``0.2``). That reasoning is
-    recorded in the corpus's ``attribution.md``.
-
-    This test exists so the exception cannot rot silently in either
-    direction: if someone makes EMA regenerable, this fails and points at
-    the note that must then be deleted.
-    """
-    committed = _committed("ema-signal-session/v1/trace-corpus.json")
-    generated = generate_corpus("ema_crossover_signal")
-
-    assert generated["trace_root"] != committed["trace_root"]
-    attribution = (_FIXTURES / "ema-signal-session/v1/attribution.md").read_text(encoding="utf-8")
-    assert "not byte-regenerable" in attribution, (
-        "the documented reason for EMA's non-regenerable aggregate root has gone missing"
-    )
-
-
 def test_every_generated_program_corpus_is_byte_identical_to_its_committed_file() -> None:
     """Programs promoted from #1730 onward must stay byte-regenerable.
 
@@ -77,14 +60,20 @@ def test_every_generated_program_corpus_is_byte_identical_to_its_committed_file(
     the generator and get the committed bytes back. Deliberately driven off
     the registry rather than a hand-listed set of program keys, so a
     program added in a later wave is covered without editing this test.
-    EMA is excluded by the documented exception above, not by omission.
+
+    EMA used to be excluded: its corpus was hand-authored before the
+    generator existed, so its aggregate root was knowingly not re-mintable.
+    #1865 put ``gap_bps`` into the evaluation identity, which moved every
+    per-cell root in that corpus and invalidated the hand-authored numbers,
+    so it was regenerated and now holds to the same standard as the rest.
+    The reasoning is recorded in its ``attribution.md``.
     """
     from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
     regenerable = {
         key: reg
         for key, reg in _STRATEGY_REGISTRY.items()
-        if reg.signal_program_factory is not None and key != "ema_crossover_signal"
+        if reg.signal_program_factory is not None
     }
     assert regenerable, "expected at least one generator-authored Signal Program corpus"
 
