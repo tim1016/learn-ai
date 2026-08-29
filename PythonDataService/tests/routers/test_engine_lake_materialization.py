@@ -18,11 +18,11 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 
 from app.config import settings
 from app.data_lake import run_materialization
 from app.data_lake.ensure_data import _compute_data_availability_hash
+from app.data_lake.path_policy import lake_subpath
 from app.data_lake.run_materialization import EngineRunMaterialization
 from app.data_lake.types import ArtifactRecord
 from app.routers import engine as engine_router
@@ -129,7 +129,7 @@ def seeded_roots(monkeypatch, tmp_path: Path) -> dict[str, Path]:
     difference in what happened to be on disk.
     """
     write_root = tmp_path / "writer-root"
-    lake_dir = write_root / "lake"
+    lake_dir = write_root / lake_subpath("raw")
     lake_dir.mkdir(parents=True)
     (write_root / "staging").mkdir()
     policy_root = tmp_path / "store" / "polygon-adjusted"
@@ -189,6 +189,10 @@ def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
             # The lake's partial-coverage gate is resolution-specific: a daily
             # run must refuse a stale daily zip that a minute run may ignore.
             "resolution": "minute",
+            # This request sets adjusted=False explicitly, so it materializes
+            # the raw root. The legacy-default (adjusted) case is the test at
+            # the bottom of this file.
+            "price_adjustment_mode": "raw",
             "requester": "sma_crossover",
         }
     ]
@@ -299,19 +303,25 @@ def test_a_lake_that_cannot_materialize_fails_the_run_loudly(seeded_roots, monke
     assert "provider_no_data" in (response.error or "")
 
 
-def test_flag_on_run_refuses_the_legacy_adjusted_default(seeded_roots, monkeypatch):
+def test_flag_on_run_materializes_the_legacy_adjusted_default_into_its_own_root(
+    seeded_roots, monkeypatch
+):
     """A request with no explicit ``data_policy`` defaults to adjusted=True.
 
-    The lake serves raw bars only. Before the fix this silently read the raw
-    lake tree back to a caller who believed the run was adjusted; now root
-    resolution itself refuses, before the lake is ever consulted.
+    This is the default Strategy Lab backtest, and it is the request that
+    #1839 exists for. It used to be refused with a 409 — the lake served raw
+    bars only, so root resolution refused rather than hand a caller raw
+    prices it believed were adjusted. The mode is now a segment of the root,
+    so the same request materializes the adjusted root instead of failing.
     """
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    calls: list[dict] = []
 
-    def _must_not_run(**kwargs):
-        raise AssertionError("the lake must not be consulted for a request it cannot satisfy")
+    def _fake_materialize(**kwargs):
+        calls.append(kwargs)
+        return _materialization(seeded_roots["lake"])
 
-    monkeypatch.setattr(run_materialization, "materialize_engine_run", _must_not_run)
+    monkeypatch.setattr(run_materialization, "materialize_engine_run", _fake_materialize)
     request = EngineBacktestRequest(
         strategy_name="sma_crossover",
         params={"symbol": "SPY"},
@@ -324,8 +334,7 @@ def test_flag_on_run_refuses_the_legacy_adjusted_default(seeded_roots, monkeypat
     assert request.data_policy is not None
     assert request.data_policy.adjusted is True
 
-    with pytest.raises(HTTPException) as exc_info:
-        execute_engine_backtest(request=request, on_phase=_noop, on_log=_noop)
+    response = execute_engine_backtest(request=request, on_phase=_noop, on_log=_noop)
 
-    assert exc_info.value.status_code == 409
-    assert "raw bars only" in exc_info.value.detail
+    assert response.success, response.error
+    assert [call["price_adjustment_mode"] for call in calls] == ["polygon_split_adjusted"]

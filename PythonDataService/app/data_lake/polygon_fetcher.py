@@ -2,9 +2,10 @@
 
 Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.6
 
-Always requests `adjusted=false` (raw bars; LEAN normalization mode='Raw' per
-the v1 single-canonical-root constraint). Paginated via Polygon's next_url
-header.
+Defaults to `adjusted=false` (raw bars; LEAN normalization mode='Raw').
+Callers that materialize a non-raw lake root pass `adjusted=True` -- the lake
+keys its root by adjustment mode since #1839, so the two normalizations no
+longer contend for one tree. Paginated via Polygon's next_url header.
 """
 
 from __future__ import annotations
@@ -68,6 +69,8 @@ async def fetch_minute_trade_aggregates(
     start: date,
     end: date,
     api_key: str,
+    *,
+    adjusted: bool = False,
 ) -> list[PolygonBar]:
     """Fetch minute-resolution trade aggregates for [start, end] inclusive.
 
@@ -78,7 +81,7 @@ async def fetch_minute_trade_aggregates(
     into ArtifactFailure.reason values.
     """
     return await fetch_aggregate_bars(
-        symbol, start, end, api_key, multiplier=1, timespan="minute"
+        symbol, start, end, api_key, multiplier=1, timespan="minute", adjusted=adjusted
     )
 
 
@@ -90,20 +93,23 @@ async def fetch_aggregate_bars(
     *,
     multiplier: int,
     timespan: str,
+    adjusted: bool = False,
 ) -> list[PolygonBar]:
     """Fetch aggregate bars at an arbitrary ``multiplier``/``timespan`` for [start, end].
 
     Generalizes :func:`fetch_minute_trade_aggregates` to the resolutions the
     broker-v2 history-chart ladder needs (5-minute, 30-minute, hour, day).
-    Returns bars ascending by ``t_ms``; pagination is transparent. Always
-    ``adjusted=false`` (raw bars), the same normalization the minute path uses.
+    Returns bars ascending by ``t_ms``; pagination is transparent.
+    ``adjusted`` defaults to False (raw bars), which is what the broker-v2
+    history-chart ladder wants and what the lake's raw root holds; the lake's
+    ``polygon_split_adjusted`` root passes True.
     """
     url = (
         f"{_POLYGON_BASE}/v2/aggs/ticker/{symbol.upper()}/range/{multiplier}/{timespan}/"
         f"{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
     )
     params = {
-        "adjusted": "false",
+        "adjusted": "true" if adjusted else "false",
         "sort": "asc",
         "limit": 50_000,
         "apiKey": api_key,

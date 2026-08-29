@@ -29,6 +29,7 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
+from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import DataRunSpec
 
 pytestmark = pytest.mark.asyncio
@@ -177,8 +178,9 @@ async def test_ensure_data_writes_files_and_catalog_rows(clean_artifacts, pool, 
     assert len(art.file_sha256) == 64
     assert art.file_sha256 != "0" * 64  # not the fake_polygon stub
 
-    # File exists on disk at the expected lake path.
-    final = tmp_lake / "lake" / art.file_path
+    # File exists on disk at the expected lake path. ``FilePath`` is relative
+    # to the mode root (#1839), and this spec is the default "raw".
+    final = tmp_lake / lake_subpath("raw") / art.file_path
     assert final.is_file()
     assert final.stat().st_size > 0
 

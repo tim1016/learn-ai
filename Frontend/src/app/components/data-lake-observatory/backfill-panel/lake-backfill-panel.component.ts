@@ -80,6 +80,16 @@ export class LakeBackfillPanelComponent {
 
   protected readonly digest = computed(() => this.defaults()?.lean_image_digest ?? null);
 
+  /**
+   * The requested view as a mode the fetch pipeline can actually write, or
+   * `null` when it cannot. Narrowing here rather than asserting at the submit
+   * site keeps `DataRunSpec` honest about which modes it accepts.
+   */
+  protected readonly backfillableMode = computed<'raw' | 'polygon_split_adjusted' | null>(() => {
+    const mode = this.priceAdjustmentMode();
+    return mode === 'raw' || mode === 'polygon_split_adjusted' ? mode : null;
+  });
+
   protected readonly blockedReason = computed<string | null>(() => {
     // Every reason submit is unavailable lives here, the capability check
     // included: a `request_id` is the run's durable identity, so a browser
@@ -89,9 +99,9 @@ export class LakeBackfillPanelComponent {
     if (this.digest() === null) {
       return 'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.';
     }
-    const mode = this.priceAdjustmentMode();
-    if (mode !== 'raw') {
-      return `The fetch pipeline writes raw bars only, so a backfill cannot fill the ${formatReceiptLabel(mode)} view — those rows arrive by import. Switch the view to Raw to backfill.`;
+    if (this.backfillableMode() === null) {
+      const mode = this.priceAdjustmentMode();
+      return `Nothing derives the ${formatReceiptLabel(mode)} view, so a backfill cannot fill it — those rows arrive by import. Switch the view to Raw or Polygon Split Adjusted to backfill.`;
     }
     if (this.parsed().symbols.length === 0) return 'Enter at least one symbol.';
     return tradingRangeRejection(
@@ -171,7 +181,8 @@ export class LakeBackfillPanelComponent {
   protected async submit(): Promise<void> {
     const digest = this.digest();
     const defaults = this.defaults();
-    if (digest === null || defaults === null || !this.canSubmit()) return;
+    const mode = this.backfillableMode();
+    if (digest === null || defaults === null || mode === null || !this.canSubmit()) return;
 
     const dataTypes: DataLakeDataType[] = this.includeQuotes() ? ['trade', 'quote'] : ['trade'];
     const spec: DataRunSpec = {
@@ -185,6 +196,9 @@ export class LakeBackfillPanelComponent {
       data_types: dataTypes,
       lean_image_digest: digest,
       force_refresh: this.forceRefresh(),
+      // Backfill the view the operator is looking at. `blockedReason` has
+      // already refused every mode the fetch pipeline cannot produce.
+      price_adjustment_mode: mode,
     };
     await this.store.start(spec);
   }

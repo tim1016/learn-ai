@@ -41,7 +41,13 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from app.data_lake.ensure_data import ensure_data
-from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
+from app.data_lake.types import (
+    ArtifactFailure,
+    ArtifactRecord,
+    DataAvailabilityResult,
+    DataRunSpec,
+    PriceAdjustmentMode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +104,7 @@ def _build_engine_run_spec(
     symbol: str,
     start: date,
     end: date,
+    price_adjustment_mode: PriceAdjustmentMode = "raw",
     requester: str | None = None,
     request_id: UUID | None = None,
     fetch_timeout_seconds: int = 600,
@@ -130,6 +137,7 @@ def _build_engine_run_spec(
         start_trading_date=start,
         end_trading_date=end,
         data_types=["trade"],
+        price_adjustment_mode=price_adjustment_mode,
         include_factor_files=False,
         include_map_files=False,
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
@@ -381,6 +389,7 @@ def materialize_engine_run(
     start: date,
     end: date,
     resolution: EngineResolution = "minute",
+    price_adjustment_mode: PriceAdjustmentMode = "raw",
     requester: str | None = None,
 ) -> EngineRunMaterialization:
     """Put a backtest run's bars in the lake and report what it will read.
@@ -420,7 +429,13 @@ def materialize_engine_run(
     reader touches them. Treat it as "the lake state this run materialized
     against", not as a byte-exact receipt for the bars it consumed.
     """
-    spec = _build_engine_run_spec(symbol=symbol, start=start, end=end, requester=requester)
+    spec = _build_engine_run_spec(
+        symbol=symbol,
+        start=start,
+        end=end,
+        price_adjustment_mode=price_adjustment_mode,
+        requester=requester,
+    )
     result = _materialize_run_data_sync(spec)
 
     if result.overall_status == "failed":

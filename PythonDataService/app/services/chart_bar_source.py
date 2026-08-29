@@ -20,9 +20,15 @@ error instead of being silently repaired.
 Three things fall back to the provider and say so in the response:
 
 * a completed session the lake does not hold yet (``lake_gap``);
-* any split/dividend-adjusted request, because the lake stores raw
-  (unadjusted) bytes only — serving those for an adjusted chart would be a
-  silent numerical error (``price_adjustment_unsupported``);
+* an adjusted request used to fall back wholesale, because the lake stored
+  raw bytes only and serving those for an adjusted chart would be a silent
+  numerical error (``price_adjustment_unsupported``). #1839 gave the lake a
+  root per adjustment mode, so an adjusted chart now reads the adjusted root
+  and a miss there is an ordinary ``lake_gap``. The reason and its
+  ``adjusted_prices_provider_only`` notice are kept in the response contract
+  — the Angular chart switches on that code — but nothing produces them any
+  more; deleting them would be a cross-stack contract change, which this
+  data-plane slice is not;
 * a ticker the lake cannot address — an index or option prefix such as
   ``I:SPX``, or a path-unsafe string — which is rejected here, before any
   filesystem path is built, and served by the identical provider call the
@@ -67,7 +73,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.data_lake.path_policy import resolve_lake_root
-from app.data_lake.types import is_lake_addressable_symbol
+from app.data_lake.types import PriceAdjustmentMode, is_lake_addressable_symbol, polygon_mode_for
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import (
     SessionWindow,
@@ -394,19 +400,26 @@ def _execute_plan(
             fetch_provider=fetch_provider,
         )
 
+    # The chart reads the root for the adjustment mode it was asked for. It
+    # never materializes, so an empty root simply means "the lake holds
+    # nothing for this window" and every day falls back to the provider --
+    # the same answer an unpopulated raw root has always given.
+    requested_mode: PriceAdjustmentMode = polygon_mode_for(adjusted)
     reader = LeanMinuteDataReader(
-        [lake_root if lake_root is not None else resolve_lake_root()],
+        [lake_root if lake_root is not None else resolve_lake_root(requested_mode)],
         # The lake holds the whole trading day; the chart applies its own
         # RTH / extended mask downstream, so read everything and change nothing.
         session="extended",
     )
 
-    # The lake is raw-only (``DataRunSpec.price_adjustment_mode == "raw"``), so
-    # an adjusted chart cannot be served from it at any price. Fall the whole
-    # history back to the provider and say why.
-    history_fallback_reason: SpanReason = "price_adjustment_unsupported" if adjusted else "lake_gap"
+    # Invariant since #1839, but kept named rather than inlined at its three
+    # use sites: `_plan_segments` takes the reason as a parameter, and a lake
+    # that cannot serve a mode would want to say so again here (the retained
+    # `price_adjustment_unsupported` reason is that shape). One name is
+    # cheaper than three literals and a re-widened signature.
+    history_fallback_reason: SpanReason = "lake_gap"
     lake_dates: frozenset[date] = frozenset()
-    if not adjusted and completed:
+    if completed:
         held = set(reader.iter_dates(symbol, completed[0].session_date, completed[-1].session_date))
         lake_dates = frozenset(held.intersection(window.session_date for window in completed))
 
@@ -414,9 +427,10 @@ def _execute_plan(
         # Nothing to stitch. Composing anyway would split the window into a
         # history segment and a live segment — two provider fetches where the
         # flag-off path makes one, and only two runs, so the fan-out cap would
-        # never notice. This is the *common* shape, not an edge case: an
-        # adjusted chart (the chart's default) can never read the raw-only
-        # lake, and a not-yet-backfilled lake holds nothing at all.
+        # never notice. This is the *common* shape, not an edge case: only a
+        # run that materialized this symbol and window puts bytes in the lake,
+        # and the adjusted root (the chart's default mode) is populated later
+        # and more sparsely than the raw one.
         return _whole_window_from_provider(
             from_date=from_date,
             to_date=to_date,

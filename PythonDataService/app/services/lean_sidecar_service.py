@@ -30,6 +30,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import settings
+from app.data_lake.types import polygon_mode_for
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
     COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
@@ -558,7 +559,7 @@ async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeA
 
     try:
         return resolve_lake_artifacts(
-            lake_root=data_plane_lake_root(),
+            lake_root=data_plane_lake_root(polygon_mode_for(request.data_policy.adjusted)),
             symbol=request.symbol,
             start=request.start_date,
             end=request.end_date,
@@ -903,6 +904,10 @@ async def run_trusted_sample(
         # read the lake. The launcher resolves the host path itself and
         # rejects the launch if it has none configured.
         mount_lake_read_only=lake_artifacts is not None,
+        # The lake is partitioned by adjustment mode (#1839), so the
+        # launcher must be told which subtree to mount or an adjusted
+        # run would silently read raw bytes.
+        price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
         # Intentionally NOT setting hardening_profile until we have a
         # verified fix for the wide-window SIGILL. The plumbing is in
         # place (HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX

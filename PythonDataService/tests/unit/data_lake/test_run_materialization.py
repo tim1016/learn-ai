@@ -26,6 +26,7 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client, run_materialization
 from app.data_lake.ensure_data import ensure_data
+from app.data_lake.path_policy import lake_subpath
 from app.data_lake.run_materialization import (
     EngineRunMaterialization,
     LakeMaterializationError,
@@ -448,9 +449,9 @@ async def test_materialize_run_data_writes_lean_bytes_into_the_lake(fake_catalog
 
     minute = [a for a in result.artifacts if a.resolution == "minute"]
     assert len(minute) == 1
-    on_disk = tmp_lake / "lake" / minute[0].file_path
+    on_disk = tmp_lake / lake_subpath("raw") / minute[0].file_path
     assert on_disk.is_file()
-    assert result.lean_data_root_path == str(tmp_lake / "lake")
+    assert result.lean_data_root_path == str(tmp_lake / lake_subpath("raw"))
 
 
 @respx.mock

@@ -205,10 +205,10 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('stops the backfill form offering to fill a view it cannot write', async () => {
-    // The heatmap can query an adjusted view; the fetch pipeline only ever
-    // writes raw rows. A backfill submitted from an adjusted view would
-    // succeed and leave that view unchanged, so the panel refuses it — and
-    // this pins the wiring, not just the panel's own rule.
+    // The heatmap can query any view; the fetch pipeline can produce raw and
+    // polygon_split_adjusted, but nothing derives lean_adjusted. A backfill
+    // submitted from that view would succeed and leave it unchanged, so the
+    // panel refuses it — and this pins the wiring, not just the panel's rule.
     const { lake } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
     await screen.findByRole('heading', { name: 'Coverage' });
 
@@ -222,7 +222,7 @@ describe('DataLakeObservatoryComponent', () => {
         expect.objectContaining({ priceAdjustmentMode: 'lean_adjusted' }),
       ),
     );
-    expect(await screen.findByText(/writes raw bars only/)).toBeTruthy();
+    expect(await screen.findByText(/Nothing derives/)).toBeTruthy();
     expect(
       (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
     ).toBe(true);
