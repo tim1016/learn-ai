@@ -21,10 +21,12 @@ import httpx
 import pytest
 import respx
 
+from app.data_lake import lean_metadata
 from app.data_lake.lean_metadata import (
     LeanMetadataExtractionError,
     extract_lean_metadata,
 )
+from app.lean_sidecar.launcher_client import EXTRACT_METADATA_HTTP_TIMEOUT_S
 
 RUN_ID = "metadata-11111111-1111-1111-1111-111111111111"
 
@@ -44,7 +46,7 @@ def _stage_workspace_files(artifacts_root: Path, run_id: str, mh_bytes: bytes, s
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_extracts_market_hours_and_symbol_properties(tmp_path):
+async def test_extract_lean_metadata_extracts_market_hours_and_symbol_properties(tmp_path):
     mh_bytes = b'{"exchange": "NYSE", "rule": "..."}'
     sp_bytes = b"SPY,equity,usd,1,0\n"
     _stage_workspace_files(tmp_path, RUN_ID, mh_bytes, sp_bytes)
@@ -70,7 +72,7 @@ async def test_extracts_market_hours_and_symbol_properties(tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_sends_run_id_the_launcher_requires(tmp_path):
+async def test_extract_lean_metadata_sends_run_id_the_launcher_requires(tmp_path):
     """Regression: the launcher's ExtractMetadataRequest requires run_id to
     resolve a workspace path (app.lean_sidecar.launcher.models). A prior
     version of this call sent only image_digest, which the launcher rejects
@@ -100,7 +102,7 @@ async def test_sends_run_id_the_launcher_requires(tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_launcher_500_raises_extraction_error(tmp_path):
+async def test_extract_lean_metadata_raises_on_launcher_500(tmp_path):
     respx.post(re.compile(r"http://[^/]+/extract-metadata")).mock(return_value=httpx.Response(500, text="boom"))
     with pytest.raises(LeanMetadataExtractionError):
         await extract_lean_metadata(
@@ -114,7 +116,7 @@ async def test_launcher_500_raises_extraction_error(tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_missing_workspace_files_raises(tmp_path):
+async def test_extract_lean_metadata_raises_on_missing_workspace_files(tmp_path):
     """Regression: a prior version of this call parsed base64-encoded bytes
     out of the launcher's JSON response — a transport the launcher has never
     actually implemented (ExtractMetadataResponse carries paths, not bytes).
@@ -137,3 +139,55 @@ async def test_missing_workspace_files_raises(tmp_path):
             run_id=RUN_ID,
             artifacts_root=tmp_path,  # no files staged
         )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_lean_metadata_raises_on_unreadable_workspace_file(tmp_path):
+    """Regression: `read_bytes()` on a workspace file raises plain `OSError`
+    — a vanished file, an unreadable mount, a permissions mismatch — not
+    `LeanMetadataExtractionError`. Left untranslated, that `OSError` skips
+    `_bootstrap_metadata_artifact`'s `except LeanMetadataExtractionError`
+    handling entirely and aborts the whole `ensure_data` request instead of
+    cleanly failing this one claimed artifact with `io_error`.
+
+    A directory where a file is expected reproduces `OSError`
+    (`IsADirectoryError`) deterministically, without depending on filesystem
+    permission semantics that vary by platform or by which user runs the
+    suite.
+    """
+    data_dir = tmp_path / RUN_ID / "workspace" / "data"
+    (data_dir / "market-hours" / "market-hours-database.json").mkdir(parents=True)
+    (data_dir / "symbol-properties").mkdir(parents=True)
+    (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(b"SPY,equity,usd,1,0\n")
+    respx.post(re.compile(r"http://[^/]+/extract-metadata")).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/irrelevant.json",
+                "symbol_properties_db_path": "/irrelevant.csv",
+            },
+        )
+    )
+    with pytest.raises(LeanMetadataExtractionError):
+        await extract_lean_metadata(
+            image_digest="sha256:97884667...",
+            launcher_url="http://launcher:8090",
+            launcher_token="t",
+            run_id=RUN_ID,
+            artifacts_root=tmp_path,
+        )
+
+
+def test_extract_lean_metadata_default_timeout_matches_the_launcher_extraction_budget():
+    """Regression: this caller's default HTTP timeout was hardcoded to 60s —
+    harmless while a missing `run_id` made the launcher reject every call
+    fast, but once `run_id` (see
+    `test_extract_lean_metadata_sends_run_id_the_launcher_requires` above)
+    makes the launcher actually execute, a legitimate cold
+    `podman create + cp x3 + rm` sequence can take up to ~300s
+    (`app.lean_sidecar.launcher_client.post_extract_metadata_sync`, the
+    canonical caller of this identical endpoint, budgets 360s for exactly
+    that). An unmatched, shorter timeout here would spuriously fail a
+    legitimate slow extraction instead of waiting it out."""
+    assert lean_metadata._DEFAULT_TIMEOUT_S == EXTRACT_METADATA_HTTP_TIMEOUT_S

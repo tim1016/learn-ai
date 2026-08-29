@@ -36,12 +36,18 @@ from pathlib import Path
 import httpx
 
 from app.lean_sidecar import config as sidecar_config
+from app.lean_sidecar.launcher_client import EXTRACT_METADATA_HTTP_TIMEOUT_S
 from app.lean_sidecar.staging import list_metadata_databases
 from app.lean_sidecar.workspace import resolve_workspace
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMEOUT_S = 60.0
+# Shared with app.lean_sidecar.launcher_client.post_extract_metadata_sync —
+# both callers hit the identical launcher endpoint, so both must budget the
+# identical worst case (a cold `podman create + cp x3 + rm` sequence) rather
+# than this caller timing out a legitimate slow extraction that the other
+# caller would have waited out.
+_DEFAULT_TIMEOUT_S = EXTRACT_METADATA_HTTP_TIMEOUT_S
 
 
 class LeanMetadataExtractionError(RuntimeError):
@@ -99,8 +105,19 @@ async def extract_lean_metadata(
             f"launcher reported success but the workspace is missing the extracted "
             f"databases; market-hours={mh_path!r}, symbol-properties={sp_path!r}"
         )
-    mh = mh_path.read_bytes()
-    sp = sp_path.read_bytes()
+    # The workspace is a shared bind mount the launcher just wrote into: an
+    # unreadable mount, a permissions mismatch, or a file that vanishes
+    # between `list_metadata_databases`' `exists()` check and this read all
+    # raise plain `OSError`, not `LeanMetadataExtractionError`. Left
+    # untranslated, that `OSError` would skip
+    # `_bootstrap_metadata_artifact`'s `except LeanMetadataExtractionError`
+    # handling entirely and abort the whole `ensure_data` request instead of
+    # cleanly failing this one claimed artifact with `io_error`.
+    try:
+        mh = mh_path.read_bytes()
+        sp = sp_path.read_bytes()
+    except OSError as e:
+        raise LeanMetadataExtractionError(f"failed to read extracted metadata from workspace: {e}") from e
     logger.info(
         "data_lake.lean_metadata: extracted %d bytes market-hours + %d bytes symbol-properties for %s",
         len(mh),

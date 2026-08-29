@@ -567,9 +567,22 @@ async def _bootstrap_metadata_artifact(
                 artifact_id = row_state.id
                 # Falls through to the launcher call below, exactly as a
                 # fresh claim would.
-            elif row_state.status == "failed":
-                # Retries exhausted: a real, terminal failure, not contention.
-                return MetadataBootstrap(None, False, "fetch_timeout")
+            else:
+                # `row_state` is a snapshot from *before* the reclaim attempt
+                # above — trusting its `status` here would misreport a lost
+                # race. A concurrent caller can win the identical reclaim
+                # between that snapshot and this check, flipping the row to
+                # 'fetching' under its own live lease; this stale snapshot
+                # would still read 'failed' and this caller would wrongly
+                # report a terminal, exhausted-retries `fetch_timeout` while
+                # the winner is actively fetching. Re-read before deciding.
+                current = await catalog_client.select_metadata_claim_state(dch)
+                if current is not None and current.status == "failed":
+                    # Retries exhausted: a real, terminal failure, not contention.
+                    return MetadataBootstrap(None, False, "fetch_timeout")
+                # Otherwise another worker's reclaim landed between the
+                # snapshot and this check — fall through to the
+                # "genuinely fetching elsewhere" branch below.
 
         if artifact_id is None:
             # Genuinely fetching under a live lease elsewhere.

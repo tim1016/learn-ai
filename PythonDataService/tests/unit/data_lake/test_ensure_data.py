@@ -16,7 +16,7 @@ import json
 import os
 import re
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from uuid import UUID
 
 import asyncpg
@@ -26,7 +26,8 @@ import respx
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.ensure_data import ensure_data
+from app.data_lake.catalog_client import ArtifactClaimState
+from app.data_lake.ensure_data import _bootstrap_metadata_artifact, ensure_data
 from app.data_lake.types import DataRunSpec
 from app.lean_sidecar import config as sidecar_config
 
@@ -312,15 +313,86 @@ async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(cle
     assert launcher_route.call_count == 4
 
 
+@pytest.mark.asyncio
+async def test_metadata_bootstrap_does_not_misreport_a_lost_reclaim_race_as_exhausted(
+    monkeypatch,
+):
+    """Regression (review round on #1867): a caller that loses a reclaim race
+    used to trust `row_state` — a snapshot taken *before* the reclaim attempt
+    — instead of re-reading current state. Two callers can both see the same
+    settled 'failed' row, both attempt `steal_or_retry_minute_bar`, and only
+    one wins; the loser's `row_state.status` is still `'failed'` even though
+    the winner just flipped the real row to `'fetching'` under a live lease.
+    Trusting the stale snapshot reported a terminal, exhausted-retries
+    `fetch_timeout` for a row someone else was actively completing — this
+    must report the transient `lease_timeout` instead.
+
+    No Postgres needed: `catalog_client` is faked directly so the race is
+    deterministic rather than relying on real concurrent connections.
+    """
+    stale_snapshot = ArtifactClaimState(id=42, status="failed", attempt_count=1, last_error="boom")
+    fresh_after_race = ArtifactClaimState(id=42, status="fetching", attempt_count=2, last_error=None)
+    claim_state_calls = {"n": 0}
+
+    async def fake_claim_metadata_artifact(**_kwargs):
+        return None  # lost the initial insert — the row already exists
+
+    async def fake_select_complete_metadata_artifact(_dch):
+        return None  # not a cache hit
+
+    async def fake_select_metadata_claim_state(_dch):
+        claim_state_calls["n"] += 1
+        # 1st read: the stale snapshot both racing callers observe.
+        # 2nd read: this caller re-checking after losing the reclaim below —
+        # must see what the winner actually left behind.
+        return stale_snapshot if claim_state_calls["n"] == 1 else fresh_after_race
+
+    async def fake_steal_or_retry_minute_bar(**_kwargs):
+        return False  # this caller lost the race
+
+    monkeypatch.setattr(catalog_client, "claim_metadata_artifact", fake_claim_metadata_artifact)
+    monkeypatch.setattr(catalog_client, "select_complete_metadata_artifact", fake_select_complete_metadata_artifact)
+    monkeypatch.setattr(catalog_client, "select_metadata_claim_state", fake_select_metadata_claim_state)
+    monkeypatch.setattr(catalog_client, "steal_or_retry_minute_bar", fake_steal_or_retry_minute_bar)
+
+    record, is_reused, failure_reason = await _bootstrap_metadata_artifact(
+        file_name="market-hours-database.json",
+        metadata_kind="market_hours",
+        rel_path=PurePosixPath("metadata/market-hours-database.json"),
+        lean_image_digest="sha256:test",
+        spec=_spec(["SPY"]),
+        lake_root=Path("/unused-lake-root"),
+        staging_root=Path("/unused-staging-root"),
+    )
+
+    assert record is None
+    assert is_reused is False
+    assert failure_reason == "lease_timeout", (
+        f"lost a reclaim race must read as transient contention, not exhausted retries: got {failure_reason!r}"
+    )
+    assert claim_state_calls["n"] == 2, "must re-read claim state after losing the reclaim, not trust the stale snapshot"
+
+
 @respx.mock
 @pytest.mark.asyncio
-async def test_metadata_bootstrap_sends_the_resolved_launcher_token(clean_artifacts, pool, tmp_lake):
+async def test_metadata_bootstrap_sends_the_resolved_launcher_token(
+    clean_artifacts, pool, tmp_lake, monkeypatch
+):
     """Regression: Phase 0 used to read settings.LEAN_LAUNCHER_TOKEN directly,
     which is empty unless an operator sets the env var — skipping the
     launcher's auto-generated file-backed token entirely
     (app.lean_sidecar.launcher_auth.read_launcher_token, the same resolution
     app.lean_sidecar.launcher_client already uses). Every request under the
-    launcher's mandatory auth then got a 401 it could never recover from."""
+    launcher's mandatory auth then got a 401 it could never recover from.
+
+    The realistic bug shape is settings empty / env set — the `tmp_lake`
+    fixture sets both to "test-token", which the old direct-settings-read
+    code would also send, so it would pass this test either way. Un-set
+    settings' copy here so the two implementations actually diverge: the old
+    code sends no header at all (settings.LEAN_LAUNCHER_TOKEN == ""), the
+    fixed one still resolves "test-token" from the environment.
+    """
+    monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "")
     launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
         side_effect=_launcher_side_effect(tmp_lake)
     )
