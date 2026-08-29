@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.engine.strategy.algorithms.ema_crossover_2_bps import EmaCrossover2BpsAlgorithm
+from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.spec.tests._parity_helpers import (
     SYMBOL,
     assert_trade_logs_match,
@@ -24,7 +24,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
 def test_two_bps_spec_matches_hand_coded_strategy_trade_by_trade() -> None:
     bars = build_minute_bars(closes_for_spy_ema(2000))
 
-    reference = run_strategy(EmaCrossover2BpsAlgorithm(symbol=SYMBOL), bars)
+    reference = run_strategy(EmaCrossoverSignalAlgorithm(symbol=SYMBOL, gap=0, gap_bps=2), bars)
     spec_strategy = load_spec_algo("ema_crossover_2_bps")
     spec_strategy._symbol_name = SYMBOL  # type: ignore[attr-defined]
     spec_trades = run_strategy(spec_strategy, bars)

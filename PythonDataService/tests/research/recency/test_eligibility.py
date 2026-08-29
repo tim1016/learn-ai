@@ -9,6 +9,9 @@ added.
 
 from __future__ import annotations
 
+from typing import Literal
+
+from app.engine.strategy.params import StrategyParamsBase
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.recency.eligibility import is_recency_supported
 
@@ -19,9 +22,28 @@ def test_numeric_only_strategies_are_supported() -> None:
         assert is_recency_supported(schema) is True, key
 
 
-def test_options_spread_strategy_is_excluded() -> None:
-    schema = _STRATEGY_REGISTRY["spy_ema_crossover_options"].param_schema
-    assert is_recency_supported(schema) is False
+def test_a_categorical_parameter_excludes_a_strategy() -> None:
+    """One non-numeric knob is enough to exclude, however numeric the rest.
+
+    This used to be pinned against ``spy_ema_crossover_options``, whose
+    ``spread_type`` / ``pricing_mode`` sat beside 25 numeric parameters. That
+    registration is gone, but the rule it demonstrated is the load-bearing
+    one: the sweep needs a numeric range for every knob, so the gate excludes
+    on *any* categorical rather than on some ratio of them. A synthetic schema
+    states that without depending on which strategies happen to be registered
+    today -- and the rule is not hypothetical: an ``ema_crossover_signal``
+    revision briefly added a categorical ``gap_mode`` and silently dropped
+    itself out of recency until this gate caught it.
+    """
+
+    class _MostlyNumericParams(StrategyParamsBase):
+        symbol: str = "SPY"
+        fast_period: int = 5
+        slow_period: int = 10
+        threshold: float = 0.2
+        mode: Literal["a", "b"] = "a"
+
+    assert is_recency_supported(_MostlyNumericParams) is False
 
 
 def test_deployment_validation_is_excluded() -> None:

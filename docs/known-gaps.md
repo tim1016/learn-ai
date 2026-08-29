@@ -158,6 +158,40 @@ generated-type, and accepted-ADR `Vocabulary:` metadata gates previously tracked
 here (issues #1666, #1667, #1668) are closed and merged to master as of
 2026-08-19; git history is the record.
 
+## 7b. Orphans left by the 2026-08-28 signal/asset decoupling sweep
+
+- **`app/engine/options/` has no importers (medium).** Deleting the coupled
+  `spy_ema_crossover_options` strategy removed the last consumer of
+  `chain_resolver.py` and `pricer.py`. Both modules remain in the tree, are
+  imported by nothing, and have no direct test coverage
+  (`docs/math-sources-of-truth.md` records `NONE — pending` for the pricer).
+  They were **not** deleted with the strategy because the package is described
+  as live in five architecture documents (`options-math-authorities.md`,
+  `options-research.md`, `options-routes-research.md`,
+  `engine-authority-map.md`, `math-sources-of-truth.md`), and retiring a
+  documented canonical math row is a decision with its own doc surface, not a
+  side effect of a strategy deletion. Disposition — delete the package and its
+  rows, or re-point it at a decoupled options Action Plan — is deliberately
+  left open. Until then treat it as dead code: `engine-authority-map.md` marks
+  the row `orphaned 2026-08-28`.
+
+- **`EmaCrossover2BpsStrategyParametersModel` survives in the LEAN sidecar
+  (low).** `app/routers/lean_sidecar.py` still defines and uses it (lines ~202,
+  298, 413) for the `ema_crossover_2_bps` trusted sample, which remains a valid
+  LEAN template even though the Python registry entry is gone. It is reachable
+  API surface, not dead code, but the name now refers to a strategy this build
+  does not register. Renaming it changes the committed OpenAPI contract, so it
+  is left alone deliberately.
+
+- **Doc paths predating this sweep (inherited, not introduced here).** A path
+  audit of `math-sources-of-truth.md` and `engine-authority-map.md` found ~30
+  cited `.py` files that no longer exist — almost all from the #1813 IBKR
+  decommission (`app/engine/live/*`, `app/services/account_*`,
+  `app/routers/broker_activity.py`, and neighbours), plus
+  `tests/services/test_bot_runner.py`. Only the two this sweep invalidated
+  (`spy_orb.py`, `spy_ema_crossover_options.py`) were corrected; the rest are
+  pre-existing and out of scope.
+
 ## 8. Sealed Signal Program admission (verified 2026-08-21, issue #1728 / ADR 0043)
 
 *The former first bullet — FR-016 crash-candidate capture "scoped to
@@ -169,13 +203,14 @@ is exactly the next bullet, and neither is live-deployable
 (`supported_alpaca_paper_strategy_keys` derives from factory presence). Git
 history has the old bullet.*
 
-- **`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
-  of their own.** Both were left with `signal_program_contract=None` /
-  `signal_program_factory=None` after the `dataclasses.replace()` identity-leak
-  fix (see ADR 0043 §4) rather than being given their own qualification, so
-  `prove_running_program_build` reports `NOT_APPLICABLE` and neither strategy's
-  running bytes are checked against any golden corpus. Already tracked in-code
-  and as issue #1730.
+- ~~**`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
+  of their own.**~~ **Resolved 2026-08-28 by removal.** The signal/asset
+  decoupling sweep deleted both registry entries: `spy_ema_crossover` was a
+  compatibility wrapper for run ledgers that are themselves disposable, and
+  `ema_crossover_2_bps` was folded into `ema_crossover_signal`'s `gap_bps`
+  parameter — inheriting that program's real qualification instead of running
+  `NOT_APPLICABLE` beside it. No unqualified registration remains on the EMA
+  lineage.
 - **The external repository-writer census is a convention nudge, not a sound
   safety gate.** `app/broker/alpaca/clerk/sqlite/repository_boundary.py` plus
   `tests/broker/alpaca/clerk/sqlite/test_repository_writer_boundary.py` are
@@ -273,11 +308,16 @@ a defect.
   full-ladder preview (`POST …/bots/admission`) exists and is unused for
   refusal shaping (gate order `app/services/run_admission.py:105-435`; study
   §3).
-- **F6 — zero-bar engine run reports `success=True` (high).**
-  `daily_sma_crossover` has no daily-bar fetch path and its engine run
-  succeeded over zero bars (`execute_engine_backtest`,
-  `app/routers/engine.py:1042`; ceremony doc §1 calls it a platform gap). An
-  engine that cannot fail on empty input is an honesty defect.
+- **F6 — zero-bar engine run reports `success=True` (high).** Still open; the
+  strategy originally cited (`daily_sma_crossover`) was removed on 2026-08-28,
+  but **the defect is not strategy-specific and was reproduced without it**: an
+  `ema_crossover_signal` run over a window the resolved data root does not
+  cover returned `success=True` with zero bars, zero trades, an empty equity
+  curve, and only `run_verdict.status="incomplete"` to show for it
+  (`execute_engine_backtest`, `app/routers/engine.py`). An engine that cannot
+  fail on empty input is an honesty defect, and the reproduction is now easier
+  to hit than before: with `DATA_LAKE_ENABLED` on and `auto_fetch` off, the
+  lake root is legitimately empty for any window nobody has materialized yet.
 - **F7 — QC-ID hard-required client-side though ignored for proof-less
   candidates (low).** Flag-form validation out of sync with the backend
   recording rule

@@ -54,6 +54,7 @@ from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
+from app.engine.strategy.normalized_gap import difference_bps
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
@@ -84,6 +85,23 @@ class _OpenTrade:
     rsi: Decimal
 
 
+def _finite(name: str, value: Decimal | float) -> Decimal:
+    """Coerce a tunable to Decimal, refusing NaN and infinity.
+
+    ``Decimal(str(x))`` keeps a float from the JSON param layer exact, but it
+    also happily produces ``Decimal("NaN")`` -- and every comparison against
+    NaN is False, so a NaN threshold does not raise, it silently *disables*
+    the gate it configures. Range bounds stay in the Pydantic params model
+    (``programs/ema_crossover_signal.py``), which is the validating boundary;
+    this is only the non-negotiable numeric floor, applied to every tunable
+    rather than to whichever one was added last.
+    """
+    coerced = Decimal(str(value))
+    if not coerced.is_finite():
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    return coerced
+
+
 class EmaCrossoverSignalAlgorithm(Strategy):
     """Generate EMA crossover decisions without selecting the traded asset."""
 
@@ -91,8 +109,32 @@ class EmaCrossoverSignalAlgorithm(Strategy):
     CONSOLIDATOR_PERIOD_MIN = 15
 
     def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
-        """Apply the configured absolute-dollar entry threshold (default 0.20)."""
-        return ema_fast - ema_slow >= self._gap
+        """Apply both entry floors: absolute price gap and normalized gap.
+
+        ``gap`` is the raw ``EMA(5) - EMA(10)`` dollar spread; ``gap_bps`` is
+        that same spread normalized against EMA(10), which scales with price
+        level instead of drifting as the underlying moves. Both are *minimums*,
+        so ``0`` means that floor imposes no constraint -- there is no sentinel
+        value and no mode flag. The validated LEAN-parity point is
+        ``gap=0.20, gap_bps=0``; the normalized point that was formerly the
+        separate ``ema_crossover_2_bps`` strategy is ``gap=0, gap_bps=2``.
+
+        A vacuous floor really is vacuous here: this runs only on a fresh
+        crossover, where ``ema_fast > ema_slow`` strictly holds, so a ``0``
+        floor admits every candidate the crossover itself already produced.
+
+        Keeping both floors numeric is load-bearing, not incidental. The
+        Recency Chart sweeps a strategy only when every non-``symbol``
+        parameter is ``int`` or ``float``
+        (``app/research/recency/eligibility.py``), so expressing this as a
+        categorical ``gap_mode`` would have silently dropped this strategy out
+        of recency sweeps.
+        """
+        if ema_fast - ema_slow < self._gap:
+            return False
+        if self._gap_bps <= 0:
+            return True
+        return difference_bps(ema_fast, ema_slow) >= self._gap_bps
 
     def _rsi_gate_bounds(self) -> tuple[Decimal, Decimal]:
         """Return the configured inclusive RSI entry band (default 50–70)."""
@@ -105,6 +147,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         gap: Decimal | float = Decimal("0.20"),
         rsi_min: Decimal | float = Decimal(50),
         rsi_max: Decimal | float = Decimal(70),
+        gap_bps: Decimal | float = Decimal("0"),
     ) -> None:
         super().__init__()
         # This is the signal stream, not an execution target. The Action Plan
@@ -116,9 +159,10 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # exactly (absolute gap 0.20, RSI band 50–70); the Recency Chart
         # sweeps these as parameters. Coerced through str() so a float from
         # the JSON param layer lands as an exact Decimal.
-        self._gap = Decimal(str(gap))
-        self._rsi_min = Decimal(str(rsi_min))
-        self._rsi_max = Decimal(str(rsi_max))
+        self._gap = _finite("gap", gap)
+        self._gap_bps = _finite("gap_bps", gap_bps)
+        self._rsi_min = _finite("rsi_min", rsi_min)
+        self._rsi_max = _finite("rsi_max", rsi_max)
         self._symbol: str = ""
         self._ema5: ExponentialMovingAverage | None = None
         self._ema10: ExponentialMovingAverage | None = None
@@ -199,10 +243,18 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         return self.signal_program.on_consolidated_bar
 
     def signal_program_settings(self) -> dict[str, str]:
-        """Stable EMA settings which participate in evaluation identity."""
+        """Stable EMA settings which participate in evaluation identity.
+
+        Every tunable that can change a decision belongs here. ``gap_bps`` is
+        a second entry floor, so two programs differing only in it can emit
+        different intents on the same bar; omitting it gave them one
+        ``evaluation_id``, which is also the Clerk ``decision_id``, the
+        crash-recovery key, and the receipt identity (#1865 review).
+        """
         return {
             "symbol": self._symbol_name,
             "gap": str(self._gap),
+            "gap_bps": str(self._gap_bps),
             "rsi_min": str(self._rsi_min),
             "rsi_max": str(self._rsi_max),
         }

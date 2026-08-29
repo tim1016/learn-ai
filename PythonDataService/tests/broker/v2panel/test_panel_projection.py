@@ -96,18 +96,27 @@ from tests.broker.v2panel.fixtures import (
 
 _NOW = 1_700_000_000_000
 
-# _status()'s default fixture strategy. Must stay a strategy with no
-# registered Signal Program: _default_program_build() below fails closed
-# (deliberately, per ADR 0043 Finding 1) the instant a named strategy
-# becomes sealed with no explicit program_build evidence supplied, and this
-# module never supplies that evidence -- almost every test in this file
-# relies on the truthful NOT_APPLICABLE default. "deployment_validation"
-# was that strategy until it was promoted through the governed Signal
-# Program seam (issue #1730 Slice 5); "spy_orb" is a genuinely still-
-# unsealed compatibility strategy (no signal_program_factory) with an
-# equally parameter-free default, so it is a clean drop-in.
-assert _STRATEGY_REGISTRY["spy_orb"].signal_program_factory is None
-_UNSEALED_STRATEGY_KEY = "spy_orb"
+# _status()'s default fixture strategy. Must be a strategy with no registered
+# Signal Program: _default_program_build() below fails closed (deliberately,
+# per ADR 0043 Finding 1) the instant a named strategy becomes sealed with no
+# explicit program_build evidence supplied, and this module never supplies
+# that evidence -- almost every test in this file relies on the truthful
+# NOT_APPLICABLE default.
+#
+# This key has walked down the registry as strategies were governed:
+# "deployment_validation" until #1730 Slice 5 sealed it, then "spy_orb" until
+# the signal/asset decoupling sweep deleted the last coupled registrations.
+# Every registered strategy now owns a Signal Program, so no registered key
+# can serve here again -- and that is the point, not an inconvenience.
+#
+# An *unregistered* key is now the only honest source of NOT_APPLICABLE, and
+# it is a real state rather than a stand-in: a durable binding can name a
+# strategy this build no longer registers (exactly what the deletions above
+# just did to existing bindings), and such a bot has no Signal Program to
+# prove. _default_program_build() already reads `registration is None` that
+# way.
+assert "retired-strategy-not-in-this-build" not in _STRATEGY_REGISTRY
+_UNSEALED_STRATEGY_KEY = "retired-strategy-not-in-this-build"
 
 _MARKET_PULSE = MarketPulseView(
     session="OPEN",
@@ -252,8 +261,8 @@ def _default_program_build(strategy_key: str) -> ProgramBuildAdmissionFact:
     ``build_panel`` requires real evidence for every call — it must never
     guess (see the "require the argument" fix on its docstring). Every
     fixture in this module uses
-    ``_status()``'s default ``strategy_key`` (``_UNSEALED_STRATEGY_KEY``,
-    "spy_orb"), which has no registered Signal Program
+    ``_status()``'s default ``strategy_key`` (``_UNSEALED_STRATEGY_KEY``),
+    which this build does not register at all
     (``app/engine/strategy/registry.py``), so ``NOT_APPLICABLE`` is the
     actually-true state here, not a fabricated placeholder. A fixture naming
     a strategy that DOES have a registered Signal Program (e.g.
@@ -267,7 +276,7 @@ def _default_program_build(strategy_key: str) -> ProgramBuildAdmissionFact:
             state="NOT_APPLICABLE",
             program_key=strategy_key,
             verified_at_ms=_NOW,
-            explanation="This compatibility strategy has no registered Signal Program.",
+            explanation="This build registers no Signal Program for that strategy.",
         )
     raise AssertionError(
         f"'{strategy_key}' has a registered Signal Program; _panel() callers must "
@@ -1070,7 +1079,11 @@ def test_sqlite_adapter_preserves_stopped_bot_resume_with_sqlite_recovery_action
     # renders it only when enabled.
     assert list(actions) == ["resume", "retire", "reconcile_now"]
     assert actions["resume"].enabled is True
-    assert actions["retire"].enabled is False
+    # Enabled, because this fixture's strategy is deliberately one this build
+    # does not register (see _UNSEALED_STRATEGY_KEY) -- which is exactly the
+    # "runtime can no longer honour the registration" condition retire gates
+    # on. It read False while that fixture still named a live strategy.
+    assert actions["retire"].enabled is True
     assert actions["reconcile_now"].concurrency_token == "sqlite-token"
     assert len(adapted.actions) == len(actions)
 

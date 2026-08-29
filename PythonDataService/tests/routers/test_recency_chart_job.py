@@ -39,7 +39,7 @@ async def test_rejects_a_grid_past_the_sanity_ceiling_before_queuing() -> None:
                 "jobId": "job-1",
                 "strategies": [
                     {
-                        "strategyKey": "ema_crossover_2_bps",
+                        "strategyKey": "ema_crossover_signal",
                         "paramRanges": {
                             "gapBps": {"type": "low_high_step", "low": 0.0, "high": 10_000_000.0, "step": 0.0001}
                         },
@@ -63,7 +63,7 @@ async def test_rejects_an_inverted_low_high_range() -> None:
                 "jobId": "job-2",
                 "strategies": [
                     {
-                        "strategyKey": "ema_crossover_2_bps",
+                        "strategyKey": "ema_crossover_signal",
                         "paramRanges": {"gapBps": {"type": "low_high_step", "low": 5.0, "high": 1.0, "step": 1.0}},
                     }
                 ],
@@ -83,7 +83,7 @@ async def test_rejects_empty_symbols() -> None:
             json={
                 "jobId": "job-3",
                 "strategies": [
-                    {"strategyKey": "ema_crossover_2_bps", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
+                    {"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
                 ],
                 "symbols": [],
                 "windowStartMs": 0,
@@ -109,7 +109,7 @@ class TestValidateBeforeDispatch:
             "jobId": "job-preflight",
             "strategies": [
                 {
-                    "strategyKey": "ema_crossover_2_bps",
+                    "strategyKey": "ema_crossover_signal",
                     "paramRanges": {"gap_bps": {"type": "value_list", "values": [1.0, 2.0]}},
                 }
             ],
@@ -146,7 +146,7 @@ class TestValidateBeforeDispatch:
                 "jobId": "job-oob-param",
                 "strategies": [
                     {
-                        "strategyKey": "ema_crossover_2_bps",
+                        "strategyKey": "ema_crossover_signal",
                         "paramRanges": {"gapBps": {"type": "value_list", "values": [150.0]}},  # le=100.0
                     }
                 ],
@@ -164,7 +164,7 @@ class TestValidateBeforeDispatch:
             {
                 "jobId": "job-bad-policy",
                 "strategies": [
-                    {"strategyKey": "ema_crossover_2_bps", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
+                    {"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
                 ],
                 "symbols": ["SPY"],
                 "windowStartMs": 0,
@@ -181,7 +181,7 @@ class TestValidateBeforeDispatch:
             {
                 "jobId": "job-bad-window",
                 "strategies": [
-                    {"strategyKey": "ema_crossover_2_bps", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
+                    {"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
                 ],
                 "symbols": ["SPY"],
                 "windowStartMs": 1000,

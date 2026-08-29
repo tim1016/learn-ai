@@ -22,7 +22,7 @@ from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
-from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
 from app.utils.timestamps import ny_datetime
 
@@ -74,7 +74,7 @@ def main() -> None:
     t0 = timing.time()
     raw_reader = LeanMinuteDataReader(CACHE_ROOT)
     reader = RTHFilteredReader(raw_reader)
-    strategy = SpyEmaCrossoverAlgorithm()
+    strategy = EmaCrossoverSignalAlgorithm()
     engine = BacktestEngine(
         data_source=reader,
         fill_model=FillModel(

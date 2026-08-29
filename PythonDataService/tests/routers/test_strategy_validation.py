@@ -26,7 +26,7 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     catalog = catalog_response.json()
     strategies = {row["strategy_key"]: row for row in catalog["strategies"]}
     assert "deployment_validation" in strategies
-    assert "spy_orb" in strategies
+    assert "sma_crossover" in strategies
     # deployment_validation proves deployment plumbing through its internal
     # deterministic replay. Its retired QuantConnect audit copy is not part of
     # this category's current proof.
@@ -45,8 +45,14 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
         == "migration:strategy-validation-prd-seed"
     )
     assert strategies["deployment_validation"]["behavioral_equivalence"]["verdict"] == "accepted_for_deploy"
-    assert strategies["spy_orb"]["validation_state"] == "needs_validation"
-    assert strategies["spy_orb"]["deployable"] is False
+    # The catalog's negative case, pinned against "spy_orb" until the
+    # signal/asset decoupling sweep deleted it. "sma_crossover" is the
+    # drop-in: under this suite's isolated flag ledger (conftest's
+    # ``_isolate_strategy_validation_flag_ledger``) it carries no validation
+    # flag event, so it reads ``needs_validation`` and refuses deployment --
+    # the same shape, and still a real strategy rather than a stub.
+    assert strategies["sma_crossover"]["validation_state"] == "needs_validation"
+    assert strategies["sma_crossover"]["deployable"] is False
 
     # The detail remains available even though a legacy QC audit file is stale,
     # because that artifact is explicitly outside the harness proof track.
