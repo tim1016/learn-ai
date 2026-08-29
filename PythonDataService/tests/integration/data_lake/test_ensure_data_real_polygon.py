@@ -28,8 +28,8 @@ import respx
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.path_policy import lake_subpath
 from app.data_lake.ensure_data import ensure_data
+from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import DataRunSpec
 
 pytestmark = pytest.mark.asyncio
