@@ -9750,9 +9750,13 @@
             "title": "Market"
           },
           "price_adjustment_mode": {
-            "const": "raw",
             "default": "raw",
-            "title": "Price Adjustment Mode"
+            "enum": [
+              "raw",
+              "polygon_split_adjusted"
+            ],
+            "title": "Price Adjustment Mode",
+            "type": "string"
           },
           "provider": {
             "const": "polygon",
