@@ -72,7 +72,6 @@ export class LakeBackfillPanelComponent {
   protected readonly startTradingDate = linkedSignal(() => this.seedStartTradingDate());
   protected readonly endTradingDate = linkedSignal(() => this.seedEndTradingDate());
   protected readonly includeQuotes = signal(false);
-  protected readonly forceRefresh = signal(false);
 
   protected readonly parsed = computed(() =>
     parseSymbols(this.symbolsText(), this.defaults()?.max_symbol_length ?? 20),
@@ -174,10 +173,6 @@ export class LakeBackfillPanelComponent {
     this.includeQuotes.set((event.target as HTMLInputElement).checked);
   }
 
-  protected onForceRefresh(event: Event): void {
-    this.forceRefresh.set((event.target as HTMLInputElement).checked);
-  }
-
   protected async submit(): Promise<void> {
     const digest = this.digest();
     const defaults = this.defaults();
@@ -195,7 +190,6 @@ export class LakeBackfillPanelComponent {
       end_trading_date: this.endTradingDate(),
       data_types: dataTypes,
       lean_image_digest: digest,
-      force_refresh: this.forceRefresh(),
       // Backfill the view the operator is looking at. `blockedReason` has
       // already refused every mode the fetch pipeline cannot produce.
       price_adjustment_mode: mode,

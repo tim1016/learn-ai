@@ -110,7 +110,8 @@ class TestSessionIteration:
     async def test_calls_ensure_once_per_canonical_session_and_narrows_the_range(self) -> None:
         """2024-05-20..24 is a normal trading week (Mon-Fri): 5 NYSE sessions.
         Each sub-call must be scoped to a single day and opt out of the
-        symbol/range-scoped artifacts a per-day call cannot correctly build."""
+        symbol/range-scoped artifacts a per-day call cannot correctly build.
+        A 6th call follows the day loop: the full-range rollup (#1869)."""
         seen_specs: list[DataRunSpec] = []
 
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
@@ -120,27 +121,33 @@ class TestSessionIteration:
         result = await run_backfill(_spec(), ensure_fn=fake_ensure)
 
         assert result.total_sessions == 5
-        assert [s.start_trading_date for s in seen_specs] == [
+        day_specs, rollup_spec = seen_specs[:5], seen_specs[5]
+        assert [s.start_trading_date for s in day_specs] == [
             date(2024, 5, 20),
             date(2024, 5, 21),
             date(2024, 5, 22),
             date(2024, 5, 23),
             date(2024, 5, 24),
         ]
-        for s in seen_specs:
+        for s in day_specs:
             assert s.start_trading_date == s.end_trading_date
             assert s.include_factor_files is False
             assert s.include_map_files is False
             assert s.include_daily_trade is False
+        assert rollup_spec.start_trading_date == date(2024, 5, 20)
+        assert rollup_spec.end_trading_date == date(2024, 5, 24)
+        assert rollup_spec.include_factor_files is True
+        assert rollup_spec.include_map_files is True
+        assert rollup_spec.include_daily_trade is True
         assert result.days_completed == 5
         assert result.days_with_failures == 0
-        assert result.fetched_artifact_count == 5
+        assert result.fetched_artifact_count == 6  # 5 days + the rollup call
         assert result.overall_status == "complete"
 
     async def test_skips_weekend_and_holiday_days(self) -> None:
         """2024-05-25/26 is a weekend and 2024-05-27 is Memorial Day
         (NYSE holiday) — the canonical calendar must exclude all three,
-        leaving only 2024-05-24 and 2024-05-28."""
+        leaving only 2024-05-24 and 2024-05-28. A 6th call is the rollup."""
         calls: list[date] = []
 
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
@@ -150,7 +157,7 @@ class TestSessionIteration:
         spec = _spec(start=date(2024, 5, 24), end=date(2024, 5, 28))
         result = await run_backfill(spec, ensure_fn=fake_ensure)
 
-        assert calls == [date(2024, 5, 24), date(2024, 5, 28)]
+        assert calls == [date(2024, 5, 24), date(2024, 5, 28), date(2024, 5, 24)]
         assert result.total_sessions == 2
 
     async def test_empty_range_produces_zero_sessions_and_complete_status(self) -> None:
@@ -162,6 +169,110 @@ class TestSessionIteration:
 
         assert result.total_sessions == 0
         assert result.overall_status == "complete"
+
+
+class TestPostLoopRollup:
+    """#1869: the follow-up full-range call that produces factor/map files
+    and the daily-trade artifact once the per-day loop completes."""
+
+    async def test_skipped_when_no_day_produced_a_bar(self) -> None:
+        """An all-failed range has no minute-trade coverage for the rollup
+        to derive anything from — it must not fire at all."""
+        calls: list[DataRunSpec] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            calls.append(day_spec)
+            return _failure_result(day_spec, reason="unknown_symbol")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
+        await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert len(calls) == 3  # exactly the 3 day sub-calls, no rollup
+
+    async def test_rollup_range_excludes_both_the_unattempted_tail_and_the_fatal_day(self) -> None:
+        """A fatal provider error stops the day loop early (days_unattempted
+        > 0) — the rollup must cover only sessions that actually reached
+        'complete'. Re-including the unattempted tail would just repeat the
+        same doomed provider call for days never even tried; re-including the
+        fatal day itself would retry the exact same auth/rate-limit failure
+        the early abort exists to avoid repeating (#1873 review fix)."""
+        seen_specs: list[DataRunSpec] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            seen_specs.append(day_spec)
+            if day_spec.start_trading_date == date(2024, 5, 20):
+                return _ok_result(day_spec)
+            return _failure_result(day_spec, reason="provider_auth_error")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        # 5 sessions total (20-24); the fatal error on 05-21 (2nd session)
+        # aborts the remaining 3 (22, 23, 24) as unattempted.
+        assert result.days_unattempted == 3
+        rollup_spec = seen_specs[-1]
+        assert rollup_spec.start_trading_date == date(2024, 5, 20)
+        assert rollup_spec.end_trading_date == date(2024, 5, 20)  # the fatal day (05-21) is excluded too
+
+    async def test_rollup_skipped_when_the_only_attempted_day_is_the_fatal_one(self) -> None:
+        """The fatal day hits on the very first session — nothing else was
+        even attempted, so excluding the fatal day leaves no sessions for the
+        rollup to cover. It must not fire with an empty/inverted range."""
+        seen_specs: list[DataRunSpec] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            seen_specs.append(day_spec)
+            return _failure_result(day_spec, reason="provider_auth_error")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.days_unattempted == 2
+        assert len(seen_specs) == 1  # just the one day sub-call, no rollup
+
+    async def test_rollup_range_also_truncates_at_a_non_fatal_interior_failure(self) -> None:
+        """A non-fatal per-day failure (e.g. provider_no_data) does not stop
+        the loop — later days still get attempted, and days_unattempted stays
+        0 — but the rollup is a single contiguous window (_rollup_spec takes
+        only a start/end) and cannot skip that one failed day in the middle.
+        It must truncate before it rather than re-request a day already
+        known to have failed this run (CodeRabbit review finding on #1873:
+        the fatal-day-only exclusion missed this non-fatal case)."""
+        seen_specs: list[DataRunSpec] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            seen_specs.append(day_spec)
+            if day_spec.start_trading_date == date(2024, 5, 21):
+                return _failure_result(day_spec, reason="provider_no_data")
+            return _ok_result(day_spec)
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        # All 5 days attempted (non-fatal — no short circuit).
+        assert result.days_unattempted == 0
+        assert result.days_with_failures == 1
+        rollup_spec = seen_specs[-1]
+        assert rollup_spec.start_trading_date == date(2024, 5, 20)
+        assert rollup_spec.end_trading_date == date(2024, 5, 20)  # truncated before 05-21, not through 05-24
+
+    async def test_rollup_failures_and_counts_fold_into_the_result(self) -> None:
+        """A rollup failure (e.g. the daily artifact itself failing) is not
+        swallowed — it surfaces in the same failures list every day's do,
+        and its fetched/reused counts fold into the running totals."""
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            if day_spec.include_daily_trade:  # the rollup call
+                return _failure_result(day_spec, reason="internal_error", detail="daily rollup exploded")
+            return _ok_result(day_spec)
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 20))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.fetched_artifact_count == 1  # the one day; rollup's own _failure_result reports 0
+        rollup_failures = [f for f in result.failures if f.reason == "internal_error"]
+        assert len(rollup_failures) == 1
+        assert result.overall_status == "partial"  # a real bar succeeded, but a failure is also present
 
 
 class TestProgressCallback:
@@ -203,6 +314,35 @@ class TestProgressCallback:
 
         # Cancelled before the second day's ensure_fn call.
         assert calls == [date(2024, 5, 20)]
+
+    async def test_cancel_check_raised_after_the_day_loop_still_stops_the_rollup(self) -> None:
+        """cancel_check is only evaluated at the top of each day-loop
+        iteration — without a dedicated check around the post-loop rollup
+        (#1869), a cancellation requested once the loop finishes would be
+        silently absorbed by that call instead of propagating (#1873 review
+        fix)."""
+        calls: list[DataRunSpec] = []
+
+        class _Cancelled(Exception):
+            pass
+
+        def cancel_check() -> None:
+            # The 3 day sub-calls must all go through; only the 4th call
+            # (the rollup) should observe the cancellation.
+            if len(calls) >= 3:
+                raise _Cancelled("stop")
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            calls.append(day_spec)
+            return _ok_result(day_spec)
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
+        with pytest.raises(_Cancelled):
+            await run_backfill(spec, ensure_fn=fake_ensure, cancel_check=cancel_check)
+
+        # All 3 days ran; the rollup call itself never fired.
+        assert len(calls) == 3
+        assert all(not c.include_daily_trade for c in calls)
 
 
 class TestTypedFailurePropagation:

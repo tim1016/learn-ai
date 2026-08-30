@@ -192,6 +192,15 @@ class FakeCatalog:
         # coexist for one (market, symbol, date, data_type), and a fake that
         # ignored the distinction would hide exactly the wrong-row bug the
         # required parameter exists to prevent.
+        #
+        # Both bounds None means unbounded — the daily-trade rollup's
+        # symbol-wide source read (#1870) — mirroring the real query's
+        # null-safe BETWEEN predicate.
+        def _in_window(trading_date) -> bool:
+            if start_trading_date is None and end_trading_date is None:
+                return True
+            return start_trading_date <= trading_date <= end_trading_date
+
         return [
             self._record(row)
             for row in self.rows.values()
@@ -202,7 +211,7 @@ class FakeCatalog:
             and row["data_type"] == data_type
             and row["price_adjustment_mode"] == price_adjustment_mode
             and row["status"] == "complete"
-            and start_trading_date <= row["trading_date"] <= end_trading_date
+            and _in_window(row["trading_date"])
         ]
 
     async def claim_aggregated_bar_artifact(
@@ -232,8 +241,33 @@ class FakeCatalog:
                 return self._record(row)
         return None
 
+    async def refresh_complete_artifact(self, artifact_id, worker_id, lease_ttl_ms) -> catalog_client.PriorArtifactMetadata | None:
+        row = self.rows.get(artifact_id)
+        if row is None or row["status"] != "complete":
+            return None
+        prior = catalog_client.PriorArtifactMetadata(
+            prior_file_path=row["file_path"],
+            prior_file_sha256=row["file_sha256"],
+        )
+        row.update(status="fetching")
+        return prior
+
+    async def restore_complete_artifact(self, artifact_id, worker_id) -> bool:
+        row = self.rows.get(artifact_id)
+        if row is None or row["status"] != "fetching":
+            return False
+        row.update(status="complete")
+        return True
+
     async def complete_artifact(
-        self, artifact_id, row_count, first_bar_start_ms, last_bar_start_ms, file_size_bytes, file_sha256
+        self,
+        artifact_id,
+        row_count,
+        first_bar_start_ms,
+        last_bar_start_ms,
+        file_size_bytes,
+        file_sha256,
+        data_contract_hash=None,
     ) -> None:
         row = self.rows[artifact_id]
         if row["status"] != "fetching":
@@ -244,6 +278,7 @@ class FakeCatalog:
             first_bar_start_ms=first_bar_start_ms,
             last_bar_start_ms=last_bar_start_ms,
             file_sha256=file_sha256,
+            data_contract_hash=data_contract_hash if data_contract_hash is not None else row["data_contract_hash"],
         )
 
     async def fail_artifact(self, artifact_id, last_error, error_message=None) -> None:
@@ -264,6 +299,8 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "select_coverage_minute_bars",
         "claim_aggregated_bar_artifact",
         "select_complete_aggregated_bar_artifact",
+        "refresh_complete_artifact",
+        "restore_complete_artifact",
         "complete_artifact",
         "fail_artifact",
     ):
@@ -876,28 +913,39 @@ async def test_metadata_launcher_failure_is_not_contention(fake_catalog, tmp_lak
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_a_second_window_leaves_the_daily_artifact_contract_mismatched(fake_catalog, tmp_lake):
-    """The hazard the gate below exists for, demonstrated end to end.
+async def test_a_second_window_rebuilds_the_daily_artifact_onto_the_wider_source_set(fake_catalog, tmp_lake):
+    """#1870: a second, wider window rebuilds the daily artifact instead of
+    refusing.
 
     The derived daily artifact's data contract is keyed by the set of minute
-    artifacts it aggregated, so widening the window makes the cached daily zip
-    describe a different set. ``ensure_data`` reports the mismatch and leaves
-    the previous window's zip on disk — a partial result whose daily bars are
-    stale rather than absent.
+    artifacts it aggregated, so widening the window makes the newly computed
+    hash describe a different (larger) set than the narrow call's. Rather
+    than refuse with a stale-daily failure, ensure_data now rebuilds the
+    artifact onto the current full set — the daily artifact's job is to
+    always reflect everything currently catalogued for the symbol, not one
+    call's requested window.
     """
     _mock_launcher()
     _mock_polygon()
 
-    await _materialize_run_data(_narrow_spec(), resolution="minute")
+    narrow = await _materialize_run_data(_narrow_spec(), resolution="minute")
     wider = await _materialize_run_data(_wide_spec(), resolution="minute")
 
-    assert wider.overall_status == "partial"
-    stale_daily = [
-        f
-        for f in wider.failures
-        if f.artifact_kind == "time_series_bars" and f.trading_date is None and f.reason == "data_contract_mismatch"
-    ]
-    assert stale_daily, wider.failures
+    assert wider.overall_status == "complete", wider.failures
+    mismatch_failures = [f for f in wider.failures if f.reason == "data_contract_mismatch"]
+    assert not mismatch_failures, wider.failures
+
+    def _daily_artifact(result):
+        daily = [a for a in result.artifacts if a.artifact_kind == "time_series_bars" and a.resolution == "daily"]
+        assert len(daily) == 1, result.artifacts
+        return daily[0]
+
+    narrow_daily = _daily_artifact(narrow)
+    wide_daily = _daily_artifact(wider)
+    assert wide_daily.data_contract_hash != narrow_daily.data_contract_hash, (
+        "the rebuilt daily artifact must reflect the wider source set, not the narrow call's cached hash"
+    )
+    assert wider.refreshed_artifact_count == 1, "the rebuild must be counted as refreshed, not fetched or reused"
 
 
 def test_materialize_engine_run_refuses_when_the_daily_bars_it_reads_are_stale(monkeypatch):

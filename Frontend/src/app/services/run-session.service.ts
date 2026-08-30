@@ -1,5 +1,5 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
-import { JobsService } from './jobs.service';
+import { JobsService, type JobStreamEvent } from './jobs.service';
 import type {
   RunDockLevel,
   RunDockSource,
@@ -136,8 +136,8 @@ export class RunSessionService implements RunDockSource {
    *  unique under @for track expressions. */
   private _logSeq = 0;
 
-  /** Subscriber handle on the active job's SSE stream. */
-  private _eventSource: EventSource | null = null;
+  /** Unsubscribe handle for this run's JobsService.onEvent() subscription. */
+  private _unsubscribeEvents: (() => void) | null = null;
   /** Filename + size captured from the terminal event so the auto-download
    *  has what it needs without parsing the result envelope twice. */
   private _completionEnvelope: { downloadUrl: string; filename: string; sizeBytes: number } | null = null;
@@ -313,9 +313,10 @@ export class RunSessionService implements RunDockSource {
     this._sessionId.set(jobId);
     this._appendLog('info', 'ⓘ', `job id ${jobId}`);
 
-    // Open our own EventSource alongside the JobsService one. The SSE
-    // endpoint is read-only and supports multiple subscribers; this keeps
-    // domain-specific event handling here without bloating JobsService.
+    // Ride JobsService's existing stream for this job rather than opening a
+    // second EventSource to the same endpoint — JobsService.onEvent() (#1856)
+    // hands us every frame, including the domain-specific ones it doesn't
+    // itself understand, so the domain handling stays local to this service.
     await this._consumeEventStream(jobId);
 
     if (options?.downloadOnComplete !== false && this._state() === 'done') {
@@ -323,19 +324,28 @@ export class RunSessionService implements RunDockSource {
     }
   }
 
-  /** Hang up the stream and tell the server to stop the worker. */
+  /**
+   * Tell the server to stop the worker. Does NOT close the stream itself —
+   * the worker observes the cancel flag cooperatively and eventually emits
+   * its own terminal event (job.cancelled, or job.completed/job.failed if
+   * it finished right before the flag was seen); `_handleEvent`'s existing
+   * handling for that event is what transitions state and closes the
+   * stream (#1856 review fix — closing here unconditionally meant that
+   * terminal event, and the state transition it drives, could never arrive,
+   * leaving the run card showing "fetching"/"bundling" forever after the
+   * user cancelled).
+   */
   async cancel(): Promise<void> {
     const sid = this._sessionId();
     if (sid) {
       try {
         await this.jobs.cancelJob(sid);
       } catch {
-        // We tried; closing the EventSource below stops the client side
-        // regardless. The worker's terminal job.cancelled event (or its
-        // absence on retry) will surface through state.
+        // The request itself failed (e.g. a network error) — the worker is
+        // presumably still running unaware of it, so leave the stream open
+        // for whatever terminal event it eventually emits on its own.
       }
     }
-    this._closeStream();
   }
 
   /** Move back to idle so the user can start another run. */
@@ -359,44 +369,22 @@ export class RunSessionService implements RunDockSource {
 
   private _consumeEventStream(jobId: string): Promise<void> {
     return new Promise((resolve) => {
-      const source = new EventSource(`/api/jobs/${jobId}/events`);
-      this._eventSource = source;
-
-      source.onmessage = (msg) => {
-        try {
-          const event = JSON.parse(msg.data) as { type: string } & Record<string, unknown>;
-          this._handleEvent(event);
-          if (event.type === 'job.completed' || event.type === 'job.failed' || event.type === 'job.cancelled') {
-            this._closeStream();
-            resolve();
-          }
-        } catch {
-          // Bad JSON from the server is unusual; skip rather than
-          // taking down the whole stream consumer.
-        }
-      };
-
-      source.onerror = () => {
-        const state = this._state();
-        // EventSource auto-reconnects unless we close it; if we already
-        // saw a terminal state, the close below was scheduled and we
-        // can resolve. Otherwise let it keep trying.
-        if (state === 'done' || state === 'error') {
+      this._unsubscribeEvents = this.jobs.onEvent(jobId, (event) => {
+        this._handleEvent(event);
+        if (event.type === 'job.completed' || event.type === 'job.failed' || event.type === 'job.cancelled') {
           this._closeStream();
           resolve();
         }
-      };
+      });
     });
   }
 
   private _closeStream(): void {
-    if (this._eventSource) {
-      this._eventSource.close();
-      this._eventSource = null;
-    }
+    this._unsubscribeEvents?.();
+    this._unsubscribeEvents = null;
   }
 
-  private _handleEvent(event: { type: string } & Record<string, unknown>): void {
+  private _handleEvent(event: JobStreamEvent): void {
     switch (event.type) {
       // ── Framework lifecycle events ────────────────────────────────
       case 'job.started':

@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService, type JobState } from '../../../services/jobs.service';
 import { DataLakeBackfillStore } from '../lib/data-lake-backfill.store';
@@ -31,19 +31,6 @@ function fakeFailure(symbol: string): BackfillFailure {
   };
 }
 
-let originalEventSource: typeof EventSource;
-
-function installEventSourceStub(): void {
-  originalEventSource = globalThis.EventSource;
-  class StubEventSource {
-    onmessage: ((event: MessageEvent<string>) => void) | null = null;
-    onerror: (() => void) | null = null;
-    close(): void {}
-  }
-  (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-    StubEventSource as unknown as typeof EventSource;
-}
-
 interface PanelOptions {
   defaults?: BackfillDefaults | null;
   priceAdjustmentMode?: PriceAdjustmentMode;
@@ -56,9 +43,12 @@ interface PanelOptions {
 async function renderPanel(options: PanelOptions = {}) {
   const startJob = vi.fn().mockResolvedValue('job-77');
   const cancelJob = vi.fn().mockResolvedValue(undefined);
+  // DataLakeBackfillStore rides JobsService.onEvent() (#1856) instead of
+  // opening its own EventSource — start() registers a listener through it.
+  const onEvent = vi.fn().mockReturnValue(vi.fn());
   const jobs = signal(options.liveJobs ?? []);
   const view = await render(LakeBackfillPanelComponent, {
-    providers: [{ provide: JobsService, useValue: { startJob, cancelJob, jobs } }],
+    providers: [{ provide: JobsService, useValue: { startJob, cancelJob, onEvent, jobs } }],
     componentInputs: {
       defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
       seedSymbols: 'SPY',
@@ -72,13 +62,6 @@ async function renderPanel(options: PanelOptions = {}) {
 }
 
 describe('LakeBackfillPanelComponent', () => {
-  beforeEach(() => installEventSourceStub());
-
-  afterEach(() => {
-    (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-      originalEventSource;
-  });
-
   it('seeds the form from the window the page is showing', async () => {
     await renderPanel();
 
@@ -104,7 +87,6 @@ describe('LakeBackfillPanelComponent', () => {
       end_trading_date: '2026-05-22',
       data_types: ['trade'],
       lean_image_digest: 'sha256:pinned',
-      force_refresh: false,
     });
   });
 
