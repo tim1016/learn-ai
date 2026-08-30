@@ -810,3 +810,175 @@ async def test_rolling_back_to_a_staled_digest_reactivates_its_row_instead_of_le
     async with catalog_client.connection() as conn:
         row = await conn.fetchrow('SELECT "Status" FROM "DataLakeArtifacts" WHERE "Id" = $1', first.market_hours.record.id)
     assert row["Status"] == "complete"
+
+
+# ---------------------------------------------------------------------------
+# #1889: launcher-unreachable is transient, distinct from a genuine
+# extraction failure, surfaces through the existing typed diagnostic, and
+# stays retryable indefinitely rather than latching after a single attempt.
+# ---------------------------------------------------------------------------
+
+
+def _unreachable_launcher_side_effect(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("Connection refused")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_launcher_unreachable_is_recorded_as_transient_and_names_the_launcher(clean_artifacts, pool, tmp_lake):
+    """Acceptance criteria (a) + (c): a launcher-unreachable extraction
+    failure must leave a retryable, auditable catalog row (not a silent
+    no-op and not a terminal reason), and the surfaced detail must name the
+    launcher explicitly rather than reading as a generic provider error."""
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_unreachable_launcher_side_effect
+    )
+    lake_root = resolve_lake_root("raw")
+    staging_root = resolve_staging_root("raw")
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    outcome = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+
+    assert launcher_route.call_count == 1
+    for bootstrap in (outcome.market_hours, outcome.symbol_properties, outcome.interest_rate):
+        assert bootstrap.record is None
+        assert bootstrap.failure_reason == "launcher_unreachable", (
+            f"launcher-unreachable must be its own transient reason, distinct from io_error: {bootstrap.failure_reason!r}"
+        )
+        assert bootstrap.detail is not None and "launcher" in bootstrap.detail.lower(), (
+            f"the surfaced detail must name the launcher: {bootstrap.detail!r}"
+        )
+        assert "unreachable" in bootstrap.detail.lower()
+
+    # The failure must be a real, auditable catalog row -- not silently
+    # dropped -- with AttemptCount and LastError recorded like every other
+    # artifact kind's failure (catalog_client.fail_artifact's own contract).
+    async with catalog_client.connection() as conn:
+        rows = await conn.fetch(
+            """SELECT "Status", "AttemptCount", "LastError" FROM "DataLakeArtifacts"
+               WHERE "ArtifactKind" = 'metadata'"""
+        )
+    assert len(rows) == 3, f"expected all three metadata kinds claimed as failed rows, got {len(rows)}"
+    for row in rows:
+        assert row["Status"] == "failed", "left retryable (Status='failed'), not silently absent from the catalog"
+        assert row["AttemptCount"] == 1
+        assert row["LastError"] == "launcher_unreachable"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_launcher_unreachable_failure_is_retried_once_the_launcher_recovers(clean_artifacts, pool, tmp_lake):
+    """Acceptance criterion (b): a subsequent materialization must actually
+    re-attempt -- and this time complete -- a metadata artifact left
+    'failed' by an unreachable launcher, rather than skipping it forever
+    because it's already 'failed'."""
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    stage = _launcher_side_effect(tmp_lake)
+    calls = {"n": 0}
+
+    def _fails_once_then_recovers(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("Connection refused")
+        return stage(request)
+
+    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_fails_once_then_recovers
+    )
+    lake_root = resolve_lake_root("raw")
+    staging_root = resolve_staging_root("raw")
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    first = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+    assert first.market_hours.failure_reason == "launcher_unreachable"
+
+    second = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+
+    assert launcher_route.call_count == 2, "the recovered launcher must actually be retried, not skipped"
+    assert second.market_hours.record is not None
+    assert second.market_hours.failure_reason is None
+    assert second.symbol_properties.record is not None
+
+    async with catalog_client.connection() as conn:
+        row = await conn.fetchrow(
+            'SELECT "Status", "AttemptCount" FROM "DataLakeArtifacts" WHERE "Id" = $1', second.market_hours.record.id
+        )
+    assert row["Status"] == "complete"
+    assert row["AttemptCount"] == 2, "the reclaim on the successful retry must bump AttemptCount, not start a new row"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_launcher_unreachable_never_exhausts_the_retry_ceiling(clean_artifacts, pool, tmp_lake):
+    """#1889: unlike a genuine extraction failure, launcher-unreachable must
+    stay retryable no matter how many consecutive attempts fail -- an
+    operator who restarts the launcher after AttemptCount has passed
+    _MAX_CLAIM_RETRIES must still see the artifact retried, not a permanent
+    'fetch_timeout' latch (the exact latch this issue exists to remove)."""
+    from app.data_lake import metadata_bundle
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    stage = _launcher_side_effect(tmp_lake)
+    calls = {"n": 0}
+    failures_before_recovery = metadata_bundle._MAX_CLAIM_RETRIES + 2  # past the normal ceiling
+
+    def _fails_repeatedly_then_recovers(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] <= failures_before_recovery:
+            raise httpx.ConnectError("Connection refused")
+        return stage(request)
+
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_fails_repeatedly_then_recovers
+    )
+    lake_root = resolve_lake_root("raw")
+    staging_root = resolve_staging_root("raw")
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    for i in range(failures_before_recovery):
+        outcome = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+        assert outcome.market_hours.failure_reason == "launcher_unreachable", (
+            f"call {i + 1}: must stay classified as transient even past the normal retry ceiling, "
+            f"got {outcome.market_hours.failure_reason!r}"
+        )
+
+    recovered = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+    assert recovered.market_hours.record is not None, "must still retry and succeed once the launcher recovers"
+    assert recovered.market_hours.failure_reason is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_non_launcher_extraction_failure_still_respects_the_retry_ceiling(clean_artifacts, pool, tmp_lake):
+    """Regression guard: only launcher_unreachable is exempt from the
+    normal retry ceiling. A genuinely, repeatedly failing extraction (a
+    malformed launcher response) must still exhaust after
+    _MAX_CLAIM_RETRIES attempts and report the existing 'fetch_timeout'
+    terminal reason, exactly as every other artifact kind already does --
+    the fix must not make every failure infinitely retryable."""
+    from app.data_lake import metadata_bundle
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(500, json={"detail": "launcher internal error"})
+    )
+    lake_root = resolve_lake_root("raw")
+    staging_root = resolve_staging_root("raw")
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    reasons = []
+    for _ in range(metadata_bundle._MAX_CLAIM_RETRIES + 1):
+        outcome = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+        reasons.append(outcome.market_hours.failure_reason)
+
+    assert reasons[0] == "io_error"
+    assert reasons[-1] == "fetch_timeout", (
+        f"a genuinely repeated extraction failure must eventually exhaust its retry budget, got {reasons}"
+    )
