@@ -56,9 +56,12 @@ interface PanelOptions {
 async function renderPanel(options: PanelOptions = {}) {
   const startJob = vi.fn().mockResolvedValue('job-77');
   const cancelJob = vi.fn().mockResolvedValue(undefined);
+  // DataLakeBackfillStore rides JobsService.onEvent() (#1856) instead of
+  // opening its own EventSource — start() registers a listener through it.
+  const onEvent = vi.fn().mockReturnValue(vi.fn());
   const jobs = signal(options.liveJobs ?? []);
   const view = await render(LakeBackfillPanelComponent, {
-    providers: [{ provide: JobsService, useValue: { startJob, cancelJob, jobs } }],
+    providers: [{ provide: JobsService, useValue: { startJob, cancelJob, onEvent, jobs } }],
     componentInputs: {
       defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
       seedSymbols: 'SPY',

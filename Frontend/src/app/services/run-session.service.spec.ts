@@ -2,13 +2,12 @@
  * RunSessionService — drives the run-card state machine off SSE events
  * routed through the unified JobsService.
  *
- * These tests stub two things:
- *   1. ``JobsService`` is replaced with a fake whose ``startJob`` returns
- *      a synthetic id and whose ``cancelJob`` is observable. We don't
- *      exercise the real Redis-backed transport.
- *   2. The global ``EventSource`` constructor is replaced with a
- *      controllable test double so tests can inject domain events
- *      (chunk_plan, bundle_progress, job.completed, …) verbatim.
+ * ``JobsService`` is replaced with a fake whose ``startJob`` returns a
+ * synthetic id, ``cancelJob`` is observable, and ``onEvent`` records the
+ * handler RunSessionService registers per job (#1856 — the real service
+ * multiplexes one EventSource across every domain consumer; this fake
+ * exposes that same seam so tests dispatch events by calling the handler
+ * directly instead of standing up a transport double).
  *
  * The download path (``/api/jobs/{id}/download``) goes through ``fetch``
  * which we stub on a per-test basis when the happy-path branch is
@@ -16,83 +15,47 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { JobsService } from './jobs.service';
+import { JobsService, type JobStreamEvent } from './jobs.service';
 import { RunSessionService } from './run-session.service';
 
 // ── Test doubles ────────────────────────────────────────────────────
 
-interface ControllableEventSource {
-  url: string;
-  onmessage: ((ev: { data: string }) => void) | null;
-  onerror: ((ev: unknown) => void) | null;
-  close: () => void;
-  dispatch: (payload: Record<string, unknown>) => void;
-}
-
-let lastSource: ControllableEventSource | null = null;
-let originalEventSource: typeof EventSource;
-
-function setLastSource(instance: ControllableEventSource): void {
-  lastSource = instance;
-}
-
-function installEventSourceStub(): void {
-  originalEventSource = globalThis.EventSource;
-  class StubEventSource implements ControllableEventSource {
-    url: string;
-    onmessage: ((ev: { data: string }) => void) | null = null;
-    onerror: ((ev: unknown) => void) | null = null;
-    constructor(url: string) {
-      this.url = url;
-      // The test harness needs a reference to the latest instance so it
-      // can dispatch events; storing it via a setter keeps the lint rule
-      // against ``this`` aliasing happy without disabling it.
-      setLastSource(this);
-    }
-    close(): void {
-      // No-op for the stub; the service's call to close() flips a flag.
-    }
-    dispatch(payload: Record<string, unknown>): void {
-      this.onmessage?.({ data: JSON.stringify(payload) });
-    }
-  }
-  // EventSource is typed strictly; cast through unknown for the stub.
-  (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-    StubEventSource as unknown as typeof EventSource;
-}
-
-function restoreEventSource(): void {
-  (globalThis as unknown as { EventSource: typeof EventSource }).EventSource = originalEventSource;
-  lastSource = null;
-}
-
-// Mocked JobsService — only the methods RunSessionService actually calls.
+/** Mocked JobsService — only the methods RunSessionService actually calls. */
 function mockJobsService(idToReturn = 'job-test-id') {
+  const handlersByJob = new Map<string, (event: JobStreamEvent) => void>();
   return {
     startJob: vi.fn().mockResolvedValue(idToReturn),
     cancelJob: vi.fn().mockResolvedValue(undefined),
-    // The real service exposes more, but RunSessionService only calls these two.
+    onEvent: vi.fn((jobId: string, handler: (event: JobStreamEvent) => void) => {
+      handlersByJob.set(jobId, handler);
+      return vi.fn(() => handlersByJob.delete(jobId));
+    }),
+    // Test-only helper — not part of the real JobsService surface.
+    dispatch(jobId: string, payload: Record<string, unknown>): void {
+      handlersByJob.get(jobId)?.(payload as JobStreamEvent);
+    },
   };
 }
 
 /**
- * Drive `service.start()` until the EventSource handle is wired up,
- * then return the stub so the caller can dispatch events. ``start()``
- * resolves only after a terminal event closes the stream, so we run it
- * unawaited and let the caller resolve it by dispatching ``job.completed``
- * (or failed/cancelled) themselves.
+ * Drive `service.start()` until it has registered its `onEvent` handler,
+ * then return a `dispatch` bound to that job so the caller can inject
+ * events. ``start()`` resolves only after a terminal event closes the
+ * stream, so we run it unawaited and let the caller resolve it by
+ * dispatching ``job.completed`` (or failed/cancelled) themselves.
  */
 async function startAndGrabSource(
   service: RunSessionService,
+  jobsMock: ReturnType<typeof mockJobsService>,
   payload: Record<string, unknown> = { ticker: 'SPY' },
   options?: { downloadOnComplete?: boolean },
-): Promise<{ done: Promise<void>; source: ControllableEventSource }> {
+): Promise<{ done: Promise<void>; source: { dispatch: (payload: Record<string, unknown>) => void } }> {
   const done = service.start(payload, options);
-  // Let the microtask that opens the EventSource run.
+  // Let the microtask that calls onEvent() run.
   await Promise.resolve();
   await Promise.resolve();
-  if (!lastSource) throw new Error('EventSource stub was not constructed');
-  return { done, source: lastSource };
+  const jobId = await jobsMock.startJob.mock.results[0]?.value;
+  return { done, source: { dispatch: (p) => jobsMock.dispatch(jobId, p) } };
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -102,7 +65,6 @@ describe('RunSessionService', () => {
   let jobsMock: ReturnType<typeof mockJobsService>;
 
   beforeEach(() => {
-    installEventSourceStub();
     jobsMock = mockJobsService('sess-1');
     TestBed.configureTestingModule({
       providers: [{ provide: JobsService, useValue: jobsMock }],
@@ -111,7 +73,6 @@ describe('RunSessionService', () => {
   });
 
   afterEach(() => {
-    restoreEventSource();
     vi.restoreAllMocks();
   });
 
@@ -135,7 +96,7 @@ describe('RunSessionService', () => {
       return document.createElement(tag);
     }) as typeof document.createElement);
 
-    const { done, source } = await startAndGrabSource(service);
+    const { done, source } = await startAndGrabSource(service, jobsMock);
 
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'chunk_plan', total: 2 });
@@ -173,7 +134,7 @@ describe('RunSessionService', () => {
   });
 
   it('marks the next-up queued chunk as paced when chunk_paced fires', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
 
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'chunk_plan', total: 3 });
@@ -193,7 +154,7 @@ describe('RunSessionService', () => {
   });
 
   it('transitions to error on a job.failed event', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'XYZ' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'XYZ' }, { downloadOnComplete: false });
 
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'job.failed', code: 'HTTPException', message: 'No bars returned' });
@@ -205,7 +166,7 @@ describe('RunSessionService', () => {
   });
 
   it('reset() returns the state machine to idle', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'job.cancelled', reason: 'manual abort' });
     await done;
@@ -219,7 +180,7 @@ describe('RunSessionService', () => {
   });
 
   it('progressFraction reflects done-chunks during fetching', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
 
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'chunk_plan', total: 4 });
@@ -245,7 +206,7 @@ describe('RunSessionService', () => {
       return document.createElement(tag);
     }) as typeof document.createElement);
 
-    const { done, source } = await startAndGrabSource(service);
+    const { done, source } = await startAndGrabSource(service, jobsMock);
 
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'chunk_plan', total: 1 });
@@ -277,7 +238,7 @@ describe('RunSessionService', () => {
   });
 
   it('bundle_progress for one component does not clear when a different component finishes', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
 
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'chunk_plan', total: 1 });
@@ -303,7 +264,7 @@ describe('RunSessionService', () => {
   });
 
   it('bundle_component_start flips a component to fetching and bundle_component_done flips it to done', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
 
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'fetch_complete' });
@@ -328,7 +289,7 @@ describe('RunSessionService', () => {
   });
 
   it('processing_indicators populates the indicator-phase signal and bundle_start clears it', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
 
     source.dispatch({ type: 'job.started' });
     source.dispatch({ type: 'chunk_plan', total: 1 });
@@ -345,17 +306,26 @@ describe('RunSessionService', () => {
     await done;
   });
 
-  it('cancel() routes through JobsService.cancelJob', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+  it('cancel() routes through JobsService.cancelJob without closing the stream itself', async () => {
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
     source.dispatch({ type: 'job.started' });
+    const unsubscribe = await jobsMock.onEvent.mock.results[0]?.value;
 
     await service.cancel();
 
     expect(jobsMock.cancelJob).toHaveBeenCalledWith('sess-1');
+    // cancel() must not unsubscribe on its own — only the worker's own
+    // eventual terminal event (job.cancelled here) does that, via the same
+    // path any other terminal event takes. Closing early here would mean
+    // that event, and the state transition it drives, could never arrive.
+    expect(unsubscribe).not.toHaveBeenCalled();
 
-    // Close the stream cleanly.
     source.dispatch({ type: 'job.cancelled', reason: 'manual' });
     await done;
+
+    expect(service.state()).toBe('error');
+    expect(service.error()).toEqual({ kind: 'cancelled', message: 'manual' });
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   // ── Run-dock event log ───────────────────────────────────────────
@@ -363,6 +333,7 @@ describe('RunSessionService', () => {
   it('appends a log entry for each meaningful SSE event with the right severity', async () => {
     const { done, source } = await startAndGrabSource(
       service,
+      jobsMock,
       { ticker: 'SPY', from_date: '2025-01-06', to_date: '2025-01-10' },
       { downloadOnComplete: false },
     );
@@ -397,7 +368,7 @@ describe('RunSessionService', () => {
   });
 
   it('caps the log at 500 entries, FIFO — oldest entries roll off when over the limit', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
 
     // Seed a recognisable first entry, then push enough events to exceed 500.
     source.dispatch({ type: 'chunk_plan', total: 999 });
@@ -416,7 +387,7 @@ describe('RunSessionService', () => {
   });
 
   it('log persists across reset() — the dock keeps history when a new run starts', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
     source.dispatch({ type: 'chunk_plan', total: 1 });
     source.dispatch({ type: 'job.cancelled', reason: 'first run' });
     await done;
@@ -434,7 +405,7 @@ describe('RunSessionService', () => {
   });
 
   it('unknown event types still produce a log line so future events are not silently dropped', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
     const beforeCount = service.log().length;
 
     source.dispatch({ type: 'totally_made_up_event', anything: 'goes' });
@@ -448,7 +419,7 @@ describe('RunSessionService', () => {
   });
 
   it('dividend_adjusted event lands in the log even though it does not affect state', async () => {
-    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
 
     source.dispatch({ type: 'dividend_adjusted', events: 4, bars: 1500 });
 
