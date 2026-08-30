@@ -230,6 +230,32 @@ class TestPostLoopRollup:
         assert result.days_unattempted == 2
         assert len(seen_specs) == 1  # just the one day sub-call, no rollup
 
+    async def test_rollup_range_also_truncates_at_a_non_fatal_interior_failure(self) -> None:
+        """A non-fatal per-day failure (e.g. provider_no_data) does not stop
+        the loop — later days still get attempted, and days_unattempted stays
+        0 — but the rollup is a single contiguous window (_rollup_spec takes
+        only a start/end) and cannot skip that one failed day in the middle.
+        It must truncate before it rather than re-request a day already
+        known to have failed this run (CodeRabbit review finding on #1873:
+        the fatal-day-only exclusion missed this non-fatal case)."""
+        seen_specs: list[DataRunSpec] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            seen_specs.append(day_spec)
+            if day_spec.start_trading_date == date(2024, 5, 21):
+                return _failure_result(day_spec, reason="provider_no_data")
+            return _ok_result(day_spec)
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        # All 5 days attempted (non-fatal — no short circuit).
+        assert result.days_unattempted == 0
+        assert result.days_with_failures == 1
+        rollup_spec = seen_specs[-1]
+        assert rollup_spec.start_trading_date == date(2024, 5, 20)
+        assert rollup_spec.end_trading_date == date(2024, 5, 20)  # truncated before 05-21, not through 05-24
+
     async def test_rollup_failures_and_counts_fold_into_the_result(self) -> None:
         """A rollup failure (e.g. the daily artifact itself failing) is not
         swallowed — it surfaces in the same failures list every day's do,

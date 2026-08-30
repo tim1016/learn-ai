@@ -499,7 +499,7 @@ async def run_backfill(
     days_completed = 0
     days_with_failures = 0
     days_unattempted = 0
-    hit_fatal_day = False
+    first_failed_day_index: int | None = None
 
     for day_index, trading_date in enumerate(sessions, start=1):
         if cancel_check is not None:
@@ -532,6 +532,8 @@ async def run_backfill(
         all_failures.extend(day_result.failures)
         if day_result.failures:
             days_with_failures += 1
+            if first_failed_day_index is None:
+                first_failed_day_index = day_index
         else:
             days_completed += 1
 
@@ -549,7 +551,6 @@ async def run_backfill(
 
         if fatal is not None:
             days_unattempted = len(remaining_dates)
-            hit_fatal_day = True
             break
 
     # Follow-up rollup: factor/map files and the daily-trade artifact, all
@@ -557,17 +558,27 @@ async def run_backfill(
     # Skipped when nothing succeeded — an empty or wholly-failed range has no
     # minute-trade coverage for the rollup to derive anything from.
     #
-    # The fatal day itself (when there was one) is excluded from the rollup's
-    # own window: it never reached 'complete' for at least one requested data
-    # type, so re-requesting it here would have this call's Pass 1 retry the
-    # exact same auth/entitlement/rate-limit failure the early abort above
-    # exists to avoid repeating. The daily-trade artifact doesn't lose that
-    # day's coverage by this exclusion — its source set is read from the full
-    # catalog regardless of this spec's window (ensure_data.
-    # _process_daily_trade_artifact) — a later ensure_data call picks it up
-    # once the underlying provider issue is resolved and the day is retried.
+    # The rollup's window is a single contiguous range (_rollup_spec takes
+    # only a start/end), so it cannot skip an individual failed day sandwiched
+    # between successes — it can only be truncated. Truncate it at the first
+    # day (fatal or not) that had ANY failure: every day from there on is not
+    # 'complete' for at least one requested data type, so re-including it
+    # would have this call's Pass 1 retry a failure that already happened
+    # once this run — repeating a doomed auth/rate-limit call in the fatal
+    # case, or just duplicating the same failure in the report otherwise.
+    # This can under-cover the factor_file's history window when a later day
+    # past the first failure succeeded (its own window is spec-scoped, unlike
+    # the daily-trade artifact's, whose source set is read from the full
+    # catalog regardless of this spec's window — see ensure_data.
+    # _process_daily_trade_artifact) — an acceptable trade-off since a later
+    # ensure_data/backfill call over that wider range naturally rebuilds it
+    # once the underlying provider issue is resolved.
     attempted_sessions = sessions[: len(sessions) - days_unattempted]
-    rollup_sessions = attempted_sessions[:-1] if hit_fatal_day else attempted_sessions
+    rollup_sessions = (
+        attempted_sessions[: first_failed_day_index - 1]
+        if first_failed_day_index is not None
+        else attempted_sessions
+    )
     if rollup_sessions and bar_success_total > 0:
         # cancel_check is otherwise only evaluated at the top of each day-loop
         # iteration; without a check here a cancellation requested during (or
