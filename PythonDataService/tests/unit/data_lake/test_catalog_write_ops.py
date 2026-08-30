@@ -377,7 +377,7 @@ async def test_refresh_complete_returns_prior_metadata(clean_artifacts, pool):
         file_sha256="b" * 64,
     )
 
-    prior = await catalog_client.refresh_complete_minute_bar(
+    prior = await catalog_client.refresh_complete_bar_artifact(
         artifact_id=artifact_id,
         worker_id="w-1",
         lease_ttl_ms=300_000,
@@ -397,7 +397,7 @@ async def test_refresh_complete_returns_none_when_not_complete(clean_artifacts, 
         file_path="x.zip",
     )
     assert artifact_id is not None  # still 'fetching', not 'complete'
-    prior = await catalog_client.refresh_complete_minute_bar(
+    prior = await catalog_client.refresh_complete_bar_artifact(
         artifact_id=artifact_id,
         worker_id="w-1",
         lease_ttl_ms=300_000,

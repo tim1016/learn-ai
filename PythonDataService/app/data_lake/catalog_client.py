@@ -262,8 +262,8 @@ async def select_coverage_minute_bars(
     market: str,
     symbol: str,
     data_type: str,
-    start_trading_date: date,
-    end_trading_date: date,
+    start_trading_date: date | None,
+    end_trading_date: date | None,
     *,
     price_adjustment_mode: str,
 ) -> list[ArtifactRecord]:
@@ -273,6 +273,14 @@ async def select_coverage_minute_bars(
     Used by ensure_data to compute which dates already exist on disk before
     deciding what to fetch. In Slice 1a there are no rows; this returns an
     empty list and exercises the schema/query end-to-end.
+
+    ``start_trading_date``/``end_trading_date`` may both be ``None`` for an
+    unbounded, symbol-wide query — the daily-trade rollup's source-of-truth
+    read (see ``ensure_data._process_daily_trade_artifact``), which derives
+    from every complete minute-trade artifact the catalog holds for the
+    symbol, not just the window one ``ensure_data`` call happened to request.
+    A caller passes both bounds or neither; there is no legitimate
+    half-open case.
 
     ``price_adjustment_mode`` is required (keyword-only): once more than one
     mode can exist for the same (market, symbol, date, data_type) --
@@ -293,7 +301,8 @@ async def select_coverage_minute_bars(
            AND "Market" = $1
            AND "Symbol" = $2
            AND "DataType" = $3
-           AND "TradingDate" BETWEEN $4 AND $5
+           AND ($4::date IS NULL OR "TradingDate" >= $4)
+           AND ($5::date IS NULL OR "TradingDate" <= $5)
            AND "PriceAdjustmentMode" = $6
            AND "Status" = 'complete'
          ORDER BY "TradingDate"
@@ -849,16 +858,20 @@ async def claim_aggregated_bar_artifact(
         )
 
 
-async def refresh_complete_minute_bar(
+async def refresh_complete_bar_artifact(
     artifact_id: int,
     worker_id: str,
     lease_ttl_ms: int,
 ) -> PriorArtifactMetadata | None:
-    """Force-refresh transition: 'complete' → 'fetching' for a re-fetch.
+    """Force-refresh transition: 'complete' → 'fetching' for a re-fetch or rebuild.
 
-    Returns the prior file_path + file_sha256 so the caller can preserve them
-    if the new fetch fails validation. Returns None when the row isn't
-    currently 'complete' (refresh has no work to do).
+    Row-id-keyed and resolution-agnostic — used both for a minute-bar
+    day-refresh (a provider correction) and for rebuilding a daily-trade
+    aggregate whose source minute set has grown or changed (see
+    ``ensure_data._process_daily_trade_artifact``). Returns the prior
+    file_path + file_sha256 so the caller can preserve them if the new write
+    fails validation. Returns None when the row isn't currently 'complete'
+    (refresh has no work to do — e.g. a race with another worker).
     """
     now_ms = int(time.time() * 1000)
     query = """

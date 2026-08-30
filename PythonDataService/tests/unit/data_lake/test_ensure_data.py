@@ -471,8 +471,9 @@ def _polygon_ok_payload_date(ticker: str, bar_start_ms: int) -> dict:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_daily_artifact_dch_mismatch_returns_failure(clean_artifacts, pool, tmp_lake):
-    """Narrower window creates a daily artifact; wider window detects DCH mismatch."""
+async def test_daily_artifact_rebuilds_onto_a_wider_window(clean_artifacts, pool, tmp_lake):
+    """Narrower window creates a daily artifact; wider window rebuilds it onto
+    the larger source set instead of refusing (#1870)."""
     launcher_mock = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
         side_effect=_launcher_side_effect(tmp_lake)
     )
@@ -515,30 +516,24 @@ async def test_daily_artifact_dch_mismatch_returns_failure(clean_artifacts, pool
     assert len(daily_artifacts_narrow) == 1
     h1 = daily_artifacts_narrow[0].data_contract_hash
 
-    # Second call: wide window (May 20–24) — produces daily hash H2 ≠ H1.
-    # The cached daily artifact (H1) conflicts; expect a data_contract_mismatch failure.
+    # Second call: wide window (May 20–24). The daily artifact's source set
+    # is read from the catalog (all of SPY's complete minute-trade coverage),
+    # not this call's own window, so it now includes the narrow call's days
+    # too — producing daily hash H2 != H1, and a rebuild rather than a
+    # data_contract_mismatch failure.
     result_wide = await ensure_data(_spec_wide(["SPY"]))
+    assert result_wide.overall_status == "complete", f"wide call failed: {result_wide.failures}"
     mismatch_failures = [
         f
         for f in result_wide.failures
         if f.reason == "data_contract_mismatch" and f.artifact_kind == "time_series_bars"
     ]
-    assert len(mismatch_failures) == 1, f"expected data_contract_mismatch failure, got: {result_wide.failures}"
-    # Confirm the hashes genuinely differ (sanity check on the test itself).
-    from app.data_lake.ensure_data import _daily_dch
+    assert not mismatch_failures, f"expected no data_contract_mismatch failure, got: {result_wide.failures}"
+    assert result_wide.refreshed_artifact_count == 1, "the daily rebuild must be counted as refreshed"
 
-    wide_source_ids = [
-        a.id
-        for a in result_wide.artifacts
-        if a.artifact_kind == "time_series_bars" and a.resolution == "minute" and a.symbol == "SPY"
+    daily_artifacts_wide = [
+        a for a in result_wide.artifacts if a.artifact_kind == "time_series_bars" and a.resolution == "daily"
     ]
-    wide_source_shas = [
-        a.file_sha256
-        for a in result_wide.artifacts
-        if a.artifact_kind == "time_series_bars" and a.resolution == "minute" and a.symbol == "SPY"
-    ]
-    # The mode participates in the hash, so recompute with the wide run's own
-    # mode rather than a literal — a fixture that changes mode must not
-    # silently turn this sanity check into a comparison of two modes.
-    h2 = _daily_dch(wide_source_ids, wide_source_shas, _spec_wide(["SPY"]).price_adjustment_mode)
-    assert h1 != h2, "narrow and wide daily DCHs must differ for this test to be meaningful"
+    assert len(daily_artifacts_wide) == 1
+    h2 = daily_artifacts_wide[0].data_contract_hash
+    assert h1 != h2, "the rebuilt daily artifact must reflect the wider source set, not the narrow call's cached hash"

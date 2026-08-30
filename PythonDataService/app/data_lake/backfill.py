@@ -298,12 +298,16 @@ def _day_sub_spec(spec: DataRunSpec, trading_date: date) -> DataRunSpec:
 
     Factor/map files are symbol-scoped (not day-scoped) — including them
     per day would just repeat the same corp-action fetch on every session.
-    Daily-trade is a whole-range rollup — including it per day guarantees a
-    data_contract_mismatch on every day after the first (see the
-    include_daily_trade field docstring on DataRunSpec). model_copy() does
-    not re-run validators, which is fine here: every field we set narrows
-    an already-validated spec and can't violate a constraint the original
-    didn't already satisfy.
+    Daily-trade is a whole-symbol rollup that now rebuilds automatically
+    when its source set changes (#1870) rather than refusing, so including
+    it per day would no longer fail — it would just rebuild the same daily
+    zip N times in a row, once per session, for no benefit (see the
+    include_daily_trade field docstring on DataRunSpec). All three are
+    produced once instead, by the one follow-up call _rollup_spec builds
+    after this loop completes. model_copy() does not re-run validators,
+    which is fine here: every field we set narrows an already-validated
+    spec and can't violate a constraint the original didn't already
+    satisfy.
     """
     return spec.model_copy(
         update={
@@ -312,6 +316,34 @@ def _day_sub_spec(spec: DataRunSpec, trading_date: date) -> DataRunSpec:
             "include_factor_files": False,
             "include_map_files": False,
             "include_daily_trade": False,
+        }
+    )
+
+
+def _rollup_spec(spec: DataRunSpec, attempted_sessions: list[date]) -> DataRunSpec:
+    """Full-range spec for the post-loop factor/map-file and daily-trade rollup.
+
+    The day loop below narrows every sub-spec to exactly one day and opts
+    out of factor files, map files, and daily-trade (see _day_sub_spec) —
+    all three are symbol- or range-scoped, not day-scoped, and are
+    deliberately deferred to this one follow-up call rather than being
+    repeated on every iteration. Narrowed to the sessions actually attempted
+    so a fatal-abort's un-attempted tail is not re-tried here — the
+    daily-trade rollup itself derives from the full catalog for the symbol
+    regardless of this spec's own window (see
+    ensure_data._process_daily_trade_artifact), so narrowing this window
+    costs the rollup nothing. Minute-trade/quote days in this window are all
+    already 'complete' from the loop, so this call's Pass 1 is cache hits —
+    zero provider calls beyond whatever factor/map files it fetches for the
+    first time.
+    """
+    return spec.model_copy(
+        update={
+            "start_trading_date": attempted_sessions[0],
+            "end_trading_date": attempted_sessions[-1],
+            "include_factor_files": True,
+            "include_map_files": True,
+            "include_daily_trade": True,
         }
     )
 
@@ -439,14 +471,18 @@ async def run_backfill(
     typed run_aborted failure records why, rather than repeating the same
     doomed provider call for every remaining day in the range.
 
-    This backfill is scoped to minute-bar (and same-day derived quote)
-    coverage. Corp-action and whole-range daily-trade artifacts are left to
-    a follow-up ensure_data() call over the full range once every day's
-    minute bars are in place (see _day_sub_spec). overall_status is
-    classified from requested minute-bar artifacts only — the Phase 0
-    metadata bootstrap that ensure_data unconditionally attempts every day
-    counts toward its own fetched/reused totals but must not make an
-    all-days-failed backfill read as "partial".
+    The day loop is scoped to minute-bar (and same-day derived quote)
+    coverage. Corp-action and daily-trade artifacts are deliberately left
+    out of every per-day sub-spec (see _day_sub_spec) and produced by one
+    follow-up ensure_fn() call over the attempted range once the loop
+    completes (#1869) — see _rollup_spec. That follow-up only runs when at
+    least one day actually produced a bar (bar_success_total > 0); its own
+    fetched/reused/failure counts fold into this function's totals the same
+    way each day's do. overall_status is classified from requested
+    minute-bar artifacts only — the Phase 0 metadata bootstrap that
+    ensure_data unconditionally attempts every day counts toward its own
+    fetched/reused totals but must not make an all-days-failed backfill read
+    as "partial".
 
     cancel_check, when given, is called before each day and may raise to
     abort the loop (the job.runner contract: JobCancelled propagates to
@@ -513,6 +549,18 @@ async def run_backfill(
         if fatal is not None:
             days_unattempted = len(remaining_dates)
             break
+
+    # Follow-up rollup: factor/map files and the daily-trade artifact, all
+    # deliberately deferred out of the per-day loop above (see _rollup_spec).
+    # Skipped when nothing succeeded — an empty or wholly-failed range has no
+    # minute-trade coverage for the rollup to derive anything from.
+    attempted_sessions = sessions[: len(sessions) - days_unattempted]
+    if attempted_sessions and bar_success_total > 0:
+        rollup_spec = _rollup_spec(spec, attempted_sessions)
+        rollup_result = await ensure_fn(rollup_spec)
+        fetched_total += rollup_result.fetched_artifact_count
+        reused_total += rollup_result.reused_artifact_count
+        all_failures.extend(rollup_result.failures)
 
     completed_ms = int(time.time() * 1000)
     return BackfillResult(

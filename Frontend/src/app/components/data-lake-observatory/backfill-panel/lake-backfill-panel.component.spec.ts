@@ -104,7 +104,6 @@ describe('LakeBackfillPanelComponent', () => {
       end_trading_date: '2026-05-22',
       data_types: ['trade'],
       lean_image_digest: 'sha256:pinned',
-      force_refresh: false,
     });
   });
 

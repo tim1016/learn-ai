@@ -161,7 +161,6 @@ export interface DataRunSpec {
   readonly end_trading_date: string;
   readonly data_types: readonly DataLakeDataType[];
   readonly lean_image_digest: string;
-  readonly force_refresh: boolean;
   /**
    * Which adjustment mode the fetch writes. Omitted means `raw`, matching
    * the data plane's own default. `lean_adjusted` is deliberately absent:

@@ -66,7 +66,6 @@ async def run_ticker(ticker: str) -> dict:
         include_factor_files=True,
         include_map_files=True,
         lean_image_digest=LEAN_IMAGE_DIGEST,
-        force_refresh=False,
         fetch_timeout_seconds=FETCH_TIMEOUT_SECONDS,
     )
 

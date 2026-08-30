@@ -149,6 +149,24 @@ def _polygon_ok_payload(bar_start_ms: int) -> dict:
     }
 
 
+def _mock_corpus_actions_and_events() -> None:
+    """Register respx mocks for splits, dividends, ticker-events (all empty).
+
+    The post-loop rollup call (#1869) opts factor/map files back in, so any
+    test whose backfill produces at least one successful bar now also needs
+    these endpoints mocked, not just the minute-bar aggregates.
+    """
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/splits.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": []})
+    )
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/dividends.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": []})
+    )
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/tickers/.*/events.*")).mock(
+        return_value=httpx.Response(200, json={"status": "OK", "results": {"events": []}})
+    )
+
+
 @respx.mock
 async def test_run_backfill_against_real_ensure_data_reports_per_day_progress(clean_artifacts, pool, tmp_lake):
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
@@ -167,6 +185,7 @@ async def test_run_backfill_against_real_ensure_data_reports_per_day_progress(cl
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-22.*").mock(
         return_value=httpx.Response(200, json={"ticker": "SPY", "status": "OK", "results": []})
     )
+    _mock_corpus_actions_and_events()  # the post-loop rollup call needs these (#1869)
 
     progress_events: list[BackfillDayProgress] = []
     result = await run_backfill(_spec(), on_day_progress=progress_events.append)
@@ -181,10 +200,12 @@ async def test_run_backfill_against_real_ensure_data_reports_per_day_progress(cl
     failing_day = next(p for p in progress_events if p.trading_date == date(2024, 5, 22))
     assert [f.reason for f in failing_day.failures] == ["provider_no_data"]
 
-    # No factor/map/daily-trade artifacts were produced by the per-day
-    # sub-calls (they opt out per _day_sub_spec) — every artifact is a
-    # per-day minute-trade or quote bar.
-    assert result.fetched_artifact_count >= 2  # at least the two successful days' minute bars
+    # The per-day sub-calls themselves never produce factor/map/daily-trade
+    # artifacts (they opt out per _day_sub_spec) — those come from the one
+    # follow-up rollup call after the loop (#1869), which is why this
+    # assertion is a floor, not an exact count: at least the two successful
+    # days' minute bars, plus whatever the rollup adds.
+    assert result.fetched_artifact_count >= 2
 
 
 @respx.mock
@@ -215,6 +236,7 @@ async def test_backfill_survives_a_pool_initialized_on_a_different_loop(clean_ar
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/2024-05-22.*").mock(
         return_value=httpx.Response(200, json=_polygon_ok_payload(1716470400000))
     )
+    _mock_corpus_actions_and_events()  # the post-loop rollup call needs these (#1869)
 
     this_loop = asyncio.get_running_loop()
     bridged_ensure_fn = _bridge_ensure_fn(this_loop)

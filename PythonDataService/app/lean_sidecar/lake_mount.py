@@ -319,21 +319,19 @@ def resolve_lake_artifacts(
         # writes the derived quotes beside them.
         #
         # It is NOT the only remedy a freshly cache_import'd lake may need:
-        # ``run_backfill`` deliberately opts out of the whole-history daily
-        # artifact per day (see its own module docstring), so a lake that
-        # never had one still lacks it after this backfill completes, and
-        # the next call here will raise ``lake_missing_daily_artifact``
-        # separately — that one does need a full-range ``ensure_data`` call
-        # (a provider call, since the daily artifact is not derivable from
-        # per-day trade zips alone). Tracked as #1869.
+        # ``run_backfill`` opts out of the daily artifact per day (see its
+        # own module docstring) and instead produces it with one follow-up
+        # full-range ``ensure_data`` call once the day loop completes
+        # (#1869). That follow-up call, like this one, costs no provider
+        # call either — ``_process_daily_trade_artifact`` derives the daily
+        # zip by reading the minute-trade zips already on disk, and a
+        # completed backfill run has already produced every one of them.
         raise LakeMountError(
             f"lake_incomplete_quote_coverage: {safe_symbol} is missing minute-quote artifacts "
             f"for {_render_sessions(missing_quote)}; LEAN's default minute subscription "
             "requests quotes and the read-only mount cannot synthesize them — run the lake "
             "backfill over this window with data_types=['trade','quote'] to derive them from "
-            "the trade artifacts already present (no provider call). If the daily artifact is "
-            "also missing, a separate lake_missing_daily_artifact error follows and needs its "
-            "own full-range backfill (see #1869)"
+            "the trade artifacts already present (no provider call)."
         )
 
     daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
