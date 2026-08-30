@@ -189,10 +189,13 @@ class TestPostLoopRollup:
 
         assert len(calls) == 3  # exactly the 3 day sub-calls, no rollup
 
-    async def test_rollup_range_narrows_to_the_attempted_sessions_on_fatal_abort(self) -> None:
+    async def test_rollup_range_excludes_both_the_unattempted_tail_and_the_fatal_day(self) -> None:
         """A fatal provider error stops the day loop early (days_unattempted
-        > 0) — the rollup must cover only what was actually attempted, not
-        re-attempt the unattempted tail with a doomed provider call."""
+        > 0) — the rollup must cover only sessions that actually reached
+        'complete'. Re-including the unattempted tail would just repeat the
+        same doomed provider call for days never even tried; re-including the
+        fatal day itself would retry the exact same auth/rate-limit failure
+        the early abort exists to avoid repeating (#1873 review fix)."""
         seen_specs: list[DataRunSpec] = []
 
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
@@ -209,7 +212,23 @@ class TestPostLoopRollup:
         assert result.days_unattempted == 3
         rollup_spec = seen_specs[-1]
         assert rollup_spec.start_trading_date == date(2024, 5, 20)
-        assert rollup_spec.end_trading_date == date(2024, 5, 21)  # the fatal day itself was attempted
+        assert rollup_spec.end_trading_date == date(2024, 5, 20)  # the fatal day (05-21) is excluded too
+
+    async def test_rollup_skipped_when_the_only_attempted_day_is_the_fatal_one(self) -> None:
+        """The fatal day hits on the very first session — nothing else was
+        even attempted, so excluding the fatal day leaves no sessions for the
+        rollup to cover. It must not fire with an empty/inverted range."""
+        seen_specs: list[DataRunSpec] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            seen_specs.append(day_spec)
+            return _failure_result(day_spec, reason="provider_auth_error")
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.days_unattempted == 2
+        assert len(seen_specs) == 1  # just the one day sub-call, no rollup
 
     async def test_rollup_failures_and_counts_fold_into_the_result(self) -> None:
         """A rollup failure (e.g. the daily artifact itself failing) is not
@@ -269,6 +288,35 @@ class TestProgressCallback:
 
         # Cancelled before the second day's ensure_fn call.
         assert calls == [date(2024, 5, 20)]
+
+    async def test_cancel_check_raised_after_the_day_loop_still_stops_the_rollup(self) -> None:
+        """cancel_check is only evaluated at the top of each day-loop
+        iteration — without a dedicated check around the post-loop rollup
+        (#1869), a cancellation requested once the loop finishes would be
+        silently absorbed by that call instead of propagating (#1873 review
+        fix)."""
+        calls: list[DataRunSpec] = []
+
+        class _Cancelled(Exception):
+            pass
+
+        def cancel_check() -> None:
+            # The 3 day sub-calls must all go through; only the 4th call
+            # (the rollup) should observe the cancellation.
+            if len(calls) >= 3:
+                raise _Cancelled("stop")
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            calls.append(day_spec)
+            return _ok_result(day_spec)
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
+        with pytest.raises(_Cancelled):
+            await run_backfill(spec, ensure_fn=fake_ensure, cancel_check=cancel_check)
+
+        # All 3 days ran; the rollup call itself never fired.
+        assert len(calls) == 3
+        assert all(not c.include_daily_trade for c in calls)
 
 
 class TestTypedFailurePropagation:

@@ -377,7 +377,7 @@ async def test_refresh_complete_returns_prior_metadata(clean_artifacts, pool):
         file_sha256="b" * 64,
     )
 
-    prior = await catalog_client.refresh_complete_bar_artifact(
+    prior = await catalog_client.refresh_complete_artifact(
         artifact_id=artifact_id,
         worker_id="w-1",
         lease_ttl_ms=300_000,
@@ -397,12 +397,173 @@ async def test_refresh_complete_returns_none_when_not_complete(clean_artifacts, 
         file_path="x.zip",
     )
     assert artifact_id is not None  # still 'fetching', not 'complete'
-    prior = await catalog_client.refresh_complete_bar_artifact(
+    prior = await catalog_client.refresh_complete_artifact(
         artifact_id=artifact_id,
         worker_id="w-1",
         lease_ttl_ms=300_000,
     )
     assert prior is None
+
+
+async def test_complete_artifact_persists_a_new_data_contract_hash_on_rebuild(clean_artifacts, pool):
+    """#1873 review fix: a rebuild (refresh_complete_artifact then
+    complete_artifact with the newly computed hash) must persist that hash —
+    otherwise every later ensure_data call sees the same stale mismatch and
+    rebuilds again forever."""
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    assert artifact_id is not None
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=390,
+        first_bar_start_ms=1,
+        last_bar_start_ms=2,
+        file_size_bytes=100,
+        file_sha256="b" * 64,
+    )
+    await catalog_client.refresh_complete_artifact(artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000)
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=500,
+        first_bar_start_ms=1,
+        last_bar_start_ms=3,
+        file_size_bytes=200,
+        file_sha256="c" * 64,
+        data_contract_hash="d" * 64,
+    )
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        row = await conn.fetchrow('SELECT "DataContractHash" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id)
+    finally:
+        await conn.close()
+    assert row["DataContractHash"] == "d" * 64
+
+
+async def test_complete_artifact_leaves_data_contract_hash_untouched_when_omitted(clean_artifacts, pool):
+    """The common (non-rebuild) path never passes data_contract_hash — the
+    column set at claim time must survive complete_artifact unchanged."""
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    assert artifact_id is not None
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=390,
+        first_bar_start_ms=1,
+        last_bar_start_ms=2,
+        file_size_bytes=100,
+        file_sha256="b" * 64,
+    )
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        row = await conn.fetchrow('SELECT "DataContractHash" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id)
+    finally:
+        await conn.close()
+    assert row["DataContractHash"] == "a" * 64
+
+
+async def test_restore_complete_artifact_undoes_a_refresh(clean_artifacts, pool):
+    """A rebuild that fails before writing anything new must be undoable back
+    to 'complete' with its pre-rebuild metadata intact (#1873 review fix —
+    aggregated-bar and corp-action artifacts have no steal_or_retry path, so
+    a bare fail_artifact() here would strand the row forever)."""
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    assert artifact_id is not None
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=390,
+        first_bar_start_ms=1,
+        last_bar_start_ms=2,
+        file_size_bytes=100,
+        file_sha256="b" * 64,
+    )
+    await catalog_client.refresh_complete_artifact(artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000)
+
+    restored = await catalog_client.restore_complete_artifact(artifact_id=artifact_id, worker_id="w-1")
+    assert restored is True
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        row = await conn.fetchrow(
+            'SELECT "Status", "FileSha256", "DataContractHash", "LeaseOwner" FROM "DataLakeArtifacts" WHERE "Id" = $1',
+            artifact_id,
+        )
+    finally:
+        await conn.close()
+    assert row["Status"] == "complete"
+    assert row["FileSha256"] == "b" * 64  # untouched by the failed rebuild
+    assert row["DataContractHash"] == "a" * 64
+    assert row["LeaseOwner"] is None
+
+
+async def test_restore_complete_artifact_rejects_a_different_worker(clean_artifacts, pool):
+    """Scoped to the caller's own worker_id, same as refresh_lease — a worker
+    must not resurrect a row it doesn't hold the lease on."""
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    assert artifact_id is not None
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=390,
+        first_bar_start_ms=1,
+        last_bar_start_ms=2,
+        file_size_bytes=100,
+        file_sha256="b" * 64,
+    )
+    await catalog_client.refresh_complete_artifact(artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000)
+
+    restored = await catalog_client.restore_complete_artifact(artifact_id=artifact_id, worker_id="w-2")
+    assert restored is False
+
+
+async def test_restore_complete_artifact_returns_false_when_not_fetching(clean_artifacts, pool):
+    """A row that was never refreshed (still plain 'complete') has nothing
+    to undo — the 'fetching' guard must reject it, not silently no-op true."""
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    assert artifact_id is not None
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=390,
+        first_bar_start_ms=1,
+        last_bar_start_ms=2,
+        file_size_bytes=100,
+        file_sha256="b" * 64,
+    )
+    restored = await catalog_client.restore_complete_artifact(artifact_id=artifact_id, worker_id="w-1")
+    assert restored is False
 
 
 # ---------------------------------------------------------------------------

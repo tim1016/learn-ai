@@ -241,7 +241,7 @@ class FakeCatalog:
                 return self._record(row)
         return None
 
-    async def refresh_complete_bar_artifact(self, artifact_id, worker_id, lease_ttl_ms) -> catalog_client.PriorArtifactMetadata | None:
+    async def refresh_complete_artifact(self, artifact_id, worker_id, lease_ttl_ms) -> catalog_client.PriorArtifactMetadata | None:
         row = self.rows.get(artifact_id)
         if row is None or row["status"] != "complete":
             return None
@@ -252,8 +252,22 @@ class FakeCatalog:
         row.update(status="fetching")
         return prior
 
+    async def restore_complete_artifact(self, artifact_id, worker_id) -> bool:
+        row = self.rows.get(artifact_id)
+        if row is None or row["status"] != "fetching":
+            return False
+        row.update(status="complete")
+        return True
+
     async def complete_artifact(
-        self, artifact_id, row_count, first_bar_start_ms, last_bar_start_ms, file_size_bytes, file_sha256
+        self,
+        artifact_id,
+        row_count,
+        first_bar_start_ms,
+        last_bar_start_ms,
+        file_size_bytes,
+        file_sha256,
+        data_contract_hash=None,
     ) -> None:
         row = self.rows[artifact_id]
         if row["status"] != "fetching":
@@ -264,6 +278,7 @@ class FakeCatalog:
             first_bar_start_ms=first_bar_start_ms,
             last_bar_start_ms=last_bar_start_ms,
             file_sha256=file_sha256,
+            data_contract_hash=data_contract_hash if data_contract_hash is not None else row["data_contract_hash"],
         )
 
     async def fail_artifact(self, artifact_id, last_error, error_message=None) -> None:
@@ -284,7 +299,8 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "select_coverage_minute_bars",
         "claim_aggregated_bar_artifact",
         "select_complete_aggregated_bar_artifact",
-        "refresh_complete_bar_artifact",
+        "refresh_complete_artifact",
+        "restore_complete_artifact",
         "complete_artifact",
         "fail_artifact",
     ):

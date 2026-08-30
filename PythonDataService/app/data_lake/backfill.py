@@ -499,6 +499,7 @@ async def run_backfill(
     days_completed = 0
     days_with_failures = 0
     days_unattempted = 0
+    hit_fatal_day = False
 
     for day_index, trading_date in enumerate(sessions, start=1):
         if cancel_check is not None:
@@ -548,16 +549,37 @@ async def run_backfill(
 
         if fatal is not None:
             days_unattempted = len(remaining_dates)
+            hit_fatal_day = True
             break
 
     # Follow-up rollup: factor/map files and the daily-trade artifact, all
     # deliberately deferred out of the per-day loop above (see _rollup_spec).
     # Skipped when nothing succeeded — an empty or wholly-failed range has no
     # minute-trade coverage for the rollup to derive anything from.
+    #
+    # The fatal day itself (when there was one) is excluded from the rollup's
+    # own window: it never reached 'complete' for at least one requested data
+    # type, so re-requesting it here would have this call's Pass 1 retry the
+    # exact same auth/entitlement/rate-limit failure the early abort above
+    # exists to avoid repeating. The daily-trade artifact doesn't lose that
+    # day's coverage by this exclusion — its source set is read from the full
+    # catalog regardless of this spec's window (ensure_data.
+    # _process_daily_trade_artifact) — a later ensure_data call picks it up
+    # once the underlying provider issue is resolved and the day is retried.
     attempted_sessions = sessions[: len(sessions) - days_unattempted]
-    if attempted_sessions and bar_success_total > 0:
-        rollup_spec = _rollup_spec(spec, attempted_sessions)
+    rollup_sessions = attempted_sessions[:-1] if hit_fatal_day else attempted_sessions
+    if rollup_sessions and bar_success_total > 0:
+        # cancel_check is otherwise only evaluated at the top of each day-loop
+        # iteration; without a check here a cancellation requested during (or
+        # right after) the loop would be silently absorbed by this call —
+        # provider I/O for corp-action artifacts included — and the job would
+        # still emit job.completed instead of job.cancelled.
+        if cancel_check is not None:
+            cancel_check()
+        rollup_spec = _rollup_spec(spec, rollup_sessions)
         rollup_result = await ensure_fn(rollup_spec)
+        if cancel_check is not None:
+            cancel_check()
         fetched_total += rollup_result.fetched_artifact_count
         reused_total += rollup_result.reused_artifact_count
         all_failures.extend(rollup_result.failures)

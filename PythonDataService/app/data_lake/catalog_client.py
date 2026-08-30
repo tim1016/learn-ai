@@ -560,11 +560,21 @@ async def complete_artifact(
     last_bar_start_ms: int,
     file_size_bytes: int,
     file_sha256: str,
+    data_contract_hash: str | None = None,
 ) -> None:
     """Transition an artifact from 'fetching' → 'complete' with byte metadata.
 
     No-op if the row is not currently 'fetching' (defensive against stale
     callers; the sweep is the only legitimate source of late writes).
+
+    ``data_contract_hash`` is optional and defaults to leaving the column
+    untouched (``COALESCE`` against the existing value) — the vast majority
+    of callers complete a row whose contract hash was fixed at claim time and
+    never changes. A rebuild via refresh_complete_artifact is the exception:
+    it can complete onto a *different* source set (see
+    ``ensure_data._process_daily_trade_artifact``), and must pass the newly
+    computed hash here or the stale one persists forever, making every
+    subsequent ensure_data call detect a mismatch and rebuild again.
     """
     now_ms = int(time.time() * 1000)
     query = """
@@ -576,6 +586,7 @@ async def complete_artifact(
                "FileSizeBytes" = $5,
                "FileSha256" = $6,
                "CompletedAtMs" = $7,
+               "DataContractHash" = COALESCE($8, "DataContractHash"),
                "LeaseOwner" = NULL,
                "LeaseExpiresAtMs" = NULL
          WHERE "Id" = $1
@@ -591,7 +602,40 @@ async def complete_artifact(
             file_size_bytes,
             file_sha256,
             now_ms,
+            data_contract_hash,
         )
+
+
+async def restore_complete_artifact(artifact_id: int, worker_id: str) -> bool:
+    """Undo a refresh_complete_artifact() that failed before writing anything new.
+
+    refresh_complete_artifact() only touches Status/LeaseOwner/
+    LeaseExpiresAtMs/AttemptCount when it transitions 'complete' → 'fetching'
+    — RowCount/FileSha256/FileSizeBytes/DataContractHash/FilePath all still
+    describe the pre-rebuild artifact. If the rebuild then fails before
+    atomic_write_and_promote runs (e.g. a source file read error), the old
+    file on disk was never touched either, so restoring Status alone is
+    sufficient to put the row back exactly as it was.
+
+    Callers must use this only when the failure happened before any new
+    bytes were promoted — a failure after promotion has already replaced the
+    file, and fail_artifact() is the correct transition there instead.
+    Scoped to the caller's own worker_id so a worker never resurrects a row
+    it doesn't hold the lease on. Returns True when the row was restored.
+    """
+    query = """
+        UPDATE "DataLakeArtifacts"
+           SET "Status" = 'complete',
+               "LeaseOwner" = NULL,
+               "LeaseExpiresAtMs" = NULL
+         WHERE "Id" = $1
+           AND "LeaseOwner" = $2
+           AND "Status" = 'fetching';
+    """
+    async with connection() as conn:
+        result = await conn.execute(query, artifact_id, worker_id)
+    n = int(result.rsplit(" ", 1)[-1])
+    return n > 0
 
 
 async def fail_artifact(
@@ -858,17 +902,19 @@ async def claim_aggregated_bar_artifact(
         )
 
 
-async def refresh_complete_bar_artifact(
+async def refresh_complete_artifact(
     artifact_id: int,
     worker_id: str,
     lease_ttl_ms: int,
 ) -> PriorArtifactMetadata | None:
     """Force-refresh transition: 'complete' → 'fetching' for a re-fetch or rebuild.
 
-    Row-id-keyed and resolution-agnostic — used both for a minute-bar
-    day-refresh (a provider correction) and for rebuilding a daily-trade
+    Row-id-keyed and artifact-kind-agnostic — used for a minute-bar
+    day-refresh (a provider correction), for rebuilding a daily-trade
     aggregate whose source minute set has grown or changed (see
-    ``ensure_data._process_daily_trade_artifact``). Returns the prior
+    ``ensure_data._process_daily_trade_artifact``), and for rebuilding a
+    factor_file whose history window has widened (see
+    ``ensure_data._process_factor_file_artifact``). Returns the prior
     file_path + file_sha256 so the caller can preserve them if the new write
     fails validation. Returns None when the row isn't currently 'complete'
     (refresh has no work to do — e.g. a race with another worker).
