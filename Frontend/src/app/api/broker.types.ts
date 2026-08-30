@@ -5423,7 +5423,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted";
+            reason: "provider_auth_error" | "provider_entitlement_error" | "provider_rate_limited" | "provider_api_error" | "provider_no_data" | "unknown_symbol" | "validation_failed" | "io_error" | "launcher_unreachable" | "lease_timeout" | "fetch_timeout" | "unsupported_resolution" | "unsupported_artifact_kind" | "corp_action_revision_mismatch" | "data_contract_mismatch" | "internal_error" | "session_not_produced" | "run_aborted";
             /** Symbol */
             symbol: string | null;
             /** Trading Date */

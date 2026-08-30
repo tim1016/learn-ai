@@ -102,6 +102,7 @@ from app.data_lake.types import (
     DataRunSpec,
     PriceAdjustmentMode,
 )
+from app.lean_sidecar.launcher_client import LauncherUnreachable
 from app.utils.advisory_lock import try_advisory_file_lock
 
 logger = logging.getLogger(__name__)
@@ -142,8 +143,29 @@ class MetadataBundleExtractionFailed(RuntimeError):
 
     Distinct from :class:`MetadataBundleError`: that one means "what's on
     disk is not trustworthy, try extracting"; this one means "the attempt to
-    extract just failed", which the orchestrator reports as ``io_error`` for
-    every kind rather than looping back into another extraction attempt.
+    extract just failed". The orchestrator (``ensure_lean_metadata_bundle``)
+    records this against each metadata kind's catalog row as ``io_error``
+    (#1889) -- an auditable, retryable failure, subject to the normal
+    per-row retry ceiling -- rather than the pre-#1889 behaviour of
+    touching nothing and silently relying on the next call to try again.
+    :class:`MetadataBundleLauncherUnreachable` below is the one case that
+    gets a different, uncapped classification.
+    """
+
+
+class MetadataBundleLauncherUnreachable(MetadataBundleExtractionFailed):
+    """The launcher process itself is not running/reachable (#1889).
+
+    A subclass of :class:`MetadataBundleExtractionFailed` rather than a
+    parallel class: everything that only cares "did the bundle extraction
+    fail" (a bare ``except MetadataBundleExtractionFailed``) keeps working
+    unchanged, while :func:`ensure_lean_metadata_bundle` catches this
+    subclass first to give the condition its own transient classification
+    (``launcher_unreachable``, distinct from the generic ``io_error``) and
+    a message that names the launcher -- reusing
+    ``app.lean_sidecar.launcher_client.LauncherUnreachable``, the existing
+    typed diagnostic every other launcher call already surfaces this
+    condition with, rather than inventing a new error shape.
     """
 
 
@@ -438,6 +460,11 @@ async def _extract_and_publish_bundle(
             launcher_token=read_launcher_token() or "",
             run_id=f"metadata-{spec.request_id}",
         )
+    except LauncherUnreachable as e:
+        # Caught before the broader LeanMetadataExtractionError below --
+        # LauncherUnreachable is a sibling type, not a subclass of it (see
+        # app.data_lake.lean_metadata.extract_lean_metadata's docstring).
+        raise MetadataBundleLauncherUnreachable(str(e)) from e
     except LeanMetadataExtractionError as e:
         raise MetadataBundleExtractionFailed(str(e)) from e
 
@@ -504,12 +531,18 @@ class MetadataBootstrap(NamedTuple):
 
     Shape preserved from the pre-#1879 ``ensure_data.MetadataBootstrap`` so
     ``ensure_data.ensure_data``'s existing per-kind failure/reuse accounting
-    (unchanged by this PR) keeps unpacking it the same way.
+    keeps unpacking the first three fields the same way. ``detail`` is new
+    (#1889): the human-readable message behind a failure, when the caller
+    has one worth surfacing (e.g. naming the unreachable launcher and its
+    URL) -- ``None`` for a cache hit, or for a failure whose reason alone
+    is already the whole story. Trailing with a default keeps every
+    existing 3-positional-argument construction valid.
     """
 
     record: ArtifactRecord | None
     is_reused: bool
     failure_reason: ArtifactFailureReason | None
+    detail: str | None = None
 
 
 class MetadataBundleOutcome(NamedTuple):
@@ -518,6 +551,108 @@ class MetadataBundleOutcome(NamedTuple):
     market_hours: MetadataBootstrap
     symbol_properties: MetadataBootstrap
     interest_rate: MetadataBootstrap
+
+
+class _MetadataRowClaim(NamedTuple):
+    """Result of :func:`_claim_or_reclaim_metadata_row`: exactly one of the
+    three fields is non-``None``. ``artifact_id`` set means the caller now
+    holds the lease and must complete or fail it; ``existing`` set means a
+    concurrent caller already published a 'complete' row for this exact
+    digest, nothing to do; ``failure_reason`` set means neither a claim nor
+    a reclaim was possible right now.
+
+    ``lease_generation`` is meaningful only alongside ``artifact_id``: it is
+    the fencing generation this claim or reclaim minted (issue #1888), and
+    every later mutation of the row -- completion or failure -- must present
+    it or be refused.
+    """
+
+    artifact_id: int | None
+    existing: ArtifactRecord | None
+    failure_reason: ArtifactFailureReason | None
+    lease_generation: int = catalog_client.INITIAL_LEASE_GENERATION
+
+
+async def _claim_or_reclaim_metadata_row(
+    *, dch: str, file_path: str, identity: ArtifactIdentity, root_id: UUID
+) -> _MetadataRowClaim:
+    """Claim (or reclaim) one metadata kind's catalog row by its identity.
+
+    Shared by :func:`_claim_and_complete_metadata_row` (the success path --
+    bytes are already published and verified on disk) and
+    :func:`_claim_and_fail_metadata_row` (the extraction-failure path --
+    there are no bytes yet, but the row's identity is fully determined
+    without them). The race against a concurrent claimant, a settled
+    'failed' row, or a lease-expired 'fetching' row is identical either
+    way; only what the caller does once it holds the lease differs
+    (complete vs. fail).
+
+    Reclaiming an existing row passes ``bypass_retry_ceiling=True`` to
+    ``catalog_client.steal_or_retry_minute_bar`` whenever the row's last
+    recorded failure was ``launcher_unreachable`` (#1889): that specific
+    reason is knowably transient (the launcher being down is never something
+    more attempts fix faster, and must stay retryable no matter how long the
+    outage lasts), so it is exempt from the normal ``AttemptCount`` ceiling
+    other failures are still subject to. No caller of this function chooses
+    that -- it is derived here, from the row's own recorded ``LastError``.
+    """
+    artifact_id = await catalog_client.claim_metadata_artifact(
+        identity=identity, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS, data_contract_hash=dch, file_path=file_path
+    )
+    if artifact_id is not None:
+        return _MetadataRowClaim(artifact_id, None, None, catalog_client.INITIAL_LEASE_GENERATION)
+
+    existing = await catalog_client.select_complete_metadata_artifact(dch, data_root_id=root_id)
+    if existing is not None:
+        return _MetadataRowClaim(None, existing, None)
+
+    row_state = await catalog_client.select_metadata_claim_state(dch, data_root_id=root_id)
+    if row_state is None:
+        return _MetadataRowClaim(None, None, "lease_timeout")
+
+    reclaimed_generation = await catalog_client.steal_or_retry_minute_bar(
+        artifact_id=row_state.id,
+        worker_id=_WORKER_ID,
+        lease_ttl_ms=_LEASE_TTL_MS,
+        max_retries=_MAX_CLAIM_RETRIES,
+        bypass_retry_ceiling=(row_state.last_error == "launcher_unreachable"),
+    )
+    if reclaimed_generation is not None:
+        # The reclaim minted a new generation; the row's previous one is
+        # stale from this moment, so the caller must carry this value.
+        return _MetadataRowClaim(row_state.id, None, None, reclaimed_generation)
+
+    # row_state is a pre-reclaim snapshot; a concurrent winner can flip
+    # 'failed' -> 'fetching' between it and this check (same race
+    # app.data_lake.ensure_data's old bootstrap guarded against). Re-read
+    # before deciding rather than trusting the stale snapshot.
+    current = await catalog_client.select_metadata_claim_state(dch, data_root_id=root_id)
+    if current is not None and current.status == "failed":
+        return _MetadataRowClaim(None, None, "fetch_timeout")
+    return _MetadataRowClaim(None, None, "lease_timeout")
+
+
+def _metadata_row_dch_and_identity(spec: DataRunSpec, kind: MetadataKind, root_id: UUID) -> tuple[str, ArtifactIdentity]:
+    """The DataContractHash and ArtifactIdentity for one metadata kind's
+    catalog row.
+
+    Fully determined by ``(spec.lean_image_digest, kind,
+    spec.price_adjustment_mode, root_id)`` alone, independent of whether
+    extraction ever succeeds -- shared by both
+    :func:`_claim_and_complete_metadata_row` (the success path) and
+    :func:`_claim_and_fail_metadata_row` (the extraction-failure path, #1889)
+    so the two don't each re-derive the same identity.
+    """
+    dch = metadata_data_contract_hash(spec.lean_image_digest, _METADATA_FILE_NAMES[kind], spec.price_adjustment_mode)
+    identity = ArtifactIdentity(
+        artifact_kind="metadata",
+        market=spec.market,
+        symbol=None,
+        provider="lean_image_extract",
+        price_adjustment_mode=spec.price_adjustment_mode,
+        data_root_id=root_id,
+    )
+    return dch, identity
 
 
 async def _claim_and_complete_metadata_row(
@@ -535,52 +670,24 @@ async def _claim_and_complete_metadata_row(
     a property of the catalog primitives, not of how many launcher calls
     preceded it.
     """
-    dch = metadata_data_contract_hash(spec.lean_image_digest, _METADATA_FILE_NAMES[kind], spec.price_adjustment_mode)
+    dch, identity = _metadata_row_dch_and_identity(spec, kind, root_id)
     file_path = entry.file_path
     published = lake_root / Path(*PurePosixPath(file_path).parts)
     file_size_bytes = published.stat().st_size
 
-    identity = ArtifactIdentity(
-        artifact_kind="metadata",
-        market=spec.market,
-        symbol=None,
-        provider="lean_image_extract",
-        price_adjustment_mode=spec.price_adjustment_mode,
-        data_root_id=root_id,
-    )
-    artifact_id = await catalog_client.claim_metadata_artifact(
-        identity=identity, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS, data_contract_hash=dch, file_path=file_path
-    )
-    lease_generation = catalog_client.INITIAL_LEASE_GENERATION
-    if artifact_id is None:
-        existing = await catalog_client.select_complete_metadata_artifact(dch, data_root_id=root_id)
-        if existing is not None:
-            await catalog_client.mark_metadata_artifacts_stale_for_path(
-                data_root_id=root_id,
-                price_adjustment_mode=spec.price_adjustment_mode,
-                file_path=file_path,
-                keep_artifact_id=existing.id,
-            )
-            return MetadataBootstrap(existing, True, None)
-
-        row_state = await catalog_client.select_metadata_claim_state(dch, data_root_id=root_id)
-        if row_state is not None:
-            reclaimed_generation = await catalog_client.steal_or_retry_minute_bar(
-                artifact_id=row_state.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS, max_retries=_MAX_CLAIM_RETRIES
-            )
-            if reclaimed_generation is not None:
-                artifact_id = row_state.id
-                lease_generation = reclaimed_generation
-            else:
-                # row_state is a pre-reclaim snapshot; a concurrent winner
-                # can flip 'failed' -> 'fetching' between it and this check
-                # (same race app.data_lake.ensure_data's old bootstrap
-                # guarded against). Re-read before deciding.
-                current = await catalog_client.select_metadata_claim_state(dch, data_root_id=root_id)
-                if current is not None and current.status == "failed":
-                    return MetadataBootstrap(None, False, "fetch_timeout")
-        if artifact_id is None:
-            return MetadataBootstrap(None, False, "lease_timeout")
+    claim = await _claim_or_reclaim_metadata_row(dch=dch, file_path=file_path, identity=identity, root_id=root_id)
+    if claim.existing is not None:
+        await catalog_client.mark_metadata_artifacts_stale_for_path(
+            data_root_id=root_id,
+            price_adjustment_mode=spec.price_adjustment_mode,
+            file_path=file_path,
+            keep_artifact_id=claim.existing.id,
+        )
+        return MetadataBootstrap(claim.existing, True, None)
+    if claim.artifact_id is None:
+        return MetadataBootstrap(None, False, claim.failure_reason)
+    artifact_id = claim.artifact_id
+    lease_generation = claim.lease_generation
 
     if not await catalog_client.complete_artifact(
         artifact_id=artifact_id,
@@ -661,6 +768,120 @@ async def _activate_catalog_from_receipt(
     return MetadataBundleOutcome(mh, sp, ir)
 
 
+async def _claim_and_fail_metadata_row(
+    *,
+    spec: DataRunSpec,
+    kind: MetadataKind,
+    root_id: UUID,
+    reason: ArtifactFailureReason,
+    detail: str,
+    bundle_verifies: bool,
+) -> MetadataBootstrap:
+    """Record this attempt's extraction failure against one metadata kind's
+    catalog row (#1889).
+
+    Called when the whole-bundle extraction call failed before any bytes
+    were ever produced. Unlike :func:`_claim_and_complete_metadata_row`
+    (the success path), there is no :class:`MetadataFileEntry` yet -- but a
+    kind's ``DataContractHash`` and canonical ``FilePath`` are fully
+    determined by ``(spec.lean_image_digest, kind,
+    spec.price_adjustment_mode)`` alone, independent of whether extraction
+    ever succeeds, so the row can be claimed (or reclaimed) here exactly
+    like the success path claims it.
+
+    Recording the failure against a real, claimed row -- rather than the
+    pre-#1889 behaviour of touching nothing on extraction failure -- is
+    what makes a launcher outage an auditable, retryable artifact like
+    every other kind: it shows up in coverage/observatory reads instead of
+    being invisible, and the very next call's
+    ``_claim_and_complete_metadata_row`` reclaims *this exact row* once
+    extraction succeeds, instead of nothing ever having tracked the
+    failure in the first place.
+    """
+    dch, identity = _metadata_row_dch_and_identity(spec, kind, root_id)
+    file_path = str(LeanMetadataPath(kind=kind).relative_path())
+    claim = await _claim_or_reclaim_metadata_row(dch=dch, file_path=file_path, identity=identity, root_id=root_id)
+    if claim.existing is not None:
+        if not bundle_verifies:
+            # The row says 'complete', but this call only got here because the
+            # bundle it describes failed verification and the repair
+            # extraction then failed too. Adopting the row would report the
+            # metadata as available on the strength of a catalog row alone,
+            # while the bytes it names are missing or tampered -- and
+            # ``ensure_data`` would return success, letting the run proceed to
+            # a LEAN mount that cannot verify. Surface the extraction failure
+            # instead. The row is left 'complete' rather than invalidated
+            # here: it is not this caller's row to transition, and the next
+            # successful extraction re-activates it through
+            # ``_activate_catalog_from_receipt``'s adopt-and-restale path.
+            return MetadataBootstrap(None, False, reason, detail)
+        # A concurrent caller already published and completed this exact
+        # kind moments ago, and the bundle on disk verifies right now -- this
+        # attempt's failure is moot.
+        return MetadataBootstrap(claim.existing, True, None)
+    if claim.artifact_id is None:
+        return MetadataBootstrap(None, False, claim.failure_reason, detail)
+    await catalog_client.fail_artifact(
+        claim.artifact_id,
+        reason,
+        detail,
+        worker_id=_WORKER_ID,
+        lease_generation=claim.lease_generation,
+    )
+    return MetadataBootstrap(None, False, reason, detail)
+
+
+def _bundle_still_verifies(spec: DataRunSpec, lake_root: Path, root_id: UUID) -> bool:
+    """Does the bundle on disk verify *right now*?
+
+    Asked once on the extraction-failure path, to decide whether a
+    pre-existing 'complete' catalog row may be adopted as a usable artifact.
+    The answer is normally False there -- a verification failure is what sent
+    this call to extraction in the first place -- but a concurrent winner can
+    legitimately have republished in between, and that case must still be
+    reusable.
+    """
+    try:
+        verify_bundle(
+            lake_root,
+            expected_root_id=root_id,
+            expected_mode=spec.price_adjustment_mode,
+            expected_digest=spec.lean_image_digest,
+        )
+    except MetadataBundleError:
+        return False
+    return True
+
+
+async def _fail_required_metadata_rows(
+    spec: DataRunSpec, root_id: UUID, *, lake_root: Path, reason: ArtifactFailureReason, detail: str
+) -> MetadataBundleOutcome:
+    """Record one failed extraction attempt against all three metadata
+    kinds (#1889) -- the bundle is one launcher call for all three, so a
+    failure to produce it is a failure for all three alike.
+
+    Whether a pre-existing 'complete' row may be adopted despite this failure
+    is decided once, from the bytes on disk, and applied to all three kinds
+    alike -- ``verify_bundle`` is a whole-bundle check, so a rejection
+    implicates every kind it covers."""
+    bundle_verifies = _bundle_still_verifies(spec, lake_root, root_id)
+    mh = await _claim_and_fail_metadata_row(
+        spec=spec, kind="market_hours", root_id=root_id, reason=reason, detail=detail, bundle_verifies=bundle_verifies
+    )
+    sp = await _claim_and_fail_metadata_row(
+        spec=spec,
+        kind="symbol_properties",
+        root_id=root_id,
+        reason=reason,
+        detail=detail,
+        bundle_verifies=bundle_verifies,
+    )
+    ir = await _claim_and_fail_metadata_row(
+        spec=spec, kind="interest_rate", root_id=root_id, reason=reason, detail=detail, bundle_verifies=bundle_verifies
+    )
+    return MetadataBundleOutcome(mh, sp, ir)
+
+
 @asynccontextmanager
 async def _bundle_lock(lake_root: Path) -> AsyncIterator[None]:
     """Serialize the whole ensure-bundle sequence per ``(root, mode)``.
@@ -735,13 +956,28 @@ async def ensure_lean_metadata_bundle(spec: DataRunSpec, lake_root: Path, stagin
                 )
                 try:
                     receipt = await _extract_and_publish_bundle(spec, lake_root, staging_root, root_id)
+                except MetadataBundleLauncherUnreachable as e2:
+                    # Caught before the broader MetadataBundleExtractionFailed
+                    # below (it's a subclass of it): the launcher being down
+                    # is transient, so this is classified and recorded as
+                    # ``launcher_unreachable`` -- infinitely retryable,
+                    # distinct from a genuine extraction failure -- rather
+                    # than the generic ``io_error`` (#1889).
+                    logger.warning(
+                        "data_lake.metadata_bundle: LEAN launcher unreachable during metadata extraction",
+                        extra={"lake_root": str(lake_root), "error": str(e2)},
+                    )
+                    return await _fail_required_metadata_rows(
+                        spec, root_id, lake_root=lake_root, reason="launcher_unreachable", detail=str(e2)
+                    )
                 except MetadataBundleExtractionFailed as e2:
                     logger.warning(
                         "data_lake.metadata_bundle: bundle extraction failed",
                         extra={"lake_root": str(lake_root), "error": str(e2)},
                     )
-                    failure = MetadataBootstrap(None, False, "io_error")
-                    return MetadataBundleOutcome(failure, failure, failure)
+                    return await _fail_required_metadata_rows(
+                        spec, root_id, lake_root=lake_root, reason="io_error", detail=str(e2)
+                    )
 
             return await _activate_catalog_from_receipt(spec, lake_root, receipt, root_id)
     except MetadataBundleLockTimeout as e3:

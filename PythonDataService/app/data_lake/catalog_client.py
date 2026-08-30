@@ -1050,13 +1050,16 @@ async def steal_or_retry_minute_bar(
     worker_id: str,
     lease_ttl_ms: int,
     max_retries: int,
+    *,
+    bypass_retry_ceiling: bool = False,
 ) -> int | None:
     """Reclaim an artifact whose lease expired, retry a failed artifact, OR
     reactivate a staled one.
 
     Eligibility:
       - Status='fetching' AND LeaseExpiresAtMs < now_ms  (lease expired), OR
-      - Status='failed' AND AttemptCount < max_retries  (retryable failure), OR
+      - Status='failed' AND (AttemptCount < max_retries OR bypass_retry_ceiling)
+        (retryable failure), OR
       - Status='stale'  (superseded row for a digest the caller just
         re-published)
 
@@ -1080,12 +1083,29 @@ async def steal_or_retry_minute_bar(
     neither 'fetching' with an expired lease nor 'failed', so no existing
     branch could ever reclaim it.
 
+    ``bypass_retry_ceiling`` (#1889) grants the same kind of unconditional
+    reclaim to a 'failed' row whose caller already knows the failure was
+    environmental rather than a live contested claim -- specifically, a LEAN
+    metadata row that failed because the launcher process was unreachable.
+    That condition is not something additional attempts fix faster, and it
+    is also not something more attempts should ever give up on: an operator
+    restarting the launcher hours or days later must still see the artifact
+    retried, not permanently latched at whatever AttemptCount the outage
+    happened to leave it at. A genuine, repeatedly-failing extraction (a
+    malformed launcher response, a workspace read error) keeps the normal
+    ceiling -- callers pass ``bypass_retry_ceiling=True`` only for the
+    specific reason they know is infinitely retryable, never as a default.
+    Default ``False`` preserves this function's existing behaviour for every
+    other caller (minute bars, factor files, map files) unchanged.
+
     Returns the new fencing generation (issue #1888; always
     ``> INITIAL_LEASE_GENERATION`` since this always increments) when the
     row was reclaimed under the new worker; None when no eligible row exists
     (e.g., already complete, already re-claimed by another worker, or failed
-    beyond max_retries). The caller must carry this value through to its
-    later ``complete_artifact`` / ``publish_under_lease`` calls — the
+    beyond max_retries). A caller that only needs "did I get it?" can test
+    the result for truthiness -- a minted generation is never zero -- but a
+    caller that will later complete or publish the row must carry the value
+    through to ``complete_artifact`` / ``publish_under_lease``, because the
     row's ``LeaseGeneration`` no longer matches whatever it was before this
     reclaim.
     """
@@ -1101,7 +1121,7 @@ async def steal_or_retry_minute_bar(
          WHERE "Id" = $1
            AND (
                   ("Status" = 'fetching' AND "LeaseExpiresAtMs" < $4)
-               OR ("Status" = 'failed' AND "AttemptCount" < $5)
+               OR ("Status" = 'failed' AND ("AttemptCount" < $5 OR $6))
                OR ("Status" = 'stale')
            )
         RETURNING "LeaseGeneration";
@@ -1114,6 +1134,7 @@ async def steal_or_retry_minute_bar(
             now_ms + lease_ttl_ms,
             now_ms,
             max_retries,
+            bypass_retry_ceiling,
         )
 
 
@@ -1122,8 +1143,8 @@ class PriorArtifactMetadata:
     prior_file_path: str
     prior_file_sha256: str
     # The generation this refresh's own reclaim minted (issue #1888) — the
-    # caller must carry it through to complete_artifact / confirm_lease_
-    # generation, same as steal_or_retry_minute_bar's return value.
+    # caller must carry it through to complete_artifact / publish_under_lease,
+    # same as steal_or_retry_minute_bar's return value.
     new_lease_generation: int
 
 
