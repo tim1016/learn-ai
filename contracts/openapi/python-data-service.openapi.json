@@ -9709,8 +9709,6 @@
             "type": "array"
           },
           "end_trading_date_ms": {
-            "maximum": 9.223372036854776e+18,
-            "minimum": -9.223372036854776e+18,
             "title": "End Trading Date Ms",
             "type": "integer"
           },
@@ -9789,8 +9787,6 @@
             "type": "string"
           },
           "start_trading_date_ms": {
-            "maximum": 9.223372036854776e+18,
-            "minimum": -9.223372036854776e+18,
             "title": "Start Trading Date Ms",
             "type": "integer"
           },
