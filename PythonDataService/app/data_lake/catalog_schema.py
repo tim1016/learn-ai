@@ -80,11 +80,17 @@ DATA_LAKE_ARTIFACTS = TableExpectation(
         "ck_data_type_enum",
         "ck_price_adjustment_mode_enum",
         "ck_status_enum",
-        "ck_raw_only_for_canonical_data_root",
+        # ck_raw_only_for_canonical_data_root dropped (#1878, PR B of #1861):
+        # adjustment mode is a physical path segment under a root-scoped
+        # identity now, so the single-canonical-root constraint no longer
+        # represents reality.
     ),
     indexes=(
         "ix_data_lake_artifacts_corp_action_lookup",
         "ix_data_lake_artifacts_incomplete",
+        # DataRootId-leading hot lookup index (#1878); the drift test only
+        # asserts index names exist, not column order.
+        "ix_data_lake_artifacts_root_scoped_coverage",
     ),
 )
 

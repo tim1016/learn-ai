@@ -17,10 +17,12 @@ public class DataLakeArtifact
     /// Which physical lake root this row belongs to (issue #1876, PR A of
     /// #1861). Additive: backfilled to the deterministic legacy-root UUID
     /// (<c>Guid.Empty</c>) for every pre-#1876 row by migration
-    /// AddDataRootIdToDataLakeArtifactsAndRuns; every new write records the
-    /// service's configured active root
-    /// (<c>app.data_lake.root_identity.active_root_id</c> on the Python
-    /// side). Not an FK — no DataLakeRoots table exists yet (explicit
+    /// AddDataRootIdToDataLakeArtifactsAndRuns. Issue #1878 (PR B) dropped
+    /// the temporary server default and rebuilt catalog uniqueness to lead
+    /// with this column — every write now supplies it explicitly (the
+    /// service's configured active root, or — for
+    /// <c>app.data_lake.cache_import</c> — the selected root's own marker
+    /// UUID). Not an FK — no DataLakeRoots table exists yet (explicit
     /// non-goal of this slice); the on-disk marker at
     /// <c>&lt;base-root&gt;/lake/.data-root.json</c> is the source of truth
     /// for what a root's identity actually is.

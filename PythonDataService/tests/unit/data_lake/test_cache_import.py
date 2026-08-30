@@ -7,14 +7,14 @@ encode idempotency + no-overwrite) need no database and always run.
 Orchestration tests (``import_cache_root``) exercise the real catalog via
 live Postgres, following the same skip-if-unconfigured pattern as
 ``test_ensure_data.py`` / ``test_catalog_write_ops.py``. They are
-parametrized by adjustment mode: the 'raw' cases pass against the schema as
-it stands today; the 'polygon_split_adjusted' cases additionally require
-``Backend/Migrations/20260827120000_AllowImportedNonRawAdjustmentModes.cs``
-to be applied (see that migration and ``app/data_lake/cache_import.py``'s
-module docstring for why). They all use the ``lake_root`` fixture, which
-patches ``settings.LEAN_DATA_WRITE_ROOT`` to match the tmp_path root they
-use -- ``import_cache_root`` now refuses any ``--lake-root`` that doesn't
-equal the canonical configured root (finding 7 of the Codex round-1 review).
+parametrized by adjustment mode: both cases pass against the schema as it
+stands today (issue #1878 dropped the constraint that used to gate the
+'polygon_split_adjusted' path). They all use the ``lake_root`` fixture,
+which patches ``settings.LEAN_DATA_WRITE_ROOT`` to match the tmp_path root
+they use and stamps it with a ``.data-root.json`` marker -- ``import_cache_root``
+requires any ``--lake-root`` to carry a valid marker (issue #1878, PR B of
+#1861; the old "must equal the canonical configured root" rule from finding
+7 of the Codex round-1 review is gone -- any marked root is now accepted).
 """
 
 from __future__ import annotations
@@ -26,13 +26,14 @@ import zipfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import asyncpg
 import pytest
 
 from app.config import settings
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, root_identity
 from app.data_lake.cache_import import (
     ClaimDecision,
     CorruptCacheZipError,
@@ -784,14 +785,25 @@ async def pool():
     await catalog_client.close_pool()
 
 
+def _marked_root(base: Path, name: str, root_id: UUID) -> Path:
+    """Build and stamp a fresh physical root at ``base / name`` with
+    ``root_id``, via the same administrative path a real operator uses
+    (``root_identity.init_empty_root``) -- never hand-writing the marker
+    JSON, so these tests exercise the real validation path."""
+    root = base / name
+    root_identity.init_empty_root(root, root_id)
+    return root
+
+
 @pytest.fixture
 def lake_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The canonical lake root for orchestration tests: a tmp_path directory
-    with settings.LEAN_DATA_WRITE_ROOT patched to match it -- satisfies
-    import_cache_root's canonical-root-identity check (finding 7) the same
-    way test_ensure_data.py's tmp_lake fixture does for the live-fetch
-    pipeline."""
-    root = tmp_path / "lake-root"
+    """The default lake root for orchestration tests: a tmp_path directory
+    with settings.LEAN_DATA_WRITE_ROOT patched to match it (several other
+    fixtures/helpers in this file still read that setting), stamped with the
+    service's own default active-root id (issue #1878's ``import_cache_root``
+    requires any ``--lake-root`` to carry a valid marker; this keeps the
+    identity every pre-#1878 test in this file implicitly assumed)."""
+    root = _marked_root(tmp_path, "lake-root", root_identity.active_root_id())
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(root))
     return root
 
@@ -805,21 +817,163 @@ def _build_cache(tmp_path: Path, symbol: str, dates: list[date], *, adjusted: bo
 
 
 @pytest.mark.asyncio
-async def test_import_cache_root_refuses_mismatched_lake_root(clean_artifacts, pool, tmp_path: Path):
-    """finding 7: --lake-root must equal the canonical configured root
-    (settings.LEAN_DATA_WRITE_ROOT) -- catalog rows are root-relative, so
-    importing anywhere else would produce rows ensure_data's live pipeline
-    can never actually find ("phantom coverage"). Deliberately does NOT use
-    the lake_root fixture (which patches settings to match), so the
-    mismatch is real."""
+async def test_import_cache_root_refuses_unmarked_root(clean_artifacts, pool, tmp_path: Path):
+    """Issue #1878: a --lake-root with no .data-root.json marker at all is
+    refused -- this importer never stamps a root itself, unmarked or not.
+    Deliberately does NOT use the lake_root fixture (which stamps a marker),
+    so the directory genuinely carries none."""
     cache_root = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
-    mismatched_root = tmp_path / "not-the-canonical-root"
+    unmarked_root = tmp_path / "unmarked-root"
 
     with pytest.raises(LakeRootIdentityError):
-        await import_cache_root(cache_root=cache_root, lake_root=mismatched_root)
+        await import_cache_root(cache_root=cache_root, lake_root=unmarked_root)
 
-    # Nothing was written anywhere.
-    assert not mismatched_root.exists()
+    # Nothing was written anywhere -- the marker check runs before any I/O.
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        count = await conn.fetchval('SELECT count(*) FROM "DataLakeArtifacts"')
+    finally:
+        await conn.close()
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_refuses_malformed_marker(clean_artifacts, pool, tmp_path: Path):
+    """A marker that exists but doesn't parse (wrong schema_version here)
+    must never be treated the same as no marker -- root_identity.read_marker
+    raises for it, and import_cache_root propagates that refusal rather than
+    silently proceeding."""
+    cache_root = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
+    malformed_root = tmp_path / "malformed-root"
+    marker_dir = malformed_root / "lake"
+    marker_dir.mkdir(parents=True)
+    (marker_dir / ".data-root.json").write_text(json.dumps({"schema_version": 99, "data_root_id": str(root_identity.active_root_id())}))
+
+    with pytest.raises(LakeRootIdentityError):
+        await import_cache_root(cache_root=cache_root, lake_root=malformed_root)
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_uses_the_markers_root_id_not_the_active_root(
+    clean_artifacts, pool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The regression #1861 exists to prevent, from the write side: a root's
+    catalog identity comes from *that root's own marker*, never from the
+    service's configured active root -- even when they disagree. Configures
+    an active root the marker deliberately does not match, so a bug that
+    fell back to active_root_id() would be caught here."""
+    configured_active_root = UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", str(configured_active_root))
+    marked_root_id = UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+    other_root = _marked_root(tmp_path, "other-root", marked_root_id)
+    cache_root = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
+
+    report = await import_cache_root(cache_root=cache_root, lake_root=other_root)
+
+    assert len(report.imported) == 1
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        row = await conn.fetchrow('SELECT "DataRootId" FROM "DataLakeArtifacts" WHERE "Symbol" = $1', "SPY")
+    finally:
+        await conn.close()
+    assert row["DataRootId"] == marked_root_id
+    assert row["DataRootId"] != configured_active_root
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_into_two_marked_roots_coexist(clean_artifacts, pool, tmp_path: Path):
+    """The coexistence proof issue #1878 asks for: the same symbol, date,
+    artifact kind, and adjustment mode, imported into two different marked
+    roots, produces two rows that both persist -- with the same root-relative
+    FilePath -- and each resolves only from its own root. This is the
+    regression #1861 exists to prevent: importing into a second physical
+    root must never make the first root appear covered, nor collide with it."""
+    root_a_id = UUID("11111111-1111-1111-1111-111111111111")
+    root_b_id = UUID("22222222-2222-2222-2222-222222222222")
+    root_a = _marked_root(tmp_path, "root-a", root_a_id)
+    root_b = _marked_root(tmp_path, "root-b", root_b_id)
+    trading_date = date(2024, 5, 20)
+    cache_root = _build_cache(tmp_path, "SPY", [trading_date], adjusted=False)
+
+    report_a = await import_cache_root(cache_root=cache_root, lake_root=root_a)
+    report_b = await import_cache_root(cache_root=cache_root, lake_root=root_b)
+
+    assert report_a.failed == []
+    assert len(report_a.imported) == 1
+    assert report_b.failed == []
+    assert len(report_b.imported) == 1
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        rows = await conn.fetch('SELECT "DataRootId", "FilePath" FROM "DataLakeArtifacts" WHERE "Symbol" = $1', "SPY")
+    finally:
+        await conn.close()
+    by_root = {r["DataRootId"]: r["FilePath"] for r in rows}
+    assert set(by_root) == {root_a_id, root_b_id}
+    # Root-relative FilePath is byte-identical across roots -- the mode
+    # segment plus the root itself is what disambiguates on disk, not the
+    # catalog column.
+    assert by_root[root_a_id] == by_root[root_b_id]
+
+    # Each root's physical bytes landed under its own tree, not the other's.
+    expected_rel = LeanMinuteBarPath(
+        market="usa", symbol="SPY", trading_date=trading_date, data_type="trade"
+    ).relative_path()
+    assert (root_a / lake_subpath("raw") / Path(*expected_rel.parts)).is_file()
+    assert (root_b / lake_subpath("raw") / Path(*expected_rel.parts)).is_file()
+
+    # Coverage for root A cannot be satisfied by root B's row, and vice
+    # versa -- importing into root B left root A's availability unchanged.
+    coverage_a = await catalog_client.select_coverage_minute_bars(
+        market="usa",
+        symbol="SPY",
+        data_type="trade",
+        start_trading_date=trading_date,
+        end_trading_date=trading_date,
+        price_adjustment_mode="raw",
+        data_root_id=root_a_id,
+    )
+    coverage_b = await catalog_client.select_coverage_minute_bars(
+        market="usa",
+        symbol="SPY",
+        data_type="trade",
+        start_trading_date=trading_date,
+        end_trading_date=trading_date,
+        price_adjustment_mode="raw",
+        data_root_id=root_b_id,
+    )
+    assert len(coverage_a) == 1
+    assert len(coverage_b) == 1
+    assert coverage_a[0].id != coverage_b[0].id
+
+    # Storage totals are isolated per root, not summed across both.
+    totals_a = await catalog_client.select_storage_totals_by_kind("usa", data_root_id=root_a_id)
+    totals_b = await catalog_client.select_storage_totals_by_kind("usa", data_root_id=root_b_id)
+    assert sum(t.artifact_count for t in totals_a) == 1
+    assert sum(t.artifact_count for t in totals_b) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_cache_root_same_root_duplicate_claim_still_dedupes(
+    clean_artifacts, pool, lake_root: Path, tmp_path: Path
+):
+    """The new DataRootId-leading ON CONFLICT target must still catch a
+    genuine duplicate within one root -- rebuilding the index must not
+    accidentally turn dedup off. Two separate import runs against the same
+    root and the same cache content is exactly test_import_cache_root_is_idempotent_on_rerun
+    below; this asserts the same property directly against the row count so
+    a regression in the conflict target shows up as a row-count doubling."""
+    cache_root = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
+
+    await import_cache_root(cache_root=cache_root, lake_root=lake_root)
+    await import_cache_root(cache_root=cache_root, lake_root=lake_root)
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        count = await conn.fetchval('SELECT count(*) FROM "DataLakeArtifacts" WHERE "Symbol" = $1', "SPY")
+    finally:
+        await conn.close()
+    assert count == 1
 
 
 @pytest.mark.parametrize("adjusted", [False, True])

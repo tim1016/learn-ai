@@ -447,6 +447,47 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
 # ---------------------------------------------------------------------------
 
 
+class CatalogSchemaNotReadyError(RuntimeError):
+    """A claim_* INSERT's ON CONFLICT target matches no constraint or index
+    in the connected database.
+
+    Wraps Postgres SQLSTATE 42P10 (``invalid_column_reference`` --
+    asyncpg's ``InvalidColumnReferenceError``), which Postgres raises when an
+    ``ON CONFLICT (...) WHERE ...`` clause names a column set that no unique
+    or exclusion index currently matches. In practice this almost always
+    means the database schema doesn't yet match what this code expects: a
+    mid-deploy race where python-service started serving traffic before
+    Backend's EF Core migration finished applying. compose.yaml health-gates
+    Backend on python-service, not the other way around, and Backend applies
+    migrations during its own startup -- so there is a real window, on every
+    deploy that ships a migration touching one of these partial unique
+    indexes (e.g. 20260830120000_ActivateDataRootScopedCatalogIdentity),
+    where python-service is already reachable but the index a claim_*
+    function's ON CONFLICT target names does not exist yet. Safe to retry
+    after a short delay once the migration completes; not safe to retry
+    immediately in a tight loop.
+    """
+
+
+async def _claim_fetchval(conn: asyncpg.Connection, query: str, *args: Any) -> int | None:
+    """Run one claim_*'s ``INSERT ... ON CONFLICT ... RETURNING "Id"`` and
+    translate a conflict-target mismatch (Postgres 42P10) into
+    :class:`CatalogSchemaNotReadyError` instead of letting the raw asyncpg
+    exception surface as an opaque 500. Any other ``PostgresError`` is
+    re-raised unchanged -- this narrowly targets the one mid-deploy race
+    described in :class:`CatalogSchemaNotReadyError`'s docstring, not
+    Postgres errors in general.
+    """
+    try:
+        return await conn.fetchval(query, *args)
+    except asyncpg.PostgresError as exc:
+        if exc.sqlstate == "42P10":
+            raise CatalogSchemaNotReadyError(
+                f"ON CONFLICT target matches no constraint/index (Postgres 42P10): {exc}"
+            ) from exc
+        raise
+
+
 async def claim_minute_bar(
     identity: ArtifactIdentity,
     worker_id: str,
@@ -461,7 +502,7 @@ async def claim_minute_bar(
     a row already exists for this identity tuple (someone else has it).
 
     Matches the partial unique index uq_data_lake_artifacts_minute_bars:
-      (Market, Symbol, TradingDate, DataType, Provider, PriceAdjustmentMode)
+      (DataRootId, Market, Symbol, TradingDate, DataType, Provider, PriceAdjustmentMode)
        WHERE ArtifactKind='time_series_bars' AND Resolution='minute'
     The ON CONFLICT clause repeats the partial index's WHERE predicate, per
     Postgres' requirement for partial-index conflict targets.
@@ -472,10 +513,10 @@ async def claim_minute_bar(
     original per-symbol provenance so it survives on the row itself as an
     audit trail, rather than being fetched-and-discarded.
 
-    Records ``identity.data_root_id`` on the new row (issue #1876). The
-    conflict target is deliberately unchanged — it still does not include
-    ``DataRootId`` — because the existing unique indexes are kept as-is in
-    this slice; multi-root uniqueness is PR B's job.
+    Records ``identity.data_root_id`` on the new row and leads the conflict
+    target with it (issue #1878, PR B of #1861): a claim for the same
+    symbol/date/mode identity in a *different* root no longer collides with
+    this one — that is the regression this redesign exists to prevent.
     """
     if identity.artifact_kind != "time_series_bars" or identity.resolution != "minute":
         raise ValueError(f"claim_minute_bar called with non-minute-bar identity: {identity!r}")
@@ -492,14 +533,15 @@ async def claim_minute_bar(
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, 'fetching', $12, $13, 1, $14, $15
         )
-        ON CONFLICT ("Market", "Symbol", "TradingDate", "DataType",
+        ON CONFLICT ("DataRootId", "Market", "Symbol", "TradingDate", "DataType",
                      "Provider", "PriceAdjustmentMode")
             WHERE "ArtifactKind" = 'time_series_bars' AND "Resolution" = 'minute'
         DO NOTHING
         RETURNING "Id";
     """
     async with connection() as conn:
-        return await conn.fetchval(
+        return await _claim_fetchval(
+            conn,
             query,
             identity.artifact_kind,
             identity.market,
@@ -815,13 +857,13 @@ async def claim_corp_action_artifact(
     a row already exists for this identity tuple (someone else has it).
 
     Matches the partial unique index uq_data_lake_artifacts_corp_actions:
-      (Market, Symbol, ArtifactKind, Provider, PriceAdjustmentMode)
+      (DataRootId, Market, Symbol, ArtifactKind, Provider, PriceAdjustmentMode)
        WHERE ArtifactKind IN ('factor_file','map_file')
     The ON CONFLICT clause repeats the partial index's WHERE predicate, per
-    Postgres' requirement for partial-index conflict targets. Unchanged by
-    issue #1876: existing unique indexes are kept as-is this slice.
+    Postgres' requirement for partial-index conflict targets.
 
-    Records ``identity.data_root_id`` on the new row.
+    Records ``identity.data_root_id`` on the new row and leads the conflict
+    target with it (issue #1878, PR B of #1861).
     """
     if identity.artifact_kind not in ("factor_file", "map_file"):
         raise ValueError(f"claim_corp_action_artifact called with non-corp-action identity: {identity!r}")
@@ -838,13 +880,14 @@ async def claim_corp_action_artifact(
             $1, $2, $3, NULL, NULL, NULL, $4, $5, $6, $7,
             $8, 'fetching', $9, $10, 1, $11, $12
         )
-        ON CONFLICT ("Market", "Symbol", "ArtifactKind", "Provider", "PriceAdjustmentMode")
+        ON CONFLICT ("DataRootId", "Market", "Symbol", "ArtifactKind", "Provider", "PriceAdjustmentMode")
             WHERE "ArtifactKind" IN ('factor_file', 'map_file')
         DO NOTHING
         RETURNING "Id";
     """
     async with connection() as conn:
-        return await conn.fetchval(
+        return await _claim_fetchval(
+            conn,
             query,
             identity.artifact_kind,
             identity.market,
@@ -874,13 +917,13 @@ async def claim_metadata_artifact(
     a row already exists for this data_contract_hash (someone else has it).
 
     Matches the partial unique index uq_data_lake_artifacts_metadata:
-      (DataContractHash)
+      (DataRootId, DataContractHash)
        WHERE ArtifactKind = 'metadata'
     The ON CONFLICT clause repeats the partial index's WHERE predicate, per
-    Postgres' requirement for partial-index conflict targets. Unchanged by
-    issue #1876: existing unique indexes are kept as-is this slice.
+    Postgres' requirement for partial-index conflict targets.
 
-    Records ``identity.data_root_id`` on the new row.
+    Records ``identity.data_root_id`` on the new row and leads the conflict
+    target with it (issue #1878, PR B of #1861).
     """
     if identity.artifact_kind != "metadata":
         raise ValueError(f"claim_metadata_artifact called with non-metadata identity: {identity!r}")
@@ -897,13 +940,14 @@ async def claim_metadata_artifact(
             'metadata', $1, $2, NULL, NULL, NULL, $3, $4, NULL, $5,
             $6, 'fetching', $7, $8, 1, $9, $10
         )
-        ON CONFLICT ("DataContractHash")
+        ON CONFLICT ("DataRootId", "DataContractHash")
             WHERE "ArtifactKind" = 'metadata'
         DO NOTHING
         RETURNING "Id";
     """
     async with connection() as conn:
-        return await conn.fetchval(
+        return await _claim_fetchval(
+            conn,
             query,
             identity.market,
             identity.symbol,
@@ -931,13 +975,13 @@ async def claim_aggregated_bar_artifact(
     a row already exists for this identity tuple (someone else has it).
 
     Matches the partial unique index uq_data_lake_artifacts_aggregated_bars:
-      (Market, Symbol, Resolution, DataType, Provider, PriceAdjustmentMode)
+      (DataRootId, Market, Symbol, Resolution, DataType, Provider, PriceAdjustmentMode)
        WHERE ArtifactKind = 'time_series_bars' AND Resolution IN ('hour','daily')
     The ON CONFLICT clause repeats the partial index's WHERE predicate, per
-    Postgres' requirement for partial-index conflict targets. Unchanged by
-    issue #1876: existing unique indexes are kept as-is this slice.
+    Postgres' requirement for partial-index conflict targets.
 
-    Records ``identity.data_root_id`` on the new row.
+    Records ``identity.data_root_id`` on the new row and leads the conflict
+    target with it (issue #1878, PR B of #1861).
     """
     if identity.artifact_kind != "time_series_bars" or identity.resolution not in ("hour", "daily"):
         raise ValueError(f"claim_aggregated_bar_artifact called with non-aggregated-bar identity: {identity!r}")
@@ -954,7 +998,7 @@ async def claim_aggregated_bar_artifact(
             $1, $2, $3, NULL, $4, $5, $6, $7, $8, $9,
             $10, 'fetching', $11, $12, 1, $13, $14
         )
-        ON CONFLICT ("Market", "Symbol", "Resolution", "DataType",
+        ON CONFLICT ("DataRootId", "Market", "Symbol", "Resolution", "DataType",
                      "Provider", "PriceAdjustmentMode")
             WHERE "ArtifactKind" = 'time_series_bars'
               AND "Resolution" IN ('hour', 'daily')
@@ -962,7 +1006,8 @@ async def claim_aggregated_bar_artifact(
         RETURNING "Id";
     """
     async with connection() as conn:
-        return await conn.fetchval(
+        return await _claim_fetchval(
+            conn,
             query,
             identity.artifact_kind,
             identity.market,
