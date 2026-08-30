@@ -407,16 +407,21 @@ jobs:
       # and it measured faster than `--dist loadfile` (94s vs 127s on a local
       # 4-worker reproduction of the same 5,815-test baseline).
       #
-      # `tests/unit/data_lake` is excluded here and run separately below: its
-      # `clean_artifacts` fixture does `TRUNCATE TABLE "DataLakeArtifacts"`
-      # against the one shared Postgres service, which races across xdist
-      # workers (verified locally — 100% pass serial, ~14% fail under -n
-      # auto, confined entirely to that directory).
+      # `tests/unit/data_lake` and `tests/integration/data_lake` are excluded
+      # here and run separately below: their `clean_artifacts` fixtures do
+      # `TRUNCATE TABLE "DataLakeArtifacts"` against the one shared Postgres
+      # service, which races across xdist workers (verified locally — 100%
+      # pass serial, ~14% fail under -n auto, confined entirely to those
+      # directories). The diff-driven "extra" step above can add individual
+      # `tests/integration/data_lake/test_*.py` paths when a PR touches a
+      # matching `app/data_lake/<name>.py` — those must not slip into this
+      # parallel run just because they arrived via `$extra` rather than a
+      # baseline dir, so both ignores below are unconditional.
       - name: Run fast baseline + change-driven tests
         run: |
           read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
           extra="${{ steps.changed.outputs.extra }}"
-          python -m pytest "${baseline_dirs[@]}" $extra --ignore=tests/unit/data_lake -n auto -v -m "not slow" --tb=short
+          python -m pytest "${baseline_dirs[@]}" $extra --ignore=tests/unit/data_lake --ignore=tests/integration/data_lake -n auto -v -m "not slow" --tb=short
 
       # Postgres-gated lake tests (catalog write ops, cache import, ensure_data,
       # schema drift) — see #1862. These skipped in CI for lack of POSTGRES_URL
