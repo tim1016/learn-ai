@@ -7,19 +7,80 @@ Issue: #1877 (PR D of #1861) — start_trading_date_ms/end_trading_date_ms.
 from __future__ import annotations
 
 from datetime import date
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
 
+from app.config import settings
+from app.data_lake.root_identity import LEGACY_ROOT_ID
 from app.data_lake.types import (
     CALENDAR_ANCHOR_UTC_HOUR,
+    ArtifactIdentity,
+    ArtifactRecord,
     DataRunSpec,
     calendar_anchor_ms_to_trading_date,
     trading_date_to_calendar_anchor_ms,
 )
 
+_EXPLICIT_ROOT = UUID("44444444-4444-4444-4444-444444444444")
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
+
+
+class TestArtifactIdentityDataRootId:
+    """Full artifact identity = data_root_id + price_adjustment_mode +
+    existing identity dimensions (issue #1876 fixed design decision)."""
+
+    def _identity_kwargs(self) -> dict:
+        return {
+            "artifact_kind": "time_series_bars",
+            "market": "usa",
+            "symbol": "SPY",
+            "resolution": "minute",
+            "data_type": "trade",
+            "provider": "polygon",
+            "price_adjustment_mode": "raw",
+        }
+
+    def test_defaults_to_the_active_root_when_omitted(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
+        identity = ArtifactIdentity(**self._identity_kwargs())
+        assert identity.data_root_id == LEGACY_ROOT_ID
+
+    def test_explicit_value_is_preserved(self):
+        identity = ArtifactIdentity(**self._identity_kwargs(), data_root_id=_EXPLICIT_ROOT)
+        assert identity.data_root_id == _EXPLICIT_ROOT
+
+
+class TestArtifactRecordDataRootId:
+    def _record_kwargs(self) -> dict:
+        return {
+            "id": 1,
+            "artifact_kind": "time_series_bars",
+            "market": "usa",
+            "symbol": "SPY",
+            "trading_date": None,
+            "resolution": "minute",
+            "data_type": "trade",
+            "provider": "polygon",
+            "price_adjustment_mode": "raw",
+            "data_contract_hash": "a" * 64,
+            "file_path": "equity/usa/minute/spy/x.zip",
+            "file_sha256": "b" * 64,
+            "row_count": 1,
+            "first_bar_start_ms": 0,
+            "last_bar_start_ms": 0,
+        }
+
+    def test_defaults_to_the_active_root_when_omitted(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
+        record = ArtifactRecord(**self._record_kwargs())
+        assert record.data_root_id == LEGACY_ROOT_ID
+
+    def test_explicit_value_is_preserved(self):
+        record = ArtifactRecord(**self._record_kwargs(), data_root_id=_EXPLICIT_ROOT)
+        assert record.data_root_id == _EXPLICIT_ROOT
 
 
 class TestCalendarAnchorHelpers:

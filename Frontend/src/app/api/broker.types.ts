@@ -1848,6 +1848,8 @@ export interface paths {
         /**
          * Get Storage Summary
          * @description Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.
+         *
+         *     Defaults to the service's configured active root (issue #1876).
          */
         get: operations["get_storage_summary_api_data_lake_storage_summary_get"];
         put?: never;
@@ -5347,6 +5349,11 @@ export interface components {
             content_hash: string | null;
             /** Data Contract Hash */
             data_contract_hash: string;
+            /**
+             * Data Root Id
+             * Format: uuid
+             */
+            data_root_id?: string;
             /** Data Type */
             data_type: string | null;
             /** Error Message */
@@ -5418,6 +5425,11 @@ export interface components {
             artifact_kind: string;
             /** Data Contract Hash */
             data_contract_hash: string;
+            /**
+             * Data Root Id
+             * Format: uuid
+             */
+            data_root_id?: string;
             /** Data Type */
             data_type: string | null;
             /** File Path */
@@ -8105,6 +8117,11 @@ export interface components {
         };
         /** CoverageResponse */
         CoverageResponse: {
+            /**
+             * Data Root Id
+             * Format: uuid
+             */
+            data_root_id?: string;
             /** Data Type */
             data_type: string;
             /**
@@ -8592,6 +8609,11 @@ export interface components {
             completed_at_ms: number;
             /** Data Availability Hash */
             data_availability_hash: string;
+            /**
+             * Data Root Id
+             * Format: uuid
+             */
+            data_root_id?: string;
             /** Duration Ms */
             duration_ms: number;
             /**
@@ -18338,6 +18360,11 @@ export interface components {
         };
         /** StorageSummaryResponse */
         StorageSummaryResponse: {
+            /**
+             * Data Root Id
+             * Format: uuid
+             */
+            data_root_id?: string;
             /**
              * Kinds
              * @default []

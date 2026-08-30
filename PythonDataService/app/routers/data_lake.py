@@ -32,7 +32,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, root_identity
 from app.data_lake.backfill import (
     BackfillDayProgress,
     BackfillResult,
@@ -179,6 +179,10 @@ async def get_coverage(
         end_trading_date,
     )
     provider = provider_for_data_type(data_type)
+    # Resolved once and passed explicitly to both the catalog query and the
+    # response (issue #1876): coverage defaults to the service's configured
+    # active root.
+    data_root_id = root_identity.active_root_id()
     # One schedule build for the whole range, not one per day: session_date
     # and its 09:30 ET open both come off the same SessionWindow, so no
     # per-day session_open_ms_utc() call re-queries pandas_market_calendars.
@@ -194,6 +198,7 @@ async def get_coverage(
             price_adjustment_mode=price_adjustment_mode,
             start_trading_date=start_trading_date,
             end_trading_date=end_trading_date,
+            data_root_id=data_root_id,
         )
     }
     days = []
@@ -213,6 +218,7 @@ async def get_coverage(
         resolution="minute",
         provider=provider,
         price_adjustment_mode=price_adjustment_mode,
+        data_root_id=data_root_id,
         days=days,
     )
 
@@ -235,13 +241,17 @@ async def get_artifact_detail(artifact_id: int) -> ArtifactDetail:
 
 @router.get("/storage-summary", response_model=StorageSummaryResponse, dependencies=[Depends(_ensure_catalog_pool)])
 async def get_storage_summary(market: Literal["usa"] = "usa") -> StorageSummaryResponse:
-    """Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span."""
+    """Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.
+
+    Defaults to the service's configured active root (issue #1876).
+    """
     logger.info("[STEP 1] /api/data-lake/storage-summary requested: market=%s", market)
+    data_root_id = root_identity.active_root_id()
     kinds, symbols = await asyncio.gather(
-        catalog_client.select_storage_totals_by_kind(market),
-        catalog_client.select_symbol_coverage_spans(market),
+        catalog_client.select_storage_totals_by_kind(market, data_root_id=data_root_id),
+        catalog_client.select_symbol_coverage_spans(market, data_root_id=data_root_id),
     )
-    return StorageSummaryResponse(market=market, kinds=kinds, symbols=symbols)
+    return StorageSummaryResponse(market=market, data_root_id=data_root_id, kinds=kinds, symbols=symbols)
 
 
 class BackfillDefaults(BaseModel):

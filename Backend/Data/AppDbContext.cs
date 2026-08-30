@@ -586,6 +586,14 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<DataLakeArtifact>(entity =>
         {
             entity.HasKey(a => a.Id);
+            // Temporary server default (issue #1876, PR A of #1861): every
+            // pre-existing row reads as the legacy-root UUID until PR B
+            // drops this default once every write path supplies the value
+            // explicitly. Declared here so the EF model snapshot matches
+            // what the migration's AddColumn(defaultValue:) actually sets —
+            // otherwise `dotnet ef migrations add` sees a phantom pending
+            // change on this property forever.
+            entity.Property(a => a.DataRootId).IsRequired().HasDefaultValue(Guid.Empty);
             entity.Property(a => a.ArtifactKind).IsRequired().HasMaxLength(40);
             entity.Property(a => a.Provider).IsRequired().HasMaxLength(40);
             entity.Property(a => a.ProviderParams).IsRequired().HasColumnType("jsonb");
@@ -605,6 +613,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<DataLakeRun>(entity =>
         {
             entity.HasKey(r => r.Id);
+            // See DataLakeArtifact.DataRootId above — same temporary default.
+            entity.Property(r => r.DataRootId).IsRequired().HasDefaultValue(Guid.Empty);
             entity.Property(r => r.RunType).IsRequired().HasMaxLength(20);
             entity.Property(r => r.RunSpec).IsRequired().HasColumnType("jsonb");
             entity.Property(r => r.RequestedAtMs).IsRequired();

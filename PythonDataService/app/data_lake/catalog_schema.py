@@ -36,6 +36,10 @@ DATA_LAKE_ARTIFACTS = TableExpectation(
     name="DataLakeArtifacts",
     columns=(
         ColumnExpectation("Id", "bigint", nullable=False),
+        # Root identity (#1876, PR A of #1861): which physical lake root
+        # this row belongs to. Backfilled to the deterministic legacy-root
+        # UUID for every pre-#1876 row; non-null going forward.
+        ColumnExpectation("DataRootId", "uuid", nullable=False),
         ColumnExpectation("ArtifactKind", "character varying", nullable=False),
         ColumnExpectation("Market", "character varying", nullable=True),
         ColumnExpectation("Symbol", "character varying", nullable=True),
@@ -89,6 +93,9 @@ DATA_LAKE_RUNS = TableExpectation(
     name="DataLakeRuns",
     columns=(
         ColumnExpectation("Id", "uuid", nullable=False),
+        # See DATA_LAKE_ARTIFACTS.DataRootId above — same backfill, same
+        # migration.
+        ColumnExpectation("DataRootId", "uuid", nullable=False),
         ColumnExpectation("StrategyExecutionId", "integer", nullable=True),
         ColumnExpectation("EngineRunId", "character varying", nullable=True),
         ColumnExpectation("RunType", "character varying", nullable=False),

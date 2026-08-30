@@ -55,6 +55,20 @@ def lake_subpath(price_adjustment_mode: PriceAdjustmentMode) -> PurePosixPath:
     return PurePosixPath(_LAKE_DIR) / price_adjustment_mode
 
 
+def lake_container_within(base_root: Path) -> Path:
+    """Return the lake container for an arbitrary base root, not just the
+    configured active one.
+
+    Extracted for ``app.data_lake.root_identity.RootContext``: a resolved
+    root context (issue #1876) carries its own ``base_root`` — the physical
+    lake's write root, portable across mount paths — and derives its paths
+    through this module rather than re-deriving them. ``resolve_lake_container``
+    below is the single-root convenience wrapper every existing caller keeps
+    using unchanged.
+    """
+    return base_root / _LAKE_DIR
+
+
 def resolve_lake_container() -> Path:
     """Return the directory holding every per-mode lake root.
 
@@ -63,7 +77,7 @@ def resolve_lake_container() -> Path:
     to answer "is this path part of the lake at all?" for callers that must
     refuse to treat any lake tree as their own writable store.
     """
-    return Path(settings.LEAN_DATA_WRITE_ROOT) / _LAKE_DIR
+    return lake_container_within(Path(settings.LEAN_DATA_WRITE_ROOT))
 
 
 def resolve_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
@@ -110,11 +124,17 @@ def resolve_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
     a runtime boundary and this is the one place the segment is constructed —
     it is where the check belongs.
     """
-    return _lake_root_within_container(price_adjustment_mode)
+    return lake_root_within(Path(settings.LEAN_DATA_WRITE_ROOT), price_adjustment_mode)
 
 
-def _lake_root_within_container(price_adjustment_mode: str) -> Path:
-    return _mode_subdir_within(resolve_lake_container(), price_adjustment_mode)
+def lake_root_within(base_root: Path, price_adjustment_mode: PriceAdjustmentMode) -> Path:
+    """Root-parameterized sibling of :func:`resolve_lake_root`.
+
+    Same validation and containment guarantees, for an arbitrary
+    ``base_root`` rather than the configured active write root — see
+    :func:`lake_container_within`.
+    """
+    return _mode_subdir_within(lake_container_within(base_root), price_adjustment_mode)
 
 
 def _mode_subdir_within(container: Path, price_adjustment_mode: str) -> Path:
@@ -157,7 +177,16 @@ def resolve_staging_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
     it promotes into, so the guarantee stops resting on an invariant
     maintained somewhere else (#1866 review).
     """
-    return _mode_subdir_within(Path(settings.LEAN_DATA_WRITE_ROOT) / _STAGING_DIR, price_adjustment_mode)
+    return staging_root_within(Path(settings.LEAN_DATA_WRITE_ROOT), price_adjustment_mode)
+
+
+def staging_root_within(base_root: Path, price_adjustment_mode: PriceAdjustmentMode) -> Path:
+    """Root-parameterized sibling of :func:`resolve_staging_root`.
+
+    See :func:`lake_root_within` — the same base-root parameterization,
+    applied to the staging tree instead of the lake tree.
+    """
+    return _mode_subdir_within(base_root / _STAGING_DIR, price_adjustment_mode)
 
 
 def minute_bar_market_root(market: Market) -> PurePosixPath:

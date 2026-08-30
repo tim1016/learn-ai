@@ -13,6 +13,20 @@ public class DataLakeArtifact
 {
     public long Id { get; set; }
 
+    /// <summary>
+    /// Which physical lake root this row belongs to (issue #1876, PR A of
+    /// #1861). Additive: backfilled to the deterministic legacy-root UUID
+    /// (<c>Guid.Empty</c>) for every pre-#1876 row by migration
+    /// AddDataRootIdToDataLakeArtifactsAndRuns; every new write records the
+    /// service's configured active root
+    /// (<c>app.data_lake.root_identity.active_root_id</c> on the Python
+    /// side). Not an FK — no DataLakeRoots table exists yet (explicit
+    /// non-goal of this slice); the on-disk marker at
+    /// <c>&lt;base-root&gt;/lake/.data-root.json</c> is the source of truth
+    /// for what a root's identity actually is.
+    /// </summary>
+    public Guid DataRootId { get; set; }
+
     [Required]
     [MaxLength(40)]
     public string ArtifactKind { get; set; } = "";

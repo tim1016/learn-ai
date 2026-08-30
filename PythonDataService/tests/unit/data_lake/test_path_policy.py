@@ -18,11 +18,14 @@ from app.data_lake.path_policy import (
     LeanMapFilePath,
     LeanMetadataPath,
     LeanMinuteBarPath,
+    lake_container_within,
+    lake_root_within,
     minute_bar_market_root,
     resolve_lake_container,
     resolve_lake_root,
     resolve_staging_root,
     staging_path_for,
+    staging_root_within,
 )
 
 
@@ -180,6 +183,47 @@ class TestLakeRoots:
 
         assert ensure_data.resolve_lake_root is resolve_lake_root
         assert ensure_data.resolve_staging_root is resolve_staging_root
+
+
+class TestWithinVariants:
+    """Root-parameterized siblings of resolve_lake_root/resolve_staging_root.
+
+    These take an explicit base root instead of reading
+    settings.LEAN_DATA_WRITE_ROOT, so a caller holding a
+    root_identity.RootContext for a non-active root can still derive its
+    mode-keyed paths through path_policy — the sole authority for
+    constructing LEAN on-disk paths (module docstring) — rather than a
+    second, ad hoc join. The settings-based resolve_* functions below become
+    thin wrappers over these for the configured active root.
+    """
+
+    def test_lake_container_within_is_base_root_slash_lake(self):
+        assert lake_container_within(Path("/mnt/other-root")) == Path("/mnt/other-root/lake")
+
+    def test_lake_root_within_carries_the_mode(self):
+        assert lake_root_within(Path("/mnt/other-root"), "raw") == Path("/mnt/other-root/lake/raw")
+        assert lake_root_within(Path("/mnt/other-root"), "polygon_split_adjusted") == Path(
+            "/mnt/other-root/lake/polygon_split_adjusted"
+        )
+
+    def test_lake_root_within_refuses_an_unknown_mode(self):
+        with pytest.raises(ValueError, match="is not a price adjustment mode"):
+            lake_root_within(Path("/mnt/other-root"), "../../etc")  # type: ignore[arg-type]
+
+    def test_staging_root_within_carries_the_mode(self):
+        assert staging_root_within(Path("/mnt/other-root"), "raw") == Path("/mnt/other-root/staging/raw")
+
+    def test_resolve_lake_root_delegates_to_lake_root_within_the_active_write_root(self, monkeypatch):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_lake_root("raw") == lake_root_within(Path("/mnt/writer"), "raw")
+
+    def test_resolve_staging_root_delegates_to_staging_root_within_the_active_write_root(self, monkeypatch):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_staging_root("raw") == staging_root_within(Path("/mnt/writer"), "raw")
+
+    def test_resolve_lake_container_delegates_to_lake_container_within_the_active_write_root(self, monkeypatch):
+        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
+        assert resolve_lake_container() == lake_container_within(Path("/mnt/writer"))
 
 
 class TestLakeRootRefusesUntrustedModes:

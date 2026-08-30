@@ -682,6 +682,7 @@ async def _bootstrap_metadata_artifact(
             first_bar_start_ms=0,
             last_bar_start_ms=0,
             file_size_bytes=len(content),
+            data_root_id=identity.data_root_id,
         ),
         False,  # freshly fetched
         None,
@@ -942,6 +943,7 @@ async def _process_minute_trade_artifact(
             first_bar_start_ms=first_bar_ms,
             last_bar_start_ms=last_bar_ms,
             file_size_bytes=len(payload),
+            data_root_id=identity.data_root_id,
         ),
         None,
         False,  # freshly fetched
@@ -1148,6 +1150,7 @@ async def _process_factor_file_artifact(
             first_bar_start_ms=0,
             last_bar_start_ms=0,
             file_size_bytes=len(payload),
+            data_root_id=identity.data_root_id,
         ),
         None,
         outcome,
@@ -1256,6 +1259,7 @@ async def _process_map_file_artifact(
             first_bar_start_ms=0,
             last_bar_start_ms=0,
             file_size_bytes=len(payload),
+            data_root_id=identity.data_root_id,
         ),
         None,
         False,  # freshly fetched
@@ -1385,6 +1389,7 @@ async def _process_minute_quote_artifact(
             first_bar_start_ms=first_ms,
             last_bar_start_ms=last_ms,
             file_size_bytes=len(payload),
+            data_root_id=identity.data_root_id,
         ),
         None,
         False,  # freshly derived
@@ -1550,6 +1555,7 @@ async def _process_daily_trade_artifact(
             first_bar_start_ms=0,
             last_bar_start_ms=0,
             file_size_bytes=len(payload),
+            data_root_id=identity.data_root_id,
         ),
         None,
         outcome,
