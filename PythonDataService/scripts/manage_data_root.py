@@ -19,6 +19,7 @@ configured ``LEAN_DATA_WRITE_ROOT``.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 from uuid import UUID
@@ -32,26 +33,31 @@ from app.data_lake.root_identity import (
     stamp_existing_root,
 )
 
+logger = logging.getLogger("manage_data_root")
+
 
 def run_init(base_root: Path, root_id: UUID) -> None:
     init_empty_root(base_root, root_id)
-    print(f"initialized {marker_path(base_root)} with data_root_id={root_id}")
+    logger.info("initialized %s with data_root_id=%s", marker_path(base_root), root_id)
 
 
 def run_stamp(base_root: Path, root_id: UUID, *, force: bool) -> None:
     stamp_existing_root(base_root, root_id, force=force)
-    print(f"stamped {marker_path(base_root)} with data_root_id={root_id}")
+    logger.info("stamped %s with data_root_id=%s", marker_path(base_root), root_id)
 
 
 def run_inspect(base_root: Path) -> None:
     marker = inspect_root(base_root)
     if marker is None:
-        print(f"no root-identity marker at {marker_path(base_root)}")
+        logger.info("no root-identity marker at %s", marker_path(base_root))
         return
-    print(f"{marker_path(base_root)}: schema_version={marker.schema_version} data_root_id={marker.data_root_id}")
+    logger.info(
+        "%s: schema_version=%s data_root_id=%s", marker_path(base_root), marker.schema_version, marker.data_root_id
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -87,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "inspect":
             run_inspect(args.base_root)
     except LakeRootIdentityError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        logger.error("%s", exc)
         return 1
     return 0
 

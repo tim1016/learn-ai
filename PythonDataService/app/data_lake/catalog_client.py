@@ -447,6 +447,47 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
 # ---------------------------------------------------------------------------
 
 
+class CatalogSchemaNotReadyError(RuntimeError):
+    """A claim_* INSERT's ON CONFLICT target matches no constraint or index
+    in the connected database.
+
+    Wraps Postgres SQLSTATE 42P10 (``invalid_column_reference`` --
+    asyncpg's ``InvalidColumnReferenceError``), which Postgres raises when an
+    ``ON CONFLICT (...) WHERE ...`` clause names a column set that no unique
+    or exclusion index currently matches. In practice this almost always
+    means the database schema doesn't yet match what this code expects: a
+    mid-deploy race where python-service started serving traffic before
+    Backend's EF Core migration finished applying. compose.yaml health-gates
+    Backend on python-service, not the other way around, and Backend applies
+    migrations during its own startup -- so there is a real window, on every
+    deploy that ships a migration touching one of these partial unique
+    indexes (e.g. 20260830120000_ActivateDataRootScopedCatalogIdentity),
+    where python-service is already reachable but the index a claim_*
+    function's ON CONFLICT target names does not exist yet. Safe to retry
+    after a short delay once the migration completes; not safe to retry
+    immediately in a tight loop.
+    """
+
+
+async def _claim_fetchval(conn: asyncpg.Connection, query: str, *args: Any) -> int | None:
+    """Run one claim_*'s ``INSERT ... ON CONFLICT ... RETURNING "Id"`` and
+    translate a conflict-target mismatch (Postgres 42P10) into
+    :class:`CatalogSchemaNotReadyError` instead of letting the raw asyncpg
+    exception surface as an opaque 500. Any other ``PostgresError`` is
+    re-raised unchanged -- this narrowly targets the one mid-deploy race
+    described in :class:`CatalogSchemaNotReadyError`'s docstring, not
+    Postgres errors in general.
+    """
+    try:
+        return await conn.fetchval(query, *args)
+    except asyncpg.PostgresError as exc:
+        if exc.sqlstate == "42P10":
+            raise CatalogSchemaNotReadyError(
+                f"ON CONFLICT target matches no constraint/index (Postgres 42P10): {exc}"
+            ) from exc
+        raise
+
+
 async def claim_minute_bar(
     identity: ArtifactIdentity,
     worker_id: str,
@@ -499,7 +540,8 @@ async def claim_minute_bar(
         RETURNING "Id";
     """
     async with connection() as conn:
-        return await conn.fetchval(
+        return await _claim_fetchval(
+            conn,
             query,
             identity.artifact_kind,
             identity.market,
@@ -844,7 +886,8 @@ async def claim_corp_action_artifact(
         RETURNING "Id";
     """
     async with connection() as conn:
-        return await conn.fetchval(
+        return await _claim_fetchval(
+            conn,
             query,
             identity.artifact_kind,
             identity.market,
@@ -914,7 +957,8 @@ async def claim_metadata_artifact(
         RETURNING "Id";
     """
     async with connection() as conn:
-        return await conn.fetchval(
+        return await _claim_fetchval(
+            conn,
             query,
             identity.market,
             identity.symbol,
@@ -1012,7 +1056,8 @@ async def claim_aggregated_bar_artifact(
         RETURNING "Id";
     """
     async with connection() as conn:
-        return await conn.fetchval(
+        return await _claim_fetchval(
+            conn,
             query,
             identity.artifact_kind,
             identity.market,
