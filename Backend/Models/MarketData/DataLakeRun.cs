@@ -15,7 +15,8 @@ public class DataLakeRun
 
     /// <summary>
     /// See <see cref="DataLakeArtifact.DataRootId"/> — same backfill, same
-    /// migration, same "not an FK yet" scoping.
+    /// migrations (including the PR B default removal), same "not an FK
+    /// yet" scoping.
     /// </summary>
     public Guid DataRootId { get; set; }
 

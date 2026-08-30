@@ -25,17 +25,27 @@ that zip's trading date. Any violation refuses the affected symbol or
 artifact rather than silently claiming a catalog row a provenance document
 doesn't actually attest to.
 
-``--lake-root`` must equal the canonical configured write root
-(``settings.LEAN_DATA_WRITE_ROOT`` -- the parent under which
-``path_policy.resolve_lake_root()`` and ``resolve_staging_root()`` live) --
-see ``LakeRootIdentityError``. Catalog
-rows are root-relative (``FilePath`` carries no root identity of its own), so
-importing into any other root would produce rows the live ``ensure_data``
-pipeline can never actually find once it resolves coverage under the real
-configured root ("phantom coverage"). Artifacts land under
-``<canonical-root>/lake/<price-adjustment-mode>/...`` (the LEAN-relative tail
+``--lake-root`` is any root carrying a valid, marked ``.data-root.json``
+(issue #1878, PR B of #1861) -- it no longer needs to equal the process's
+configured write root. Root-aware since PR A gave every physical root a
+portable identity (``app.data_lake.root_identity``): this importer opens and
+validates the *selected* root's marker via ``root_identity.read_marker``,
+uses that marker's ``data_root_id`` for every catalog claim/lookup, and
+resolves paths relative to that root -- never the configured
+``settings.LEAN_DATA_WRITE_ROOT``. An unmarked or malformed root is refused
+(``LakeRootIdentityError``, re-exported from ``root_identity``) rather than
+silently stamped; an operator marks a root first via
+``scripts/manage_data_root.py`` (``init`` for a brand-new root, ``stamp
+--force`` for an existing populated one) -- the same explicit administrative
+path every other root-identity consumer goes through. Because the catalog's
+uniqueness now leads with ``DataRootId`` (the index rebuild this PR ships),
+importing into a second physical root with the same symbol/date/artifact
+identity as a first no longer collides with it, and no longer risks
+"phantom coverage": each root's rows resolve only against that root's own
+``data_root_id``. Artifacts land under
+``<selected-root>/lake/<price-adjustment-mode>/...`` (the LEAN-relative tail
 is ``app.data_lake.path_policy.LeanMinuteBarPath`` unchanged; the mode segment
-sits above it), staged through ``<canonical-root>/staging/...`` per
+sits above it), staged through ``<selected-root>/staging/...`` per
 ``app.data_lake.atomic``. Staging is deliberately not mode-keyed: its paths
 are already unique per ``(request_id, worker_id, attempt)``.
 
@@ -55,19 +65,18 @@ later correct.
 Schema note: the v1 ``ck_raw_only_for_canonical_data_root`` CHECK constraint
 (``Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs``)
 originally allowed only ``PriceAdjustmentMode = 'raw'`` for every non-metadata
-row. Migration
-``Backend/Migrations/20260827120000_AllowImportedNonRawAdjustmentModes.cs``
-widens it to also allow ``'polygon_split_adjusted'`` — the constraint's own
-comment anticipated exactly this ("Relaxed in v2 by adding data_root_id and
-dropping this constraint"); this migration takes the minimal step needed for
-an honest adjusted-mode import without attempting the full data_root_id
-redesign. That migration must be applied before this script's adjusted-mode
-path will insert successfully — a 'raw'-only cache (``policy.adjusted=false``)
-already works against the unmigrated schema.
+row -- a temporary widening
+(``Backend/Migrations/20260827120000_AllowImportedNonRawAdjustmentModes.cs``)
+later admitted ``'polygon_split_adjusted'`` too. PR B
+(``Backend/Migrations/20260830120000_ActivateDataRootScopedCatalogIdentity.cs``)
+drops the constraint outright, exactly as its own comment anticipated
+("Relaxed in v2 by adding data_root_id and dropping this constraint"):
+adjustment mode is a physical path segment under a root-scoped identity now,
+so the single-canonical-root restriction no longer represents reality.
 
 One lake root per adjustment mode — structurally, since #1839. The mode is a
 path segment above the LEAN tree
-(``path_policy.resolve_lake_root(price_adjustment_mode)``), so a 'raw' and a
+(``path_policy.lake_root_within(base_root, price_adjustment_mode)``), so a 'raw' and a
 'polygon_split_adjusted' artifact for the same (market, symbol, date, type)
 resolve to different absolute paths and simply cannot overwrite one another.
 Each symbol's mode comes from its own provenance document, so one invocation
@@ -153,10 +162,17 @@ from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.path_policy import (
     LeanMinuteBarPath,
     ensure_lean_readable_layout,
+    lake_root_within,
     minute_bar_market_root,
-    resolve_lake_root,
-    resolve_staging_root,
+    staging_root_within,
 )
+
+# Re-exported so existing `from app.data_lake.cache_import import
+# LakeRootIdentityError` call sites (this module's own callers and its
+# tests) keep working unchanged -- it is the same type root_identity's other
+# administrative consumers (scripts/manage_data_root.py) already raise, not
+# a parallel hierarchy.
+from app.data_lake.root_identity import LakeRootIdentityError as LakeRootIdentityError
 from app.data_lake.types import ArtifactIdentity, ArtifactRecord, polygon_mode_for
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.utils.timestamps import now_ms_utc, to_ms_utc
@@ -212,22 +228,6 @@ class CorruptCacheZipError(RuntimeError):
 
     Refused with no catalog row and no lake write — never silently repaired
     or partially imported.
-    """
-
-
-class LakeRootIdentityError(RuntimeError):
-    """``--lake-root`` does not match the canonical configured lake root.
-
-    Catalog rows are root-relative: ``FilePath`` carries no root identity of
-    its own. Importing into any root other than
-    ``app.data_lake.path_policy.resolve_lake_root()`` (``settings.LEAN_DATA_WRITE_ROOT``)
-    would place bytes ``ensure_data``'s live pipeline can never actually find
-    once it resolves coverage under the real configured root -- "phantom
-    coverage" the catalog claims but the canonical root doesn't have. The
-    full root-identity (``data_root_id``) design that would let more than
-    one physical root coexist honestly is ledgered for the flag-flip
-    integration slice (T10); until then there is exactly one canonical
-    root, and ``--lake-root`` must equal it.
     """
 
 
@@ -700,6 +700,7 @@ async def _import_one_zip(
     lake_dir: Path,
     staging_dir: Path,
     run_id: UUID,
+    data_root_id: UUID,
 ) -> ImportedArtifact | SkippedArtifact | FailedArtifact:
     try:
         verified = verify_and_read_zip(ref.zip_path, ref.symbol, ref.trading_date)
@@ -723,9 +724,11 @@ async def _import_one_zip(
         provider="polygon",
         price_adjustment_mode=price_adjustment_mode,
         # Explicit, not relying on the field's own default (issue #1876):
-        # this is a production write path and the service's active root at
-        # import time is what a reader should see recorded on the row.
-        data_root_id=root_identity.active_root_id(),
+        # the *selected* root's identity (issue #1878) -- read from that
+        # root's own .data-root.json marker, not necessarily the service's
+        # configured active root -- is what a reader should see recorded on
+        # the row.
+        data_root_id=data_root_id,
     )
 
     claim_result = await catalog_client.claim_minute_bar(
@@ -745,6 +748,7 @@ async def _import_one_zip(
             start_trading_date=ref.trading_date,
             end_trading_date=ref.trading_date,
             price_adjustment_mode=price_adjustment_mode,
+            data_root_id=data_root_id,
         )
         existing = existing_rows[0] if existing_rows else None
 
@@ -929,13 +933,27 @@ def _fail_all(
 async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
     """Import every trade zip under ``cache_root`` into the lake catalog.
 
-    ``lake_root`` must equal the canonical configured write root
-    (``settings.LEAN_DATA_WRITE_ROOT``, the parent ``resolve_lake_root()``
-    and ``resolve_staging_root()`` resolve under) -- or this raises
-    ``LakeRootIdentityError`` before touching anything — its one remaining job
-    is to make the operator state which root they mean and refuse a wrong
-    answer loudly, since a root-relative catalog cannot detect the mistake
-    later. Artifacts land under ``lake_root/lake/<price-adjustment-mode>/...``,
+    ``lake_root`` is any physical root carrying a valid, marked
+    ``.data-root.json`` (issue #1878, PR B of #1861) -- it no longer needs to
+    equal the process's configured write root. The marker is opened and
+    validated via ``root_identity.read_marker`` before anything else runs;
+    a missing marker or a malformed one both raise ``LakeRootIdentityError``
+    with no catalog row and no lake write. This importer never stamps a root
+    itself -- an unmarked root (brand-new or an existing-but-unmarked
+    canonical root) must go through ``scripts/manage_data_root.py``
+    (``init`` or ``stamp --force``) first, the same explicit administrative
+    path every other root-identity consumer goes through.
+
+    The marker's ``data_root_id`` is used for every catalog claim and lookup
+    this run performs, and every artifact/staging path is resolved relative
+    to ``lake_root`` itself (``path_policy.lake_root_within`` /
+    ``staging_root_within``), never the configured
+    ``settings.LEAN_DATA_WRITE_ROOT``. Because catalog uniqueness now leads
+    with ``DataRootId`` (this PR's index rebuild), importing into a second
+    physical root with the same symbol/date/artifact identity as a first no
+    longer collides with it and no longer risks "phantom coverage" -- each
+    root's rows resolve only against that root's own ``data_root_id``.
+    Artifacts land under ``lake_root/lake/<price-adjustment-mode>/...``,
     staged through ``lake_root/staging/...``; both are created if missing.
     Makes zero provider calls — every byte written comes from the cache zips
     already on disk.
@@ -944,26 +962,21 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
     selects its own lake root, so one invocation can import a mixture of raw
     and adjusted caches without them ever meeting on disk (#1839).
     """
-    from app.config import settings
-
-    canonical_root = Path(settings.LEAN_DATA_WRITE_ROOT)
-    if lake_root.resolve() != canonical_root.resolve():
+    marker = root_identity.read_marker(lake_root)
+    if marker is None:
         raise LakeRootIdentityError(
-            f"--lake-root {lake_root} does not match the canonical configured lake root "
-            f"{canonical_root} (settings.LEAN_DATA_WRITE_ROOT). Catalog rows are root-relative "
-            f"(FilePath carries no root identity of its own), so ensure_data's live pipeline "
-            f"will resolve this import's rows under the canonical root regardless of where "
-            f"--lake-root pointed -- importing anywhere else creates catalog rows the canonical "
-            f"root doesn't actually have bytes for (\"phantom coverage\"). The full root-identity "
-            f"(data_root_id) design that would let more than one physical root coexist honestly "
-            f"is ledgered for the flag-flip integration slice (T10); until then, --lake-root must "
-            f"equal the canonical root."
+            f"no root-identity marker at {root_identity.marker_path(lake_root)}; refusing to import "
+            f"into an unmarked root. Run `python -m scripts.manage_data_root init --root-id <uuid> "
+            f"--base-root {lake_root}` for a brand-new root, or `... stamp --root-id <uuid> --force "
+            f"--base-root {lake_root}` to claim an existing populated root -- this importer never "
+            f"stamps a root itself."
         )
+    resolved_root_id = marker.data_root_id
 
     # Both roots are resolved per symbol, below: each is keyed by adjustment
     # mode, and the mode comes from that symbol's own provenance document.
-    # They come from the canonical helpers so they cannot diverge from where
-    # ensure_data's live pipeline reads and writes.
+    # Resolved relative to the selected `lake_root`, not the configured
+    # write root, so this import lands wherever the operator pointed it.
     await catalog_client.init_pool()
 
     refs, unrecognized = discover_cache_zips(cache_root)
@@ -1019,16 +1032,18 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
         adjusted = provenance["policy"]["adjusted"]
         price_adjustment_mode = price_adjustment_mode_for(provenance)
 
-        # This symbol's mode selects its own lake root. Where this used to
-        # sit there was a check-then-commit critical section under a
-        # cross-process advisory lock, guarding a marker that committed the
-        # whole tree to one mode -- because raw and adjusted bytes for the
-        # same (symbol, date) resolved to one path and either could
-        # overwrite the other. The mode is now a segment of the root itself,
-        # so they cannot collide and there is nothing to serialize: two
-        # concurrent imports of different modes touch disjoint trees.
-        lake_dir = resolve_lake_root(price_adjustment_mode)
-        staging_dir = resolve_staging_root(price_adjustment_mode)
+        # This symbol's mode selects its own lake root, resolved relative to
+        # the selected `lake_root` (issue #1878) rather than the configured
+        # write root. Where this used to sit there was a check-then-commit
+        # critical section under a cross-process advisory lock, guarding a
+        # marker that committed the whole tree to one mode -- because raw
+        # and adjusted bytes for the same (symbol, date) resolved to one
+        # path and either could overwrite the other. The mode is now a
+        # segment of the root itself, so they cannot collide and there is
+        # nothing to serialize: two concurrent imports of different modes
+        # touch disjoint trees.
+        lake_dir = lake_root_within(lake_root, price_adjustment_mode)
+        staging_dir = staging_root_within(lake_root, price_adjustment_mode)
         staging_dir.mkdir(parents=True, exist_ok=True)
         lake_dir.mkdir(parents=True, exist_ok=True)
         # An imported-only lake is still a lake LEAN may be pointed at, so it
@@ -1048,6 +1063,7 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
                 lake_dir=lake_dir,
                 staging_dir=staging_dir,
                 run_id=run_id,
+                data_root_id=resolved_root_id,
             )
             if isinstance(outcome, ImportedArtifact):
                 report.imported.append(outcome)
@@ -1084,10 +1100,10 @@ def main() -> None:
         type=Path,
         required=True,
         help=(
-            "Write root: must equal the canonical configured lake root "
-            "(the canonical configured write root, settings.LEAN_DATA_WRITE_ROOT) "
-            "or the import refuses (catalog rows are root-relative; any other root produces "
-            "'phantom coverage'). Artifacts land under <lake-root>/lake/<adjustment-mode>, "
+            "Write root: any physical root carrying a valid, marked .data-root.json "
+            "(see scripts/manage_data_root.py) -- does not need to equal the configured "
+            "write root. An unmarked or malformed root refuses (this importer never stamps "
+            "one itself). Artifacts land under <lake-root>/lake/<adjustment-mode>, "
             "staged through <lake-root>/staging. Each symbol's adjustment mode comes from its "
             "own provenance document and selects its own subtree, so one invocation can import "
             "a mixture without the modes ever meeting on disk."

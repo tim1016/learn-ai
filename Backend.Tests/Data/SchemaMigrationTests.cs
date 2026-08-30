@@ -308,6 +308,11 @@ public class SchemaMigrationTests
         "account_owner_status_snapshots"
     ];
 
+    // ck_raw_only_for_canonical_data_root is deliberately absent: migration
+    // 20260830120000_ActivateDataRootScopedCatalogIdentity (#1878, PR B of
+    // #1861) drops it, so a fresh full migration must NOT find it — see
+    // ActivateDataRootScopedCatalogIdentity_Up_DropsLegacyConstraintAndDefaults
+    // below for the explicit non-existence assertion.
     private static readonly string[] RawSqlMigrationConstraints =
     [
         "ck_artifact_kind_fields",
@@ -316,7 +321,6 @@ public class SchemaMigrationTests
         "ck_data_type_enum",
         "ck_price_adjustment_mode_enum",
         "ck_status_enum",
-        "ck_raw_only_for_canonical_data_root",
         "ck_data_lake_runs_run_type",
         "ck_data_lake_runs_ensure_data_status",
         "ck_data_lake_runs_engine_status"

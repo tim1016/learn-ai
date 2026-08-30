@@ -524,7 +524,7 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
     import httpx
     import respx
 
-    from app.data_lake import catalog_client
+    from app.data_lake import catalog_client, root_identity
     from app.data_lake.cache_import import import_cache_root
     from app.data_lake.run_materialization import materialize_engine_run
 
@@ -539,6 +539,11 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
     write_root = tmp_path / "lean-data-writer"
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+    # import_cache_root requires any --lake-root to carry a valid marker
+    # (issue #1878, PR B of #1861) -- stamped with the service's own default
+    # active root so materialize_engine_run's later catalog reads (which
+    # default to that same root) actually find what this import writes.
+    root_identity.init_empty_root(write_root, root_identity.active_root_id())
     _write_cache_provenance(cache_root, symbol)
 
     try:

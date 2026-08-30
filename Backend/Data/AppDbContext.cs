@@ -586,14 +586,12 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<DataLakeArtifact>(entity =>
         {
             entity.HasKey(a => a.Id);
-            // Temporary server default (issue #1876, PR A of #1861): every
-            // pre-existing row reads as the legacy-root UUID until PR B
-            // drops this default once every write path supplies the value
-            // explicitly. Declared here so the EF model snapshot matches
-            // what the migration's AddColumn(defaultValue:) actually sets —
-            // otherwise `dotnet ef migrations add` sees a phantom pending
-            // change on this property forever.
-            entity.Property(a => a.DataRootId).IsRequired().HasDefaultValue(Guid.Empty);
+            // Issue #1878 (PR B of #1861): the temporary server default PR A
+            // (#1876) left in place is gone — every write path now supplies
+            // DataRootId explicitly (catalog_client.py's claim_* functions,
+            // cache_import.py), so a caller that forgets fails loudly (NOT
+            // NULL violation) instead of silently landing on the legacy root.
+            entity.Property(a => a.DataRootId).IsRequired();
             entity.Property(a => a.ArtifactKind).IsRequired().HasMaxLength(40);
             entity.Property(a => a.Provider).IsRequired().HasMaxLength(40);
             entity.Property(a => a.ProviderParams).IsRequired().HasColumnType("jsonb");
@@ -606,15 +604,18 @@ public class AppDbContext : DbContext
             entity.Property(a => a.FileSha256).HasMaxLength(64).IsFixedLength();
             entity.Property(a => a.CorpActionRevision).HasMaxLength(64).IsFixedLength();
 
-            // Hot-path coverage lookup (partial indexes added via raw SQL in the migration).
-            entity.HasIndex(a => new { a.Market, a.Symbol, a.Resolution, a.DataType, a.TradingDate });
+            // Hot-path coverage lookup (partial indexes added via raw SQL in the
+            // migration). DataRootId leads (#1878) so a root-filtered coverage
+            // query stays index-backed instead of falling back to a full scan.
+            entity.HasIndex(a => new { a.DataRootId, a.Market, a.Symbol, a.Resolution, a.DataType, a.TradingDate })
+                  .HasDatabaseName("ix_data_lake_artifacts_root_scoped_coverage");
         });
 
         modelBuilder.Entity<DataLakeRun>(entity =>
         {
             entity.HasKey(r => r.Id);
-            // See DataLakeArtifact.DataRootId above — same temporary default.
-            entity.Property(r => r.DataRootId).IsRequired().HasDefaultValue(Guid.Empty);
+            // See DataLakeArtifact.DataRootId above — same default removal (#1878).
+            entity.Property(r => r.DataRootId).IsRequired();
             entity.Property(r => r.RunType).IsRequired().HasMaxLength(20);
             entity.Property(r => r.RunSpec).IsRequired().HasColumnType("jsonb");
             entity.Property(r => r.RequestedAtMs).IsRequired();
