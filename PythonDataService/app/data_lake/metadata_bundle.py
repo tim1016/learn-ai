@@ -753,7 +753,13 @@ async def _activate_catalog_from_receipt(
 
 
 async def _claim_and_fail_metadata_row(
-    *, spec: DataRunSpec, kind: MetadataKind, root_id: UUID, reason: ArtifactFailureReason, detail: str
+    *,
+    spec: DataRunSpec,
+    kind: MetadataKind,
+    root_id: UUID,
+    reason: ArtifactFailureReason,
+    detail: str,
+    bundle_verifies: bool,
 ) -> MetadataBootstrap:
     """Record this attempt's extraction failure against one metadata kind's
     catalog row (#1889).
@@ -780,8 +786,22 @@ async def _claim_and_fail_metadata_row(
     file_path = str(LeanMetadataPath(kind=kind).relative_path())
     claim = await _claim_or_reclaim_metadata_row(dch=dch, file_path=file_path, identity=identity, root_id=root_id)
     if claim.existing is not None:
+        if not bundle_verifies:
+            # The row says 'complete', but this call only got here because the
+            # bundle it describes failed verification and the repair
+            # extraction then failed too. Adopting the row would report the
+            # metadata as available on the strength of a catalog row alone,
+            # while the bytes it names are missing or tampered -- and
+            # ``ensure_data`` would return success, letting the run proceed to
+            # a LEAN mount that cannot verify. Surface the extraction failure
+            # instead. The row is left 'complete' rather than invalidated
+            # here: it is not this caller's row to transition, and the next
+            # successful extraction re-activates it through
+            # ``_activate_catalog_from_receipt``'s adopt-and-restale path.
+            return MetadataBootstrap(None, False, reason, detail)
         # A concurrent caller already published and completed this exact
-        # kind moments ago -- this attempt's failure is moot.
+        # kind moments ago, and the bundle on disk verifies right now -- this
+        # attempt's failure is moot.
         return MetadataBootstrap(claim.existing, True, None)
     if claim.artifact_id is None:
         return MetadataBootstrap(None, False, claim.failure_reason, detail)
@@ -789,17 +809,54 @@ async def _claim_and_fail_metadata_row(
     return MetadataBootstrap(None, False, reason, detail)
 
 
+def _bundle_still_verifies(spec: DataRunSpec, lake_root: Path, root_id: UUID) -> bool:
+    """Does the bundle on disk verify *right now*?
+
+    Asked once on the extraction-failure path, to decide whether a
+    pre-existing 'complete' catalog row may be adopted as a usable artifact.
+    The answer is normally False there -- a verification failure is what sent
+    this call to extraction in the first place -- but a concurrent winner can
+    legitimately have republished in between, and that case must still be
+    reusable.
+    """
+    try:
+        verify_bundle(
+            lake_root,
+            expected_root_id=root_id,
+            expected_mode=spec.price_adjustment_mode,
+            expected_digest=spec.lean_image_digest,
+        )
+    except MetadataBundleError:
+        return False
+    return True
+
+
 async def _fail_required_metadata_rows(
-    spec: DataRunSpec, root_id: UUID, *, reason: ArtifactFailureReason, detail: str
+    spec: DataRunSpec, root_id: UUID, *, lake_root: Path, reason: ArtifactFailureReason, detail: str
 ) -> MetadataBundleOutcome:
     """Record one failed extraction attempt against all three metadata
     kinds (#1889) -- the bundle is one launcher call for all three, so a
-    failure to produce it is a failure for all three alike."""
-    mh = await _claim_and_fail_metadata_row(spec=spec, kind="market_hours", root_id=root_id, reason=reason, detail=detail)
-    sp = await _claim_and_fail_metadata_row(
-        spec=spec, kind="symbol_properties", root_id=root_id, reason=reason, detail=detail
+    failure to produce it is a failure for all three alike.
+
+    Whether a pre-existing 'complete' row may be adopted despite this failure
+    is decided once, from the bytes on disk, and applied to all three kinds
+    alike -- ``verify_bundle`` is a whole-bundle check, so a rejection
+    implicates every kind it covers."""
+    bundle_verifies = _bundle_still_verifies(spec, lake_root, root_id)
+    mh = await _claim_and_fail_metadata_row(
+        spec=spec, kind="market_hours", root_id=root_id, reason=reason, detail=detail, bundle_verifies=bundle_verifies
     )
-    ir = await _claim_and_fail_metadata_row(spec=spec, kind="interest_rate", root_id=root_id, reason=reason, detail=detail)
+    sp = await _claim_and_fail_metadata_row(
+        spec=spec,
+        kind="symbol_properties",
+        root_id=root_id,
+        reason=reason,
+        detail=detail,
+        bundle_verifies=bundle_verifies,
+    )
+    ir = await _claim_and_fail_metadata_row(
+        spec=spec, kind="interest_rate", root_id=root_id, reason=reason, detail=detail, bundle_verifies=bundle_verifies
+    )
     return MetadataBundleOutcome(mh, sp, ir)
 
 
@@ -888,13 +945,17 @@ async def ensure_lean_metadata_bundle(spec: DataRunSpec, lake_root: Path, stagin
                         "data_lake.metadata_bundle: LEAN launcher unreachable during metadata extraction",
                         extra={"lake_root": str(lake_root), "error": str(e2)},
                     )
-                    return await _fail_required_metadata_rows(spec, root_id, reason="launcher_unreachable", detail=str(e2))
+                    return await _fail_required_metadata_rows(
+                        spec, root_id, lake_root=lake_root, reason="launcher_unreachable", detail=str(e2)
+                    )
                 except MetadataBundleExtractionFailed as e2:
                     logger.warning(
                         "data_lake.metadata_bundle: bundle extraction failed",
                         extra={"lake_root": str(lake_root), "error": str(e2)},
                     )
-                    return await _fail_required_metadata_rows(spec, root_id, reason="io_error", detail=str(e2))
+                    return await _fail_required_metadata_rows(
+                        spec, root_id, lake_root=lake_root, reason="io_error", detail=str(e2)
+                    )
 
             return await _activate_catalog_from_receipt(spec, lake_root, receipt, root_id)
     except MetadataBundleLockTimeout as e3:

@@ -914,6 +914,98 @@ async def test_launcher_unreachable_failure_is_retried_once_the_launcher_recover
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_a_failed_repair_does_not_report_unverifiable_metadata_as_reused(clean_artifacts, pool, tmp_lake):
+    """A complete catalog row is not, by itself, evidence the bytes exist.
+
+    Sequence: a good bundle is published and catalogued; a file is then
+    tampered with, so ``verify_bundle`` rejects the bundle; the repair
+    extraction is attempted and fails because the launcher is unreachable.
+    The three catalog rows are still 'complete' from the first run, and the
+    failure path used to adopt them and report the metadata as successfully
+    reused -- so ``ensure_data`` returned success for metadata whose bytes
+    had just been proven unusable, and the run proceeded toward a LEAN mount
+    that could not verify.
+    """
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    stage = _launcher_side_effect(tmp_lake)
+    calls = {"n": 0}
+
+    def _succeeds_once_then_unreachable(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return stage(request)
+        raise httpx.ConnectError("Connection refused")
+
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_succeeds_once_then_unreachable
+    )
+    lake_root = resolve_lake_root("raw")
+    staging_root = resolve_staging_root("raw")
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    first = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+    assert first.market_hours.record is not None, "the first run must publish and catalogue a good bundle"
+    assert first.symbol_properties.record is not None
+
+    # The bytes the catalog rows describe are now unusable.
+    (lake_root / "symbol-properties" / "symbol-properties-database.csv").write_bytes(b"tampered\n")
+
+    second = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+
+    for kind, bootstrap in (
+        ("market_hours", second.market_hours),
+        ("symbol_properties", second.symbol_properties),
+        ("interest_rate", second.interest_rate),
+    ):
+        assert bootstrap.record is None, (
+            f"{kind}: metadata was reported as available on the strength of a stale catalog row, "
+            f"but the bundle it describes failed verification and the repair extraction failed"
+        )
+        assert bootstrap.failure_reason == "launcher_unreachable", (
+            f"{kind}: the extraction failure must be surfaced, not replaced by a reuse"
+        )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_failed_repair_still_reuses_a_bundle_that_verifies(clean_artifacts, pool, tmp_lake):
+    """The other half: refusing to adopt a stale row must not turn every
+    launcher outage into a failure. When the bundle on disk verifies, the
+    completed rows are genuinely usable and are still reused -- an outage
+    with nothing wrong on disk is a cache hit, not an error."""
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    stage = _launcher_side_effect(tmp_lake)
+    calls = {"n": 0}
+
+    def _succeeds_once_then_unreachable(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return stage(request)
+        raise httpx.ConnectError("Connection refused")
+
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_succeeds_once_then_unreachable
+    )
+    lake_root = resolve_lake_root("raw")
+    staging_root = resolve_staging_root("raw")
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    first = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+    assert first.market_hours.record is not None
+
+    second = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+
+    assert second.market_hours.record is not None, "an intact, verifying bundle must still be a cache hit"
+    assert second.market_hours.failure_reason is None
+    assert calls["n"] == 1, "a verifying bundle must not have re-called the launcher at all"
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_launcher_unreachable_never_exhausts_the_retry_ceiling(clean_artifacts, pool, tmp_lake):
     """#1889: unlike a genuine extraction failure, launcher-unreachable must
     stay retryable no matter how many consecutive attempts fail -- an
