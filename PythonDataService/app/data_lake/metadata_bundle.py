@@ -61,6 +61,17 @@ becomes a read of the winner's row via ``select_complete_metadata_artifact``
 on this same call, not a wasted future one. A cross-host lock
 (``pg_advisory_lock``) could remove the redundant extraction if it ever
 becomes materially expensive; not added here.
+
+This safety argument holds only when the racing hosts are extracting the
+*same* digest. A rolling multi-host deploy where two hosts are pinned to
+*different* digests and interleave publishes against the same ``(root,
+mode)`` lake root is a genuinely different, more severe scenario the above
+argument does not cover -- the same-host advisory lock cannot serialize
+across hosts at all, so one host's file-and-receipt publish for digest A
+can interleave with another host's for digest B. That is a real,
+currently-unmitigated gap, not one the above trade-off already accounts
+for; closing it needs the cross-host lock described above, scoped as a
+follow-up rather than folded into this fix.
 """
 
 from __future__ import annotations
@@ -76,7 +87,7 @@ from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from app.config import active_root_id, settings
 from app.data_lake import catalog_client
@@ -136,6 +147,24 @@ class MetadataBundleExtractionFailed(RuntimeError):
     """
 
 
+class MetadataBundleLockTimeout(MetadataBundleError):
+    """Waiting for the per-``(root, mode)`` bundle lock exceeded
+    ``_LOCK_TIMEOUT_S``.
+
+    A distinct subclass rather than the plain :class:`MetadataBundleError`
+    ``_bundle_lock`` used to raise: that base class also covers "what's on
+    disk is not trustworthy" (a condition :func:`ensure_lean_metadata_bundle`
+    already handles inline, by re-extracting), which is a completely
+    different situation from "another caller is still holding the lock".
+    ``_LOCK_TIMEOUT_S`` (60s) is shorter than the launcher's documented HTTP
+    budget for a legitimate extraction (``EXTRACT_METADATA_HTTP_TIMEOUT_S``,
+    360s), so a concurrent caller polling the lock while another caller is
+    mid-extraction can time out well before that extraction was ever
+    expected to fail -- this must read as ordinary, retryable contention,
+    not an unstructured 500.
+    """
+
+
 class MetadataFileEntry(BaseModel):
     """One file's receipt entry: where it lives (root-relative to the
     mode-specific lake root) and its sha256."""
@@ -171,6 +200,39 @@ class LeanMetadataFiles(BaseModel):
     symbol_properties: MetadataFileEntry
     interest_rate: MetadataFileEntry | None
 
+    @model_validator(mode="after")
+    def _bind_entries_to_their_canonical_paths(self) -> LeanMetadataFiles:
+        """Refuse a receipt whose ``file_path`` for a kind doesn't equal that
+        kind's fixed canonical location.
+
+        ``_reject_traversal`` above only rejects an unsafe path shape; it
+        never checks that ``market_hours.file_path`` actually names the
+        market-hours file rather than, say, the symbol-properties file's
+        path (whose real on-disk content a corrupted/hand-edited receipt
+        could legitimately hash-match, since :func:`verify_files_on_disk`
+        just opens whatever path each entry names). LEAN itself always
+        reads the fixed canonical location for each kind, never whatever
+        the receipt says -- so a mismatch here means ``verify_bundle`` could
+        pass while the file LEAN actually reads is missing or wrong. This
+        is exactly the tampering ``MetadataBundleError``'s docstring says
+        the receipt exists to catch.
+        """
+        expected: dict[MetadataKind, MetadataFileEntry | None] = {
+            "market_hours": self.market_hours,
+            "symbol_properties": self.symbol_properties,
+            "interest_rate": self.interest_rate,
+        }
+        for kind, entry in expected.items():
+            if entry is None:
+                continue
+            canonical = str(LeanMetadataPath(kind=kind).relative_path())
+            if entry.file_path != canonical:
+                raise ValueError(
+                    f"{kind} file_path {entry.file_path!r} does not match its canonical path {canonical!r} "
+                    "-- LEAN reads the fixed canonical location, not whatever the receipt names"
+                )
+        return self
+
 
 class LeanMetadataReceipt(BaseModel):
     """The exact, closed shape of ``.lean-metadata-receipt.json``."""
@@ -203,7 +265,7 @@ def read_receipt(lake_root: Path) -> LeanMetadataReceipt | None:
         return None
     try:
         raw = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise MetadataBundleError(f"{path} is malformed: not valid JSON ({exc})") from exc
     try:
         receipt = LeanMetadataReceipt.model_validate(raw)
@@ -394,6 +456,24 @@ async def _extract_and_publish_bundle(
         ir_sha = _publish_and_verify(
             content=ir_bytes, lake_root=lake_root, staging_root=staging_root, rel_path=ir_rel, request_id=spec.request_id
         )
+    else:
+        # This digest has no interest-rate data, but an earlier digest that
+        # DID publish one may have left it on disk at the same canonical
+        # path (interest_rate's location is digest-independent). LEAN opens
+        # that canonical path directly -- it does not consult the receipt to
+        # decide whether to look (module docstring) -- so a stale file here
+        # would be silently read even though this receipt correctly records
+        # interest_rate: null. Delete it as part of this same publish
+        # sequence, before the receipt is written: an interrupted delete
+        # just means the stale file survives and is retried on the next
+        # extraction, never worse than today.
+        stale_ir_path = lake_root / Path(*ir_rel.parts)
+        if stale_ir_path.exists():
+            stale_ir_path.unlink()
+            logger.info(
+                "data_lake.metadata_bundle: removed stale interest-rate file left by an earlier digest",
+                extra={"path": str(stale_ir_path), "lean_image_digest": spec.lean_image_digest},
+            )
 
     receipt = LeanMetadataReceipt(
         schema_version=RECEIPT_SCHEMA_VERSION,
@@ -549,6 +629,21 @@ async def _activate_catalog_from_receipt(
         spec=spec, kind="symbol_properties", entry=receipt.files.symbol_properties, lake_root=lake_root, root_id=root_id
     )
     if receipt.files.interest_rate is None:
+        # No row is claimed or completed for this digest -- there is no
+        # interest-rate DCH to claim it under. But a PRIOR digest that did
+        # publish interest-rate data may still have a 'complete' row
+        # claiming the same physical (root, mode, canonical path); left
+        # alone it would keep reading as a valid catalog row for a file
+        # this receipt just deleted (or never had). Stale it directly by
+        # path -- there is no "keeper" row to exclude in this branch, so
+        # ``keep_artifact_id`` is omitted (mark_metadata_artifacts_stale_
+        # for_path treats that as "no keeper, stale everything complete
+        # for this path").
+        await catalog_client.mark_metadata_artifacts_stale_for_path(
+            data_root_id=root_id,
+            price_adjustment_mode=spec.price_adjustment_mode,
+            file_path=str(LeanMetadataPath(kind="interest_rate").relative_path()),
+        )
         ir = MetadataBootstrap(None, False, "provider_no_data")
     else:
         ir = await _claim_and_complete_metadata_row(
@@ -583,7 +678,9 @@ async def _bundle_lock(lake_root: Path) -> AsyncIterator[None]:
                 yield
                 return
         if time.monotonic() > deadline:
-            raise MetadataBundleError(f"timed out waiting {_LOCK_TIMEOUT_S}s for the metadata-bundle lock at {target}")
+            raise MetadataBundleLockTimeout(
+                f"timed out waiting {_LOCK_TIMEOUT_S}s for the metadata-bundle lock at {target}"
+            )
         await asyncio.sleep(_LOCK_POLL_INTERVAL_S)
 
 
@@ -613,27 +710,44 @@ async def ensure_lean_metadata_bundle(spec: DataRunSpec, lake_root: Path, stagin
     """
     root_id = active_root_id()
 
-    async with _bundle_lock(lake_root):
-        try:
-            receipt = verify_bundle(
-                lake_root,
-                expected_root_id=root_id,
-                expected_mode=spec.price_adjustment_mode,
-                expected_digest=spec.lean_image_digest,
-            )
-        except MetadataBundleError as e:
-            logger.info(
-                "data_lake.metadata_bundle: bundle cache miss, (re-)extracting",
-                extra={"lake_root": str(lake_root), "reason": str(e)},
-            )
+    try:
+        async with _bundle_lock(lake_root):
             try:
-                receipt = await _extract_and_publish_bundle(spec, lake_root, staging_root, root_id)
-            except MetadataBundleExtractionFailed as e2:
-                logger.warning(
-                    "data_lake.metadata_bundle: bundle extraction failed",
-                    extra={"lake_root": str(lake_root), "error": str(e2)},
+                receipt = verify_bundle(
+                    lake_root,
+                    expected_root_id=root_id,
+                    expected_mode=spec.price_adjustment_mode,
+                    expected_digest=spec.lean_image_digest,
                 )
-                failure = MetadataBootstrap(None, False, "io_error")
-                return MetadataBundleOutcome(failure, failure, failure)
+            except MetadataBundleError as e:
+                logger.info(
+                    "data_lake.metadata_bundle: bundle cache miss, (re-)extracting",
+                    extra={"lake_root": str(lake_root), "reason": str(e)},
+                )
+                try:
+                    receipt = await _extract_and_publish_bundle(spec, lake_root, staging_root, root_id)
+                except MetadataBundleExtractionFailed as e2:
+                    logger.warning(
+                        "data_lake.metadata_bundle: bundle extraction failed",
+                        extra={"lake_root": str(lake_root), "error": str(e2)},
+                    )
+                    failure = MetadataBootstrap(None, False, "io_error")
+                    return MetadataBundleOutcome(failure, failure, failure)
 
-        return await _activate_catalog_from_receipt(spec, lake_root, receipt, root_id)
+            return await _activate_catalog_from_receipt(spec, lake_root, receipt, root_id)
+    except MetadataBundleLockTimeout as e3:
+        # Raised by _bundle_lock itself, before its `async with` body ever
+        # runs -- structurally distinct from the `except MetadataBundleError`
+        # above, which only wraps `verify_bundle`'s call once the lock is
+        # already held. A caller polling the lock while another caller is
+        # mid-extraction (up to EXTRACT_METADATA_HTTP_TIMEOUT_S = 360s, well
+        # past this lock's own 60s budget) is ordinary, retryable
+        # contention, not a bundle that failed to verify or extract -- it
+        # must surface the same way the module's other "still contended"
+        # outcome does, not as an unstructured 500.
+        logger.warning(
+            "data_lake.metadata_bundle: timed out waiting for the bundle lock",
+            extra={"lake_root": str(lake_root), "error": str(e3)},
+        )
+        failure = MetadataBootstrap(None, False, "lease_timeout")
+        return MetadataBundleOutcome(failure, failure, failure)

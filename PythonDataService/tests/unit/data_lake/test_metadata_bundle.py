@@ -34,6 +34,7 @@ from app.data_lake.metadata_bundle import (
     RECEIPT_SCHEMA_VERSION,
     LeanMetadataFiles,
     LeanMetadataReceipt,
+    MetadataBootstrap,
     MetadataBundleError,
     MetadataFileEntry,
     ensure_lean_metadata_bundle,
@@ -79,6 +80,40 @@ class TestLeanMetadataFiles:
         )
         assert files.interest_rate is None
 
+    def test_rejects_a_market_hours_entry_pointing_at_another_kinds_canonical_path(self):
+        """Codex P2, PR #1884. A receipt with market_hours.file_path pointing
+        at the symbol_properties file's real, on-disk path would pass
+        verify_bundle cleanly (the hash legitimately matches that file's
+        content) even though LEAN always reads market_hours from its own
+        fixed canonical location, never from whatever the receipt names."""
+        with pytest.raises(Exception, match="market_hours"):
+            LeanMetadataFiles.model_validate(
+                {
+                    "market_hours": {
+                        "file_path": "symbol-properties/symbol-properties-database.csv",
+                        "sha256": "a" * 64,
+                    },
+                    "symbol_properties": {
+                        "file_path": "symbol-properties/symbol-properties-database.csv",
+                        "sha256": "b" * 64,
+                    },
+                    "interest_rate": None,
+                }
+            )
+
+    def test_rejects_an_interest_rate_entry_at_the_wrong_path_when_present(self):
+        with pytest.raises(Exception, match="interest_rate"):
+            LeanMetadataFiles.model_validate(
+                {
+                    "market_hours": {"file_path": "market-hours/market-hours-database.json", "sha256": "a" * 64},
+                    "symbol_properties": {
+                        "file_path": "symbol-properties/symbol-properties-database.csv",
+                        "sha256": "b" * 64,
+                    },
+                    "interest_rate": {"file_path": "alternative/interest-rate/usa/wrong.csv", "sha256": "c" * 64},
+                }
+            )
+
 
 class TestMetadataFileEntry:
     @pytest.mark.parametrize("bad_path", ["/etc/passwd", "../../etc/passwd", "a/../../b", "", "."])
@@ -97,6 +132,16 @@ class TestReadReceipt:
 
     def test_raises_on_malformed_json(self, tmp_path: Path):
         receipt_path(tmp_path).write_text("{not json")
+        with pytest.raises(MetadataBundleError, match="malformed"):
+            read_receipt(tmp_path)
+
+    def test_raises_on_invalid_utf8_bytes(self, tmp_path: Path):
+        """Codex P2, PR #1884. Path.read_text() can raise UnicodeDecodeError
+        (a ValueError subclass, not OSError) for a partially-overwritten or
+        corrupted receipt file -- that must read as "malformed receipt,
+        needs repair" like every other corruption case here, not propagate
+        unhandled."""
+        receipt_path(tmp_path).write_bytes(b"\xff\xfe\x00\x01not valid utf-8")
         with pytest.raises(MetadataBundleError, match="malformed"):
             read_receipt(tmp_path)
 
@@ -321,6 +366,59 @@ class TestClaimAndCompleteMetadataRowReclaimRace:
         assert claim_state_calls["n"] == 2, "must re-read claim state after losing the reclaim, not trust the stale snapshot"
 
 
+class TestBundleLockTimeout:
+    """Codex P2, PR #1884. No Postgres needed: lock contention is reproduced
+    directly with a real flock held by this test, with the lock's own
+    timeout/poll knobs monkeypatched down so the test doesn't actually wait
+    out the real 60s budget."""
+
+    @pytest.mark.asyncio
+    async def test_bundle_lock_raises_a_distinct_lock_timeout(self, tmp_path: Path, monkeypatch):
+        """_bundle_lock itself must raise MetadataBundleLockTimeout, not the
+        plain MetadataBundleError -- the two mean different things (lock
+        contention vs. an untrustworthy on-disk bundle) and only the former
+        may be swallowed into a retryable outcome by the caller."""
+        from app.data_lake import metadata_bundle
+        from app.utils.advisory_lock import try_advisory_file_lock
+
+        monkeypatch.setattr(metadata_bundle, "_LOCK_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(metadata_bundle, "_LOCK_POLL_INTERVAL_S", 0.01)
+        target = receipt_path(tmp_path)
+
+        with try_advisory_file_lock(target) as acquired:
+            assert acquired is True
+            with pytest.raises(metadata_bundle.MetadataBundleLockTimeout):
+                async with metadata_bundle._bundle_lock(tmp_path):
+                    pytest.fail("must not acquire the lock while it is already held")
+
+    @pytest.mark.asyncio
+    async def test_ensure_lean_metadata_bundle_reports_lease_timeout_on_lock_contention(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A lock-timeout reaching ensure_lean_metadata_bundle must come back
+        as the same structured, retryable MetadataBundleOutcome the module
+        already uses for other "still contended" conditions -- never an
+        unhandled exception. Never reaches Postgres or the launcher: the
+        lock times out before the guarded body runs."""
+        from app.data_lake import metadata_bundle
+        from app.utils.advisory_lock import try_advisory_file_lock
+
+        monkeypatch.setattr(metadata_bundle, "_LOCK_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(metadata_bundle, "_LOCK_POLL_INTERVAL_S", 0.01)
+        lake_root = tmp_path / "lake"
+        lake_root.mkdir()
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        with try_advisory_file_lock(receipt_path(lake_root)) as acquired:
+            assert acquired is True
+            outcome = await ensure_lean_metadata_bundle(_spec(), lake_root, staging_root)
+
+        assert outcome.market_hours == MetadataBootstrap(None, False, "lease_timeout")
+        assert outcome.symbol_properties == MetadataBootstrap(None, False, "lease_timeout")
+        assert outcome.interest_rate == MetadataBootstrap(None, False, "lease_timeout")
+
+
 # ---------------------------------------------------------------------------
 # ensure_lean_metadata_bundle end-to-end -- Postgres + mocked launcher
 # ---------------------------------------------------------------------------
@@ -376,7 +474,10 @@ _MARKET_HOURS_JSON = json.dumps({"entries": {}}).encode("utf-8")
 _SYMBOL_PROPERTIES_CSV = b"SPY,equity,usd,1,0\n"
 
 
-def _stage_workspace_files(artifacts_root: Path, run_id: str, *, digest: str) -> None:
+_INTEREST_RATE_CSV = b"date,rate\n"
+
+
+def _stage_workspace_files(artifacts_root: Path, run_id: str, *, digest: str, include_interest_rate: bool = False) -> None:
     """Content is keyed by ``digest`` so a re-extraction under a new digest
     is distinguishable on disk from the previous one."""
     data_dir = artifacts_root / run_id / "workspace" / "data"
@@ -384,12 +485,24 @@ def _stage_workspace_files(artifacts_root: Path, run_id: str, *, digest: str) ->
     (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
     (data_dir / "market-hours" / "market-hours-database.json").write_bytes(_MARKET_HOURS_JSON + digest.encode())
     (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(_SYMBOL_PROPERTIES_CSV + digest.encode())
+    if include_interest_rate:
+        ir_dir = data_dir / "alternative" / "interest-rate" / "usa"
+        ir_dir.mkdir(parents=True, exist_ok=True)
+        (ir_dir / "interest-rate.csv").write_bytes(_INTEREST_RATE_CSV + digest.encode())
 
 
-def _launcher_side_effect(artifacts_root: Path):
+def _launcher_side_effect(artifacts_root: Path, *, interest_rate_digests: frozenset[str] = frozenset()):
+    """``interest_rate_digests`` opts specific digests into carrying
+    interest-rate bytes -- mirroring how a real LEAN image variant either
+    does or doesn't bundle the ``alternative/interest-rate`` subtree, so one
+    mocked launcher route can serve two calls for two digests differently."""
+
     def _mock(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        _stage_workspace_files(artifacts_root, body["run_id"], digest=body["image_digest"])
+        digest = body["image_digest"]
+        _stage_workspace_files(
+            artifacts_root, body["run_id"], digest=digest, include_interest_rate=digest in interest_rate_digests
+        )
         return httpx.Response(
             200,
             json={
@@ -602,3 +715,96 @@ async def test_concurrent_different_digest_requests_do_not_interleave_files_and_
     verify_bundle(  # must not raise: whichever digest won, its files are fully self-consistent
         lake_root, expected_root_id=receipt.data_root_id, expected_mode="raw", expected_digest=receipt.lean_image_digest
     )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_transitioning_to_no_interest_rate_data_removes_the_stale_file_and_its_row(clean_artifacts, pool, tmp_lake):
+    """Codex P1, PR #1884. Digest A publishes interest-rate data; digest B
+    (the next extraction at this lake root) has none. The module's own
+    docstring says LEAN discovers the interest-rate file by opening the
+    fixed canonical path directly on the mounted filesystem -- it does not
+    consult the receipt to decide whether to look. A file left over from A
+    would therefore be silently read by LEAN even though B's receipt
+    correctly records interest_rate: null. Both the stale file and A's
+    now-orphaned interest-rate catalog row must be cleaned up."""
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake, interest_rate_digests=frozenset({"sha256:aaa"}))
+    )
+    lake_root = resolve_lake_root("raw")
+    staging_root = resolve_staging_root("raw")
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+    ir_path = lake_root / "alternative" / "interest-rate" / "usa" / "interest-rate.csv"
+
+    first = await ensure_lean_metadata_bundle(_spec(lean_image_digest="sha256:aaa"), lake_root, staging_root)
+    assert first.interest_rate.record is not None
+    assert ir_path.is_file()
+    first_ir_id = first.interest_rate.record.id
+
+    second = await ensure_lean_metadata_bundle(_spec(lean_image_digest="sha256:bbb"), lake_root, staging_root)
+
+    assert second.interest_rate.failure_reason == "provider_no_data"
+    assert not ir_path.exists(), "the interest-rate file left over from digest A must be deleted"
+    receipt = read_receipt(lake_root)
+    assert receipt.files.interest_rate is None
+
+    async with catalog_client.connection() as conn:
+        row = await conn.fetchrow('SELECT "Status" FROM "DataLakeArtifacts" WHERE "Id" = $1', first_ir_id)
+    assert row["Status"] != "complete", "digest A's interest-rate row must no longer read as complete"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_rolling_back_to_a_staled_digest_reactivates_its_row_instead_of_lease_timeout(
+    clean_artifacts, pool, tmp_lake
+):
+    """Codex P1, PR #1884 -- the most important regression here. Once digest
+    B's bundle completes, mark_metadata_artifacts_stale_for_path marks
+    digest A's now-superseded row 'stale' (metadata FilePath is canonical
+    and mode-relative, not digest-specific, so both digests' rows claim the
+    same physical path). An operator rollback to digest A re-extracts (the
+    receipt now names B, so verify_bundle no longer trusts it) and
+    re-publishes A's bytes to disk -- but before this fix,
+    claim_metadata_artifact's ON CONFLICT hits A's existing (now 'stale')
+    row and returns None; select_complete_metadata_artifact finds nothing
+    (status is 'stale', not 'complete'); and steal_or_retry_minute_bar's
+    WHERE clause matched neither 'fetching' nor 'failed', so the row could
+    never be reclaimed -- ensure_lean_metadata_bundle reported
+    lease_timeout permanently, on every subsequent retry, even though this
+    exact call had already re-verified digest A's bytes on disk moments
+    earlier."""
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake)
+    )
+    lake_root = resolve_lake_root("raw")
+    staging_root = resolve_staging_root("raw")
+    lake_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    first = await ensure_lean_metadata_bundle(_spec(lean_image_digest="sha256:aaa"), lake_root, staging_root)
+    await ensure_lean_metadata_bundle(_spec(lean_image_digest="sha256:bbb"), lake_root, staging_root)
+
+    async with catalog_client.connection() as conn:
+        precondition = await conn.fetchrow(
+            'SELECT "Status" FROM "DataLakeArtifacts" WHERE "Id" = $1', first.market_hours.record.id
+        )
+    assert precondition["Status"] == "stale", "sanity check: reproduces the precondition this fix reactivates from"
+
+    rollback = await ensure_lean_metadata_bundle(_spec(lean_image_digest="sha256:aaa"), lake_root, staging_root)
+
+    assert launcher_route.call_count == 3, "rollback must re-extract -- the on-disk receipt now names digest B"
+    assert rollback.market_hours.failure_reason is None, (
+        f"a staled row for the exact digest whose bytes were just re-verified on disk must reactivate, "
+        f"not report lease_timeout forever: got {rollback.market_hours.failure_reason!r}"
+    )
+    assert rollback.market_hours.record is not None
+    assert rollback.market_hours.record.id == first.market_hours.record.id, "reactivates the SAME row, not a new one"
+
+    async with catalog_client.connection() as conn:
+        row = await conn.fetchrow('SELECT "Status" FROM "DataLakeArtifacts" WHERE "Id" = $1', first.market_hours.record.id)
+    assert row["Status"] == "complete"

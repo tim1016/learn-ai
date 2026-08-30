@@ -801,11 +801,34 @@ async def steal_or_retry_minute_bar(
     lease_ttl_ms: int,
     max_retries: int,
 ) -> bool:
-    """Reclaim an artifact whose lease expired OR retry a failed artifact.
+    """Reclaim an artifact whose lease expired, retry a failed artifact, OR
+    reactivate a staled one.
 
     Eligibility:
       - Status='fetching' AND LeaseExpiresAtMs < now_ms  (lease expired), OR
-      - Status='failed' AND AttemptCount < max_retries  (retryable failure)
+      - Status='failed' AND AttemptCount < max_retries  (retryable failure), OR
+      - Status='stale'  (superseded row for a digest the caller just
+        re-published)
+
+    The 'stale' branch is deliberately gated by nothing else -- no
+    lease-expiry check, no retry-count ceiling. That is a real asymmetry
+    with the other two branches, not an oversight: 'fetching' and 'failed'
+    rows can represent work genuinely still in flight elsewhere (a live
+    lease, a retry budget not yet exhausted), so reclaiming them needs a
+    condition proving the other side is no longer active. A 'stale' row
+    (currently only metadata rows reach that status, via
+    ``mark_metadata_artifacts_stale_for_path`` -- see that function's
+    docstring) exists only because a *caller of this same function* -- in
+    ``metadata_bundle._claim_and_complete_metadata_row`` -- has already
+    extracted and verified fresh bytes on disk for this exact digest
+    moments earlier in the same call. There is no "still in flight
+    elsewhere" ambiguity a stale row could represent, so reactivating the
+    catalog row to reflect bytes already known-good is always safe.
+    Without this branch, an operator rolling back to a digest whose row was
+    staled by a newer digest's publish would see a permanent
+    ``lease_timeout`` on every retry (Codex P1, PR #1884): the row is
+    neither 'fetching' with an expired lease nor 'failed', so no existing
+    branch could ever reclaim it.
 
     Returns True when the row was updated to 'fetching' under the new worker;
     False when no eligible row exists (e.g., already complete, already
@@ -823,6 +846,7 @@ async def steal_or_retry_minute_bar(
            AND (
                   ("Status" = 'fetching' AND "LeaseExpiresAtMs" < $4)
                OR ("Status" = 'failed' AND "AttemptCount" < $5)
+               OR ("Status" = 'stale')
            );
     """
     async with connection() as conn:
@@ -978,7 +1002,7 @@ async def mark_metadata_artifacts_stale_for_path(
     data_root_id: UUID,
     price_adjustment_mode: str,
     file_path: str,
-    keep_artifact_id: int,
+    keep_artifact_id: int | None = None,
 ) -> int:
     """Mark every OTHER complete metadata row for this physical file 'stale'.
 
@@ -990,22 +1014,35 @@ async def mark_metadata_artifacts_stale_for_path(
     mode from the predicate would incorrectly stale a sibling mode's still-
     valid row the moment this root's other mode republished its own bundle.
 
+    The mode predicate also matches ``PriceAdjustmentMode IS NULL``: rows
+    written before #1879 always recorded ``NULL`` there (see
+    ``claim_metadata_artifact``'s docstring), and in SQL ``NULL = $2`` is
+    never true, so without this a legacy NULL-mode row sharing the exact
+    same ``FilePath`` as a freshly-completed mode-tagged row could never be
+    staled and would persist indefinitely as a phantom 'complete' duplicate
+    of the same physical path.
+
     Called once a new (or newly-verified) complete row exists at
     ``keep_artifact_id``, so a stale reader that only ever queries
     ``Status = 'complete'`` can never observe two rows claiming the same
     on-disk path (#1879, PR C of #1861 — "old catalog rows cannot claim
-    current physical metadata after a newer bundle replaces them"). Returns
-    the number of rows staled.
+    current physical metadata after a newer bundle replaces them").
+    ``keep_artifact_id`` is optional: the interest-rate "this digest has no
+    data" branch has no new row to keep at all (there is no interest-rate
+    ``DataContractHash`` to claim one under), so it needs every complete row
+    for the path staled unconditionally -- omitting the argument does that,
+    rather than inventing a sentinel id that matches nothing. Returns the
+    number of rows staled.
     """
     query = """
         UPDATE "DataLakeArtifacts"
            SET "Status" = 'stale'
          WHERE "ArtifactKind" = 'metadata'
            AND "DataRootId" = $1
-           AND "PriceAdjustmentMode" = $2
+           AND ("PriceAdjustmentMode" = $2 OR "PriceAdjustmentMode" IS NULL)
            AND "FilePath" = $3
            AND "Status" = 'complete'
-           AND "Id" != $4;
+           AND ($4::bigint IS NULL OR "Id" != $4);
     """
     async with connection() as conn:
         result = await conn.execute(query, data_root_id, price_adjustment_mode, file_path, keep_artifact_id)

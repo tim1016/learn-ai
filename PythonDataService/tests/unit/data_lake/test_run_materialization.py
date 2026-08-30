@@ -156,21 +156,25 @@ class FakeCatalog:
         )
 
     async def mark_metadata_artifacts_stale_for_path(
-        self, data_root_id, price_adjustment_mode, file_path, keep_artifact_id
+        self, data_root_id, price_adjustment_mode, file_path, keep_artifact_id=None
     ) -> int:
         """Mirrors the real query's mode-scoped staleness predicate (#1879):
         FilePath alone is identical across modes, so PriceAdjustmentMode
         must gate which rows this call is allowed to touch -- see
         ``catalog_client.mark_metadata_artifacts_stale_for_path``'s own
-        docstring for why."""
+        docstring for why. Also mirrors that function's two Codex-P1/P2
+        fixes (PR #1884): a legacy pre-#1879 row's ``price_adjustment_mode``
+        is ``None`` and must still match any requested mode, and
+        ``keep_artifact_id`` omitted (``None``) means "no keeper, stale
+        every complete row for this path" rather than excluding nothing."""
         staled = 0
         for artifact_id, row in self.rows.items():
             if (
                 row["artifact_kind"] == "metadata"
-                and row["price_adjustment_mode"] == price_adjustment_mode
+                and (row["price_adjustment_mode"] == price_adjustment_mode or row["price_adjustment_mode"] is None)
                 and row["file_path"] == file_path
                 and row["status"] == "complete"
-                and artifact_id != keep_artifact_id
+                and (keep_artifact_id is None or artifact_id != keep_artifact_id)
             ):
                 row["status"] = "stale"
                 staled += 1
@@ -208,7 +212,10 @@ class FakeCatalog:
         # The fake has no lease clock, so "fetching" always means a live
         # lease held by someone else — nothing to steal, matching the real
         # WHERE clause's "LeaseExpiresAtMs < now" arm never firing here.
-        if row["status"] == "failed" and row["attempt_count"] < max_retries:
+        # 'stale' reactivates unconditionally (Codex P1, PR #1884) -- see
+        # the real ``steal_or_retry_minute_bar``'s docstring for why that
+        # branch carries no lease/retry gate, unlike the other two.
+        if (row["status"] == "failed" and row["attempt_count"] < max_retries) or row["status"] == "stale":
             row["status"] = "fetching"
             row["attempt_count"] += 1
             row["last_error"] = None
