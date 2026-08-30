@@ -89,6 +89,7 @@ describe('DataLakeService', () => {
       symbol: 'SPY',
       startTradingDate: 'not-a-date',
       endTradingDate: '2026-05-20',
+      priceAdjustmentMode: 'raw',
     });
 
     // No request at all: a fallback anchor would make this a *valid* query
@@ -107,6 +108,7 @@ describe('DataLakeService', () => {
       symbol: 'SPY',
       startTradingDate: '2020-01-01',
       endTradingDate: '2030-01-01',
+      priceAdjustmentMode: 'raw',
     });
 
     http.expectOne((candidate) => candidate.url === `${BASE}/coverage`).flush(

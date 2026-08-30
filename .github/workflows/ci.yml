@@ -288,6 +288,16 @@ jobs:
       # and `catalog_client.init_pool`. Same postgres:16 service as
       # `backend-test`, same credentials, so both jobs' migrated schemas agree.
       POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # #1887: tests/conftest.py's `_guard_data_lake_catalog_truncation`
+      # refuses to let a `clean_artifacts`-style fixture TRUNCATE
+      # DataLakeArtifacts/DataLakeRuns unless the target is attested
+      # ephemeral out of band — POSTGRES_URL alone can't prove it, since this
+      # job's disposable `postgres` service above resolves to the exact same
+      # `postgres://postgres:...@localhost:5432/postgres` a developer's real
+      # `my-postgres` dev container would. This service container is created
+      # fresh for this job and destroyed after, so it genuinely is safe to
+      # wipe — the attestation below just says so explicitly.
+      POSTGRES_URL_IS_EPHEMERAL: "1"
     defaults:
       run:
         working-directory: PythonDataService
