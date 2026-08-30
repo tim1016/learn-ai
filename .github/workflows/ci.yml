@@ -312,6 +312,12 @@ jobs:
         run: |
           dotnet tool install --global dotnet-ef --version 10.0.2
           export PATH="$PATH:$HOME/.dotnet/tools"
+          # `dotnet ef database update` alone on a cold checkout fails with
+          # NETSDK1004 (no project.assets.json) even after a prior `dotnet
+          # restore` — verified locally. A plain `dotnet build` first
+          # (which restores implicitly) leaves the project in a state `dotnet
+          # ef`'s own build step reliably picks up.
+          dotnet build Backend/Backend.csproj
           dotnet ef database update --project Backend/Backend.csproj
       - uses: actions/setup-python@v5
         with:
