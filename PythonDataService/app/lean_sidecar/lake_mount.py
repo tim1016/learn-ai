@@ -102,7 +102,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Literal
 
 from app.data_lake.path_policy import (
@@ -245,6 +245,9 @@ class LakeArtifacts:
     symbol_properties_path: Path
     factor_file_paths: tuple[Path, ...]
     map_file_paths: tuple[Path, ...]
+    # Optional (#1859) — None when the lake has no interest-rate subtree
+    # for this run yet. See resolve_optional_lake_interest_rate.
+    interest_rate_path: Path | None
 
 
 def resolve_lake_artifacts(
@@ -343,6 +346,7 @@ def resolve_lake_artifacts(
     daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
     market_hours_path, symbol_properties_path = require_lake_metadata(lake_root)
     log_lake_mode_input_divergences(lake_root)
+    interest_rate_path = resolve_optional_lake_interest_rate(lake_root)
 
     logger.info(
         "lean sidecar resolving lake artifacts",
@@ -360,15 +364,10 @@ def resolve_lake_artifacts(
         daily_zip_path=daily_zip_path,
         market_hours_path=market_hours_path,
         symbol_properties_path=symbol_properties_path,
+        interest_rate_path=interest_rate_path,
         factor_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "factor"),
         map_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "map"),
     )
-
-
-# LEAN's risk-free-rate subtree. Staging extracts it from the image
-# (``staging.IMAGE_INTEREST_RATE``); the lake has no producer for it. See the
-# module docstring's "known input divergence".
-_INTEREST_RATE_SUBTREE = PurePosixPath("alternative") / "interest-rate"
 
 
 def log_lake_mode_input_divergences(lake_root: Path) -> None:
@@ -386,14 +385,14 @@ def log_lake_mode_input_divergences(lake_root: Path) -> None:
     that a flag-on run and a flag-off run read the same inputs, and this
     is the one place they can still knowably not.
     """
-    interest_rate = lake_root / Path(*_INTEREST_RATE_SUBTREE.parts)
-    if interest_rate.is_dir():
+    if resolve_optional_lake_interest_rate(lake_root) is not None:
         return
+    interest_rate_rel = LeanMetadataPath(kind="interest_rate").relative_path()
     logger.warning(
         "lean sidecar lake-mode run has no interest-rate data",
         extra={
             "lake_root": str(lake_root),
-            "missing_subtree": _INTEREST_RATE_SUBTREE.as_posix(),
+            "missing_file": interest_rate_rel.as_posix(),
             "consequence": "LEAN falls back to its built-in risk-free rate; a staging-mode "
             "run would have read the image's interest-rate files",
         },
@@ -471,11 +470,11 @@ def _existing_corporate_action_files(
     return (candidate,) if candidate.exists() else ()
 
 
-# Every metadata kind the lake bootstraps is one LEAN refuses to
-# initialize without (see
-# ``staging.stage_lean_metadata_from_image``'s docstring), so the lake
-# has no optional metadata today. A future optional kind belongs in a
-# separate accessor that may return ``None``, not in this one.
+# The two metadata kinds LEAN refuses to initialize without (see
+# ``staging.stage_lean_metadata_from_image``'s docstring). interest_rate
+# is the "future optional kind" this comment used to say didn't exist yet
+# — #1859 added it via the separate accessor below,
+# resolve_optional_lake_interest_rate, which may return ``None``.
 REQUIRED_LAKE_METADATA: tuple[Literal["market_hours", "symbol_properties"], ...] = (
     "market_hours",
     "symbol_properties",
@@ -501,6 +500,28 @@ def require_lake_metadata(lake_root: Path) -> tuple[Path, Path]:
             "LEAN refuses to initialize without them and lake mode has no image-extracted fallback"
         )
     return paths["market_hours"], paths["symbol_properties"]
+
+
+def resolve_optional_lake_interest_rate(lake_root: Path) -> Path | None:
+    """Return the interest-rate CSV path if the lake has it, else ``None``.
+
+    The one optional metadata kind — unlike ``require_lake_metadata``,
+    absence here is not an error (LEAN falls back to its built-in
+    risk-free rate). Presence, however, is load-bearing the same way
+    factor/map files are: LEAN reads the file and it changes computed
+    statistics (Sharpe and relatives), so whatever is there must still
+    reach the manifest hash — see ``lean_sidecar_service._build_manifest``
+    and CodeRabbit review fix on #1859.
+
+    Single source of truth for this resolution: both
+    ``log_lake_mode_input_divergences`` (the warn-don't-refuse check) and
+    ``resolve_lake_artifacts`` (which threads the path into
+    ``LakeArtifacts`` for the manifest) call this rather than each
+    re-deriving the same path.
+    """
+    relative = LeanMetadataPath(kind="interest_rate").relative_path()
+    candidate = lake_root / Path(*relative.parts)
+    return candidate if candidate.is_file() else None
 
 
 def _lake_metadata_path(

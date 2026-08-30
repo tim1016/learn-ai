@@ -27,7 +27,7 @@ from app.lean_sidecar.lake_mount import CONTAINER_LAKE_DATA_MOUNT
 from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITIES, LaunchRequest, LaunchResponse
 from app.lean_sidecar.lean_config import CONTAINER_DATA_FOLDER
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
-from tests._helpers.lake_fixture import seed_lake_corporate_actions, seed_lake_window
+from tests._helpers.lake_fixture import seed_lake_corporate_actions, seed_lake_interest_rate, seed_lake_window
 from tests._helpers.lean_store import seed_store_day
 
 DAY_ONE = date(2026, 1, 5)
@@ -569,3 +569,70 @@ async def test_factor_files_move_the_input_snapshot(
     assert manifest_a["staged_data"]["factor_files"], "factor file present in the lake must be hashed"
     assert manifest_a["staged_data"]["map_files"], "map file present in the lake must be hashed"
     assert manifest_a["input_snapshot_sha256"] != manifest_b["input_snapshot_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_interest_rate_file_moves_the_input_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _polygon_is_off_limits: None,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """#1859 review fix (CodeRabbit-P1): a changed interest-rate CSV must
+    change ``input_snapshot_sha256``, the same way a factor-file change
+    does above.
+
+    LEAN reads the interest-rate file and it changes computed statistics
+    (Sharpe and relatives). Before this fix, ``_build_manifest`` discarded
+    the path entirely — the rate could change while the reproducibility
+    fingerprint stayed constant, exactly the gap the manifest exists to
+    close.
+    """
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    lake_root = write_root / lake_subpath("raw")
+    seed_lake_window(lake_root, SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    seed_lake_interest_rate(lake_root, rows="date,rate\n20260105,0.0525\n")
+    first = await service.run_trusted_sample(_request("interest-rate-snapshot-a"))
+    manifest_a = _read_manifest(first.workspace_root)
+
+    seed_lake_interest_rate(lake_root, rows="date,rate\n20260105,0.0475\n")
+    second = await service.run_trusted_sample(_request("interest-rate-snapshot-b"))
+    manifest_b = _read_manifest(second.workspace_root)
+
+    assert manifest_a["staged_data"]["interest_rate_database"], (
+        "interest-rate file present in the lake must be hashed"
+    )
+    assert manifest_a["input_snapshot_sha256"] != manifest_b["input_snapshot_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_absent_interest_rate_file_still_produces_a_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _polygon_is_off_limits: None,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """The optional file's absence must not break manifest construction —
+    unlike market-hours/symbol-properties, which require_lake_metadata
+    already refuses the run over."""
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    lake_root = write_root / lake_subpath("raw")
+    seed_lake_window(lake_root, SYMBOL, WINDOW)  # no seed_lake_interest_rate call
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
+
+    result = await service.run_trusted_sample(_request("interest-rate-absent"))
+    manifest = _read_manifest(result.workspace_root)
+
+    assert manifest["staged_data"]["interest_rate_database"] is None

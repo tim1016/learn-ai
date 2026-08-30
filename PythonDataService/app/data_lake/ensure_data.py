@@ -522,9 +522,14 @@ async def _bootstrap_metadata_artifact(
     - ``"provider_no_data"`` — ``metadata_kind == "interest_rate"`` only:
       the workspace genuinely has no ``alternative/interest-rate``
       subtree (an image variant without it, or an older launcher build).
-      Unlike the other reasons, the caller treats this one as optional
-      and does not surface it as an ``ArtifactFailure`` — see the Phase 0
-      call site.
+      The caller treats this one as optional and does not surface it as
+      an ``ArtifactFailure`` — see the Phase 0 call site. Unlike the
+      other reasons, this does NOT call ``fail_artifact``: doing so would
+      burn this claim's bounded retry budget on something that should be
+      retried indefinitely, not a fixed number of times. The row is left
+      ``'fetching'``; its lease expires naturally and a later call
+      reclaims it via ``steal_or_retry_minute_bar``'s expired-lease
+      branch, which has no retry ceiling (unlike its failed-row branch).
     """
     dch = _metadata_dch(lean_image_digest, file_name, spec.price_adjustment_mode)
     file_path = str(rel_path)
@@ -627,14 +632,19 @@ async def _bootstrap_metadata_artifact(
     else:  # "interest_rate"
         if ir_bytes is None:
             # Optional: an image variant (or a launcher build) without the
-            # alternative/interest-rate subtree. Release the claim rather
-            # than leave the row 'fetching' forever — a later call retries
-            # via steal_or_retry_minute_bar once/if the subtree becomes
-            # available. Non-fatal for the run: see the caller, which does
-            # not surface this as an ArtifactFailure.
-            await catalog_client.fail_artifact(
-                artifact_id, "provider_no_data", "workspace has no interest-rate subtree"
-            )
+            # alternative/interest-rate subtree. Deliberately NOT
+            # fail_artifact — that would mark the row 'failed' and burn
+            # this claim's bounded AttemptCount retry budget
+            # (steal_or_retry_minute_bar's failed-row branch requires
+            # AttemptCount < max_retries), permanently stranding the row
+            # once exhausted even after a launcher upgrade could finally
+            # provide the file. Leave it 'fetching' instead: its lease
+            # (set at claim time) expires naturally, and
+            # steal_or_retry_minute_bar's OTHER branch — expired-lease
+            # reclaim — has no retry ceiling, so a later call keeps trying
+            # indefinitely rather than giving up after a fixed count
+            # (CodeRabbit review fix on #1859).
+            logger.info("data_lake.ensure_data: workspace has no interest-rate subtree; leaving claim for retry")
             return MetadataBootstrap(None, False, "provider_no_data")
         content = ir_bytes
     file_sha = atomic_write_and_promote(
@@ -1581,35 +1591,53 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             )
         )
 
-    # Unlike market-hours/symbol-properties, interest-rate is optional:
-    # LEAN falls back to its built-in risk-free rate when it's absent (see
-    # app.lean_sidecar.lake_mount's module docstring), so a failure here —
-    # whatever the reason — is logged, not surfaced as an ArtifactFailure.
-    # Surfacing it would gate overall_status on data LEAN doesn't require,
-    # regressing every caller that ran fine without it before #1859.
-    #
-    # This is safe to treat uniformly (not selectively by reason) because a
-    # genuine extraction problem can't hide behind interest-rate alone: the
-    # image-side copy (staging.stage_lean_metadata_from_image's podman-cp
-    # loop) is all-or-nothing across all three files in one attempt, so any
-    # failure severe enough to break interest-rate extraction also breaks
-    # this same attempt's market-hours/symbol-properties bytes, which DO
-    # surface loudly above. What legitimately reaches this branch is either
-    # a workspace/cache that simply predates interest-rate being tracked
-    # (steal_or_retry_minute_bar-style cache reuse can hit an older
-    # directory) or — the common case in tests — a launcher mock that only
-    # stages the two required files.
+    # Unlike market-hours/symbol-properties, interest-rate is optional: LEAN
+    # falls back to its built-in risk-free rate when it's absent (see
+    # app.lean_sidecar.lake_mount's module docstring). "Optional" covers two
+    # reasons, both non-blocking:
+    #   - provider_no_data: confirmed absence — the workspace/image
+    #     genuinely has no interest-rate subtree (staging.py's own optional
+    #     podman-cp handling for this one file).
+    #   - lease_timeout: NOT genuine contention here the way it is for
+    #     market-hours/symbol-properties. provider_no_data deliberately
+    #     leaves the row 'fetching' rather than 'failed' (see
+    #     _bootstrap_metadata_artifact's docstring — burning the retry
+    #     budget on confirmed absence would strand the row even after a
+    #     later launcher upgrade), so ANY call within that row's still-live
+    #     lease window — extremely common, since two ensure_data calls
+    #     close together for the same symbol/window is the normal case —
+    #     reports lease_timeout as the mechanical consequence of that
+    #     choice, not because a fetch is genuinely in flight. Surfacing it
+    #     would make nearly every second call report "partial" purely from
+    #     re-observing the same confirmed absence.
+    # Any other reason (io_error, fetch_timeout) means the bootstrap
+    # attempt itself failed without ever learning whether data exists —
+    # surfacing those exactly like a market-hours/symbol-properties failure
+    # is what stops the run from silently claiming input parity it doesn't
+    # have (CodeRabbit review fix on #1859).
     if ir_record is not None:
         artifacts.append(ir_record)
         if ir_reused:
             reused_count += 1
         else:
             fetched_count += 1
-    else:
+    elif ir_failure_reason in ("provider_no_data", "lease_timeout"):
         logger.info(
-            "data_lake.ensure_data: interest-rate metadata bootstrap did not complete "
-            "(reason=%s) — non-blocking, LEAN falls back to its built-in risk-free rate",
+            "data_lake.ensure_data: interest-rate metadata not available this call "
+            "(reason=%s) — non-blocking",
             ir_failure_reason,
+        )
+    else:
+        failures.append(
+            ArtifactFailure(
+                artifact_kind="metadata",
+                symbol=None,
+                trading_date=None,
+                data_type=None,
+                reason=ir_failure_reason,
+                detail="interest-rate metadata bootstrap failed; see launcher logs",
+                attempt_count=1,
+            )
         )
 
     # -----------------------------------------------------------------------

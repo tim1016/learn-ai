@@ -226,6 +226,72 @@ class TestDataFolderRoundTrip:
         assert symbol_properties.read_text(encoding="utf-8") == "symbol,security-type,market\n"
         assert interest_rate is None, "neither cache candidate staged an interest-rate subtree"
 
+    def test_direct_podman_tolerates_a_missing_interest_rate_source(
+        self,
+        tmp_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#1859 review fix (CodeRabbit-Major): an image variant without the
+        alternative/interest-rate subtree must not fail market-hours/
+        symbol-properties staging too. Before this fix, a single failed
+        ``podman cp`` for any of the three sources — required or optional —
+        raised and discarded whatever had already been copied successfully,
+        so ``list_metadata_databases``' own promise that a missing
+        interest-rate file reads as ``None`` (not an error) could never
+        actually be reached via the real extraction path.
+        """
+        import subprocess as _subprocess
+
+        digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ws = resolve_workspace("interest_rate_missing_from_image", tmp_artifacts_root)
+
+        calls: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(list(argv))
+            if argv[1] == "create":
+                return _subprocess.CompletedProcess(args=argv, returncode=0, stdout="deadbeef\n", stderr="")
+            if argv[1] == "cp":
+                source = argv[2]  # "<container_id>:<image path>"
+                if source.endswith("/alternative/interest-rate"):
+                    # The one source this image variant doesn't have.
+                    return _subprocess.CompletedProcess(
+                        args=argv, returncode=1, stdout="", stderr="no such file or directory"
+                    )
+                # market-hours / symbol-properties: write something real so
+                # list_metadata_databases finds it afterward.
+                dest = Path(argv[3])
+                if source.endswith("/market-hours"):
+                    (dest / "market-hours").mkdir(parents=True, exist_ok=True)
+                    (dest / "market-hours" / "market-hours-database.json").write_text("{}", encoding="utf-8")
+                else:
+                    (dest / "symbol-properties").mkdir(parents=True, exist_ok=True)
+                    (dest / "symbol-properties" / "symbol-properties-database.csv").write_text(
+                        "symbol,security-type,market\n", encoding="utf-8"
+                    )
+                return _subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+            assert argv[1] == "rm"
+            return _subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(_subprocess, "run", fake_run)
+        import shutil as _shutil
+
+        monkeypatch.setattr(_shutil, "which", lambda _: "/usr/bin/podman")
+
+        market_hours, symbol_properties, interest_rate = stage_lean_metadata_from_image(
+            ws,
+            digest,
+            allow_launcher_fallback=False,
+        )
+
+        assert market_hours.read_text(encoding="utf-8") == "{}"
+        assert symbol_properties.read_text(encoding="utf-8") == "symbol,security-type,market\n"
+        assert interest_rate is None, "the missing source must read as None, not raise"
+        # All four subprocess calls still ran — create, all three cp
+        # attempts (including the failed one), and rm — nothing short-
+        # circuited early.
+        assert [c[1] for c in calls] == ["create", "cp", "cp", "cp", "rm"]
+
     def test_naive_or_utc_input_is_normalized_to_eastern(self, tmp_path: Path) -> None:
         """Bars supplied in UTC must serialize as the equivalent ET ms.
 

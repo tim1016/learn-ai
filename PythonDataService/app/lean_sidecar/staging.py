@@ -432,8 +432,23 @@ def stage_lean_metadata_from_image(
                     timeout=_CP_TIMEOUT_S,
                 )
             except subprocess.TimeoutExpired as e:
+                if src == IMAGE_INTEREST_RATE:
+                    logger.warning("podman cp %s timed out after %ss; continuing without it", src, _CP_TIMEOUT_S)
+                    continue
                 raise MetadataStagingError(f"podman cp {src} timed out after {_CP_TIMEOUT_S}s") from e
             if cp.returncode != 0:
+                if src == IMAGE_INTEREST_RATE:
+                    # Optional subtree — an image variant without it, or one
+                    # built before LEAN shipped it, fails this cp the same
+                    # way a missing source path always does. Unlike the two
+                    # required databases below, this must not abort staging:
+                    # list_metadata_databases already treats an absent
+                    # interest-rate file as optional, and this is the one
+                    # place that promise can actually be honored — market-
+                    # hours/symbol-properties staging must not fail over data
+                    # LEAN doesn't require.
+                    logger.warning("podman cp %s failed, continuing without it: %s", src, cp.stderr.strip())
+                    continue
                 raise MetadataStagingError(f"podman cp {src} failed: {cp.stderr.strip()}")
     finally:
         # ``rm`` is best-effort cleanup; a timeout here leaves a

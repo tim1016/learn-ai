@@ -126,6 +126,12 @@ class StagedDataManifest:
     map_files: tuple[StagedDataFile, ...] = ()
     market_hours_database: StagedDataFile | None = None
     symbol_properties_database: StagedDataFile | None = None
+    # Optional (#1859) — None when the run's workspace/lake has no
+    # interest-rate subtree, same absence LEAN itself tolerates by falling
+    # back to its built-in risk-free rate. When present, its bytes DO
+    # affect LEAN's own computed statistics (Sharpe and relatives), so a
+    # run that read one must hash it — see CodeRabbit review fix on #1859.
+    interest_rate_database: StagedDataFile | None = None
 
 
 @dataclass(frozen=True, slots=True)

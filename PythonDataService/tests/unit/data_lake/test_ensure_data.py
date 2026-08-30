@@ -316,14 +316,23 @@ async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(cle
 
     second = await ensure_data(_spec(["SPY"]))
     second_metadata_failures = [f for f in second.failures if f.artifact_kind == "metadata"]
+    # Interest-rate never staged here (`stage` doesn't produce that file),
+    # so round 1 leaves its claim row 'fetching' rather than 'failed' —
+    # deliberately, so its bounded retry budget isn't burned on confirmed
+    # absence (#1859 review fix) — and round 2's claim attempt lands
+    # inside that still-live lease window and reports lease_timeout
+    # internally. That reason is treated the same as confirmed absence for
+    # interest-rate specifically (see ensure_data's Phase 0 orchestration)
+    # precisely because it's this design's own expected side effect, not
+    # genuine contention — so it must not appear here either.
     assert second_metadata_failures == [], (
         f"expected the recovered launcher to be retried, not permanently jammed: {second_metadata_failures}"
     )
-    # 2 rounds x 3 kinds (market-hours, symbol-properties, interest-rate) —
-    # interest-rate soft-fails every round since `stage` here never stages
-    # its file, but that never surfaces as an ArtifactFailure (it's
-    # optional), so it doesn't change the assertions above; it still POSTs.
-    assert launcher_route.call_count == 6
+    # Round 1: 3 calls (market-hours, symbol-properties, interest-rate).
+    # Round 2: 2 calls — market-hours/symbol-properties reclaim and call
+    # the launcher again; interest-rate's lease_timeout above is resolved
+    # entirely from catalog state and never reaches the launcher at all.
+    assert launcher_route.call_count == 5
 
 
 @pytest.mark.asyncio
@@ -472,6 +481,105 @@ async def test_interest_rate_metadata_bootstrap_is_optional_not_a_failure(clean_
     assert result.failures == [], "interest-rate absence must never surface as an ArtifactFailure"
     metadata = [a for a in result.artifacts if a.artifact_kind == "metadata"]
     assert len(metadata) == 2, f"expected exactly market-hours + symbol-properties, got {len(metadata)}"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_interest_rate_genuine_extraction_failure_surfaces_as_artifact_failure(
+    clean_artifacts, pool, tmp_lake
+):
+    """#1859 review fix: only confirmed absence (provider_no_data) is
+    optional. A genuine extraction failure — the launcher 500s specifically
+    on interest-rate's own independent request, unlike a workspace that
+    simply never had the file — must surface exactly like a market-hours/
+    symbol-properties failure, so the run does not silently claim input
+    parity it doesn't have."""
+
+    # Every extraction attempt fails at the HTTP layer, including the third
+    # (interest-rate) call — this is the "the check itself broke" case, not
+    # "confirmed no data".
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        return_value=httpx.Response(500, json={"detail": "launcher internal error"})
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    result = await ensure_data(_spec(["SPY"]))
+
+    metadata_failures = [f for f in result.failures if f.artifact_kind == "metadata"]
+    assert len(metadata_failures) == 3, f"expected all three metadata kinds to fail, got {metadata_failures}"
+    assert all(f.reason == "io_error" for f in metadata_failures)
+    interest_rate_failure = next(f for f in metadata_failures if "interest-rate" in f.detail)
+    assert interest_rate_failure.reason == "io_error"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_interest_rate_confirmed_absence_never_exhausts_the_retry_budget(clean_artifacts, pool, tmp_lake):
+    """#1859 review fix (CodeRabbit-Major): calling fail_artifact for a
+    confirmed-absent interest-rate subtree would burn this claim's bounded
+    AttemptCount budget (steal_or_retry_minute_bar's failed-row branch
+    requires AttemptCount < max_retries) on something that should be
+    retried indefinitely — permanently stranding the row even after a
+    later launcher upgrade could finally provide the file. Prove the row
+    survives far more attempts than the retry budget allows, then that a
+    launcher upgrade (the file becomes available) still completes it once
+    the lease naturally expires."""
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake)  # never stages interest-rate
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    # Confirmed-absence, repeated well past the retry ceiling. The first
+    # call claims and confirms absence; every later call sees the still-
+    # live lease from the prior attempt and reports lease_timeout
+    # internally — never fetch_timeout (exhausted retries), because
+    # AttemptCount never moves. Both provider_no_data and this lease_
+    # timeout are non-blocking for interest-rate (see ensure_data's Phase
+    # 0 orchestration), so none of these calls ever produce a failure for
+    # it — that's the actual regression this test guards against.
+    for _ in range(6):  # comfortably more than ensure_data's own _MAX_CLAIM_RETRIES (3)
+        result = await ensure_data(_spec(["SPY"]))
+        ir_failures = [f for f in result.failures if "interest-rate" in f.detail]
+        assert ir_failures == [], f"confirmed absence must never surface as a failure: {ir_failures}"
+
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        row = await conn.fetchrow(
+            """SELECT "Status", "AttemptCount" FROM "DataLakeArtifacts"
+               WHERE "ArtifactKind" = 'metadata' AND "FilePath" LIKE '%interest-rate%'"""
+        )
+        assert row["Status"] == "fetching", "must stay retryable, never settle into 'failed'"
+        assert row["AttemptCount"] == 1, "confirmed absence alone must never increment the retry counter"
+
+        # Simulate real time passing (the lease from the very first claim
+        # expiring) without waiting out the real _LEASE_TTL_MS.
+        await conn.execute(
+            """UPDATE "DataLakeArtifacts" SET "LeaseExpiresAtMs" = 1
+               WHERE "ArtifactKind" = 'metadata' AND "FilePath" LIKE '%interest-rate%'"""
+        )
+    finally:
+        await conn.close()
+
+    # The "launcher upgrade": this call's mock now produces the file.
+    respx.routes.clear()
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake, include_interest_rate=True)
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    final = await ensure_data(_spec(["SPY"]))
+    assert final.failures == [], f"expected the now-available file to complete cleanly: {final.failures}"
+    metadata = [a for a in final.artifacts if a.artifact_kind == "metadata"]
+    assert len(metadata) == 3, "market-hours + symbol-properties (reused) + interest-rate (finally fetched)"
 
 
 # ---------------------------------------------------------------------------
