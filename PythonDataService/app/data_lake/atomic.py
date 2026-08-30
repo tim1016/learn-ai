@@ -277,6 +277,17 @@ async def publish_artifact(
         # nothing left to unlink then. Every other exit -- refusal, a failed
         # rename, a rolled-back completion -- leaves it behind.
         if not promoted:
-            with contextlib.suppress(OSError):
-                staged.unlink()
+            # Re-anchor the delete inside the staging tree rather than trust
+            # it transitively. ``rel_lake_path`` was already validated by
+            # ``stage_content`` (no absolute paths, no '..', no empty
+            # segments) and ``stage_path_for`` roots the result under
+            # ``staging_root``, so this cannot fail in practice -- but a
+            # delete keyed on caller-supplied path components deserves its
+            # own containment check, and this is the prefix form static
+            # analysis recognizes as one.
+            staging_prefix = os.path.realpath(staging_root) + os.sep
+            staged_real = os.path.realpath(staged)
+            if staged_real.startswith(staging_prefix):
+                with contextlib.suppress(OSError):
+                    os.unlink(staged_real)
     return sha
