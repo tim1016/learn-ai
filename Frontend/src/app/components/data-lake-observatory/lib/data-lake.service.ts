@@ -26,7 +26,16 @@ export interface CoverageQuery {
   readonly endTradingDate: string;
   readonly market?: string;
   readonly dataType?: DataLakeDataType;
-  readonly priceAdjustmentMode?: PriceAdjustmentMode;
+  /**
+   * No default (#1890): the data plane used to fall back to `"raw"` when a
+   * caller omitted this, and for most of the lake's life the raw root held
+   * zero catalogued rows even when `polygon_split_adjusted` was fully
+   * populated for a symbol — an unqualified request silently read
+   * "missing" for data that actually existed under the other root. The
+   * endpoint now 422s on an omitted value instead, so this is required
+   * here too rather than papered over with a client-side fallback.
+   */
+  readonly priceAdjustmentMode: PriceAdjustmentMode;
 }
 
 /** The `{reason, message}` object every typed data-lake rejection puts in `detail`. */
@@ -73,7 +82,7 @@ export class DataLakeService {
             end_trading_date_ms: endMs,
             market: query.market ?? 'usa',
             data_type: query.dataType ?? 'trade',
-            price_adjustment_mode: query.priceAdjustmentMode ?? 'raw',
+            price_adjustment_mode: query.priceAdjustmentMode,
           },
         }),
       ),
