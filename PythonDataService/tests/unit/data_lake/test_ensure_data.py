@@ -28,7 +28,7 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.catalog_client import ArtifactClaimState
 from app.data_lake.ensure_data import _bootstrap_metadata_artifact, ensure_data
-from app.data_lake.types import DataRunSpec
+from app.data_lake.types import ArtifactIdentity, DataRunSpec
 from app.lean_sidecar import config as sidecar_config
 
 
@@ -471,8 +471,9 @@ def _polygon_ok_payload_date(ticker: str, bar_start_ms: int) -> dict:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_daily_artifact_dch_mismatch_returns_failure(clean_artifacts, pool, tmp_lake):
-    """Narrower window creates a daily artifact; wider window detects DCH mismatch."""
+async def test_daily_artifact_rebuilds_onto_a_wider_window(clean_artifacts, pool, tmp_lake):
+    """Narrower window creates a daily artifact; wider window rebuilds it onto
+    the larger source set instead of refusing (#1870)."""
     launcher_mock = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
         side_effect=_launcher_side_effect(tmp_lake)
     )
@@ -515,30 +516,145 @@ async def test_daily_artifact_dch_mismatch_returns_failure(clean_artifacts, pool
     assert len(daily_artifacts_narrow) == 1
     h1 = daily_artifacts_narrow[0].data_contract_hash
 
-    # Second call: wide window (May 20–24) — produces daily hash H2 ≠ H1.
-    # The cached daily artifact (H1) conflicts; expect a data_contract_mismatch failure.
+    # Second call: wide window (May 20–24). The daily artifact's source set
+    # is read from the catalog (all of SPY's complete minute-trade coverage),
+    # not this call's own window, so it now includes the narrow call's days
+    # too — producing daily hash H2 != H1, and a rebuild rather than a
+    # data_contract_mismatch failure.
     result_wide = await ensure_data(_spec_wide(["SPY"]))
+    assert result_wide.overall_status == "complete", f"wide call failed: {result_wide.failures}"
     mismatch_failures = [
         f
         for f in result_wide.failures
         if f.reason == "data_contract_mismatch" and f.artifact_kind == "time_series_bars"
     ]
-    assert len(mismatch_failures) == 1, f"expected data_contract_mismatch failure, got: {result_wide.failures}"
-    # Confirm the hashes genuinely differ (sanity check on the test itself).
-    from app.data_lake.ensure_data import _daily_dch
+    assert not mismatch_failures, f"expected no data_contract_mismatch failure, got: {result_wide.failures}"
+    # 2, not 1: the factor_file's DCH is also window-scoped (_factor_file_dch)
+    # and rebuilds onto the wider history window alongside the daily-trade
+    # artifact — see test_factor_file_rebuilds_onto_a_wider_window for that
+    # rebuild in isolation.
+    assert result_wide.refreshed_artifact_count == 2, "both the daily and factor-file rebuilds must count as refreshed"
 
-    wide_source_ids = [
-        a.id
-        for a in result_wide.artifacts
-        if a.artifact_kind == "time_series_bars" and a.resolution == "minute" and a.symbol == "SPY"
+    daily_artifacts_wide = [
+        a for a in result_wide.artifacts if a.artifact_kind == "time_series_bars" and a.resolution == "daily"
     ]
-    wide_source_shas = [
-        a.file_sha256
-        for a in result_wide.artifacts
-        if a.artifact_kind == "time_series_bars" and a.resolution == "minute" and a.symbol == "SPY"
+    assert len(daily_artifacts_wide) == 1
+    h2 = daily_artifacts_wide[0].data_contract_hash
+    assert h1 != h2, "the rebuilt daily artifact must reflect the wider source set, not the narrow call's cached hash"
+
+    # Third call: identical wide window again. If the rebuild above had not
+    # persisted the new hash to the DataContractHash column, this call would
+    # see the same "mismatch" forever and rebuild a third time — the row
+    # must now be a clean cache hit (#1873 review fix).
+    result_wide_again = await ensure_data(_spec_wide(["SPY"]))
+    assert result_wide_again.overall_status == "complete", f"repeat wide call failed: {result_wide_again.failures}"
+    assert result_wide_again.refreshed_artifact_count == 0, "an unchanged source set must not rebuild again"
+    daily_artifacts_again = [
+        a for a in result_wide_again.artifacts if a.artifact_kind == "time_series_bars" and a.resolution == "daily"
     ]
-    # The mode participates in the hash, so recompute with the wide run's own
-    # mode rather than a literal — a fixture that changes mode must not
-    # silently turn this sanity check into a comparison of two modes.
-    h2 = _daily_dch(wide_source_ids, wide_source_shas, _spec_wide(["SPY"]).price_adjustment_mode)
-    assert h1 != h2, "narrow and wide daily DCHs must differ for this test to be meaningful"
+    assert len(daily_artifacts_again) == 1
+    assert daily_artifacts_again[0].data_contract_hash == h2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_factor_file_rebuilds_onto_a_wider_window(clean_artifacts, pool, tmp_lake):
+    """Same #1870 rebuild-on-mismatch model as the daily-trade artifact,
+    applied to factor_file: a wider window changes _factor_file_dch (see
+    test_factor_file_dch_differs_across_windows), and the existing complete
+    row must rebuild onto it instead of silently keeping the narrower
+    window's split/dividend history bounds (#1873 review fix — this gap
+    would have produced incorrect adjusted results after a widened
+    backfill)."""
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake)
+    )
+    _mock_corpus_actions_and_events()
+    for trading_date, start_ms in {
+        date(2024, 5, 20): 1716211800000,
+        date(2024, 5, 21): 1716298200000,
+        date(2024, 5, 22): 1716384600000,
+        date(2024, 5, 23): 1716470400000,
+        date(2024, 5, 24): 1716557400000,
+    }.items():
+        respx.get(
+            url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/{trading_date.isoformat()}.*"
+        ).mock(return_value=httpx.Response(200, json=_polygon_ok_payload_date("SPY", start_ms)))
+
+    result_narrow = await ensure_data(_spec_narrow(["SPY"]))
+    assert result_narrow.overall_status == "complete", f"narrow call failed: {result_narrow.failures}"
+    factor_narrow = [a for a in result_narrow.artifacts if a.artifact_kind == "factor_file"]
+    assert len(factor_narrow) == 1
+    h1 = factor_narrow[0].data_contract_hash
+
+    result_wide = await ensure_data(_spec_wide(["SPY"]))
+    assert result_wide.overall_status == "complete", f"wide call failed: {result_wide.failures}"
+    assert result_wide.refreshed_artifact_count >= 1, "the factor-file rebuild must be counted as refreshed"
+    factor_wide = [a for a in result_wide.artifacts if a.artifact_kind == "factor_file"]
+    assert len(factor_wide) == 1
+    h2 = factor_wide[0].data_contract_hash
+    assert h1 != h2, "the rebuilt factor file must reflect the wider history window, not the narrow call's cached hash"
+
+    # Repeat wide call: clean cache hit, no third rebuild.
+    result_wide_again = await ensure_data(_spec_wide(["SPY"]))
+    assert result_wide_again.overall_status == "complete"
+    factor_again = [a for a in result_wide_again.artifacts if a.artifact_kind == "factor_file"]
+    assert len(factor_again) == 1
+    assert factor_again[0].data_contract_hash == h2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_daily_artifact_rebuild_failure_restores_the_prior_complete_state(clean_artifacts, pool, tmp_lake, monkeypatch):
+    """A rebuild that fails while reading source trade bars must not strand
+    a previously-working daily artifact 'failed' with no retry path —
+    steal_or_retry_minute_bar does not cover aggregated-bar artifacts.
+    Restore it to 'complete' instead (#1873 review fix)."""
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake)
+    )
+    _mock_corpus_actions_and_events()
+    for trading_date, start_ms in {
+        date(2024, 5, 20): 1716211800000,
+        date(2024, 5, 21): 1716298200000,
+        date(2024, 5, 22): 1716384600000,
+        date(2024, 5, 23): 1716470400000,
+        date(2024, 5, 24): 1716557400000,
+    }.items():
+        respx.get(
+            url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/{trading_date.isoformat()}.*"
+        ).mock(return_value=httpx.Response(200, json=_polygon_ok_payload_date("SPY", start_ms)))
+
+    result_narrow = await ensure_data(_spec_narrow(["SPY"]))
+    assert result_narrow.overall_status == "complete", f"narrow call failed: {result_narrow.failures}"
+    daily_narrow = next(
+        a for a in result_narrow.artifacts if a.artifact_kind == "time_series_bars" and a.resolution == "daily"
+    )
+
+    from app.data_lake import ensure_data as ensure_data_module
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated corrupt source zip")
+
+    monkeypatch.setattr(ensure_data_module, "_read_minute_trade_bars", _boom)
+
+    result_wide = await ensure_data(_spec_wide(["SPY"]))
+    io_failures = [
+        f for f in result_wide.failures if f.reason == "io_error" and f.artifact_kind == "time_series_bars"
+    ]
+    assert len(io_failures) == 1, f"expected exactly one daily-trade io_error, got: {result_wide.failures}"
+
+    identity = ArtifactIdentity(
+        artifact_kind="time_series_bars",
+        market=daily_narrow.market,
+        symbol="SPY",
+        trading_date=None,
+        resolution="daily",
+        data_type="trade",
+        provider="learn_ai_derived",
+        price_adjustment_mode=daily_narrow.price_adjustment_mode,
+    )
+    restored = await catalog_client.select_complete_aggregated_bar_artifact(identity)
+    assert restored is not None, "the row must still be 'complete' — a failed rebuild must not strand it"
+    assert restored.data_contract_hash == daily_narrow.data_contract_hash
+    assert restored.file_sha256 == daily_narrow.file_sha256

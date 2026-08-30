@@ -8762,11 +8762,6 @@ export interface components {
              */
             fetch_timeout_seconds?: number;
             /**
-             * Force Refresh
-             * @default false
-             */
-            force_refresh?: boolean;
-            /**
              * Include Daily Trade
              * @default true
              */

@@ -34,6 +34,8 @@ The `data_contract_hash` in `manifest.json` is the authoritative integrity check
 
 ## Regeneration policy
 
-This fixture is regenerated only on deliberate trigger (a new `force_refresh=True` call
-to `ensure_data`). The regenerating commit must update `manifest.json` with the new
-`data_contract_hash` and `captured_at_ms_utc`, and explain the reason in the commit message.
+This fixture is regenerated only on deliberate trigger. `ensure_data` has no force-refetch
+flag (#1870 removed the unwired `force_refresh` field) — to regenerate, delete the symbol's
+catalog rows and on-disk artifacts under this capture's window, then re-run
+`capture_24mo_minute_bars.py`. The regenerating commit must update `manifest.json` with the
+new `data_contract_hash` and `captured_at_ms_utc`, and explain the reason in the commit message.
