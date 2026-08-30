@@ -284,12 +284,12 @@ async def test_metadata_bootstrap_failure_surfaces_as_artifact_failure(clean_art
 @respx.mock
 @pytest.mark.asyncio
 async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(clean_artifacts, pool, tmp_lake):
-    """A launcher outage leaves no partial catalog state at all (#1879, PR C
-    of #1861 rewrites Phase 0 into a single bundle call: catalog claims only
-    ever happen *after* a successful extraction, so a failed round has
-    nothing to reclaim). A second call, once the launcher recovers, must
-    still succeed cleanly rather than being permanently jammed by whatever
-    the first round left behind."""
+    """A launcher outage now leaves a real, claimed 'failed' catalog row for
+    each metadata kind (#1889 -- ensure_lean_metadata_bundle claims and
+    fails a row on extraction failure instead of the pre-#1889 behaviour of
+    touching nothing). A second call, once the launcher recovers, must
+    reclaim and complete that exact row rather than being permanently
+    jammed by whatever the first round left behind."""
     succeed_from_call = 1  # round 1 fails; round 2 succeeds
     stage = _launcher_side_effect(tmp_lake)
     calls = {"n": 0}
@@ -319,6 +319,80 @@ async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(cle
         f"expected the recovered launcher to be retried, not permanently jammed: {second_metadata_failures}"
     )
     assert launcher_route.call_count == 2, "one launcher call per ensure_data call, not one per metadata kind"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_metadata_bootstrap_launcher_unreachable_is_transient_and_names_the_launcher(
+    clean_artifacts, pool, tmp_lake
+):
+    """#1889 acceptance test, at the materialization (ensure_data) seam: a
+    launcher that is not running/reachable (a connection failure, not a
+    500 response) must be classified as its own transient reason distinct
+    from the generic io_error surfaced by
+    test_metadata_bootstrap_failure_surfaces_as_artifact_failure above, and
+    the failure's detail must explicitly name the launcher as unreachable."""
+
+    def _connection_refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused")
+
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(side_effect=_connection_refused)
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    result = await ensure_data(_spec(["SPY"]))
+
+    metadata_failures = [f for f in result.failures if f.artifact_kind == "metadata"]
+    assert len(metadata_failures) == 3
+    for failure in metadata_failures:
+        assert failure.reason == "launcher_unreachable", (
+            f"launcher-unreachable must be its own transient reason, distinct from io_error: {failure.reason!r}"
+        )
+        assert "launcher" in failure.detail.lower() and "unreachable" in failure.detail.lower(), (
+            f"the surfaced detail must explicitly name the launcher: {failure.detail!r}"
+        )
+    assert result.overall_status in {"partial", "failed"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_metadata_bootstrap_launcher_unreachable_retries_and_completes_when_the_launcher_recovers(
+    clean_artifacts, pool, tmp_lake
+):
+    """#1889 acceptance test: the artifact left 'failed' by an unreachable
+    launcher is retried -- not skipped because it's already 'failed' -- by
+    the very next ensure_data materialization once the launcher recovers."""
+    stage = _launcher_side_effect(tmp_lake)
+    calls = {"n": 0}
+
+    def _unreachable_then_recovers(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("Connection refused")
+        return stage(request)
+
+    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_unreachable_then_recovers
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    first = await ensure_data(_spec(["SPY"]))
+    first_metadata_failures = [f for f in first.failures if f.artifact_kind == "metadata"]
+    assert all(f.reason == "launcher_unreachable" for f in first_metadata_failures)
+    assert len(first_metadata_failures) == 3
+
+    second = await ensure_data(_spec(["SPY"]))
+    second_metadata_failures = [f for f in second.failures if f.artifact_kind == "metadata"]
+    assert second_metadata_failures == [], (
+        f"expected the recovered launcher to be retried and complete, not left failed: {second_metadata_failures}"
+    )
+    assert second.overall_status == "complete"
+    assert launcher_route.call_count == 2
 
 
 @respx.mock

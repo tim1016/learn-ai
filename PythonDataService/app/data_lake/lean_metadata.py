@@ -36,7 +36,7 @@ from pathlib import Path
 import httpx
 
 from app.lean_sidecar import config as sidecar_config
-from app.lean_sidecar.launcher_client import EXTRACT_METADATA_HTTP_TIMEOUT_S
+from app.lean_sidecar.launcher_client import EXTRACT_METADATA_HTTP_TIMEOUT_S, LauncherUnreachable
 from app.lean_sidecar.staging import list_metadata_databases
 from app.lean_sidecar.workspace import resolve_workspace
 
@@ -86,7 +86,14 @@ async def extract_lean_metadata(
     to point at a tmp_path instead of the real shared mount. Production
     callers leave it at its default.
 
-    Raises LeanMetadataExtractionError on any failure.
+    Raises LauncherUnreachable (app.lean_sidecar.launcher_client) when the
+    launcher process itself can't be reached over the network -- the same
+    typed diagnostic every other launcher call already surfaces that
+    condition with (#1889), reused here rather than folding it into the
+    generic LeanMetadataExtractionError so a caller can classify "the
+    launcher isn't running" as transient. Raises LeanMetadataExtractionError
+    for any other failure (non-200 response, missing/unreadable extracted
+    files).
     """
     url = launcher_url.rstrip("/") + "/extract-metadata"
     headers = {"X-Launcher-Token": launcher_token} if launcher_token else {}
@@ -97,8 +104,17 @@ async def extract_lean_metadata(
                 json={"run_id": run_id, "image_digest": image_digest},
                 headers=headers,
             )
+        # Same split app.lean_sidecar.launcher_client.post_launch uses:
+        # TimeoutException covers Connect/Read/Write/Pool timeouts,
+        # NetworkError covers ConnectError + general transport errors --
+        # together "the launcher process is not running/reachable", which
+        # LauncherUnreachable exists to name. Any other RequestError (a
+        # malformed request, a protocol-level error) is a genuine
+        # extraction problem, not a launcher-liveness one.
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            raise LauncherUnreachable(f"launcher at {url} unreachable: {e}") from e
         except httpx.RequestError as e:
-            raise LeanMetadataExtractionError(f"launcher unreachable at {url}: {e}") from e
+            raise LeanMetadataExtractionError(f"launcher request failed at {url}: {e}") from e
 
     if resp.status_code != 200:
         raise LeanMetadataExtractionError(f"launcher /extract-metadata returned {resp.status_code}: {resp.text[:200]}")
