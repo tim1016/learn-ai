@@ -551,6 +551,7 @@ async def _claim_and_complete_metadata_row(
     artifact_id = await catalog_client.claim_metadata_artifact(
         identity=identity, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS, data_contract_hash=dch, file_path=file_path
     )
+    lease_generation = catalog_client.INITIAL_LEASE_GENERATION
     if artifact_id is None:
         existing = await catalog_client.select_complete_metadata_artifact(dch, data_root_id=root_id)
         if existing is not None:
@@ -564,11 +565,12 @@ async def _claim_and_complete_metadata_row(
 
         row_state = await catalog_client.select_metadata_claim_state(dch, data_root_id=root_id)
         if row_state is not None:
-            reclaimed = await catalog_client.steal_or_retry_minute_bar(
+            reclaimed_generation = await catalog_client.steal_or_retry_minute_bar(
                 artifact_id=row_state.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS, max_retries=_MAX_CLAIM_RETRIES
             )
-            if reclaimed:
+            if reclaimed_generation is not None:
                 artifact_id = row_state.id
+                lease_generation = reclaimed_generation
             else:
                 # row_state is a pre-reclaim snapshot; a concurrent winner
                 # can flip 'failed' -> 'fetching' between it and this check
@@ -587,6 +589,7 @@ async def _claim_and_complete_metadata_row(
         last_bar_start_ms=0,
         file_size_bytes=file_size_bytes,
         file_sha256=entry.sha256,
+        lease_generation=lease_generation,
     )
     await catalog_client.mark_metadata_artifacts_stale_for_path(
         data_root_id=root_id,

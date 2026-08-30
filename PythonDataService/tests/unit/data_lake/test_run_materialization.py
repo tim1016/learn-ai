@@ -83,6 +83,10 @@ class FakeCatalog:
             "status": "fetching",
             "attempt_count": 1,
             "last_error": None,
+            # Fencing generation (issue #1888): mirrors the real schema's
+            # LeaseGeneration column, starting at
+            # catalog_client.INITIAL_LEASE_GENERATION on every fresh claim.
+            "lease_generation": catalog_client.INITIAL_LEASE_GENERATION,
         }
         return artifact_id
 
@@ -105,7 +109,7 @@ class FakeCatalog:
             "last_bar_start_ms": None,
         }
 
-    _BOOKKEEPING_KEYS = frozenset({"status", "attempt_count", "last_error"})
+    _BOOKKEEPING_KEYS = frozenset({"status", "attempt_count", "last_error", "lease_generation"})
 
     @classmethod
     def _record(cls, row: dict) -> ArtifactRecord:
@@ -207,7 +211,7 @@ class FakeCatalog:
             last_error=row["last_error"],
         )
 
-    async def steal_or_retry_minute_bar(self, artifact_id, worker_id, lease_ttl_ms, max_retries) -> bool:
+    async def steal_or_retry_minute_bar(self, artifact_id, worker_id, lease_ttl_ms, max_retries) -> int | None:
         row = self.rows[artifact_id]
         # The fake has no lease clock, so "fetching" always means a live
         # lease held by someone else — nothing to steal, matching the real
@@ -219,8 +223,9 @@ class FakeCatalog:
             row["status"] = "fetching"
             row["attempt_count"] += 1
             row["last_error"] = None
-            return True
-        return False
+            row["lease_generation"] += 1
+            return row["lease_generation"]
+        return None
 
     async def select_coverage_minute_bars(
         self, market, symbol, data_type, start_trading_date, end_trading_date, *, price_adjustment_mode
@@ -282,9 +287,11 @@ class FakeCatalog:
         row = self.rows.get(artifact_id)
         if row is None or row["status"] != "complete":
             return None
+        row["lease_generation"] += 1
         prior = catalog_client.PriorArtifactMetadata(
             prior_file_path=row["file_path"],
             prior_file_sha256=row["file_sha256"],
+            new_lease_generation=row["lease_generation"],
         )
         row.update(status="fetching")
         return prior
@@ -304,10 +311,13 @@ class FakeCatalog:
         last_bar_start_ms,
         file_size_bytes,
         file_sha256,
+        lease_generation,
         data_contract_hash=None,
     ) -> None:
         row = self.rows[artifact_id]
-        if row["status"] != "fetching":
+        # Status AND generation (issue #1888) -- mirrors the real guard's
+        # tightening from status-only.
+        if row["status"] != "fetching" or row["lease_generation"] != lease_generation:
             return
         row.update(
             status="complete",
@@ -317,6 +327,10 @@ class FakeCatalog:
             file_sha256=file_sha256,
             data_contract_hash=data_contract_hash if data_contract_hash is not None else row["data_contract_hash"],
         )
+
+    async def confirm_lease_generation(self, artifact_id, worker_id, lease_generation) -> bool:
+        row = self.rows.get(artifact_id)
+        return row is not None and row["status"] == "fetching" and row["lease_generation"] == lease_generation
 
     async def fail_artifact(self, artifact_id, last_error, error_message=None) -> None:
         self.rows[artifact_id].update(status="failed", last_error=last_error)
@@ -340,6 +354,7 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "refresh_complete_artifact",
         "restore_complete_artifact",
         "complete_artifact",
+        "confirm_lease_generation",
         "fail_artifact",
     ):
         monkeypatch.setattr(catalog_client, name, getattr(catalog, name))

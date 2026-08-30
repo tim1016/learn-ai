@@ -6,14 +6,17 @@ Tests clean up after themselves via TRUNCATE in a function-scoped fixture.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import date
+from pathlib import Path, PurePosixPath
+from uuid import uuid4
 
 import asyncpg
 import pytest
 
 from app.config import settings
-from app.data_lake import catalog_client
+from app.data_lake import atomic, catalog_client
 from app.data_lake.types import ArtifactIdentity
 
 pytestmark = pytest.mark.asyncio
@@ -161,6 +164,7 @@ async def test_complete_artifact_updates_to_complete(clean_artifacts, pool):
         last_bar_start_ms=1_716_229_740_000,
         file_size_bytes=12345,
         file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     conn = await asyncpg.connect(_postgres_url())
@@ -282,18 +286,20 @@ async def test_steal_or_retry_steals_expired_lease(clean_artifacts, pool):
     finally:
         await conn.close()
 
-    ok = await catalog_client.steal_or_retry_minute_bar(
+    new_generation = await catalog_client.steal_or_retry_minute_bar(
         artifact_id=artifact_id,
         worker_id="w-new",
         lease_ttl_ms=300_000,
         max_retries=3,
     )
-    assert ok is True
+    # issue #1888: the steal must mint a fencing generation strictly past
+    # the one the original claim recorded, not just report a bare boolean.
+    assert new_generation == catalog_client.INITIAL_LEASE_GENERATION + 1
 
     conn = await asyncpg.connect(_postgres_url())
     try:
         row = await conn.fetchrow(
-            'SELECT "Status", "LeaseOwner", "AttemptCount" FROM "DataLakeArtifacts" WHERE "Id" = $1',
+            'SELECT "Status", "LeaseOwner", "AttemptCount", "LeaseGeneration" FROM "DataLakeArtifacts" WHERE "Id" = $1',
             artifact_id,
         )
     finally:
@@ -301,6 +307,7 @@ async def test_steal_or_retry_steals_expired_lease(clean_artifacts, pool):
     assert row["Status"] == "fetching"
     assert row["LeaseOwner"] == "w-new"
     assert row["AttemptCount"] == 2  # incremented from 1
+    assert row["LeaseGeneration"] == new_generation
 
 
 async def test_steal_or_retry_retries_failed_under_max(clean_artifacts, pool):
@@ -317,13 +324,13 @@ async def test_steal_or_retry_retries_failed_under_max(clean_artifacts, pool):
         artifact_id=artifact_id,
         last_error="provider_api_error",
     )
-    ok = await catalog_client.steal_or_retry_minute_bar(
+    new_generation = await catalog_client.steal_or_retry_minute_bar(
         artifact_id=artifact_id,
         worker_id="w-2",
         lease_ttl_ms=300_000,
         max_retries=3,
     )
-    assert ok is True
+    assert new_generation == catalog_client.INITIAL_LEASE_GENERATION + 1
 
 
 async def test_steal_or_retry_reactivates_a_stale_row_unconditionally(clean_artifacts, pool):
@@ -345,7 +352,13 @@ async def test_steal_or_retry_reactivates_a_stale_row_unconditionally(clean_arti
     )
     assert artifact_id is not None
     await catalog_client.complete_artifact(
-        artifact_id=artifact_id, row_count=1, first_bar_start_ms=0, last_bar_start_ms=0, file_size_bytes=1, file_sha256="b" * 64
+        artifact_id=artifact_id,
+        row_count=1,
+        first_bar_start_ms=0,
+        last_bar_start_ms=0,
+        file_size_bytes=1,
+        file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     # Force the row into 'stale' directly (unit-level: isolates this
@@ -357,13 +370,13 @@ async def test_steal_or_retry_reactivates_a_stale_row_unconditionally(clean_arti
     finally:
         await conn.close()
 
-    ok = await catalog_client.steal_or_retry_minute_bar(
+    new_generation = await catalog_client.steal_or_retry_minute_bar(
         artifact_id=artifact_id,
         worker_id="w-new",
         lease_ttl_ms=300_000,
         max_retries=0,  # deliberately zero: a stale reclaim must not be gated by retry budget
     )
-    assert ok is True
+    assert new_generation == catalog_client.INITIAL_LEASE_GENERATION + 1
 
     conn = await asyncpg.connect(_postgres_url())
     try:
@@ -397,13 +410,13 @@ async def test_steal_or_retry_rejects_failed_at_max(clean_artifacts, pool):
     finally:
         await conn.close()
 
-    ok = await catalog_client.steal_or_retry_minute_bar(
+    new_generation = await catalog_client.steal_or_retry_minute_bar(
         artifact_id=artifact_id,
         worker_id="w-2",
         lease_ttl_ms=300_000,
         max_retries=3,
     )
-    assert ok is False
+    assert new_generation is None
 
 
 async def test_refresh_complete_returns_prior_metadata(clean_artifacts, pool):
@@ -423,6 +436,7 @@ async def test_refresh_complete_returns_prior_metadata(clean_artifacts, pool):
         last_bar_start_ms=2,
         file_size_bytes=100,
         file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     prior = await catalog_client.refresh_complete_artifact(
@@ -433,6 +447,9 @@ async def test_refresh_complete_returns_prior_metadata(clean_artifacts, pool):
     assert prior is not None
     assert prior.prior_file_path == "equity/usa/minute/spy/20240520_trade.zip"
     assert prior.prior_file_sha256 == "b" * 64
+    # issue #1888: a rebuild reclaim mints a new fencing generation, strictly
+    # past the one the original claim/completion recorded.
+    assert prior.new_lease_generation == catalog_client.INITIAL_LEASE_GENERATION + 1
 
 
 async def test_refresh_complete_returns_none_when_not_complete(clean_artifacts, pool):
@@ -474,8 +491,10 @@ async def test_complete_artifact_persists_a_new_data_contract_hash_on_rebuild(cl
         last_bar_start_ms=2,
         file_size_bytes=100,
         file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
-    await catalog_client.refresh_complete_artifact(artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000)
+    prior = await catalog_client.refresh_complete_artifact(artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000)
+    assert prior is not None
     await catalog_client.complete_artifact(
         artifact_id=artifact_id,
         row_count=500,
@@ -483,6 +502,7 @@ async def test_complete_artifact_persists_a_new_data_contract_hash_on_rebuild(cl
         last_bar_start_ms=3,
         file_size_bytes=200,
         file_sha256="c" * 64,
+        lease_generation=prior.new_lease_generation,
         data_contract_hash="d" * 64,
     )
 
@@ -513,6 +533,7 @@ async def test_complete_artifact_leaves_data_contract_hash_untouched_when_omitte
         last_bar_start_ms=2,
         file_size_bytes=100,
         file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     conn = await asyncpg.connect(_postgres_url())
@@ -544,6 +565,7 @@ async def test_restore_complete_artifact_undoes_a_refresh(clean_artifacts, pool)
         last_bar_start_ms=2,
         file_size_bytes=100,
         file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
     await catalog_client.refresh_complete_artifact(artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000)
 
@@ -583,6 +605,7 @@ async def test_restore_complete_artifact_rejects_a_different_worker(clean_artifa
         last_bar_start_ms=2,
         file_size_bytes=100,
         file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
     await catalog_client.refresh_complete_artifact(artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000)
 
@@ -609,6 +632,7 @@ async def test_restore_complete_artifact_returns_false_when_not_fetching(clean_a
         last_bar_start_ms=2,
         file_size_bytes=100,
         file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
     restored = await catalog_client.restore_complete_artifact(artifact_id=artifact_id, worker_id="w-1")
     assert restored is False
@@ -729,13 +753,13 @@ async def test_select_metadata_claim_state_finds_a_failed_row_reclaimable_by_ste
     assert state.status == "failed"
     assert state.attempt_count == 1
 
-    reclaimed = await catalog_client.steal_or_retry_minute_bar(
+    reclaimed_generation = await catalog_client.steal_or_retry_minute_bar(
         artifact_id=state.id,
         worker_id="w-2",
         lease_ttl_ms=300_000,
         max_retries=3,
     )
-    assert reclaimed is True
+    assert reclaimed_generation == catalog_client.INITIAL_LEASE_GENERATION + 1
 
 
 async def test_claim_aggregated_bar_artifact_inserts_and_conflicts(clean_artifacts, pool):
@@ -821,7 +845,13 @@ async def _complete_metadata_row(identity: ArtifactIdentity, dch: str, file_path
     )
     assert artifact_id is not None
     await catalog_client.complete_artifact(
-        artifact_id=artifact_id, row_count=1, first_bar_start_ms=0, last_bar_start_ms=0, file_size_bytes=10, file_sha256="a" * 64
+        artifact_id=artifact_id,
+        row_count=1,
+        first_bar_start_ms=0,
+        last_bar_start_ms=0,
+        file_size_bytes=10,
+        file_sha256="a" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
     return artifact_id
 
@@ -896,3 +926,191 @@ async def test_mark_metadata_artifacts_stale_for_path_with_no_keeper_stales_ever
     async with catalog_client.connection() as conn:
         row = await conn.fetchrow('SELECT "Status" FROM "DataLakeArtifacts" WHERE "Id" = $1', old_row)
     assert row["Status"] == "stale"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1888: fence the artifact lease against a zombie writer.
+#
+# Reproduces the exact scenario from the bug report end to end, across both
+# systems the race spans: writer A claims, A's lease expires and is stolen
+# by writer B, B stages+promotes+completes its own bytes, and only then does
+# A -- unaware it lost the lease -- attempt to promote its own stale bytes.
+# The regression is real (not vacuous) precisely because it drives the
+# production orchestration function (atomic.write_lease_gated_artifact) that
+# every real claim-holding writer in app/data_lake now goes through, not a
+# re-implementation of the gate inside the test. Revert catalog_client.py's
+# LeaseGeneration column/guards or atomic.py's confirm-before-promote gate
+# and this test fails: confirm_lease_generation would answer True for A (no
+# generation to disagree on), write_lease_gated_artifact would promote A's
+# bytes unconditionally, and the final assertions on disk content and the
+# recorded hash would both flip.
+# ---------------------------------------------------------------------------
+
+
+async def test_zombie_writer_cannot_overwrite_winners_file_after_lease_steal(clean_artifacts, pool, tmp_path: Path):
+    identity = _minute_identity()
+    lake_root = tmp_path / "lake"
+    staging_root = tmp_path / "staging"
+    lake_root.mkdir()
+    staging_root.mkdir()
+    rel_path = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
+
+    # Writer A claims first -- generation 1.
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="writer-a",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path=str(rel_path),
+    )
+    assert artifact_id is not None
+    a_generation = catalog_client.INITIAL_LEASE_GENERATION
+
+    # A's lease expires (a slow Polygon fetch, a stalled worker -- doesn't
+    # matter which) and writer B steals it via the same primitive the
+    # lease-expiry sweep's callers use.
+    async with catalog_client.connection() as conn:
+        await conn.execute('UPDATE "DataLakeArtifacts" SET "LeaseExpiresAtMs" = 1 WHERE "Id" = $1', artifact_id)
+    b_generation = await catalog_client.steal_or_retry_minute_bar(
+        artifact_id=artifact_id,
+        worker_id="writer-b",
+        lease_ttl_ms=300_000,
+        max_retries=3,
+    )
+    assert b_generation == a_generation + 1
+
+    # B does the real thing: stage, confirm, promote, complete. This is the
+    # winning write.
+    b_content = b"winner-bytes-from-writer-b"
+    b_sha = await atomic.write_lease_gated_artifact(
+        content=b_content,
+        lake_root=lake_root,
+        staging_root=staging_root,
+        rel_lake_path=rel_path,
+        request_id=uuid4(),
+        worker_id="writer-b",
+        attempt=1,
+        artifact_id=artifact_id,
+        lease_generation=b_generation,
+    )
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=1,
+        first_bar_start_ms=1,
+        last_bar_start_ms=2,
+        file_size_bytes=len(b_content),
+        file_sha256=b_sha,
+        lease_generation=b_generation,
+    )
+
+    final_path = lake_root / Path(*rel_path.parts)
+    assert final_path.read_bytes() == b_content
+
+    # Writer A, unaware it lost the lease, now finishes its own (late,
+    # stale) fetch and attempts to promote under its ORIGINAL generation.
+    # The reordered promotion sequence must refuse before touching disk.
+    a_content = b"stale-bytes-from-writer-a"
+    with pytest.raises(atomic.ArtifactLeaseLostError):
+        await atomic.write_lease_gated_artifact(
+            content=a_content,
+            lake_root=lake_root,
+            staging_root=staging_root,
+            rel_lake_path=rel_path,
+            request_id=uuid4(),
+            worker_id="writer-a",
+            attempt=1,
+            artifact_id=artifact_id,
+            lease_generation=a_generation,
+        )
+
+    # B's winning file on disk is untouched -- the core claim of #1888.
+    assert final_path.read_bytes() == b_content, "writer A's stale promote must not overwrite writer B's file"
+
+    # Defense in depth: even a caller that ignored the raised exception and
+    # called complete_artifact anyway (skipping the promote) must still be
+    # refused by the tightened status-AND-generation guard.
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=999,
+        first_bar_start_ms=999,
+        last_bar_start_ms=999,
+        file_size_bytes=len(a_content),
+        file_sha256=hashlib.sha256(a_content).hexdigest(),
+        lease_generation=a_generation,
+    )
+    async with catalog_client.connection() as conn:
+        row = await conn.fetchrow(
+            'SELECT "FileSha256", "RowCount", "Status" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id
+        )
+    assert row["FileSha256"] == b_sha, "the catalog must still record B's winning hash, never A's stale one"
+    assert row["RowCount"] == 1
+    assert row["Status"] == "complete"
+
+
+async def test_confirm_lease_generation_true_for_current_holder(clean_artifacts, pool):
+    """The authorization primitive in isolation: a holder's own current
+    generation is confirmed."""
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    assert artifact_id is not None
+
+    assert (
+        await catalog_client.confirm_lease_generation(artifact_id, "w-1", catalog_client.INITIAL_LEASE_GENERATION)
+        is True
+    )
+
+
+async def test_confirm_lease_generation_false_for_wrong_worker_or_stale_generation(clean_artifacts, pool):
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    assert artifact_id is not None
+
+    # Wrong worker at the correct generation.
+    assert (
+        await catalog_client.confirm_lease_generation(artifact_id, "w-impostor", catalog_client.INITIAL_LEASE_GENERATION)
+        is False
+    )
+
+    # Correct worker, but a generation that has not (yet) been reached.
+    assert await catalog_client.confirm_lease_generation(artifact_id, "w-1", 99) is False
+
+
+async def test_confirm_lease_generation_false_once_complete(clean_artifacts, pool):
+    """A completed row has no live lease at all -- confirm must refuse even
+    the generation/owner that legitimately completed it, since Status is no
+    longer 'fetching'."""
+    identity = _minute_identity()
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path="x.zip",
+    )
+    assert artifact_id is not None
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=1,
+        first_bar_start_ms=0,
+        last_bar_start_ms=0,
+        file_size_bytes=1,
+        file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+    )
+
+    assert (
+        await catalog_client.confirm_lease_generation(artifact_id, "w-1", catalog_client.INITIAL_LEASE_GENERATION)
+        is False
+    )

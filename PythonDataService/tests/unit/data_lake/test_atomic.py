@@ -11,11 +11,16 @@ from uuid import UUID
 
 import pytest
 
+from app.data_lake import catalog_client
 from app.data_lake.atomic import (
+    ArtifactLeaseLostError,
     AtomicRenameUnsafeError,
     assert_same_filesystem,
     atomic_write_and_promote,
+    promote_staged,
+    stage_content,
     stage_path_for,
+    write_lease_gated_artifact,
 )
 
 
@@ -197,3 +202,110 @@ class TestAtomicWriteAndPromote:
                 worker_id="w",
                 attempt=1,
             )
+
+
+class TestStageContentAndPromoteStaged:
+    """The two-phase split (issue #1888) must reproduce atomic_write_and_
+    promote's exact end state when run back-to-back with nothing gating
+    between them -- the split changes nothing about the filesystem contract,
+    only where a caller may insert a catalog check."""
+
+    def test_stage_then_promote_matches_atomic_write_and_promote(self, tmp_path: Path):
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        rel = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
+        content = b"two-phase payload"
+
+        staged, sha = stage_content(
+            content=content,
+            lake_root=lake_root,
+            staging_root=staging_root,
+            rel_lake_path=rel,
+            request_id=UUID("12345678-1234-5678-1234-567812345678"),
+            worker_id="w",
+            attempt=1,
+        )
+        assert sha == hashlib.sha256(content).hexdigest()
+        assert staged.is_file(), "stage_content must not promote -- nothing at the lake path yet"
+        final = lake_root / "equity" / "usa" / "minute" / "spy" / "20240520_trade.zip"
+        assert not final.exists()
+
+        promote_staged(staged, lake_root, rel)
+
+        assert final.is_file()
+        assert final.read_bytes() == content
+        assert not staged.exists(), "promote must move (not copy) the staged file"
+
+
+class TestWriteLeaseGatedArtifact:
+    """The reordered promotion sequence (issue #1888), exercised without a
+    live Postgres: catalog_client.confirm_lease_generation is monkeypatched
+    directly, so this proves write_lease_gated_artifact's own control flow
+    -- stage always happens, promote happens if and only if confirm says
+    yes -- independent of the real SQL guard (which test_catalog_write_ops.py
+    covers against a live database instead)."""
+
+    @pytest.mark.asyncio
+    async def test_promotes_when_catalog_confirms_the_lease(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        rel = PurePosixPath("a.zip")
+        content = b"authorized bytes"
+
+        async def fake_confirm(artifact_id: int, worker_id: str, lease_generation: int) -> bool:
+            assert (artifact_id, worker_id, lease_generation) == (7, "w-1", 3)
+            return True
+
+        monkeypatch.setattr(catalog_client, "confirm_lease_generation", fake_confirm)
+
+        sha = await write_lease_gated_artifact(
+            content=content,
+            lake_root=lake_root,
+            staging_root=staging_root,
+            rel_lake_path=rel,
+            request_id=UUID("12345678-1234-5678-1234-567812345678"),
+            worker_id="w-1",
+            attempt=1,
+            artifact_id=7,
+            lease_generation=3,
+        )
+
+        assert sha == hashlib.sha256(content).hexdigest()
+        assert (lake_root / "a.zip").read_bytes() == content
+
+    @pytest.mark.asyncio
+    async def test_refuses_to_promote_when_catalog_denies_the_lease(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """This is the zombie-writer fix's core unit-level proof: a denied
+        confirm must leave the lake path untouched -- the whole point of
+        staging before asking, instead of promoting and asking after."""
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        rel = PurePosixPath("a.zip")
+
+        async def fake_confirm(artifact_id: int, worker_id: str, lease_generation: int) -> bool:
+            return False  # the lease was stolen before this writer reached promote
+
+        monkeypatch.setattr(catalog_client, "confirm_lease_generation", fake_confirm)
+
+        with pytest.raises(ArtifactLeaseLostError, match="no longer holds the lease"):
+            await write_lease_gated_artifact(
+                content=b"stale bytes",
+                lake_root=lake_root,
+                staging_root=staging_root,
+                rel_lake_path=rel,
+                request_id=UUID("12345678-1234-5678-1234-567812345678"),
+                worker_id="w-1",
+                attempt=1,
+                artifact_id=7,
+                lease_generation=1,
+            )
+
+        assert not (lake_root / "a.zip").exists(), "a denied lease must never reach the lake path"

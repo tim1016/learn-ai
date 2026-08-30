@@ -156,7 +156,9 @@ from zoneinfo import ZoneInfo
 
 from app.data_lake import catalog_client, root_identity
 from app.data_lake.atomic import (
+    ArtifactLeaseLostError,
     atomic_write_and_promote,
+    write_lease_gated_artifact,
 )
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.path_policy import (
@@ -850,7 +852,7 @@ async def _import_one_zip(
         file_sha = (
             content_hash
             if already_present
-            else atomic_write_and_promote(
+            else await write_lease_gated_artifact(
                 content=verified.raw_bytes,
                 lake_root=lake_dir,
                 staging_root=staging_dir,
@@ -858,6 +860,12 @@ async def _import_one_zip(
                 request_id=run_id,
                 worker_id=_WORKER_ID,
                 attempt=1,
+                artifact_id=claim_result,
+                # This claim was won moments ago in this same call (no
+                # steal_or_retry_minute_bar path in this file) -- the
+                # fencing generation issue #1888 added is always the
+                # freshly-claimed one.
+                lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
             )
         )
         await catalog_client.complete_artifact(
@@ -867,6 +875,22 @@ async def _import_one_zip(
             last_bar_start_ms=verified.last_bar_start_ms,
             file_size_bytes=len(verified.raw_bytes),
             file_sha256=file_sha,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+        )
+    except ArtifactLeaseLostError as exc:
+        # Unlike the branches below, the lease is no longer ours to fail --
+        # fail_artifact() has no owner/generation guard (issue #1888 did not
+        # extend the fencing check to it; see the PR's residual-risk note),
+        # so calling it here would clobber whoever now legitimately holds
+        # this row. Just report the loss; do not touch the catalog row.
+        logger.warning(
+            "cache_import: %s %s: %s",
+            ref.symbol,
+            ref.trading_date,
+            exc,
+        )
+        return FailedArtifact(
+            symbol=ref.symbol, trading_date=ref.trading_date, reason="in_flight_or_incomplete", detail=str(exc)
         )
     except Exception as exc:
         # Caught broadly and deliberately: whatever goes wrong here (disk

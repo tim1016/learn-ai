@@ -445,6 +445,22 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
 # ---------------------------------------------------------------------------
 # Slice 1b write operations
 # ---------------------------------------------------------------------------
+#
+# Fencing generation (issue #1888). Every artifact lease carries a
+# monotonic "LeaseGeneration" counter -- the same idiom ADR 0048 established
+# for the SQLite execution authority's authority_generation column
+# (app/broker/alpaca/clerk/sqlite/writes.py), applied to this subsystem: a
+# claim_* INSERT starts a row at generation INITIAL_LEASE_GENERATION,
+# steal_or_retry_minute_bar and refresh_complete_artifact each increment it
+# by exactly 1 on every reclaim, and every protected mutation
+# (complete_artifact, confirm_lease_generation) validates the caller's
+# recorded generation atomically against the durable row instead of trusting
+# the caller's own recollection of still holding the lease -- a check a
+# paused/stale writer will always pass. See confirm_lease_generation's
+# docstring for the one gap this cannot close (a write across the
+# Postgres/filesystem boundary is not one atomic operation).
+
+INITIAL_LEASE_GENERATION = 1
 
 
 class CatalogSchemaNotReadyError(RuntimeError):
@@ -526,12 +542,12 @@ async def claim_minute_bar(
             "ArtifactKind", "Market", "Symbol", "TradingDate",
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
-            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, 'fetching', $12, $13, 1, $14, $15
+            $11, 'fetching', $12, $13, 1, 1, $14, $15
         )
         ON CONFLICT ("DataRootId", "Market", "Symbol", "TradingDate", "DataType",
                      "Provider", "PriceAdjustmentMode")
@@ -669,12 +685,23 @@ async def complete_artifact(
     last_bar_start_ms: int,
     file_size_bytes: int,
     file_sha256: str,
+    lease_generation: int,
     data_contract_hash: str | None = None,
 ) -> None:
     """Transition an artifact from 'fetching' → 'complete' with byte metadata.
 
-    No-op if the row is not currently 'fetching' (defensive against stale
-    callers; the sweep is the only legitimate source of late writes).
+    No-op if the row is not currently 'fetching' at exactly
+    ``lease_generation`` (issue #1888). Status alone used to gate this
+    update; that let a writer whose lease had already been stolen and
+    re-completed by another worker under a *new* claim (Status back to
+    'fetching' again, this time under the winner) slip its own stale
+    metadata onto the row, because from the loser's point of view Status
+    still read 'fetching'. ``lease_generation`` is the value the caller
+    observed at claim/reclaim time (``INITIAL_LEASE_GENERATION`` for a fresh
+    claim; the return value of ``steal_or_retry_minute_bar`` or
+    ``refresh_complete_artifact`` for a reclaim) — the store, not the
+    caller's recollection, is what decides whether that generation is still
+    current.
 
     ``data_contract_hash`` is optional and defaults to leaving the column
     untouched (``COALESCE`` against the existing value) — the vast majority
@@ -699,7 +726,8 @@ async def complete_artifact(
                "LeaseOwner" = NULL,
                "LeaseExpiresAtMs" = NULL
          WHERE "Id" = $1
-           AND "Status" = 'fetching';
+           AND "Status" = 'fetching'
+           AND "LeaseGeneration" = $9;
     """
     async with connection() as conn:
         await conn.execute(
@@ -712,7 +740,47 @@ async def complete_artifact(
             file_sha256,
             now_ms,
             data_contract_hash,
+            lease_generation,
         )
+
+
+async def confirm_lease_generation(artifact_id: int, worker_id: str, lease_generation: int) -> bool:
+    """Authorize a promotion: True iff ``worker_id`` still durably holds the
+    lease on ``artifact_id`` at exactly ``lease_generation`` right now.
+
+    This is the "ask the catalog" half of issue #1888's reordered promotion
+    sequence: a writer stages its bytes to a temp path first (no catalog
+    call needed for that), calls this immediately before the filesystem
+    rename, and only promotes on a ``True`` answer. See
+    ``app.data_lake.atomic.write_lease_gated_artifact``, the one production
+    caller.
+
+    Residual risk (documented, not eliminated — CLAUDE.md numerical/temporal
+    rigor's standard for an accepted gap applies to concurrency risk here
+    too): this check and the ``os.replace`` it authorizes are two separate
+    operations, not one atomic transaction — Postgres cannot participate in
+    a POSIX rename. A steal (or a completion) that lands in the vanishingly
+    narrow window between this call returning ``True`` and the caller's
+    ``os.replace`` executing can still let a losing writer's bytes briefly
+    occupy the winner's path on disk. What this DOES guarantee: the catalog
+    row itself can never be left describing the loser's bytes —
+    ``complete_artifact``'s own generation-gated guard refuses the loser's
+    completion independently of this check's outcome, so a reader that
+    trusts the catalog's recorded hash over raw disk content is protected
+    even in that narrow window.
+    """
+    query = """
+        SELECT 1
+          FROM "DataLakeArtifacts"
+         WHERE "Id" = $1
+           AND "LeaseOwner" = $2
+           AND "LeaseGeneration" = $3
+           AND "Status" = 'fetching'
+         LIMIT 1;
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(query, artifact_id, worker_id, lease_generation)
+    return row is not None
 
 
 async def restore_complete_artifact(artifact_id: int, worker_id: str) -> bool:
@@ -800,7 +868,7 @@ async def steal_or_retry_minute_bar(
     worker_id: str,
     lease_ttl_ms: int,
     max_retries: int,
-) -> bool:
+) -> int | None:
     """Reclaim an artifact whose lease expired, retry a failed artifact, OR
     reactivate a staled one.
 
@@ -830,9 +898,14 @@ async def steal_or_retry_minute_bar(
     neither 'fetching' with an expired lease nor 'failed', so no existing
     branch could ever reclaim it.
 
-    Returns True when the row was updated to 'fetching' under the new worker;
-    False when no eligible row exists (e.g., already complete, already
-    re-claimed by another worker, or failed beyond max_retries).
+    Returns the new fencing generation (issue #1888; always
+    ``> INITIAL_LEASE_GENERATION`` since this always increments) when the
+    row was reclaimed under the new worker; None when no eligible row exists
+    (e.g., already complete, already re-claimed by another worker, or failed
+    beyond max_retries). The caller must carry this value through to its
+    later ``complete_artifact`` / ``confirm_lease_generation`` calls — the
+    row's ``LeaseGeneration`` no longer matches whatever it was before this
+    reclaim.
     """
     now_ms = int(time.time() * 1000)
     query = """
@@ -840,6 +913,7 @@ async def steal_or_retry_minute_bar(
            SET "Status" = 'fetching',
                "LeaseOwner" = $2,
                "LeaseExpiresAtMs" = $3,
+               "LeaseGeneration" = "LeaseGeneration" + 1,
                "AttemptCount" = "AttemptCount" + 1,
                "LastError" = NULL
          WHERE "Id" = $1
@@ -847,10 +921,11 @@ async def steal_or_retry_minute_bar(
                   ("Status" = 'fetching' AND "LeaseExpiresAtMs" < $4)
                OR ("Status" = 'failed' AND "AttemptCount" < $5)
                OR ("Status" = 'stale')
-           );
+           )
+        RETURNING "LeaseGeneration";
     """
     async with connection() as conn:
-        result = await conn.execute(
+        return await conn.fetchval(
             query,
             artifact_id,
             worker_id,
@@ -858,14 +933,16 @@ async def steal_or_retry_minute_bar(
             now_ms,
             max_retries,
         )
-    n = int(result.rsplit(" ", 1)[-1])
-    return n > 0
 
 
 @dataclass(frozen=True)
 class PriorArtifactMetadata:
     prior_file_path: str
     prior_file_sha256: str
+    # The generation this refresh's own reclaim minted (issue #1888) — the
+    # caller must carry it through to complete_artifact / confirm_lease_
+    # generation, same as steal_or_retry_minute_bar's return value.
+    new_lease_generation: int
 
 
 async def claim_corp_action_artifact(
@@ -897,12 +974,12 @@ async def claim_corp_action_artifact(
             "ArtifactKind", "Market", "Symbol", "TradingDate",
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
-            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, NULL, NULL, NULL, $4, $5, $6, $7,
-            $8, 'fetching', $9, $10, 1, $11, $12
+            $8, 'fetching', $9, $10, 1, 1, $11, $12
         )
         ON CONFLICT ("DataRootId", "Market", "Symbol", "ArtifactKind", "Provider", "PriceAdjustmentMode")
             WHERE "ArtifactKind" IN ('factor_file', 'map_file')
@@ -968,12 +1045,12 @@ async def claim_metadata_artifact(
             "ArtifactKind", "Market", "Symbol", "TradingDate",
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
-            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             'metadata', $1, $2, NULL, NULL, NULL, $3, $4, $5, $6,
-            $7, 'fetching', $8, $9, 1, $10, $11
+            $7, 'fetching', $8, $9, 1, 1, $10, $11
         )
         ON CONFLICT ("DataRootId", "DataContractHash")
             WHERE "ArtifactKind" = 'metadata'
@@ -1078,12 +1155,12 @@ async def claim_aggregated_bar_artifact(
             "ArtifactKind", "Market", "Symbol", "TradingDate",
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
-            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, NULL, $4, $5, $6, $7, $8, $9,
-            $10, 'fetching', $11, $12, 1, $13, $14
+            $10, 'fetching', $11, $12, 1, 1, $13, $14
         )
         ON CONFLICT ("DataRootId", "Market", "Symbol", "Resolution", "DataType",
                      "Provider", "PriceAdjustmentMode")
@@ -1127,8 +1204,11 @@ async def refresh_complete_artifact(
     factor_file whose history window has widened (see
     ``ensure_data._process_factor_file_artifact``). Returns the prior
     file_path + file_sha256 so the caller can preserve them if the new write
-    fails validation. Returns None when the row isn't currently 'complete'
-    (refresh has no work to do — e.g. a race with another worker).
+    fails validation, plus the fencing generation this reclaim minted
+    (issue #1888) so the caller's later complete_artifact /
+    confirm_lease_generation calls target the right generation. Returns None
+    when the row isn't currently 'complete' (refresh has no work to do —
+    e.g. a race with another worker).
     """
     now_ms = int(time.time() * 1000)
     query = """
@@ -1136,10 +1216,11 @@ async def refresh_complete_artifact(
            SET "Status" = 'fetching',
                "LeaseOwner" = $2,
                "LeaseExpiresAtMs" = $3,
+               "LeaseGeneration" = "LeaseGeneration" + 1,
                "AttemptCount" = "AttemptCount" + 1
          WHERE "Id" = $1
            AND "Status" = 'complete'
-        RETURNING "FilePath", "FileSha256";
+        RETURNING "FilePath", "FileSha256", "LeaseGeneration";
     """
     async with connection() as conn:
         row = await conn.fetchrow(
@@ -1153,6 +1234,7 @@ async def refresh_complete_artifact(
     return PriorArtifactMetadata(
         prior_file_path=row["FilePath"],
         prior_file_sha256=row["FileSha256"],
+        new_lease_generation=row["LeaseGeneration"],
     )
 
 

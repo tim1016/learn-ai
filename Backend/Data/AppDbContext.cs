@@ -600,6 +600,8 @@ public class AppDbContext : DbContext
             entity.Property(a => a.Status).IsRequired().HasMaxLength(20);
             entity.Property(a => a.FetchedAtMs).IsRequired();
             entity.Property(a => a.AttemptCount).IsRequired().HasDefaultValue(0);
+            // Fencing generation (issue #1888) — see DataLakeArtifact.LeaseGeneration.
+            entity.Property(a => a.LeaseGeneration).IsRequired().HasDefaultValue(1);
 
             entity.Property(a => a.FileSha256).HasMaxLength(64).IsFixedLength();
             entity.Property(a => a.CorpActionRevision).HasMaxLength(64).IsFixedLength();

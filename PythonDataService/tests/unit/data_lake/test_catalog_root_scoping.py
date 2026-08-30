@@ -141,6 +141,7 @@ class TestMinuteBarRootScoping:
             last_bar_start_ms=1,
             file_size_bytes=10,
             file_sha256="a" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
         seen_by_a = await catalog_client.select_coverage_minute_bars(
@@ -218,6 +219,7 @@ class TestAggregatedBarRootScoping:
             last_bar_start_ms=1,
             file_size_bytes=10,
             file_sha256="b" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
         assert await catalog_client.select_complete_aggregated_bar_artifact(_aggregated_bar_identity(_ROOT_A)) is not None
@@ -252,6 +254,7 @@ class TestCorpActionRootScoping:
             last_bar_start_ms=1,
             file_size_bytes=10,
             file_sha256="c" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
         assert await catalog_client.select_complete_corp_action_artifact(_corp_action_identity(_ROOT_A)) is not None
@@ -286,6 +289,7 @@ class TestMetadataRootScoping:
             last_bar_start_ms=1,
             file_size_bytes=10,
             file_sha256="d" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
         assert await catalog_client.select_complete_metadata_artifact("d" * 64, data_root_id=_ROOT_A) is not None
@@ -324,6 +328,7 @@ class TestObservatoryRootScoping:
             last_bar_start_ms=1,
             file_size_bytes=123,
             file_sha256="e" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
         totals_a = await catalog_client.select_storage_totals_by_kind("usa", data_root_id=_ROOT_A)
@@ -347,6 +352,7 @@ class TestObservatoryRootScoping:
             last_bar_start_ms=1,
             file_size_bytes=10,
             file_sha256="f" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
         spans_a = await catalog_client.select_symbol_coverage_spans("usa", data_root_id=_ROOT_A)
@@ -370,6 +376,7 @@ class TestObservatoryRootScoping:
             last_bar_start_ms=1,
             file_size_bytes=10,
             file_sha256="g" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
         coverage_a = await catalog_client.select_artifact_coverage(
@@ -546,11 +553,11 @@ class TestCrossRootCoexistence:
         )
         await catalog_client.complete_artifact(
             artifact_id=artifact_id_a, row_count=1, first_bar_start_ms=0, last_bar_start_ms=1,
-            file_size_bytes=100, file_sha256="e" * 64,
+            file_size_bytes=100, file_sha256="e" * 64, lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
         await catalog_client.complete_artifact(
             artifact_id=artifact_id_b, row_count=1, first_bar_start_ms=0, last_bar_start_ms=1,
-            file_size_bytes=999, file_sha256="e" * 64,
+            file_size_bytes=999, file_sha256="e" * 64, lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
         totals_a = await catalog_client.select_storage_totals_by_kind("usa", data_root_id=_ROOT_A)
@@ -570,7 +577,7 @@ class TestCrossRootCoexistence:
         )
         await catalog_client.complete_artifact(
             artifact_id=artifact_id_a, row_count=1, first_bar_start_ms=0, last_bar_start_ms=1,
-            file_size_bytes=10, file_sha256="a" * 64,
+            file_size_bytes=10, file_sha256="a" * 64, lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
         coverage_a_before = await catalog_client.select_coverage_minute_bars(
             market="usa", symbol="SPY", data_type="trade",
@@ -584,7 +591,7 @@ class TestCrossRootCoexistence:
         )
         await catalog_client.complete_artifact(
             artifact_id=artifact_id_b, row_count=1, first_bar_start_ms=0, last_bar_start_ms=1,
-            file_size_bytes=10, file_sha256="a" * 64,
+            file_size_bytes=10, file_sha256="a" * 64, lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
         coverage_a_after = await catalog_client.select_coverage_minute_bars(
             market="usa", symbol="SPY", data_type="trade",
