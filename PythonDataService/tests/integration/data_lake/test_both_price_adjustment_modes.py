@@ -70,6 +70,7 @@ from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.lake_mount import LakeMountError, data_plane_lake_root, resolve_lake_artifacts
+from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 
 pytestmark = pytest.mark.asyncio
 
@@ -96,6 +97,60 @@ _MODES: tuple[PriceAdjustmentMode, ...] = ("raw", "polygon_split_adjusted")
 # by two fixtures that happen to agree.
 _RAW_BASE_PRICE = 500.0
 _ADJUSTED_BASE_PRICE = 250.0  # simulates a 2:1 split adjustment
+
+
+def _sidecar_request(*, adjusted: bool):
+    """A TrustedRunRequest for this module's symbol and single trading day.
+
+    Built the same way ``tests/lean_sidecar/test_lake_mount_service.py``
+    builds one, so the ``adjusted`` boolean travels through the same field
+    the router populates.
+    """
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+    from app.services.lean_sidecar_service import TrustedRunRequest
+
+    return TrustedRunRequest(
+        run_id=f"run_1891_{'adjusted' if adjusted else 'raw'}",
+        start_ms_utc=session_open_ms_utc(TRADING_DATE),
+        end_ms_utc=session_open_ms_utc(next_trading_day(TRADING_DATE)),
+        starting_cash=100_000.0,
+        data_policy=DataPolicy(
+            source="polygon",
+            symbol=SYMBOL,
+            adjusted=adjusted,
+            session="regular",
+            input_bars=BarsSpec(timespan="minute", multiplier=1),
+            strategy_bars=BarsSpec(timespan="minute", multiplier=1),
+            timestamp_policy="bar_close_ms_utc",
+            timezone="America/New_York",
+            provider_kind="live",
+            fixture_id=None,
+            fixture_sha256=None,
+        ),
+    )
+
+
+async def _resolve_through_the_sidecar_seam(monkeypatch: pytest.MonkeyPatch, *, adjusted: bool):
+    """Drive the production request -> root conversion, not the roots directly.
+
+    ``lean_sidecar_service._resolve_lake_artifacts_or_refuse`` is where a run
+    request's ``data_policy.adjusted`` boolean becomes a physical lake root,
+    via ``polygon_mode_for``. Selecting the two roots by hand (as the
+    assertions above do) proves the roots differ but would stay green if that
+    conversion inverted or collapsed -- feeding split-inappropriate prices
+    into a backtest with every other assertion in this file still passing.
+
+    The launcher capability probe is the only process boundary in the way; it
+    is a separate concern with its own tests, so it is stubbed out.
+    """
+    from app.lean_sidecar import launcher_client
+    from app.services import lean_sidecar_service
+
+    async def _supports(_capability: str) -> None:
+        return None
+
+    monkeypatch.setattr(launcher_client, "assert_launcher_supports", _supports)
+    return await lean_sidecar_service._resolve_lake_artifacts_or_refuse(_sidecar_request(adjusted=adjusted))
 
 
 def _postgres_url() -> str:
@@ -201,6 +256,19 @@ def _aggs_side_effect(request: httpx.Request) -> httpx.Response:
     the same vendor query parameter app.data_lake.polygon_fetcher sends
     (see PolygonFetchError-free path in fetch_aggregate_bars)."""
     adjusted = request.url.params.get("adjusted")
+    if adjusted not in ("true", "false"):
+        # Not a soft default: every claim in this module rests on the two
+        # modes producing different vendor bytes, and that only holds while
+        # the fetcher actually expresses the mode on the wire. Treating a
+        # missing or misspelled value as raw would keep this file green while
+        # the real Polygon request had stopped asking for a specific
+        # adjustment at all -- and Polygon's own default is adjusted=true, so
+        # the "raw" leg would silently be served adjusted prices.
+        raise AssertionError(
+            f"the raw/adjusted proof depends on Polygon's own `adjusted` query parameter, "
+            f"but the fetcher sent adjusted={adjusted!r} (expected exactly 'true' or 'false') "
+            f"for {request.url}"
+        )
     base_price = _ADJUSTED_BASE_PRICE if adjusted == "true" else _RAW_BASE_PRICE
     return httpx.Response(200, json=_polygon_aggs_for(base_price))
 
@@ -307,7 +375,7 @@ def _sha256(path: Path) -> str:
 
 @respx.mock
 async def test_both_price_adjustment_modes_catalogue_independently_and_read_back_correctly(
-    clean_artifacts, pool, tmp_lake: Path, artifacts_root: Path
+    clean_artifacts, pool, tmp_lake: Path, artifacts_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC 1: raw and polygon_split_adjusted both catalogue the same
     (market, symbol, trading_date, data_type) without identity collision.
@@ -436,10 +504,25 @@ async def test_both_price_adjustment_modes_catalogue_independently_and_read_back
     assert sidecar_raw_sha != adjusted_row.file_sha256
     assert sidecar_adjusted_sha != raw_row.file_sha256
 
+    # --- AC 2c: the same claim through the production request -> root
+    # conversion, not through roots this test picked itself. ---
+    seam_raw = await _resolve_through_the_sidecar_seam(monkeypatch, adjusted=False)
+    seam_adjusted = await _resolve_through_the_sidecar_seam(monkeypatch, adjusted=True)
+
+    assert len(seam_raw.trade_zip_paths) == 1
+    assert len(seam_adjusted.trade_zip_paths) == 1
+    assert seam_raw.trade_zip_paths[0] != seam_adjusted.trade_zip_paths[0]
+    assert _sha256(seam_raw.trade_zip_paths[0]) == raw_row.file_sha256, (
+        "a run requesting unadjusted prices resolved to bytes that are not the raw row's"
+    )
+    assert _sha256(seam_adjusted.trade_zip_paths[0]) == adjusted_row.file_sha256, (
+        "a run requesting adjusted prices resolved to bytes that are not the adjusted row's"
+    )
+
 
 @respx.mock
 async def test_sidecar_refuses_a_mode_with_no_coverage_rather_than_falling_back(
-    clean_artifacts, pool, tmp_lake: Path, artifacts_root: Path
+    clean_artifacts, pool, tmp_lake: Path, artifacts_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The other half of "you get the mode you asked for": a mode this test
     never catalogues must refuse rather than silently serve the other mode's
@@ -457,3 +540,16 @@ async def test_sidecar_refuses_a_mode_with_no_coverage_rather_than_falling_back(
             start=TRADING_DATE,
             end=TRADING_DATE,
         )
+
+    # And through the production request -> root conversion: a run asking for
+    # adjusted prices must refuse, not fall through to the raw root that does
+    # have full coverage.
+    from app.services.lean_sidecar_service import LeanSidecarServiceError
+
+    with pytest.raises(LeanSidecarServiceError):
+        await _resolve_through_the_sidecar_seam(monkeypatch, adjusted=True)
+
+    # The mode that *is* catalogued still resolves, so the refusal above is
+    # about coverage and not about the seam being broken outright.
+    seam_raw = await _resolve_through_the_sidecar_seam(monkeypatch, adjusted=False)
+    assert len(seam_raw.trade_zip_paths) == 1
