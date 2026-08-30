@@ -517,12 +517,14 @@ def _launcher_side_effect(artifacts_root: Path, *, interest_rate_digests: frozen
 def _spec(*, lean_image_digest: str = "sha256:test", request_id: UUID | None = None) -> DataRunSpec:
     from datetime import date
 
+    from app.data_lake.types import trading_date_to_calendar_anchor_ms
+
     return DataRunSpec(
         request_id=request_id or uuid4(),
         run_type="python_lab",
         symbols=["SPY"],
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 24),
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
         lean_image_digest=lean_image_digest,
     )
 
