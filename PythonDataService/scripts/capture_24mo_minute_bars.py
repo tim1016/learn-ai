@@ -48,7 +48,7 @@ FETCH_TIMEOUT_SECONDS = 1800
 
 async def run_ticker(ticker: str) -> dict:
     from app.data_lake.ensure_data import ensure_data
-    from app.data_lake.types import DataRunSpec
+    from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 
     request_id = uuid.uuid4()
     spec = DataRunSpec(
@@ -57,8 +57,8 @@ async def run_ticker(ticker: str) -> dict:
         requester="capture_24mo_minute_bars.py",
         market="usa",
         symbols=[ticker],
-        start_trading_date=START_DATE,
-        end_trading_date=END_DATE,
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(START_DATE),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(END_DATE),
         resolution="minute",
         data_types=["trade"],
         price_adjustment_mode="raw",

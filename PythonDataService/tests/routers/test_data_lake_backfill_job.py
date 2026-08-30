@@ -27,7 +27,7 @@ from httpx import ASGITransport, AsyncClient
 
 import app.routers.data_lake as data_lake_router
 from app.data_lake.backfill import BackfillDayProgress, BackfillResult, BackfillWaitProgress
-from app.data_lake.types import ArtifactFailure, DataAvailabilityResult
+from app.data_lake.types import ArtifactFailure, DataAvailabilityResult, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.routers.data_lake import router as data_lake_router_instance
 
@@ -48,8 +48,8 @@ def _valid_body(job_id: str = "job-1", **spec_overrides: Any) -> dict:
         "request_id": str(uuid4()),
         "run_type": "python_lab",
         "symbols": ["SPY"],
-        "start_trading_date": "2024-05-20",
-        "end_trading_date": "2024-05-24",
+        "start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        "end_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
         "lean_image_digest": "sha256:test",
     }
     spec.update(spec_overrides)
@@ -125,6 +125,104 @@ async def test_invalid_spec_symbol_is_422() -> None:
     async with AsyncClient(transport=ASGITransport(app=flag_on_app), base_url="http://test") as client:
         r = await client.post("/api/data-lake/backfill", json=body)
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# #1877 boundary matrix — mirrors tests/integration/data_lake/test_ensure_data_route.py
+# so /ensure-data and /backfill are pinned to identical behavior on the same
+# cases. Every case here is rejected by DataRunSpec's own validation before
+# the job is even queued — no run_in_thread monkeypatch needed.
+# ---------------------------------------------------------------------------
+
+
+async def _post_backfill(body: dict):
+    flag_on_app = _make_app(include_data_lake=True)
+    async with AsyncClient(transport=ASGITransport(app=flag_on_app), base_url="http://test") as client:
+        return await client.post("/api/data-lake/backfill", json=body)
+
+
+async def test_backfill_old_field_names_rejected() -> None:
+    body = {
+        "job_id": "job-1",
+        "spec": {
+            "request_id": str(uuid4()),
+            "run_type": "python_lab",
+            "symbols": ["SPY"],
+            "start_trading_date": "2024-05-20",
+            "end_trading_date": "2024-05-24",
+            "lean_image_digest": "sha256:test",
+        },
+    }
+    r = await _post_backfill(body)
+    assert r.status_code == 422
+
+
+async def test_backfill_iso_strings_on_ms_fields_rejected() -> None:
+    body = _valid_body(start_trading_date_ms="2024-05-20", end_trading_date_ms="2024-05-24")
+    r = await _post_backfill(body)
+    assert r.status_code == 422
+
+
+async def test_backfill_non_integer_value_rejected() -> None:
+    body = _valid_body(start_trading_date_ms=1716206400000.5)
+    r = await _post_backfill(body)
+    assert r.status_code == 422
+
+
+async def test_backfill_value_outside_signed_int64_rejected() -> None:
+    body = _valid_body(start_trading_date_ms=2**63)
+    r = await _post_backfill(body)
+    assert r.status_code == 422
+
+
+async def test_backfill_off_anchor_milliseconds_rejected() -> None:
+    off_anchor = trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) + 1
+    body = _valid_body(start_trading_date_ms=off_anchor)
+    r = await _post_backfill(body)
+    assert r.status_code == 422
+
+
+async def test_backfill_reversed_range_rejected() -> None:
+    body = _valid_body(
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+    )
+    r = await _post_backfill(body)
+    assert r.status_code == 422
+
+
+async def test_backfill_range_over_max_cap_rejected() -> None:
+    body = _valid_body(
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2018, 1, 1)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 12, 31)),  # ~7 years
+    )
+    r = await _post_backfill(body)
+    assert r.status_code == 422
+
+
+async def test_weekend_boundary_backfill_job_accepted_and_completes_with_zero_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Sat->Sun window must clear the body-validation gate and actually
+    run — not just be accepted on paper. run_backfill is deliberately left
+    real here (only run_in_thread is faked, as every other test in this file
+    does): a weekend-only range has zero canonical NYSE sessions, so the
+    per-day loop never calls ensure_fn and this needs no Postgres, launcher,
+    or Polygon double to prove the boundary end to end."""
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(data_lake_router, "run_in_thread", _run_sync_factory(captured))
+
+    body = _valid_body(
+        job_id="job-weekend",
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2026, 8, 29)),  # Saturday
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2026, 8, 30)),  # Sunday
+    )
+    response = await _post_backfill(body)
+
+    assert response.status_code == 202
+    result = captured["result"]
+    assert result["overall_status"] == "complete"
+    assert result["total_sessions"] == 0
 
 
 async def test_start_backfill_job_returns_202_and_streams_per_day_progress(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -328,7 +426,11 @@ async def test_ensure_data_calls_bridge_onto_the_requests_own_loop(monkeypatch: 
     async with AsyncClient(transport=ASGITransport(app=flag_on_app), base_url="http://test") as client:
         response = await client.post(
             "/api/data-lake/backfill",
-            json=_valid_body(job_id="job-loop", start_trading_date="2024-05-20", end_trading_date="2024-05-20"),
+            json=_valid_body(
+                job_id="job-loop",
+                start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+                end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+            ),
         )
 
     assert response.status_code == 202

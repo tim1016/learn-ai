@@ -145,20 +145,27 @@ export interface BackfillDayEvent {
 /**
  * The `DataRunSpec` body the backfill job accepts.
  *
- * `start_trading_date` / `end_trading_date` are `YYYY-MM-DD` because that is
- * what the endpoint's `date`-typed fields take; they are the one place a
- * caller does not get to choose the representation. The range-scoped
- * `include_factor_files` / `include_map_files` / `include_daily_trade`
- * switches are deliberately absent: `run_backfill` overrides all three for
- * its per-day sub-calls, so offering them here would be a lie.
+ * `start_trading_date_ms` / `end_trading_date_ms` are `int64 ms UTC`,
+ * anchored at 12:00:00.000 UTC of the selected calendar date — a
+ * deliberate, documented exception to the session-open anchor the rest of
+ * the lake's wire vocabulary uses (`.claude/rules/temporal-rigor.md`, and
+ * `PythonDataService/app/data_lake/types.py`'s
+ * `trading_date_to_calendar_anchor_ms`), chosen so the wire value never
+ * depends on the browser's local timezone. `tradingDateToMs` (trading-range.ts)
+ * is the one place that anchor is computed on this side of the wire (#1877).
+ * The pre-#1877 ISO-date field names are not accepted: there is no
+ * compatibility alias. The range-scoped `include_factor_files` /
+ * `include_map_files` / `include_daily_trade` switches are deliberately
+ * absent: `run_backfill` overrides all three for its per-day sub-calls, so
+ * offering them here would be a lie.
  */
 export interface DataRunSpec {
   readonly request_id: string;
   readonly run_type: 'python_lab' | 'lean_lab';
   readonly market: string;
   readonly symbols: readonly string[];
-  readonly start_trading_date: string;
-  readonly end_trading_date: string;
+  readonly start_trading_date_ms: number;
+  readonly end_trading_date_ms: number;
   readonly data_types: readonly DataLakeDataType[];
   readonly lean_image_digest: string;
   /**
