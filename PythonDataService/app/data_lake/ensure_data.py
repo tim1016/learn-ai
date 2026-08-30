@@ -1328,6 +1328,21 @@ async def _process_daily_trade_artifact(
 # ---------------------------------------------------------------------------
 
 
+def _metadata_bootstrap_detail(kind_label: str, detail: str | None) -> str:
+    """ArtifactFailure.detail text for a Phase 0 metadata bootstrap failure.
+
+    Keeps the kind-identifying prefix ("market-hours"/"symbol-properties"/
+    "interest-rate") existing callers match on, while appending the real
+    diagnostic message from ``MetadataBootstrap.detail`` when one is
+    available — naming the launcher explicitly when it's the cause (e.g.
+    "launcher at http://...:8090 unreachable: ...") instead of only the
+    generic "see launcher logs" (#1889).
+    """
+    if detail:
+        return f"{kind_label} metadata bootstrap failed: {detail}"
+    return f"{kind_label} metadata bootstrap failed; see launcher logs"
+
+
 async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     """Full Slice 1c pipeline: Phase 0 metadata bootstrap + Pass 1 + Pass 2.
 
@@ -1371,9 +1386,9 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     mh_outcome, sp_outcome, ir_outcome = await ensure_lean_metadata_bundle(
         spec=spec, lake_root=lake_root, staging_root=staging_root
     )
-    mh_record, mh_reused, mh_failure_reason = mh_outcome
-    sp_record, sp_reused, sp_failure_reason = sp_outcome
-    ir_record, ir_reused, ir_failure_reason = ir_outcome
+    mh_record, mh_reused, mh_failure_reason, mh_detail = mh_outcome
+    sp_record, sp_reused, sp_failure_reason, sp_detail = sp_outcome
+    ir_record, ir_reused, ir_failure_reason, ir_detail = ir_outcome
 
     # The market-hours database is bootstrapped for LEAN, which reads it off
     # the mount and refuses to initialize without it. It is deliberately NOT
@@ -1398,7 +1413,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 trading_date=None,
                 data_type=None,
                 reason=mh_failure_reason,
-                detail="market-hours metadata bootstrap failed; see launcher logs",
+                detail=_metadata_bootstrap_detail("market-hours", mh_detail),
                 attempt_count=1,
             )
         )
@@ -1417,7 +1432,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 trading_date=None,
                 data_type=None,
                 reason=sp_failure_reason,
-                detail="symbol-properties metadata bootstrap failed; see launcher logs",
+                detail=_metadata_bootstrap_detail("symbol-properties", sp_detail),
                 attempt_count=1,
             )
         )
@@ -1458,7 +1473,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 trading_date=None,
                 data_type=None,
                 reason=ir_failure_reason,
-                detail="interest-rate metadata bootstrap failed; see launcher logs",
+                detail=_metadata_bootstrap_detail("interest-rate", ir_detail),
                 attempt_count=1,
             )
         )

@@ -26,7 +26,7 @@ from app.data_lake.lean_metadata import (
     LeanMetadataExtractionError,
     extract_lean_metadata,
 )
-from app.lean_sidecar.launcher_client import EXTRACT_METADATA_HTTP_TIMEOUT_S
+from app.lean_sidecar.launcher_client import EXTRACT_METADATA_HTTP_TIMEOUT_S, LauncherUnreachable
 
 RUN_ID = "metadata-11111111-1111-1111-1111-111111111111"
 
@@ -250,6 +250,52 @@ async def test_extract_lean_metadata_interest_rate_absence_is_not_an_error(tmp_p
         artifacts_root=tmp_path,
     )
     assert interest_rate is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_lean_metadata_raises_launcher_unreachable_on_connect_error(tmp_path):
+    """#1889: a network-level failure reaching the launcher must be routed
+    through the existing typed LauncherUnreachable diagnostic
+    (app.lean_sidecar.launcher_client — the same class every other launcher
+    call already surfaces this condition with), not folded into the
+    generic LeanMetadataExtractionError. The message must name the
+    launcher as unreachable, not read as a generic provider failure."""
+    respx.post(re.compile(r"http://[^/]+/extract-metadata")).mock(side_effect=httpx.ConnectError("Connection refused"))
+
+    with pytest.raises(LauncherUnreachable) as exc_info:
+        await extract_lean_metadata(
+            image_digest="sha256:97884667...",
+            launcher_url="http://launcher:8090",
+            launcher_token="t",
+            run_id=RUN_ID,
+            artifacts_root=tmp_path,
+        )
+    assert "launcher" in str(exc_info.value).lower()
+    assert "unreachable" in str(exc_info.value).lower()
+    assert "launcher:8090" in str(exc_info.value)
+    # LauncherUnreachable is not a LeanMetadataExtractionError -- callers
+    # that only catch the latter must NOT swallow this as a generic
+    # extraction failure.
+    assert not isinstance(exc_info.value, LeanMetadataExtractionError)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_lean_metadata_raises_launcher_unreachable_on_timeout(tmp_path):
+    """Same classification for a timeout as for a connect failure -- both
+    mean the launcher process didn't answer, matching
+    app.lean_sidecar.launcher_client.post_launch's own split."""
+    respx.post(re.compile(r"http://[^/]+/extract-metadata")).mock(side_effect=httpx.ConnectTimeout("timed out"))
+
+    with pytest.raises(LauncherUnreachable):
+        await extract_lean_metadata(
+            image_digest="sha256:97884667...",
+            launcher_url="http://launcher:8090",
+            launcher_token="t",
+            run_id=RUN_ID,
+            artifacts_root=tmp_path,
+        )
 
 
 def test_extract_lean_metadata_default_timeout_matches_the_launcher_extraction_budget():

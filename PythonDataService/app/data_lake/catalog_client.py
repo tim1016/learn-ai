@@ -800,13 +800,16 @@ async def steal_or_retry_minute_bar(
     worker_id: str,
     lease_ttl_ms: int,
     max_retries: int,
+    *,
+    bypass_retry_ceiling: bool = False,
 ) -> bool:
     """Reclaim an artifact whose lease expired, retry a failed artifact, OR
     reactivate a staled one.
 
     Eligibility:
       - Status='fetching' AND LeaseExpiresAtMs < now_ms  (lease expired), OR
-      - Status='failed' AND AttemptCount < max_retries  (retryable failure), OR
+      - Status='failed' AND (AttemptCount < max_retries OR bypass_retry_ceiling)
+        (retryable failure), OR
       - Status='stale'  (superseded row for a digest the caller just
         re-published)
 
@@ -830,6 +833,21 @@ async def steal_or_retry_minute_bar(
     neither 'fetching' with an expired lease nor 'failed', so no existing
     branch could ever reclaim it.
 
+    ``bypass_retry_ceiling`` (#1889) grants the same kind of unconditional
+    reclaim to a 'failed' row whose caller already knows the failure was
+    environmental rather than a live contested claim -- specifically, a LEAN
+    metadata row that failed because the launcher process was unreachable.
+    That condition is not something additional attempts fix faster, and it
+    is also not something more attempts should ever give up on: an operator
+    restarting the launcher hours or days later must still see the artifact
+    retried, not permanently latched at whatever AttemptCount the outage
+    happened to leave it at. A genuine, repeatedly-failing extraction (a
+    malformed launcher response, a workspace read error) keeps the normal
+    ceiling -- callers pass ``bypass_retry_ceiling=True`` only for the
+    specific reason they know is infinitely retryable, never as a default.
+    Default ``False`` preserves this function's existing behaviour for every
+    other caller (minute bars, factor files, map files) unchanged.
+
     Returns True when the row was updated to 'fetching' under the new worker;
     False when no eligible row exists (e.g., already complete, already
     re-claimed by another worker, or failed beyond max_retries).
@@ -845,7 +863,7 @@ async def steal_or_retry_minute_bar(
          WHERE "Id" = $1
            AND (
                   ("Status" = 'fetching' AND "LeaseExpiresAtMs" < $4)
-               OR ("Status" = 'failed' AND "AttemptCount" < $5)
+               OR ("Status" = 'failed' AND ("AttemptCount" < $5 OR $6))
                OR ("Status" = 'stale')
            );
     """
@@ -857,6 +875,7 @@ async def steal_or_retry_minute_bar(
             now_ms + lease_ttl_ms,
             now_ms,
             max_retries,
+            bypass_retry_ceiling,
         )
     n = int(result.rsplit(" ", 1)[-1])
     return n > 0
