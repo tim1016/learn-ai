@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService } from '../../../services/jobs.service';
 import { BACKFILL_JOB_TYPE, DataLakeBackfillStore } from './data-lake-backfill.store';
@@ -20,37 +20,23 @@ const SPEC: DataRunSpec = {
   lean_image_digest: 'sha256:pinned',
 };
 
-// jsdom has no EventSource; the store only ever parses a frame and routes
-// it into `ingestEvent`, so a stub constructor is enough to let `start()`
-// run and the fold be driven directly.
-let originalEventSource: typeof EventSource;
-
-function installEventSourceStub(): void {
-  originalEventSource = globalThis.EventSource;
-  class StubEventSource {
-    onmessage: ((event: MessageEvent<string>) => void) | null = null;
-    onerror: (() => void) | null = null;
-    close(): void {}
-  }
-  (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-    StubEventSource as unknown as typeof EventSource;
-}
-
+// The store rides JobsService.onEvent() (#1856) rather than opening its own
+// EventSource, so every mocked JobsService below needs a no-op onEvent —
+// start()/reattach() call it to register the store's fold as a listener,
+// and jsdom has no EventSource for the real service to construct anyway.
+// The store only ever parses a frame and routes it into `ingestEvent`,
+// which every test below drives directly.
 function makeStore(jobs: Partial<JobsService>): DataLakeBackfillStore {
   TestBed.configureTestingModule({
-    providers: [DataLakeBackfillStore, { provide: JobsService, useValue: jobs }],
+    providers: [
+      DataLakeBackfillStore,
+      { provide: JobsService, useValue: { onEvent: vi.fn().mockReturnValue(vi.fn()), ...jobs } },
+    ],
   });
   return TestBed.inject(DataLakeBackfillStore);
 }
 
 describe('DataLakeBackfillStore', () => {
-  beforeEach(() => installEventSourceStub());
-
-  afterEach(() => {
-    (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-      originalEventSource;
-  });
-
   it('submits under the public job type the jobs framework routes', async () => {
     const startJob = vi.fn().mockResolvedValue('job-1');
     const store = makeStore({ startJob } as unknown as Partial<JobsService>);
@@ -238,5 +224,57 @@ describe('DataLakeBackfillStore', () => {
     store.ingestEvent({ type: 'something.else' });
 
     expect(store.phase()).toBe('idle');
+  });
+
+  // ── JobsService.onEvent wiring (#1856) — no second EventSource ──────
+
+  it('start() rides JobsService.onEvent() instead of opening its own stream', async () => {
+    const startJob = vi.fn().mockResolvedValue('job-1');
+    const onEvent = vi.fn().mockReturnValue(vi.fn());
+    const store = makeStore({ startJob, onEvent } as unknown as Partial<JobsService>);
+
+    await store.start(SPEC);
+
+    expect(onEvent).toHaveBeenCalledWith('job-1', expect.any(Function));
+  });
+
+  it('a frame delivered through the registered handler folds the same as a direct ingestEvent() call', async () => {
+    let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
+    const startJob = vi.fn().mockResolvedValue('job-1');
+    const onEvent = vi.fn((_jobId: string, h: typeof handler) => {
+      handler = h;
+      return vi.fn();
+    });
+    const store = makeStore({ startJob, onEvent } as unknown as Partial<JobsService>);
+
+    await store.start(SPEC);
+    handler?.({ type: 'job.progress', current: 1, total: 2, unit: 'days' });
+
+    expect(store.progress()).toMatchObject({ current: 1, total: 2 });
+  });
+
+  it('unsubscribes once a terminal event is folded', async () => {
+    let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const startJob = vi.fn().mockResolvedValue('job-1');
+    const onEvent = vi.fn((_jobId: string, h: typeof handler) => {
+      handler = h;
+      return unsubscribe;
+    });
+    const store = makeStore({ startJob, onEvent } as unknown as Partial<JobsService>);
+
+    await store.start(SPEC);
+    handler?.({ type: 'job.completed' });
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('reattach() also rides JobsService.onEvent() for the adopted job', () => {
+    const onEvent = vi.fn().mockReturnValue(vi.fn());
+    const store = makeStore({ onEvent } as unknown as Partial<JobsService>);
+
+    store.reattach('job-live');
+
+    expect(onEvent).toHaveBeenCalledWith('job-live', expect.any(Function));
   });
 });

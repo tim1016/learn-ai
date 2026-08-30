@@ -1,6 +1,6 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
-import { JobsService } from '../../../services/jobs.service';
+import { JobsService, type JobStreamEvent } from '../../../services/jobs.service';
 import { classifyDataLakeError } from './data-lake.service';
 import type { BackfillDayEvent, BackfillFailure, DataRunSpec } from './data-lake.types';
 
@@ -81,10 +81,12 @@ const TERMINAL_EVENTS = new Set(['job.completed', 'job.failed', 'job.cancelled']
  * job id and writes its initial Redis state; the worker on the Python side
  * then streams `job.*` lifecycle events *and* the domain-specific
  * `data_lake.backfill_day` payload over the same Redis-backed SSE channel.
- * `JobsService` deliberately understands only the `job.*` verbs, so — as
- * `RunSessionService` does for the dataset bundler — this store opens its
- * own read-only subscription to the same stream and keeps the domain
- * handling here rather than bloating the shared registry.
+ * `JobsService` deliberately understands only the `job.*` verbs, so this
+ * store rides `JobsService.onEvent()` (#1856) — the same one stream
+ * `RunSessionService` rides for the dataset bundler — rather than each
+ * domain consumer opening its own second `EventSource` to the same
+ * endpoint. Domain handling (the fold below) stays local to this store
+ * rather than bloating the shared registry.
  *
  * `ingestEvent` is public so the fold is unit-testable without an
  * `EventSource` (jsdom has none); the SSE handler only parses a frame and
@@ -127,7 +129,7 @@ export class DataLakeBackfillStore {
     this.daysState().reduce((total, day) => total + day.reused_count, 0),
   );
 
-  private source: EventSource | null = null;
+  private unsubscribeEvents: (() => void) | null = null;
 
   constructor() {
     this.destroyRef.onDestroy(() => this.closeStream());
@@ -255,32 +257,11 @@ export class DataLakeBackfillStore {
   }
 
   private openStream(jobId: string): void {
-    const source = new EventSource(`/api/jobs/${jobId}/events`);
-    this.source = source;
-    source.onmessage = (message: MessageEvent<string>) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(message.data);
-      } catch {
-        // A malformed frame is one frame, not a reason to tear the
-        // subscription down; the next well-formed one still folds.
-        return;
-      }
-      if (typeof parsed !== 'object' || parsed === null) return;
-      const event = parsed as SseEvent;
-      if (typeof event.type !== 'string') return;
-      this.ingestEvent(event);
-    };
-    source.onerror = () => {
-      // EventSource reconnects on its own. Only close once the run has
-      // reached a terminal phase, so a transient drop mid-backfill does
-      // not silently strand the panel.
-      if (!this.running()) this.closeStream();
-    };
+    this.unsubscribeEvents = this.jobs.onEvent(jobId, (event: JobStreamEvent) => this.ingestEvent(event));
   }
 
   private closeStream(): void {
-    this.source?.close();
-    this.source = null;
+    this.unsubscribeEvents?.();
+    this.unsubscribeEvents = null;
   }
 }

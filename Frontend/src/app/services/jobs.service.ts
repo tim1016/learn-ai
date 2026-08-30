@@ -25,6 +25,15 @@ export interface JobEvent {
   [key: string]: unknown;
 }
 
+/**
+ * One already-parsed SSE frame from a job's stream, typed for consumers
+ * that also handle domain-specific event types this service doesn't know
+ * about (e.g. `chunk_plan`, `data_lake.backfill_day`) — {@link JobEvent}'s
+ * `type` is the closed {@link JobEventType} union, which such a type
+ * string doesn't satisfy.
+ */
+export type JobStreamEvent = { type: string } & Record<string, unknown>;
+
 export interface JobEventRecord {
   /** Redis stream id. Its millisecond prefix is the server-side event time. */
   id: string;
@@ -106,6 +115,10 @@ export class JobsService {
   // Per-job EventSource handles, kept out of the signal to avoid
   // serializing them into change detection.
   private readonly sources = new Map<string, EventSource>();
+  // Per-job subscribers to the raw SSE stream (#1856) — domain-specific
+  // consumers (RunSessionService, DataLakeBackfillStore) ride this existing
+  // stream instead of opening a second EventSource to the same endpoint.
+  private readonly listeners = new Map<string, Set<(event: JobStreamEvent, eventId: string) => void>>();
   // Last seen event id per job — used when a connection drops and we
   // reopen with `Last-Event-ID`. The browser's native EventSource
   // automatically supplies the last seen id on reconnect, but if the
@@ -155,6 +168,30 @@ export class JobsService {
   /** Fetch the full result of a completed job. */
   async fetchResult<T = unknown>(id: string): Promise<T> {
     return firstValueFrom(this.http.get<T>(`/api/jobs/${id}/result`));
+  }
+
+  /**
+   * Subscribe to every raw SSE frame for a job — including domain-specific
+   * event types this service doesn't itself understand (only the known
+   * `job.*` verbs drive `JobState`; see `applyJobEvent`). Rides the one
+   * `EventSource` `startJob`/`resumeActive` already opened for this job
+   * rather than requiring the caller to open a second one.
+   *
+   * The job's stream must already be open (i.e. `startJob` has resolved,
+   * or the job was discovered by `resumeActive` on load) — this does not
+   * open one itself. Returns an unsubscribe function.
+   */
+  onEvent(id: string, handler: (event: JobStreamEvent, eventId: string) => void): () => void {
+    let handlers = this.listeners.get(id);
+    if (!handlers) {
+      handlers = new Set();
+      this.listeners.set(id, handlers);
+    }
+    handlers.add(handler);
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) this.listeners.delete(id);
+    };
   }
 
   /** Drop a job from the local registry (e.g., user dismissed it from the drawer). */
@@ -220,6 +257,11 @@ export class JobsService {
       source.close();
       this.sources.delete(id);
     }
+    // Backstop, not a substitute for onEvent()'s own unsubscribe function:
+    // once this job's transport is gone, nothing can ever call a listener
+    // registered for it again, so a stale registration is dead weight —
+    // clear it here too in case a caller never unsubscribed.
+    this.listeners.delete(id);
   }
 
   private applyEvent(id: string, raw: string, lastEventId: string): void {
@@ -237,6 +279,10 @@ export class JobsService {
       next.set(id, updated);
       return next;
     });
+
+    for (const handler of this.listeners.get(id) ?? []) {
+      handler(evt, lastEventId);
+    }
 
     if (evt.type === 'job.completed' || evt.type === 'job.failed' || evt.type === 'job.cancelled') {
       // The server side closes the stream after a terminal event; close
