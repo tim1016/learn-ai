@@ -1111,7 +1111,7 @@ def _build_manifest(
     # both modes.
     if lake_artifacts is None:
         data_root = workspace.data_dir
-        market_hours, symbol_properties = _list_metadata(workspace)
+        market_hours, symbol_properties, _interest_rate = _list_metadata(workspace)
     else:
         data_root = lake_artifacts.lake_root
         market_hours = lake_artifacts.market_hours_path
@@ -1284,8 +1284,14 @@ def _effective_window_from_normalized(normalized: NormalizedResult | None) -> Wi
     )
 
 
-def _list_metadata(workspace: Workspace) -> tuple[Path | None, Path | None]:
-    """Return (market_hours, symbol_properties) paths from the workspace."""
+def _list_metadata(workspace: Workspace) -> tuple[Path | None, Path | None, Path | None]:
+    """Return (market_hours, symbol_properties, interest_rate) paths from the workspace.
+
+    The reproducibility manifest built from this (``StagedDataManifest``,
+    above) does not yet carry an interest-rate hash field — the third
+    value is threaded through for callers that want it, but the one
+    caller here still only consumes the first two, unchanged.
+    """
     from app.lean_sidecar.staging import list_metadata_databases
 
     return list_metadata_databases(workspace)

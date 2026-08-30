@@ -66,19 +66,23 @@ tell. Detecting it needs a catalog read this module deliberately does
 not do — the sidecar's lake access is filesystem-only. Recorded for the
 integration slice, which already talks to the catalog.
 
-**The lake has no ``alternative/interest-rate`` subtree, and staging
-does.** ``staging.stage_lean_metadata_from_image`` extracts that subtree
-out of the LEAN image alongside the two metadata databases, so a
-staging-mode run gives LEAN real risk-free-rate data and a lake-mode run
-gives it none — LEAN falls back to its built-in default. It is the one
-known input divergence between the two modes, and it is not fixable from
-inside the data plane: the launcher's ``/extract-metadata`` contract
-returns exactly two byte fields, so closing it needs a launcher-side
-contract change plus a third metadata artifact kind in the catalog's
-vocabulary. Booked rather than papered over, and
-:func:`log_lake_mode_input_divergences` says so once per lake-mode run so
-an operator chasing a rate-sensitive difference has the breadcrumb rather
-than a mystery.
+**A lake bootstrapped before #1859 (or whose Phase 0 hasn't run since)
+has no ``alternative/interest-rate`` subtree, and staging does.**
+``ensure_data``'s Phase 0 now bootstraps a third, optional metadata
+artifact (``interest_rate`` — ``app.data_lake.ensure_data._bootstrap_metadata_artifact``,
+``app.data_lake.path_policy.LeanMetadataPath(kind="interest_rate")``)
+that promotes the same subtree ``staging.stage_lean_metadata_from_image``
+already extracts out of the LEAN image into the permanent lake tree, the
+same way the two required metadata databases already are. Any
+``ensure_data`` call populates it going forward, at which point a
+lake-mode run and a staging-mode run read identical inputs; a lake that
+predates the fix (or one running against an image variant / launcher
+build that genuinely has no such subtree) still shows the gap until its
+next bootstrap succeeds. That is exactly the graceful-degradation case
+:func:`log_lake_mode_input_divergences` exists for — it stays a log, not
+a refusal, because the gap is now transient rather than structural, and
+an operator chasing a rate-sensitive difference still gets the
+breadcrumb rather than a mystery.
 
 Materially it is narrow, for a reason worth stating precisely rather than
 by account type — three of the four trusted samples run
@@ -370,12 +374,17 @@ _INTEREST_RATE_SUBTREE = PurePosixPath("alternative") / "interest-rate"
 def log_lake_mode_input_divergences(lake_root: Path) -> None:
     """Say once, per run, where lake mode gives LEAN less than staging would.
 
-    Deliberately a log and not a refusal. Refusing would block every lake-mode
-    run over a gap that is a missing *producer*, not a missing *fetch* — no
-    operator action could clear it, so the refusal would be permanent and the
-    flag unusable. Deliberately not silent either: the whole claim of this
-    slice is that a flag-on run and a flag-off run read the same inputs, and
-    this is the one place they knowably do not.
+    Deliberately a log and not a refusal. #1859 gave the lake a producer
+    for this subtree (``ensure_data``'s Phase 0), so the operator action
+    that clears the gap is simply "run ensure_data or a backfill against
+    this lake" — but refusing here would still be wrong: this same code
+    path also has to serve a lake whose Phase 0 hasn't run since, or an
+    image variant/launcher build that genuinely has no such subtree, and
+    a refusal in either of those cases would be a run blocked over a gap
+    the operator did nothing to cause and may not be able to clear at
+    all. Deliberately not silent either: the whole claim of this slice is
+    that a flag-on run and a flag-off run read the same inputs, and this
+    is the one place they can still knowably not.
     """
     interest_rate = lake_root / Path(*_INTEREST_RATE_SUBTREE.parts)
     if interest_rate.is_dir():

@@ -140,22 +140,31 @@ _MARKET_HOURS_JSON = json.dumps(
     }
 ).encode("utf-8")
 _SYMBOL_PROPERTIES_CSV = b"SPY,equity,usd,1,0\n"
+_INTEREST_RATE_CSV = b"date,rate\n2024-05-20,0.0525\n"
 
 
-def _stage_workspace_files(artifacts_root: Path, run_id: str) -> None:
-    """Pre-place the two files a real launcher run would have written.
+def _stage_workspace_files(artifacts_root: Path, run_id: str, *, include_interest_rate: bool = False) -> None:
+    """Pre-place the files a real launcher run would have written.
 
     Layout must match app.lean_sidecar.workspace.Workspace.data_dir and
     staging.list_metadata_databases: <root>/<run_id>/workspace/data/...
+
+    ``include_interest_rate`` defaults False: most tests exercise a
+    launcher build (or an image variant) that doesn't produce the
+    optional alternative/interest-rate subtree, which is the common case
+    every test but the dedicated interest-rate ones needs.
     """
     data_dir = artifacts_root / run_id / "workspace" / "data"
     (data_dir / "market-hours").mkdir(parents=True, exist_ok=True)
     (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
     (data_dir / "market-hours" / "market-hours-database.json").write_bytes(_MARKET_HOURS_JSON)
     (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(_SYMBOL_PROPERTIES_CSV)
+    if include_interest_rate:
+        (data_dir / "alternative" / "interest-rate" / "usa").mkdir(parents=True, exist_ok=True)
+        (data_dir / "alternative" / "interest-rate" / "usa" / "interest-rate.csv").write_bytes(_INTEREST_RATE_CSV)
 
 
-def _launcher_side_effect(artifacts_root: Path):
+def _launcher_side_effect(artifacts_root: Path, *, include_interest_rate: bool = False):
     """respx side_effect standing in for a real launcher: stages the files
     app.data_lake.lean_metadata will read back, keyed by the run_id the
     caller sent, then returns the launcher's actual (paths-only) response
@@ -164,14 +173,14 @@ def _launcher_side_effect(artifacts_root: Path):
 
     def _mock(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        _stage_workspace_files(artifacts_root, body["run_id"])
-        return httpx.Response(
-            200,
-            json={
-                "market_hours_db_path": "/launcher-side/market-hours-database.json",
-                "symbol_properties_db_path": "/launcher-side/symbol-properties-database.csv",
-            },
-        )
+        _stage_workspace_files(artifacts_root, body["run_id"], include_interest_rate=include_interest_rate)
+        response: dict[str, str] = {
+            "market_hours_db_path": "/launcher-side/market-hours-database.json",
+            "symbol_properties_db_path": "/launcher-side/symbol-properties-database.csv",
+        }
+        if include_interest_rate:
+            response["interest_rate_db_path"] = "/launcher-side/interest-rate.csv"
+        return httpx.Response(200, json=response)
 
     return _mock
 
@@ -310,7 +319,11 @@ async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(cle
     assert second_metadata_failures == [], (
         f"expected the recovered launcher to be retried, not permanently jammed: {second_metadata_failures}"
     )
-    assert launcher_route.call_count == 4
+    # 2 rounds x 3 kinds (market-hours, symbol-properties, interest-rate) —
+    # interest-rate soft-fails every round since `stage` here never stages
+    # its file, but that never surfaces as an ArtifactFailure (it's
+    # optional), so it doesn't change the assertions above; it still POSTs.
+    assert launcher_route.call_count == 6
 
 
 @pytest.mark.asyncio
@@ -403,9 +416,62 @@ async def test_metadata_bootstrap_sends_the_resolved_launcher_token(
 
     await ensure_data(_spec(["SPY"]))
 
-    assert launcher_route.call_count == 2  # market-hours + symbol-properties
+    assert launcher_route.call_count == 3  # market-hours + symbol-properties + interest-rate
     for call in launcher_route.calls:
         assert call.request.headers["X-Launcher-Token"] == "test-token"
+
+
+# ---------------------------------------------------------------------------
+# #1859: interest-rate is a third, optional metadata artifact
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_interest_rate_metadata_bootstraps_when_the_launcher_produces_it(clean_artifacts, pool, tmp_lake):
+    """A launcher build that stages the alternative/interest-rate subtree
+    (every current build does — see staging.py's podman-cp loop) gets it
+    promoted into the lake as a third metadata artifact, closing the
+    lake_mount.py-documented input divergence for this run."""
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake, include_interest_rate=True)
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    result = await ensure_data(_spec(["SPY"]))
+
+    assert result.overall_status == "complete"
+    assert result.failures == []
+    metadata = [a for a in result.artifacts if a.artifact_kind == "metadata"]
+    assert len(metadata) == 3, f"expected 3 metadata artifacts (mh, sp, interest-rate), got {len(metadata)}"
+    interest_rate = next(a for a in metadata if a.file_path == "alternative/interest-rate/usa/interest-rate.csv")
+    assert interest_rate.file_size_bytes == len(_INTEREST_RATE_CSV)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_interest_rate_metadata_bootstrap_is_optional_not_a_failure(clean_artifacts, pool, tmp_lake):
+    """A launcher/workspace with no interest-rate subtree — every other
+    test's `_launcher_side_effect` — must not degrade the run: LEAN falls
+    back to its built-in risk-free rate (lake_mount.py's module
+    docstring), so this is logged, never an ArtifactFailure."""
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake)  # include_interest_rate defaults False
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    result = await ensure_data(_spec(["SPY"]))
+
+    assert result.overall_status == "complete"
+    assert result.failures == [], "interest-rate absence must never surface as an ArtifactFailure"
+    metadata = [a for a in result.artifacts if a.artifact_kind == "metadata"]
+    assert len(metadata) == 2, f"expected exactly market-hours + symbol-properties, got {len(metadata)}"
 
 
 # ---------------------------------------------------------------------------

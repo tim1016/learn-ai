@@ -258,18 +258,35 @@ def list_factor_map_files(workspace: Workspace) -> tuple[tuple[Path, ...], tuple
 
 def list_metadata_databases(
     workspace: Workspace,
-) -> tuple[Path | None, Path | None]:
-    """Return (market_hours_db, symbol_properties_db) paths if present.
+) -> tuple[Path | None, Path | None, Path | None]:
+    """Return (market_hours_db, symbol_properties_db, interest_rate_csv) paths if present.
 
-    Reconciliation-grade runs require both; trusted-sample non-
+    Reconciliation-grade runs require the first two; trusted-sample non-
     reconciliation runs may omit them and inherit the LEAN image
     defaults. The manifest distinguishes the two cases by recording
     whether the file existed at staging time, not by inferring from the
     run.
+
+    The interest-rate CSV is always optional here, unlike the other two:
+    an image variant without the ``alternative/interest-rate`` subtree, a
+    workspace staged by a build that predates it, or a launcher that
+    hasn't produced it yet all read the same way — a caller wanting the
+    file treats ``None`` as "LEAN falls back to its built-in risk-free
+    rate" (see ``app.lean_sidecar.lake_mount``'s module docstring), not
+    as an error the other two databases' absence would be.
     """
     mh = workspace.data_dir / "market-hours" / "market-hours-database.json"
     sp = workspace.data_dir / "symbol-properties" / "symbol-properties-database.csv"
-    return (mh if mh.exists() else None, sp if sp.exists() else None)
+    # LEAN's image nests one file per market — usa/interest-rate.csv, not
+    # a flat file directly under interest-rate/. Confirmed against the
+    # real image layout by app.services.lean_statistics_adapter, which
+    # reads this exact path off a genuine staged LEAN run.
+    ir = workspace.data_dir / "alternative" / "interest-rate" / "usa" / "interest-rate.csv"
+    return (
+        mh if mh.exists() else None,
+        sp if sp.exists() else None,
+        ir if ir.exists() else None,
+    )
 
 
 def stage_lean_metadata_from_image(
@@ -277,7 +294,7 @@ def stage_lean_metadata_from_image(
     image_digest: str,
     *,
     allow_launcher_fallback: bool = True,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path | None]:
     """Extract the image's bundled metadata databases into the workspace.
 
     LEAN refuses to initialize when the symbol-properties or market-hours
@@ -285,7 +302,13 @@ def stage_lean_metadata_from_image(
     ship inside the image at ``/Lean/Data/{market-hours,symbol-properties}/``;
     this helper copies them into the workspace's ``data/`` subtree so
     they sit under the single mount LEAN sees and so the manifest can
-    hash exactly what LEAN read.
+    hash exactly what LEAN read. It also copies the image's
+    ``alternative/interest-rate`` subtree the same way (this function's
+    own ``podman cp`` loop still treats all three sources as required —
+    unchanged), but callers of the read-back check below (and the
+    launcher-HTTP path, which does not control what got staged) must
+    still treat a missing interest-rate file as optional — see
+    ``list_metadata_databases``.
 
     Uses ``podman cp`` against a freshly-created (but not started)
     container, then removes the container — no LEAN process runs and no
@@ -310,8 +333,9 @@ def stage_lean_metadata_from_image(
             handler (infinite recursion until httpx times out).
 
     Returns:
-        Tuple of (market_hours_db_path, symbol_properties_db_path) under
-        the workspace.
+        Tuple of (market_hours_db_path, symbol_properties_db_path,
+        interest_rate_csv_path) under the workspace. The third element is
+        ``None`` when the workspace has no interest-rate subtree.
     """
     bare = image_digest.split("@", 1)[-1]
     if not bare.startswith("sha256:"):
@@ -431,18 +455,18 @@ def stage_lean_metadata_from_image(
                 _RM_TIMEOUT_S,
             )
 
-    mh, sp = list_metadata_databases(workspace)
+    mh, sp, ir = list_metadata_databases(workspace)
     if mh is None or sp is None:
         raise MetadataStagingError(
             f"metadata databases not present in workspace after extract; market-hours={mh!r}, symbol-properties={sp!r}"
         )
-    return mh, sp
+    return mh, sp, ir
 
 
 def _stage_lean_metadata_from_cached_same_digest_workspace(
     workspace: Workspace,
     image_digest: str,
-) -> tuple[Path, Path] | None:
+) -> tuple[Path, Path, Path | None] | None:
     """Copy metadata from a previous workspace for the same LEAN digest.
 
     The image-bundled metadata is immutable for a pinned digest. Once a
@@ -500,21 +524,21 @@ def _stage_lean_metadata_from_cached_same_digest_workspace(
                 shutil.rmtree(workspace.data_dir / relative, ignore_errors=True)
             continue
 
-        mh, sp = list_metadata_databases(workspace)
+        mh, sp, ir = list_metadata_databases(workspace)
         if mh is not None and sp is not None:
             logger.info(
                 "reused LEAN metadata for %s from cached workspace %s",
                 image_digest,
                 candidate_root.name,
             )
-            return mh, sp
+            return mh, sp, ir
     return None
 
 
 def _stage_lean_metadata_via_launcher(
     workspace: Workspace,
     image_digest: str,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path | None]:
     """Delegate metadata extraction to the launcher service.
 
     Used when the local environment has no ``podman`` on PATH — the
@@ -548,10 +572,10 @@ def _stage_lean_metadata_via_launcher(
         # reason label so an operator can distinguish in logs.
         raise MetadataStagingError(f"metadata extraction via launcher failed: {e}") from e
 
-    mh, sp = list_metadata_databases(workspace)
+    mh, sp, ir = list_metadata_databases(workspace)
     if mh is None or sp is None:
         raise MetadataStagingError(
             f"metadata databases not present in workspace after launcher "
             f"extract; market-hours={mh!r}, symbol-properties={sp!r}"
         )
-    return mh, sp
+    return mh, sp, ir

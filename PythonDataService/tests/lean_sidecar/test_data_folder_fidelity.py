@@ -156,19 +156,24 @@ class TestDataFolderRoundTrip:
         source.ensure_layout()
         (source.data_dir / "market-hours").mkdir(parents=True)
         (source.data_dir / "symbol-properties").mkdir(parents=True)
-        (source.data_dir / "alternative" / "interest-rate").mkdir(parents=True)
+        (source.data_dir / "alternative" / "interest-rate" / "usa").mkdir(parents=True)
         (source.data_dir / "market-hours" / "market-hours-database.json").write_text("{}", encoding="utf-8")
         (source.data_dir / "symbol-properties" / "symbol-properties-database.csv").write_text(
             "symbol,security-type,market\n",
             encoding="utf-8",
         )
-        (source.data_dir / "alternative" / "interest-rate" / "usa.csv").write_text("date,rate\n", encoding="utf-8")
+        # LEAN nests one file per market under the subtree — see
+        # app.services.lean_statistics_adapter, which reads this exact
+        # path off a genuine staged LEAN run.
+        (source.data_dir / "alternative" / "interest-rate" / "usa" / "interest-rate.csv").write_text(
+            "date,rate\n", encoding="utf-8"
+        )
         source.manifest_path.write_text(json.dumps({"lean_image_digest": digest}), encoding="utf-8")
 
         target = resolve_workspace("metadata_cache_target", tmp_artifacts_root)
         monkeypatch.setattr("app.lean_sidecar.staging.shutil.which", lambda _: None)
 
-        market_hours, symbol_properties = stage_lean_metadata_from_image(
+        market_hours, symbol_properties, interest_rate = stage_lean_metadata_from_image(
             target,
             digest,
             allow_launcher_fallback=False,
@@ -176,8 +181,9 @@ class TestDataFolderRoundTrip:
 
         assert market_hours == target.data_dir / "market-hours" / "market-hours-database.json"
         assert symbol_properties == target.data_dir / "symbol-properties" / "symbol-properties-database.csv"
-        assert (target.data_dir / "alternative" / "interest-rate" / "usa.csv").exists()
-        assert list_metadata_databases(target) == (market_hours, symbol_properties)
+        assert interest_rate == target.data_dir / "alternative" / "interest-rate" / "usa" / "interest-rate.csv"
+        assert interest_rate.exists()
+        assert list_metadata_databases(target) == (market_hours, symbol_properties, interest_rate)
 
     def test_metadata_staging_skips_corrupt_matching_cache(
         self,
@@ -210,7 +216,7 @@ class TestDataFolderRoundTrip:
         target = resolve_workspace("metadata_cache_target", tmp_artifacts_root)
         monkeypatch.setattr("app.lean_sidecar.staging.shutil.which", lambda _: None)
 
-        market_hours, symbol_properties = stage_lean_metadata_from_image(
+        market_hours, symbol_properties, interest_rate = stage_lean_metadata_from_image(
             target,
             digest,
             allow_launcher_fallback=False,
@@ -218,6 +224,7 @@ class TestDataFolderRoundTrip:
 
         assert market_hours.read_text(encoding="utf-8") == "{}"
         assert symbol_properties.read_text(encoding="utf-8") == "symbol,security-type,market\n"
+        assert interest_rate is None, "neither cache candidate staged an interest-rate subtree"
 
     def test_naive_or_utc_input_is_normalized_to_eastern(self, tmp_path: Path) -> None:
         """Bars supplied in UTC must serialize as the equivalent ET ms.

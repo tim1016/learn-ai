@@ -31,17 +31,29 @@ from app.lean_sidecar.launcher_client import EXTRACT_METADATA_HTTP_TIMEOUT_S
 RUN_ID = "metadata-11111111-1111-1111-1111-111111111111"
 
 
-def _stage_workspace_files(artifacts_root: Path, run_id: str, mh_bytes: bytes, sp_bytes: bytes) -> None:
-    """Pre-place the two files a real launcher run would have written.
+def _stage_workspace_files(
+    artifacts_root: Path,
+    run_id: str,
+    mh_bytes: bytes,
+    sp_bytes: bytes,
+    ir_bytes: bytes | None = None,
+) -> None:
+    """Pre-place the files a real launcher run would have written.
 
     Layout must match app.lean_sidecar.workspace.Workspace.data_dir and
     staging.list_metadata_databases exactly: <root>/<run_id>/workspace/data/...
+    ``ir_bytes`` defaults to unstaged — the common case, since most
+    launcher builds/image variants a test exercises here don't carry the
+    optional interest-rate subtree.
     """
     data_dir = artifacts_root / run_id / "workspace" / "data"
     (data_dir / "market-hours").mkdir(parents=True, exist_ok=True)
     (data_dir / "symbol-properties").mkdir(parents=True, exist_ok=True)
     (data_dir / "market-hours" / "market-hours-database.json").write_bytes(mh_bytes)
     (data_dir / "symbol-properties" / "symbol-properties-database.csv").write_bytes(sp_bytes)
+    if ir_bytes is not None:
+        (data_dir / "alternative" / "interest-rate" / "usa").mkdir(parents=True, exist_ok=True)
+        (data_dir / "alternative" / "interest-rate" / "usa" / "interest-rate.csv").write_bytes(ir_bytes)
 
 
 @pytest.mark.asyncio
@@ -59,7 +71,7 @@ async def test_extract_lean_metadata_extracts_market_hours_and_symbol_properties
             },
         )
     )
-    market_hours, symbol_properties = await extract_lean_metadata(
+    market_hours, symbol_properties, interest_rate = await extract_lean_metadata(
         image_digest="sha256:97884667...",
         launcher_url="http://launcher:8090",
         launcher_token="t",
@@ -68,6 +80,7 @@ async def test_extract_lean_metadata_extracts_market_hours_and_symbol_properties
     )
     assert market_hours == mh_bytes
     assert symbol_properties == sp_bytes
+    assert interest_rate is None, "no interest-rate file was staged for this call"
 
 
 @pytest.mark.asyncio
@@ -177,6 +190,66 @@ async def test_extract_lean_metadata_raises_on_unreadable_workspace_file(tmp_pat
             run_id=RUN_ID,
             artifacts_root=tmp_path,
         )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_lean_metadata_returns_interest_rate_bytes_when_staged(tmp_path):
+    """#1859: the optional third file, when the workspace has it."""
+    mh_bytes = b'{"exchange": "NYSE", "rule": "..."}'
+    sp_bytes = b"SPY,equity,usd,1,0\n"
+    ir_bytes = b"date,rate\n2024-05-20,0.0525\n"
+    _stage_workspace_files(tmp_path, RUN_ID, mh_bytes, sp_bytes, ir_bytes)
+    respx.post(re.compile(r"http://[^/]+/extract-metadata")).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/irrelevant.json",
+                "symbol_properties_db_path": "/irrelevant.csv",
+                "interest_rate_db_path": "/irrelevant.csv",
+            },
+        )
+    )
+    market_hours, symbol_properties, interest_rate = await extract_lean_metadata(
+        image_digest="sha256:97884667...",
+        launcher_url="http://launcher:8090",
+        launcher_token="t",
+        run_id=RUN_ID,
+        artifacts_root=tmp_path,
+    )
+    assert market_hours == mh_bytes
+    assert symbol_properties == sp_bytes
+    assert interest_rate == ir_bytes
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_lean_metadata_interest_rate_absence_is_not_an_error(tmp_path):
+    """#1859: unlike market-hours/symbol-properties, a missing interest-rate
+    file must not raise — it's optional (LEAN falls back to its built-in
+    risk-free rate; see app.lean_sidecar.lake_mount's module docstring).
+    Same fixture shape as the base happy-path test above, just asserting
+    the specific claim directly rather than incidentally via ``is None``."""
+    mh_bytes = b'{"exchange": "NYSE", "rule": "..."}'
+    sp_bytes = b"SPY,equity,usd,1,0\n"
+    _stage_workspace_files(tmp_path, RUN_ID, mh_bytes, sp_bytes)  # no interest-rate
+    respx.post(re.compile(r"http://[^/]+/extract-metadata")).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "market_hours_db_path": "/irrelevant.json",
+                "symbol_properties_db_path": "/irrelevant.csv",
+            },
+        )
+    )
+    _market_hours, _symbol_properties, interest_rate = await extract_lean_metadata(
+        image_digest="sha256:97884667...",
+        launcher_url="http://launcher:8090",
+        launcher_token="t",
+        run_id=RUN_ID,
+        artifacts_root=tmp_path,
+    )
+    assert interest_rate is None
 
 
 def test_extract_lean_metadata_default_timeout_matches_the_launcher_extraction_budget():

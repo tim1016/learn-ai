@@ -519,6 +519,12 @@ async def _bootstrap_metadata_artifact(
       attempt. The row is left ``'failed'`` with attempts remaining, so a
       later call reclaims and retries it via ``steal_or_retry_minute_bar``
       instead of jamming on this data_contract_hash forever.
+    - ``"provider_no_data"`` — ``metadata_kind == "interest_rate"`` only:
+      the workspace genuinely has no ``alternative/interest-rate``
+      subtree (an image variant without it, or an older launcher build).
+      Unlike the other reasons, the caller treats this one as optional
+      and does not surface it as an ``ArtifactFailure`` — see the Phase 0
+      call site.
     """
     dch = _metadata_dch(lean_image_digest, file_name, spec.price_adjustment_mode)
     file_path = str(rel_path)
@@ -603,7 +609,7 @@ async def _bootstrap_metadata_artifact(
     from app.lean_sidecar.launcher_auth import read_launcher_token
 
     try:
-        mh_bytes, sp_bytes = await extract_lean_metadata(
+        mh_bytes, sp_bytes, ir_bytes = await extract_lean_metadata(
             image_digest=lean_image_digest,
             launcher_url=settings.LEAN_LAUNCHER_URL,
             launcher_token=read_launcher_token() or "",
@@ -614,7 +620,23 @@ async def _bootstrap_metadata_artifact(
         logger.warning("data_lake.ensure_data: metadata extraction failed: %s", e)
         return MetadataBootstrap(None, False, "io_error")
 
-    content = mh_bytes if metadata_kind == "market_hours" else sp_bytes
+    if metadata_kind == "market_hours":
+        content = mh_bytes
+    elif metadata_kind == "symbol_properties":
+        content = sp_bytes
+    else:  # "interest_rate"
+        if ir_bytes is None:
+            # Optional: an image variant (or a launcher build) without the
+            # alternative/interest-rate subtree. Release the claim rather
+            # than leave the row 'fetching' forever — a later call retries
+            # via steal_or_retry_minute_bar once/if the subtree becomes
+            # available. Non-fatal for the run: see the caller, which does
+            # not surface this as an ArtifactFailure.
+            await catalog_client.fail_artifact(
+                artifact_id, "provider_no_data", "workspace has no interest-rate subtree"
+            )
+            return MetadataBootstrap(None, False, "provider_no_data")
+        content = ir_bytes
     file_sha = atomic_write_and_promote(
         content=content,
         lake_root=lake_root,
@@ -1482,6 +1504,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     # -----------------------------------------------------------------------
     mh_rel = LeanMetadataPath(kind="market_hours").relative_path()
     sp_rel = LeanMetadataPath(kind="symbol_properties").relative_path()
+    ir_rel = LeanMetadataPath(kind="interest_rate").relative_path()
 
     mh_record, mh_reused, mh_failure_reason = await _bootstrap_metadata_artifact(
         file_name="market-hours-database.json",
@@ -1496,6 +1519,15 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
         file_name="symbol-properties-database.csv",
         metadata_kind="symbol_properties",
         rel_path=sp_rel,
+        lean_image_digest=spec.lean_image_digest,
+        spec=spec,
+        lake_root=lake_root,
+        staging_root=staging_root,
+    )
+    ir_record, ir_reused, ir_failure_reason = await _bootstrap_metadata_artifact(
+        file_name="interest-rate.csv",
+        metadata_kind="interest_rate",
+        rel_path=ir_rel,
         lean_image_digest=spec.lean_image_digest,
         spec=spec,
         lake_root=lake_root,
@@ -1547,6 +1579,37 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 detail="symbol-properties metadata bootstrap failed; see launcher logs",
                 attempt_count=1,
             )
+        )
+
+    # Unlike market-hours/symbol-properties, interest-rate is optional:
+    # LEAN falls back to its built-in risk-free rate when it's absent (see
+    # app.lean_sidecar.lake_mount's module docstring), so a failure here —
+    # whatever the reason — is logged, not surfaced as an ArtifactFailure.
+    # Surfacing it would gate overall_status on data LEAN doesn't require,
+    # regressing every caller that ran fine without it before #1859.
+    #
+    # This is safe to treat uniformly (not selectively by reason) because a
+    # genuine extraction problem can't hide behind interest-rate alone: the
+    # image-side copy (staging.stage_lean_metadata_from_image's podman-cp
+    # loop) is all-or-nothing across all three files in one attempt, so any
+    # failure severe enough to break interest-rate extraction also breaks
+    # this same attempt's market-hours/symbol-properties bytes, which DO
+    # surface loudly above. What legitimately reaches this branch is either
+    # a workspace/cache that simply predates interest-rate being tracked
+    # (steal_or_retry_minute_bar-style cache reuse can hit an older
+    # directory) or — the common case in tests — a launcher mock that only
+    # stages the two required files.
+    if ir_record is not None:
+        artifacts.append(ir_record)
+        if ir_reused:
+            reused_count += 1
+        else:
+            fetched_count += 1
+    else:
+        logger.info(
+            "data_lake.ensure_data: interest-rate metadata bootstrap did not complete "
+            "(reason=%s) — non-blocking, LEAN falls back to its built-in risk-free rate",
+            ir_failure_reason,
         )
 
     # -----------------------------------------------------------------------

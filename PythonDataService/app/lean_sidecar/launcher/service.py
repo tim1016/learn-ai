@@ -353,7 +353,7 @@ def extract_metadata(
         # recursively HTTP-POST itself via /extract-metadata, blocking
         # the request loop until httpx times out (Codex-P2 /
         # CodeRabbit-Major review-fix).
-        mh, sp = stage_lean_metadata_from_image(
+        mh, sp, ir = stage_lean_metadata_from_image(
             workspace,
             request.image_digest,
             allow_launcher_fallback=False,
@@ -365,6 +365,7 @@ def extract_metadata(
     return ExtractMetadataResponse(
         market_hours_db_path=str(mh),
         symbol_properties_db_path=str(sp),
+        interest_rate_db_path=str(ir) if ir is not None else None,
     )
 
 
