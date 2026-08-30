@@ -1811,6 +1811,16 @@ export interface paths {
          *     Polygon's, quote bars are ``learn_ai_derived``. A fixed ``provider="polygon"``
          *     parameter made quote coverage unfindable, since quote rows are never
          *     catalogued under that provider.
+         *
+         *     ``price_adjustment_mode`` has no default (#1890): it used to fall back to
+         *     ``"raw"`` when a caller omitted it, and for most of the lake's life the
+         *     raw root held zero catalogued rows even when ``polygon_split_adjusted``
+         *     was fully populated for a symbol — an unqualified request silently read
+         *     "missing" for data that actually existed under the other root. A default
+         *     that reads empty is indistinguishable from genuinely absent data, so the
+         *     caller must say which root they mean; FastAPI's own structural 422
+         *     (missing required query parameter) is what an omitted value gets, the
+         *     same as an omitted ``symbol`` or ``start_trading_date_ms`` already does.
          */
         get: operations["get_coverage_api_data_lake_coverage_get"];
         put?: never;
@@ -24290,7 +24300,7 @@ export interface operations {
                 end_trading_date_ms: number;
                 market?: "usa";
                 data_type?: "trade" | "quote";
-                price_adjustment_mode?: "raw" | "polygon_split_adjusted" | "lean_adjusted";
+                price_adjustment_mode: "raw" | "polygon_split_adjusted" | "lean_adjusted";
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

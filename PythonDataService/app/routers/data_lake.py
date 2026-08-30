@@ -98,9 +98,10 @@ async def get_coverage(
     symbol: str,
     start_trading_date_ms: int,
     end_trading_date_ms: int,
+    *,
     market: Literal["usa"] = "usa",
     data_type: Literal["trade", "quote"] = "trade",
-    price_adjustment_mode: PriceAdjustmentMode = "raw",
+    price_adjustment_mode: PriceAdjustmentMode,
 ) -> CoverageResponse:
     """Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.
 
@@ -124,6 +125,16 @@ async def get_coverage(
     Polygon's, quote bars are ``learn_ai_derived``. A fixed ``provider="polygon"``
     parameter made quote coverage unfindable, since quote rows are never
     catalogued under that provider.
+
+    ``price_adjustment_mode`` has no default (#1890): it used to fall back to
+    ``"raw"`` when a caller omitted it, and for most of the lake's life the
+    raw root held zero catalogued rows even when ``polygon_split_adjusted``
+    was fully populated for a symbol — an unqualified request silently read
+    "missing" for data that actually existed under the other root. A default
+    that reads empty is indistinguishable from genuinely absent data, so the
+    caller must say which root they mean; FastAPI's own structural 422
+    (missing required query parameter) is what an omitted value gets, the
+    same as an omitted ``symbol`` or ``start_trading_date_ms`` already does.
     """
     if not SYMBOL_RE.match(symbol) or len(symbol) > MAX_SYMBOL_LENGTH:
         raise HTTPException(
