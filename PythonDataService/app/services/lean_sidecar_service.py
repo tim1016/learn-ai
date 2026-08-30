@@ -1111,11 +1111,12 @@ def _build_manifest(
     # both modes.
     if lake_artifacts is None:
         data_root = workspace.data_dir
-        market_hours, symbol_properties = _list_metadata(workspace)
+        market_hours, symbol_properties, interest_rate = _list_metadata(workspace)
     else:
         data_root = lake_artifacts.lake_root
         market_hours = lake_artifacts.market_hours_path
         symbol_properties = lake_artifacts.symbol_properties_path
+        interest_rate = lake_artifacts.interest_rate_path
     if response is not None:
         exit_code = response.exit_code
         is_clean_note = f"is_clean={response.is_clean}"
@@ -1153,6 +1154,13 @@ def _build_manifest(
         market_hours_database=(hash_staged_files(data_root, [market_hours])[0] if market_hours is not None else None),
         symbol_properties_database=(
             hash_staged_files(data_root, [symbol_properties])[0] if symbol_properties is not None else None
+        ),
+        # Optional (#1859): None when this run's workspace/lake has no
+        # interest-rate subtree — the same absence LEAN itself tolerates.
+        # When present, its bytes DO affect LEAN's computed statistics, so
+        # a run that read one must hash it (CodeRabbit review fix).
+        interest_rate_database=(
+            hash_staged_files(data_root, [interest_rate])[0] if interest_rate is not None else None
         ),
     )
     runtime_provenance = runtime_provenance_for_digest(PINNED_LEAN_IMAGE_DIGEST)
@@ -1284,8 +1292,8 @@ def _effective_window_from_normalized(normalized: NormalizedResult | None) -> Wi
     )
 
 
-def _list_metadata(workspace: Workspace) -> tuple[Path | None, Path | None]:
-    """Return (market_hours, symbol_properties) paths from the workspace."""
+def _list_metadata(workspace: Workspace) -> tuple[Path | None, Path | None, Path | None]:
+    """Return (market_hours, symbol_properties, interest_rate) paths from the workspace."""
     from app.lean_sidecar.staging import list_metadata_databases
 
     return list_metadata_databases(workspace)

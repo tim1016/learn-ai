@@ -152,6 +152,20 @@ def seed_lake_metadata(lake_root: Path) -> tuple[Path, Path]:
     return market_hours, symbol_properties
 
 
+def seed_lake_interest_rate(lake_root: Path, *, rows: str = "date,rate\n20260105,0.0525\n") -> Path:
+    """Write the optional interest-rate CSV at its lake path (#1859).
+
+    Opt-in like :func:`seed_lake_corporate_actions` — most fixture lakes
+    have no reason to carry it, so ``seed_lake_window`` does not call this
+    on their behalf.
+    """
+    return _write(
+        lake_root,
+        Path(*LeanMetadataPath(kind="interest_rate").relative_path().parts),
+        rows.encode("ascii"),
+    )
+
+
 def seed_lake_corporate_actions(
     lake_root: Path,
     symbol: str,

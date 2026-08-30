@@ -30,7 +30,7 @@ from app.data_lake.types import PriceAdjustmentMode
 Market = Literal["usa"]
 Resolution = Literal["minute", "hour", "daily"]
 DataType = Literal["trade", "quote"]
-MetadataKind = Literal["market_hours", "symbol_properties"]
+MetadataKind = Literal["market_hours", "symbol_properties", "interest_rate"]
 
 _LAKE_DIR = "lake"
 _STAGING_DIR = "staging"
@@ -256,6 +256,15 @@ class LeanMetadataPath:
             return PurePosixPath("market-hours") / "market-hours-database.json"
         if self.kind == "symbol_properties":
             return PurePosixPath("symbol-properties") / "symbol-properties-database.csv"
+        if self.kind == "interest_rate":
+            # LEAN's on-disk layout nests one file per market under the
+            # subtree — usa/interest-rate.csv, not a flat file directly
+            # under interest-rate/. Confirmed against the real image
+            # layout by app.services.lean_statistics_adapter, which reads
+            # this exact path off a genuine staged LEAN run for output-
+            # side parity checking. Hardcoded "usa" matches this module's
+            # existing single-market scope (``Market = Literal["usa"]``).
+            return PurePosixPath("alternative") / "interest-rate" / "usa" / "interest-rate.csv"
         raise ValueError(f"unknown metadata kind: {self.kind!r}")
 
 

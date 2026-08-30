@@ -257,7 +257,14 @@ class ExtractMetadataResponse(BaseModel):
     its own manifest hashing — the data plane re-resolves the workspace
     against its in-container ``DEFAULT_ARTIFACTS_ROOT``. The paths are
     returned anyway for log auditability + a launcher-side sanity check.
+
+    ``interest_rate_db_path`` is optional, unlike the other two: an
+    image variant without the ``alternative/interest-rate`` subtree
+    staged nothing for it, and the data plane's own re-read
+    (``list_metadata_databases``) already treats that file as optional —
+    see its docstring.
     """
 
     market_hours_db_path: str
     symbol_properties_db_path: str
+    interest_rate_db_path: str | None = None

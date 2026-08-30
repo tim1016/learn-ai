@@ -674,13 +674,16 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
     def test_the_missing_interest_rate_subtree_is_warned_about_not_refused(
         self, fixture_lake: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A3(a). Declared, because it cannot be fixed from in here.
+        """A3(a). Declared, not refused — the gap is transient, not structural.
 
-        Refusing would block every lake-mode run over a gap no operator action
-        can clear — the launcher's ``/extract-metadata`` returns two byte
-        fields and there is no third. Staying silent would hide the one known
-        input difference between a flag-on and a flag-off run, which is
-        exactly the claim this slice exists to make.
+        #1859 gave the lake a producer for this subtree (``ensure_data``'s
+        Phase 0), but this fixture lake predates any bootstrap having run
+        against it, and a lake in that state must still resolve rather than
+        refuse: an image variant or launcher build with genuinely no
+        interest-rate subtree hits the identical fixture shape. Staying
+        silent would hide the one known input difference a flag-on and a
+        flag-off run can still have, which is exactly the claim this slice
+        exists to make.
         """
         with caplog.at_level(logging.WARNING):
             resolve_lake_artifacts(
@@ -695,7 +698,13 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
     def test_a_lake_that_does_carry_interest_rate_data_says_nothing(
         self, fixture_lake: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        (fixture_lake / "alternative" / "interest-rate").mkdir(parents=True)
+        # The canonical CSV itself, not just its parent directory — an
+        # empty alternative/interest-rate/ must still warn (see the sibling
+        # test below).
+        (fixture_lake / "alternative" / "interest-rate" / "usa").mkdir(parents=True)
+        (fixture_lake / "alternative" / "interest-rate" / "usa" / "interest-rate.csv").write_text(
+            "date,rate\n", encoding="utf-8"
+        )
 
         with caplog.at_level(logging.WARNING):
             resolve_lake_artifacts(
@@ -706,6 +715,26 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
             )
 
         assert not any("interest-rate" in record.getMessage() for record in caplog.records)
+
+    def test_an_empty_interest_rate_directory_still_warns(
+        self, fixture_lake: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """CodeRabbit review fix on #1859: the check must test the canonical
+        CSV file, not just its parent directory — a bare mkdir with no file
+        inside it (a partial write, or a directory some other process
+        created) must not silently pass as "the lake has interest-rate
+        data" when LEAN would still find nothing to read."""
+        (fixture_lake / "alternative" / "interest-rate" / "usa").mkdir(parents=True)
+
+        with caplog.at_level(logging.WARNING):
+            resolve_lake_artifacts(
+                lake_root=fixture_lake,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
+
+        assert any("interest-rate" in record.getMessage() for record in caplog.records)
 
     def test_the_quote_refusal_names_the_remedy(self, tmp_path: Path) -> None:
         """A4. A trade-only import is the common way to reach this refusal.

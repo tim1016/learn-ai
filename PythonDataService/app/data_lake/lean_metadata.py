@@ -62,13 +62,19 @@ async def extract_lean_metadata(
     *,
     timeout_s: float = _DEFAULT_TIMEOUT_S,
     artifacts_root: Path | None = None,
-) -> tuple[bytes, bytes]:
-    """Fetch (market_hours_database_bytes, symbol_properties_database_bytes).
+) -> tuple[bytes, bytes, bytes | None]:
+    """Fetch (market_hours_bytes, symbol_properties_bytes, interest_rate_bytes).
 
-    The launcher does the subprocess work and writes the two files into the
+    The launcher does the subprocess work and writes the files into the
     ``run_id`` workspace under the shared artifacts bind mount; this function
     then reads them back through this container's own view of that mount
     (see module docstring for why the HTTP response body isn't the transport).
+
+    ``interest_rate_bytes`` is ``None`` when the workspace has no
+    ``alternative/interest-rate`` subtree — an image variant without it,
+    or a launcher build that predates it. Unlike the other two, that is
+    not an extraction failure: LEAN falls back to its built-in risk-free
+    rate (see ``app.lean_sidecar.lake_mount``'s module docstring).
 
     ``run_id`` names that workspace (``ExtractMetadataRequest.run_id`` in
     app.lean_sidecar.launcher.models, validated there against
@@ -99,7 +105,7 @@ async def extract_lean_metadata(
 
     root = artifacts_root if artifacts_root is not None else sidecar_config.DEFAULT_ARTIFACTS_ROOT
     workspace = resolve_workspace(run_id, root)
-    mh_path, sp_path = list_metadata_databases(workspace)
+    mh_path, sp_path, ir_path = list_metadata_databases(workspace)
     if mh_path is None or sp_path is None:
         raise LeanMetadataExtractionError(
             f"launcher reported success but the workspace is missing the extracted "
@@ -112,16 +118,23 @@ async def extract_lean_metadata(
     # untranslated, that `OSError` would skip
     # `_bootstrap_metadata_artifact`'s `except LeanMetadataExtractionError`
     # handling entirely and abort the whole `ensure_data` request instead of
-    # cleanly failing this one claimed artifact with `io_error`.
+    # cleanly failing this one claimed artifact with `io_error`. The same
+    # applies to the interest-rate file when present — a race between its
+    # own `exists()` check and this read should not read as "the launcher
+    # never had it" (None), so a mid-flight OSError there still raises
+    # rather than silently downgrading to the optional-absence case.
     try:
         mh = mh_path.read_bytes()
         sp = sp_path.read_bytes()
+        ir = ir_path.read_bytes() if ir_path is not None else None
     except OSError as e:
         raise LeanMetadataExtractionError(f"failed to read extracted metadata from workspace: {e}") from e
     logger.info(
-        "data_lake.lean_metadata: extracted %d bytes market-hours + %d bytes symbol-properties for %s",
+        "data_lake.lean_metadata: extracted %d bytes market-hours + %d bytes symbol-properties"
+        " + %s interest-rate for %s",
         len(mh),
         len(sp),
+        f"{len(ir)} bytes" if ir is not None else "no",
         image_digest,
     )
-    return mh, sp
+    return mh, sp, ir
