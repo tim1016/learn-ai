@@ -1,6 +1,7 @@
 """Shared test fixtures and helpers"""
 
 import os
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,87 @@ def _isolate_canary_admission_ledger(
         "DEFAULT_CANARY_ADMISSION_LEDGER_PATH",
         isolated_path,
     )
+
+
+_CATALOG_TRUNCATING_FIXTURE_PREFIX = "clean_artifacts"
+
+# A developer or CI job must set this to explicitly attest, out of band,
+# that POSTGRES_URL points at a database safe to wipe. It cannot be inferred
+# from POSTGRES_URL itself: CI's per-job postgres:16 service (ci.yml) and a
+# developer's real my-postgres dev container (compose.yaml) both resolve to
+# postgres://postgres:...@localhost:5432/postgres -- host, port, user, and
+# database name are identical either way. Only an explicit, separate signal
+# can tell them apart.
+_POSTGRES_TARGET_EPHEMERAL_ENV_VAR = "POSTGRES_URL_IS_EPHEMERAL"
+
+
+def _postgres_target_is_ephemeral() -> bool:
+    return os.getenv(_POSTGRES_TARGET_EPHEMERAL_ENV_VAR, "").strip().lower() in ("1", "true")
+
+
+def _postgres_target_url() -> str:
+    """Same lookup every per-file ``_postgres_url()`` helper in
+    tests/{unit,integration}/data_lake already does (``settings.POSTGRES_URL``
+    falling back to the raw env var). Imported lazily, matching this file's
+    other fixtures, so importing conftest doesn't require app.config to be
+    importable before pytest has set up sys.path.
+    """
+    from app.config import settings
+
+    return settings.POSTGRES_URL or os.getenv("POSTGRES_URL", "")
+
+
+def _raise_if_catalog_truncation_is_unsafe(fixturenames: Iterable[str]) -> None:
+    """Core decision behind ``_guard_data_lake_catalog_truncation`` below,
+    factored out so it is unit-testable without going through pytest's
+    fixture-injection machinery -- see
+    tests/unit/data_lake/test_catalog_truncation_guard.py.
+
+    Matches by *prefix*, not an exhaustive name list: every current
+    ``clean_artifacts``-style fixture across tests/unit/data_lake and
+    tests/integration/data_lake follows this naming convention (including
+    test_ensure_data_all_kinds.py's ``clean_artifacts_all_kinds_complete``
+    and ``clean_artifacts_second_call``), and a future one that follows it
+    too is covered without editing this file again.
+
+    A test with no POSTGRES_URL configured is left alone: the fixture's own
+    ``_postgres_url()`` helper will ``pytest.skip`` before issuing any SQL,
+    same as it always has, and this guard only has something to protect once
+    there is a real database on the other end of the connection.
+    """
+    truncates_catalog = any(
+        name.startswith(_CATALOG_TRUNCATING_FIXTURE_PREFIX) for name in fixturenames
+    )
+    if not truncates_catalog or not _postgres_target_url() or _postgres_target_is_ephemeral():
+        return
+    raise RuntimeError(
+        "Refusing to run a catalog-truncating fixture (name starting with "
+        f"'{_CATALOG_TRUNCATING_FIXTURE_PREFIX}'): {_POSTGRES_TARGET_EPHEMERAL_ENV_VAR} "
+        "is not set, so POSTGRES_URL has not been demonstrated to point at a "
+        "disposable database. A prior incident pointed POSTGRES_URL at the "
+        "shared dev container (my-postgres) and these fixtures truncated "
+        "DataLakeArtifacts to zero rows on every test that used them (#1887). "
+        f"Set {_POSTGRES_TARGET_EPHEMERAL_ENV_VAR}=1 only when POSTGRES_URL "
+        "names a database you can afford to lose -- a fresh postgres:16 "
+        "container you stood up for this run, never my-postgres."
+    )
+
+
+@pytest.fixture(autouse=True)
+def _guard_data_lake_catalog_truncation(request: pytest.FixtureRequest) -> None:
+    """Block any ``clean_artifacts``-style fixture (tests/unit/data_lake,
+    tests/integration/data_lake) from truncating DataLakeArtifacts /
+    DataLakeRuns unless POSTGRES_URL has been explicitly attested as
+    ephemeral.
+
+    Same class of bug as ``_isolate_data_lake_write_root`` and
+    ``_isolate_strategy_validation_flag_ledger`` above -- a developer's real
+    resource getting hit by a test that assumed it owned the whole
+    environment -- except here there is no ``tmp_path`` to silently redirect
+    writes to: Postgres is out-of-process infrastructure this test process
+    doesn't control. So this fails loudly instead of isolating quietly.
+    """
+    _raise_if_catalog_truncation_is_unsafe(request.fixturenames)
 
 
 @pytest.fixture
