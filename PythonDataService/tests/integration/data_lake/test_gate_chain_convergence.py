@@ -34,6 +34,7 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.backfill import run_backfill
+from app.data_lake.ensure_data import _metadata_dch
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
@@ -41,7 +42,13 @@ from app.lean_sidecar.lake_mount import resolve_lake_artifacts
 
 pytestmark = pytest.mark.asyncio
 
-SYMBOL = "SPY"
+# A distinct symbol from every other clean_artifacts-truncating test in this
+# directory (SPY: test_ensure_data_all_kinds_complete; QQQ:
+# test_ensure_data_second_call_is_cache_hit) so this module's minute-bar/
+# daily-trade and corp-action (factor_file/map_file) claims share no
+# identity with theirs under pytest-xdist concurrency — see the analogous
+# note in test_ensure_data_all_kinds.py's _SECOND_CALL_DAY_OFFSETS_MS.
+SYMBOL = "AAPL"
 # 2024-05-20..22 is window A (Mon-Wed); 2024-05-20..24 is window B (Mon-Fri) —
 # wider, not disjoint, matching the real #1870 reproduction shape.
 WINDOW_A_END = date(2024, 5, 22)
@@ -53,6 +60,12 @@ _DAY_OFFSETS_MS = {
     date(2024, 5, 23): 1716471000000,
     date(2024, 5, 24): 1716557400000,
 }
+# See _spec()'s lean_image_digest note below.
+_LEAN_IMAGE_DIGEST = "sha256:test-image-digest-gate-chain"
+# The three metadata files Phase 0 always attempts (see ensure_data.py's
+# calls into _metadata_dch) -- needed below to scope metadata-row cleanup
+# by lean_image_digest, since metadata identity has no Symbol column.
+_METADATA_FILE_NAMES = ("market-hours-database.json", "symbol-properties-database.csv", "interest-rate.csv")
 
 
 def _postgres_url() -> str:
@@ -64,17 +77,36 @@ def _postgres_url() -> str:
 
 @pytest.fixture
 async def clean_artifacts():
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        await conn.execute('TRUNCATE TABLE "DataLakeArtifacts" RESTART IDENTITY CASCADE')
-    finally:
-        await conn.close()
+    """Delete only this test's own catalog rows (SYMBOL + its metadata
+    contract hashes), instead of a blanket ``TRUNCATE``.
+
+    A table-wide TRUNCATE (every other clean_artifacts fixture in this
+    directory still does this) wipes ANY concurrently-running test's
+    in-flight rows too, regardless of identity: under pytest-xdist, this
+    test's two sequential backfill calls run long enough that another,
+    faster test's setup/teardown TRUNCATE reliably lands mid-flight of this
+    one. A disjoint SYMBOL/digest (see the module docstring above) prevents
+    a claim COLLISION but not a TRUNCATE WIPE, since TRUNCATE carries no
+    WHERE clause. Scoping the delete to SYMBOL, plus this test's own
+    metadata contract hashes (computed via the same _metadata_dch the app
+    itself claims by), makes cleanup identity-scoped instead of table-wide.
+    """
+    metadata_dchs = [_metadata_dch(_LEAN_IMAGE_DIGEST, name, "raw") for name in _METADATA_FILE_NAMES]
+
+    async def _delete() -> None:
+        conn = await asyncpg.connect(_postgres_url())
+        try:
+            await conn.execute(
+                'DELETE FROM "DataLakeArtifacts" WHERE "Symbol" = ANY($1::text[]) OR "DataContractHash" = ANY($2::text[])',
+                [SYMBOL],
+                metadata_dchs,
+            )
+        finally:
+            await conn.close()
+
+    await _delete()
     yield
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        await conn.execute('TRUNCATE TABLE "DataLakeArtifacts" RESTART IDENTITY CASCADE')
-    finally:
-        await conn.close()
+    await _delete()
 
 
 @pytest.fixture
@@ -122,7 +154,7 @@ def _minimal_market_hours_json() -> bytes:
 
 
 def _minimal_symbol_properties_csv() -> bytes:
-    return b"SPY,equity,usd,1,0\n"
+    return b"AAPL,equity,usd,1,0\n"
 
 
 def _stage_workspace_files(artifacts_root: Path, run_id: str) -> None:
@@ -173,7 +205,14 @@ def _spec(end: date) -> DataRunSpec:
         start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
         end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
         data_types=["trade", "quote"],
-        lean_image_digest="sha256:test-image-digest",
+        # Distinct from test_ensure_data_all_kinds_complete's
+        # "sha256:test-image-digest": the metadata artifact claim is keyed
+        # by lean_image_digest ALONE (uq_data_lake_artifacts_metadata is
+        # symbol-independent — see ensure_data._metadata_dch), so reusing
+        # that digest here would race the two tests' metadata claims under
+        # pytest-xdist even after SYMBOL diverged. Shared with clean_artifacts
+        # above so its scoped-delete matches what this spec actually claims.
+        lean_image_digest=_LEAN_IMAGE_DIGEST,
     )
 
 
