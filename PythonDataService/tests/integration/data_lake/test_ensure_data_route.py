@@ -52,6 +52,10 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-polygon-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_TOKEN", "test-token")
+    # Phase 0 resolves the sent token via read_launcher_token(), which reads
+    # os.environ directly rather than settings — the setattr above alone is
+    # a no-op for what actually reaches the launcher.
+    monkeypatch.setenv("LEAN_LAUNCHER_TOKEN", "test-token")
     artifacts_root = tmp_path / "artifacts-root"
     artifacts_root.mkdir(parents=True)
     monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
