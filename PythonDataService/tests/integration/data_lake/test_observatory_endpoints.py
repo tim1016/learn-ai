@@ -16,6 +16,7 @@ import asyncio
 import threading
 from datetime import date, datetime, timedelta
 from urllib.parse import quote
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import asyncpg
@@ -353,6 +354,7 @@ async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatc
         price_adjustment_mode: str,
         start_trading_date: date,
         end_trading_date: date,
+        data_root_id: UUID | None = None,
     ) -> list[ArtifactCoverageRow]:
         return []
 
@@ -386,6 +388,7 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
         price_adjustment_mode: str,
         start_trading_date: date,
         end_trading_date: date,
+        data_root_id: UUID | None = None,
     ) -> list[ArtifactCoverageRow]:
         return [
             ArtifactCoverageRow(trading_date=date(2024, 5, 20), status="complete", artifact_id=101),
@@ -857,13 +860,13 @@ async def test_artifact_detail_404_when_row_does_not_exist(monkeypatch: pytest.M
 async def test_storage_summary_reports_counts_bytes_and_symbol_spans(
     monkeypatch: pytest.MonkeyPatch, make_data_lake_app
 ):
-    async def _kinds(market: str) -> list[StorageKindTotal]:
+    async def _kinds(market: str, data_root_id: UUID | None = None) -> list[StorageKindTotal]:
         return [
             StorageKindTotal(artifact_kind="time_series_bars", resolution="minute", artifact_count=42, total_bytes=1_048_576),
             StorageKindTotal(artifact_kind="factor_file", resolution=None, artifact_count=1, total_bytes=2048),
         ]
 
-    async def _spans(market: str) -> list[SymbolCoverageSpan]:
+    async def _spans(market: str, data_root_id: UUID | None = None) -> list[SymbolCoverageSpan]:
         return [
             SymbolCoverageSpan(
                 symbol="SPY",
@@ -895,10 +898,10 @@ async def test_storage_summary_reports_counts_bytes_and_symbol_spans(
 
 
 async def test_storage_summary_honest_empty_on_empty_catalog(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
-    async def _no_kinds(market: str) -> list[StorageKindTotal]:
+    async def _no_kinds(market: str, data_root_id: UUID | None = None) -> list[StorageKindTotal]:
         return []
 
-    async def _no_spans(market: str) -> list[SymbolCoverageSpan]:
+    async def _no_spans(market: str, data_root_id: UUID | None = None) -> list[SymbolCoverageSpan]:
         return []
 
     monkeypatch.setattr(catalog_client, "select_storage_totals_by_kind", _no_kinds)

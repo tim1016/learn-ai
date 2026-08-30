@@ -13,6 +13,12 @@ public class DataLakeRun
 {
     public Guid Id { get; set; }
 
+    /// <summary>
+    /// See <see cref="DataLakeArtifact.DataRootId"/> — same backfill, same
+    /// migration, same "not an FK yet" scoping.
+    /// </summary>
+    public Guid DataRootId { get; set; }
+
     public int? StrategyExecutionId { get; set; }
     public StrategyExecution? StrategyExecution { get; set; }
 

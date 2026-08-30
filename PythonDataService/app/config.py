@@ -1,5 +1,7 @@
 """Application configuration loaded from environment variables"""
 
+from uuid import UUID
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -135,6 +137,13 @@ class Settings(BaseSettings):
     # The writer creates lake/ and staging/ subdirectories under this path.
     # Must be on a single filesystem so POSIX atomic rename(2) is valid.
     LEAN_DATA_WRITE_ROOT: str = "/lean-data-writer"
+    # Root identity (#1876, PR A of #1861): the physical lake root this
+    # deployment is configured to treat as active. Empty means "the legacy
+    # single root" — active_root_id() below falls back to LEGACY_ROOT_ID,
+    # the same UUID the schema migration backfilled every pre-#1876 catalog
+    # row with, so an upgrade needs no operator action to keep writing/
+    # reading the same rows it always has.
+    DATA_LAKE_ROOT_ID: str = ""
     # LEAN sidecar launcher (Slice 1c Phase 0 metadata extraction).
     # The launcher is a host process with podman access; the data-plane
     # container calls it via HTTP to extract market-hours-database.json
@@ -145,3 +154,22 @@ class Settings(BaseSettings):
     LEAN_LAUNCHER_TOKEN: str = ""
 
 settings = Settings()
+
+# The deterministic root UUID every pre-#1876 catalog row was backfilled with
+# (Backend migration AddDataRootIdToDataLakeArtifactsAndRuns) and the value
+# active_root_id() falls back to when DATA_LAKE_ROOT_ID is unset. Lives here,
+# not in app.data_lake.root_identity, so that module — which needs
+# app.data_lake.path_policy for its RootContext — has no reason to be
+# imported by app.data_lake.types (whose Pydantic models default their own
+# data_root_id fields to active_root_id()); path_policy itself imports
+# types.py for PriceAdjustmentMode, so routing this through root_identity
+# would be a straight import cycle. config.py has no data_lake dependents to
+# cycle with, and "which UUID does this deployment call its active root" is
+# config-shaped regardless.
+LEGACY_ROOT_ID = UUID("00000000-0000-0000-0000-000000000000")
+
+
+def active_root_id() -> UUID:
+    """The service's own configured root — server-resolved, never supplied
+    by a client (fixed design decision, issue #1876)."""
+    return UUID(settings.DATA_LAKE_ROOT_ID) if settings.DATA_LAKE_ROOT_ID else LEGACY_ROOT_ID

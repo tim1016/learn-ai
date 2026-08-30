@@ -172,6 +172,11 @@ namespace Backend.Migrations
                         .HasColumnType("character(64)")
                         .IsFixedLength();
 
+                    b.Property<Guid>("DataRootId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValue(new Guid("00000000-0000-0000-0000-000000000000"));
+
                     b.Property<string>("DataType")
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
@@ -266,6 +271,11 @@ namespace Backend.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character(64)")
                         .IsFixedLength();
+
+                    b.Property<Guid>("DataRootId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValue(new Guid("00000000-0000-0000-0000-000000000000"));
 
                     b.Property<string>("EngineRunId")
                         .HasMaxLength(128)

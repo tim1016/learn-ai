@@ -1381,6 +1381,11 @@
             "title": "Data Contract Hash",
             "type": "string"
           },
+          "data_root_id": {
+            "format": "uuid",
+            "title": "Data Root Id",
+            "type": "string"
+          },
           "data_type": {
             "anyOf": [
               {
@@ -1681,6 +1686,11 @@
           },
           "data_contract_hash": {
             "title": "Data Contract Hash",
+            "type": "string"
+          },
+          "data_root_id": {
+            "format": "uuid",
+            "title": "Data Root Id",
             "type": "string"
           },
           "data_type": {
@@ -8522,6 +8532,11 @@
       },
       "CoverageResponse": {
         "properties": {
+          "data_root_id": {
+            "format": "uuid",
+            "title": "Data Root Id",
+            "type": "string"
+          },
           "data_type": {
             "title": "Data Type",
             "type": "string"
@@ -9471,6 +9486,11 @@
           },
           "data_availability_hash": {
             "title": "Data Availability Hash",
+            "type": "string"
+          },
+          "data_root_id": {
+            "format": "uuid",
+            "title": "Data Root Id",
             "type": "string"
           },
           "duration_ms": {
@@ -30333,6 +30353,11 @@
       },
       "StorageSummaryResponse": {
         "properties": {
+          "data_root_id": {
+            "format": "uuid",
+            "title": "Data Root Id",
+            "type": "string"
+          },
           "kinds": {
             "default": [],
             "items": {
@@ -43643,7 +43668,7 @@
     },
     "/api/data-lake/storage-summary": {
       "get": {
-        "description": "Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.",
+        "description": "Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.\n\nDefaults to the service's configured active root (issue #1876).",
         "operationId": "get_storage_summary_api_data_lake_storage_summary_get",
         "parameters": [
           {

@@ -20,7 +20,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.config import active_root_id
 from app.utils.timestamps import ny_datetime
+
+# Every ``data_root_id`` field below defaults to active_root_id() — the
+# service's configured active root — so every existing ``ArtifactIdentity``/
+# ``ArtifactRecord`` construction site in the codebase keeps working
+# unchanged (issue #1876's "current single-root behavior is unchanged end to
+# end" acceptance criterion). ``active_root_id`` lives in app.config, not
+# app.data_lake.root_identity, specifically so this module-level import here
+# cannot cycle back through it — see that module's own comment.
 
 #: The lake's symbol policy. ``DataRunSpec`` enforces it on every write, so it
 #: is also the answer to "could the lake ever hold this symbol?" — readers that
@@ -181,7 +190,15 @@ class DataRunSpec(BaseModel):
 
 
 class ArtifactIdentity(BaseModel):
-    """Internal identity tuple — what the catalog claim key looks like."""
+    """Internal identity tuple — what the catalog claim key looks like.
+
+    Full artifact identity is ``data_root_id + price_adjustment_mode +``
+    every dimension below (issue #1876 fixed design decision): the physical
+    lake root an artifact belongs to, not its adjustment mode. Defaults to
+    the service's configured active root (``active_root_id()``) so every
+    existing caller keeps constructing identities exactly as before; a
+    caller that needs another root's identity passes it explicitly.
+    """
 
     artifact_kind: Literal["time_series_bars", "factor_file", "map_file", "metadata"]
     market: str | None = None
@@ -191,6 +208,7 @@ class ArtifactIdentity(BaseModel):
     data_type: Literal["trade", "quote"] | None = None
     provider: str
     price_adjustment_mode: str | None = None
+    data_root_id: UUID = Field(default_factory=active_root_id)
 
 
 class ArtifactRecord(BaseModel):
@@ -215,6 +233,7 @@ class ArtifactRecord(BaseModel):
     # app.data_lake.run_materialization.materialize_engine_run's reused-
     # artifact verification) must skip the size check rather than fail it.
     file_size_bytes: int | None = None
+    data_root_id: UUID = Field(default_factory=active_root_id)
 
 
 # Named so producers upstream of ``ArtifactFailure`` can carry a reason with
@@ -281,6 +300,11 @@ class DataAvailabilityResult(BaseModel):
     request_id: UUID
     overall_status: OverallStatus
     lean_data_root_path: str
+    # The physical root's portable identity, distinct from
+    # lean_data_root_path (a filesystem location for this one run) — see
+    # root_identity.RootContext. Exposed so a caller can tell which root
+    # every artifact below actually landed in, not just where on disk.
+    data_root_id: UUID = Field(default_factory=active_root_id)
     data_availability_hash: str
     artifacts: list[ArtifactRecord] = []
     failures: list[ArtifactFailure] = []
@@ -326,6 +350,9 @@ class CoverageResponse(BaseModel):
     resolution: str
     provider: str
     price_adjustment_mode: str
+    # Observatory listings default to the service's configured active root
+    # (issue #1876) — exposed so the response says which root it covers.
+    data_root_id: UUID = Field(default_factory=active_root_id)
     days: list[CoverageDay] = []
 
 
@@ -342,6 +369,11 @@ class ArtifactDetail(BaseModel):
     provider: str
     provider_params: dict[str, object]
     price_adjustment_mode: str | None
+    # Exposed even when the row belongs to a root other than the service's
+    # active one — artifact-by-id lookups are ID-scoped, not root-scoped
+    # (issue #1876), so the response must say which root answered rather
+    # than let the caller assume it was the active one.
+    data_root_id: UUID = Field(default_factory=active_root_id)
     data_contract_hash: str
     # None (not "") until the artifact reaches Status='complete' and its
     # FileSha256 column is actually populated — an empty string on a
@@ -379,5 +411,8 @@ class SymbolCoverageSpan(BaseModel):
 
 class StorageSummaryResponse(BaseModel):
     market: str
+    # Storage summaries default to the service's configured active root
+    # (issue #1876) — exposed so the response says which root it covers.
+    data_root_id: UUID = Field(default_factory=active_root_id)
     kinds: list[StorageKindTotal] = []
     symbols: list[SymbolCoverageSpan] = []

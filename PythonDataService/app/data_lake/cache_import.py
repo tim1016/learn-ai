@@ -145,7 +145,7 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, root_identity
 from app.data_lake.atomic import (
     atomic_write_and_promote,
 )
@@ -722,6 +722,10 @@ async def _import_one_zip(
         data_type="trade",
         provider="polygon",
         price_adjustment_mode=price_adjustment_mode,
+        # Explicit, not relying on the field's own default (issue #1876):
+        # this is a production write path and the service's active root at
+        # import time is what a reader should see recorded on the row.
+        data_root_id=root_identity.active_root_id(),
     )
 
     claim_result = await catalog_client.claim_minute_bar(

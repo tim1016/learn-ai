@@ -18,10 +18,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
+from uuid import UUID
 
 import asyncpg
 
 from app.config import settings
+from app.data_lake import root_identity
 from app.data_lake.types import (
     ArtifactDetail,
     ArtifactIdentity,
@@ -102,29 +104,48 @@ async def connection():  # type: ignore[return]
         yield conn
 
 
+def _resolve_data_root_id(data_root_id: UUID | None) -> UUID:
+    """Default a caller-omitted ``data_root_id`` to the service's configured
+    active root (issue #1876's "active-root defaults" acceptance bullet:
+    coverage, storage summaries, ensure-data, backfill, and observatory
+    listings default to it). Every read/write below that isn't keyed by an
+    ``ArtifactIdentity`` (which carries its own default, see types.py) takes
+    ``data_root_id`` this way rather than requiring every existing caller to
+    pass it explicitly."""
+    return data_root_id if data_root_id is not None else root_identity.active_root_id()
+
+
 async def select_complete_metadata_artifact(
     data_contract_hash: str,
+    data_root_id: UUID | None = None,
 ) -> ArtifactRecord | None:
     """Return a complete metadata artifact row by data_contract_hash, or None.
 
     Used by ensure_data Phase 0 bootstrap when claim_metadata_artifact returns
     None (conflict — already exists). Returns the existing complete row so the
     caller can reuse it without calling the launcher again.
+
+    ``data_root_id`` defaults to the service's configured active root
+    (issue #1876) — every identity lookup is root-scoped so a metadata row
+    minted for a different physical root can never be picked here.
     """
+    root_id = _resolve_data_root_id(data_root_id)
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
                "DataContractHash", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
-               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes"
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
+               "DataRootId"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'metadata'
            AND "DataContractHash" = $1
+           AND "DataRootId" = $2
            AND "Status" = 'complete'
          LIMIT 1
     """
     async with connection() as conn:
-        row = await conn.fetchrow(query, data_contract_hash)
+        row = await conn.fetchrow(query, data_contract_hash, root_id)
     if row is None:
         return None
     return ArtifactRecord(
@@ -144,6 +165,7 @@ async def select_complete_metadata_artifact(
         first_bar_start_ms=row["FirstBarStartMs"],
         last_bar_start_ms=row["LastBarStartMs"],
         file_size_bytes=row["FileSizeBytes"],
+        data_root_id=row["DataRootId"],
     )
 
 
@@ -154,19 +176,26 @@ async def select_complete_corp_action_artifact(
 
     Used by ensure_data Pass 1 when claim_corp_action_artifact returns None
     (conflict — already exists). Returns the existing complete row.
+
+    Root-scoped by ``identity.data_root_id`` (issue #1876): full artifact
+    identity is data_root_id + price_adjustment_mode + the dimensions below,
+    so a corp-action row minted for a different physical root can never be
+    picked here.
     """
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
                "DataContractHash", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
-               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes"
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
+               "DataRootId"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = $1
            AND "Market" = $2
            AND "Symbol" = $3
            AND "Provider" = $4
            AND "PriceAdjustmentMode" = $5
+           AND "DataRootId" = $6
            AND "Status" = 'complete'
          LIMIT 1
     """
@@ -178,6 +207,7 @@ async def select_complete_corp_action_artifact(
             identity.symbol,
             identity.provider,
             identity.price_adjustment_mode,
+            identity.data_root_id,
         )
     if row is None:
         return None
@@ -198,6 +228,7 @@ async def select_complete_corp_action_artifact(
         first_bar_start_ms=row["FirstBarStartMs"],
         last_bar_start_ms=row["LastBarStartMs"],
         file_size_bytes=row["FileSizeBytes"],
+        data_root_id=row["DataRootId"],
     )
 
 
@@ -208,13 +239,17 @@ async def select_complete_aggregated_bar_artifact(
 
     Used by ensure_data Pass 2 when claim_aggregated_bar_artifact returns None
     (conflict — already exists). Returns the existing complete row.
+
+    Root-scoped by ``identity.data_root_id`` (issue #1876) — see
+    select_complete_corp_action_artifact's docstring above.
     """
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
                "DataContractHash", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
-               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes"
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
+               "DataRootId"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'time_series_bars'
            AND "Resolution" = $1
@@ -223,6 +258,7 @@ async def select_complete_aggregated_bar_artifact(
            AND "DataType" = $4
            AND "Provider" = $5
            AND "PriceAdjustmentMode" = $6
+           AND "DataRootId" = $7
            AND "Status" = 'complete'
          LIMIT 1
     """
@@ -235,6 +271,7 @@ async def select_complete_aggregated_bar_artifact(
             identity.data_type,
             identity.provider,
             identity.price_adjustment_mode,
+            identity.data_root_id,
         )
     if row is None:
         return None
@@ -255,6 +292,7 @@ async def select_complete_aggregated_bar_artifact(
         first_bar_start_ms=row["FirstBarStartMs"],
         last_bar_start_ms=row["LastBarStartMs"],
         file_size_bytes=row["FileSizeBytes"],
+        data_root_id=row["DataRootId"],
     )
 
 
@@ -266,6 +304,7 @@ async def select_coverage_minute_bars(
     end_trading_date: date | None,
     *,
     price_adjustment_mode: str,
+    data_root_id: UUID | None = None,
 ) -> list[ArtifactRecord]:
     """Return all complete minute-bar artifacts for the given window and
     adjustment mode.
@@ -288,13 +327,19 @@ async def select_coverage_minute_bars(
     'polygon_split_adjusted' row alongside ensure_data's 'raw' rows -- an
     unscoped query would pick an arbitrary row for the caller's identity.
     Every call site in the repo already passes this explicitly.
+
+    ``data_root_id`` defaults to the service's configured active root
+    (issue #1876) for the same reason — a coexisting row from a different
+    physical root must never be picked here either.
     """
+    root_id = _resolve_data_root_id(data_root_id)
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
                "DataContractHash", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
-               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes"
+               "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
+               "DataRootId"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'time_series_bars'
            AND "Resolution" = 'minute'
@@ -304,12 +349,13 @@ async def select_coverage_minute_bars(
            AND ($4::date IS NULL OR "TradingDate" >= $4)
            AND ($5::date IS NULL OR "TradingDate" <= $5)
            AND "PriceAdjustmentMode" = $6
+           AND "DataRootId" = $7
            AND "Status" = 'complete'
          ORDER BY "TradingDate"
     """
     async with connection() as conn:
         rows = await conn.fetch(
-            query, market, symbol, data_type, start_trading_date, end_trading_date, price_adjustment_mode
+            query, market, symbol, data_type, start_trading_date, end_trading_date, price_adjustment_mode, root_id
         )
     return [
         ArtifactRecord(
@@ -329,6 +375,7 @@ async def select_coverage_minute_bars(
             first_bar_start_ms=r["FirstBarStartMs"],
             last_bar_start_ms=r["LastBarStartMs"],
             file_size_bytes=r["FileSizeBytes"],
+            data_root_id=r["DataRootId"],
         )
         for r in rows
     ]
@@ -355,6 +402,8 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
     """Return the current row state for one minute-bar identity, or None
     if no row exists for it yet. A single indexed SELECT — no join, no
     aggregation; cheap to poll.
+
+    Root-scoped by ``identity.data_root_id`` (issue #1876).
     """
     if identity.artifact_kind != "time_series_bars" or identity.resolution != "minute":
         raise ValueError(f"select_minute_bar_lease_status called with non-minute-bar identity: {identity!r}")
@@ -369,6 +418,7 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
            AND "DataType" = $4
            AND "Provider" = $5
            AND "PriceAdjustmentMode" = $6
+           AND "DataRootId" = $7
          LIMIT 1
     """
     async with connection() as conn:
@@ -380,6 +430,7 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
             identity.data_type,
             identity.provider,
             identity.price_adjustment_mode,
+            identity.data_root_id,
         )
     if row is None:
         return None
@@ -420,6 +471,11 @@ async def claim_minute_bar(
     pipeline's existing callers); ``app.data_lake.cache_import`` passes the
     original per-symbol provenance so it survives on the row itself as an
     audit trail, rather than being fetched-and-discarded.
+
+    Records ``identity.data_root_id`` on the new row (issue #1876). The
+    conflict target is deliberately unchanged — it still does not include
+    ``DataRootId`` — because the existing unique indexes are kept as-is in
+    this slice; multi-root uniqueness is PR B's job.
     """
     if identity.artifact_kind != "time_series_bars" or identity.resolution != "minute":
         raise ValueError(f"claim_minute_bar called with non-minute-bar identity: {identity!r}")
@@ -430,11 +486,11 @@ async def claim_minute_bar(
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
             "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
-            "AttemptCount", "FetchedAtMs"
+            "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, 'fetching', $12, $13, 1, $14
+            $11, 'fetching', $12, $13, 1, $14, $15
         )
         ON CONFLICT ("Market", "Symbol", "TradingDate", "DataType",
                      "Provider", "PriceAdjustmentMode")
@@ -459,6 +515,7 @@ async def claim_minute_bar(
             worker_id,
             now_ms + lease_ttl_ms,
             now_ms,
+            identity.data_root_id,
         )
 
 
@@ -487,8 +544,9 @@ async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> ArtifactC
     """Look up the existing minute-bar row's claim state, at any status.
 
     Matches the same identity tuple as ``claim_minute_bar``'s partial unique
-    index. Returns None only if the row was deleted between the failed claim
-    and this lookup (not expected in practice — rows are never deleted).
+    index, plus ``identity.data_root_id`` (issue #1876). Returns None only
+    if the row was deleted between the failed claim and this lookup (not
+    expected in practice — rows are never deleted).
     """
     query = """
         SELECT "Id", "Status", "AttemptCount", "LastError"
@@ -501,6 +559,7 @@ async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> ArtifactC
            AND "DataType" = $4
            AND "Provider" = $5
            AND "PriceAdjustmentMode" = $6
+           AND "DataRootId" = $7
     """
     async with connection() as conn:
         row = await conn.fetchrow(
@@ -511,6 +570,7 @@ async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> ArtifactC
             identity.data_type,
             identity.provider,
             identity.price_adjustment_mode,
+            identity.data_root_id,
         )
     if row is None:
         return None
@@ -522,7 +582,9 @@ async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> ArtifactC
     )
 
 
-async def select_metadata_claim_state(data_contract_hash: str) -> ArtifactClaimState | None:
+async def select_metadata_claim_state(
+    data_contract_hash: str, data_root_id: UUID | None = None
+) -> ArtifactClaimState | None:
     """Look up the existing metadata row's claim state, at any status.
 
     ``claim_metadata_artifact``'s ``ON CONFLICT ... DO NOTHING`` returns
@@ -534,15 +596,20 @@ async def select_metadata_claim_state(data_contract_hash: str) -> ArtifactClaimS
     future bootstrap attempt sees "not complete" and reports lease_timeout,
     even though nothing is actually in flight and :func:`steal_or_retry_minute_bar`
     could reclaim it immediately.
+
+    ``data_root_id`` defaults to the service's configured active root
+    (issue #1876).
     """
+    root_id = _resolve_data_root_id(data_root_id)
     query = """
         SELECT "Id", "Status", "AttemptCount", "LastError"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'metadata'
            AND "DataContractHash" = $1
+           AND "DataRootId" = $2
     """
     async with connection() as conn:
-        row = await conn.fetchrow(query, data_contract_hash)
+        row = await conn.fetchrow(query, data_contract_hash, root_id)
     if row is None:
         return None
     return ArtifactClaimState(
@@ -751,7 +818,10 @@ async def claim_corp_action_artifact(
       (Market, Symbol, ArtifactKind, Provider, PriceAdjustmentMode)
        WHERE ArtifactKind IN ('factor_file','map_file')
     The ON CONFLICT clause repeats the partial index's WHERE predicate, per
-    Postgres' requirement for partial-index conflict targets.
+    Postgres' requirement for partial-index conflict targets. Unchanged by
+    issue #1876: existing unique indexes are kept as-is this slice.
+
+    Records ``identity.data_root_id`` on the new row.
     """
     if identity.artifact_kind not in ("factor_file", "map_file"):
         raise ValueError(f"claim_corp_action_artifact called with non-corp-action identity: {identity!r}")
@@ -762,11 +832,11 @@ async def claim_corp_action_artifact(
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
             "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
-            "AttemptCount", "FetchedAtMs"
+            "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, NULL, NULL, NULL, $4, $5, $6, $7,
-            $8, 'fetching', $9, $10, 1, $11
+            $8, 'fetching', $9, $10, 1, $11, $12
         )
         ON CONFLICT ("Market", "Symbol", "ArtifactKind", "Provider", "PriceAdjustmentMode")
             WHERE "ArtifactKind" IN ('factor_file', 'map_file')
@@ -787,6 +857,7 @@ async def claim_corp_action_artifact(
             worker_id,
             now_ms + lease_ttl_ms,
             now_ms,
+            identity.data_root_id,
         )
 
 
@@ -806,7 +877,10 @@ async def claim_metadata_artifact(
       (DataContractHash)
        WHERE ArtifactKind = 'metadata'
     The ON CONFLICT clause repeats the partial index's WHERE predicate, per
-    Postgres' requirement for partial-index conflict targets.
+    Postgres' requirement for partial-index conflict targets. Unchanged by
+    issue #1876: existing unique indexes are kept as-is this slice.
+
+    Records ``identity.data_root_id`` on the new row.
     """
     if identity.artifact_kind != "metadata":
         raise ValueError(f"claim_metadata_artifact called with non-metadata identity: {identity!r}")
@@ -817,11 +891,11 @@ async def claim_metadata_artifact(
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
             "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
-            "AttemptCount", "FetchedAtMs"
+            "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             'metadata', $1, $2, NULL, NULL, NULL, $3, $4, NULL, $5,
-            $6, 'fetching', $7, $8, 1, $9
+            $6, 'fetching', $7, $8, 1, $9, $10
         )
         ON CONFLICT ("DataContractHash")
             WHERE "ArtifactKind" = 'metadata'
@@ -840,6 +914,7 @@ async def claim_metadata_artifact(
             worker_id,
             now_ms + lease_ttl_ms,
             now_ms,
+            identity.data_root_id,
         )
 
 
@@ -859,7 +934,10 @@ async def claim_aggregated_bar_artifact(
       (Market, Symbol, Resolution, DataType, Provider, PriceAdjustmentMode)
        WHERE ArtifactKind = 'time_series_bars' AND Resolution IN ('hour','daily')
     The ON CONFLICT clause repeats the partial index's WHERE predicate, per
-    Postgres' requirement for partial-index conflict targets.
+    Postgres' requirement for partial-index conflict targets. Unchanged by
+    issue #1876: existing unique indexes are kept as-is this slice.
+
+    Records ``identity.data_root_id`` on the new row.
     """
     if identity.artifact_kind != "time_series_bars" or identity.resolution not in ("hour", "daily"):
         raise ValueError(f"claim_aggregated_bar_artifact called with non-aggregated-bar identity: {identity!r}")
@@ -870,11 +948,11 @@ async def claim_aggregated_bar_artifact(
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
             "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
-            "AttemptCount", "FetchedAtMs"
+            "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, NULL, $4, $5, $6, $7, $8, $9,
-            $10, 'fetching', $11, $12, 1, $13
+            $10, 'fetching', $11, $12, 1, $13, $14
         )
         ON CONFLICT ("Market", "Symbol", "Resolution", "DataType",
                      "Provider", "PriceAdjustmentMode")
@@ -899,6 +977,7 @@ async def claim_aggregated_bar_artifact(
             worker_id,
             now_ms + lease_ttl_ms,
             now_ms,
+            identity.data_root_id,
         )
 
 
@@ -988,6 +1067,7 @@ async def select_artifact_coverage(
     price_adjustment_mode: str,
     start_trading_date: date,
     end_trading_date: date,
+    data_root_id: UUID | None = None,
 ) -> list[ArtifactCoverageRow]:
     """Return per-day minute-bar artifact status in the window, any status.
 
@@ -995,7 +1075,11 @@ async def select_artifact_coverage(
     hour/daily aggregated-bar artifacts cover a symbol's whole history in one
     row (see uq_data_lake_artifacts_aggregated_bars), so day-keyed coverage
     is meaningful only at minute resolution.
+
+    ``data_root_id`` defaults to the service's configured active root
+    (issue #1876) — coverage is an active-root-default listing.
     """
+    root_id = _resolve_data_root_id(data_root_id)
     query = """
         SELECT "TradingDate" AS trading_date, "Status" AS status, "Id" AS artifact_id
           FROM "DataLakeArtifacts"
@@ -1007,6 +1091,7 @@ async def select_artifact_coverage(
            AND "Provider" = $4
            AND "PriceAdjustmentMode" = $5
            AND "TradingDate" BETWEEN $6 AND $7
+           AND "DataRootId" = $8
          ORDER BY "TradingDate"
     """
     async with connection() as conn:
@@ -1019,6 +1104,7 @@ async def select_artifact_coverage(
             price_adjustment_mode,
             start_trading_date,
             end_trading_date,
+            root_id,
         )
     return [ArtifactCoverageRow(**dict(r)) for r in rows]
 
@@ -1034,6 +1120,11 @@ async def select_artifact_by_id(artifact_id: int) -> ArtifactDetail | None:
     Includes the failure diagnostics fail_artifact() persists (AttemptCount,
     LastError, ErrorMessage) — a 'failed' row's receipt is not "full"
     without them.
+
+    Deliberately not root-scoped (issue #1876): a lookup by row Id is
+    already unambiguous, and this may return a row from a root other than
+    the service's active one — ``data_root_id`` is included in the
+    response precisely so that isn't misleading.
     """
     query = """
         SELECT "Id" AS id, "ArtifactKind" AS artifact_kind, "Market" AS market,
@@ -1041,6 +1132,7 @@ async def select_artifact_by_id(artifact_id: int) -> ArtifactDetail | None:
                "Resolution" AS resolution, "DataType" AS data_type,
                "Provider" AS provider, "ProviderParams" AS provider_params,
                "PriceAdjustmentMode" AS price_adjustment_mode,
+               "DataRootId" AS data_root_id,
                "DataContractHash" AS data_contract_hash,
                "FileSha256" AS content_hash,
                "FilePath" AS file_path, "FileSizeBytes" AS file_size_bytes,
@@ -1069,30 +1161,35 @@ async def select_artifact_by_id(artifact_id: int) -> ArtifactDetail | None:
     )
 
 
-async def select_storage_totals_by_kind(market: str) -> list[StorageKindTotal]:
+async def select_storage_totals_by_kind(market: str, data_root_id: UUID | None = None) -> list[StorageKindTotal]:
     """Complete-artifact counts and bytes, grouped by kind (+ resolution).
 
     Scoped to Status='complete': only completed artifacts have bytes on
     disk to count; fetching/failed rows have no FileSizeBytes. Every column
     is an identity projection, so the aliased row maps straight onto the
     model.
+
+    ``data_root_id`` defaults to the service's configured active root
+    (issue #1876) — storage summaries are an active-root-default listing.
     """
+    root_id = _resolve_data_root_id(data_root_id)
     query = """
         SELECT "ArtifactKind" AS artifact_kind, "Resolution" AS resolution,
                COUNT(*) AS artifact_count,
                COALESCE(SUM("FileSizeBytes"), 0) AS total_bytes
           FROM "DataLakeArtifacts"
          WHERE "Market" = $1
+           AND "DataRootId" = $2
            AND "Status" = 'complete'
          GROUP BY "ArtifactKind", "Resolution"
          ORDER BY "ArtifactKind", "Resolution" NULLS FIRST
     """
     async with connection() as conn:
-        rows = await conn.fetch(query, market)
+        rows = await conn.fetch(query, market, root_id)
     return [StorageKindTotal(**dict(r)) for r in rows]
 
 
-async def select_symbol_coverage_spans(market: str) -> list[SymbolCoverageSpan]:
+async def select_symbol_coverage_spans(market: str, data_root_id: UUID | None = None) -> list[SymbolCoverageSpan]:
     """Per-symbol day-keyed coverage span over complete minute-bar artifacts.
 
     Resolution='minute' is the filter, not just ArtifactKind='time_series_bars':
@@ -1102,7 +1199,11 @@ async def select_symbol_coverage_spans(market: str) -> list[SymbolCoverageSpan]:
     produce a row here (MIN/MAX NULL, artifact_count=0 since COUNT ignores
     NULLs) — a fabricated placeholder for a symbol with no day-keyed
     coverage at all, not the honest absence the "span" concept documents.
+
+    ``data_root_id`` defaults to the service's configured active root
+    (issue #1876) — storage summaries are an active-root-default listing.
     """
+    root_id = _resolve_data_root_id(data_root_id)
     query = """
         SELECT "Symbol" AS symbol,
                MIN("TradingDate") AS first_trading_date,
@@ -1114,11 +1215,12 @@ async def select_symbol_coverage_spans(market: str) -> list[SymbolCoverageSpan]:
            AND "Resolution" = 'minute'
            AND "Status" = 'complete'
            AND "Symbol" IS NOT NULL
+           AND "DataRootId" = $2
          GROUP BY "Symbol"
          ORDER BY "Symbol"
     """
     async with connection() as conn:
-        rows = await conn.fetch(query, market)
+        rows = await conn.fetch(query, market, root_id)
     return [
         SymbolCoverageSpan(
             symbol=r["symbol"],
