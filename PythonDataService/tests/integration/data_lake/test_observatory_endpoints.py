@@ -60,6 +60,19 @@ def _window(start: date, end: date) -> str:
 def _ms(day: date) -> int:
     return int(datetime(day.year, day.month, day.day, tzinfo=_ET).timestamp() * 1000)
 
+
+# Every coverage test below sends this explicitly (#1890): the endpoint used
+# to default `price_adjustment_mode` to "raw" when a caller omitted it, and
+# for most of the lake's life the raw root held zero catalogued rows even
+# when polygon_split_adjusted was fully populated -- an unqualified request
+# silently read "missing" for data that actually existed under the other
+# root. A default that reads empty is indistinguishable from genuinely
+# absent data, so the parameter is now required with no default at all
+# (see test_coverage_422_when_price_adjustment_mode_omitted below). This
+# constant is just a convenient, explicit choice for tests that don't care
+# which mode they're pinning.
+_PRICE_MODE = "raw"
+
 # Captured before the autouse fixture below ever monkeypatches init_pool, so
 # the pool-lifecycle test can restore the real implementation for itself.
 _REAL_INIT_POOL = catalog_client.init_pool
@@ -140,7 +153,7 @@ def _catalog_pool_already_initialized(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.parametrize(
     "url",
     [
-        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
         "/api/data-lake/artifacts/1",
         "/api/data-lake/storage-summary",
     ],
@@ -159,7 +172,7 @@ async def test_observatory_routes_404_when_flag_off(url: str, make_data_lake_app
 @pytest.mark.parametrize(
     "url",
     [
-        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
         "/api/data-lake/artifacts/1",
         "/api/data-lake/storage-summary",
     ],
@@ -339,6 +352,76 @@ async def test_router_loop_and_engine_loop_each_get_their_own_pool(monkeypatch: 
 # ---------------------------------------------------------------------------
 
 
+async def test_coverage_422_when_price_adjustment_mode_omitted(make_data_lake_app):
+    """#1890: the endpoint must not silently default `price_adjustment_mode`.
+
+    Before this fix, an omitted `price_adjustment_mode` fell back to "raw" —
+    and for most of the lake's life the raw root held zero catalogued rows
+    even when polygon_split_adjusted was fully populated for a symbol, so an
+    unqualified request read "missing" for data that actually existed. A
+    default that reads empty is indistinguishable from genuinely absent
+    data, so the parameter is now required with no default: a caller must
+    say which root they mean. This is FastAPI's own structural "missing
+    required query parameter" 422 (a `list`-shaped `detail`), not this
+    router's hand-rolled `{reason, message}` shape — consistent with how
+    `market`/`data_type` (also plain, undefaulted-when-required `Literal`
+    query params elsewhere on this same endpoint) are already validated: a
+    request that doesn't even parse never reaches the router's own manual
+    checks.
+    """
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+    )
+    assert status_code == 422
+    assert isinstance(body["detail"], list)
+    assert any("price_adjustment_mode" in error.get("loc", []) for error in body["detail"])
+
+
+async def test_coverage_422_when_price_adjustment_mode_invalid(make_data_lake_app):
+    """An out-of-vocabulary mode must 422, not silently coerce to a known one."""
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode=adjusted"
+        f"&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+    )
+    assert status_code == 422
+    assert isinstance(body["detail"], list)
+    assert any("price_adjustment_mode" in error.get("loc", []) for error in body["detail"])
+
+
+async def test_coverage_forwards_the_explicit_price_adjustment_mode(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    """A caller who names `polygon_split_adjusted` explicitly must get exactly
+    that root's coverage back — never a silent read of `raw` instead.
+
+    Captures the kwargs `select_artifact_coverage` was actually called with,
+    which is the one place a stale default could still leak in even after
+    the request-level 422 above closes the "omitted" gap.
+    """
+    captured: dict[str, object] = {}
+
+    async def _capturing_coverage(**kwargs) -> list[ArtifactCoverageRow]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _capturing_coverage)
+
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, body = await _get(
+        app,
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode=polygon_split_adjusted"
+        f"&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+    )
+
+    assert status_code == 200
+    assert captured["price_adjustment_mode"] == "polygon_split_adjusted"
+    assert body["price_adjustment_mode"] == "polygon_split_adjusted"
+
+
 async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
     """2024-05-20 (Mon) .. 2024-05-26 (Sun) has 5 NYSE sessions and a weekend.
 
@@ -363,7 +446,7 @@ async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatc
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 26))}",
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 26))}",
     )
 
     assert status_code == 200
@@ -400,7 +483,7 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
     assert status_code == 200
@@ -450,7 +533,7 @@ async def test_coverage_derives_provider_from_data_type(
     status_code, body = await _get(
         app,
         f"/api/data-lake/coverage?symbol=SPY&data_type={data_type}"
-        f"&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
     assert status_code == 200
@@ -477,7 +560,7 @@ async def test_coverage_finds_a_seeded_quote_artifact_as_complete(monkeypatch: p
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&data_type=quote&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol=SPY&data_type=quote&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
     assert status_code == 200
@@ -515,7 +598,8 @@ async def test_coverage_window_accepts_any_anchor_inside_the_et_day(
     for anchor in (at_open, at_midnight, at_open + 3 * 60 * 60 * 1000):
         status_code, body = await _get(
             app,
-            f"/api/data-lake/coverage?symbol=SPY&start_trading_date_ms={anchor}&end_trading_date_ms={anchor}",
+            f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}"
+            f"&start_trading_date_ms={anchor}&end_trading_date_ms={anchor}",
         )
         assert status_code == 200
         responses.append(body["days"])
@@ -533,7 +617,8 @@ async def test_coverage_422_on_a_ms_value_that_is_not_a_representable_instant(ma
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        "/api/data-lake/coverage?symbol=SPY&start_trading_date_ms=999999999999999999"
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}"
+        "&start_trading_date_ms=999999999999999999"
         "&end_trading_date_ms=999999999999999999",
     )
     assert status_code == 422
@@ -545,7 +630,7 @@ async def test_coverage_422_when_range_inverted(make_data_lake_app):
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 24), date(2024, 5, 20))}",
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 24), date(2024, 5, 20))}",
     )
     assert status_code == 422
     assert body["detail"]["reason"] == "invalid_range"
@@ -571,7 +656,7 @@ async def test_coverage_422_when_symbol_invalid(symbol: str, make_data_lake_app)
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol={quote(symbol)}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol={quote(symbol)}&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
     assert status_code == 422
     assert body["detail"]["reason"] == "invalid_symbol"
@@ -588,7 +673,7 @@ async def test_coverage_200_when_symbol_valid(monkeypatch: pytest.MonkeyPatch, m
     app = make_data_lake_app(include_data_lake=True)
     status_code, _ = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=BRK.B&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol=BRK.B&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
     assert status_code == 200
 
@@ -615,7 +700,7 @@ async def test_coverage_422_when_range_exceeds_max_days(monkeypatch: pytest.Monk
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&{_window(start, end)}",
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(start, end)}",
     )
     assert status_code == 422
     assert body["detail"]["reason"] == "range_too_large"
@@ -651,7 +736,7 @@ async def test_coverage_200_at_exactly_max_range_days(monkeypatch: pytest.Monkey
     app = make_data_lake_app(include_data_lake=True)
     status_code, _ = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&{_window(start, end)}",
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(start, end)}",
     )
     assert status_code == 200
 
@@ -685,7 +770,7 @@ async def test_coverage_builds_one_schedule_for_the_whole_range(monkeypatch: pyt
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
     assert status_code == 200
