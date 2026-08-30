@@ -35,7 +35,7 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.backfill import run_backfill
 from app.data_lake.path_policy import lake_subpath
-from app.data_lake.types import DataRunSpec
+from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.lake_mount import resolve_lake_artifacts
 
@@ -170,8 +170,8 @@ def _spec(end: date) -> DataRunSpec:
         request_id=_REQUEST_IDS[end],
         run_type="python_lab",
         symbols=[SYMBOL],
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=end,
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
         data_types=["trade", "quote"],
         lean_image_digest="sha256:test-image-digest",
     )

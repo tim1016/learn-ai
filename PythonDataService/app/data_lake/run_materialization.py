@@ -47,6 +47,7 @@ from app.data_lake.types import (
     DataAvailabilityResult,
     DataRunSpec,
     PriceAdjustmentMode,
+    trading_date_to_calendar_anchor_ms,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,8 +135,8 @@ def _build_engine_run_spec(
         run_type="python_lab",
         requester=requester,
         symbols=[symbol.upper()],
-        start_trading_date=start,
-        end_trading_date=end,
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(start),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
         data_types=["trade"],
         price_adjustment_mode=price_adjustment_mode,
         include_factor_files=False,

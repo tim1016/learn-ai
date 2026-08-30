@@ -8751,11 +8751,8 @@ export interface components {
              *     ]
              */
             data_types?: ("trade" | "quote")[];
-            /**
-             * End Trading Date
-             * Format: date
-             */
-            end_trading_date: string;
+            /** End Trading Date Ms */
+            end_trading_date_ms: number;
             /**
              * Fetch Timeout Seconds
              * @default 600
@@ -8814,11 +8811,8 @@ export interface components {
              * @enum {string}
              */
             run_type: "python_lab" | "lean_lab";
-            /**
-             * Start Trading Date
-             * Format: date
-             */
-            start_trading_date: string;
+            /** Start Trading Date Ms */
+            start_trading_date_ms: number;
             /** Strategy Execution Id */
             strategy_execution_id?: number | null;
             /** Symbols */

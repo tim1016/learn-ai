@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
@@ -29,6 +30,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
 from app.data_lake import catalog_client
+from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
 pytestmark = pytest.mark.asyncio
@@ -155,8 +157,8 @@ async def test_post_ensure_data_known_symbol(make_data_lake_app, tmp_lake):
         "request_id": str(uuid4()),
         "run_type": "python_lab",
         "symbols": ["SPY"],
-        "start_trading_date": "2024-05-20",
-        "end_trading_date": "2024-05-24",
+        "start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        "end_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
         "lean_image_digest": "sha256:test",
     }
     try:
@@ -177,10 +179,126 @@ async def test_post_ensure_data_422_on_bad_symbol(make_data_lake_app):
         "request_id": str(uuid4()),
         "run_type": "python_lab",
         "symbols": ["spy"],  # lowercase — rejected by validator
-        "start_trading_date": "2024-05-20",
-        "end_trading_date": "2024-05-24",
+        "start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        "end_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
         "lean_image_digest": "sha256:test",
     }
     async with AsyncClient(transport=ASGITransport(app=flag_on_app), base_url="http://test") as client:
         r = await client.post("/api/data-lake/ensure-data", json=payload)
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# #1877 boundary matrix — POST-body trading dates become anchored ms.
+# The rejection cases below need no Postgres: DataRunSpec's own validation
+# runs before ensure_data() ever touches the catalog, so an invalid body
+# never reaches the handler. The accepted-shape check further down validates
+# in-process for the same reason (see its own docstring).
+# ---------------------------------------------------------------------------
+
+
+def _valid_ensure_data_payload(**overrides) -> dict:
+    payload = {
+        "request_id": str(uuid4()),
+        "run_type": "python_lab",
+        "symbols": ["SPY"],
+        "start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        "end_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
+        "lean_image_digest": "sha256:test",
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def _post_ensure_data(make_data_lake_app, payload: dict):
+    flag_on_app = make_data_lake_app(include_data_lake=True)
+    async with AsyncClient(transport=ASGITransport(app=flag_on_app), base_url="http://test") as client:
+        return await client.post("/api/data-lake/ensure-data", json=payload)
+
+
+async def test_ensure_data_old_field_names_rejected(make_data_lake_app):
+    payload = {
+        "request_id": str(uuid4()),
+        "run_type": "python_lab",
+        "symbols": ["SPY"],
+        "start_trading_date": "2024-05-20",
+        "end_trading_date": "2024-05-24",
+        "lean_image_digest": "sha256:test",
+    }
+    r = await _post_ensure_data(make_data_lake_app, payload)
+    assert r.status_code == 422
+
+
+async def test_ensure_data_iso_strings_on_ms_fields_rejected(make_data_lake_app):
+    payload = _valid_ensure_data_payload(start_trading_date_ms="2024-05-20", end_trading_date_ms="2024-05-24")
+    r = await _post_ensure_data(make_data_lake_app, payload)
+    assert r.status_code == 422
+
+
+async def test_ensure_data_non_integer_value_rejected(make_data_lake_app):
+    payload = _valid_ensure_data_payload(start_trading_date_ms=1716206400000.5)
+    r = await _post_ensure_data(make_data_lake_app, payload)
+    assert r.status_code == 422
+
+
+async def test_ensure_data_value_outside_signed_int64_rejected(make_data_lake_app):
+    payload = _valid_ensure_data_payload(start_trading_date_ms=2**63)
+    r = await _post_ensure_data(make_data_lake_app, payload)
+    assert r.status_code == 422
+
+
+async def test_ensure_data_off_anchor_milliseconds_rejected(make_data_lake_app):
+    off_anchor = trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) + 1
+    payload = _valid_ensure_data_payload(start_trading_date_ms=off_anchor)
+    r = await _post_ensure_data(make_data_lake_app, payload)
+    assert r.status_code == 422
+
+
+async def test_ensure_data_reversed_range_rejected(make_data_lake_app):
+    payload = _valid_ensure_data_payload(
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+    )
+    r = await _post_ensure_data(make_data_lake_app, payload)
+    assert r.status_code == 422
+
+
+async def test_ensure_data_range_over_max_cap_rejected(make_data_lake_app):
+    payload = _valid_ensure_data_payload(
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2018, 1, 1)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 12, 31)),  # ~7 years
+    )
+    r = await _post_ensure_data(make_data_lake_app, payload)
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        pytest.param(date(2026, 1, 12), date(2026, 1, 16), id="est_date_range"),
+        pytest.param(date(2026, 7, 13), date(2026, 7, 17), id="edt_date_range"),
+        pytest.param(date(2026, 8, 29), date(2026, 8, 30), id="weekend_boundary"),  # Sat -> Sun
+        pytest.param(date(2026, 12, 25), date(2026, 12, 25), id="holiday_boundary"),  # Christmas
+    ],
+)
+async def test_ensure_data_body_shape_accepted_for_boundary_dates(start, end):
+    """The request-body validation DataRunSpec performs — the only gate this
+    slice owns — must not reject an EST/EDT/weekend/holiday-anchored window.
+
+    Deliberately validated in-process (no HTTP round trip): unlike the
+    rejection cases above, an *accepted* body reaches ensure_data(), which
+    requires live Postgres/launcher/Polygon — infrastructure this boundary
+    check has no business depending on. Full end-to-end acceptance for a
+    normal trading window is already covered by
+    test_post_ensure_data_known_symbol above; DataRunSpec is the identical
+    shared model /ensure-data and /backfill both validate against (see
+    BackfillJobRequest.spec in app/routers/data_lake.py), so this in-process
+    check generalizes to both routes without needing to repeat it per route.
+    """
+    payload = _valid_ensure_data_payload(
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(start),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
+    )
+    spec = DataRunSpec(**payload)
+    assert spec.start_trading_date == start
+    assert spec.end_trading_date == end

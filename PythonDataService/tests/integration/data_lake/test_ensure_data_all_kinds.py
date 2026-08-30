@@ -40,7 +40,7 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.path_policy import lake_subpath
-from app.data_lake.types import DataRunSpec
+from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
 pytestmark = pytest.mark.asyncio
@@ -207,8 +207,8 @@ def _make_spec(request_id: str, include_quote: bool = True) -> DataRunSpec:
         request_id=UUID(request_id),
         run_type="python_lab",
         symbols=["SPY"],
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 24),
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
         data_types=data_types,
         lean_image_digest="sha256:test-image-digest",
     )
