@@ -9708,10 +9708,9 @@
             "title": "Data Types",
             "type": "array"
           },
-          "end_trading_date": {
-            "format": "date",
-            "title": "End Trading Date",
-            "type": "string"
+          "end_trading_date_ms": {
+            "title": "End Trading Date Ms",
+            "type": "integer"
           },
           "fetch_timeout_seconds": {
             "default": 600,
@@ -9787,10 +9786,9 @@
             "title": "Run Type",
             "type": "string"
           },
-          "start_trading_date": {
-            "format": "date",
-            "title": "Start Trading Date",
-            "type": "string"
+          "start_trading_date_ms": {
+            "title": "Start Trading Date Ms",
+            "type": "integer"
           },
           "strategy_execution_id": {
             "anyOf": [
@@ -9816,8 +9814,8 @@
           "request_id",
           "run_type",
           "symbols",
-          "start_trading_date",
-          "end_trading_date",
+          "start_trading_date_ms",
+          "end_trading_date_ms",
           "lean_image_digest"
         ],
         "title": "DataRunSpec",

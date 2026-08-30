@@ -38,9 +38,9 @@ import respx
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.ensure_data import ensure_data
+from app.data_lake.ensure_data import _metadata_dch, ensure_data
 from app.data_lake.path_policy import lake_subpath
-from app.data_lake.types import DataRunSpec
+from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
 pytestmark = pytest.mark.asyncio
@@ -53,19 +53,53 @@ def _postgres_url() -> str:
     return url
 
 
+# The three metadata files Phase 0 always attempts (see ensure_data.py's
+# calls into _metadata_dch), needed below to scope metadata-row cleanup by
+# lean_image_digest -- metadata identity has no Symbol column.
+_METADATA_FILE_NAMES = ("market-hours-database.json", "symbol-properties-database.csv", "interest-rate.csv")
+
+
+async def _delete_scoped_artifacts(symbols: list[str], lean_image_digest: str) -> None:
+    """Delete only the catalog rows this test's own identity could have
+    written, instead of a blanket ``TRUNCATE``.
+
+    A table-wide TRUNCATE (every other clean_artifacts fixture in this
+    directory still does this) wipes ANY concurrently-running test's
+    in-flight rows too, regardless of identity: under pytest-xdist, this
+    module's fast single-call test and test_gate_chain_convergence's
+    slower two-call test land on different workers with enough duration
+    skew that one test's setup/teardown TRUNCATE reliably lands mid-flight
+    of the other. Disjoint symbols/digests (see _SECOND_CALL_DAY_OFFSETS_MS
+    above) prevent a claim COLLISION but not a TRUNCATE WIPE, since
+    TRUNCATE carries no WHERE clause. Scoping the delete to this test's own
+    symbols, plus its own metadata contract hashes (computed via the same
+    _metadata_dch the app itself claims by -- metadata rows have no Symbol
+    column), makes cleanup identity-scoped instead of table-wide.
+    """
+    metadata_dchs = [_metadata_dch(lean_image_digest, name, "raw") for name in _METADATA_FILE_NAMES]
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        await conn.execute(
+            'DELETE FROM "DataLakeArtifacts" WHERE "Symbol" = ANY($1::text[]) OR "DataContractHash" = ANY($2::text[])',
+            symbols,
+            metadata_dchs,
+        )
+    finally:
+        await conn.close()
+
+
 @pytest.fixture
-async def clean_artifacts():
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        await conn.execute('TRUNCATE TABLE "DataLakeArtifacts" RESTART IDENTITY CASCADE')
-    finally:
-        await conn.close()
+async def clean_artifacts_all_kinds_complete():
+    await _delete_scoped_artifacts(["SPY"], "sha256:test-image-digest")
     yield
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        await conn.execute('TRUNCATE TABLE "DataLakeArtifacts" RESTART IDENTITY CASCADE')
-    finally:
-        await conn.close()
+    await _delete_scoped_artifacts(["SPY"], "sha256:test-image-digest")
+
+
+@pytest.fixture
+async def clean_artifacts_second_call():
+    await _delete_scoped_artifacts(["QQQ"], "sha256:test-image-digest-second-call")
+    yield
+    await _delete_scoped_artifacts(["QQQ"], "sha256:test-image-digest-second-call")
 
 
 @pytest.fixture
@@ -126,10 +160,32 @@ _DAY_OFFSETS_MS = {
     date(2024, 5, 24): 1716557400000,
 }
 
+# A distinct holiday-free week for test_ensure_data_second_call_is_cache_hit.
+# The two tests in this module share no other state, but under
+# pytest-xdist they can run concurrently on different workers against the
+# same Postgres catalog. test_ensure_data_second_call_is_cache_hit uses a
+# distinct trading-date range (this dict), a distinct symbol (QQQ, see
+# that test), and a distinct lean_image_digest (also that test) so it
+# shares no artifact identity at all with test_ensure_data_all_kinds_complete
+# — daily-trade/minute-bar identity includes TradingDate, corp-action
+# identity (factor_file/map_file) includes Symbol but not TradingDate, and
+# metadata identity is keyed by lean_image_digest alone, so all three had
+# to move to fully avoid a claim race (ensure_data.py's non-minute-bar/
+# non-metadata claim paths have no reclaim-on-failure — see
+# app.data_lake.ensure_data's "polling not implemented in Slice 1c").
+# 2024-06-03 09:30:00 ET = UTC 2024-06-03 13:30:00 = 1717421400000 ms UTC
+_SECOND_CALL_DAY_OFFSETS_MS = {
+    date(2024, 6, 3): 1717421400000,
+    date(2024, 6, 4): 1717507800000,  # +86400000
+    date(2024, 6, 5): 1717594200000,
+    date(2024, 6, 6): 1717680600000,
+    date(2024, 6, 7): 1717767000000,
+}
 
-def _polygon_aggs_for(start_ms: int, count: int = 390) -> dict:
+
+def _polygon_aggs_for(start_ms: int, count: int = 390, ticker: str = "SPY") -> dict:
     return {
-        "ticker": "SPY",
+        "ticker": ticker,
         "status": "OK",
         "results": [
             {
@@ -201,16 +257,23 @@ def _launcher_side_effect(artifacts_root: Path):
     return _mock
 
 
-def _make_spec(request_id: str, include_quote: bool = True) -> DataRunSpec:
+def _make_spec(
+    request_id: str,
+    include_quote: bool = True,
+    start_date: date = date(2024, 5, 20),
+    end_date: date = date(2024, 5, 24),
+    symbol: str = "SPY",
+    lean_image_digest: str = "sha256:test-image-digest",
+) -> DataRunSpec:
     data_types = ["trade", "quote"] if include_quote else ["trade"]
     return DataRunSpec(
         request_id=UUID(request_id),
         run_type="python_lab",
-        symbols=["SPY"],
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 24),
+        symbols=[symbol],
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(start_date),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end_date),
         data_types=data_types,
-        lean_image_digest="sha256:test-image-digest",
+        lean_image_digest=lean_image_digest,
     )
 
 
@@ -220,7 +283,7 @@ def _make_spec(request_id: str, include_quote: bool = True) -> DataRunSpec:
 
 
 @respx.mock
-async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake, artifacts_root):
+async def test_ensure_data_all_kinds_complete(clean_artifacts_all_kinds_complete, pool, tmp_lake, artifacts_root):
     """Run ensure_data for SPY over 2024-05-20 to 2024-05-24.
 
     Expects 15 artifacts, all complete, all files on disk.
@@ -311,20 +374,24 @@ async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake, a
 
 
 @respx.mock
-async def test_ensure_data_second_call_is_cache_hit(clean_artifacts, pool, tmp_lake, artifacts_root):
-    """Second ensure_data call with the same content spec is a pure cache hit."""
+async def test_ensure_data_second_call_is_cache_hit(clean_artifacts_second_call, pool, tmp_lake, artifacts_root):
+    """Second ensure_data call with the same content spec is a pure cache hit.
+
+    Uses a distinct week (_SECOND_CALL_DAY_OFFSETS_MS) from
+    test_ensure_data_all_kinds_complete's — see that constant's docstring.
+    """
     # Mock launcher — called on first run; should not be called on second.
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
         side_effect=_launcher_side_effect(artifacts_root)
     )
 
-    for trading_date, start_ms in _DAY_OFFSETS_MS.items():
+    for trading_date, start_ms in _SECOND_CALL_DAY_OFFSETS_MS.items():
         respx.get(
             url__regex=(
-                rf"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/"
+                rf"https://api\.polygon\.io/v2/aggs/ticker/QQQ/range/1/minute/"
                 rf"{trading_date.strftime('%Y-%m-%d')}/.*"
             )
-        ).mock(return_value=httpx.Response(200, json=_polygon_aggs_for(start_ms)))
+        ).mock(return_value=httpx.Response(200, json=_polygon_aggs_for(start_ms, ticker="QQQ")))
 
     respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/splits.*")).mock(
         return_value=httpx.Response(200, json={"status": "OK", "results": []})
@@ -332,11 +399,17 @@ async def test_ensure_data_second_call_is_cache_hit(clean_artifacts, pool, tmp_l
     respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/dividends.*")).mock(
         return_value=httpx.Response(200, json={"status": "OK", "results": []})
     )
-    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/tickers/SPY/events.*")).mock(
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/tickers/QQQ/events.*")).mock(
         return_value=httpx.Response(200, json={"status": "OK", "results": {"events": []}})
     )
 
-    spec1 = _make_spec("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    spec1 = _make_spec(
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        start_date=date(2024, 6, 3),
+        end_date=date(2024, 6, 7),
+        symbol="QQQ",
+        lean_image_digest="sha256:test-image-digest-second-call",
+    )
     first = await ensure_data(spec1)
     assert first.overall_status == "complete", f"first call failed: {first.failures}"
 

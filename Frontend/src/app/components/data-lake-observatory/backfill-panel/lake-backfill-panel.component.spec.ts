@@ -83,11 +83,14 @@ describe('LakeBackfillPanelComponent', () => {
       run_type: 'python_lab',
       market: 'usa',
       symbols: ['SPY'],
-      start_trading_date: '2026-05-18',
-      end_trading_date: '2026-05-22',
+      start_trading_date_ms: Date.UTC(2026, 4, 18, 12, 0),
+      end_trading_date_ms: Date.UTC(2026, 4, 22, 12, 0),
       data_types: ['trade'],
       lean_image_digest: 'sha256:pinned',
     });
+    // #1877: only the ms fields travel on the wire — no ISO-date compatibility alias.
+    expect(payload.spec).not.toHaveProperty('start_trading_date');
+    expect(payload.spec).not.toHaveProperty('end_trading_date');
   });
 
   it('adds quote bars alongside trade when asked, never on their own', async () => {

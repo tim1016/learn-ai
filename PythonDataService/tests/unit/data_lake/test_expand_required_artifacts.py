@@ -11,7 +11,7 @@ from datetime import date
 from uuid import UUID
 
 from app.data_lake.ensure_data import expand_required_artifacts
-from app.data_lake.types import DataRunSpec
+from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 
 
 def _base_spec(**overrides) -> DataRunSpec:
@@ -19,8 +19,8 @@ def _base_spec(**overrides) -> DataRunSpec:
         "request_id": UUID("12345678-1234-5678-1234-567812345678"),
         "run_type": "python_lab",
         "symbols": ["SPY"],
-        "start_trading_date": date(2024, 5, 20),
-        "end_trading_date": date(2024, 5, 24),
+        "start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        "end_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
         "lean_image_digest": "sha256:test",
     }
     payload.update(overrides)
@@ -46,8 +46,8 @@ def test_quote_inclusion_doubles_minute_artifacts():
 
 def test_holiday_week_produces_non_sessions():
     spec = _base_spec(
-        start_trading_date=date(2024, 5, 25),  # Sat
-        end_trading_date=date(2024, 5, 27),  # Memorial Day Mon
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 25)),  # Sat
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 27)),  # Memorial Day Mon
     )
     required, non_sessions = expand_required_artifacts(spec)
     # No minute-bar artifacts when there are no trading sessions.

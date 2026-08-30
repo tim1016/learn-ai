@@ -9,16 +9,20 @@ Spec-update corrections applied (post-plan review):
   LEAN-image-extracted session calendar and is mandatory for every request.
 - ``'quote'`` in ``data_types`` requires ``'trade'`` to also be present;
   quote artifacts are derived from same-day trade bytes.
+- (#1877) ``start_trading_date``/``end_trading_date`` are no longer wire
+  fields; the wire carries ``start_trading_date_ms``/``end_trading_date_ms``
+  (int64 ms UTC, anchored at ``CALENDAR_ANCHOR_UTC_HOUR``:00:00.000 UTC) and
+  the ``date`` values are exposed as read-only properties derived from them.
 """
 
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.utils.timestamps import ny_datetime
 
@@ -100,6 +104,64 @@ def trading_date_at_ms(trading_date_ms: int) -> date:
     return ny_datetime(trading_date_ms).date()
 
 
+# ---------------------------------------------------------------------------
+# POST-body calendar anchor — issue #1877 (PR D of #1861).
+#
+# start_trading_date_ms/end_trading_date_ms (below, on DataRunSpec) describe
+# a *calendar*-range boundary, not an execution instant: the window may
+# legitimately start or end on a weekend or a market holiday, so there is no
+# session to anchor at. This is a deliberate, documented exception to the
+# session-open (09:30 ET) anchor the rest of the lake's wire vocabulary uses
+# (trading_date_at_ms/session_open_ms_utc above) — anchoring at 12:00:00.000
+# UTC instead keeps the wire value independent of both the browser's local
+# timezone and the DST-dependent ET session-open instant. A submitted value
+# must land exactly on this anchor; off-anchor milliseconds are a caller
+# error, not "any time near noon" to be silently snapped to the nearest date.
+# ---------------------------------------------------------------------------
+
+CALENDAR_ANCHOR_UTC_HOUR = 12
+_MS_PER_DAY = 24 * 60 * 60 * 1000
+_CALENDAR_ANCHOR_MS_OF_DAY = CALENDAR_ANCHOR_UTC_HOUR * 60 * 60 * 1000
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+_EPOCH_DATE = date(1970, 1, 1)
+
+
+def trading_date_to_calendar_anchor_ms(d: date) -> int:
+    """Construct the canonical POST-body wire value for calendar date ``d``:
+    ``CALENDAR_ANCHOR_UTC_HOUR``:00:00.000 UTC of that date, as int64 ms UTC.
+
+    Pure integer arithmetic — no timezone conversion is involved, since the
+    anchor is a fixed UTC hour rather than an ET wall-clock instant. The sole
+    forward direction of this module's calendar-anchor pair (paired with
+    :func:`calendar_anchor_ms_to_trading_date`); every ``DataRunSpec``
+    construction in this codebase builds its ``start_trading_date_ms``/
+    ``end_trading_date_ms`` through this helper, never through hand-written
+    ``date``/``timedelta`` arithmetic of its own.
+    """
+    return (d - _EPOCH_DATE).days * _MS_PER_DAY + _CALENDAR_ANCHOR_MS_OF_DAY
+
+
+def calendar_anchor_ms_to_trading_date(value_ms: int) -> date:
+    """Inverse of :func:`trading_date_to_calendar_anchor_ms`, with validation.
+
+    Rejects (``ValueError``) any ms value that is not exactly
+    ``CALENDAR_ANCHOR_UTC_HOUR``:00:00.000 UTC of some calendar date, or that
+    falls outside the representable signed-int64 range.
+    """
+    if not (_INT64_MIN <= value_ms <= _INT64_MAX):
+        raise ValueError(f"trading-date ms {value_ms} is outside the representable signed-int64 range")
+    if value_ms % _MS_PER_DAY != _CALENDAR_ANCHOR_MS_OF_DAY:
+        raise ValueError(
+            f"trading-date ms {value_ms} is not anchored at {CALENDAR_ANCHOR_UTC_HOUR:02d}:00:00.000 UTC"
+        )
+    days = value_ms // _MS_PER_DAY
+    try:
+        return _EPOCH_DATE + timedelta(days=days)
+    except OverflowError as exc:
+        raise ValueError(f"trading-date ms {value_ms} is not a representable calendar date") from exc
+
+
 def is_lake_addressable_symbol(symbol: str) -> bool:
     """True iff the lake writer would accept ``symbol``.
 
@@ -119,8 +181,17 @@ class DataRunSpec(BaseModel):
 
     market: Literal["usa"] = "usa"
     symbols: list[str] = Field(min_length=1)
-    start_trading_date: date
-    end_trading_date: date
+    # int64 ms UTC, anchored at CALENDAR_ANCHOR_UTC_HOUR:00:00.000 UTC (see
+    # the banner above trading_date_to_calendar_anchor_ms) — the only wire
+    # shape a caller may submit. There is no ISO-date compatibility alias
+    # (#1877): the pre-#1877 start_trading_date/end_trading_date field names
+    # are rejected by model_config's extra="forbid" below, same as any other
+    # unknown field. The signed-int64 range is enforced once, inside
+    # calendar_anchor_ms_to_trading_date (via _validate_calendar_anchor
+    # below) alongside the anchor check itself — not restated here as a
+    # second Field(ge=, le=) constraint on the same invariant.
+    start_trading_date_ms: int = Field(strict=True)
+    end_trading_date_ms: int = Field(strict=True)
 
     resolution: Literal["minute"] = "minute"
     data_types: list[Literal["trade", "quote"]] = ["trade"]
@@ -153,6 +224,24 @@ class DataRunSpec(BaseModel):
     lean_image_digest: str
 
     fetch_timeout_seconds: int = Field(default=600, ge=10, le=7200)
+
+    @field_validator("start_trading_date_ms", "end_trading_date_ms")
+    @classmethod
+    def _validate_calendar_anchor(cls, value: int) -> int:
+        calendar_anchor_ms_to_trading_date(value)  # raises ValueError off-anchor
+        return value
+
+    @property
+    def start_trading_date(self) -> date:
+        """Internal read-only ``date`` view of ``start_trading_date_ms``,
+        derived via :func:`calendar_anchor_ms_to_trading_date`. Not part of
+        the wire schema — every external representation of this value is
+        the ms field alone (#1877)."""
+        return calendar_anchor_ms_to_trading_date(self.start_trading_date_ms)
+
+    @property
+    def end_trading_date(self) -> date:
+        return calendar_anchor_ms_to_trading_date(self.end_trading_date_ms)
 
     @model_validator(mode="after")
     def _validate(self) -> DataRunSpec:

@@ -32,6 +32,7 @@ from app.data_lake.types import (
     NonSessionRecord,
     OverallStatus,
     classify_overall_status,
+    trading_date_to_calendar_anchor_ms,
 )
 from app.lean_sidecar.trading_calendar import expected_sessions
 
@@ -309,10 +310,11 @@ def _day_sub_spec(spec: DataRunSpec, trading_date: date) -> DataRunSpec:
     spec and can't violate a constraint the original didn't already
     satisfy.
     """
+    anchor_ms = trading_date_to_calendar_anchor_ms(trading_date)
     return spec.model_copy(
         update={
-            "start_trading_date": trading_date,
-            "end_trading_date": trading_date,
+            "start_trading_date_ms": anchor_ms,
+            "end_trading_date_ms": anchor_ms,
             "include_factor_files": False,
             "include_map_files": False,
             "include_daily_trade": False,
@@ -339,8 +341,8 @@ def _rollup_spec(spec: DataRunSpec, attempted_sessions: list[date]) -> DataRunSp
     """
     return spec.model_copy(
         update={
-            "start_trading_date": attempted_sessions[0],
-            "end_trading_date": attempted_sessions[-1],
+            "start_trading_date_ms": trading_date_to_calendar_anchor_ms(attempted_sessions[0]),
+            "end_trading_date_ms": trading_date_to_calendar_anchor_ms(attempted_sessions[-1]),
             "include_factor_files": True,
             "include_map_files": True,
             "include_daily_trade": True,

@@ -25,7 +25,7 @@ import type {
   DataRunSpec,
   PriceAdjustmentMode,
 } from '../lib/data-lake.types';
-import { MAX_TRADING_RANGE_DAYS, tradingRangeRejection } from '../lib/trading-range';
+import { MAX_TRADING_RANGE_DAYS, tradingDateToMs, tradingRangeRejection } from '../lib/trading-range';
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
@@ -177,7 +177,22 @@ export class LakeBackfillPanelComponent {
     const digest = this.digest();
     const defaults = this.defaults();
     const mode = this.backfillableMode();
-    if (digest === null || defaults === null || mode === null || !this.canSubmit()) return;
+    // `blockedReason`'s tradingRangeRejection() check already proved both
+    // dates parse as YYYY-MM-DD before canSubmit() can be true, so these
+    // are never null in practice — checked explicitly rather than asserted,
+    // so a future change to that gate fails safe instead of sending NaN.
+    const startMs = tradingDateToMs(this.startTradingDate());
+    const endMs = tradingDateToMs(this.endTradingDate());
+    if (
+      digest === null ||
+      defaults === null ||
+      mode === null ||
+      startMs === null ||
+      endMs === null ||
+      !this.canSubmit()
+    ) {
+      return;
+    }
 
     const dataTypes: DataLakeDataType[] = this.includeQuotes() ? ['trade', 'quote'] : ['trade'];
     const spec: DataRunSpec = {
@@ -186,8 +201,8 @@ export class LakeBackfillPanelComponent {
       run_type: 'python_lab',
       market: defaults.market,
       symbols: this.parsed().symbols,
-      start_trading_date: this.startTradingDate(),
-      end_trading_date: this.endTradingDate(),
+      start_trading_date_ms: startMs,
+      end_trading_date_ms: endMs,
       data_types: dataTypes,
       lean_image_digest: digest,
       // Backfill the view the operator is looking at. `blockedReason` has
