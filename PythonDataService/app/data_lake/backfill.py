@@ -399,6 +399,31 @@ def _missing_bar_failures(
     return missing
 
 
+def _is_bar_affecting_failure(failure: ArtifactFailure) -> bool:
+    """True when ``failure`` means this day's requested bar coverage is not
+    complete for at least one requested (symbol, data_type) — the only kind
+    of failure that should be able to truncate the post-loop rollup window
+    (see the rollup-window comment in run_backfill).
+
+    Excludes Phase 0 metadata-bootstrap failures (``artifact_kind ==
+    "metadata"``, e.g. ``launcher_unreachable`` — #1889/#1898 made these
+    retryable rather than fatal for the metadata artifacts themselves):
+    ensure_data's Phase 0 block always sets ``symbol=None`` and
+    ``trading_date=None`` on these (they are day-independent — one bundle
+    extraction per call, not per requested artifact) and, critically, a
+    Phase 0 failure does not stop Pass 1 from running — ensure_data falls
+    through to `expand_required_artifacts`/Pass 1 regardless. A metadata
+    failure therefore says nothing about whether this day's bar artifacts
+    were actually produced, and must not be misread as one. Root cause of
+    the rollup gap found while backfilling #1892's ten symbols (PR #1900):
+    the old truncation logic treated ANY ``day_result.failures`` entry —
+    metadata included — as reason to truncate, so a launcher-down day 1
+    zeroed the rollup window to empty and silently skipped the whole
+    rollup step even though every day's bar data completed.
+    """
+    return failure.artifact_kind == "time_series_bars"
+
+
 def _run_aborted_failure(trading_date: date, fatal: ArtifactFailure, remaining_dates: list[date]) -> ArtifactFailure:
     """Typed marker recording that a globally-fatal failure stopped the
     run before the remaining sessions were ever attempted.
@@ -501,7 +526,10 @@ async def run_backfill(
     days_completed = 0
     days_with_failures = 0
     days_unattempted = 0
-    first_failed_day_index: int | None = None
+    # Only a bar-affecting failure (see _is_bar_affecting_failure) may set
+    # this — a day-independent Phase 0 metadata failure must not truncate
+    # the rollup window below.
+    first_bar_failure_day_index: int | None = None
 
     for day_index, trading_date in enumerate(sessions, start=1):
         if cancel_check is not None:
@@ -534,10 +562,12 @@ async def run_backfill(
         all_failures.extend(day_result.failures)
         if day_result.failures:
             days_with_failures += 1
-            if first_failed_day_index is None:
-                first_failed_day_index = day_index
         else:
             days_completed += 1
+        if first_bar_failure_day_index is None and any(
+            _is_bar_affecting_failure(f) for f in day_result.failures
+        ):
+            first_bar_failure_day_index = day_index
 
         if on_day_progress is not None:
             on_day_progress(
@@ -563,11 +593,13 @@ async def run_backfill(
     # The rollup's window is a single contiguous range (_rollup_spec takes
     # only a start/end), so it cannot skip an individual failed day sandwiched
     # between successes — it can only be truncated. Truncate it at the first
-    # day (fatal or not) that had ANY failure: every day from there on is not
-    # 'complete' for at least one requested data type, so re-including it
-    # would have this call's Pass 1 retry a failure that already happened
-    # once this run — repeating a doomed auth/rate-limit call in the fatal
-    # case, or just duplicating the same failure in the report otherwise.
+    # day (fatal or not) that had a bar-affecting failure (see
+    # _is_bar_affecting_failure — a day-independent Phase 0 metadata failure
+    # does NOT count): every day from there on is not 'complete' for at least
+    # one requested data type, so re-including it would have this call's
+    # Pass 1 retry a failure that already happened once this run — repeating
+    # a doomed auth/rate-limit call in the fatal case, or just duplicating
+    # the same failure in the report otherwise.
     # This can under-cover the factor_file's history window when a later day
     # past the first failure succeeded (its own window is spec-scoped, unlike
     # the daily-trade artifact's, whose source set is read from the full
@@ -577,8 +609,8 @@ async def run_backfill(
     # once the underlying provider issue is resolved.
     attempted_sessions = sessions[: len(sessions) - days_unattempted]
     rollup_sessions = (
-        attempted_sessions[: first_failed_day_index - 1]
-        if first_failed_day_index is not None
+        attempted_sessions[: first_bar_failure_day_index - 1]
+        if first_bar_failure_day_index is not None
         else attempted_sessions
     )
     if rollup_sessions and bar_success_total > 0:

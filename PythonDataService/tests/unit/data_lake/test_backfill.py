@@ -113,6 +113,41 @@ def _failure_result(spec: DataRunSpec, reason: str, detail: str = "boom") -> Dat
     )
 
 
+def _ok_result_with_metadata_failure(spec: DataRunSpec, artifact_id: int = 1) -> DataAvailabilityResult:
+    """Mimics ensure_data when Phase 0's LEAN-metadata bootstrap fails (e.g.
+    launcher_unreachable, #1889) but Pass 1 still succeeds. Phase 0 failing
+    does not stop Pass 1 from running -- ensure_data's Phase 0 block appends
+    to `failures` and falls through to `expand_required_artifacts`/Pass 1
+    rather than returning early (see ensure_data.py lines ~1470-1568) -- so a
+    real day_result can legitimately carry both a bar-artifact success and a
+    day-independent metadata failure (symbol=None, trading_date=None) at once.
+    """
+    trading_date = spec.start_trading_date
+    return DataAvailabilityResult(
+        request_id=spec.request_id,
+        overall_status="partial",
+        lean_data_root_path="/tmp/lake",
+        data_availability_hash="hash",
+        artifacts=[_artifact(trading_date, spec.symbols[0], artifact_id)],
+        failures=[
+            ArtifactFailure(
+                artifact_kind="metadata",
+                symbol=None,
+                trading_date=None,
+                data_type=None,
+                reason="launcher_unreachable",
+                detail="market-hours metadata bootstrap failed: launcher at http://lean-launcher:8090 unreachable",
+                attempt_count=1,
+            )
+        ],
+        skipped_non_sessions=[],
+        fetched_artifact_count=1,
+        reused_artifact_count=0,
+        completed_at_ms=1,
+        duration_ms=1,
+    )
+
+
 class TestSessionIteration:
     async def test_calls_ensure_once_per_canonical_session_and_narrows_the_range(self) -> None:
         """2024-05-20..24 is a normal trading week (Mon-Fri): 5 NYSE sessions.
@@ -262,6 +297,43 @@ class TestPostLoopRollup:
         rollup_spec = seen_specs[-1]
         assert rollup_spec.start_trading_date == date(2024, 5, 20)
         assert rollup_spec.end_trading_date == date(2024, 5, 20)  # truncated before 05-21, not through 05-24
+
+    async def test_metadata_bootstrap_failure_does_not_truncate_the_rollup_window(self) -> None:
+        """Confirmed root cause of the rollup gap discovered while backfilling
+        #1892's ten symbols (PR #1900): a day-independent Phase 0 metadata-
+        bootstrap failure (launcher_unreachable -- #1889/#1898 made this
+        retryable rather than fatal for the metadata artifacts themselves) was
+        misread by the truncation logic as if it were this day's bar failure.
+        On day 1 that zeroed the rollup window to empty (truncate-before-the-
+        first-failed-day, and the first failed day was day 1), silently
+        skipping the rollup step for the whole range even though every day's
+        bar data completed successfully. A metadata failure carries
+        symbol=None/trading_date=None and says nothing about whether this
+        day's bar artifacts were produced -- only a time_series_bars failure
+        should be able to truncate the window."""
+        seen_specs: list[DataRunSpec] = []
+
+        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
+            seen_specs.append(day_spec)
+            if day_spec.start_trading_date == date(2024, 5, 20):
+                return _ok_result_with_metadata_failure(day_spec)
+            return _ok_result(day_spec)
+
+        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
+        result = await run_backfill(spec, ensure_fn=fake_ensure)
+
+        assert result.days_unattempted == 0
+        # The metadata failure is still reported, not swallowed.
+        assert any(f.artifact_kind == "metadata" and f.reason == "launcher_unreachable" for f in result.failures)
+        # The rollup must still fire, over the FULL window -- not truncated
+        # to empty by the metadata-only failure on day 1.
+        assert len(seen_specs) == 6  # 5 day sub-calls + the rollup call
+        rollup_spec = seen_specs[-1]
+        assert rollup_spec.include_factor_files is True
+        assert rollup_spec.include_map_files is True
+        assert rollup_spec.include_daily_trade is True
+        assert rollup_spec.start_trading_date == date(2024, 5, 20)
+        assert rollup_spec.end_trading_date == date(2024, 5, 24)
 
     async def test_rollup_failures_and_counts_fold_into_the_result(self) -> None:
         """A rollup failure (e.g. the daily artifact itself failing) is not
