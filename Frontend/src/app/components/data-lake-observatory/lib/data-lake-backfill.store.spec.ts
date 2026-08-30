@@ -18,7 +18,6 @@ const SPEC: DataRunSpec = {
   end_trading_date: '2026-05-20',
   data_types: ['trade'],
   lean_image_digest: 'sha256:pinned',
-  force_refresh: false,
 };
 
 // The store rides JobsService.onEvent() (#1856) rather than opening its own

@@ -921,14 +921,23 @@ async def _process_factor_file_artifact(
     spec: DataRunSpec,
     minute_trade_records: list[ArtifactRecord],
     lake_root: Path,
-) -> tuple[ArtifactRecord | None, ArtifactFailure | None, bool]:
+) -> tuple[ArtifactRecord | None, ArtifactFailure | None, Literal["fetched", "reused", "refreshed"]]:
     """Claim → fetch splits/dividends → build factor-file bytes → write → complete.
 
     ``minute_trade_records`` are the symbol's complete minute-trade
     artifacts from Pass 1; their RTH closes price the dividend rows
     (LEAN throws on a zero reference price — see ``factor_files``).
 
-    Returns (record, None, is_reused) on success or (None, failure, False) on error.
+    A factor file's DataContractHash is derived from the request's history
+    window (``_factor_file_dch``), unlike map_file's (window-independent —
+    see ``_map_file_dch``). A wider window therefore produces a different
+    hash for the same symbol, and this rebuilds onto it — same
+    refresh-on-mismatch model as ``_process_daily_trade_artifact`` — instead
+    of silently serving back a factor file anchored to the earlier, narrower
+    window's history bounds.
+
+    Returns (record, None, outcome) on success or (None, failure, "fetched")
+    on error — the third element is meaningless on failure.
     """
     rel_path = LeanFactorFilePath(
         market=identity.market,  # type: ignore[arg-type]
@@ -937,6 +946,7 @@ async def _process_factor_file_artifact(
     file_path = str(rel_path)
     dch = _factor_file_dch(spec.start_trading_date, spec.end_trading_date, spec.price_adjustment_mode)
 
+    outcome: Literal["fetched", "reused", "refreshed"] = "fetched"
     artifact_id = await catalog_client.claim_corp_action_artifact(
         identity=identity,
         worker_id=_WORKER_ID,
@@ -947,27 +957,63 @@ async def _process_factor_file_artifact(
     if artifact_id is None:
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
         if existing is not None:
-            return existing, None, True  # cache hit
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=None,
-                data_type=None,
-                reason="lease_timeout",
-                detail="factor_file in-flight elsewhere; polling not implemented in Slice 1c",
-                attempt_count=1,
-            ),
-            False,
-        )
+            if existing.data_contract_hash == dch:
+                return existing, None, "reused"  # cache hit — same history window
+            prior = await catalog_client.refresh_complete_artifact(
+                artifact_id=existing.id,
+                worker_id=_WORKER_ID,
+                lease_ttl_ms=_LEASE_TTL_MS,
+            )
+            if prior is None:
+                # Raced with another worker's own refresh/claim between the two
+                # selects above; the caller's next ensure_data call retries.
+                return (
+                    None,
+                    ArtifactFailure(
+                        artifact_kind=identity.artifact_kind,
+                        symbol=identity.symbol,
+                        trading_date=None,
+                        data_type=None,
+                        reason="lease_timeout",
+                        detail="factor_file rebuild raced with another worker; retry on a later ensure_data call",
+                        attempt_count=1,
+                    ),
+                    "fetched",
+                )
+            artifact_id = existing.id
+            outcome = "refreshed"
+        else:
+            return (
+                None,
+                ArtifactFailure(
+                    artifact_kind=identity.artifact_kind,
+                    symbol=identity.symbol,
+                    trading_date=None,
+                    data_type=None,
+                    reason="lease_timeout",
+                    detail="factor_file in-flight elsewhere; polling not implemented in Slice 1c",
+                    attempt_count=1,
+                ),
+                "fetched",
+            )
+
+    # A rebuild (outcome == "refreshed") that fails anywhere below hasn't
+    # written anything new yet — restore the previously-complete artifact
+    # rather than marking it 'failed' with no retry path (steal_or_retry_
+    # minute_bar doesn't cover corp-action rows). A first-ever fetch
+    # (outcome == "fetched") has no prior state to restore, so fail as before.
+    async def _fail_or_restore(last_error: str, detail: str) -> None:
+        if outcome == "refreshed":
+            await catalog_client.restore_complete_artifact(artifact_id, _WORKER_ID)
+        else:
+            await catalog_client.fail_artifact(artifact_id, last_error, detail)
 
     api_key = settings.POLYGON_API_KEY
     try:
         splits = await fetch_splits(symbol=identity.symbol or "", api_key=api_key)
         dividends = await fetch_dividends(symbol=identity.symbol or "", api_key=api_key)
     except Exception as e:
-        await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e))
+        await _fail_or_restore("provider_api_error", str(e))
         return (
             None,
             ArtifactFailure(
@@ -979,7 +1025,7 @@ async def _process_factor_file_artifact(
                 detail=str(e),
                 attempt_count=1,
             ),
-            False,
+            "fetched",
         )
 
     # Reference prices for the dividend rows come from the symbol's
@@ -991,7 +1037,7 @@ async def _process_factor_file_artifact(
         try:
             all_bars.extend(_read_minute_trade_bars(src.file_path, lake_root))
         except Exception as e:
-            await catalog_client.fail_artifact(artifact_id, "io_error", str(e))
+            await _fail_or_restore("io_error", str(e))
             return (
                 None,
                 ArtifactFailure(
@@ -1003,7 +1049,7 @@ async def _process_factor_file_artifact(
                     detail=f"failed to read minute bars for factor-file reference prices: {e}",
                     attempt_count=1,
                 ),
-                False,
+                "fetched",
             )
 
     try:
@@ -1016,7 +1062,7 @@ async def _process_factor_file_artifact(
             daily_closes=rth_daily_closes(all_bars),
         )
     except FactorFileReferenceError as e:
-        await catalog_client.fail_artifact(artifact_id, "internal_error", str(e))
+        await _fail_or_restore("internal_error", str(e))
         return (
             None,
             ArtifactFailure(
@@ -1028,7 +1074,7 @@ async def _process_factor_file_artifact(
                 detail=str(e),
                 attempt_count=1,
             ),
-            False,
+            "fetched",
         )
     staging_root = resolve_staging_root(spec.price_adjustment_mode)
     file_sha = atomic_write_and_promote(
@@ -1047,6 +1093,10 @@ async def _process_factor_file_artifact(
         last_bar_start_ms=0,
         file_size_bytes=len(payload),
         file_sha256=file_sha,
+        # Rebuild path (outcome == "refreshed") completes onto a different
+        # history window's hash than the row's existing DataContractHash —
+        # see the identical comment in _process_daily_trade_artifact.
+        data_contract_hash=dch,
     )
     return (
         ArtifactRecord(
@@ -1068,7 +1118,7 @@ async def _process_factor_file_artifact(
             file_size_bytes=len(payload),
         ),
         None,
-        False,  # freshly fetched
+        outcome,
     )
 
 
@@ -1314,10 +1364,20 @@ async def _process_daily_trade_artifact(
     source_trade_records: list[ArtifactRecord],
     spec: DataRunSpec,
     lake_root: Path,
-) -> tuple[ArtifactRecord | None, ArtifactFailure | None, bool]:
+) -> tuple[ArtifactRecord | None, ArtifactFailure | None, Literal["fetched", "reused", "refreshed"]]:
     """Derive daily-trade bytes from all complete minute-trade artifacts for the symbol.
 
-    Returns (record, None, is_reused) on success or (None, failure, False) on error.
+    ``source_trade_records`` is the symbol's full current minute-trade
+    coverage (the caller queries the catalog directly, not just this call's
+    requested window — see the Pass 2 call site), so the resulting
+    DataContractHash reflects everything currently catalogued, not one
+    window. That is what makes the artifact rebuildable across successive
+    windows instead of colliding: a second, wider (or narrower, or
+    corrected) window naturally produces a different hash over a different
+    source set, and this function rebuilds onto it rather than refusing.
+
+    Returns (record, None, outcome) on success or (None, failure, "fetched")
+    on error — the third element is meaningless on failure.
     """
     rel_path = LeanDailyBarPath(
         market=identity.market,  # type: ignore[arg-type]
@@ -1328,6 +1388,7 @@ async def _process_daily_trade_artifact(
     source_shas = [r.file_sha256 for r in source_trade_records]
     dch = _daily_dch(source_ids, source_shas, spec.price_adjustment_mode)
 
+    outcome: Literal["fetched", "reused", "refreshed"] = "fetched"
     artifact_id = await catalog_client.claim_aggregated_bar_artifact(
         identity=identity,
         worker_id=_WORKER_ID,
@@ -1339,11 +1400,35 @@ async def _process_daily_trade_artifact(
         existing = await catalog_client.select_complete_aggregated_bar_artifact(identity)
         if existing is not None:
             if existing.data_contract_hash == dch:
-                return existing, None, True  # cache hit — same source set
-            # The existing daily artifact was built from a different set of source
-            # minute artifacts (different window or different corp-action history).
-            # Return a failure so Backend / the caller can decide whether to
-            # force_refresh. Re-aggregation is out of scope for Slice 1c.
+                return existing, None, "reused"  # cache hit — same source set
+            # The symbol's catalogued minute coverage has grown (or a source
+            # minute artifact's bytes changed under a day-refresh) since this
+            # daily artifact was last built. Rebuild it onto the current full
+            # set instead of refusing — see catalog_client.refresh_complete_artifact.
+            prior = await catalog_client.refresh_complete_artifact(
+                artifact_id=existing.id,
+                worker_id=_WORKER_ID,
+                lease_ttl_ms=_LEASE_TTL_MS,
+            )
+            if prior is None:
+                # Raced with another worker's own refresh/claim between the two
+                # selects above; the caller's next ensure_data call retries.
+                return (
+                    None,
+                    ArtifactFailure(
+                        artifact_kind=identity.artifact_kind,
+                        symbol=identity.symbol,
+                        trading_date=None,
+                        data_type=identity.data_type,
+                        reason="lease_timeout",
+                        detail="daily-trade rebuild raced with another worker; retry on a later ensure_data call",
+                        attempt_count=1,
+                    ),
+                    "fetched",
+                )
+            artifact_id = existing.id
+            outcome = "refreshed"
+        else:
             return (
                 None,
                 ArtifactFailure(
@@ -1351,29 +1436,12 @@ async def _process_daily_trade_artifact(
                     symbol=identity.symbol,
                     trading_date=None,
                     data_type=identity.data_type,
-                    reason="data_contract_mismatch",
-                    detail=(
-                        f"cached daily artifact hash {existing.data_contract_hash!r} "
-                        f"differs from newly computed {dch!r}; "
-                        "re-run with force_refresh=True to rebuild"
-                    ),
+                    reason="lease_timeout",
+                    detail="daily-trade in-flight elsewhere; polling not implemented in Slice 1c",
                     attempt_count=1,
                 ),
-                False,
+                "fetched",
             )
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=None,
-                data_type=identity.data_type,
-                reason="lease_timeout",
-                detail="daily-trade in-flight elsewhere; polling not implemented in Slice 1c",
-                attempt_count=1,
-            ),
-            False,
-        )
 
     # Read all source trade bars from disk.
     all_bars: list[MinuteTradeBar] = []
@@ -1382,7 +1450,14 @@ async def _process_daily_trade_artifact(
             bars = _read_minute_trade_bars(src.file_path, lake_root)
             all_bars.extend(bars)
         except Exception as e:
-            await catalog_client.fail_artifact(artifact_id, "io_error", str(e))
+            # A rebuild (outcome == "refreshed") that fails here hasn't
+            # written anything new yet — restore the previously-complete
+            # artifact rather than marking it 'failed' with no retry path
+            # (steal_or_retry_minute_bar doesn't cover aggregated-bar rows).
+            if outcome == "refreshed":
+                await catalog_client.restore_complete_artifact(artifact_id, _WORKER_ID)
+            else:
+                await catalog_client.fail_artifact(artifact_id, "io_error", str(e))
             return (
                 None,
                 ArtifactFailure(
@@ -1394,7 +1469,7 @@ async def _process_daily_trade_artifact(
                     detail=f"failed to read source trade bars from {src.file_path}: {e}",
                     attempt_count=1,
                 ),
-                False,
+                "fetched",
             )
 
     aggregates = aggregate_minute_to_daily(all_bars)
@@ -1417,6 +1492,13 @@ async def _process_daily_trade_artifact(
         last_bar_start_ms=0,
         file_size_bytes=len(payload),
         file_sha256=file_sha,
+        # Rebuild path (outcome == "refreshed") completes onto a different
+        # source set than the row's existing DataContractHash — persist the
+        # freshly computed one or the next ensure_data call sees the same
+        # stale mismatch and rebuilds again. "fetched" path claims with dch
+        # already (claim_aggregated_bar_artifact above), so this is a no-op
+        # there, but passing it unconditionally keeps both paths honest.
+        data_contract_hash=dch,
     )
     return (
         ArtifactRecord(
@@ -1438,7 +1520,7 @@ async def _process_daily_trade_artifact(
             file_size_bytes=len(payload),
         ),
         None,
-        False,  # freshly derived
+        outcome,
     )
 
 
@@ -1476,6 +1558,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     failures: list[ArtifactFailure] = []
     fetched_count = 0
     reused_count = 0
+    refreshed_count = 0
 
     # -----------------------------------------------------------------------
     # Phase 0: LEAN metadata bootstrap
@@ -1607,7 +1690,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                     )
                 )
                 continue
-            record, failure, is_reused = await _process_factor_file_artifact(
+            record, failure, outcome = await _process_factor_file_artifact(
                 identity,
                 spec,
                 minute_trade_by_symbol.get(sym, []),
@@ -1615,8 +1698,10 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             )
             if record is not None:
                 artifacts.append(record)
-                if is_reused:
+                if outcome == "reused":
                     reused_count += 1
+                elif outcome == "refreshed":
+                    refreshed_count += 1
                 else:
                     fetched_count += 1
             elif failure is not None:
@@ -1667,7 +1752,22 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
 
         elif _is_daily_trade(identity):
             sym = identity.symbol or ""
-            source_records = minute_trade_by_symbol.get(sym, [])
+            # Symbol-wide, not window-scoped: the daily artifact's job is to
+            # always reflect everything currently catalogued for this
+            # symbol, so its source set is read from the catalog directly
+            # rather than from this call's own required-artifacts window
+            # (minute_trade_by_symbol). This is what makes a second,
+            # differently-windowed ensure_data call for the same symbol a
+            # legitimate rebuild instead of a data_contract_mismatch — see
+            # _process_daily_trade_artifact.
+            source_records = await catalog_client.select_coverage_minute_bars(
+                spec.market,
+                sym,
+                "trade",
+                None,
+                None,
+                price_adjustment_mode=spec.price_adjustment_mode,
+            )
             if not source_records:
                 failures.append(
                     ArtifactFailure(
@@ -1681,11 +1781,13 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                     )
                 )
                 continue
-            record, failure, is_reused = await _process_daily_trade_artifact(identity, source_records, spec, lake_root)
+            record, failure, outcome = await _process_daily_trade_artifact(identity, source_records, spec, lake_root)
             if record is not None:
                 artifacts.append(record)
-                if is_reused:
+                if outcome == "reused":
                     reused_count += 1
+                elif outcome == "refreshed":
+                    refreshed_count += 1
                 else:
                     fetched_count += 1
             elif failure is not None:
@@ -1704,7 +1806,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
         skipped_non_sessions=non_sessions,
         fetched_artifact_count=fetched_count,
         reused_artifact_count=reused_count,
-        refreshed_artifact_count=0,
+        refreshed_artifact_count=refreshed_count,
         completed_at_ms=completed_ms,
         duration_ms=completed_ms - started_ms,
     )

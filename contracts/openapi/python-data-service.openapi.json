@@ -9720,11 +9720,6 @@
             "title": "Fetch Timeout Seconds",
             "type": "integer"
           },
-          "force_refresh": {
-            "default": false,
-            "title": "Force Refresh",
-            "type": "boolean"
-          },
           "include_daily_trade": {
             "default": true,
             "title": "Include Daily Trade",
