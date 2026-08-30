@@ -13,7 +13,12 @@ import subprocess
 from pathlib import Path
 
 from app.lean_sidecar.config import LEAN_IMAGE_REPO, PINNED_LEAN_IMAGE_DIGEST, RunLimits
-from app.lean_sidecar.lake_mount import LAKE_VOLUME_HOST_PATH_ENV, LakeMount
+from app.lean_sidecar.lake_mount import (
+    LAKE_VOLUME_HOST_PATH_ENV,
+    LakeMount,
+    LakeMountError,
+    verify_lake_metadata_bundle,
+)
 from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
@@ -143,6 +148,7 @@ def launch(
     *,
     artifacts_root: Path,
     lake_root: Path | None = None,
+    lake_base_root: Path | None = None,
     allowed_image_digests: frozenset[str] | None = None,
 ) -> LaunchResponse:
     """Validate, plan, execute, and persist the launcher log.
@@ -150,10 +156,12 @@ def launch(
     Order of operations is load-bearing for safety:
     1. Resolve workspace under the configured artifacts root.
     2. Refuse if the workspace directory has not been pre-populated.
-    3. Build the podman argv (re-asserts image allow-list + limits).
-    4. Write the planned argv to ``launcher.log`` *before* execution.
-    5. Execute, capturing exit code, duration, and log tail.
-    6. Append the result to ``launcher.log``.
+    3. For a lake-mount run, verify the on-disk root marker and metadata
+       receipt before building anything (#1879, PR C of #1861).
+    4. Build the podman argv (re-asserts image allow-list + limits).
+    5. Write the planned argv to ``launcher.log`` *before* execution.
+    6. Execute, capturing exit code, duration, and log tail.
+    7. Append the result to ``launcher.log``.
 
     Writing the plan before execution means a launcher crash mid-run
     still leaves an audit trail of "the launcher tried to invoke
@@ -161,11 +169,11 @@ def launch(
     the explicit override exists only for the developer-only reconciliation
     fixture generator, whose historical pins are isolated from live requests.
 
-    ``lake_root`` is the launcher's deploy-time host path for the data
-    lake, resolved by the transport layer — never by the request. A
-    request asking for the lake mount when the launcher has no lake root
-    configured is rejected rather than silently launched without it,
-    which would run LEAN against an empty data folder.
+    ``lake_root`` and ``lake_base_root`` are the launcher's deploy-time host
+    paths for the data lake, resolved by the transport layer — never by the
+    request. A request asking for the lake mount when the launcher has no
+    lake root configured is rejected rather than silently launched without
+    it, which would run LEAN against an empty data folder.
     """
     try:
         workspace = resolve_workspace(request.run_id, artifacts_root)
@@ -180,12 +188,28 @@ def launch(
 
     lake_mount: LakeMount | None = None
     if request.mount_lake_read_only:
-        if lake_root is None:
+        if lake_root is None or lake_base_root is None:
             raise LaunchRejectedError(
                 "lake_mount_not_configured",
                 f"run requested the read-only lake mount but the launcher has no "
                 f"{LAKE_VOLUME_HOST_PATH_ENV} configured",
             )
+        if request.data_root_id is None:
+            raise LaunchRejectedError(
+                "lake_metadata_verification_missing_root_id",
+                "run requested the read-only lake mount but sent no data_root_id; "
+                "refusing rather than mounting an unverified root (#1879)",
+            )
+        try:
+            verify_lake_metadata_bundle(
+                lake_root=lake_root,
+                base_root=lake_base_root,
+                expected_data_root_id=request.data_root_id,
+                expected_price_adjustment_mode=request.price_adjustment_mode,
+                expected_lean_image_digest=request.image_digest,
+            )
+        except LakeMountError as e:
+            raise LaunchRejectedError("lake_metadata_verification_failed", str(e)) from e
         lake_mount = LakeMount(host_lake_root=lake_root)
 
     limits = RunLimits(

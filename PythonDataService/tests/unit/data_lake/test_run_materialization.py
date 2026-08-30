@@ -124,7 +124,14 @@ class FakeCatalog:
             self._identity_row(identity, data_contract_hash, file_path),
         )
 
-    async def select_complete_metadata_artifact(self, data_contract_hash: str) -> ArtifactRecord | None:
+    async def select_complete_metadata_artifact(
+        self, data_contract_hash: str, data_root_id=None
+    ) -> ArtifactRecord | None:
+        # data_root_id accepted-not-modeled: this fake has never partitioned
+        # any of its tables by root (see select_coverage_minute_bars above),
+        # so a caller passing the real function's now-optional data_root_id
+        # kwarg (#1879, PR C of #1861) must not TypeError -- the same reason
+        # every other newly-optional kwarg on this fake's methods is accepted.
         for row in self.rows.values():
             if (
                 row["artifact_kind"] == "metadata"
@@ -134,7 +141,9 @@ class FakeCatalog:
                 return self._record(row)
         return None
 
-    async def select_metadata_claim_state(self, data_contract_hash: str) -> catalog_client.ArtifactClaimState | None:
+    async def select_metadata_claim_state(
+        self, data_contract_hash: str, data_root_id=None
+    ) -> catalog_client.ArtifactClaimState | None:
         artifact_id = self.keys.get(("metadata", data_contract_hash))
         if artifact_id is None:
             return None
@@ -145,6 +154,31 @@ class FakeCatalog:
             attempt_count=row["attempt_count"],
             last_error=row["last_error"],
         )
+
+    async def mark_metadata_artifacts_stale_for_path(
+        self, data_root_id, price_adjustment_mode, file_path, keep_artifact_id=None
+    ) -> int:
+        """Mirrors the real query's mode-scoped staleness predicate (#1879):
+        FilePath alone is identical across modes, so PriceAdjustmentMode
+        must gate which rows this call is allowed to touch -- see
+        ``catalog_client.mark_metadata_artifacts_stale_for_path``'s own
+        docstring for why. Also mirrors that function's two Codex-P1/P2
+        fixes (PR #1884): a legacy pre-#1879 row's ``price_adjustment_mode``
+        is ``None`` and must still match any requested mode, and
+        ``keep_artifact_id`` omitted (``None``) means "no keeper, stale
+        every complete row for this path" rather than excluding nothing."""
+        staled = 0
+        for artifact_id, row in self.rows.items():
+            if (
+                row["artifact_kind"] == "metadata"
+                and (row["price_adjustment_mode"] == price_adjustment_mode or row["price_adjustment_mode"] is None)
+                and row["file_path"] == file_path
+                and row["status"] == "complete"
+                and (keep_artifact_id is None or artifact_id != keep_artifact_id)
+            ):
+                row["status"] = "stale"
+                staled += 1
+        return staled
 
     @staticmethod
     def _minute_key(identity) -> tuple:
@@ -178,7 +212,10 @@ class FakeCatalog:
         # The fake has no lease clock, so "fetching" always means a live
         # lease held by someone else — nothing to steal, matching the real
         # WHERE clause's "LeaseExpiresAtMs < now" arm never firing here.
-        if row["status"] == "failed" and row["attempt_count"] < max_retries:
+        # 'stale' reactivates unconditionally (Codex P1, PR #1884) -- see
+        # the real ``steal_or_retry_minute_bar``'s docstring for why that
+        # branch carries no lease/retry gate, unlike the other two.
+        if (row["status"] == "failed" and row["attempt_count"] < max_retries) or row["status"] == "stale":
             row["status"] = "fetching"
             row["attempt_count"] += 1
             row["last_error"] = None
@@ -293,6 +330,7 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "claim_metadata_artifact",
         "select_complete_metadata_artifact",
         "select_metadata_claim_state",
+        "mark_metadata_artifacts_stale_for_path",
         "claim_minute_bar",
         "select_minute_bar_claim_state",
         "steal_or_retry_minute_bar",
@@ -873,22 +911,35 @@ async def test_materialize_run_data_stops_waiting_at_the_fetch_deadline(
 # The wait above keys off ``lease_timeout``, so ``ensure_data`` reporting the
 # two Phase-0 outcomes under one reason would make it un-waitable: a run that
 # lost the metadata race would look exactly like a run whose launcher is dead.
+# That distinction (lease_timeout vs. io_error) is still covered directly —
+# see tests/unit/data_lake/test_metadata_bundle.py's
+# TestClaimAndCompleteMetadataRowReclaimRace, which forces a genuine claim
+# collision in app.data_lake.metadata_bundle._claim_and_complete_metadata_row
+# and asserts the loser reports lease_timeout, not fetch_timeout or io_error.
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_metadata_leased_elsewhere_reports_contention(fake_catalog, tmp_lake):
+async def test_concurrent_metadata_bootstraps_no_longer_race_the_claim(fake_catalog, tmp_lake):
+    """Pre-#1879, two concurrent ensure_data calls raced the Phase-0 Postgres
+    claim directly and the loser reported metadata lease_timeout. #1879's
+    same-host advisory lock (app.data_lake.metadata_bundle) now serializes
+    the whole Phase-0 bundle sequence per (root, mode): the two calls no
+    longer interleave their Postgres claims at all — one extracts and
+    publishes the receipt, the other waits for the lock and then finds a
+    verified receipt, a clean cache hit. Neither call reports a metadata
+    failure — the acceptance criterion this guards is "concurrent requests
+    ... cannot interleave files and receipts", proven here at the
+    ``ensure_data`` level the way the pre-#1879 test proved the old,
+    unserialized race."""
     _mock_launcher(latency_s=0.05)
     _mock_polygon()
 
-    # Raw ensure_data, not the bridge: the bridge's retry would erase the
-    # loser's report, and the loser's report is the subject here.
     both = await asyncio.gather(ensure_data(_spec()), ensure_data(_spec()))
 
     metadata_failures = [f for result in both for f in result.failures if f.artifact_kind == "metadata"]
-    assert metadata_failures, "the two runs did not race for the Phase-0 claim"
-    assert all(f.reason == "lease_timeout" for f in metadata_failures)
+    assert metadata_failures == [], "the advisory lock must serialize Phase-0, not let two calls race the claim"
 
 
 @respx.mock

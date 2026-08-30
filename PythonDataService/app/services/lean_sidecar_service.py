@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from app.config import settings
+from app.config import active_root_id, settings
 from app.data_lake.types import polygon_mode_for
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
@@ -912,6 +912,12 @@ async def run_trusted_sample(
         # launcher must be told which subtree to mount or an adjusted
         # run would silently read raw bytes.
         price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
+        # The physical root this process expects the lake to be (#1879, PR C
+        # of #1861) -- the launcher verifies it against the root marker and
+        # metadata receipt already on disk before mounting. Server-resolved,
+        # never taken from the request, matching every other data_root_id
+        # default in the codebase (issue #1876's fixed design decision).
+        data_root_id=active_root_id(),
         # Intentionally NOT setting hardening_profile until we have a
         # verified fix for the wide-window SIGILL. The plumbing is in
         # place (HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX

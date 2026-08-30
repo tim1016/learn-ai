@@ -229,10 +229,22 @@ class TestLauncherResolvesTheHostPath:
     """The data plane states intent; the launcher owns the path."""
 
     def test_launch_request_carries_intent_not_a_path(self) -> None:
+        """No field lets a caller hand the launcher a filesystem path.
+
+        ``data_root_id`` (#1879, PR C of #1861) is a deliberate, narrow
+        exception to the old blanket "root" ban: it is an opaque identity
+        UUID the launcher only ever *compares* against the marker and
+        receipt already on disk (``app.lean_sidecar.lake_mount.verify_lake_metadata_bundle``)
+        -- never a path, and never something that widens or redirects
+        where the launcher looks. The invariant this test actually guards
+        (a caller cannot tell the launcher *where* to mount from) still
+        holds; only the substring match had to narrow to say so precisely.
+        """
         fields = set(LaunchRequest.model_fields)
 
         assert "mount_lake_read_only" in fields
-        assert not any("path" in name or "root" in name for name in fields)
+        path_or_root_fields = {name for name in fields if "path" in name or "root" in name}
+        assert path_or_root_fields == {"data_root_id"}
 
     def test_launcher_refuses_a_lake_run_it_cannot_satisfy(
         self,
