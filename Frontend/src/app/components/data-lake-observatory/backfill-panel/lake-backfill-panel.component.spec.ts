@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService, type JobState } from '../../../services/jobs.service';
 import { DataLakeBackfillStore } from '../lib/data-lake-backfill.store';
@@ -29,19 +29,6 @@ function fakeFailure(symbol: string): BackfillFailure {
     provider_status_code: 429,
     attempt_count: 1,
   };
-}
-
-let originalEventSource: typeof EventSource;
-
-function installEventSourceStub(): void {
-  originalEventSource = globalThis.EventSource;
-  class StubEventSource {
-    onmessage: ((event: MessageEvent<string>) => void) | null = null;
-    onerror: (() => void) | null = null;
-    close(): void {}
-  }
-  (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-    StubEventSource as unknown as typeof EventSource;
 }
 
 interface PanelOptions {
@@ -75,13 +62,6 @@ async function renderPanel(options: PanelOptions = {}) {
 }
 
 describe('LakeBackfillPanelComponent', () => {
-  beforeEach(() => installEventSourceStub());
-
-  afterEach(() => {
-    (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-      originalEventSource;
-  });
-
   it('seeds the form from the window the page is showing', async () => {
     await renderPanel();
 
