@@ -336,6 +336,7 @@ ArtifactFailureReason = Literal[
     "unknown_symbol",
     "validation_failed",
     "io_error",
+    "launcher_unreachable",  # #1889: LEAN-sidecar launcher unreachable -- transient, distinct from io_error
     "lease_timeout",
     "fetch_timeout",
     "unsupported_resolution",
