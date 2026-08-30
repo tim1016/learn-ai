@@ -79,6 +79,26 @@ from app.utils.error_handlers import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+def _validate_data_root_identity() -> None:
+    """Fail closed if the configured lake root's identity marker is missing,
+    malformed, or doesn't match (#1876).
+
+    Unlike the IBKR best-effort connect below, this is NOT best-effort: a
+    wrong or missing root marker means every subsequent catalog write in
+    this process could be mislabeled, so a :class:`LakeRootIdentityError`
+    here must abort startup rather than being logged and absorbed.
+    ``active_root_id()`` falls back to ``LEGACY_ROOT_ID`` when
+    ``DATA_LAKE_ROOT_ID`` is unset — that default/back-compat case is
+    validated too, since the whole point is failing closed, not failing
+    closed only when explicitly configured.
+    """
+    from app.data_lake.root_identity import active_root_id, resolve_root_context
+
+    expected_root_id = active_root_id()
+    logger.info("Validating data-lake root identity (expected data_root_id=%s)...", expected_root_id)
+    resolve_root_context(expected_root_id)
+
+
 def _alpaca_clerk_configuration_is_valid() -> bool:
     """Clear stale runtime state, validate settings, and log only safe detail."""
     from pydantic import ValidationError
@@ -117,6 +137,12 @@ async def lifespan(app: FastAPI):
     """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
+
+    # Root identity (#1876) — validated first, before any other subsystem
+    # touches the lake: a LakeRootIdentityError here aborts startup (see
+    # _validate_data_root_identity's docstring for why this is not
+    # best-effort like the IBKR connect below).
+    _validate_data_root_identity()
 
     # Broker System v2 — register the phase-1 read brokers (Alpaca only) so
     # /api/brokers/{broker}/... can resolve them. Cheap and keyless: the client

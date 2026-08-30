@@ -167,10 +167,15 @@ def _is_empty_dir(path: Path) -> bool:
 def _atomic_write_marker(base_root: Path, root_id: UUID) -> RootContext:
     """Write the marker at ``base_root`` exactly once, atomically.
 
-    Stage-then-rename within the same directory (never a cross-filesystem
-    hop, since both live under ``base_root``): a reader can only ever see
-    either no marker or a fully-written one, never a partial write from an
-    interrupted process.
+    Stage-then-link within the same directory (never a cross-filesystem hop,
+    since both live under ``base_root``): a reader can only ever see either
+    no marker or a fully-written one, never a partial write from an
+    interrupted process. ``os.link`` (not ``os.replace``) is what makes this
+    create-if-absent rather than create-or-overwrite — it raises
+    ``FileExistsError`` instead of silently clobbering a marker another
+    concurrent caller just wrote, closing the TOCTOU window between the
+    ``read_marker(...) is not None`` checks in :func:`init_empty_root` /
+    :func:`stamp_existing_root` and this write.
     """
     container = path_policy.lake_container_within(base_root)
     container.mkdir(parents=True, exist_ok=True)
@@ -181,7 +186,14 @@ def _atomic_write_marker(base_root: Path, root_id: UUID) -> RootContext:
         f.write(payload)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(staged, final)
+    try:
+        os.link(staged, final)
+    except FileExistsError as exc:
+        raise LakeRootIdentityError(
+            f"{final} was created concurrently by another process; refusing to overwrite it"
+        ) from exc
+    finally:
+        os.unlink(staged)
     return RootContext(root_id=root_id, base_root=base_root)
 
 
@@ -217,6 +229,15 @@ def stamp_existing_root(base_root: Path, root_id: UUID, *, force: bool) -> RootC
     they know what they are stamping. Still refuses outright if a marker
     already exists, force or not: this stamps a root's *first* identity, it
     does not relabel one.
+
+    A **populated** root may only be stamped with :data:`LEGACY_ROOT_ID`.
+    The EF migration that shipped alongside this issue backfilled every
+    pre-existing ``DataLakeArtifacts``/``DataLakeRuns`` row to that same
+    nil UUID; stamping the physical root that holds that data with any
+    other UUID would silently orphan it from every root-scoped catalog
+    read. An empty root has no existing catalog rows to orphan, so it may
+    still take any UUID — that is the genuine "new secondary root" path
+    :func:`init_empty_root` normally covers.
     """
     if not force:
         raise LakeRootIdentityError(
@@ -225,6 +246,13 @@ def stamp_existing_root(base_root: Path, root_id: UUID, *, force: bool) -> RootC
         )
     if read_marker(base_root) is not None:
         raise LakeRootIdentityError(f"{marker_path(base_root)} already exists; refusing to overwrite it")
+    container = path_policy.lake_container_within(base_root)
+    if not _is_empty_dir(container) and root_id != LEGACY_ROOT_ID:
+        raise LakeRootIdentityError(
+            f"{container} is populated; stamping a populated root requires root_id={LEGACY_ROOT_ID} "
+            f"(the id the migration backfilled existing catalog rows to), got {root_id}. "
+            f"Use init_empty_root for a genuinely new, empty secondary root."
+        )
     return _atomic_write_marker(base_root, root_id)
 
 

@@ -20,8 +20,10 @@ from app.config import settings
 from app.data_lake.path_policy import lake_container_within, lake_root_within, staging_root_within
 from app.data_lake.root_identity import (
     LEGACY_ROOT_ID,
+    MARKER_FILENAME,
     LakeRootIdentityError,
     RootContext,
+    _atomic_write_marker,
     active_root_id,
     init_empty_root,
     inspect_root,
@@ -175,6 +177,40 @@ class TestInitEmptyRoot:
         assert ctx.root_id == _ROOT_A
 
 
+class TestAtomicWriteMarkerConcurrency:
+    """A second concurrent writer must never silently overwrite the first
+    marker (TOCTOU between the ``read_marker(...) is not None`` check and
+    the write itself in both administrative functions) — issue #1876
+    review fix 2."""
+
+    def test_second_write_to_an_already_marked_root_raises(self, tmp_path: Path):
+        _atomic_write_marker(tmp_path, _ROOT_A)
+
+        with pytest.raises(LakeRootIdentityError, match="concurrently"):
+            _atomic_write_marker(tmp_path, _ROOT_B)
+
+    def test_the_first_writers_marker_survives_the_second_writers_attempt(self, tmp_path: Path):
+        _atomic_write_marker(tmp_path, _ROOT_A)
+
+        with pytest.raises(LakeRootIdentityError):
+            _atomic_write_marker(tmp_path, _ROOT_B)
+
+        marker = read_marker(tmp_path)
+        assert marker is not None
+        assert marker.data_root_id == _ROOT_A
+
+    def test_no_leftover_staged_temp_file_after_a_losing_write(self, tmp_path: Path):
+        """The loser's staged file is cleaned up rather than left on disk."""
+        _atomic_write_marker(tmp_path, _ROOT_A)
+
+        with pytest.raises(LakeRootIdentityError):
+            _atomic_write_marker(tmp_path, _ROOT_B)
+
+        container = lake_container_within(tmp_path)
+        leftovers = [p for p in container.iterdir() if p.name.startswith(f"{MARKER_FILENAME}.tmp-")]
+        assert leftovers == []
+
+
 class TestStampExistingRoot:
     def test_requires_the_explicit_force_flag(self, tmp_path: Path):
         container = lake_container_within(tmp_path)
@@ -186,11 +222,37 @@ class TestStampExistingRoot:
 
         assert read_marker(tmp_path) is None
 
-    def test_stamps_a_populated_root_when_forced(self, tmp_path: Path):
+    def test_stamps_a_populated_root_with_the_legacy_root_id_when_forced(self, tmp_path: Path):
+        """The legitimate rollout path: the EF migration backfilled every
+        pre-existing catalog row to LEGACY_ROOT_ID, so stamping the
+        physical root that holds that data with the same id is safe."""
         container = lake_container_within(tmp_path)
         container.mkdir(parents=True)
         (container / "raw").mkdir()
 
+        ctx = stamp_existing_root(tmp_path, LEGACY_ROOT_ID, force=True)
+
+        assert ctx.root_id == LEGACY_ROOT_ID
+        marker = read_marker(tmp_path)
+        assert marker is not None
+        assert marker.data_root_id == LEGACY_ROOT_ID
+
+    def test_refuses_a_populated_root_with_a_non_legacy_root_id(self, tmp_path: Path):
+        """Stamping a populated root with an arbitrary UUID would silently
+        orphan the catalog rows the migration backfilled to LEGACY_ROOT_ID
+        (issue #1876 review fix 4)."""
+        container = lake_container_within(tmp_path)
+        container.mkdir(parents=True)
+        (container / "raw").mkdir()
+
+        with pytest.raises(LakeRootIdentityError, match="populated"):
+            stamp_existing_root(tmp_path, _ROOT_A, force=True)
+
+        assert read_marker(tmp_path) is None
+
+    def test_stamps_an_empty_root_with_a_non_legacy_root_id_when_forced(self, tmp_path: Path):
+        """An empty root has no existing catalog rows to orphan, so the
+        genuine "new secondary root" path still accepts any UUID."""
         ctx = stamp_existing_root(tmp_path, _ROOT_A, force=True)
 
         assert ctx.root_id == _ROOT_A
