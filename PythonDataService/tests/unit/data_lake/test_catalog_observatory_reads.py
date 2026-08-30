@@ -183,6 +183,8 @@ async def test_artifact_detail_carries_failure_diagnostics(clean_artifacts, pool
         artifact_id,
         last_error="provider_rate_limited",
         error_message="429 Too Many Requests from Polygon",
+        worker_id="w-1",
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     detail = await catalog_client.select_artifact_by_id(artifact_id)

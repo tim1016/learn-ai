@@ -63,7 +63,7 @@ DATA_LAKE_ARTIFACTS = TableExpectation(
         # Fencing generation (issue #1888, ADR 0048's idiom applied to this
         # subsystem): incremented on every claim_* INSERT (starts at 1) and
         # on every steal_or_retry_minute_bar / refresh_complete_artifact
-        # reclaim. complete_artifact and confirm_lease_generation both gate
+        # reclaim. publish_under_lease and complete_artifact both gate
         # on it so a writer whose claim was stolen cannot complete or
         # promote under its own stale recollection of still holding the
         # lease -- see catalog_client.py's write-ops section docstring.

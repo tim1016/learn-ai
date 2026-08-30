@@ -296,9 +296,11 @@ class FakeCatalog:
         row.update(status="fetching")
         return prior
 
-    async def restore_complete_artifact(self, artifact_id, worker_id) -> bool:
+    async def restore_complete_artifact(self, artifact_id, worker_id, lease_generation) -> bool:
         row = self.rows.get(artifact_id)
-        if row is None or row["status"] != "fetching":
+        # Owner AND generation, like the real guard: a stale caller sharing
+        # the per-process worker id must not restore a newer generation.
+        if row is None or row["status"] != "fetching" or row["lease_generation"] != lease_generation:
             return False
         row.update(status="complete")
         return True
@@ -313,12 +315,14 @@ class FakeCatalog:
         file_sha256,
         lease_generation,
         data_contract_hash=None,
-    ) -> None:
+    ) -> bool:
         row = self.rows[artifact_id]
         # Status AND generation (issue #1888) -- mirrors the real guard's
-        # tightening from status-only.
+        # tightening from status-only. Returns whether the row was actually
+        # completed: a caller that treated a refused completion as success
+        # would report an ArtifactRecord describing someone else's row.
         if row["status"] != "fetching" or row["lease_generation"] != lease_generation:
-            return
+            return False
         row.update(
             status="complete",
             row_count=row_count,
@@ -326,14 +330,66 @@ class FakeCatalog:
             last_bar_start_ms=last_bar_start_ms,
             file_sha256=file_sha256,
             data_contract_hash=data_contract_hash if data_contract_hash is not None else row["data_contract_hash"],
+            last_error=None,
         )
+        return True
 
-    async def confirm_lease_generation(self, artifact_id, worker_id, lease_generation) -> bool:
+    async def publish_under_lease(
+        self,
+        *,
+        artifact_id,
+        worker_id,
+        lease_generation,
+        promote,
+        row_count,
+        first_bar_start_ms,
+        last_bar_start_ms,
+        file_size_bytes,
+        file_sha256,
+        data_contract_hash=None,
+    ) -> None:
+        """Authorize, promote, then record -- in that order, and only in that
+        order. The real implementation makes the three inseparable by holding
+        a row lock across them; this fake keeps the same *observable*
+        contract, which is what the code under test depends on: an
+        unauthorized writer never sees ``promote`` called at all.
+        """
         row = self.rows.get(artifact_id)
-        return row is not None and row["status"] == "fetching" and row["lease_generation"] == lease_generation
+        if (
+            row is None
+            or row["status"] != "fetching"
+            or row["lease_generation"] != lease_generation
+            or row.get("lease_owner", worker_id) != worker_id
+        ):
+            raise catalog_client.ArtifactLeaseLostError(
+                f"artifact {artifact_id}: {worker_id} is not authorized to publish at generation {lease_generation}"
+            )
+        promote()
+        completed = await self.complete_artifact(
+            artifact_id=artifact_id,
+            row_count=row_count,
+            first_bar_start_ms=first_bar_start_ms,
+            last_bar_start_ms=last_bar_start_ms,
+            file_size_bytes=file_size_bytes,
+            file_sha256=file_sha256,
+            lease_generation=lease_generation,
+            data_contract_hash=data_contract_hash,
+        )
+        assert completed, "the fake authorized a publication it then refused to complete"
 
-    async def fail_artifact(self, artifact_id, last_error, error_message=None) -> None:
-        self.rows[artifact_id].update(status="failed", last_error=last_error)
+    async def fail_artifact(self, artifact_id, last_error, error_message=None, *, worker_id, lease_generation) -> bool:
+        row = self.rows.get(artifact_id)
+        if row is None or row["lease_generation"] != lease_generation:
+            return False
+        row.update(status="failed", last_error=last_error)
+        return True
+
+    async def mark_complete_artifact_failed(self, artifact_id, last_error, error_message=None) -> bool:
+        row = self.rows.get(artifact_id)
+        if row is None or row["status"] != "complete":
+            return False
+        row.update(status="failed", last_error=last_error)
+        return True
 
 
 @pytest.fixture
@@ -354,8 +410,9 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "refresh_complete_artifact",
         "restore_complete_artifact",
         "complete_artifact",
-        "confirm_lease_generation",
+        "publish_under_lease",
         "fail_artifact",
+        "mark_complete_artifact_failed",
     ):
         monkeypatch.setattr(catalog_client, name, getattr(catalog, name))
     return catalog

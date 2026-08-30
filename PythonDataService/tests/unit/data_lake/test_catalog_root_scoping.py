@@ -303,7 +303,12 @@ class TestMetadataRootScoping:
             data_contract_hash="d" * 64,
             file_path="market-hours-database.json",
         )
-        await catalog_client.fail_artifact(artifact_id=artifact_id, last_error="provider_api_error")
+        await catalog_client.fail_artifact(
+            artifact_id=artifact_id,
+            last_error="provider_api_error",
+            worker_id="w-1",
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+        )
 
         assert (await catalog_client.select_metadata_claim_state("d" * 64, data_root_id=_ROOT_A)) is not None
         assert (await catalog_client.select_metadata_claim_state("d" * 64, data_root_id=_ROOT_B)) is None

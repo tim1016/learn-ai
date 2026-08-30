@@ -582,7 +582,7 @@ async def _claim_and_complete_metadata_row(
         if artifact_id is None:
             return MetadataBootstrap(None, False, "lease_timeout")
 
-    await catalog_client.complete_artifact(
+    if not await catalog_client.complete_artifact(
         artifact_id=artifact_id,
         row_count=1,
         first_bar_start_ms=0,
@@ -590,7 +590,13 @@ async def _claim_and_complete_metadata_row(
         file_size_bytes=file_size_bytes,
         file_sha256=entry.sha256,
         lease_generation=lease_generation,
-    )
+    ):
+        # The lease was reclaimed while this call extracted the bundle. The
+        # bytes on disk are content-addressed by the LEAN image digest, so
+        # the winner publishes byte-identical content and the file is fine
+        # either way -- but this row is no longer ours to describe, so report
+        # the loss rather than returning a record for someone else's row.
+        return MetadataBootstrap(None, False, "lease_timeout")
     await catalog_client.mark_metadata_artifacts_stale_for_path(
         data_root_id=root_id,
         price_adjustment_mode=spec.price_adjustment_mode,
