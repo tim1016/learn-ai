@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.atomic import atomic_write_and_promote
+from app.data_lake.atomic import ArtifactLeaseLostError, publish_artifact
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     aggregate_minute_to_daily,
@@ -141,6 +141,69 @@ def _writable_lake_roots(spec: DataRunSpec) -> tuple[Path, Path]:
     lake_root.mkdir(parents=True, exist_ok=True)
     staging_root.mkdir(parents=True, exist_ok=True)
     return lake_root, staging_root
+
+
+async def _publish_under_lease(
+    *,
+    identity: ArtifactIdentity,
+    payload: bytes,
+    lake_root: Path,
+    staging_root: Path,
+    rel_path: PurePosixPath,
+    spec: DataRunSpec,
+    artifact_id: int,
+    lease_generation: int,
+    trading_date: date | None,
+    row_count: int,
+    first_bar_start_ms: int,
+    last_bar_start_ms: int,
+    data_contract_hash: str | None = None,
+) -> tuple[str, None] | tuple[None, ArtifactFailure]:
+    """Publish one claimed artifact -- bytes onto the lake and receipt into
+    the catalog, as one operation (issue #1888).
+
+    Every Pass-1/Pass-2 ``_process_*_artifact`` function claims (or reclaims)
+    a row, fetches or derives bytes, then reaches this one call. Promotion
+    and completion are deliberately not separable here: they happen inside a
+    single catalog transaction holding the artifact's row lock, so a writer
+    that lost its lease can neither overwrite the winner's file nor record a
+    receipt describing bytes it never managed to publish. Centralized so the
+    "lease lost mid-write" outcome is classified exactly once.
+
+    Returns ``(file_sha, None)`` on success or ``(None, failure)`` when the
+    catalog refused to authorize this writer -- the caller folds ``failure``
+    into its own return shape (each ``_process_*`` function's third tuple
+    element has a different type, so that fold can't live here too). On a
+    refusal the caller must not call ``fail_artifact``: the row belongs to
+    another generation now, and failing it would clobber the winner.
+    """
+    try:
+        file_sha = await publish_artifact(
+            content=payload,
+            lake_root=lake_root,
+            staging_root=staging_root,
+            rel_lake_path=rel_path,
+            request_id=spec.request_id,
+            worker_id=_WORKER_ID,
+            attempt=1,
+            artifact_id=artifact_id,
+            lease_generation=lease_generation,
+            row_count=row_count,
+            first_bar_start_ms=first_bar_start_ms,
+            last_bar_start_ms=last_bar_start_ms,
+            data_contract_hash=data_contract_hash,
+        )
+    except ArtifactLeaseLostError as e:
+        return None, ArtifactFailure(
+            artifact_kind=identity.artifact_kind,
+            symbol=identity.symbol,
+            trading_date=trading_date,
+            data_type=identity.data_type,
+            reason="lease_timeout",
+            detail=str(e),
+            attempt_count=1,
+        )
+    return file_sha, None
 
 
 def _minute_trade_dch(price_adjustment_mode: PriceAdjustmentMode) -> str:
@@ -480,6 +543,7 @@ async def _process_minute_trade_artifact(
         data_contract_hash=dch,
         file_path=file_path,
     )
+    lease_generation = catalog_client.INITIAL_LEASE_GENERATION
     if artifact_id is None:
         # Already complete (or in-flight); read the existing complete row.
         # price_adjustment_mode is passed explicitly (not left to the
@@ -510,14 +574,15 @@ async def _process_minute_trade_artifact(
         # terminal answer, on this pass.
         row_state = await catalog_client.select_minute_bar_claim_state(identity)
         if row_state is not None:
-            reclaimed = await catalog_client.steal_or_retry_minute_bar(
+            reclaimed_generation = await catalog_client.steal_or_retry_minute_bar(
                 artifact_id=row_state.id,
                 worker_id=_WORKER_ID,
                 lease_ttl_ms=_LEASE_TTL_MS,
                 max_retries=_MAX_CLAIM_RETRIES,
             )
-            if reclaimed:
+            if reclaimed_generation is not None:
                 artifact_id = row_state.id
+                lease_generation = reclaimed_generation
                 # Falls through to the fetch below, exactly as a fresh claim would.
             elif row_state.status == "failed":
                 # Retries exhausted: a real, terminal failure, not contention.
@@ -566,7 +631,7 @@ async def _process_minute_trade_artifact(
             adjusted=_polygon_adjusted_flag(spec.price_adjustment_mode),
         )
     except PolygonAuthError as e:
-        await catalog_client.fail_artifact(artifact_id, "provider_auth_error", str(e))
+        await catalog_client.fail_artifact(artifact_id, "provider_auth_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
             None,
             ArtifactFailure(
@@ -581,7 +646,7 @@ async def _process_minute_trade_artifact(
             False,
         )
     except PolygonEntitlementError as e:
-        await catalog_client.fail_artifact(artifact_id, "provider_entitlement_error", str(e))
+        await catalog_client.fail_artifact(artifact_id, "provider_entitlement_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
             None,
             ArtifactFailure(
@@ -596,7 +661,7 @@ async def _process_minute_trade_artifact(
             False,
         )
     except PolygonRateLimitedError as e:
-        await catalog_client.fail_artifact(artifact_id, "provider_rate_limited", str(e))
+        await catalog_client.fail_artifact(artifact_id, "provider_rate_limited", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
             None,
             ArtifactFailure(
@@ -611,7 +676,7 @@ async def _process_minute_trade_artifact(
             False,
         )
     except PolygonUnknownSymbolError as e:
-        await catalog_client.fail_artifact(artifact_id, "unknown_symbol", str(e))
+        await catalog_client.fail_artifact(artifact_id, "unknown_symbol", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
             None,
             ArtifactFailure(
@@ -626,7 +691,7 @@ async def _process_minute_trade_artifact(
             False,
         )
     except PolygonFetchError as e:
-        await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e))
+        await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
             None,
             ArtifactFailure(
@@ -642,7 +707,7 @@ async def _process_minute_trade_artifact(
         )
 
     if not polygon_bars:
-        await catalog_client.fail_artifact(artifact_id, "provider_no_data", "empty response")
+        await catalog_client.fail_artifact(artifact_id, "provider_no_data", "empty response", worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
             None,
             ArtifactFailure(
@@ -665,26 +730,24 @@ async def _process_minute_trade_artifact(
         bars=minute_bars,
     )
     lake_root, staging_root = _writable_lake_roots(spec)
-    file_sha = atomic_write_and_promote(
-        content=payload,
-        lake_root=lake_root,
-        staging_root=staging_root,
-        rel_lake_path=rel_path,
-        request_id=spec.request_id,
-        worker_id=_WORKER_ID,
-        attempt=1,
-    )
-
     first_bar_ms = polygon_bars[0].t_ms
     last_bar_ms = polygon_bars[-1].t_ms
-    await catalog_client.complete_artifact(
+    file_sha, lease_failure = await _publish_under_lease(
+        identity=identity,
+        payload=payload,
+        lake_root=lake_root,
+        staging_root=staging_root,
+        rel_path=rel_path,
+        spec=spec,
         artifact_id=artifact_id,
+        lease_generation=lease_generation,
+        trading_date=identity.trading_date,
         row_count=len(polygon_bars),
         first_bar_start_ms=first_bar_ms,
         last_bar_start_ms=last_bar_ms,
-        file_size_bytes=len(payload),
-        file_sha256=file_sha,
     )
+    if lease_failure is not None:
+        return None, lease_failure, False
 
     return (
         ArtifactRecord(
@@ -749,6 +812,7 @@ async def _process_factor_file_artifact(
         data_contract_hash=dch,
         file_path=file_path,
     )
+    lease_generation = catalog_client.INITIAL_LEASE_GENERATION
     if artifact_id is None:
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
         if existing is not None:
@@ -776,6 +840,7 @@ async def _process_factor_file_artifact(
                     "fetched",
                 )
             artifact_id = existing.id
+            lease_generation = prior.new_lease_generation
             outcome = "refreshed"
         else:
             return (
@@ -799,9 +864,9 @@ async def _process_factor_file_artifact(
     # (outcome == "fetched") has no prior state to restore, so fail as before.
     async def _fail_or_restore(last_error: str, detail: str) -> None:
         if outcome == "refreshed":
-            await catalog_client.restore_complete_artifact(artifact_id, _WORKER_ID)
+            await catalog_client.restore_complete_artifact(artifact_id, _WORKER_ID, lease_generation)
         else:
-            await catalog_client.fail_artifact(artifact_id, last_error, detail)
+            await catalog_client.fail_artifact(artifact_id, last_error, detail, worker_id=_WORKER_ID, lease_generation=lease_generation)
 
     api_key = settings.POLYGON_API_KEY
     try:
@@ -872,27 +937,26 @@ async def _process_factor_file_artifact(
             "fetched",
         )
     staging_root = resolve_staging_root(spec.price_adjustment_mode)
-    file_sha = atomic_write_and_promote(
-        content=payload,
+    file_sha, lease_failure = await _publish_under_lease(
+        identity=identity,
+        payload=payload,
         lake_root=lake_root,
         staging_root=staging_root,
-        rel_lake_path=rel_path,
-        request_id=spec.request_id,
-        worker_id=_WORKER_ID,
-        attempt=1,
-    )
-    await catalog_client.complete_artifact(
+        rel_path=rel_path,
+        spec=spec,
         artifact_id=artifact_id,
+        lease_generation=lease_generation,
+        trading_date=None,
         row_count=len(splits) + len(dividends),
         first_bar_start_ms=0,
         last_bar_start_ms=0,
-        file_size_bytes=len(payload),
-        file_sha256=file_sha,
         # Rebuild path (outcome == "refreshed") completes onto a different
         # history window's hash than the row's existing DataContractHash —
         # see the identical comment in _process_daily_trade_artifact.
         data_contract_hash=dch,
     )
+    if lease_failure is not None:
+        return None, lease_failure, "fetched"
     return (
         ArtifactRecord(
             id=artifact_id,
@@ -940,6 +1004,7 @@ async def _process_map_file_artifact(
         data_contract_hash=dch,
         file_path=file_path,
     )
+    lease_generation = catalog_client.INITIAL_LEASE_GENERATION
     if artifact_id is None:
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
         if existing is not None:
@@ -962,7 +1027,7 @@ async def _process_map_file_artifact(
     try:
         events = await fetch_ticker_events(symbol=identity.symbol or "", api_key=api_key)
     except Exception as e:
-        await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e))
+        await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
             None,
             ArtifactFailure(
@@ -985,23 +1050,22 @@ async def _process_map_file_artifact(
         exchange="nyse",
     )
     lake_root, staging_root = _writable_lake_roots(spec)
-    file_sha = atomic_write_and_promote(
-        content=payload,
+    file_sha, lease_failure = await _publish_under_lease(
+        identity=identity,
+        payload=payload,
         lake_root=lake_root,
         staging_root=staging_root,
-        rel_lake_path=rel_path,
-        request_id=spec.request_id,
-        worker_id=_WORKER_ID,
-        attempt=1,
-    )
-    await catalog_client.complete_artifact(
+        rel_path=rel_path,
+        spec=spec,
         artifact_id=artifact_id,
+        lease_generation=lease_generation,
+        trading_date=None,
         row_count=len(events),
         first_bar_start_ms=0,
         last_bar_start_ms=0,
-        file_size_bytes=len(payload),
-        file_sha256=file_sha,
     )
+    if lease_failure is not None:
+        return None, lease_failure, False
     return (
         ArtifactRecord(
             id=artifact_id,
@@ -1058,6 +1122,7 @@ async def _process_minute_quote_artifact(
         data_contract_hash=dch,
         file_path=file_path,
     )
+    lease_generation = catalog_client.INITIAL_LEASE_GENERATION
     if artifact_id is None:
         # price_adjustment_mode scoped explicitly for the same reason as the
         # minute-trade lookup above: a coexisting different-mode row for
@@ -1090,7 +1155,7 @@ async def _process_minute_quote_artifact(
     try:
         trade_bars = _read_minute_trade_bars(source_trade_record.file_path, lake_root)
     except Exception as e:
-        await catalog_client.fail_artifact(artifact_id, "io_error", str(e))
+        await catalog_client.fail_artifact(artifact_id, "io_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
             None,
             ArtifactFailure(
@@ -1111,27 +1176,25 @@ async def _process_minute_quote_artifact(
         bars=trade_bars,
     )
     staging_root = resolve_staging_root(spec.price_adjustment_mode)
-    file_sha = atomic_write_and_promote(
-        content=payload,
-        lake_root=lake_root,
-        staging_root=staging_root,
-        rel_lake_path=rel_path,
-        request_id=spec.request_id,
-        worker_id=_WORKER_ID,
-        attempt=1,
-    )
     row_count = len(trade_bars)
     first_ms = int(trade_bars[0].bar_start_et.timestamp() * 1000) if trade_bars else 0
     last_ms = int(trade_bars[-1].bar_start_et.timestamp() * 1000) if trade_bars else 0
-
-    await catalog_client.complete_artifact(
+    file_sha, lease_failure = await _publish_under_lease(
+        identity=identity,
+        payload=payload,
+        lake_root=lake_root,
+        staging_root=staging_root,
+        rel_path=rel_path,
+        spec=spec,
         artifact_id=artifact_id,
+        lease_generation=lease_generation,
+        trading_date=identity.trading_date,
         row_count=row_count,
         first_bar_start_ms=first_ms,
         last_bar_start_ms=last_ms,
-        file_size_bytes=len(payload),
-        file_sha256=file_sha,
     )
+    if lease_failure is not None:
+        return None, lease_failure, False
     return (
         ArtifactRecord(
             id=artifact_id,
@@ -1194,6 +1257,7 @@ async def _process_daily_trade_artifact(
         data_contract_hash=dch,
         file_path=file_path,
     )
+    lease_generation = catalog_client.INITIAL_LEASE_GENERATION
     if artifact_id is None:
         existing = await catalog_client.select_complete_aggregated_bar_artifact(identity)
         if existing is not None:
@@ -1225,6 +1289,7 @@ async def _process_daily_trade_artifact(
                     "fetched",
                 )
             artifact_id = existing.id
+            lease_generation = prior.new_lease_generation
             outcome = "refreshed"
         else:
             return (
@@ -1253,9 +1318,9 @@ async def _process_daily_trade_artifact(
             # artifact rather than marking it 'failed' with no retry path
             # (steal_or_retry_minute_bar doesn't cover aggregated-bar rows).
             if outcome == "refreshed":
-                await catalog_client.restore_complete_artifact(artifact_id, _WORKER_ID)
+                await catalog_client.restore_complete_artifact(artifact_id, _WORKER_ID, lease_generation)
             else:
-                await catalog_client.fail_artifact(artifact_id, "io_error", str(e))
+                await catalog_client.fail_artifact(artifact_id, "io_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
             return (
                 None,
                 ArtifactFailure(
@@ -1273,23 +1338,20 @@ async def _process_daily_trade_artifact(
     aggregates = aggregate_minute_to_daily(all_bars)
     payload = build_daily_zip_bytes(symbol=identity.symbol or "", aggregates=aggregates)
     staging_root = resolve_staging_root(spec.price_adjustment_mode)
-    file_sha = atomic_write_and_promote(
-        content=payload,
+    row_count = len(aggregates)
+    file_sha, lease_failure = await _publish_under_lease(
+        identity=identity,
+        payload=payload,
         lake_root=lake_root,
         staging_root=staging_root,
-        rel_lake_path=rel_path,
-        request_id=spec.request_id,
-        worker_id=_WORKER_ID,
-        attempt=1,
-    )
-    row_count = len(aggregates)
-    await catalog_client.complete_artifact(
+        rel_path=rel_path,
+        spec=spec,
         artifact_id=artifact_id,
+        lease_generation=lease_generation,
+        trading_date=None,
         row_count=row_count,
         first_bar_start_ms=0,
         last_bar_start_ms=0,
-        file_size_bytes=len(payload),
-        file_sha256=file_sha,
         # Rebuild path (outcome == "refreshed") completes onto a different
         # source set than the row's existing DataContractHash — persist the
         # freshly computed one or the next ensure_data call sees the same
@@ -1298,6 +1360,8 @@ async def _process_daily_trade_artifact(
         # there, but passing it unconditionally keeps both paths honest.
         data_contract_hash=dch,
     )
+    if lease_failure is not None:
+        return None, lease_failure, "fetched"
     return (
         ArtifactRecord(
             id=artifact_id,

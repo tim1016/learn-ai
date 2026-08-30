@@ -88,6 +88,20 @@ public class DataLakeArtifact
 
     public long? LeaseExpiresAtMs { get; set; }
 
+    /// <summary>
+    /// Monotonic fencing generation for this artifact's lease (issue #1888,
+    /// ADR 0048's fencing idiom applied to this subsystem). Starts at 1 on
+    /// the row's INSERT and is incremented by exactly 1 on every reclaim
+    /// (a lease-expiry steal, a retry of a failed row, or a rebuild's
+    /// complete-to-fetching transition). Python's write path
+    /// (<c>app/data_lake/catalog_client.py</c>) gates both the completion
+    /// UPDATE and the pre-promotion authorization check on this value
+    /// matching the durable row, not on the caller's own recollection of
+    /// still holding the lease -- see that module's write-ops section for
+    /// why a status-only check was insufficient.
+    /// </summary>
+    public int LeaseGeneration { get; set; } = 1;
+
     public int AttemptCount { get; set; } = 0;
 
     public string? LastError { get; set; }

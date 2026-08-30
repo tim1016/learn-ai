@@ -4,14 +4,23 @@ raw asyncpg exception, when the DB schema is one migration behind the code.
 Reproduces the deploy-ordering race CatalogSchemaNotReadyError exists to
 make legible (app/data_lake/catalog_client.py): compose.yaml health-gates
 Backend on python-service, not the reverse, and Backend applies its EF Core
-migrations during its own startup. So on any deploy that ships
-20260830120000_ActivateDataRootScopedCatalogIdentity (issue #1878, PR B of
-#1861 -- Codex P2 finding on PR #1883), there is a real window where
+migrations during its own startup. So on any deploy that ships the newest
+migration a claim_* query depends on, there is a real window where
 python-service is already serving /ensure-data traffic while Postgres is
-still sitting on the prior migration, whose partial-unique indexes don't
-lead with DataRootId. claim_minute_bar's ON CONFLICT target does lead with
-it, so Postgres raises SQLSTATE 42P10 (no unique/exclusion constraint
-matches the conflict target) until the migration finishes.
+still sitting on the prior migration. TARGET_MIGRATION_CLASS always names
+the newest such migration, so this test tracks whichever race is currently
+"one migration behind the code" rather than a fixed historical one -- it
+was originally 20260830120000_ActivateDataRootScopedCatalogIdentity (issue
+#1878, PR B of #1861 -- Codex P2 finding on PR #1883), whose partial-unique
+indexes don't lead with DataRootId; issue #1888 then added
+20260830130000_AddLeaseGenerationToDataLakeArtifacts, a new column
+claim_minute_bar's INSERT list now names unconditionally. Postgres
+validates that column list before it evaluates the ON CONFLICT target, so
+pinning one migration behind AddLeaseGenerationToDataLakeArtifacts now
+surfaces SQLSTATE 42703 (undefined column) rather than the 42P10 (no
+unique/exclusion constraint matches the conflict target) the original race
+raised -- both are schema-not-ready symptoms translated by the same
+CatalogSchemaNotReadyError; see its docstring.
 
 This deliberately does NOT reuse the shared POSTGRES_URL instance the rest
 of the suite runs against -- CI's "Python Tests" job migrates that instance
@@ -56,7 +65,7 @@ pytestmark = pytest.mark.asyncio
 REPO_ROOT = Path(__file__).resolve().parents[4]
 BACKEND_PROJECT = REPO_ROOT / "Backend" / "Backend.csproj"
 MIGRATIONS_DIR = REPO_ROOT / "Backend" / "Migrations"
-TARGET_MIGRATION_CLASS = "ActivateDataRootScopedCatalogIdentity"
+TARGET_MIGRATION_CLASS = "AddLeaseGenerationToDataLakeArtifacts"
 
 _MIGRATION_FILENAME_RE = re.compile(r"^(\d{14})_([A-Za-z0-9]+)\.cs$")
 
@@ -117,7 +126,7 @@ async def _wait_for_postgres_ready(dsn: str, timeout_s: float = 30.0) -> None:
 @pytest.fixture
 async def pre_migration_dsn():
     """Yield an asyncpg DSN for a disposable Postgres migrated only through
-    the migration immediately before ActivateDataRootScopedCatalogIdentity.
+    the migration immediately before TARGET_MIGRATION_CLASS.
 
     Skips (does not fail) when the environment lacks a capability this test
     needs at all: POSTGRES_URL unset (Postgres-gated tests disabled, same
@@ -253,10 +262,15 @@ async def test_claim_minute_bar_raises_catalog_schema_not_ready_pre_migration(
             )
 
         # Translated, not the raw driver error -- and the chained cause is
-        # exactly the SQLSTATE this whole test exists to pin.
+        # exactly the SQLSTATE this whole test exists to pin: 42703
+        # (undefined column) is what a schema pinned one migration behind
+        # AddLeaseGenerationToDataLakeArtifacts actually raises, since
+        # Postgres validates the INSERT's column list before it evaluates
+        # the ON CONFLICT target -- see CatalogSchemaNotReadyError's
+        # docstring for why both 42P10 and 42703 land here.
         assert not isinstance(exc_info.value, asyncpg.PostgresError)
-        assert "42P10" in str(exc_info.value)
+        assert "42703" in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, asyncpg.PostgresError)
-        assert exc_info.value.__cause__.sqlstate == "42P10"
+        assert exc_info.value.__cause__.sqlstate == "42703"
     finally:
         await catalog_client.close_pool()

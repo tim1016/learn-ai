@@ -14,6 +14,7 @@ import json
 import logging
 import time
 import weakref
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -445,45 +446,90 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
 # ---------------------------------------------------------------------------
 # Slice 1b write operations
 # ---------------------------------------------------------------------------
+#
+# Fencing generation (issue #1888). Every artifact lease carries a
+# monotonic "LeaseGeneration" counter -- the same idiom ADR 0048 established
+# for the SQLite execution authority's authority_generation column
+# (app/broker/alpaca/clerk/sqlite/writes.py), applied to this subsystem: a
+# claim_* INSERT starts a row at generation INITIAL_LEASE_GENERATION,
+# steal_or_retry_minute_bar and refresh_complete_artifact each increment it
+# by exactly 1 on every reclaim, and every protected mutation
+# (publish_under_lease, complete_artifact, fail_artifact, refresh_lease,
+# restore_complete_artifact) validates the caller's recorded generation
+# atomically against the durable row instead of trusting the caller's own
+# recollection of still holding the lease -- a check a paused/stale writer
+# will always pass. Generation, not owner, is what discriminates: every
+# writer inside one process shares a single _WORKER_ID, so an owner-only
+# predicate cannot tell two concurrent operations apart.
+#
+# publish_under_lease closes the filesystem half of the same problem by
+# holding the row lock across the rename, so no reclaim can interleave
+# between authorization and promotion.
+
+INITIAL_LEASE_GENERATION = 1
+
+
+class ArtifactLeaseLostError(RuntimeError):
+    """Raised when the catalog refuses to authorize a lease holder's mutation.
+
+    The writer's lease was stolen, expired, or already completed by another
+    worker. Callers must treat this as "lost the race": do not promote, do
+    not complete, and do not call ``fail_artifact`` either -- the row is no
+    longer this writer's to transition. Defined here rather than in
+    ``app.data_lake.atomic`` because ``publish_under_lease`` (the transaction
+    that decides) lives here, and atomic.py imports this module.
+    """
 
 
 class CatalogSchemaNotReadyError(RuntimeError):
-    """A claim_* INSERT's ON CONFLICT target matches no constraint or index
-    in the connected database.
+    """A claim_* INSERT references a column or ON CONFLICT target the
+    connected database doesn't have yet.
 
-    Wraps Postgres SQLSTATE 42P10 (``invalid_column_reference`` --
-    asyncpg's ``InvalidColumnReferenceError``), which Postgres raises when an
-    ``ON CONFLICT (...) WHERE ...`` clause names a column set that no unique
-    or exclusion index currently matches. In practice this almost always
-    means the database schema doesn't yet match what this code expects: a
-    mid-deploy race where python-service started serving traffic before
-    Backend's EF Core migration finished applying. compose.yaml health-gates
-    Backend on python-service, not the other way around, and Backend applies
-    migrations during its own startup -- so there is a real window, on every
-    deploy that ships a migration touching one of these partial unique
-    indexes (e.g. 20260830120000_ActivateDataRootScopedCatalogIdentity),
-    where python-service is already reachable but the index a claim_*
-    function's ON CONFLICT target names does not exist yet. Safe to retry
-    after a short delay once the migration completes; not safe to retry
-    immediately in a tight loop.
+    Wraps two Postgres SQLSTATEs, both symptoms of the same mid-deploy race:
+    python-service started serving traffic before Backend's EF Core
+    migrations finished applying. compose.yaml health-gates Backend on
+    python-service, not the other way around, and Backend applies migrations
+    during its own startup -- so there is a real window, on every deploy
+    that ships a migration a claim_* query depends on (e.g.
+    20260830120000_ActivateDataRootScopedCatalogIdentity's partial unique
+    indexes, or 20260830130000_AddLeaseGenerationToDataLakeArtifacts' new
+    column), where python-service is already reachable but the schema it
+    expects does not exist yet:
+
+    - **42P10** (``invalid_column_reference`` / asyncpg's
+      ``InvalidColumnReferenceError``): an ``ON CONFLICT (...) WHERE ...``
+      clause names a column set that no unique or exclusion index currently
+      matches.
+    - **42703** (``undefined_column`` / asyncpg's ``UndefinedColumnError``):
+      the INSERT's column list names a column the table doesn't have yet.
+      Postgres validates the column list before it evaluates the ON
+      CONFLICT target, so when a migration adds both a new column and a
+      later migration adds the matching index, the column error is the one
+      that actually surfaces first for a schema pinned before either lands.
+
+    Safe to retry after a short delay once the migration completes; not
+    safe to retry immediately in a tight loop.
     """
+
+
+_SCHEMA_NOT_READY_SQLSTATES = frozenset({"42P10", "42703"})
 
 
 async def _claim_fetchval(conn: asyncpg.Connection, query: str, *args: Any) -> int | None:
     """Run one claim_*'s ``INSERT ... ON CONFLICT ... RETURNING "Id"`` and
-    translate a conflict-target mismatch (Postgres 42P10) into
+    translate a schema-not-ready mismatch (Postgres 42P10 or 42703) into
     :class:`CatalogSchemaNotReadyError` instead of letting the raw asyncpg
     exception surface as an opaque 500. Any other ``PostgresError`` is
-    re-raised unchanged -- this narrowly targets the one mid-deploy race
+    re-raised unchanged -- this narrowly targets the mid-deploy race
     described in :class:`CatalogSchemaNotReadyError`'s docstring, not
     Postgres errors in general.
     """
     try:
         return await conn.fetchval(query, *args)
     except asyncpg.PostgresError as exc:
-        if exc.sqlstate == "42P10":
+        if exc.sqlstate in _SCHEMA_NOT_READY_SQLSTATES:
             raise CatalogSchemaNotReadyError(
-                f"ON CONFLICT target matches no constraint/index (Postgres 42P10): {exc}"
+                f"Schema not ready for this claim query (Postgres {exc.sqlstate}): {exc}"
             ) from exc
         raise
 
@@ -526,12 +572,12 @@ async def claim_minute_bar(
             "ArtifactKind", "Market", "Symbol", "TradingDate",
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
-            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, 'fetching', $12, $13, 1, $14, $15
+            $11, 'fetching', $12, $13, 1, 1, $14, $15
         )
         ON CONFLICT ("DataRootId", "Market", "Symbol", "TradingDate", "DataType",
                      "Provider", "PriceAdjustmentMode")
@@ -662,6 +708,31 @@ async def select_metadata_claim_state(
     )
 
 
+_COMPLETE_ARTIFACT_SQL = """
+    UPDATE "DataLakeArtifacts"
+       SET "Status" = 'complete',
+           "RowCount" = $2,
+           "FirstBarStartMs" = $3,
+           "LastBarStartMs" = $4,
+           "FileSizeBytes" = $5,
+           "FileSha256" = $6,
+           "CompletedAtMs" = $7,
+           "DataContractHash" = COALESCE($8, "DataContractHash"),
+           "LeaseOwner" = NULL,
+           "LeaseExpiresAtMs" = NULL,
+           "LastError" = NULL,
+           "ErrorMessage" = NULL
+     WHERE "Id" = $1
+       AND "Status" = 'fetching'
+       AND "LeaseGeneration" = $9;
+"""
+
+
+def _rows_affected(result: str) -> int:
+    """Parse asyncpg's "UPDATE n" command tag into n."""
+    return int(result.rsplit(" ", 1)[-1])
+
+
 async def complete_artifact(
     artifact_id: int,
     row_count: int,
@@ -669,41 +740,49 @@ async def complete_artifact(
     last_bar_start_ms: int,
     file_size_bytes: int,
     file_sha256: str,
+    lease_generation: int,
     data_contract_hash: str | None = None,
-) -> None:
-    """Transition an artifact from 'fetching' → 'complete' with byte metadata.
+) -> bool:
+    """Transition an artifact from 'fetching' \u2192 'complete' with byte metadata.
 
-    No-op if the row is not currently 'fetching' (defensive against stale
-    callers; the sweep is the only legitimate source of late writes).
+    Returns True when the row was completed, False when the guard refused --
+    the row is not 'fetching' at exactly ``lease_generation`` any more, so
+    this writer's lease was stolen or already completed by someone else. A
+    False return is a lost race, never a success: callers must not build an
+    ``ArtifactRecord`` from it, because the catalog row they would be
+    describing belongs to another generation and may point at different
+    bytes than the ones they just wrote.
+
+    ``lease_generation`` is the value the caller observed at claim/reclaim
+    time (``INITIAL_LEASE_GENERATION`` for a fresh claim; the return value of
+    ``steal_or_retry_minute_bar`` or ``refresh_complete_artifact`` for a
+    reclaim). The store, not the caller's recollection, decides whether that
+    generation is still current. Owner is deliberately *not* part of the
+    guard: ``ensure_data._WORKER_ID`` is per-process, so every concurrent
+    operation in one process shares it and only the generation distinguishes
+    them.
+
+    Completing clears ``LastError``/``ErrorMessage``: a row that reached
+    'complete' after an earlier failure was reclaimed must not keep
+    advertising that stale failure to the Observatory receipt.
 
     ``data_contract_hash`` is optional and defaults to leaving the column
-    untouched (``COALESCE`` against the existing value) — the vast majority
+    untouched (``COALESCE`` against the existing value) -- the vast majority
     of callers complete a row whose contract hash was fixed at claim time and
     never changes. A rebuild via refresh_complete_artifact is the exception:
     it can complete onto a *different* source set (see
     ``ensure_data._process_daily_trade_artifact``), and must pass the newly
     computed hash here or the stale one persists forever, making every
     subsequent ensure_data call detect a mismatch and rebuild again.
+
+    Prefer :func:`publish_under_lease` for any caller that is also promoting
+    bytes onto the lake: it performs the rename and this completion inside
+    one locked transaction, so the two cannot disagree.
     """
     now_ms = int(time.time() * 1000)
-    query = """
-        UPDATE "DataLakeArtifacts"
-           SET "Status" = 'complete',
-               "RowCount" = $2,
-               "FirstBarStartMs" = $3,
-               "LastBarStartMs" = $4,
-               "FileSizeBytes" = $5,
-               "FileSha256" = $6,
-               "CompletedAtMs" = $7,
-               "DataContractHash" = COALESCE($8, "DataContractHash"),
-               "LeaseOwner" = NULL,
-               "LeaseExpiresAtMs" = NULL
-         WHERE "Id" = $1
-           AND "Status" = 'fetching';
-    """
     async with connection() as conn:
-        await conn.execute(
-            query,
+        result = await conn.execute(
+            _COMPLETE_ARTIFACT_SQL,
             artifact_id,
             row_count,
             first_bar_start_ms,
@@ -712,25 +791,141 @@ async def complete_artifact(
             file_sha256,
             now_ms,
             data_contract_hash,
+            lease_generation,
         )
+    return _rows_affected(result) > 0
 
 
-async def restore_complete_artifact(artifact_id: int, worker_id: str) -> bool:
+async def publish_under_lease(
+    *,
+    artifact_id: int,
+    worker_id: str,
+    lease_generation: int,
+    promote: Callable[[], None],
+    row_count: int,
+    first_bar_start_ms: int,
+    last_bar_start_ms: int,
+    file_size_bytes: int,
+    file_sha256: str,
+    data_contract_hash: str | None = None,
+) -> None:
+    """Publish one artifact: authorize, rename, and record, atomically w.r.t.
+    every other writer of the same row (issue #1888).
+
+    This is the whole publication, hidden behind one call. The sequence:
+
+    1. Open a transaction and take a row lock (``SELECT ... FOR UPDATE``) on
+       the artifact.
+    2. Under that lock, validate status, lease owner, lease generation, and
+       that the lease has not expired.
+    3. If any check fails, raise :class:`ArtifactLeaseLostError` *without*
+       calling ``promote`` -- the canonical file is never touched.
+    4. Otherwise call ``promote`` (the caller's filesystem rename + directory
+       fsync) while the row lock is still held.
+    5. Write the completion receipt in the same transaction, then commit,
+       releasing the lock.
+
+    Why the lock spans the rename: a concurrent
+    ``steal_or_retry_minute_bar`` / ``refresh_complete_artifact`` issues an
+    ``UPDATE`` against this same row, so it blocks on the lock for the whole
+    publication and is forced to re-evaluate its ``WHERE`` clause against
+    committed state afterwards. It therefore cannot interleave between the
+    authorization and the rename -- which is exactly the window a
+    check-then-rename design leaves open, and the reason this replaced one.
+
+    Crash safety: if the publisher dies after the rename but before the
+    commit, the transaction rolls back and the row stays non-complete with
+    its old receipt. Readers that trust the catalog therefore never accept
+    the half-published file, and the next writer to win the lease overwrites
+    it. The reverse (a committed receipt describing bytes that were never
+    renamed) cannot happen, because the rename precedes the commit.
+
+    ``promote`` must be synchronous, fast, and side-effecting only on the
+    filesystem. It runs inline on the event loop while a database row lock is
+    held; a rename plus a directory fsync is the intended cost. Anything
+    slower belongs before this call (stage and fsync the payload first), and
+    a ``promote`` that hangs is bounded by the pool's ``command_timeout``,
+    which aborts the transaction and releases the lock.
+
+    Raises :class:`ArtifactLeaseLostError` when the catalog refuses. The
+    caller must not retry the promote for this attempt and must not call
+    ``fail_artifact``: the row belongs to another generation now.
+    """
+    now_ms = int(time.time() * 1000)
+    async with connection() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """
+            SELECT "Status", "LeaseOwner", "LeaseGeneration", "LeaseExpiresAtMs"
+              FROM "DataLakeArtifacts"
+             WHERE "Id" = $1
+               FOR UPDATE;
+            """,
+            artifact_id,
+        )
+        if row is None:
+            raise ArtifactLeaseLostError(f"artifact {artifact_id}: no such catalog row; refusing to publish")
+
+        expires_at_ms = row["LeaseExpiresAtMs"]
+        if (
+            row["Status"] != "fetching"
+            or row["LeaseOwner"] != worker_id
+            or row["LeaseGeneration"] != lease_generation
+            or expires_at_ms is None
+            or expires_at_ms <= now_ms
+        ):
+            raise ArtifactLeaseLostError(
+                f"artifact {artifact_id}: {worker_id} is not authorized to publish at generation "
+                f"{lease_generation} (row is status={row['Status']!r} owner={row['LeaseOwner']!r} "
+                f"generation={row['LeaseGeneration']} expires_at_ms={expires_at_ms}); "
+                f"refusing to touch the canonical file"
+            )
+
+        promote()
+
+        result = await conn.execute(
+            _COMPLETE_ARTIFACT_SQL,
+            artifact_id,
+            row_count,
+            first_bar_start_ms,
+            last_bar_start_ms,
+            file_size_bytes,
+            file_sha256,
+            now_ms,
+            data_contract_hash,
+            lease_generation,
+        )
+        if _rows_affected(result) != 1:
+            # Unreachable while the row lock is held -- the predicate was just
+            # validated against the locked row. Refuse to commit rather than
+            # leave a promoted file with no receipt describing it.
+            raise ArtifactLeaseLostError(
+                f"artifact {artifact_id}: completion affected no rows under the publication lock; "
+                f"rolling back generation {lease_generation}"
+            )
+
+
+async def restore_complete_artifact(artifact_id: int, worker_id: str, lease_generation: int) -> bool:
     """Undo a refresh_complete_artifact() that failed before writing anything new.
 
     refresh_complete_artifact() only touches Status/LeaseOwner/
-    LeaseExpiresAtMs/AttemptCount when it transitions 'complete' → 'fetching'
-    — RowCount/FileSha256/FileSizeBytes/DataContractHash/FilePath all still
-    describe the pre-rebuild artifact. If the rebuild then fails before
-    atomic_write_and_promote runs (e.g. a source file read error), the old
-    file on disk was never touched either, so restoring Status alone is
-    sufficient to put the row back exactly as it was.
+    LeaseExpiresAtMs/AttemptCount when it transitions 'complete' \u2192 'fetching'
+    -- RowCount/FileSha256/FileSizeBytes/DataContractHash/FilePath all still
+    describe the pre-rebuild artifact. If the rebuild then fails before any
+    bytes were promoted (e.g. a source file read error), the old file on disk
+    was never touched either, so restoring Status alone is sufficient to put
+    the row back exactly as it was.
 
-    Callers must use this only when the failure happened before any new
-    bytes were promoted — a failure after promotion has already replaced the
-    file, and fail_artifact() is the correct transition there instead.
-    Scoped to the caller's own worker_id so a worker never resurrects a row
-    it doesn't hold the lease on. Returns True when the row was restored.
+    Callers must use this only when the failure happened before any new bytes
+    were promoted -- a failure after promotion has already replaced the file,
+    and fail_artifact() is the correct transition there instead.
+
+    Fenced on both owner and generation (issue #1888). Owner alone was not
+    enough: ``ensure_data._WORKER_ID`` is per-process, so two concurrent
+    refreshes in one process share it, and a stale one could restore the row
+    to 'complete' out from under a live reclaim -- discarding the winner's
+    work, or worse, leaving the old hash recorded while the winner's new
+    bytes sit on disk. Returns True when the row was restored, False when
+    this writer no longer holds the generation.
     """
     query = """
         UPDATE "DataLakeArtifacts"
@@ -739,23 +934,38 @@ async def restore_complete_artifact(artifact_id: int, worker_id: str) -> bool:
                "LeaseExpiresAtMs" = NULL
          WHERE "Id" = $1
            AND "LeaseOwner" = $2
+           AND "LeaseGeneration" = $3
            AND "Status" = 'fetching';
     """
     async with connection() as conn:
-        result = await conn.execute(query, artifact_id, worker_id)
-    n = int(result.rsplit(" ", 1)[-1])
-    return n > 0
+        result = await conn.execute(query, artifact_id, worker_id, lease_generation)
+    return _rows_affected(result) > 0
 
 
 async def fail_artifact(
     artifact_id: int,
     last_error: str,
     error_message: str | None = None,
-) -> None:
+    *,
+    worker_id: str,
+    lease_generation: int,
+) -> bool:
     """Transition an artifact to 'failed' with diagnostic info.
 
     The row stays in the catalog as an audit record; future ensure_data calls
-    may retry it via steal_or_retry_minute_bar (Task 7).
+    may retry it via steal_or_retry_minute_bar.
+
+    Fenced on owner and generation (issue #1888). Without the fence this
+    update keyed on artifact id alone, so a writer whose lease had already
+    been stolen could mark the *winner's* newer generation failed and clear
+    its lease while it was legitimately fetching or publishing -- turning one
+    writer's provider timeout into another writer's aborted work. Both
+    arguments are keyword-only and required precisely so no call site can
+    reintroduce the unfenced form by omission.
+
+    Returns True when the row was marked failed, False when this writer no
+    longer holds the generation (in which case the failure is this writer's
+    alone and the row is not theirs to transition).
     """
     query = """
         UPDATE "DataLakeArtifacts"
@@ -764,21 +974,62 @@ async def fail_artifact(
                "ErrorMessage" = $3,
                "LeaseOwner" = NULL,
                "LeaseExpiresAtMs" = NULL
-         WHERE "Id" = $1;
+         WHERE "Id" = $1
+           AND "LeaseOwner" = $4
+           AND "LeaseGeneration" = $5;
     """
     async with connection() as conn:
-        await conn.execute(query, artifact_id, last_error, error_message)
+        result = await conn.execute(query, artifact_id, last_error, error_message, worker_id, lease_generation)
+    return _rows_affected(result) > 0
+
+
+async def mark_complete_artifact_failed(
+    artifact_id: int,
+    last_error: str,
+    error_message: str | None = None,
+) -> bool:
+    """Mark a *complete, unleased* row 'failed' because its bytes no longer
+    honestly describe what is on disk.
+
+    The deliberate no-lease counterpart to :func:`fail_artifact`, for the one
+    caller that legitimately fails a row it never claimed: cache-import's
+    duplicate path, which finds the catalog claiming a hash the destination
+    file contradicts. There is no lease to fence against there -- the row is
+    'complete' and nobody owns it -- so the guard is ``Status = 'complete'``
+    instead. That still refuses to touch a row another writer has since
+    claimed for a refresh, which is the only race this needs to lose.
+
+    Returns True when the row was marked failed, False when it was not
+    'complete' any more.
+    """
+    query = """
+        UPDATE "DataLakeArtifacts"
+           SET "Status" = 'failed',
+               "LastError" = $2,
+               "ErrorMessage" = $3,
+               "LeaseOwner" = NULL,
+               "LeaseExpiresAtMs" = NULL
+         WHERE "Id" = $1
+           AND "Status" = 'complete';
+    """
+    async with connection() as conn:
+        result = await conn.execute(query, artifact_id, last_error, error_message)
+    return _rows_affected(result) > 0
 
 
 async def refresh_lease(
     artifact_id: int,
     worker_id: str,
     lease_ttl_ms: int,
+    lease_generation: int,
 ) -> bool:
-    """Heartbeat: extend a lease as long as the calling worker still owns it.
+    """Heartbeat: extend a lease as long as the calling worker still holds it
+    at ``lease_generation``.
 
-    Returns True when the lease was updated; False when worker_id no longer
-    matches LeaseOwner (the lease may have been stolen by the sweep).
+    Returns True when the lease was updated; False when this writer no longer
+    holds that generation (stolen by the sweep, or reclaimed by a sibling
+    operation sharing the same per-process worker id -- which is why the
+    generation, not just the owner, is part of the predicate).
     """
     now_ms = int(time.time() * 1000)
     query = """
@@ -786,13 +1037,12 @@ async def refresh_lease(
            SET "LeaseExpiresAtMs" = $3
          WHERE "Id" = $1
            AND "LeaseOwner" = $2
+           AND "LeaseGeneration" = $4
            AND "Status" = 'fetching';
     """
     async with connection() as conn:
-        result = await conn.execute(query, artifact_id, worker_id, now_ms + lease_ttl_ms)
-    # asyncpg returns "UPDATE n" — parse the row count.
-    n = int(result.rsplit(" ", 1)[-1])
-    return n > 0
+        result = await conn.execute(query, artifact_id, worker_id, now_ms + lease_ttl_ms, lease_generation)
+    return _rows_affected(result) > 0
 
 
 async def steal_or_retry_minute_bar(
@@ -802,7 +1052,7 @@ async def steal_or_retry_minute_bar(
     max_retries: int,
     *,
     bypass_retry_ceiling: bool = False,
-) -> bool:
+) -> int | None:
     """Reclaim an artifact whose lease expired, retry a failed artifact, OR
     reactivate a staled one.
 
@@ -848,9 +1098,16 @@ async def steal_or_retry_minute_bar(
     Default ``False`` preserves this function's existing behaviour for every
     other caller (minute bars, factor files, map files) unchanged.
 
-    Returns True when the row was updated to 'fetching' under the new worker;
-    False when no eligible row exists (e.g., already complete, already
-    re-claimed by another worker, or failed beyond max_retries).
+    Returns the new fencing generation (issue #1888; always
+    ``> INITIAL_LEASE_GENERATION`` since this always increments) when the
+    row was reclaimed under the new worker; None when no eligible row exists
+    (e.g., already complete, already re-claimed by another worker, or failed
+    beyond max_retries). A caller that only needs "did I get it?" can test
+    the result for truthiness -- a minted generation is never zero -- but a
+    caller that will later complete or publish the row must carry the value
+    through to ``complete_artifact`` / ``publish_under_lease``, because the
+    row's ``LeaseGeneration`` no longer matches whatever it was before this
+    reclaim.
     """
     now_ms = int(time.time() * 1000)
     query = """
@@ -858,6 +1115,7 @@ async def steal_or_retry_minute_bar(
            SET "Status" = 'fetching',
                "LeaseOwner" = $2,
                "LeaseExpiresAtMs" = $3,
+               "LeaseGeneration" = "LeaseGeneration" + 1,
                "AttemptCount" = "AttemptCount" + 1,
                "LastError" = NULL
          WHERE "Id" = $1
@@ -865,10 +1123,11 @@ async def steal_or_retry_minute_bar(
                   ("Status" = 'fetching' AND "LeaseExpiresAtMs" < $4)
                OR ("Status" = 'failed' AND ("AttemptCount" < $5 OR $6))
                OR ("Status" = 'stale')
-           );
+           )
+        RETURNING "LeaseGeneration";
     """
     async with connection() as conn:
-        result = await conn.execute(
+        return await conn.fetchval(
             query,
             artifact_id,
             worker_id,
@@ -877,14 +1136,16 @@ async def steal_or_retry_minute_bar(
             max_retries,
             bypass_retry_ceiling,
         )
-    n = int(result.rsplit(" ", 1)[-1])
-    return n > 0
 
 
 @dataclass(frozen=True)
 class PriorArtifactMetadata:
     prior_file_path: str
     prior_file_sha256: str
+    # The generation this refresh's own reclaim minted (issue #1888) — the
+    # caller must carry it through to complete_artifact / publish_under_lease,
+    # same as steal_or_retry_minute_bar's return value.
+    new_lease_generation: int
 
 
 async def claim_corp_action_artifact(
@@ -916,12 +1177,12 @@ async def claim_corp_action_artifact(
             "ArtifactKind", "Market", "Symbol", "TradingDate",
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
-            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, NULL, NULL, NULL, $4, $5, $6, $7,
-            $8, 'fetching', $9, $10, 1, $11, $12
+            $8, 'fetching', $9, $10, 1, 1, $11, $12
         )
         ON CONFLICT ("DataRootId", "Market", "Symbol", "ArtifactKind", "Provider", "PriceAdjustmentMode")
             WHERE "ArtifactKind" IN ('factor_file', 'map_file')
@@ -987,12 +1248,12 @@ async def claim_metadata_artifact(
             "ArtifactKind", "Market", "Symbol", "TradingDate",
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
-            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             'metadata', $1, $2, NULL, NULL, NULL, $3, $4, $5, $6,
-            $7, 'fetching', $8, $9, 1, $10, $11
+            $7, 'fetching', $8, $9, 1, 1, $10, $11
         )
         ON CONFLICT ("DataRootId", "DataContractHash")
             WHERE "ArtifactKind" = 'metadata'
@@ -1097,12 +1358,12 @@ async def claim_aggregated_bar_artifact(
             "ArtifactKind", "Market", "Symbol", "TradingDate",
             "Resolution", "DataType", "Provider", "ProviderParams",
             "PriceAdjustmentMode", "DataContractHash",
-            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs", "LeaseGeneration",
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
             $1, $2, $3, NULL, $4, $5, $6, $7, $8, $9,
-            $10, 'fetching', $11, $12, 1, $13, $14
+            $10, 'fetching', $11, $12, 1, 1, $13, $14
         )
         ON CONFLICT ("DataRootId", "Market", "Symbol", "Resolution", "DataType",
                      "Provider", "PriceAdjustmentMode")
@@ -1146,8 +1407,11 @@ async def refresh_complete_artifact(
     factor_file whose history window has widened (see
     ``ensure_data._process_factor_file_artifact``). Returns the prior
     file_path + file_sha256 so the caller can preserve them if the new write
-    fails validation. Returns None when the row isn't currently 'complete'
-    (refresh has no work to do — e.g. a race with another worker).
+    fails validation, plus the fencing generation this reclaim minted
+    (issue #1888) so the caller's later complete_artifact /
+    publish_under_lease calls target the right generation. Returns None
+    when the row isn't currently 'complete' (refresh has no work to do —
+    e.g. a race with another worker).
     """
     now_ms = int(time.time() * 1000)
     query = """
@@ -1155,10 +1419,11 @@ async def refresh_complete_artifact(
            SET "Status" = 'fetching',
                "LeaseOwner" = $2,
                "LeaseExpiresAtMs" = $3,
+               "LeaseGeneration" = "LeaseGeneration" + 1,
                "AttemptCount" = "AttemptCount" + 1
          WHERE "Id" = $1
            AND "Status" = 'complete'
-        RETURNING "FilePath", "FileSha256";
+        RETURNING "FilePath", "FileSha256", "LeaseGeneration";
     """
     async with connection() as conn:
         row = await conn.fetchrow(
@@ -1172,6 +1437,7 @@ async def refresh_complete_artifact(
     return PriorArtifactMetadata(
         prior_file_path=row["FilePath"],
         prior_file_sha256=row["FileSha256"],
+        new_lease_generation=row["LeaseGeneration"],
     )
 
 

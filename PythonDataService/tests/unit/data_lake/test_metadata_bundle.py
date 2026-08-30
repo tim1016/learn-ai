@@ -347,7 +347,7 @@ class TestClaimAndCompleteMetadataRowReclaimRace:
             return stale_snapshot if claim_state_calls["n"] == 1 else fresh_after_race
 
         async def fake_steal_or_retry_minute_bar(**_kwargs):
-            return False  # this caller lost the race
+            return None  # this caller lost the race (issue #1888: bool -> int | None)
 
         monkeypatch.setattr(catalog_client, "claim_metadata_artifact", fake_claim_metadata_artifact)
         monkeypatch.setattr(catalog_client, "select_complete_metadata_artifact", fake_select_complete_metadata_artifact)

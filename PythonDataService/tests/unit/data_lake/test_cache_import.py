@@ -1193,7 +1193,10 @@ async def test_import_cache_root_marks_failed_not_stranded_when_write_fails(
     def _boom(**kwargs):
         raise RuntimeError("disk full (simulated)")
 
-    monkeypatch.setattr(cache_import_module, "atomic_write_and_promote", _boom)
+    # issue #1888: the "proceed" (fresh-claim) branch now writes through the
+    # lease-gated publication interface, not the unconditional
+    # atomic_write_and_promote -- see cache_import._import_one_zip.
+    monkeypatch.setattr(cache_import_module, "publish_artifact", _boom)
 
     cache_root = _build_cache(tmp_path, "SPY", [date(2024, 5, 20)], adjusted=False)
 

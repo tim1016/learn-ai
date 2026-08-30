@@ -99,6 +99,7 @@ async def test_observatory_selects_read_a_real_complete_artifact(clean_artifacts
         last_bar_start_ms=1716219540000,
         file_size_bytes=123456,
         file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     # select_artifact_coverage: the completed day shows up with its real status.
@@ -182,6 +183,8 @@ async def test_artifact_detail_carries_failure_diagnostics(clean_artifacts, pool
         artifact_id,
         last_error="provider_rate_limited",
         error_message="429 Too Many Requests from Polygon",
+        worker_id="w-1",
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     detail = await catalog_client.select_artifact_by_id(artifact_id)
@@ -229,6 +232,7 @@ async def test_symbol_coverage_spans_excludes_aggregated_only_symbols(clean_arti
         last_bar_start_ms=1716220000000,
         file_size_bytes=999,
         file_sha256="f" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     spans = await catalog_client.select_symbol_coverage_spans("usa")
@@ -276,6 +280,7 @@ async def test_coverage_finds_a_real_quote_artifact_seeded_under_learn_ai_derive
         last_bar_start_ms=1716305940000,
         file_size_bytes=54321,
         file_sha256="h" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
     )
 
     coverage = await catalog_client.select_artifact_coverage(

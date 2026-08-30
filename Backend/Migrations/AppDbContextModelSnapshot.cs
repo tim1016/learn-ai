@@ -209,6 +209,11 @@ namespace Backend.Migrations
                     b.Property<long?>("LeaseExpiresAtMs")
                         .HasColumnType("bigint");
 
+                    b.Property<int>("LeaseGeneration")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
                     b.Property<string>("LeaseOwner")
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");

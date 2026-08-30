@@ -11,10 +11,15 @@ from uuid import UUID
 
 import pytest
 
+from app.data_lake import catalog_client
 from app.data_lake.atomic import (
+    ArtifactLeaseLostError,
     AtomicRenameUnsafeError,
     assert_same_filesystem,
     atomic_write_and_promote,
+    promote_staged,
+    publish_artifact,
+    stage_content,
     stage_path_for,
 )
 
@@ -197,3 +202,198 @@ class TestAtomicWriteAndPromote:
                 worker_id="w",
                 attempt=1,
             )
+
+
+class TestStageContentAndPromoteStaged:
+    """The two-phase split (issue #1888) must reproduce atomic_write_and_
+    promote's exact end state when run back-to-back with nothing gating
+    between them -- the split changes nothing about the filesystem contract,
+    only where a caller may insert a catalog check."""
+
+    def test_stage_then_promote_matches_atomic_write_and_promote(self, tmp_path: Path):
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        rel = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
+        content = b"two-phase payload"
+
+        staged, sha = stage_content(
+            content=content,
+            lake_root=lake_root,
+            staging_root=staging_root,
+            rel_lake_path=rel,
+            request_id=UUID("12345678-1234-5678-1234-567812345678"),
+            worker_id="w",
+            attempt=1,
+        )
+        assert sha == hashlib.sha256(content).hexdigest()
+        assert staged.is_file(), "stage_content must not promote -- nothing at the lake path yet"
+        final = lake_root / "equity" / "usa" / "minute" / "spy" / "20240520_trade.zip"
+        assert not final.exists()
+
+        promote_staged(staged, lake_root, rel)
+
+        assert final.is_file()
+        assert final.read_bytes() == content
+        assert not staged.exists(), "promote must move (not copy) the staged file"
+
+
+class TestPublishArtifact:
+    """The publication interface (issue #1888), exercised without a live
+    Postgres: catalog_client.publish_under_lease is monkeypatched directly,
+    so this proves publish_artifact's own control flow -- stage always
+    happens, promote happens if and only if the catalog authorizes it, and
+    staged bytes never survive a refusal -- independent of the real SQL
+    transaction (which test_catalog_write_ops.py covers against a live
+    database instead)."""
+
+    @pytest.mark.asyncio
+    async def test_promotes_and_completes_when_the_catalog_authorizes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        rel = PurePosixPath("a.zip")
+        content = b"authorized bytes"
+        seen: dict[str, object] = {}
+
+        async def fake_publish(**kwargs):
+            seen.update(kwargs)
+            kwargs["promote"]()
+
+        monkeypatch.setattr(catalog_client, "publish_under_lease", fake_publish)
+
+        sha = await publish_artifact(
+            content=content,
+            lake_root=lake_root,
+            staging_root=staging_root,
+            rel_lake_path=rel,
+            request_id=UUID("12345678-1234-5678-1234-567812345678"),
+            worker_id="w-1",
+            attempt=1,
+            artifact_id=7,
+            lease_generation=3,
+            row_count=390,
+            first_bar_start_ms=1_700_000_000_000,
+            last_bar_start_ms=1_700_000_060_000,
+        )
+
+        assert sha == hashlib.sha256(content).hexdigest()
+        assert (lake_root / "a.zip").read_bytes() == content
+        # The completion receipt travels with the promotion -- there is no
+        # second call a caller could forget to make.
+        assert seen["artifact_id"] == 7
+        assert seen["worker_id"] == "w-1"
+        assert seen["lease_generation"] == 3
+        assert seen["row_count"] == 390
+        assert seen["file_sha256"] == sha
+        assert seen["file_size_bytes"] == len(content)
+
+    @pytest.mark.asyncio
+    async def test_refuses_to_promote_when_the_catalog_denies_the_lease(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The zombie-writer fix's core unit-level proof: a refusal must
+        leave the lake path untouched. The catalog never calls ``promote``,
+        so the canonical file is not reachable from a losing writer at all."""
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        rel = PurePosixPath("a.zip")
+
+        async def fake_publish(**kwargs):
+            raise ArtifactLeaseLostError("artifact 7: not authorized to publish")
+
+        monkeypatch.setattr(catalog_client, "publish_under_lease", fake_publish)
+
+        with pytest.raises(ArtifactLeaseLostError, match="not authorized to publish"):
+            await publish_artifact(
+                content=b"stale bytes",
+                lake_root=lake_root,
+                staging_root=staging_root,
+                rel_lake_path=rel,
+                request_id=UUID("12345678-1234-5678-1234-567812345678"),
+                worker_id="w-1",
+                attempt=1,
+                artifact_id=7,
+                lease_generation=1,
+                row_count=1,
+                first_bar_start_ms=0,
+                last_bar_start_ms=0,
+            )
+
+        assert not (lake_root / "a.zip").exists(), "a denied lease must never reach the lake path"
+
+    @pytest.mark.asyncio
+    async def test_refusal_leaves_no_staged_bytes_behind(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Staging is request/worker/attempt-scoped with no sweeper behind
+        it, so a contended path that leaked its staged copy would accumulate
+        whole artifacts on the lake filesystem forever."""
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+
+        async def fake_publish(**kwargs):
+            raise ArtifactLeaseLostError("artifact 7: not authorized to publish")
+
+        monkeypatch.setattr(catalog_client, "publish_under_lease", fake_publish)
+
+        with pytest.raises(ArtifactLeaseLostError):
+            await publish_artifact(
+                content=b"x" * 4096,
+                lake_root=lake_root,
+                staging_root=staging_root,
+                rel_lake_path=PurePosixPath("a.zip"),
+                request_id=UUID("12345678-1234-5678-1234-567812345678"),
+                worker_id="w-1",
+                attempt=1,
+                artifact_id=7,
+                lease_generation=1,
+                row_count=1,
+                first_bar_start_ms=0,
+                last_bar_start_ms=0,
+            )
+
+        leftovers = [p for p in staging_root.rglob("*") if p.is_file()]
+        assert leftovers == [], f"staged bytes survived a refused publication: {leftovers}"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_rename_leaves_no_staged_bytes_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Cleanup is on every non-promoting exit, not just the refusal --
+        a rename that raises under the publication lock rolls the
+        transaction back and must not strand the staged copy either."""
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+
+        async def fake_publish(**kwargs):
+            raise OSError("disk went away mid-rename")
+
+        monkeypatch.setattr(catalog_client, "publish_under_lease", fake_publish)
+
+        with pytest.raises(OSError, match="disk went away"):
+            await publish_artifact(
+                content=b"y" * 4096,
+                lake_root=lake_root,
+                staging_root=staging_root,
+                rel_lake_path=PurePosixPath("a.zip"),
+                request_id=UUID("12345678-1234-5678-1234-567812345678"),
+                worker_id="w-1",
+                attempt=1,
+                artifact_id=7,
+                lease_generation=1,
+                row_count=1,
+                first_bar_start_ms=0,
+                last_bar_start_ms=0,
+            )
+
+        leftovers = [p for p in staging_root.rglob("*") if p.is_file()]
+        assert leftovers == [], f"staged bytes survived a failed publication: {leftovers}"

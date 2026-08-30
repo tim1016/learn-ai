@@ -156,7 +156,9 @@ from zoneinfo import ZoneInfo
 
 from app.data_lake import catalog_client, root_identity
 from app.data_lake.atomic import (
+    ArtifactLeaseLostError,
     atomic_write_and_promote,
+    publish_artifact,
 )
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.path_policy import (
@@ -771,7 +773,9 @@ async def _import_one_zip(
                 # The row no longer honestly describes what's on disk --
                 # mark it 'failed' rather than leaving it 'complete' while
                 # this run reports a refusal for it.
-                await catalog_client.fail_artifact(artifact_id=existing.id, last_error="io_error", error_message=detail)
+                await catalog_client.mark_complete_artifact_failed(
+                    artifact_id=existing.id, last_error="io_error", error_message=detail
+                )
                 logger.error("cache_import: %s %s: %s", ref.symbol, ref.trading_date, detail)
                 return FailedArtifact(
                     symbol=ref.symbol, trading_date=ref.trading_date, reason="destination_file_conflict", detail=detail
@@ -795,7 +799,9 @@ async def _import_one_zip(
                     ref.trading_date,
                 )
         except Exception as exc:
-            await catalog_client.fail_artifact(artifact_id=existing.id, last_error="io_error", error_message=str(exc))
+            await catalog_client.mark_complete_artifact_failed(
+                artifact_id=existing.id, last_error="io_error", error_message=str(exc)
+            )
             logger.exception(
                 "cache_import: %s %s: destination inspection/restore failed for existing complete row id=%s",
                 ref.symbol,
@@ -837,7 +843,13 @@ async def _import_one_zip(
                 f"mode -- it is a segment of this path -- so they disagree about content: one "
                 f"of the two source caches is not what its provenance says it is."
             )
-            await catalog_client.fail_artifact(artifact_id=claim_result, last_error="io_error", error_message=detail)
+            await catalog_client.fail_artifact(
+                artifact_id=claim_result,
+                last_error="io_error",
+                error_message=detail,
+                worker_id=_WORKER_ID,
+                lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+            )
             logger.error("cache_import: %s %s: %s", ref.symbol, ref.trading_date, detail)
             return FailedArtifact(
                 symbol=ref.symbol, trading_date=ref.trading_date, reason="destination_file_conflict", detail=detail
@@ -847,10 +859,27 @@ async def _import_one_zip(
         # in 'fetching'.
         already_present = dest_decision.action == "already_present"
 
-        file_sha = (
-            content_hash
-            if already_present
-            else atomic_write_and_promote(
+        # This claim was won moments ago in this same call (no
+        # steal_or_retry_minute_bar path in this file) -- the fencing
+        # generation is always the freshly-claimed one.
+        if already_present:
+            file_sha = content_hash
+            if not await catalog_client.complete_artifact(
+                artifact_id=claim_result,
+                row_count=verified.row_count,
+                first_bar_start_ms=verified.first_bar_start_ms,
+                last_bar_start_ms=verified.last_bar_start_ms,
+                file_size_bytes=len(verified.raw_bytes),
+                file_sha256=file_sha,
+                lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+            ):
+                raise ArtifactLeaseLostError(
+                    f"artifact {claim_result}: completion refused at generation "
+                    f"{catalog_client.INITIAL_LEASE_GENERATION}; the lease was reclaimed while "
+                    f"this import confirmed identical bytes already at the destination"
+                )
+        else:
+            file_sha = await publish_artifact(
                 content=verified.raw_bytes,
                 lake_root=lake_dir,
                 staging_root=staging_dir,
@@ -858,15 +887,25 @@ async def _import_one_zip(
                 request_id=run_id,
                 worker_id=_WORKER_ID,
                 attempt=1,
+                artifact_id=claim_result,
+                lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+                row_count=verified.row_count,
+                first_bar_start_ms=verified.first_bar_start_ms,
+                last_bar_start_ms=verified.last_bar_start_ms,
             )
+    except ArtifactLeaseLostError as exc:
+        # Unlike the branches below, the lease is no longer ours to fail:
+        # fail_artifact() is fenced on owner and generation, so the call
+        # would be refused anyway, and reporting the loss is the honest
+        # outcome. Do not touch the catalog row.
+        logger.warning(
+            "cache_import: %s %s: %s",
+            ref.symbol,
+            ref.trading_date,
+            exc,
         )
-        await catalog_client.complete_artifact(
-            artifact_id=claim_result,
-            row_count=verified.row_count,
-            first_bar_start_ms=verified.first_bar_start_ms,
-            last_bar_start_ms=verified.last_bar_start_ms,
-            file_size_bytes=len(verified.raw_bytes),
-            file_sha256=file_sha,
+        return FailedArtifact(
+            symbol=ref.symbol, trading_date=ref.trading_date, reason="in_flight_or_incomplete", detail=str(exc)
         )
     except Exception as exc:
         # Caught broadly and deliberately: whatever goes wrong here (disk
@@ -883,6 +922,8 @@ async def _import_one_zip(
             artifact_id=claim_result,
             last_error="io_error",
             error_message=str(exc),
+            worker_id=_WORKER_ID,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
         logger.exception(
             "cache_import: %s %s: claimed artifact_id=%s but failed to write/complete",

@@ -560,11 +560,17 @@ class _MetadataRowClaim(NamedTuple):
     concurrent caller already published a 'complete' row for this exact
     digest, nothing to do; ``failure_reason`` set means neither a claim nor
     a reclaim was possible right now.
+
+    ``lease_generation`` is meaningful only alongside ``artifact_id``: it is
+    the fencing generation this claim or reclaim minted (issue #1888), and
+    every later mutation of the row -- completion or failure -- must present
+    it or be refused.
     """
 
     artifact_id: int | None
     existing: ArtifactRecord | None
     failure_reason: ArtifactFailureReason | None
+    lease_generation: int = catalog_client.INITIAL_LEASE_GENERATION
 
 
 async def _claim_or_reclaim_metadata_row(
@@ -594,7 +600,7 @@ async def _claim_or_reclaim_metadata_row(
         identity=identity, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS, data_contract_hash=dch, file_path=file_path
     )
     if artifact_id is not None:
-        return _MetadataRowClaim(artifact_id, None, None)
+        return _MetadataRowClaim(artifact_id, None, None, catalog_client.INITIAL_LEASE_GENERATION)
 
     existing = await catalog_client.select_complete_metadata_artifact(dch, data_root_id=root_id)
     if existing is not None:
@@ -604,15 +610,17 @@ async def _claim_or_reclaim_metadata_row(
     if row_state is None:
         return _MetadataRowClaim(None, None, "lease_timeout")
 
-    reclaimed = await catalog_client.steal_or_retry_minute_bar(
+    reclaimed_generation = await catalog_client.steal_or_retry_minute_bar(
         artifact_id=row_state.id,
         worker_id=_WORKER_ID,
         lease_ttl_ms=_LEASE_TTL_MS,
         max_retries=_MAX_CLAIM_RETRIES,
         bypass_retry_ceiling=(row_state.last_error == "launcher_unreachable"),
     )
-    if reclaimed:
-        return _MetadataRowClaim(row_state.id, None, None)
+    if reclaimed_generation is not None:
+        # The reclaim minted a new generation; the row's previous one is
+        # stale from this moment, so the caller must carry this value.
+        return _MetadataRowClaim(row_state.id, None, None, reclaimed_generation)
 
     # row_state is a pre-reclaim snapshot; a concurrent winner can flip
     # 'failed' -> 'fetching' between it and this check (same race
@@ -679,15 +687,23 @@ async def _claim_and_complete_metadata_row(
     if claim.artifact_id is None:
         return MetadataBootstrap(None, False, claim.failure_reason)
     artifact_id = claim.artifact_id
+    lease_generation = claim.lease_generation
 
-    await catalog_client.complete_artifact(
+    if not await catalog_client.complete_artifact(
         artifact_id=artifact_id,
         row_count=1,
         first_bar_start_ms=0,
         last_bar_start_ms=0,
         file_size_bytes=file_size_bytes,
         file_sha256=entry.sha256,
-    )
+        lease_generation=lease_generation,
+    ):
+        # The lease was reclaimed while this call extracted the bundle. The
+        # bytes on disk are content-addressed by the LEAN image digest, so
+        # the winner publishes byte-identical content and the file is fine
+        # either way -- but this row is no longer ours to describe, so report
+        # the loss rather than returning a record for someone else's row.
+        return MetadataBootstrap(None, False, "lease_timeout")
     await catalog_client.mark_metadata_artifacts_stale_for_path(
         data_root_id=root_id,
         price_adjustment_mode=spec.price_adjustment_mode,
@@ -805,7 +821,13 @@ async def _claim_and_fail_metadata_row(
         return MetadataBootstrap(claim.existing, True, None)
     if claim.artifact_id is None:
         return MetadataBootstrap(None, False, claim.failure_reason, detail)
-    await catalog_client.fail_artifact(claim.artifact_id, reason, detail)
+    await catalog_client.fail_artifact(
+        claim.artifact_id,
+        reason,
+        detail,
+        worker_id=_WORKER_ID,
+        lease_generation=claim.lease_generation,
+    )
     return MetadataBootstrap(None, False, reason, detail)
 
 

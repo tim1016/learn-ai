@@ -60,6 +60,14 @@ DATA_LAKE_ARTIFACTS = TableExpectation(
         ColumnExpectation("Status", "character varying", nullable=False),
         ColumnExpectation("LeaseOwner", "character varying", nullable=True),
         ColumnExpectation("LeaseExpiresAtMs", "bigint", nullable=True),
+        # Fencing generation (issue #1888, ADR 0048's idiom applied to this
+        # subsystem): incremented on every claim_* INSERT (starts at 1) and
+        # on every steal_or_retry_minute_bar / refresh_complete_artifact
+        # reclaim. publish_under_lease and complete_artifact both gate
+        # on it so a writer whose claim was stolen cannot complete or
+        # promote under its own stale recollection of still holding the
+        # lease -- see catalog_client.py's write-ops section docstring.
+        ColumnExpectation("LeaseGeneration", "integer", nullable=False),
         ColumnExpectation("AttemptCount", "integer", nullable=False),
         ColumnExpectation("LastError", "text", nullable=True),
         ColumnExpectation("ErrorMessage", "text", nullable=True),

@@ -83,6 +83,10 @@ class FakeCatalog:
             "status": "fetching",
             "attempt_count": 1,
             "last_error": None,
+            # Fencing generation (issue #1888): mirrors the real schema's
+            # LeaseGeneration column, starting at
+            # catalog_client.INITIAL_LEASE_GENERATION on every fresh claim.
+            "lease_generation": catalog_client.INITIAL_LEASE_GENERATION,
         }
         return artifact_id
 
@@ -105,7 +109,7 @@ class FakeCatalog:
             "last_bar_start_ms": None,
         }
 
-    _BOOKKEEPING_KEYS = frozenset({"status", "attempt_count", "last_error"})
+    _BOOKKEEPING_KEYS = frozenset({"status", "attempt_count", "last_error", "lease_generation"})
 
     @classmethod
     def _record(cls, row: dict) -> ArtifactRecord:
@@ -207,7 +211,9 @@ class FakeCatalog:
             last_error=row["last_error"],
         )
 
-    async def steal_or_retry_minute_bar(self, artifact_id, worker_id, lease_ttl_ms, max_retries) -> bool:
+    async def steal_or_retry_minute_bar(
+        self, artifact_id, worker_id, lease_ttl_ms, max_retries, *, bypass_retry_ceiling: bool = False
+    ) -> int | None:
         row = self.rows[artifact_id]
         # The fake has no lease clock, so "fetching" always means a live
         # lease held by someone else — nothing to steal, matching the real
@@ -215,12 +221,18 @@ class FakeCatalog:
         # 'stale' reactivates unconditionally (Codex P1, PR #1884) -- see
         # the real ``steal_or_retry_minute_bar``'s docstring for why that
         # branch carries no lease/retry gate, unlike the other two.
-        if (row["status"] == "failed" and row["attempt_count"] < max_retries) or row["status"] == "stale":
+        # ``bypass_retry_ceiling`` (#1889) is modelled rather than ignored:
+        # a fake that accepted the flag and dropped it would answer "no
+        # eligible row" for exactly the launcher-outage case the flag exists
+        # to keep retryable, which is the bug it would be there to catch.
+        retryable = row["attempt_count"] < max_retries or bypass_retry_ceiling
+        if (row["status"] == "failed" and retryable) or row["status"] == "stale":
             row["status"] = "fetching"
             row["attempt_count"] += 1
             row["last_error"] = None
-            return True
-        return False
+            row["lease_generation"] += 1
+            return row["lease_generation"]
+        return None
 
     async def select_coverage_minute_bars(
         self, market, symbol, data_type, start_trading_date, end_trading_date, *, price_adjustment_mode
@@ -282,16 +294,20 @@ class FakeCatalog:
         row = self.rows.get(artifact_id)
         if row is None or row["status"] != "complete":
             return None
+        row["lease_generation"] += 1
         prior = catalog_client.PriorArtifactMetadata(
             prior_file_path=row["file_path"],
             prior_file_sha256=row["file_sha256"],
+            new_lease_generation=row["lease_generation"],
         )
         row.update(status="fetching")
         return prior
 
-    async def restore_complete_artifact(self, artifact_id, worker_id) -> bool:
+    async def restore_complete_artifact(self, artifact_id, worker_id, lease_generation) -> bool:
         row = self.rows.get(artifact_id)
-        if row is None or row["status"] != "fetching":
+        # Owner AND generation, like the real guard: a stale caller sharing
+        # the per-process worker id must not restore a newer generation.
+        if row is None or row["status"] != "fetching" or row["lease_generation"] != lease_generation:
             return False
         row.update(status="complete")
         return True
@@ -304,11 +320,16 @@ class FakeCatalog:
         last_bar_start_ms,
         file_size_bytes,
         file_sha256,
+        lease_generation,
         data_contract_hash=None,
-    ) -> None:
+    ) -> bool:
         row = self.rows[artifact_id]
-        if row["status"] != "fetching":
-            return
+        # Status AND generation (issue #1888) -- mirrors the real guard's
+        # tightening from status-only. Returns whether the row was actually
+        # completed: a caller that treated a refused completion as success
+        # would report an ArtifactRecord describing someone else's row.
+        if row["status"] != "fetching" or row["lease_generation"] != lease_generation:
+            return False
         row.update(
             status="complete",
             row_count=row_count,
@@ -316,10 +337,66 @@ class FakeCatalog:
             last_bar_start_ms=last_bar_start_ms,
             file_sha256=file_sha256,
             data_contract_hash=data_contract_hash if data_contract_hash is not None else row["data_contract_hash"],
+            last_error=None,
         )
+        return True
 
-    async def fail_artifact(self, artifact_id, last_error, error_message=None) -> None:
-        self.rows[artifact_id].update(status="failed", last_error=last_error)
+    async def publish_under_lease(
+        self,
+        *,
+        artifact_id,
+        worker_id,
+        lease_generation,
+        promote,
+        row_count,
+        first_bar_start_ms,
+        last_bar_start_ms,
+        file_size_bytes,
+        file_sha256,
+        data_contract_hash=None,
+    ) -> None:
+        """Authorize, promote, then record -- in that order, and only in that
+        order. The real implementation makes the three inseparable by holding
+        a row lock across them; this fake keeps the same *observable*
+        contract, which is what the code under test depends on: an
+        unauthorized writer never sees ``promote`` called at all.
+        """
+        row = self.rows.get(artifact_id)
+        if (
+            row is None
+            or row["status"] != "fetching"
+            or row["lease_generation"] != lease_generation
+            or row.get("lease_owner", worker_id) != worker_id
+        ):
+            raise catalog_client.ArtifactLeaseLostError(
+                f"artifact {artifact_id}: {worker_id} is not authorized to publish at generation {lease_generation}"
+            )
+        promote()
+        completed = await self.complete_artifact(
+            artifact_id=artifact_id,
+            row_count=row_count,
+            first_bar_start_ms=first_bar_start_ms,
+            last_bar_start_ms=last_bar_start_ms,
+            file_size_bytes=file_size_bytes,
+            file_sha256=file_sha256,
+            lease_generation=lease_generation,
+            data_contract_hash=data_contract_hash,
+        )
+        assert completed, "the fake authorized a publication it then refused to complete"
+
+    async def fail_artifact(self, artifact_id, last_error, error_message=None, *, worker_id, lease_generation) -> bool:
+        row = self.rows.get(artifact_id)
+        if row is None or row["lease_generation"] != lease_generation:
+            return False
+        row.update(status="failed", last_error=last_error)
+        return True
+
+    async def mark_complete_artifact_failed(self, artifact_id, last_error, error_message=None) -> bool:
+        row = self.rows.get(artifact_id)
+        if row is None or row["status"] != "complete":
+            return False
+        row.update(status="failed", last_error=last_error)
+        return True
 
 
 @pytest.fixture
@@ -340,7 +417,9 @@ def fake_catalog(monkeypatch) -> FakeCatalog:
         "refresh_complete_artifact",
         "restore_complete_artifact",
         "complete_artifact",
+        "publish_under_lease",
         "fail_artifact",
+        "mark_complete_artifact_failed",
     ):
         monkeypatch.setattr(catalog_client, name, getattr(catalog, name))
     return catalog
