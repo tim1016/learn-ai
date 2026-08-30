@@ -190,8 +190,8 @@ class DataRunSpec(BaseModel):
     # calendar_anchor_ms_to_trading_date (via _validate_calendar_anchor
     # below) alongside the anchor check itself — not restated here as a
     # second Field(ge=, le=) constraint on the same invariant.
-    start_trading_date_ms: int
-    end_trading_date_ms: int
+    start_trading_date_ms: int = Field(strict=True)
+    end_trading_date_ms: int = Field(strict=True)
 
     resolution: Literal["minute"] = "minute"
     data_types: list[Literal["trade", "quote"]] = ["trade"]

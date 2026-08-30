@@ -231,6 +231,24 @@ class TestDataRunSpec:
         with pytest.raises(ValidationError):
             DataRunSpec(**payload)
 
+    def test_numeric_string_value_is_rejected(self):
+        """A numeric string that would parse to an on-anchor ms value must
+        still be refused — the wire type is int64, not a string that
+        happens to parse to the right number."""
+        payload = self._valid_payload()
+        payload["start_trading_date_ms"] = str(payload["start_trading_date_ms"])
+        with pytest.raises(ValidationError):
+            DataRunSpec(**payload)
+
+    def test_integral_float_value_is_rejected(self):
+        """An integral float (e.g. 1716206400000.0) that would parse to an
+        on-anchor ms value must still be refused — Pydantic's lax int
+        coercion would otherwise silently accept it."""
+        payload = self._valid_payload()
+        payload["start_trading_date_ms"] = float(payload["start_trading_date_ms"])
+        with pytest.raises(ValidationError):
+            DataRunSpec(**payload)
+
     def test_est_date_range_accepted(self):
         payload = self._valid_payload()
         payload["start_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2026, 1, 12))
