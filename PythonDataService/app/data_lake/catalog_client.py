@@ -881,6 +881,17 @@ async def claim_metadata_artifact(
 
     Records ``identity.data_root_id`` on the new row and leads the conflict
     target with it (issue #1878, PR B of #1861).
+
+    ``PriceAdjustmentMode`` is recorded from ``identity.price_adjustment_mode``
+    (issue #1879, PR C of #1861) instead of the ``NULL`` this always inserted
+    before: the metadata *bytes* are mode-independent, but each mode gets its
+    own physical copy under its own lake root (see ``_metadata_dch`` /
+    ``app.data_lake.metadata_bundle``'s module docstring), and
+    ``mark_metadata_artifacts_stale_for_path`` below needs the mode on the row
+    to avoid staling a sibling mode's still-valid row — ``FilePath`` alone is
+    identical across modes, since it is root-relative to the mode-specific
+    lake root. Existing callers that still pass ``price_adjustment_mode=None``
+    (identity default) keep writing ``NULL``, unchanged.
     """
     if identity.artifact_kind != "metadata":
         raise ValueError(f"claim_metadata_artifact called with non-metadata identity: {identity!r}")
@@ -894,8 +905,8 @@ async def claim_metadata_artifact(
             "AttemptCount", "FetchedAtMs", "DataRootId"
         )
         VALUES (
-            'metadata', $1, $2, NULL, NULL, NULL, $3, $4, NULL, $5,
-            $6, 'fetching', $7, $8, 1, $9, $10
+            'metadata', $1, $2, NULL, NULL, NULL, $3, $4, $5, $6,
+            $7, 'fetching', $8, $9, 1, $10, $11
         )
         ON CONFLICT ("DataRootId", "DataContractHash")
             WHERE "ArtifactKind" = 'metadata'
@@ -909,6 +920,7 @@ async def claim_metadata_artifact(
             identity.symbol,
             identity.provider,
             "{}",  # ProviderParams (jsonb)
+            identity.price_adjustment_mode,
             data_contract_hash,
             file_path,
             worker_id,
@@ -916,6 +928,44 @@ async def claim_metadata_artifact(
             now_ms,
             identity.data_root_id,
         )
+
+
+async def mark_metadata_artifacts_stale_for_path(
+    data_root_id: UUID,
+    price_adjustment_mode: str,
+    file_path: str,
+    keep_artifact_id: int,
+) -> int:
+    """Mark every OTHER complete metadata row for this physical file 'stale'.
+
+    "Physical file" here is ``(DataRootId, PriceAdjustmentMode, FilePath)``,
+    not ``(DataRootId, FilePath)`` alone — ``FilePath`` for a metadata
+    artifact is root-relative to its *mode-specific* lake root (see
+    ``app.data_lake.path_policy``'s module docstring), so the identical
+    string names two different physical files across two modes. Omitting the
+    mode from the predicate would incorrectly stale a sibling mode's still-
+    valid row the moment this root's other mode republished its own bundle.
+
+    Called once a new (or newly-verified) complete row exists at
+    ``keep_artifact_id``, so a stale reader that only ever queries
+    ``Status = 'complete'`` can never observe two rows claiming the same
+    on-disk path (#1879, PR C of #1861 — "old catalog rows cannot claim
+    current physical metadata after a newer bundle replaces them"). Returns
+    the number of rows staled.
+    """
+    query = """
+        UPDATE "DataLakeArtifacts"
+           SET "Status" = 'stale'
+         WHERE "ArtifactKind" = 'metadata'
+           AND "DataRootId" = $1
+           AND "PriceAdjustmentMode" = $2
+           AND "FilePath" = $3
+           AND "Status" = 'complete'
+           AND "Id" != $4;
+    """
+    async with connection() as conn:
+        result = await conn.execute(query, data_root_id, price_adjustment_mode, file_path, keep_artifact_id)
+    return int(result.rsplit(" ", 1)[-1])
 
 
 async def claim_aggregated_bar_artifact(

@@ -13,8 +13,10 @@ seed both substrates from one source of truth and compare them.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 from pathlib import Path
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from app.data_lake.derived_daily import aggregate_minute_to_daily, build_daily_zip_bytes
@@ -164,6 +166,57 @@ def seed_lake_interest_rate(lake_root: Path, *, rows: str = "date,rate\n20260105
         Path(*LeanMetadataPath(kind="interest_rate").relative_path().parts),
         rows.encode("ascii"),
     )
+
+
+def seed_lean_metadata_receipt(
+    lake_root: Path,
+    *,
+    data_root_id: UUID,
+    price_adjustment_mode: str,
+    lean_image_digest: str,
+    include_interest_rate: bool = False,
+) -> Path:
+    """Write a valid metadata bundle (#1879, PR C of #1861) at ``lake_root``:
+    market-hours + symbol-properties (+ optional interest-rate), and a
+    receipt whose hashes match the bytes actually on disk.
+
+    Mirrors what ``app.data_lake.metadata_bundle.ensure_lean_metadata_bundle``
+    itself would publish, without needing Postgres or a mocked launcher —
+    for tests that only care whether the receipt on disk is trustworthy
+    (``verify_bundle``, and the launcher's pre-mount check that calls it).
+    Returns the receipt's path.
+    """
+    from app.data_lake.metadata_bundle import (
+        RECEIPT_SCHEMA_VERSION,
+        LeanMetadataFiles,
+        LeanMetadataReceipt,
+        MetadataFileEntry,
+        receipt_path,
+    )
+
+    mh_path, sp_path = seed_lake_metadata(lake_root)
+
+    def _entry(path: Path) -> MetadataFileEntry:
+        return MetadataFileEntry(
+            file_path=path.relative_to(lake_root).as_posix(),
+            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
+
+    interest_rate_entry = _entry(seed_lake_interest_rate(lake_root)) if include_interest_rate else None
+    receipt = LeanMetadataReceipt(
+        schema_version=RECEIPT_SCHEMA_VERSION,
+        data_root_id=data_root_id,
+        price_adjustment_mode=price_adjustment_mode,
+        lean_image_digest=lean_image_digest,
+        files=LeanMetadataFiles(
+            market_hours=_entry(mh_path),
+            symbol_properties=_entry(sp_path),
+            interest_rate=interest_rate_entry,
+        ),
+    )
+    path = receipt_path(lake_root)
+    path.write_text(receipt.model_dump_json())
+    return path
 
 
 def seed_lake_corporate_actions(

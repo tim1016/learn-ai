@@ -29,7 +29,7 @@ import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
-from typing import Literal, NamedTuple
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -43,14 +43,13 @@ from app.data_lake.derived_daily import (
 )
 from app.data_lake.derived_quote import build_minute_quote_zip_bytes
 from app.data_lake.factor_files import FactorFileReferenceError, build_factor_file_bytes
-from app.data_lake.lean_metadata import LeanMetadataExtractionError, extract_lean_metadata
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.map_files import build_map_file_bytes
+from app.data_lake.metadata_bundle import ensure_lean_metadata_bundle
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
     LeanFactorFilePath,
     LeanMapFilePath,
-    LeanMetadataPath,
     LeanMinuteBarPath,
     ensure_lean_readable_layout,
     resolve_lake_root,
@@ -70,7 +69,6 @@ from app.data_lake.polygon_ticker_events import fetch_ticker_events
 from app.data_lake.sessions import trading_sessions_for
 from app.data_lake.types import (
     ArtifactFailure,
-    ArtifactFailureReason,
     ArtifactIdentity,
     ArtifactRecord,
     DataAvailabilityResult,
@@ -186,36 +184,6 @@ def _map_file_dch(price_adjustment_mode: PriceAdjustmentMode) -> str:
         provider="polygon",
         provider_params=_DCH_MAP_FILE_PARAMS,
         price_adjustment_mode=price_adjustment_mode,
-        session_policy="full",
-        lean_format_version=1,
-    )
-
-
-def _metadata_dch(
-    lean_image_digest: str, file_name: str, price_adjustment_mode: PriceAdjustmentMode
-) -> str:
-    """LEAN's session calendar and symbol properties, per lake root.
-
-    The bytes do not vary by adjustment mode -- but the *roots* do, and LEAN
-    resolves this file inside whichever root it is handed, so every mode root
-    needs its own physical copy. The metadata claim is keyed by contract hash
-    alone (``uq_data_lake_artifacts_metadata``), so folding the mode into the
-    hash is what gives each root its own row and therefore its own write. The
-    ``PriceAdjustmentMode`` column stays NULL, which is both what the claim
-    inserts and honest: the content really is mode-independent.
-
-    Without this, the second mode's root would silently never receive the
-    file: the first mode's row already reads 'complete', so the writer skips
-    it, and LEAN then starts against a root with no market-hours database.
-    """
-    return _dch(
-        provider="lean_image_extract",
-        provider_params={
-            "lean_image_digest": lean_image_digest,
-            "file_name": file_name,
-            "lake_root_mode": price_adjustment_mode,
-        },
-        price_adjustment_mode=None,
         session_policy="full",
         lean_format_version=1,
     )
@@ -480,213 +448,6 @@ def _read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTrade
             )
         )
     return bars
-
-
-# ---------------------------------------------------------------------------
-# Phase 0: LEAN metadata bootstrap
-# ---------------------------------------------------------------------------
-
-
-class MetadataBootstrap(NamedTuple):
-    """Outcome of one Phase-0 artifact: the row, whether it was a cache hit,
-    and — when there is no row — the reason, typed as the failure it becomes."""
-
-    record: ArtifactRecord | None
-    is_reused: bool
-    failure_reason: ArtifactFailureReason | None
-
-
-async def _bootstrap_metadata_artifact(
-    file_name: str,
-    metadata_kind: str,
-    rel_path: PurePosixPath,
-    lean_image_digest: str,
-    spec: DataRunSpec,
-    lake_root: Path,
-    staging_root: Path,
-) -> MetadataBootstrap:
-    """Claim, extract, write, and complete one LEAN metadata artifact.
-
-    On failure ``record`` is None and ``failure_reason`` names *why*, because
-    the failure modes need different handling by the caller:
-
-    - ``"lease_timeout"`` — another worker holds a live lease and has not
-      completed yet. Transient: retrying the whole spec once the winner
-      finishes turns this into a cache hit.
-    - ``"fetch_timeout"`` — the existing row is a settled ``'failed'`` claim
-      that has exhausted its retries. Terminal, not contention.
-    - ``"io_error"`` — the launcher could not produce the bytes on *this*
-      attempt. The row is left ``'failed'`` with attempts remaining, so a
-      later call reclaims and retries it via ``steal_or_retry_minute_bar``
-      instead of jamming on this data_contract_hash forever.
-    - ``"provider_no_data"`` — ``metadata_kind == "interest_rate"`` only:
-      the workspace genuinely has no ``alternative/interest-rate``
-      subtree (an image variant without it, or an older launcher build).
-      The caller treats this one as optional and does not surface it as
-      an ``ArtifactFailure`` — see the Phase 0 call site. Unlike the
-      other reasons, this does NOT call ``fail_artifact``: doing so would
-      burn this claim's bounded retry budget on something that should be
-      retried indefinitely, not a fixed number of times. The row is left
-      ``'fetching'``; its lease expires naturally and a later call
-      reclaims it via ``steal_or_retry_minute_bar``'s expired-lease
-      branch, which has no retry ceiling (unlike its failed-row branch).
-    """
-    dch = _metadata_dch(lean_image_digest, file_name, spec.price_adjustment_mode)
-    file_path = str(rel_path)
-
-    identity = ArtifactIdentity(
-        artifact_kind="metadata",
-        market=spec.market,
-        symbol=None,
-        provider="lean_image_extract",
-        price_adjustment_mode=None,
-    )
-
-    artifact_id = await catalog_client.claim_metadata_artifact(
-        identity=identity,
-        worker_id=_WORKER_ID,
-        lease_ttl_ms=_LEASE_TTL_MS,
-        data_contract_hash=dch,
-        file_path=file_path,
-    )
-
-    if artifact_id is None:
-        # Already exists (complete, in-flight, or a settled failure). Try
-        # the complete row first.
-        existing = await catalog_client.select_complete_metadata_artifact(dch)
-        if existing is not None:
-            return MetadataBootstrap(existing, True, None)  # cache hit
-
-        # Not complete. Unlike claim_minute_bar, claim_metadata_artifact's
-        # ON CONFLICT DO NOTHING has no reclaim path of its own, so a
-        # settled 'failed' or lease-expired 'fetching' row would otherwise
-        # look identical to live contention on every future call. Reclaim
-        # it here via the same primitive claim_minute_bar's callers use —
-        # it operates purely on Id/Status/LeaseExpiresAtMs/AttemptCount,
-        # which every artifact kind shares, so it needs no bar-specific
-        # variant.
-        row_state = await catalog_client.select_metadata_claim_state(dch)
-        if row_state is not None:
-            reclaimed = await catalog_client.steal_or_retry_minute_bar(
-                artifact_id=row_state.id,
-                worker_id=_WORKER_ID,
-                lease_ttl_ms=_LEASE_TTL_MS,
-                max_retries=_MAX_CLAIM_RETRIES,
-            )
-            if reclaimed:
-                artifact_id = row_state.id
-                # Falls through to the launcher call below, exactly as a
-                # fresh claim would.
-            else:
-                # `row_state` is a snapshot from *before* the reclaim attempt
-                # above — trusting its `status` here would misreport a lost
-                # race. A concurrent caller can win the identical reclaim
-                # between that snapshot and this check, flipping the row to
-                # 'fetching' under its own live lease; this stale snapshot
-                # would still read 'failed' and this caller would wrongly
-                # report a terminal, exhausted-retries `fetch_timeout` while
-                # the winner is actively fetching. Re-read before deciding.
-                current = await catalog_client.select_metadata_claim_state(dch)
-                if current is not None and current.status == "failed":
-                    # Retries exhausted: a real, terminal failure, not contention.
-                    return MetadataBootstrap(None, False, "fetch_timeout")
-                # Otherwise another worker's reclaim landed between the
-                # snapshot and this check — fall through to the
-                # "genuinely fetching elsewhere" branch below.
-
-        if artifact_id is None:
-            # Genuinely fetching under a live lease elsewhere.
-            logger.warning(
-                "data_lake.ensure_data: metadata artifact %s is in-flight elsewhere; "
-                "Phase 0 may use fallback holiday list for sessions.",
-                file_name,
-            )
-            return MetadataBootstrap(None, False, "lease_timeout")
-
-    # Fetch from launcher. Token resolution mirrors
-    # app.lean_sidecar.launcher_client._auth_headers: env override first,
-    # then the launcher's auto-generated file-backed token, shared over the
-    # same artifacts bind mount both processes already see. Reading
-    # settings.LEAN_LAUNCHER_TOKEN directly (empty unless an operator sets
-    # the env) skips that fallback entirely, so every request the launcher's
-    # mandatory auth wasn't opted out of gets a 401 it can never recover
-    # from on its own.
-    from app.lean_sidecar.launcher_auth import read_launcher_token
-
-    try:
-        mh_bytes, sp_bytes, ir_bytes = await extract_lean_metadata(
-            image_digest=lean_image_digest,
-            launcher_url=settings.LEAN_LAUNCHER_URL,
-            launcher_token=read_launcher_token() or "",
-            run_id=f"metadata-{spec.request_id}",
-        )
-    except LeanMetadataExtractionError as e:
-        await catalog_client.fail_artifact(artifact_id, "provider_api_error", str(e))
-        logger.warning("data_lake.ensure_data: metadata extraction failed: %s", e)
-        return MetadataBootstrap(None, False, "io_error")
-
-    if metadata_kind == "market_hours":
-        content = mh_bytes
-    elif metadata_kind == "symbol_properties":
-        content = sp_bytes
-    else:  # "interest_rate"
-        if ir_bytes is None:
-            # Optional: an image variant (or a launcher build) without the
-            # alternative/interest-rate subtree. Deliberately NOT
-            # fail_artifact — that would mark the row 'failed' and burn
-            # this claim's bounded AttemptCount retry budget
-            # (steal_or_retry_minute_bar's failed-row branch requires
-            # AttemptCount < max_retries), permanently stranding the row
-            # once exhausted even after a launcher upgrade could finally
-            # provide the file. Leave it 'fetching' instead: its lease
-            # (set at claim time) expires naturally, and
-            # steal_or_retry_minute_bar's OTHER branch — expired-lease
-            # reclaim — has no retry ceiling, so a later call keeps trying
-            # indefinitely rather than giving up after a fixed count
-            # (CodeRabbit review fix on #1859).
-            logger.info("data_lake.ensure_data: workspace has no interest-rate subtree; leaving claim for retry")
-            return MetadataBootstrap(None, False, "provider_no_data")
-        content = ir_bytes
-    file_sha = atomic_write_and_promote(
-        content=content,
-        lake_root=lake_root,
-        staging_root=staging_root,
-        rel_lake_path=rel_path,
-        request_id=spec.request_id,
-        worker_id=_WORKER_ID,
-        attempt=1,
-    )
-    await catalog_client.complete_artifact(
-        artifact_id=artifact_id,
-        row_count=1,
-        first_bar_start_ms=0,
-        last_bar_start_ms=0,
-        file_size_bytes=len(content),
-        file_sha256=file_sha,
-    )
-    return MetadataBootstrap(
-        ArtifactRecord(
-            id=artifact_id,
-            artifact_kind="metadata",
-            market=spec.market,
-            symbol=None,
-            trading_date=None,
-            resolution=None,
-            data_type=None,
-            provider="lean_image_extract",
-            price_adjustment_mode=None,
-            data_contract_hash=dch,
-            file_path=file_path,
-            file_sha256=file_sha,
-            row_count=1,
-            first_bar_start_ms=0,
-            last_bar_start_ms=0,
-            file_size_bytes=len(content),
-            data_root_id=identity.data_root_id,
-        ),
-        False,  # freshly fetched
-        None,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1600,38 +1361,19 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
 
     # -----------------------------------------------------------------------
     # Phase 0: LEAN metadata bootstrap
+    #
+    # One call for the whole bundle (#1879, PR C of #1861): a single
+    # extraction, an on-disk receipt binding all three files to
+    # spec.lean_image_digest, and per-kind catalog activation from that
+    # verified receipt -- replacing three independent per-kind bootstrap
+    # calls (and three independent launcher round trips) this used to make.
     # -----------------------------------------------------------------------
-    mh_rel = LeanMetadataPath(kind="market_hours").relative_path()
-    sp_rel = LeanMetadataPath(kind="symbol_properties").relative_path()
-    ir_rel = LeanMetadataPath(kind="interest_rate").relative_path()
-
-    mh_record, mh_reused, mh_failure_reason = await _bootstrap_metadata_artifact(
-        file_name="market-hours-database.json",
-        metadata_kind="market_hours",
-        rel_path=mh_rel,
-        lean_image_digest=spec.lean_image_digest,
-        spec=spec,
-        lake_root=lake_root,
-        staging_root=staging_root,
+    mh_outcome, sp_outcome, ir_outcome = await ensure_lean_metadata_bundle(
+        spec=spec, lake_root=lake_root, staging_root=staging_root
     )
-    sp_record, sp_reused, sp_failure_reason = await _bootstrap_metadata_artifact(
-        file_name="symbol-properties-database.csv",
-        metadata_kind="symbol_properties",
-        rel_path=sp_rel,
-        lean_image_digest=spec.lean_image_digest,
-        spec=spec,
-        lake_root=lake_root,
-        staging_root=staging_root,
-    )
-    ir_record, ir_reused, ir_failure_reason = await _bootstrap_metadata_artifact(
-        file_name="interest-rate.csv",
-        metadata_kind="interest_rate",
-        rel_path=ir_rel,
-        lean_image_digest=spec.lean_image_digest,
-        spec=spec,
-        lake_root=lake_root,
-        staging_root=staging_root,
-    )
+    mh_record, mh_reused, mh_failure_reason = mh_outcome
+    sp_record, sp_reused, sp_failure_reason = sp_outcome
+    ir_record, ir_reused, ir_failure_reason = ir_outcome
 
     # The market-hours database is bootstrapped for LEAN, which reads it off
     # the mount and refuses to initialize without it. It is deliberately NOT
@@ -1682,28 +1424,20 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
 
     # Unlike market-hours/symbol-properties, interest-rate is optional: LEAN
     # falls back to its built-in risk-free rate when it's absent (see
-    # app.lean_sidecar.lake_mount's module docstring). "Optional" covers two
-    # reasons, both non-blocking:
-    #   - provider_no_data: confirmed absence — the workspace/image
-    #     genuinely has no interest-rate subtree (staging.py's own optional
-    #     podman-cp handling for this one file).
-    #   - lease_timeout: NOT genuine contention here the way it is for
-    #     market-hours/symbol-properties. provider_no_data deliberately
-    #     leaves the row 'fetching' rather than 'failed' (see
-    #     _bootstrap_metadata_artifact's docstring — burning the retry
-    #     budget on confirmed absence would strand the row even after a
-    #     later launcher upgrade), so ANY call within that row's still-live
-    #     lease window — extremely common, since two ensure_data calls
-    #     close together for the same symbol/window is the normal case —
-    #     reports lease_timeout as the mechanical consequence of that
-    #     choice, not because a fetch is genuinely in flight. Surfacing it
-    #     would make nearly every second call report "partial" purely from
-    #     re-observing the same confirmed absence.
-    # Any other reason (io_error, fetch_timeout) means the bootstrap
-    # attempt itself failed without ever learning whether data exists —
-    # surfacing those exactly like a market-hours/symbol-properties failure
-    # is what stops the run from silently claiming input parity it doesn't
-    # have (CodeRabbit review fix on #1859).
+    # app.lean_sidecar.lake_mount's module docstring). Confirmed absence
+    # ("provider_no_data") is a fact the receipt itself records
+    # (``files.interest_rate: null`` -- app.data_lake.metadata_bundle's
+    # ``_activate_catalog_from_receipt`` returns this reason directly,
+    # without ever attempting a catalog claim for it), so it is non-blocking
+    # and, per that module's own trade-off note, stable across repeat calls
+    # with the same lean_image_digest rather than retried indefinitely: a
+    # digest change is what triggers another extraction attempt. Any other
+    # reason (io_error, fetch_timeout, lease_timeout) means the attempt to
+    # learn whether interest-rate data exists itself failed or is genuinely
+    # racing another worker -- surfacing those exactly like a
+    # market-hours/symbol-properties failure is what stops the run from
+    # silently claiming input parity it doesn't have (CodeRabbit review fix
+    # on #1859, preserved by #1879's bundle rewrite).
     if ir_record is not None:
         artifacts.append(ir_record)
         if ir_reused:

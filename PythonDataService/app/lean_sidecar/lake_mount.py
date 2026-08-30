@@ -57,19 +57,24 @@ declared inputs, in exchange for the copy. Recorded for the integration
 slice, which owns whether an undeclared-read *detection* (rather than
 prevention) is warranted.
 
-**Lake metadata bytes are not verified against the pinned LEAN image
-digest.** ``ensure_data`` records the ``lean_image_digest`` its
-market-hours / symbol-properties bytes came from in the *catalog*
-(``data_contract_hash``), not beside the files, so a lake bootstrapped
-under image A can serve a run pinned to image B and this module cannot
-tell. Detecting it needs a catalog read this module deliberately does
-not do — the sidecar's lake access is filesystem-only. Recorded for the
-integration slice, which already talks to the catalog.
+**Lake metadata bytes are verified against the pinned LEAN image digest —
+at launch time, not at read time (#1879, PR C of #1861).**
+:func:`resolve_lake_artifacts` and :func:`require_lake_metadata` above stay
+filesystem-only reads (existence, not provenance) — they serve the
+sidecar's *own* manifest, which hashes the bytes it declares regardless of
+where they came from. The stronger claim, "these exact bytes were extracted
+under the ``lean_image_digest`` this run is pinned to", is proven once, at
+the launcher boundary, by :func:`verify_lake_metadata_bundle` — it reads the
+on-disk receipt ``app.data_lake.metadata_bundle`` publishes beside the
+files (``<lake_root>/.lean-metadata-receipt.json``) and refuses the mount
+if the receipt's root, mode, or digest disagree, or if any file it names
+no longer hashes as recorded. ``app.lean_sidecar.launcher.service.launch``
+calls it before constructing a :class:`LakeMount`.
 
 **A lake bootstrapped before #1859 (or whose Phase 0 hasn't run since)
 has no ``alternative/interest-rate`` subtree, and staging does.**
 ``ensure_data``'s Phase 0 now bootstraps a third, optional metadata
-artifact (``interest_rate`` — ``app.data_lake.ensure_data._bootstrap_metadata_artifact``,
+artifact (``interest_rate`` — ``app.data_lake.metadata_bundle.ensure_lean_metadata_bundle``,
 ``app.data_lake.path_policy.LeanMetadataPath(kind="interest_rate")``)
 that promotes the same subtree ``staging.stage_lean_metadata_from_image``
 already extracts out of the LEAN image into the permanent lake tree, the
@@ -104,6 +109,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
@@ -190,12 +196,18 @@ def data_plane_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
     return resolve_lake_root(price_adjustment_mode)
 
 
-def launcher_host_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path | None:
-    """The lake root as the *launcher host* sees it, or None if unset.
+def launcher_host_base_root() -> Path | None:
+    """The lake's base root (the directory holding ``lake/``) as the
+    *launcher host* sees it, or None if unset.
 
     Resolved from :data:`LAKE_VOLUME_HOST_PATH_ENV` exactly the way the
     launcher resolves its artifacts root — deploy-time configuration,
-    never request payload.
+    never request payload. Extracted from :func:`launcher_host_lake_root`
+    (#1879, PR C of #1861) because the root-identity marker
+    (``app.data_lake.root_identity``) lives one level above any single
+    mode's lake root, at ``<base_root>/lake/.data-root.json`` — the
+    launcher's pre-mount verification needs this base, not the mode-joined
+    path.
 
     Deliberately does NOT create the directory. Unlike the artifacts
     root, which the launcher owns and fills, the lake is written by the
@@ -222,7 +234,68 @@ def launcher_host_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path 
             f"({Path.cwd()}), compose against the directory holding compose.yaml; "
             "set an absolute path so both agree."
         )
-    return candidate.resolve() / lake_subpath(price_adjustment_mode)
+    return candidate.resolve()
+
+
+def launcher_host_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path | None:
+    """The lake root as the *launcher host* sees it, or None if unset.
+
+    Delegates to :func:`launcher_host_base_root` for the base and joins the
+    mode segment shared by every lake-root resolver (see
+    ``app.data_lake.path_policy.lake_subpath``'s own docstring).
+    """
+    base = launcher_host_base_root()
+    if base is None:
+        return None
+    return base / lake_subpath(price_adjustment_mode)
+
+
+def verify_lake_metadata_bundle(
+    *,
+    lake_root: Path,
+    base_root: Path,
+    expected_data_root_id: UUID,
+    expected_price_adjustment_mode: PriceAdjustmentMode,
+    expected_lean_image_digest: str,
+) -> None:
+    """Refuse to mount unless the on-disk root marker and metadata receipt
+    both prove this is exactly the bundle the caller asked for (#1879, PR C
+    of #1861 — "Launcher verification").
+
+    Two independent proofs, both filesystem-only (no Postgres; the launcher
+    is a standalone host process — see this module's own module docstring):
+
+    1. :func:`app.data_lake.root_identity.resolve_root_context` — the
+       ``.data-root.json`` marker at ``base_root`` names the same physical
+       root the caller expects.
+    2. :func:`app.data_lake.metadata_bundle.verify_bundle` — the receipt at
+       ``lake_root`` names the same root, the same adjustment mode, and the
+       same ``lean_image_digest``, and every file it names still hashes as
+       recorded (catching a tampered or wiped file, and a receipt copied
+       from another mode's directory).
+
+    Raises :class:`LakeMountError` on any failure, with a message naming
+    which proof failed and why -- no secrets (paths and hashes only), and no
+    silent fallback: a caller that catches this must refuse the launch, not
+    mount an unverified lake.
+    """
+    from app.data_lake import root_identity
+    from app.data_lake.metadata_bundle import MetadataBundleError, verify_bundle
+
+    try:
+        root_identity.resolve_root_context(expected_data_root_id, base_root=base_root)
+    except root_identity.LakeRootIdentityError as e:
+        raise LakeMountError(f"lake_root_identity_invalid: {e}") from e
+
+    try:
+        verify_bundle(
+            lake_root,
+            expected_root_id=expected_data_root_id,
+            expected_mode=expected_price_adjustment_mode,
+            expected_digest=expected_lean_image_digest,
+        )
+    except MetadataBundleError as e:
+        raise LakeMountError(f"lake_metadata_receipt_invalid: {e}") from e
 
 
 @dataclass(frozen=True, slots=True)

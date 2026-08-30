@@ -709,3 +709,93 @@ async def test_claim_aggregated_bar_artifact_inserts_and_conflicts(clean_artifac
         file_path="equity/usa/daily/spy.zip",
     )
     assert b is None  # second claim loses
+
+
+# ---------------------------------------------------------------------------
+# #1879 (PR C of #1861): metadata rows carry a real PriceAdjustmentMode,
+# and mark_metadata_artifacts_stale_for_path scopes staleness by it.
+# ---------------------------------------------------------------------------
+
+
+async def test_claim_metadata_artifact_records_the_price_adjustment_mode(clean_artifacts, pool):
+    """Pre-#1879, PriceAdjustmentMode was hardcoded NULL for every metadata
+    row regardless of ``identity.price_adjustment_mode``. Populating it is
+    what lets mark_metadata_artifacts_stale_for_path scope by mode instead
+    of staling a sibling mode's still-valid row (FilePath alone is identical
+    across modes -- see that function's own docstring)."""
+    identity = ArtifactIdentity(
+        artifact_kind="metadata",
+        market=None,
+        symbol=None,
+        provider="lean_image_extract",
+        price_adjustment_mode="raw",
+    )
+    artifact_id = await catalog_client.claim_metadata_artifact(
+        identity=identity,
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="f" * 64,
+        file_path="market-hours/market-hours-database.json",
+    )
+    async with catalog_client.connection() as conn:
+        row = await conn.fetchrow('SELECT "PriceAdjustmentMode" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id)
+    assert row["PriceAdjustmentMode"] == "raw"
+
+
+async def test_claim_metadata_artifact_still_writes_null_when_identity_carries_none(clean_artifacts, pool):
+    """Existing callers (pre-#1879) construct their identity with
+    ``price_adjustment_mode=None`` and must keep writing NULL, unchanged."""
+    artifact_id = await catalog_client.claim_metadata_artifact(
+        identity=_metadata_identity(),
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="f" * 64,
+        file_path="market-hours/market-hours-database.json",
+    )
+    async with catalog_client.connection() as conn:
+        row = await conn.fetchrow('SELECT "PriceAdjustmentMode" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id)
+    assert row["PriceAdjustmentMode"] is None
+
+
+def _metadata_identity_with_mode(mode: str) -> ArtifactIdentity:
+    return ArtifactIdentity(
+        artifact_kind="metadata",
+        market=None,
+        symbol=None,
+        provider="lean_image_extract",
+        price_adjustment_mode=mode,
+    )
+
+
+async def _complete_metadata_row(identity: ArtifactIdentity, dch: str, file_path: str) -> int:
+    artifact_id = await catalog_client.claim_metadata_artifact(
+        identity=identity, worker_id="w-1", lease_ttl_ms=300_000, data_contract_hash=dch, file_path=file_path
+    )
+    assert artifact_id is not None
+    await catalog_client.complete_artifact(
+        artifact_id=artifact_id, row_count=1, first_bar_start_ms=0, last_bar_start_ms=0, file_size_bytes=10, file_sha256="a" * 64
+    )
+    return artifact_id
+
+
+async def test_mark_metadata_artifacts_stale_for_path_stales_only_the_same_root_and_mode(clean_artifacts, pool):
+    root_id = _metadata_identity().data_root_id
+    file_path = "market-hours/market-hours-database.json"
+
+    old_raw = await _complete_metadata_row(_metadata_identity_with_mode("raw"), "g" * 64, file_path)
+    sibling_mode = await _complete_metadata_row(_metadata_identity_with_mode("polygon_split_adjusted"), "h" * 64, file_path)
+    new_raw = await _complete_metadata_row(_metadata_identity_with_mode("raw"), "i" * 64, file_path)
+
+    staled = await catalog_client.mark_metadata_artifacts_stale_for_path(
+        data_root_id=root_id, price_adjustment_mode="raw", file_path=file_path, keep_artifact_id=new_raw
+    )
+
+    assert staled == 1
+    async with catalog_client.connection() as conn:
+        rows = {
+            r["Id"]: r["Status"]
+            for r in await conn.fetch('SELECT "Id", "Status" FROM "DataLakeArtifacts" WHERE "ArtifactKind" = \'metadata\'')
+        }
+    assert rows[old_raw] == "stale", "the superseded 'raw' row must be staled"
+    assert rows[sibling_mode] == "complete", "a different mode's row for the identical FilePath must survive untouched"
+    assert rows[new_raw] == "complete", "the row just kept must stay complete"

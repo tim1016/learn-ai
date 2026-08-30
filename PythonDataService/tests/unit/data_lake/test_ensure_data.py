@@ -16,7 +16,7 @@ import json
 import os
 import re
 from datetime import date
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from uuid import UUID
 
 import asyncpg
@@ -26,8 +26,7 @@ import respx
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.catalog_client import ArtifactClaimState
-from app.data_lake.ensure_data import _bootstrap_metadata_artifact, ensure_data
+from app.data_lake.ensure_data import ensure_data
 from app.data_lake.types import ArtifactIdentity, DataRunSpec
 from app.lean_sidecar import config as sidecar_config
 
@@ -94,14 +93,14 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     return artifacts_root
 
 
-def _spec(symbols: list[str]) -> DataRunSpec:
+def _spec(symbols: list[str], *, lean_image_digest: str = "sha256:test") -> DataRunSpec:
     return DataRunSpec(
         request_id=UUID("12345678-1234-5678-1234-567812345678"),
         run_type="python_lab",
         symbols=symbols,
         start_trading_date=date(2024, 5, 20),
         end_trading_date=date(2024, 5, 24),
-        lean_image_digest="sha256:test",
+        lean_image_digest=lean_image_digest,
     )
 
 
@@ -285,13 +284,13 @@ async def test_metadata_bootstrap_failure_surfaces_as_artifact_failure(clean_art
 @respx.mock
 @pytest.mark.asyncio
 async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(clean_artifacts, pool, tmp_lake):
-    """Regression: claim_metadata_artifact's ON CONFLICT DO NOTHING has no
-    reclaim path of its own (unlike claim_minute_bar), so a settled 'failed'
-    row used to look identical to live contention on every later call —
-    ensure_data would report lease_timeout on this data_contract_hash
-    forever, even once the launcher was healthy again. A second call must
-    reclaim the failed row via steal_or_retry_minute_bar and succeed."""
-    succeed_from_call = 2  # round 1 (calls 0, 1) fails; round 2 (calls 2, 3) succeeds
+    """A launcher outage leaves no partial catalog state at all (#1879, PR C
+    of #1861 rewrites Phase 0 into a single bundle call: catalog claims only
+    ever happen *after* a successful extraction, so a failed round has
+    nothing to reclaim). A second call, once the launcher recovers, must
+    still succeed cleanly rather than being permanently jammed by whatever
+    the first round left behind."""
+    succeed_from_call = 1  # round 1 fails; round 2 succeeds
     stage = _launcher_side_effect(tmp_lake)
     calls = {"n": 0}
 
@@ -312,87 +311,14 @@ async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(cle
 
     first = await ensure_data(_spec(["SPY"]))
     first_metadata_failures = [f for f in first.failures if f.artifact_kind == "metadata"]
-    assert len(first_metadata_failures) == 2, "both metadata files should fail while the launcher is down"
+    assert len(first_metadata_failures) == 3, "all three metadata kinds fail together — one bundle, one launcher call"
 
     second = await ensure_data(_spec(["SPY"]))
     second_metadata_failures = [f for f in second.failures if f.artifact_kind == "metadata"]
-    # Interest-rate never staged here (`stage` doesn't produce that file),
-    # so round 1 leaves its claim row 'fetching' rather than 'failed' —
-    # deliberately, so its bounded retry budget isn't burned on confirmed
-    # absence (#1859 review fix) — and round 2's claim attempt lands
-    # inside that still-live lease window and reports lease_timeout
-    # internally. That reason is treated the same as confirmed absence for
-    # interest-rate specifically (see ensure_data's Phase 0 orchestration)
-    # precisely because it's this design's own expected side effect, not
-    # genuine contention — so it must not appear here either.
     assert second_metadata_failures == [], (
         f"expected the recovered launcher to be retried, not permanently jammed: {second_metadata_failures}"
     )
-    # Round 1: 3 calls (market-hours, symbol-properties, interest-rate).
-    # Round 2: 2 calls — market-hours/symbol-properties reclaim and call
-    # the launcher again; interest-rate's lease_timeout above is resolved
-    # entirely from catalog state and never reaches the launcher at all.
-    assert launcher_route.call_count == 5
-
-
-@pytest.mark.asyncio
-async def test_metadata_bootstrap_does_not_misreport_a_lost_reclaim_race_as_exhausted(
-    monkeypatch,
-):
-    """Regression (review round on #1867): a caller that loses a reclaim race
-    used to trust `row_state` — a snapshot taken *before* the reclaim attempt
-    — instead of re-reading current state. Two callers can both see the same
-    settled 'failed' row, both attempt `steal_or_retry_minute_bar`, and only
-    one wins; the loser's `row_state.status` is still `'failed'` even though
-    the winner just flipped the real row to `'fetching'` under a live lease.
-    Trusting the stale snapshot reported a terminal, exhausted-retries
-    `fetch_timeout` for a row someone else was actively completing — this
-    must report the transient `lease_timeout` instead.
-
-    No Postgres needed: `catalog_client` is faked directly so the race is
-    deterministic rather than relying on real concurrent connections.
-    """
-    stale_snapshot = ArtifactClaimState(id=42, status="failed", attempt_count=1, last_error="boom")
-    fresh_after_race = ArtifactClaimState(id=42, status="fetching", attempt_count=2, last_error=None)
-    claim_state_calls = {"n": 0}
-
-    async def fake_claim_metadata_artifact(**_kwargs):
-        return None  # lost the initial insert — the row already exists
-
-    async def fake_select_complete_metadata_artifact(_dch):
-        return None  # not a cache hit
-
-    async def fake_select_metadata_claim_state(_dch):
-        claim_state_calls["n"] += 1
-        # 1st read: the stale snapshot both racing callers observe.
-        # 2nd read: this caller re-checking after losing the reclaim below —
-        # must see what the winner actually left behind.
-        return stale_snapshot if claim_state_calls["n"] == 1 else fresh_after_race
-
-    async def fake_steal_or_retry_minute_bar(**_kwargs):
-        return False  # this caller lost the race
-
-    monkeypatch.setattr(catalog_client, "claim_metadata_artifact", fake_claim_metadata_artifact)
-    monkeypatch.setattr(catalog_client, "select_complete_metadata_artifact", fake_select_complete_metadata_artifact)
-    monkeypatch.setattr(catalog_client, "select_metadata_claim_state", fake_select_metadata_claim_state)
-    monkeypatch.setattr(catalog_client, "steal_or_retry_minute_bar", fake_steal_or_retry_minute_bar)
-
-    record, is_reused, failure_reason = await _bootstrap_metadata_artifact(
-        file_name="market-hours-database.json",
-        metadata_kind="market_hours",
-        rel_path=PurePosixPath("metadata/market-hours-database.json"),
-        lean_image_digest="sha256:test",
-        spec=_spec(["SPY"]),
-        lake_root=Path("/unused-lake-root"),
-        staging_root=Path("/unused-staging-root"),
-    )
-
-    assert record is None
-    assert is_reused is False
-    assert failure_reason == "lease_timeout", (
-        f"lost a reclaim race must read as transient contention, not exhausted retries: got {failure_reason!r}"
-    )
-    assert claim_state_calls["n"] == 2, "must re-read claim state after losing the reclaim, not trust the stale snapshot"
+    assert launcher_route.call_count == 2, "one launcher call per ensure_data call, not one per metadata kind"
 
 
 @respx.mock
@@ -425,7 +351,7 @@ async def test_metadata_bootstrap_sends_the_resolved_launcher_token(
 
     await ensure_data(_spec(["SPY"]))
 
-    assert launcher_route.call_count == 3  # market-hours + symbol-properties + interest-rate
+    assert launcher_route.call_count == 1  # one call for the whole bundle (#1879)
     for call in launcher_route.calls:
         assert call.request.headers["X-Launcher-Token"] == "test-token"
 
@@ -518,16 +444,23 @@ async def test_interest_rate_genuine_extraction_failure_surfaces_as_artifact_fai
 @respx.mock
 @pytest.mark.asyncio
 async def test_interest_rate_confirmed_absence_never_exhausts_the_retry_budget(clean_artifacts, pool, tmp_lake):
-    """#1859 review fix (CodeRabbit-Major): calling fail_artifact for a
-    confirmed-absent interest-rate subtree would burn this claim's bounded
-    AttemptCount budget (steal_or_retry_minute_bar's failed-row branch
-    requires AttemptCount < max_retries) on something that should be
-    retried indefinitely — permanently stranding the row even after a
-    later launcher upgrade could finally provide the file. Prove the row
-    survives far more attempts than the retry budget allows, then that a
-    launcher upgrade (the file becomes available) still completes it once
-    the lease naturally expires."""
-    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+    """Confirmed absence (the receipt's ``interest_rate`` entry is ``null``)
+    is a fact recorded once, in the bundle's own on-disk receipt (#1879, PR C
+    of #1861) — not a Postgres claim row with a retry budget to exhaust.
+    Repeating the same call (same ``lean_image_digest``) any number of times
+    must never surface a failure and never touch the launcher again after
+    the first call, because the receipt is a verified cache hit.
+
+    Per the issue's own acceptance criterion ("changing lean_image_digest
+    triggers re-extraction"), a "launcher upgrade" under the *same* digest is
+    no longer implicitly retried the way the pre-#1879 per-kind bootstrap
+    did — only a digest change re-extracts. That is proven separately by
+    ``test_changing_the_digest_triggers_re_extraction_and_stales_the_old_row``
+    in ``test_metadata_bundle.py``; here a fresh digest stands in for
+    exactly that operator action and demonstrates the file becomes
+    available once taken.
+    """
+    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
         side_effect=_launcher_side_effect(tmp_lake)  # never stages interest-rate
     )
     _mock_corpus_actions_and_events()
@@ -535,38 +468,27 @@ async def test_interest_rate_confirmed_absence_never_exhausts_the_retry_budget(c
         return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
     )
 
-    # Confirmed-absence, repeated well past the retry ceiling. The first
-    # call claims and confirms absence; every later call sees the still-
-    # live lease from the prior attempt and reports lease_timeout
-    # internally — never fetch_timeout (exhausted retries), because
-    # AttemptCount never moves. Both provider_no_data and this lease_
-    # timeout are non-blocking for interest-rate (see ensure_data's Phase
-    # 0 orchestration), so none of these calls ever produce a failure for
-    # it — that's the actual regression this test guards against.
-    for _ in range(6):  # comfortably more than ensure_data's own _MAX_CLAIM_RETRIES (3)
+    for _ in range(6):
         result = await ensure_data(_spec(["SPY"]))
         ir_failures = [f for f in result.failures if "interest-rate" in f.detail]
         assert ir_failures == [], f"confirmed absence must never surface as a failure: {ir_failures}"
+        metadata = [a for a in result.artifacts if a.artifact_kind == "metadata"]
+        assert len(metadata) == 2, "interest-rate stays confirmed-absent; only market-hours + symbol-properties complete"
+
+    assert launcher_route.call_count == 1, "a verified receipt for the same digest is a pure cache hit, no re-extraction"
 
     conn = await asyncpg.connect(_postgres_url())
     try:
-        row = await conn.fetchrow(
-            """SELECT "Status", "AttemptCount" FROM "DataLakeArtifacts"
+        count = await conn.fetchval(
+            """SELECT count(*) FROM "DataLakeArtifacts"
                WHERE "ArtifactKind" = 'metadata' AND "FilePath" LIKE '%interest-rate%'"""
         )
-        assert row["Status"] == "fetching", "must stay retryable, never settle into 'failed'"
-        assert row["AttemptCount"] == 1, "confirmed absence alone must never increment the retry counter"
-
-        # Simulate real time passing (the lease from the very first claim
-        # expiring) without waiting out the real _LEASE_TTL_MS.
-        await conn.execute(
-            """UPDATE "DataLakeArtifacts" SET "LeaseExpiresAtMs" = 1
-               WHERE "ArtifactKind" = 'metadata' AND "FilePath" LIKE '%interest-rate%'"""
-        )
+        assert count == 0, "confirmed absence needs no catalog row at all -- it never reaches the claim step"
     finally:
         await conn.close()
 
-    # The "launcher upgrade": this call's mock now produces the file.
+    # A new pinned image (the operator action the acceptance criteria name)
+    # forces re-extraction; this mock now produces the interest-rate file.
     respx.routes.clear()
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
         side_effect=_launcher_side_effect(tmp_lake, include_interest_rate=True)
@@ -576,10 +498,10 @@ async def test_interest_rate_confirmed_absence_never_exhausts_the_retry_budget(c
         return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
     )
 
-    final = await ensure_data(_spec(["SPY"]))
+    final = await ensure_data(_spec(["SPY"], lean_image_digest="sha256:test-v2"))
     assert final.failures == [], f"expected the now-available file to complete cleanly: {final.failures}"
     metadata = [a for a in final.artifacts if a.artifact_kind == "metadata"]
-    assert len(metadata) == 3, "market-hours + symbol-properties (reused) + interest-rate (finally fetched)"
+    assert len(metadata) == 3, "market-hours + symbol-properties + interest-rate, all under the new digest"
 
 
 # ---------------------------------------------------------------------------

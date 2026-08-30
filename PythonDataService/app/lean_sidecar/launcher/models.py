@@ -11,6 +11,7 @@ shape".
 from __future__ import annotations
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -116,6 +117,22 @@ class LaunchRequest(BaseModel):
             "launcher resolves the host path from its own deploy-time "
             "configuration, so this cannot widen the mount. Defaults to "
             "'raw' so a data plane that predates #1839 keeps its behavior."
+        ),
+    )
+    data_root_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The physical lake root the data plane expects to read, for "
+            "``mount_lake_read_only`` runs (#1879, PR C of #1861). The "
+            "launcher verifies this against the root marker "
+            "(``.data-root.json``) and the on-disk metadata receipt at the "
+            "resolved lake root before mounting -- a mismatch, or a run "
+            "requesting the lake mount with no ``data_root_id`` at all "
+            "(a data plane that predates #1879), refuses the launch rather "
+            "than mounting an unverified root. ``image_digest`` above "
+            "doubles as the expected ``lean_image_digest`` for that same "
+            "check -- both name the LEAN image this run is pinned to, so "
+            "there is no separate field for it."
         ),
     )
     hardening_profile: str | None = Field(

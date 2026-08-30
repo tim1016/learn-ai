@@ -245,6 +245,7 @@ class TestLauncherAppConcurrency:
             *,
             artifacts_root: Path,
             lake_root: Path | None = None,
+            lake_base_root: Path | None = None,
         ) -> LaunchResponse:
             launch_started.set()
             if not release_launch.wait(timeout=2):

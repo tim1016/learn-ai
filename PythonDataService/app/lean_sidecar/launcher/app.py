@@ -30,7 +30,7 @@ from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
-from app.lean_sidecar.lake_mount import launcher_host_lake_root
+from app.lean_sidecar.lake_mount import launcher_host_base_root, launcher_host_lake_root
 from app.lean_sidecar.launcher.models import (
     LAUNCHER_CAPABILITIES,
     ExtractMetadataRequest,
@@ -170,6 +170,7 @@ async def post_launch(
             request,
             artifacts_root=_artifacts_root(),
             lake_root=launcher_host_lake_root(request.price_adjustment_mode),
+            lake_base_root=launcher_host_base_root(),
         )
     except LaunchRejectedError as e:
         # 4xx covers all "this request is malformed in a way the
