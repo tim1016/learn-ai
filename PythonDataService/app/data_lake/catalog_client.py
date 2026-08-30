@@ -464,42 +464,54 @@ INITIAL_LEASE_GENERATION = 1
 
 
 class CatalogSchemaNotReadyError(RuntimeError):
-    """A claim_* INSERT's ON CONFLICT target matches no constraint or index
-    in the connected database.
+    """A claim_* INSERT references a column or ON CONFLICT target the
+    connected database doesn't have yet.
 
-    Wraps Postgres SQLSTATE 42P10 (``invalid_column_reference`` --
-    asyncpg's ``InvalidColumnReferenceError``), which Postgres raises when an
-    ``ON CONFLICT (...) WHERE ...`` clause names a column set that no unique
-    or exclusion index currently matches. In practice this almost always
-    means the database schema doesn't yet match what this code expects: a
-    mid-deploy race where python-service started serving traffic before
-    Backend's EF Core migration finished applying. compose.yaml health-gates
-    Backend on python-service, not the other way around, and Backend applies
-    migrations during its own startup -- so there is a real window, on every
-    deploy that ships a migration touching one of these partial unique
-    indexes (e.g. 20260830120000_ActivateDataRootScopedCatalogIdentity),
-    where python-service is already reachable but the index a claim_*
-    function's ON CONFLICT target names does not exist yet. Safe to retry
-    after a short delay once the migration completes; not safe to retry
-    immediately in a tight loop.
+    Wraps two Postgres SQLSTATEs, both symptoms of the same mid-deploy race:
+    python-service started serving traffic before Backend's EF Core
+    migrations finished applying. compose.yaml health-gates Backend on
+    python-service, not the other way around, and Backend applies migrations
+    during its own startup -- so there is a real window, on every deploy
+    that ships a migration a claim_* query depends on (e.g.
+    20260830120000_ActivateDataRootScopedCatalogIdentity's partial unique
+    indexes, or 20260830130000_AddLeaseGenerationToDataLakeArtifacts' new
+    column), where python-service is already reachable but the schema it
+    expects does not exist yet:
+
+    - **42P10** (``invalid_column_reference`` / asyncpg's
+      ``InvalidColumnReferenceError``): an ``ON CONFLICT (...) WHERE ...``
+      clause names a column set that no unique or exclusion index currently
+      matches.
+    - **42703** (``undefined_column`` / asyncpg's ``UndefinedColumnError``):
+      the INSERT's column list names a column the table doesn't have yet.
+      Postgres validates the column list before it evaluates the ON
+      CONFLICT target, so when a migration adds both a new column and a
+      later migration adds the matching index, the column error is the one
+      that actually surfaces first for a schema pinned before either lands.
+
+    Safe to retry after a short delay once the migration completes; not
+    safe to retry immediately in a tight loop.
     """
+
+
+_SCHEMA_NOT_READY_SQLSTATES = frozenset({"42P10", "42703"})
 
 
 async def _claim_fetchval(conn: asyncpg.Connection, query: str, *args: Any) -> int | None:
     """Run one claim_*'s ``INSERT ... ON CONFLICT ... RETURNING "Id"`` and
-    translate a conflict-target mismatch (Postgres 42P10) into
+    translate a schema-not-ready mismatch (Postgres 42P10 or 42703) into
     :class:`CatalogSchemaNotReadyError` instead of letting the raw asyncpg
     exception surface as an opaque 500. Any other ``PostgresError`` is
-    re-raised unchanged -- this narrowly targets the one mid-deploy race
+    re-raised unchanged -- this narrowly targets the mid-deploy race
     described in :class:`CatalogSchemaNotReadyError`'s docstring, not
     Postgres errors in general.
     """
     try:
         return await conn.fetchval(query, *args)
     except asyncpg.PostgresError as exc:
-        if exc.sqlstate == "42P10":
+        if exc.sqlstate in _SCHEMA_NOT_READY_SQLSTATES:
             raise CatalogSchemaNotReadyError(
-                f"ON CONFLICT target matches no constraint/index (Postgres 42P10): {exc}"
+                f"Schema not ready for this claim query (Postgres {exc.sqlstate}): {exc}"
             ) from exc
         raise
 
