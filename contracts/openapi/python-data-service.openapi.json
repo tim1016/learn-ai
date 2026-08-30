@@ -1631,6 +1631,7 @@
               "unknown_symbol",
               "validation_failed",
               "io_error",
+              "launcher_unreachable",
               "lease_timeout",
               "fetch_timeout",
               "unsupported_resolution",
