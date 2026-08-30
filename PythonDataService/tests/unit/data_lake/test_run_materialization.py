@@ -211,7 +211,9 @@ class FakeCatalog:
             last_error=row["last_error"],
         )
 
-    async def steal_or_retry_minute_bar(self, artifact_id, worker_id, lease_ttl_ms, max_retries) -> int | None:
+    async def steal_or_retry_minute_bar(
+        self, artifact_id, worker_id, lease_ttl_ms, max_retries, *, bypass_retry_ceiling: bool = False
+    ) -> int | None:
         row = self.rows[artifact_id]
         # The fake has no lease clock, so "fetching" always means a live
         # lease held by someone else — nothing to steal, matching the real
@@ -219,7 +221,12 @@ class FakeCatalog:
         # 'stale' reactivates unconditionally (Codex P1, PR #1884) -- see
         # the real ``steal_or_retry_minute_bar``'s docstring for why that
         # branch carries no lease/retry gate, unlike the other two.
-        if (row["status"] == "failed" and row["attempt_count"] < max_retries) or row["status"] == "stale":
+        # ``bypass_retry_ceiling`` (#1889) is modelled rather than ignored:
+        # a fake that accepted the flag and dropped it would answer "no
+        # eligible row" for exactly the launcher-outage case the flag exists
+        # to keep retryable, which is the bug it would be there to catch.
+        retryable = row["attempt_count"] < max_retries or bypass_retry_ceiling
+        if (row["status"] == "failed" and retryable) or row["status"] == "stale":
             row["status"] = "fetching"
             row["attempt_count"] += 1
             row["last_error"] = None
