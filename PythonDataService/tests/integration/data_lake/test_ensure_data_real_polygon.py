@@ -29,7 +29,7 @@ from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.path_policy import lake_subpath
-from app.data_lake.types import DataRunSpec
+from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
 pytestmark = pytest.mark.asyncio
@@ -202,8 +202,8 @@ async def test_ensure_data_writes_files_and_catalog_rows(clean_artifacts, pool, 
         request_id=UUID("12345678-1234-5678-1234-567812345678"),
         run_type="python_lab",
         symbols=["SPY"],
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 20),
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
         lean_image_digest="sha256:test",
     )
     result = await ensure_data(spec)
@@ -247,8 +247,8 @@ async def test_second_call_is_cache_hit(clean_artifacts, pool, tmp_lake, artifac
         request_id=UUID("11111111-1111-1111-1111-111111111111"),
         run_type="python_lab",
         symbols=["SPY"],
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 20),
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
         lean_image_digest="sha256:test",
     )
     first = await ensure_data(spec)

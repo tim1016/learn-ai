@@ -8,14 +8,16 @@ import type { DataRunSpec } from './data-lake.types';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
 const MAY_20_OPEN_MS = Date.UTC(2026, 4, 20, 13, 30);
+/** 12:00:00.000 UTC on 2026-05-20 — DataRunSpec's calendar anchor (#1877). */
+const MAY_20_CALENDAR_ANCHOR_MS = Date.UTC(2026, 4, 20, 12, 0);
 
 const SPEC: DataRunSpec = {
   request_id: '11111111-2222-3333-4444-555555555555',
   run_type: 'python_lab',
   market: 'usa',
   symbols: ['SPY'],
-  start_trading_date: '2026-05-20',
-  end_trading_date: '2026-05-20',
+  start_trading_date_ms: MAY_20_CALENDAR_ANCHOR_MS,
+  end_trading_date_ms: MAY_20_CALENDAR_ANCHOR_MS,
   data_types: ['trade'],
   lean_image_digest: 'sha256:pinned',
 };

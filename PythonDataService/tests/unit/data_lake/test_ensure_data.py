@@ -27,7 +27,7 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
-from app.data_lake.types import ArtifactIdentity, DataRunSpec
+from app.data_lake.types import ArtifactIdentity, DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
 
@@ -98,8 +98,8 @@ def _spec(symbols: list[str], *, lean_image_digest: str = "sha256:test") -> Data
         request_id=UUID("12345678-1234-5678-1234-567812345678"),
         run_type="python_lab",
         symbols=symbols,
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 24),
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
         lean_image_digest=lean_image_digest,
     )
 
@@ -528,8 +528,8 @@ def _spec_narrow(symbols: list[str]) -> DataRunSpec:
         request_id=UUID("aaaaaaaa-1234-5678-1234-567812345678"),
         run_type="python_lab",
         symbols=symbols,
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 22),
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 22)),
         lean_image_digest="sha256:test",
     )
 
@@ -539,8 +539,8 @@ def _spec_wide(symbols: list[str]) -> DataRunSpec:
         request_id=UUID("bbbbbbbb-1234-5678-1234-567812345678"),
         run_type="python_lab",
         symbols=symbols,
-        start_trading_date=date(2024, 5, 20),
-        end_trading_date=date(2024, 5, 24),
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
         lean_image_digest="sha256:test",
     )
 

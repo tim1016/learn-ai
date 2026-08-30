@@ -395,7 +395,17 @@ jobs:
                 ;;
             esac
           done <<< "$changed"
-          extra=$(echo "$extra" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
+          # Strip anything under tests/unit/data_lake or tests/integration/data_lake:
+          # the "Run fast baseline" step's --ignore flags for those two directories
+          # only suppress directory-walked collection, not an explicitly-passed file
+          # path (verified: `pytest <file> --ignore=<file's dir>` still collects
+          # <file> — a pytest --ignore is not retroactive over positional args). A
+          # PR that directly edits a data-lake test file — e.g. one porting a
+          # DataRunSpec field rename through every call site — makes rule (1) above
+          # add that file to $extra, which used to slip it past both --ignore flags
+          # and into the parallel run, exposing the TRUNCATE-based clean_artifacts
+          # race the ignores exist to prevent (see the comment on that step).
+          extra=$(echo "$extra" | tr ' ' '\n' | awk 'NF' | sort -u | { grep -v -E '^tests/(unit|integration)/data_lake/' || true; } | tr '\n' ' ')
           echo "extra=${extra}" >> "$GITHUB_OUTPUT"
           echo "Extra change-driven test paths: ${extra:-<none>}"
 

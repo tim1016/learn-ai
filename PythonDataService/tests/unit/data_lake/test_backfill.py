@@ -22,7 +22,14 @@ import pytest
 
 from app.data_lake.backfill import BackfillDayProgress, BackfillWaitProgress, run_backfill
 from app.data_lake.catalog_client import MinuteBarLeaseStatus
-from app.data_lake.types import ArtifactFailure, ArtifactIdentity, ArtifactRecord, DataAvailabilityResult, DataRunSpec
+from app.data_lake.types import (
+    ArtifactFailure,
+    ArtifactIdentity,
+    ArtifactRecord,
+    DataAvailabilityResult,
+    DataRunSpec,
+    trading_date_to_calendar_anchor_ms,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -36,8 +43,8 @@ def _spec(
         request_id=UUID("12345678-1234-5678-1234-567812345678"),
         run_type="python_lab",
         symbols=symbols or ["SPY"],
-        start_trading_date=start,
-        end_trading_date=end,
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(start),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
         lean_image_digest="sha256:test",
     )
 

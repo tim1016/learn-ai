@@ -38,9 +38,9 @@ import respx
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.ensure_data import ensure_data
+from app.data_lake.ensure_data import _metadata_dch, ensure_data
 from app.data_lake.path_policy import lake_subpath
-from app.data_lake.types import DataRunSpec
+from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
 pytestmark = pytest.mark.asyncio
@@ -53,19 +53,53 @@ def _postgres_url() -> str:
     return url
 
 
+# The three metadata files Phase 0 always attempts (see ensure_data.py's
+# calls into _metadata_dch), needed below to scope metadata-row cleanup by
+# lean_image_digest -- metadata identity has no Symbol column.
+_METADATA_FILE_NAMES = ("market-hours-database.json", "symbol-properties-database.csv", "interest-rate.csv")
+
+
+async def _delete_scoped_artifacts(symbols: list[str], lean_image_digest: str) -> None:
+    """Delete only the catalog rows this test's own identity could have
+    written, instead of a blanket ``TRUNCATE``.
+
+    A table-wide TRUNCATE (every other clean_artifacts fixture in this
+    directory still does this) wipes ANY concurrently-running test's
+    in-flight rows too, regardless of identity: under pytest-xdist, this
+    module's fast single-call test and test_gate_chain_convergence's
+    slower two-call test land on different workers with enough duration
+    skew that one test's setup/teardown TRUNCATE reliably lands mid-flight
+    of the other. Disjoint symbols/digests (see _SECOND_CALL_DAY_OFFSETS_MS
+    above) prevent a claim COLLISION but not a TRUNCATE WIPE, since
+    TRUNCATE carries no WHERE clause. Scoping the delete to this test's own
+    symbols, plus its own metadata contract hashes (computed via the same
+    _metadata_dch the app itself claims by -- metadata rows have no Symbol
+    column), makes cleanup identity-scoped instead of table-wide.
+    """
+    metadata_dchs = [_metadata_dch(lean_image_digest, name, "raw") for name in _METADATA_FILE_NAMES]
+    conn = await asyncpg.connect(_postgres_url())
+    try:
+        await conn.execute(
+            'DELETE FROM "DataLakeArtifacts" WHERE "Symbol" = ANY($1::text[]) OR "DataContractHash" = ANY($2::text[])',
+            symbols,
+            metadata_dchs,
+        )
+    finally:
+        await conn.close()
+
+
 @pytest.fixture
-async def clean_artifacts():
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        await conn.execute('TRUNCATE TABLE "DataLakeArtifacts" RESTART IDENTITY CASCADE')
-    finally:
-        await conn.close()
+async def clean_artifacts_all_kinds_complete():
+    await _delete_scoped_artifacts(["SPY"], "sha256:test-image-digest")
     yield
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        await conn.execute('TRUNCATE TABLE "DataLakeArtifacts" RESTART IDENTITY CASCADE')
-    finally:
-        await conn.close()
+    await _delete_scoped_artifacts(["SPY"], "sha256:test-image-digest")
+
+
+@pytest.fixture
+async def clean_artifacts_second_call():
+    await _delete_scoped_artifacts(["QQQ"], "sha256:test-image-digest-second-call")
+    yield
+    await _delete_scoped_artifacts(["QQQ"], "sha256:test-image-digest-second-call")
 
 
 @pytest.fixture
@@ -236,8 +270,8 @@ def _make_spec(
         request_id=UUID(request_id),
         run_type="python_lab",
         symbols=[symbol],
-        start_trading_date=start_date,
-        end_trading_date=end_date,
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(start_date),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end_date),
         data_types=data_types,
         lean_image_digest=lean_image_digest,
     )
@@ -249,7 +283,7 @@ def _make_spec(
 
 
 @respx.mock
-async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake, artifacts_root):
+async def test_ensure_data_all_kinds_complete(clean_artifacts_all_kinds_complete, pool, tmp_lake, artifacts_root):
     """Run ensure_data for SPY over 2024-05-20 to 2024-05-24.
 
     Expects 15 artifacts, all complete, all files on disk.
@@ -340,7 +374,7 @@ async def test_ensure_data_all_kinds_complete(clean_artifacts, pool, tmp_lake, a
 
 
 @respx.mock
-async def test_ensure_data_second_call_is_cache_hit(clean_artifacts, pool, tmp_lake, artifacts_root):
+async def test_ensure_data_second_call_is_cache_hit(clean_artifacts_second_call, pool, tmp_lake, artifacts_root):
     """Second ensure_data call with the same content spec is a pure cache hit.
 
     Uses a distinct week (_SECOND_CALL_DAY_OFFSETS_MS) from
