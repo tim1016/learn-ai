@@ -2380,31 +2380,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/engine/export-lean": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Export Polygon To Lean
-         * @description Fetch a Polygon minute-bar range and export it to LEAN zips.
-         *
-         *     Writes one ``{YYYYMMDD}_trade.zip`` per trading day under
-         *     ``{LEAN_DATA_CACHE}/equity/usa/minute/{symbol}/``. The read-only
-         *     reference mount is never touched — all fetched data lives in the
-         *     writable cache so the SPY fixture's bit-exact guarantee is preserved.
-         */
-        post: operations["export_polygon_to_lean_api_engine_export_lean_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/engine/strategies": {
         parameters: {
             query?: never;
@@ -12227,52 +12202,6 @@ export interface components {
             other?: string[];
             /** Runtime Error */
             runtime_error?: string[];
-        };
-        /** LeanExportRequest */
-        LeanExportRequest: {
-            /**
-             * Adjusted
-             * @description Apply split/dividend adjustments
-             * @default true
-             */
-            adjusted?: boolean;
-            /**
-             * From Date
-             * @description YYYY-MM-DD (inclusive)
-             */
-            from_date: string;
-            /**
-             * Resolution
-             * @description Resolution to fetch: 'minute' (per-day zips) or 'daily' (one zip per symbol)
-             * @default minute
-             * @enum {string}
-             */
-            resolution?: "minute" | "daily";
-            /** Symbol */
-            symbol: string;
-            /**
-             * To Date
-             * @description YYYY-MM-DD (inclusive)
-             */
-            to_date: string;
-        };
-        /** LeanExportResponse */
-        LeanExportResponse: {
-            /** Data Root */
-            data_root: string;
-            /** Days Written */
-            days_written: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Files
-             * @default []
-             */
-            files?: string[];
-            /** Success */
-            success: boolean;
-            /** Symbol */
-            symbol: string;
         };
         /**
          * LeanPortfolioStatsResponse
@@ -25151,39 +25080,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AvailabilityResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    export_polygon_to_lean_api_engine_export_lean_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LeanExportRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LeanExportResponse"];
                 };
             };
             /** @description Validation Error */

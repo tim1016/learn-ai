@@ -1,37 +1,30 @@
-"""Policy-keyed canonical bar store for both backtest engines.
+"""Policy vocabulary and root resolution for both backtest engines.
 
-The shared on-disk LEAN-zip cache is the single canonical bar store:
-the Python engine reads it natively (``LeanMinuteDataReader`` /
-``LeanDailyDataReader``), the LEAN sidecar stages byte-copies of its
-zips into each run workspace, and the ``/api/engine/bars`` endpoint
-serves the same bytes to the UI. One write boundary (Polygon →
-``polygon_export``), three readers.
+This module was the policy-keyed on-disk bar store: one write boundary
+(Polygon -> ``polygon_export``), three readers, and a cache tree keyed by
+the DataPolicy dimensions that change bytes. #1893 retired that store --
+the lake is the only place historical bars live now (ADR 0049) -- and what
+survives here is the vocabulary and the root lookup its callers still need:
 
-Bars fetched with different Polygon parameters produce different bytes
-on disk, so the cache is keyed by the DataPolicy dimensions that change
-bytes::
+- :func:`policy_key` names a ``(source, adjusted)`` pair. It no longer
+  selects a directory; it is the label the engine and ``/api/engine/bars``
+  report so a caller can see which policy produced a response.
+- :func:`resolve_data_roots` answers "where do the LEAN readers look?" with
+  the lake root for the run's adjustment mode. It is the single
+  root-resolution seam, which the tombstone test pins: nothing in the tree
+  resolves bar data outside the lake.
+- :func:`snapshot_minute_trade_zips` hashes a symbol's minute zips for the
+  run manifest.
 
-    {cache_root}/{source}-{adjusted|raw}/equity/usa/minute/{symbol}/{YYYYMMDD}_trade.zip
-    {cache_root}/{source}-{adjusted|raw}/equity/usa/daily/{symbol}.zip
-    {cache_root}/{source}-{adjusted|raw}/provenance/{symbol}.json
-    {cache_root}/{source}-{adjusted|raw}/locks/{symbol}.lock
-
-``session`` is deliberately NOT part of the key: the store always holds
+``session`` is deliberately not part of the policy: the store always held
 the full session and both engines filter at read time (see
-``LeanMinuteDataReader.session``). Consolidation timeframe is a
-downstream concern and never touches the stored bytes.
+``LeanMinuteDataReader.session``). Consolidation timeframe is a downstream
+concern and never touches the stored bytes. That is still true of the lake.
 
-The pre-policy legacy tree (``{cache_root}/equity/...``) held
-adjusted bars with no policy label — the seam bug this module fixes is
-that the Python engine cached *adjusted* bars while the LEAN sidecar
-fetched *raw* bars, so the two engines never consumed the same bytes on
-Polygon-sourced runs. The legacy tree is intentionally no longer read;
-data is re-fetched on demand into the policy-keyed roots.
-
-Concurrency: writers must hold :func:`symbol_write_lock` for the
-``(policy_root, symbol)`` pair across the check-fetch-write sequence
-(see ``availability.ensure_range``). Zip writers are atomic
-(write-temp + ``os.replace``) so readers never observe a torn zip.
+Concurrency is no longer this module's problem. Writers used to hold a
+``symbol_write_lock`` across a check-fetch-write sequence; the lake
+coordinates its writers through the catalog's claim/lease protocol with a
+fencing generation (#1888) instead.
 """
 
 from __future__ import annotations
