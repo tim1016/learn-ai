@@ -48,12 +48,15 @@ def test_bench_runs_at_small_scale_and_reads_stay_pure(capsys) -> None:
     )
 
     assert exit_code == 0
-    payload = json.loads(capsys.readouterr().out)
+    document = json.loads(capsys.readouterr().out)
+    assert isinstance(document, list) and len(document) == 1  # one valid JSON doc
+    payload = document[0]
     assert payload["rows"] == 4
-    # Every surface produced samples...
+    # Every surface produced samples — both panel lifecycle strata included.
     for key in (
         "catalog_sequential",
-        "panel_sequential",
+        "panel_sequential_stopped",
+        "panel_sequential_running",
         "panel_concurrent",
         "catalog_concurrent",
     ):

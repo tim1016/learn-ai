@@ -27,7 +27,14 @@ What it deliberately does NOT measure (live-only, still owed by #1801):
 The bot task registry is a minimal in-memory stand-in answering liveness —
 in production that answer is a dict lookup, so it is not part of the cost
 curve under test. Everything below it (SQLite reads, lifecycle-file reads,
-projection, serialization) is the production implementation.
+projection, serialization) is the production implementation, with one
+bounded exception: the stopped-bot panel's ``preview_resume_admission``
+stand-in runs only the real custody projection (the read-heavy seam) and
+deliberately skips the runner's admission-policy fact stack (process,
+runtime, checkpoint, validation, market data), which needs a full
+``BotTaskRegistry`` with real bindings. Stopped-panel figures are therefore
+a floor for that surface, and they are reported separately from
+running-panel figures so the two paths are never averaged together.
 
 Usage (host venv, repo root)::
 
@@ -43,6 +50,7 @@ import asyncio
 import cProfile
 import io
 import json
+import math
 import os
 import pstats
 import statistics
@@ -50,24 +58,47 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import httpx
+
+    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrder
+    from app.schemas.broker_bots import BotStatusView
+    from app.schemas.run_admission import RunAdmissionDecision
 
 ACCOUNT_ID = "PA-BENCH-1801"
 BROKER = "alpaca"
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"{value!r} must be a positive integer")
+    return parsed
+
+
+def _fraction(value: str) -> float:
+    parsed = float(value)
+    if not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError(f"{value!r} must be within [0, 1]")
+    return parsed
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="bench_panel_read_latency")
     parser.add_argument(
         "--rows",
-        type=int,
+        type=_positive_int,
         nargs="+",
         default=[94, 144],
         help="fleet sizes to bench (default: the audit's idle and loaded row counts)",
     )
-    parser.add_argument("--requests", type=int, default=15, help="sequential requests per surface")
+    parser.add_argument("--requests", type=_positive_int, default=15, help="sequential requests per surface")
     parser.add_argument(
         "--concurrency",
-        type=int,
+        type=_positive_int,
         default=10,
         help="concurrent panel/catalog GETs for the F13 case (default 10)",
     )
@@ -76,7 +107,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--stopped-fraction",
-        type=float,
+        type=_fraction,
         default=0.5,
         help="fraction of the fleet with a stopped run + terminal lifecycle record",
     )
@@ -96,15 +127,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _percentiles(samples_ms: list[float]) -> dict[str, float]:
     ordered = sorted(samples_ms)
+    # Nearest-rank with ceil: the smallest value with >=95% of observations
+    # at or below it (flooring selected one rank low on non-integral n*0.95).
+    p95_index = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * 0.95) - 1))
     return {
         "n": len(ordered),
         "p50_ms": round(statistics.median(ordered), 2),
-        "p95_ms": round(ordered[max(0, int(len(ordered) * 0.95) - 1)], 2),
+        "p95_ms": round(ordered[p95_index], 2),
         "max_ms": round(ordered[-1], 2),
     }
 
 
-def _build_fleet(artifacts_root: Path, rows: int, stopped_fraction: float):
+def _build_fleet(
+    artifacts_root: Path, rows: int, stopped_fraction: float
+) -> tuple[ClerkSqliteRepository, list[str]]:
     """Populate a real SQLite authority + file-side lifecycle for N bots."""
     from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -188,7 +224,7 @@ class _BenchBrokerPort:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def get_account(self):
+    async def get_account(self) -> BrokerAccountSnapshot:
         from app.broker.contract.models import BrokerAccountSnapshot
 
         self.calls += 1
@@ -212,19 +248,19 @@ class _BenchBrokerPort:
             observed_at_ms=now_ms,
         )
 
-    async def list_positions(self) -> list:
+    async def list_positions(self) -> list[object]:
         self.calls += 1
         return []
 
-    async def list_orders(self, **_kwargs) -> list:
+    async def list_orders(self, **_kwargs: object) -> list[object]:
         self.calls += 1
         return []
 
-    async def list_activities(self, **_kwargs) -> list:
+    async def list_activities(self, **_kwargs: object) -> list[object]:
         self.calls += 1
         return []
 
-    async def get_order_by_client_order_id(self, _client_order_id: str):
+    async def get_order_by_client_order_id(self, _client_order_id: str) -> BrokerOrder | None:
         return None
 
     def capabilities(self) -> None:  # pragma: no cover - registry shape only
@@ -239,7 +275,7 @@ class _BenchRegistry:
         self._sids = sids
         self._stopped = set(sids[:stopped_count])
 
-    def _view(self, sid: str):
+    def _view(self, sid: str) -> BotStatusView:
         from app.schemas.broker_bots import BotStatusView
 
         stopped = sid in self._stopped
@@ -261,7 +297,7 @@ class _BenchRegistry:
             last_transition_at_ms=now_ms,
         )
 
-    async def preview_resume_admission(self, broker: str, sid: str):
+    async def preview_resume_admission(self, broker: str, sid: str) -> RunAdmissionDecision:
         """Resolve custody through the real production projection.
 
         The stopped-bot panel read is exactly where the per-poll custody
@@ -277,14 +313,14 @@ class _BenchRegistry:
             pass
         raise BotRunnerError("resume admission policy is not modelled in this bench")
 
-    def status(self, broker: str, sid: str):
+    def status(self, broker: str, sid: str) -> BotStatusView:
         assert broker == BROKER
         return self._view(sid)
 
-    def list_bots(self, broker: str) -> list:
+    def list_bots(self, broker: str) -> list[BotStatusView]:
         return [self._view(sid) for sid in self._sids]
 
-    def binding_for_control(self, broker: str, sid: str):
+    def binding_for_control(self, broker: str, sid: str) -> object:
         from types import SimpleNamespace
 
         return SimpleNamespace(
@@ -300,14 +336,14 @@ class _BenchRegistry:
     def panel_action_receipt_path(self, sid: str) -> Path:
         return self._receipts_root / f"{sid}-panel-action-receipts.json"
 
-    def dry_run_activity(self, broker: str, sid: str) -> list:
+    def dry_run_activity(self, broker: str, sid: str) -> list[object]:
         return []
 
-    def bindings_for_broker(self, broker: str) -> list:
+    def bindings_for_broker(self, broker: str) -> list[object]:
         return []
 
 
-async def _timed_get(client, path: str) -> float:
+async def _timed_get(client: httpx.AsyncClient, path: str) -> float:
     started = time.perf_counter()
     response = await client.get(path)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
@@ -316,7 +352,9 @@ async def _timed_get(client, path: str) -> float:
     return elapsed_ms
 
 
-async def _bench_fleet(args: argparse.Namespace, rows: int, artifacts_root: Path) -> dict:
+async def _bench_fleet(
+    args: argparse.Namespace, rows: int, artifacts_root: Path
+) -> dict[str, Any]:
     import httpx
     from fastapi import FastAPI
     from httpx import ASGITransport
@@ -352,25 +390,45 @@ async def _bench_fleet(args: argparse.Namespace, rows: int, artifacts_root: Path
     app.include_router(router)
     account_root = f"/api/brokers/{BROKER}/accounts/{ACCOUNT_ID}"
     catalog_path = f"{account_root}/bots/catalog"
-    panel_paths = [f"{account_root}/bots/{sid}/panel" for sid in sids]
+    stopped_paths = [
+        f"{account_root}/bots/{sid}/panel" for sid in sids[:stopped_count]
+    ]
+    running_paths = [
+        f"{account_root}/bots/{sid}/panel" for sid in sids[stopped_count:]
+    ]
+    # Interleave both lifecycle states so no sampling scheme — sequential or
+    # concurrent — can silently measure only one half of the fleet.
+    interleaved_paths = [
+        path
+        for pair in zip(stopped_paths, running_paths, strict=False)
+        for path in pair
+    ] or (stopped_paths + running_paths)
 
-    results: dict = {"rows": rows}
+    results: dict[str, Any] = {"rows": rows}
     try:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://bench", timeout=120.0
         ) as client:
             # Warm once so first-touch imports/caches don't skew the samples.
             await _timed_get(client, catalog_path)
-            await _timed_get(client, panel_paths[0])
+            for path in interleaved_paths[:2]:
+                await _timed_get(client, path)
             broker_calls_before = port.calls
 
             catalog_seq = [
                 await _timed_get(client, catalog_path) for _ in range(args.requests)
             ]
-            panel_seq = [
-                await _timed_get(client, panel_paths[i % len(panel_paths)])
+            # Stratified on purpose: the stopped-bot panel runs the resume
+            # custody projection and the running-bot panel does not — one
+            # averaged number would hide whichever path dominates.
+            panel_seq_stopped = [
+                await _timed_get(client, stopped_paths[i % len(stopped_paths)])
                 for i in range(args.requests)
-            ]
+            ] if stopped_paths else []
+            panel_seq_running = [
+                await _timed_get(client, running_paths[i % len(running_paths)])
+                for i in range(args.requests)
+            ] if running_paths else []
 
             concurrent_panel: list[float] = []
             concurrent_panel_walls: list[float] = []
@@ -380,7 +438,8 @@ async def _bench_fleet(args: argparse.Namespace, rows: int, artifacts_root: Path
                 samples = await asyncio.gather(
                     *(
                         _timed_get(
-                            client, panel_paths[(offset + i) % len(panel_paths)]
+                            client,
+                            interleaved_paths[(offset + i) % len(interleaved_paths)],
                         )
                         for i in range(args.concurrency)
                     )
@@ -403,7 +462,10 @@ async def _bench_fleet(args: argparse.Namespace, rows: int, artifacts_root: Path
                 concurrent_catalog.extend(samples)
 
             results["catalog_sequential"] = _percentiles(catalog_seq)
-            results["panel_sequential"] = _percentiles(panel_seq)
+            if panel_seq_stopped:
+                results["panel_sequential_stopped"] = _percentiles(panel_seq_stopped)
+            if panel_seq_running:
+                results["panel_sequential_running"] = _percentiles(panel_seq_running)
             results["panel_concurrent"] = {
                 **_percentiles(concurrent_panel),
                 "concurrency": args.concurrency,
@@ -418,7 +480,14 @@ async def _bench_fleet(args: argparse.Namespace, rows: int, artifacts_root: Path
             }
             # #1776 read purity: the bench refuses to report numbers from a
             # run whose reads secretly contacted the broker port.
-            results["broker_calls_during_bench"] = port.calls - broker_calls_before
+            broker_calls = port.calls - broker_calls_before
+            if broker_calls:
+                raise SystemExit(
+                    f"purity fence tripped: {broker_calls} broker call(s) during "
+                    "measured reads — these numbers do not describe the pure "
+                    "read path and are refused (#1776)"
+                )
+            results["broker_calls_during_bench"] = broker_calls
 
             if args.profile:
                 results["profile"] = await _profile_catalog(
@@ -433,7 +502,9 @@ async def _bench_fleet(args: argparse.Namespace, rows: int, artifacts_root: Path
     return results
 
 
-async def _profile_catalog(client, catalog_path: str, requests: int, limit: int) -> str:
+async def _profile_catalog(
+    client: httpx.AsyncClient, catalog_path: str, requests: int, limit: int
+) -> str:
     """cProfile the catalog read loop; return the top rows by cumulative time."""
     profiler = cProfile.Profile()
     profiler.enable()
@@ -446,24 +517,38 @@ async def _profile_catalog(client, catalog_path: str, requests: int, limit: int)
     return buffer.getvalue()
 
 
-def _print_table(results: dict) -> None:
+def _emit(text: str) -> None:
+    """CLI output seam: the measurement report is this tool's product, so it
+    goes to stdout deliberately (the ``sys.stdout.write`` idiom the repo's
+    other CLIs use — e.g. ``export_openapi_contract``), never the app logger.
+    """
+    sys.stdout.write(text + "\n")
+
+
+_TABLE_SURFACES: tuple[tuple[str, str], ...] = (
+    ("catalog_sequential", "catalog GET (sequential)"),
+    ("panel_sequential_stopped", "panel GET (sequential, stopped bots)"),
+    ("panel_sequential_running", "panel GET (sequential, running bots)"),
+    ("panel_concurrent", "panel GET (concurrent, interleaved states)"),
+    ("catalog_concurrent", "catalog GET (concurrent)"),
+)
+
+
+def _print_table(results: dict[str, Any]) -> None:
     rows = results["rows"]
-    print(f"\n## {rows} rows")
-    print("| surface | n | p50 ms | p95 ms | max ms | wall/round ms |")
-    print("|---|---|---|---|---|---|")
-    for key, label in (
-        ("catalog_sequential", "catalog GET (sequential)"),
-        ("panel_sequential", "panel GET (sequential)"),
-        ("panel_concurrent", "panel GET (concurrent)"),
-        ("catalog_concurrent", "catalog GET (concurrent)"),
-    ):
-        surface = results[key]
+    _emit(f"\n## {rows} rows")
+    _emit("| surface | n | p50 ms | p95 ms | max ms | wall/round ms |")
+    _emit("|---|---|---|---|---|---|")
+    for key, label in _TABLE_SURFACES:
+        surface = results.get(key)
+        if surface is None:
+            continue
         wall = surface.get("wall_per_round_ms", "—")
-        print(
+        _emit(
             f"| {label} | {surface['n']} | {surface['p50_ms']} | "
             f"{surface['p95_ms']} | {surface['max_ms']} | {wall} |"
         )
-    print(f"broker calls during bench: {results['broker_calls_during_bench']}")
+    _emit(f"broker calls during bench: {results['broker_calls_during_bench']}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -475,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("app.services.broker_v2_panel.panel_data_source").setLevel(
         logging.ERROR
     )
-    all_results = []
+    all_results: list[dict[str, Any]] = []
     if args.disable_gc:
         import gc
 
@@ -491,13 +576,14 @@ def main(argv: list[str] | None = None) -> int:
             reset_settings_for_testing()
             results = asyncio.run(_bench_fleet(args, rows, artifacts_root))
             all_results.append(results)
-            if args.json:
-                print(json.dumps(results, indent=2))
-            else:
+            if not args.json:
                 _print_table(results)
                 if args.profile and "profile" in results:
-                    print("\n### cProfile (catalog reads, cumulative, app code)\n")
-                    print(results["profile"])
+                    _emit("\n### cProfile (catalog reads, cumulative, app code)\n")
+                    _emit(results["profile"])
+    if args.json:
+        # One valid JSON document per invocation, however many fleet sizes ran.
+        _emit(json.dumps(all_results, indent=2))
     return 0
 
 
