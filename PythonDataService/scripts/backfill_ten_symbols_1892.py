@@ -17,6 +17,18 @@ environment selects:
 
 Omit --symbol/--mode to run every (symbol, mode) combination in RANGES x
 MODES sequentially. Issue: #1892. Part of: #1885.
+
+--rollup-only (follow-up to #1892, fixing the rollup-window truncation bug
+in app.data_lake.backfill.run_backfill): minute-bar coverage for these ten
+symbols is already complete, so re-running the full per-day run_backfill()
+loop would just repeat ~2,600 no-op catalog cache hits with a Phase-0
+metadata bootstrap attempt on every single day. Instead this mode calls
+app.data_lake.ensure_data.ensure_data() directly, once per (symbol, mode),
+with a spec spanning the symbol's full RANGES span and
+include_factor_files/include_map_files/include_daily_trade left at their
+DataRunSpec default of True — exactly the one follow-up call run_backfill's
+own rollup step would make (see backfill._rollup_spec), without the
+per-day loop around it.
 """
 
 from __future__ import annotations
@@ -30,7 +42,13 @@ from typing import Literal
 from uuid import uuid4
 
 from app.data_lake.backfill import BackfillDayProgress, BackfillResult, BackfillWaitProgress, run_backfill
-from app.data_lake.types import DataRunSpec, PriceAdjustmentMode, trading_date_to_calendar_anchor_ms
+from app.data_lake.ensure_data import ensure_data
+from app.data_lake.types import (
+    DataAvailabilityResult,
+    DataRunSpec,
+    PriceAdjustmentMode,
+    trading_date_to_calendar_anchor_ms,
+)
 from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
 
 logger = logging.getLogger("backfill_ten_symbols_1892")
@@ -64,26 +82,14 @@ def _on_day_progress(symbol: str, mode: str):
         if noteworthy or progress.failures:
             logger.info(
                 "[%s/%s] day %d/%d %s: fetched=%d reused=%d failed=%d",
-                symbol,
-                mode,
-                progress.day_index,
-                progress.total_days,
-                progress.trading_date,
-                progress.fetched_count,
-                progress.reused_count,
-                len(progress.failures),
+                symbol, mode, progress.day_index, progress.total_days, progress.trading_date,
+                progress.fetched_count, progress.reused_count, len(progress.failures),
             )
         for failure in progress.failures:
             logger.error(
                 "    FAILURE [%s/%s] %s %s %s %s: %s - %s",
-                symbol,
-                mode,
-                failure.artifact_kind,
-                failure.symbol,
-                failure.trading_date,
-                failure.data_type,
-                failure.reason,
-                failure.detail,
+                symbol, mode, failure.artifact_kind, failure.symbol,
+                failure.trading_date, failure.data_type, failure.reason, failure.detail,
             )
 
     return _cb
@@ -93,12 +99,7 @@ def _on_wait(symbol: str, mode: str):
     def _cb(progress: BackfillWaitProgress) -> None:
         logger.info(
             "[%s/%s] waiting on in-flight lease: %s %s %s attempt=%d",
-            symbol,
-            mode,
-            progress.trading_date,
-            progress.symbol,
-            progress.data_type,
-            progress.attempt,
+            symbol, mode, progress.trading_date, progress.symbol, progress.data_type, progress.attempt,
         )
 
     return _cb
@@ -118,14 +119,14 @@ def _summarize(result: BackfillResult) -> dict[str, object]:
     }
 
 
-async def _run_one(symbol: str, mode: PriceAdjustmentMode, start: date, end: date) -> dict[str, object]:
+def _build_spec(symbol: str, mode: PriceAdjustmentMode, start: date, end: date, *, requester: str) -> DataRunSpec:
     if PINNED_LEAN_IMAGE_DIGEST is None:
         raise RuntimeError("PINNED_LEAN_IMAGE_DIGEST is unset for this host architecture")
 
-    spec = DataRunSpec(
+    return DataRunSpec(
         request_id=uuid4(),
         run_type="python_lab",
-        requester="backfill-1892",
+        requester=requester,
         market="usa",
         symbols=[symbol],
         start_trading_date_ms=trading_date_to_calendar_anchor_ms(start),
@@ -133,6 +134,10 @@ async def _run_one(symbol: str, mode: PriceAdjustmentMode, start: date, end: dat
         price_adjustment_mode=mode,
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
     )
+
+
+async def _run_one(symbol: str, mode: PriceAdjustmentMode, start: date, end: date) -> dict[str, object]:
+    spec = _build_spec(symbol, mode, start, end, requester="backfill-1892")
     logger.info("=== Starting %s/%s: %s .. %s ===", symbol, mode, start, end)
     result = await run_backfill(spec, on_day_progress=_on_day_progress(symbol, mode), on_wait=_on_wait(symbol, mode))
     summary = _summarize(result)
@@ -140,7 +145,39 @@ async def _run_one(symbol: str, mode: PriceAdjustmentMode, start: date, end: dat
     return summary
 
 
-async def _main(only_symbol: str | None, only_mode: Literal["raw", "polygon_split_adjusted"] | None) -> None:
+def _summarize_availability(result: DataAvailabilityResult) -> dict[str, object]:
+    return {
+        "overall_status": result.overall_status,
+        "artifact_kinds_produced": sorted({a.artifact_kind for a in result.artifacts}),
+        "fetched": result.fetched_artifact_count,
+        "reused": result.reused_artifact_count,
+        "refreshed": result.refreshed_artifact_count,
+        "n_failures": len(result.failures),
+        "failure_reasons": sorted({failure.reason for failure in result.failures}),
+    }
+
+
+async def _run_rollup_only(symbol: str, mode: PriceAdjustmentMode, start: date, end: date) -> dict[str, object]:
+    """The rollup step alone (factor_file, map_file, daily-trade), over the
+    symbol's already-backfilled full range — see the --rollup-only note in
+    the module docstring."""
+    spec = _build_spec(symbol, mode, start, end, requester="rollup-1892")
+    logger.info("=== Rollup %s/%s: %s .. %s ===", symbol, mode, start, end)
+    result = await ensure_data(spec)
+    summary = _summarize_availability(result)
+    logger.info("=== Done rollup %s/%s: %s ===", symbol, mode, json.dumps(summary, default=str))
+    for failure in result.failures:
+        logger.error(
+            "    FAILURE [%s/%s] %s %s %s %s: %s - %s",
+            symbol, mode, failure.artifact_kind, failure.symbol,
+            failure.trading_date, failure.data_type, failure.reason, failure.detail,
+        )
+    return summary
+
+
+async def _main(
+    only_symbol: str | None, only_mode: Literal["raw", "polygon_split_adjusted"] | None, rollup_only: bool
+) -> None:
     results: dict[str, dict[str, object]] = {}
     for symbol, (start, end) in RANGES.items():
         if only_symbol is not None and symbol != only_symbol:
@@ -150,7 +187,11 @@ async def _main(only_symbol: str | None, only_mode: Literal["raw", "polygon_spli
                 continue
             key = f"{symbol}/{mode}"
             try:
-                results[key] = await _run_one(symbol, mode, start, end)
+                results[key] = (
+                    await _run_rollup_only(symbol, mode, start, end)
+                    if rollup_only
+                    else await _run_one(symbol, mode, start, end)
+                )
             except Exception as exc:  # top-level driver: one bad combo must not abort the whole batch
                 logger.exception("=== %s RAISED ===", key)
                 results[key] = {"error": repr(exc)}
@@ -164,13 +205,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", choices=sorted(RANGES), default=None, help="restrict to one symbol")
     parser.add_argument("--mode", choices=MODES, default=None, help="restrict to one price-adjustment mode")
+    parser.add_argument(
+        "--rollup-only",
+        action="store_true",
+        help="skip the per-day backfill loop; call ensure_data() once per combo for factor/map/daily-trade only",
+    )
     args = parser.parse_args()
     # WARNING for everything else (the data-lake modules are chatty at INFO
     # over a multi-thousand-day backfill); INFO for this driver alone, so the
     # operator still sees per-day progress and every artifact failure.
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
     logger.setLevel(logging.INFO)
-    asyncio.run(_main(args.symbol, args.mode))
+    asyncio.run(_main(args.symbol, args.mode, args.rollup_only))
 
 
 if __name__ == "__main__":
