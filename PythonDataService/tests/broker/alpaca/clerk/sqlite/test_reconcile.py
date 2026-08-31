@@ -48,7 +48,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
     reconcile_account,
 )
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
@@ -2533,3 +2533,180 @@ async def test_exit_stuck_is_resolved_once_attributed_reaches_flat(clocked_repo)
         strategy_instance_id=WATCHDOG_SID,
     ) is None
     admit_new_exposure(repo, strategy_instance_id=WATCHDOG_SID)  # must not raise
+
+
+# ── ADR 0050: supervised lease revival ───────────────────────────────────────
+
+
+async def test_heartbeat_revives_an_expired_lease_and_fires_the_recovery_hook(
+    tmp_path: Path,
+) -> None:
+    """A freeze past the TTL with no competing writer self-cures: the
+    heartbeat revives the lease, fires the recovery hook once, and keeps
+    renewing afterwards."""
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=90,
+    )
+    hook_fired = asyncio.Event()
+    hook_calls: list[int] = []
+    renewed_after_revival = asyncio.Event()
+    hold_heartbeat = asyncio.Event()
+    ticks = {"n": 0}
+
+    async def controlled_heartbeat_sleep(delay: float) -> None:
+        del delay
+        ticks["n"] += 1
+        if ticks["n"] == 1:
+            now["ms"] += 5_000  # the freeze: TTL long expired on wake
+            return
+        if ticks["n"] == 2:
+            return  # post-revival renewal tick
+        renewed_after_revival.set()
+        await hold_heartbeat.wait()
+
+    async def on_lease_revived() -> None:
+        hook_calls.append(now["ms"])
+        hook_fired.set()
+
+    class IdleSweep(ReconciliationSweep):
+        async def run(self) -> None:
+            await hold_heartbeat.wait()
+
+    sweep = IdleSweep(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        lease_sleep=controlled_heartbeat_sleep,
+        on_lease_revived=on_lease_revived,
+    )
+    try:
+        sweep.start()
+        await asyncio.wait_for(hook_fired.wait(), timeout=1.0)
+        await asyncio.wait_for(renewed_after_revival.wait(), timeout=1.0)
+
+        assert hook_calls == [now["ms"]]
+        lease = clerk_repo._conn.execute(
+            "SELECT execution_lease_owner, execution_lease_expires_at_ms "
+            "FROM control_meta WHERE id = 1"
+        ).fetchone()
+        assert lease["execution_lease_expires_at_ms"] == now["ms"] + 90
+        # The heartbeat is still alive after the revival, not exited.
+        assert sweep._lease_task is not None and not sweep._lease_task.done()
+    finally:
+        hold_heartbeat.set()
+        await sweep.stop()
+        clerk_repo.close()
+
+
+async def test_heartbeat_exits_without_hook_when_revival_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A lease another owner took stays lost: no revival, no hook, heartbeat
+    ends, writes remain fail-closed (the ADR 0047 restart cure stands)."""
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=90,
+    )
+    hook_calls: list[int] = []
+    hold_heartbeat = asyncio.Event()
+
+    async def controlled_heartbeat_sleep(delay: float) -> None:
+        del delay
+        # Another process took (and later let lapse) the lease during a freeze.
+        clerk_repo._conn.execute(
+            "UPDATE control_meta SET execution_lease_owner = 'someone-else', "
+            "execution_lease_expires_at_ms = ? WHERE id = 1",
+            (now["ms"] + 1,),
+        )
+        clerk_repo._conn.commit()
+        now["ms"] += 5_000
+
+    async def on_lease_revived() -> None:
+        hook_calls.append(now["ms"])
+
+    class IdleSweep(ReconciliationSweep):
+        async def run(self) -> None:
+            await hold_heartbeat.wait()
+
+    sweep = IdleSweep(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        lease_sleep=controlled_heartbeat_sleep,
+        on_lease_revived=on_lease_revived,
+    )
+    try:
+        sweep.start()
+        assert sweep._lease_task is not None
+        await asyncio.wait_for(asyncio.shield(sweep._lease_task), timeout=1.0)
+
+        assert hook_calls == []
+        with pytest.raises(ExecutionLeaseLost):
+            clerk_repo.revive_execution_lease()
+    finally:
+        hold_heartbeat.set()
+        await sweep.stop()
+        clerk_repo.close()
+
+
+async def test_heartbeat_survives_a_transient_renewal_error(tmp_path: Path) -> None:
+    """A one-off store error must not end the heartbeat permanently — that
+    was the pre-ADR-0050 behavior that turned one hiccup into a bricked
+    account handle three missed renewals later."""
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=90,
+    )
+    real_renew = clerk_repo.renew_execution_lease
+    renew_calls = {"n": 0}
+
+    def flaky_renew() -> None:
+        renew_calls["n"] += 1
+        if renew_calls["n"] == 1:
+            raise RuntimeError("transient disk stall")
+        real_renew()
+
+    clerk_repo.renew_execution_lease = flaky_renew  # type: ignore[method-assign]
+
+    recovered = asyncio.Event()
+    hold_heartbeat = asyncio.Event()
+    ticks = {"n": 0}
+
+    async def controlled_heartbeat_sleep(delay: float) -> None:
+        del delay
+        ticks["n"] += 1
+        if ticks["n"] <= 2:
+            return
+        recovered.set()
+        await hold_heartbeat.wait()
+
+    class IdleSweep(ReconciliationSweep):
+        async def run(self) -> None:
+            await hold_heartbeat.wait()
+
+    sweep = IdleSweep(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        lease_sleep=controlled_heartbeat_sleep,
+    )
+    try:
+        sweep.start()
+        await asyncio.wait_for(recovered.wait(), timeout=1.0)
+
+        assert renew_calls["n"] >= 2
+        assert sweep._lease_task is not None and not sweep._lease_task.done()
+    finally:
+        hold_heartbeat.set()
+        await sweep.stop()
+        clerk_repo.close()

@@ -53,6 +53,36 @@ class BotRecoveryCandidate:
     sqlite_active: bool
 
 
+@dataclass(frozen=True, slots=True)
+class RecoverySweepProvenance:
+    """Who ran the lifecycle repair pass, stamped into what it writes.
+
+    ADR 0050 runs the same repair pass in two circumstances -- container
+    boot and in-process lease revival -- and the records it writes must say
+    which one actually happened, not claim a restart that never occurred.
+    """
+
+    updated_by: str
+    interrupted_reason_code: str
+    interrupted_reason: str
+    desired_state_reason: str
+
+
+BOOT_SWEEP_PROVENANCE = RecoverySweepProvenance(
+    updated_by="bot_runner_boot_sweep",
+    interrupted_reason_code="INTERRUPTED_BY_RESTART",
+    interrupted_reason="container_restart",
+    desired_state_reason="interrupted_by_restart",
+)
+
+LEASE_REVIVAL_PROVENANCE = RecoverySweepProvenance(
+    updated_by="bot_runner_lease_revival",
+    interrupted_reason_code="INTERRUPTED_BY_AUTHORITY_OUTAGE",
+    interrupted_reason="execution_lease_revival",
+    desired_state_reason="interrupted_by_authority_outage",
+)
+
+
 class BotBootRecovery:
     """Repair interrupted durable state and run the Clerk recovery sequence."""
 
@@ -89,6 +119,7 @@ class BotBootRecovery:
         recover: Callable[[], Awaitable[None]] | None = None,
         reconcile: Callable[[], Awaitable[object]] | None = None,
         unresolved_intents_probe: Callable[[str | None], Awaitable[int]] | None = None,
+        provenance: RecoverySweepProvenance = BOOT_SWEEP_PROVENANCE,
     ) -> BootRecoveryReport:
         """Recover SQLite authority first, then repair derived file projections."""
         for step_name, step in (("recover", recover), ("reconcile", reconcile)):
@@ -104,7 +135,7 @@ class BotBootRecovery:
                 raise BootAuthorityPreparationError(
                     f"SQLite boot authority step {step_name!r} failed"
                 ) from exc
-        interrupted = await self._repair_lifecycle_artifacts()
+        interrupted = await self._repair_lifecycle_artifacts(provenance)
         # Account-wide on purpose: this is a boot summary of the whole
         # authority, not an admission decision about one bot (#1793).
         unresolved = (
@@ -125,7 +156,9 @@ class BotBootRecovery:
         )
         return report
 
-    async def _repair_lifecycle_artifacts(self) -> list[str]:
+    async def _repair_lifecycle_artifacts(
+        self, provenance: RecoverySweepProvenance
+    ) -> list[str]:
         interrupted: list[str] = []
         try:
             candidates = sorted(
@@ -149,7 +182,7 @@ class BotBootRecovery:
                 projection = projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
-                    updated_by="bot_runner_boot_sweep",
+                    updated_by=provenance.updated_by,
                     reason="refresh_running_projection",
                 )
                 self._require_settled_projection(
@@ -186,7 +219,7 @@ class BotBootRecovery:
                 projection = projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
-                    updated_by="bot_runner_boot_sweep",
+                    updated_by=provenance.updated_by,
                     reason="repair_terminal_projection",
                 )
                 if not self._require_settled_projection(
@@ -197,7 +230,7 @@ class BotBootRecovery:
                     continue
                 desired_repo.set(
                     DesiredState.STOPPED,
-                    updated_by="bot_runner_boot_sweep",
+                    updated_by=provenance.updated_by,
                     now_ms=self._now_ms(),
                     reason="repair_terminal_nonstopped_intent",
                 )
@@ -211,7 +244,17 @@ class BotBootRecovery:
                     },
                 )
                 continue
-            needs_interrupted_evidence = candidate.sqlite_active or (
+            # A run that already carries its own terminal outcome (the bot
+            # finalized file-side; only the SQLite STOP was still owed, and it
+            # was committed above) keeps that outcome: overwriting a durable
+            # CRASHED record with generic interrupted evidence would replace
+            # the more specific receipt with the less specific one (ADR 0050).
+            already_terminal_for_run = (
+                record is not None
+                and record.duty_outcome is not None
+                and record.duty_outcome.run_id == run_id
+            )
+            run_looks_interrupted = candidate.sqlite_active or (
                 record is not None and record.phase is BotLifecyclePhase.ON_DUTY
             ) or (
                 desired_state in {DesiredState.RUNNING, DesiredState.PAUSED}
@@ -223,11 +266,12 @@ class BotBootRecovery:
                     )
                 )
             )
+            needs_interrupted_evidence = run_looks_interrupted and not already_terminal_for_run
             if not needs_interrupted_evidence:
                 projection = projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
-                    updated_by="bot_runner_boot_sweep",
+                    updated_by=provenance.updated_by,
                     reason="refresh_boot_projection",
                 )
                 self._require_settled_projection(
@@ -240,7 +284,7 @@ class BotBootRecovery:
             now_ms = self._now_ms()
             outcome = BotDutyOutcome(
                 kind="EXITED_UNVERIFIED",
-                reason_code="INTERRUPTED_BY_RESTART",
+                reason_code=provenance.interrupted_reason_code,
                 recorded_at_ms=now_ms,
                 run_id=run_id,
             )
@@ -248,8 +292,8 @@ class BotBootRecovery:
                 strategy_instance_id=strategy_instance_id,
                 outcome=outcome,
                 now_ms=now_ms,
-                updated_by="bot_runner_boot_sweep",
-                reason="container_restart",
+                updated_by=provenance.updated_by,
+                reason=provenance.interrupted_reason,
             )
             if not self._require_settled_projection(
                 update_result,
@@ -259,9 +303,9 @@ class BotBootRecovery:
                 continue
             desired_repo.set(
                 DesiredState.STOPPED,
-                updated_by="bot_runner_boot_sweep",
+                updated_by=provenance.updated_by,
                 now_ms=now_ms,
-                reason="interrupted_by_restart",
+                reason=provenance.desired_state_reason,
             )
             interrupted.append(strategy_instance_id)
             logger.warning(

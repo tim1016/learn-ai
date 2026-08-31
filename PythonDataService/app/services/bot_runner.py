@@ -84,6 +84,7 @@ from app.services.bot_binding_repository import (
     alpaca_v1_action_plan,
 )
 from app.services.bot_boot_recovery import (
+    LEASE_REVIVAL_PROVENANCE,
     BootRecoveryReport,
     BotBootRecovery,
     BotRecoveryCandidate,
@@ -1125,6 +1126,25 @@ class BotTaskRegistry:
         # `_is_running` reflects the recovered fleet.
         self._resume_pending_replay_receipts()
         return report
+
+    async def run_lease_recovery(
+        self,
+        *,
+        reconcile: Callable[[], Awaitable[object]] | None = None,
+    ) -> BootRecoveryReport:
+        """Close the terminal-evidence hole after a lease revival (ADR 0050).
+
+        A narrow in-process re-run of the boot scan's repair pass: one
+        reconcile pass, then the lifecycle repair that commits the SQLite
+        STOPs for runs whose tasks died on the dead handle. Deliberately
+        skips the boot-only steps (synthetic-authority recovery, replay
+        receipts) — those belong to a fresh process, not a revived lease.
+        """
+        return await self._boot_recovery.run(
+            reconcile=reconcile,
+            unresolved_intents_probe=self._unresolved_intents_probe,
+            provenance=LEASE_REVIVAL_PROVENANCE,
+        )
 
     # ── read surface ──────────────────────────────────────────────────
 

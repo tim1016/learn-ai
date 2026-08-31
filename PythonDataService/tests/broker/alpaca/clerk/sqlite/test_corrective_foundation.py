@@ -609,6 +609,65 @@ def test_lease_renews_on_every_write_and_lost_lease_blocks_further_writes(tmp_pa
         r.register_strategy_instance(strategy_instance_id=SID_B, symbol="QQQ", config_hash="h2")
 
 
+def test_revive_execution_lease_after_expiry_restores_writes(tmp_path: Path) -> None:
+    """ADR 0050: an expired-but-unclaimed lease is revivable by its owner.
+
+    Owner and generation unchanged prove no other writer ever held the
+    account, so revival is indistinguishable from a TTL that covered the
+    freeze -- writes work again without a process restart.
+    """
+    clock = _clock_seq()
+    r = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=1000
+    )
+    r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
+
+    clock.advance(5_000)  # freeze past the TTL; nobody else takes the lease
+    with pytest.raises(ExecutionLeaseLost):
+        r.register_strategy_instance(strategy_instance_id=SID_B, symbol="QQQ", config_hash="h2")
+
+    r.revive_execution_lease()
+
+    r.register_strategy_instance(strategy_instance_id=SID_B, symbol="QQQ", config_hash="h2")
+    r.renew_execution_lease()
+
+
+def test_revive_refused_after_another_owner_took_the_lease(tmp_path: Path) -> None:
+    """Revival never breaks another owner's claim, even a lapsed one."""
+    clock = _clock_seq()
+    r = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=1000
+    )
+    r._conn.execute(
+        "UPDATE control_meta SET execution_lease_owner = 'someone-else', "
+        "execution_lease_expires_at_ms = ? WHERE id = 1",
+        (clock() + 1,),
+    )
+    r._conn.commit()
+    clock.advance(5_000)  # the usurper's lease has itself lapsed
+
+    with pytest.raises(ExecutionLeaseLost):
+        r.revive_execution_lease()
+    with pytest.raises(ExecutionLeaseLost):
+        r.register_strategy_instance(strategy_instance_id=SID_B, symbol="QQQ", config_hash="h2")
+
+
+def test_revive_refused_after_authority_generation_changed(tmp_path: Path) -> None:
+    """A reset ceremony bumps the generation; the pre-ceremony handle stays dead."""
+    clock = _clock_seq()
+    r = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=1000
+    )
+    clock.advance(5_000)
+    r._conn.execute(
+        "UPDATE control_meta SET authority_generation = authority_generation + 1 WHERE id = 1"
+    )
+    r._conn.commit()
+
+    with pytest.raises(ExecutionLeaseLost):
+        r.revive_execution_lease()
+
+
 def test_operation_claim_cas_fences_a_second_owner_until_expiry(repo: ClerkSqliteRepository) -> None:
     submission = submit_start_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"

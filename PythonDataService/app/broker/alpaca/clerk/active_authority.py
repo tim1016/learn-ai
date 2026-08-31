@@ -554,6 +554,13 @@ async def select_synthetic_clerk_runtime(
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
             on_result=facade.publish_sweep_reconciliation,
+            # ADR 0050: no on_lease_revived here, deliberately. Lease
+            # *revival* applies to this synthetic heartbeat like any other,
+            # but the post-revival recovery pass is real-paper-scoped (the
+            # boot-recovery candidates come from the account authority, not
+            # per-strategy synthetic repos), so a revived synthetic lease
+            # relies on the boot scan for its terminal-evidence closure —
+            # the same posture every authority had before ADR 0050.
         )
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
