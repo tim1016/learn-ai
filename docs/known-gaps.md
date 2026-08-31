@@ -358,8 +358,19 @@ a defect.
   roster-building slice and a GIL-holding `to_thread` projection slice, so
   10 concurrent reads serialize on both (catalog 44 ms alone → ~1.6 s each
   at 10 concurrent, 144 rows, with ~3.8× total-work inflation; GC ruled
-  out). The bullet still stands until the live 10-concurrent remeasure on
-  the deployed topology.
+  out).
+  **Live remeasure 2026-08-31** on the deployed topology
+  (`docs/audits/read-latency-profile-live-2026-08-31.md` §3): the stated
+  deletion condition is now **satisfied — and it confirmed the defect
+  rather than clearing it**, so the bullet is rewritten, not deleted. Ten
+  concurrent catalog GETs against the live data plane at 52 rows with 50
+  bots trading: **7 682 ms each, wall 7 684 ms** — every request takes the
+  whole round, with **4.8×** total-work inflation, against 161 ms for the
+  same read alone. At the audit's full 144-row / 50-trading shape, measured
+  with the audit's own 6-thread methodology, catalog p50 was **8.78 s**
+  (§6). Serialization is real, live, and unfixed. Delete this bullet when
+  the serialization is *fixed* — the lever and its ordering are in that
+  audit's §11 — not on any further measurement.
 - **F14 — `gallery/snapshot` unbounded by liveness (low).** 5.6 s / 751 KB /
   25 tiles including retired bots (`app/routers/broker_v2_gallery.py`; study
   §7).
@@ -397,11 +408,19 @@ why its acceptance did not test it.
 The items below remain open.
 
 - **S12d — stopped fleet leaves a hot data plane and 105–145 s panel reads
-  (high).** After mass stop, zero running bots still consumed 77% CPU until a
-  data-plane restart. The responsible background loop is not yet identified;
-  reproduce under profiling before choosing a fix. Worth profiling in the same
-  session as T2/O4 (**#1801**) — both are unexplained per-account cost curves
-  and may share a root.
+  (high; did NOT reproduce 2026-08-31).** After mass stop, zero running bots
+  still consumed 77% CPU until a data-plane restart. **Remeasured under
+  #1801** at 144 rows with zero running bots
+  (`docs/audits/read-latency-profile-live-2026-08-31.md` §10): CPU held flat
+  at **24–25% of one core** across three minutes with no upward drift, panel
+  storm p50 was **0.77 s** and sequential catalog p50 **267 ms** (unchanged
+  at 270 ms after further settling), and no restart was needed. Neither
+  symptom reproduces. This is a **non-reproduction, not a fix** — the
+  original observation was not attributed. One condition differs: the
+  2026-08-26 run had IB Gateway live, and IBKR has since been decommissioned
+  (#1813); its auto-reconnect monitor polls at 3 s and is gated on
+  `ibkr_settings.broker_enabled`. That is a plausible but unproven cause.
+  Delete this bullet if a second stopped-fleet run also comes back clean.
 - **S10 UI — active holds contradict roster counts and guidance (medium;
   partially cured).** An active stream-health hold can coexist with "Running 0,
   Stopped 0" and "no active hold" copy while dozens of bots are running. The

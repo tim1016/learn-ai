@@ -18,11 +18,27 @@ What it measures:
 - ``--profile``: cProfile of the catalog reads, top functions by
   cumulative time, filtered to repository code
 
-What it deliberately does NOT measure (live-only, still owed by #1801):
-- per-account lock contention between admission work and *running bots'*
-  clerk operations (the audit's suspected root needs live write load)
-- deploy latency under fleet load (O2)
-- the post-mass-stop 77% CPU residue (S12d)
+What it deliberately does NOT measure: live write load, running bots as
+additional GIL tenants, deploy latency, and post-mass-stop CPU. These were
+the live-only items owed by #1801 and were measured on 2026-08-31 --
+findings live in ``docs/audits/read-latency-profile-live-2026-08-31.md``,
+not here.
+
+Two sizing caveats for anyone quoting this bench's absolute numbers. Both
+are measured, not estimated, in that audit's SS7-SS8:
+
+1. **A synthetic row is ~7x cheaper than a real one.** 144 synthetic rows
+   read in 36 ms here; 144 real deployed rows read in 267 ms live with
+   zero bots running. A real row carries runs/orders/positions/effect
+   operations and ~10 artifact files where a bench row carries a run and
+   two JSON files.
+2. **The fleet's filesystem is one knob here but two in production.** This
+   bench puts the DB *and* the per-row lifecycle files under one TMPDIR.
+   Production splits them: the clerk DB must sit on a container-local named
+   volume (the WAL guard rejects fuse outright), while the per-row
+   lifecycle files live under ``artifacts/live_state`` on the virtiofs bind
+   mount, which costs 5x per row. Varying TMPDIR here therefore cannot
+   reproduce the production split, and understates the file half.
 
 The bot task registry is a minimal in-memory stand-in answering liveness —
 in production that answer is a dict lookup, so it is not part of the cost
