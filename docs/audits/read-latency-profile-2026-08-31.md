@@ -1,5 +1,20 @@
 # Panel/Catalog Read-Latency Profile — 2026-08-31 (#1801)
 
+> **Partially corrected 2026-08-31 by the live half**, in
+> `read-latency-profile-live-2026-08-31.md`. The **mechanism** below —
+> per-row work split across an event-loop-blocking slice and GIL-holding
+> `to_thread` workers — is confirmed live and stands. Three things here do
+> not, all traceable to one comparison error in §3: the live audit figures
+> it compares against (3.3 s / 16.8 s) are **6-thread concurrent-storm**
+> percentiles from `scripts/dev/fleet/read_bench.py`, not sequential ones,
+> so §3's "~118×" is unlike-for-unlike (like-for-like it is ~1.7×); §4's
+> virtiofs row is **pinned at 5× on ~10 % of a read**, not "consistent with
+> a ~100× multiplier", and the clerk DB was never on virtiofs at all
+> because the WAL guard rejects it; and §5's lever ordering is reversed —
+> (d), moving the roster slice off the event loop, is first, because it
+> attacks the ~9.7× convoy that multiplies (a)–(c). See that document's §12.
+
+
 **Scope.** The profile-first deliverable #1801 asks for, produced offline with
 a reproducible bench so the read-side cost curve can be re-measured after any
 change without staging a 50-bot fleet. Source finding: T2/O4 in
