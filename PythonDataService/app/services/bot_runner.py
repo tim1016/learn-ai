@@ -44,7 +44,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
-from app.broker.v2panel.action_policy import evaluate_retirement
+from app.broker.v2panel.action_policy import evaluate_archive, evaluate_retirement
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
@@ -206,6 +206,32 @@ _RETIRE_REFUSAL: dict[str | None, tuple[str, str]] = {
     None: (
         "This registration cannot be retired.",
         "Retirement preconditions are no longer satisfied.",
+    ),
+}
+
+# The same shape for the archive rule (ADR 0052). Kept separate from the
+# retirement map rather than merged on the shared cause names: the two rules
+# refuse for different reasons and an operator reading "provably dead" copy
+# after clicking Archive would be told about a contract that does not govern
+# their command.
+_ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
+    "BOT_STILL_RUNNING": (
+        "The bot is still running.",
+        "Stop the bot before archiving its registration.",
+    ),
+    "ARCHIVE_CUSTODY_UNPROVABLE": (
+        "The Clerk cannot prove this bot is flat.",
+        "Archiving is allowed on proof that the bot holds nothing. Restore "
+        "broker observation and reconcile before archiving.",
+    ),
+    "ARCHIVE_WOULD_STRAND_CUSTODY": (
+        "The bot still holds custody.",
+        "Archiving now would strand attributed exposure or a working order. "
+        "Flatten and let working orders reach a terminal state first.",
+    ),
+    None: (
+        "This registration cannot be archived.",
+        "Archive preconditions are no longer satisfied.",
     ),
 }
 
@@ -835,6 +861,57 @@ class BotTaskRegistry:
                 now_ms=self._now_ms(),
                 updated_by=updated_by,
                 reason=reason or f"Panel retire by {updated_by}",
+            )
+            return self.status(broker, strategy_instance_id)
+
+    async def archive(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str = "operator",
+        reason: str | None = None,
+    ) -> BotStatusView:
+        """Take a finished bot off the roster (ADR 0052).
+
+        The sanctioned exit for a registration the operator is *done with*,
+        as distinct from ``retire``'s provably-dead contract (#1795), which
+        this does not touch. Both land in the same terminal phase, so both
+        are refused admission by ``run_admission``'s ``BOT_RETIRED`` and both
+        leave the catalog's per-row cost curve (#1911); ``updated_by`` and
+        ``reason`` are what keep the two apart in the audit trail.
+
+        Archive's enabling proof *is* custody, so like ``retire`` it
+        re-answers the shared rule against a freshly reconciled snapshot
+        rather than the projected one the operator clicked on: a fill that
+        landed in between must refuse the command, not be stranded by it.
+        """
+        async with self._operation_lock(strategy_instance_id):
+            binding = self._bindings.read(strategy_instance_id)
+            if binding is None:
+                raise BotRunnerError(
+                    f"Bot '{strategy_instance_id}' has no registration to archive.",
+                    detail="The roster has no binding for this instance.",
+                )
+            status = self.status(broker, strategy_instance_id)
+            async with self._start_custody_guard(binding) as custody:
+                verdict = evaluate_archive(
+                    running=status.running,
+                    phase=status.phase,
+                    has_exposure=custody.exposure.state != "zero",
+                    working_order_count=custody.working_orders.count,
+                    custody_provable=not custody.freeze.active,
+                )
+            if verdict.already_retired:
+                return status
+            if not verdict.eligible:
+                headline, detail = _ARCHIVE_REFUSAL[verdict.cause]
+                raise BotRunnerError(headline, detail=detail)
+            self._lifecycle_projector_for_instance(strategy_instance_id).retire(
+                strategy_instance_id=strategy_instance_id,
+                now_ms=self._now_ms(),
+                updated_by=updated_by,
+                reason=reason or f"Panel archive by {updated_by}",
             )
             return self.status(broker, strategy_instance_id)
 

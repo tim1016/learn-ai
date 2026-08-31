@@ -29,6 +29,13 @@ import { OperatorBotBannerComponent } from './operator-bot-banner/operator-bot-b
 import { primaryActionForLens } from '../bot-detail-banner/lifecycle-action';
 
 /**
+ * The closed set of registration exits. Both clear a registration for good —
+ * `retire` a provably dead one (#1795), `archive` one the operator is
+ * finished with (ADR 0052) — and the backend arms each under its own proof.
+ */
+const EXIT_ACTION_IDS: readonly string[] = ['retire', 'archive'];
+
+/**
  * Operator lens (spec §7).
  *
  * Orchestrates the four operator-lens regions:
@@ -110,16 +117,18 @@ export class OperatorLensComponent {
     primaryActionForLens(this.panel(), 'operator'),
   );
   /**
-   * Retire is presented for every bot but enabled only for a registration
-   * the runtime can no longer honour (#1778, S5). Render it only when it is
-   * actually on offer: a permanently dead button on every healthy bot is
-   * noise, not honesty.
+   * The two registration exits, rendered only when actually on offer.
+   *
+   * Both are presented for every bot and enabled only under their own proof:
+   * `retire` when the runtime can no longer honour the registration (#1778,
+   * S5), `archive` when the bot is stopped and provably flat (ADR 0052). A
+   * permanently dead button on every healthy bot is noise, not honesty, so
+   * the filter is on `enabled` rather than on presentation.
    */
-  protected readonly retireAction = computed<PanelAction | null>(
-    () =>
-      this.panel().actions.find(
-        (action) => action.action_id === 'retire' && action.enabled,
-      ) ?? null,
+  protected readonly exitActions = computed<readonly PanelAction[]>(() =>
+    this.panel().actions.filter(
+      (action) => EXIT_ACTION_IDS.includes(action.action_id) && action.enabled,
+    ),
   );
 
   // ── Template handlers ─────────────────────────────────────────────────────

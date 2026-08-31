@@ -384,3 +384,61 @@ def test_retiring_an_already_retired_instance_keeps_the_first_instant(
         assert repo.strategy_instance("paper-projection")["retired_at_ms"] == now_ms
     finally:
         repo.close()
+
+
+async def test_archive_takes_a_finished_bot_off_the_roster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The case ``retire`` refuses and #1911 asked for (ADR 0052).
+
+    The bot's strategy is registered and its symbol is fine, so retire refuses
+    it with ``STRATEGY_STILL_RUNNABLE`` -- correctly, for what #1795 covers.
+    ``archive`` is the sanctioned exit for exactly that bot, and it commits to
+    the authority: this asserts ``strategy_instances.retired_at_ms``, not just
+    the file projection, because that column is what the catalog reads and
+    what ``run_admission`` refuses ``BOT_RETIRED`` on.
+    """
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path / "clerk",
+    )
+    broker = _SqliteRuntimeBroker()
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    set_alpaca_clerk(clerk)
+    registry = BotTaskRegistry(
+        tmp_path / "artifacts",
+        feed_resolver=lambda: _FakeFeed([], mode="hold"),
+        boot_recovery_required=False,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=clerk.start_admission_snapshot,
+        now_ms=now_ms_utc,
+    )
+    admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
+    try:
+        await registry.deploy(
+            broker="alpaca", strategy_instance_id="paper-archive", symbol="SPY"
+        )
+        await registry.stop("alpaca", "paper-archive")
+
+        from app.services.bot_runner import BotRunnerError
+
+        with pytest.raises(BotRunnerError):
+            await registry.retire("alpaca", "paper-archive", updated_by="operator")
+
+        status = await registry.archive(
+            "alpaca", "paper-archive", updated_by="operator"
+        )
+
+        assert status.phase == "RETIRED"
+        registration = repo.strategy_instance("paper-archive")
+        assert registration is not None
+        assert registration["retired_at_ms"] is not None
+        # Idempotent at the operation: a re-click is not an error.
+        assert (
+            await registry.archive("alpaca", "paper-archive", updated_by="operator")
+        ).phase == "RETIRED"
+    finally:
+        await registry.stop_all()
+        set_alpaca_clerk(None)
+        repo.close()

@@ -44,10 +44,12 @@ def test_alpaca_profile_advertises_only_actions_with_production_performers() -> 
         "stop",
         "flatten_stop",
         "retire",
+        "archive",
         "reconcile_now",
     ]
     # retire joined the advertised set when it gained a production performer
-    # (#1778, S5) -- the invariant this test guards is unchanged.
+    # (#1778, S5), and archive when it gained one (ADR 0052) -- the invariant
+    # this test guards is unchanged.
     assert "cancel_order" not in profile.supported_action_ids
 
 

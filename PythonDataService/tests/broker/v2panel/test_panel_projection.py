@@ -1074,10 +1074,11 @@ def test_sqlite_adapter_preserves_stopped_bot_resume_with_sqlite_recovery_action
 
     actions = {action.action_id: action for action in adapted.actions}
     # `retire` is a bot-lifecycle action too, so it survives adaptation
-    # alongside Resume (#1778, S5). It is presented for every bot and enabled
-    # only when the runtime can no longer honour the registration; the lens
-    # renders it only when enabled.
-    assert list(actions) == ["resume", "retire", "reconcile_now"]
+    # alongside Resume (#1778, S5), and so does `archive` (ADR 0052). Both are
+    # presented for every bot: retire enabled only when the runtime can no
+    # longer honour the registration, archive only when the bot is stopped and
+    # provably flat. The lens renders each only when enabled.
+    assert list(actions) == ["resume", "retire", "archive", "reconcile_now"]
     assert actions["resume"].enabled is True
     # Enabled, because this fixture's strategy is deliberately one this build
     # does not register (see _UNSEALED_STRATEGY_KEY) -- which is exactly the
@@ -1222,6 +1223,7 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert action_ids == {
         "resume",
         "retire",
+        "archive",
         "pause",
         "continue",
         "stop",

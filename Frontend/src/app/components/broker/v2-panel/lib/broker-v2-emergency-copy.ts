@@ -166,6 +166,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     explanation:
       'Submit the prepared reduction as recovery EXIT custody with exact attributed quantities.',
   },
+  archive: {
+    label: 'Archive',
+    explanation:
+      'Take a bot you are finished with off the roster. It must be stopped and flat.',
+  },
   retire: {
     label: 'Retire',
     explanation: 'Permanently decommission this bot. Its id is never reused.',

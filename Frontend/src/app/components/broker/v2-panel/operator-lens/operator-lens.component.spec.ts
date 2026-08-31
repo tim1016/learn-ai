@@ -401,6 +401,47 @@ describe('OperatorLensComponent', () => {
     expect(screen.queryByRole('button', { name: /Retire/ })).toBeNull();
   });
 
+  // ADR 0052: archive is the second registration exit. Retire clears a
+  // provably dead registration; archive clears one the operator is finished
+  // with. The lens renders whichever the backend armed, so both must appear
+  // and both must vanish when refused.
+  const archiveAction: PanelAction = {
+    action_id: 'archive', label: 'Archive', explanation: 'Take this bot off the roster.',
+    enabled: true, blockers: [], confirmation: null, revision: 1,
+    concurrency_token: 'archive-token',
+  };
+
+  it('offers Archive for a bot the operator is finished with', async () => {
+    await renderLens({
+      ...stoppedPanelWithRetire(false),
+      actions: [{ ...retireAction, enabled: false }, archiveAction],
+    });
+
+    expect(screen.getByRole('button', { name: /Archive/ })).toBeTruthy();
+    // Retire stays hidden: the two exits are armed by independent proofs and
+    // a healthy stopped bot satisfies only archive's.
+    expect(screen.queryByRole('button', { name: /Retire/ })).toBeNull();
+  });
+
+  it('renders no Archive control when the backend refuses it', async () => {
+    await renderLens({
+      ...stoppedPanelWithRetire(false),
+      actions: [{ ...archiveAction, enabled: false }],
+    });
+
+    expect(screen.queryByRole('button', { name: /Archive/ })).toBeNull();
+  });
+
+  it('offers both exits when the backend arms both', async () => {
+    await renderLens({
+      ...stoppedPanelWithRetire(true),
+      actions: [retireAction, archiveAction],
+    });
+
+    expect(screen.getByRole('button', { name: /Retire/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Archive/ })).toBeTruthy();
+  });
+
   it('keeps the promoted lifecycle action out of readiness while retaining its gate', async () => {
     const fakeSvc = makeFakePanelService();
     const resumeAction: PanelAction = {

@@ -559,6 +559,21 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             "feed subscriptions and can start no new runs."
         )
 
+    async def _archive(operator: str, reason: str | None) -> str:
+        registry = get_bot_task_registry()
+        if registry is None:
+            raise PanelUnavailableError("The bot runner is not available.")
+        await registry.archive(
+            broker,
+            sid,
+            updated_by=operator,
+            reason=f"Panel archive by {operator}",
+        )
+        return (
+            "Bot archived and taken off the roster. Its history and receipts are "
+            "kept; it can start no new runs."
+        )
+
     async def _pause(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         if registry is None:
@@ -635,6 +650,7 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         "continue": _continue,
         "stop": _stop,
         "retire": _retire,
+        "archive": _archive,
         "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,
     }
