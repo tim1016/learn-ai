@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from bisect import bisect_right
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -122,6 +123,13 @@ class SymbolValidityProbe:
     steady-state broker cost at zero. ``min_interval_ms`` decouples the probe
     cadence from the sweep's 15 s pass so the roster provider is not re-read
     every pass.
+
+    The per-pass cap is applied to a *rotated* due list, not to the head of it.
+    A symbol that keeps raising ``BrokerError`` records no observation and so
+    stays due forever; slicing the sorted head would hand the same failing
+    prefix every pass and starve every later symbol indefinitely, which is
+    exactly the bot that would never receive its retirement fact. The cursor
+    advances past the symbols attempted this pass, so the batch is fair.
     """
 
     def __init__(
@@ -143,6 +151,10 @@ class SymbolValidityProbe:
         self._refresh_ttl_ms = refresh_ttl_ms
         self._max_probes_per_pass = max_probes_per_pass
         self._last_ran_ms: int | None = None
+        # Rotation anchor: the symbol to resume the next capped batch from.
+        # A symbol, not an index, because the due list changes shape between
+        # passes (bots deploy, observations land) and an index would drift.
+        self._resume_after: str | None = None
 
     async def run_due(self) -> None:
         now_ms = self._now_ms()
@@ -150,11 +162,13 @@ class SymbolValidityProbe:
             return
         self._last_ran_ms = now_ms
         observed = self._store.read_all()
-        due = [
-            symbol
-            for symbol in sorted({symbol.upper() for symbol in self._roster_symbols()})
-            if self._is_due(observed.get(symbol), now_ms)
-        ][: self._max_probes_per_pass]
+        due = self._rotated_batch(
+            [
+                symbol
+                for symbol in sorted({symbol.upper() for symbol in self._roster_symbols()})
+                if self._is_due(observed.get(symbol), now_ms)
+            ]
+        )
         observations: list[SymbolValidityObservation] = []
         for symbol in due:
             try:
@@ -178,6 +192,21 @@ class SymbolValidityProbe:
                 )
             )
         self._store.record(observations)
+
+    def _rotated_batch(self, due: list[str]) -> list[str]:
+        """The next ``max_probes_per_pass`` due symbols, resuming after the cursor."""
+        if not due:
+            self._resume_after = None
+            return []
+        start = 0
+        if self._resume_after is not None:
+            # bisect_right on the sorted due list: the first symbol strictly
+            # after the cursor, wrapping to the head once the list is exhausted.
+            start = bisect_right(due, self._resume_after) % len(due)
+        size = min(self._max_probes_per_pass, len(due))
+        batch = [due[(start + offset) % len(due)] for offset in range(size)]
+        self._resume_after = batch[-1]
+        return batch
 
     def _is_due(self, observation: SymbolValidityObservation | None, now_ms: int) -> bool:
         if observation is None:
@@ -204,9 +233,33 @@ def _store_root() -> Path:
 def symbol_marked_unresolvable(symbol: str) -> bool:
     """True iff the durable store holds a definitive "symbol unlisted" answer.
 
-    The canonical read-side predicate for #1795's retire widening: pure file
-    read, no broker I/O, fail-closed — no observation means False, so retire
-    stays refused until the sweep has actually asked the broker.
+    The raw store predicate: pure file read, no broker I/O, fail-closed — no
+    observation means False, so retire stays refused until the sweep has
+    actually asked the broker. Callers deciding *retirement* want
+    ``symbol_unresolvable_for_mode``, which also applies the mode rule below.
     """
     observation = SymbolValidityStore(_store_root()).read(symbol)
     return observation is not None and not observation.resolvable
+
+
+# Alpaca's asset universe is an admission invariant only for the modes whose
+# execution authority *is* Alpaca. A ``dry_run`` binding is sealed to a
+# synthetic sim account — ``_admission_clerk`` refuses the real Clerk for it,
+# and its admission contract asks only for a registered runtime and a healthy
+# market-data channel — so it never contacts the Alpaca broker at all. "Not a
+# listed Alpaca asset" therefore proves nothing about whether such a
+# registration can admit again, and must not authorise retiring it. Membership,
+# not exclusion, so an unrecognised future mode fails closed (retire refused).
+_ALPACA_LISTING_GATES_ADMISSION: frozenset[str] = frozenset({"log_only", "trade"})
+
+
+def symbol_unresolvable_for_mode(symbol: str, mode: str) -> bool:
+    """The canonical retire-side predicate for #1795: store fact ∧ mode rule.
+
+    One function so the panel guard and the retire commit boundary cannot
+    drift on *which bots* an unlisted symbol proves permanently inadmissible
+    (CLAUDE.md guiding philosophy #5).
+    """
+    if mode not in _ALPACA_LISTING_GATES_ADMISSION:
+        return False
+    return symbol_marked_unresolvable(symbol)

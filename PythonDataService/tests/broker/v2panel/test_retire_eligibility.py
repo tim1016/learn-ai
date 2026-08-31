@@ -28,7 +28,11 @@ dead-symbol bot the sweep has not yet observed.
 
 from __future__ import annotations
 
-from app.broker.v2panel.action_policy import ACTION_REGISTRY, ActionGuardContext
+from app.broker.v2panel.action_policy import (
+    ACTION_REGISTRY,
+    ActionGuardContext,
+    build_actions_from_registry,
+)
 from app.services.broker_v2_panel.presented_actions import strategy_runtime_missing
 
 
@@ -161,3 +165,38 @@ def test_retire_and_resume_never_contradict_on_a_permanently_dead_bot() -> None:
     rendered = " ".join(f"{b.headline} {b.detail}" for b in blockers).lower()
     assert "can still run" not in rendered
     assert "no proof" in rendered
+
+
+def _retire_confirmation(ctx: ActionGuardContext):
+    actions = build_actions_from_registry(ctx, revision=1, broker="alpaca")
+    retire = next(action for action in actions if action.action_id == "retire")
+    assert retire.enabled, "confirmation copy only exists for an enabled action"
+    return retire.confirmation
+
+
+def test_retire_confirmation_names_the_proof_that_enabled_it() -> None:
+    """An irreversible command must not misdescribe its own reason (#1904 review).
+
+    Stating "its strategy is no longer registered" for a symbol-proved bot is
+    simply false -- that bot's strategy is alive -- and would send the operator
+    hunting a runtime problem that does not exist.
+    """
+    by_symbol = _retire_confirmation(
+        _ctx(strategy_runtime_missing=False, symbol_unresolvable=True)
+    )
+    assert by_symbol is not None
+    assert "not a listed asset" in by_symbol.body
+    assert "no longer registered" not in by_symbol.body
+
+    by_strategy = _retire_confirmation(
+        _ctx(strategy_runtime_missing=True, symbol_unresolvable=False)
+    )
+    assert by_strategy is not None
+    assert "no longer registered" in by_strategy.body
+
+    # Both proofs: the missing program is the broader fact, so it leads.
+    both = _retire_confirmation(
+        _ctx(strategy_runtime_missing=True, symbol_unresolvable=True)
+    )
+    assert both is not None
+    assert "no longer registered" in both.body

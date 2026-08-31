@@ -86,8 +86,8 @@ const GROUPS: readonly GroupDefinition[] = [
  * rest collapsed behind a disclosure so the retired backlog cannot stretch
  * the rail; the group auto-expands whenever a retired bot still needs
  * attention (hiding an alerting row behind a collapse is how authored cures
- * went missing in #1778), when the Retired chip is selected, or while a
- * search term is active.
+ * went missing in #1778), when the Retired chip is selected, while a search
+ * term is active, or when the selected bot is itself a retired row.
  */
 @Component({
   selector: 'app-bots-roster',
@@ -186,10 +186,14 @@ export class BotsRosterComponent {
   }
 
   /**
-   * Collapsed is the retired group's resting state; three conditions force it
+   * Collapsed is the retired group's resting state; four conditions force it
    * open regardless of the operator's disclosure choice: an alerting retired
-   * row (its authored cure must stay reachable, #1778), the Retired chip, and
-   * an active search (a hidden match would read as "bot not found").
+   * row (its authored cure must stay reachable, #1778), the Retired chip, an
+   * active search (a hidden match would read as "bot not found"), and the
+   * selected row. Selection matters because the parent keeps `selectedSid`
+   * across a retirement and keeps rendering that bot's detail pane — collapsing
+   * it would leave the rail with no row identifying the bot on screen, which
+   * is also the default-selection case in an all-retired fleet.
    */
   private retiredCollapsed(
     rows: readonly RailBotRow[],
@@ -197,7 +201,10 @@ export class BotsRosterComponent {
     filter: RailGroup | null,
   ): boolean {
     if (this.retiredExpanded() || filter === 'retired' || term !== '') return false;
-    return !rows.some((row) => row.bot.needs_attention);
+    const selected = this.selectedSid();
+    return !rows.some(
+      (row) => row.bot.needs_attention || row.bot.strategy_instance_id === selected,
+    );
   }
 
   protected select(bot: BotCatalogView): void {

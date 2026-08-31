@@ -18,6 +18,7 @@ from app.broker.alpaca.symbol_validity import (
     SymbolValidityProbe,
     SymbolValidityStore,
     symbol_marked_unresolvable,
+    symbol_unresolvable_for_mode,
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAsset
@@ -197,6 +198,55 @@ async def test_probe_caps_probes_per_pass(tmp_path: Path) -> None:
     await _probe(store, read, symbols, max_probes_per_pass=5).run_due()
 
     assert len(read.calls) == 5
+
+
+async def test_probe_rotates_past_symbols_that_keep_raising(tmp_path: Path) -> None:
+    """A symbol that always errors records nothing and so stays due forever.
+
+    Slicing the sorted head would re-select that same failing prefix on every
+    pass and starve every later symbol indefinitely -- including the bot this
+    feature exists to retire (#1904 review).
+    """
+    store = SymbolValidityStore(tmp_path)
+    failing = [f"A{i}" for i in range(5)]
+    answers: dict[str, object] = {symbol: BrokerError("down") for symbol in failing}
+    answers["ZZZ"] = _asset("ZZZ")
+    read = _FakeRead(answers)  # type: ignore[arg-type]
+    probe = _probe(store, read, [*failing, "ZZZ"], max_probes_per_pass=5)
+
+    await probe.run_due()
+    assert "ZZZ" not in read.calls, "first pass takes the head, as before"
+
+    await probe.run_due()
+
+    assert "ZZZ" in read.calls, "the cursor moved past the failing prefix"
+    observation = store.read("ZZZ")
+    assert observation is not None and observation.resolvable is True
+
+
+def test_symbol_unresolvable_for_mode_refuses_to_speak_for_dry_run(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Alpaca listing is not Dry Run's admission invariant (#1904 review).
+
+    A Dry Run binding is sealed to a synthetic sim account and never contacts
+    the Alpaca broker, so "not a listed Alpaca asset" proves nothing about
+    whether that registration can admit again -- and must not authorise
+    retiring it.
+    """
+    monkeypatch.setattr(
+        "app.broker.alpaca.symbol_validity._store_root",
+        lambda: tmp_path,
+    )
+    SymbolValidityStore(tmp_path).record(
+        [SymbolValidityObservation(symbol="APPL", observed_at_ms=5, resolvable=False)]
+    )
+
+    assert symbol_unresolvable_for_mode("APPL", "trade") is True
+    assert symbol_unresolvable_for_mode("APPL", "log_only") is True
+    assert symbol_unresolvable_for_mode("APPL", "dry_run") is False
+    # Membership, not exclusion: an unrecognised future mode fails closed.
+    assert symbol_unresolvable_for_mode("APPL", "some_future_mode") is False
 
 
 def test_symbol_marked_unresolvable_reads_the_settings_store(

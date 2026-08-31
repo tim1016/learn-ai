@@ -137,6 +137,36 @@ describe('BotsRosterComponent', () => {
     expect(await screen.findByText('gone-bot')).toBeTruthy();
   });
 
+  it('keeps the selected retired bot visible in the rail', async () => {
+    // The parent keeps `selectedSid` across a retirement and keeps rendering
+    // that bot's detail pane. Collapsing its row would leave the rail with no
+    // row identifying the bot on screen (#1904 review) -- the same case as a
+    // quiet retired bot being the default selection in an all-retired fleet.
+    await renderRail(
+      [
+        fakeCatalogBot({ strategy_instance_id: 'gone-bot', phase: 'RETIRED', running: false }),
+        fakeCatalogBot({ strategy_instance_id: 'other-gone', phase: 'RETIRED', running: false }),
+      ],
+      { selectedSid: 'gone-bot' },
+    );
+
+    expect(await screen.findByText('gone-bot')).toBeTruthy();
+    expect(screen.getByText('other-gone')).toBeTruthy();
+  });
+
+  it('rests retired rows collapsed when the selection is not among them', async () => {
+    await renderRail(
+      [
+        fakeCatalogBot({ strategy_instance_id: 'gone-bot', phase: 'RETIRED', running: false }),
+        fakeCatalogBot({ strategy_instance_id: 'running-bot' }),
+      ],
+      { selectedSid: 'running-bot' },
+    );
+
+    await screen.findByText('running-bot');
+    expect(screen.queryByText('gone-bot')).toBeNull();
+  });
+
   it('omits the retired chip when no bot is retired', async () => {
     await renderRail([fakeCatalogBot({ strategy_instance_id: 'spy-01' })]);
 

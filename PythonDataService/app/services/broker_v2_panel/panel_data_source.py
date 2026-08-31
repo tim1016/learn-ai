@@ -29,7 +29,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.alpaca.symbol_validity import symbol_marked_unresolvable
+from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.ibkr.config import live_artifacts_root
 from app.schemas.broker_bots import (
     BotControlAuthorityFacts,
@@ -339,8 +339,9 @@ async def _get_panel_with_entries_from_authority(
         program_build=program_build,
         dry_run_activity=registry.dry_run_activity(broker, sid),
         # Pure file read of the sweep-produced fact (#1795) — no broker I/O
-        # enters this read path.
-        symbol_unresolvable=symbol_marked_unresolvable(binding.symbol),
+        # enters this read path. Mode-scoped: Alpaca listing is not Dry Run's
+        # admission invariant, so it cannot prove a Dry Run bot is dead.
+        symbol_unresolvable=symbol_unresolvable_for_mode(binding.symbol, binding.mode),
         market_pulse=build_market_pulse(
             market_data_feed,
             now_ms=captured_now_ms,

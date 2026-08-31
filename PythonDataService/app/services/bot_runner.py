@@ -43,7 +43,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.broker.alpaca.symbol_validity import symbol_marked_unresolvable
+from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.v2panel.action_policy import evaluate_retirement
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
@@ -228,7 +228,7 @@ class BotTaskRegistry:
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None = None,
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
-        symbol_unresolvable: Callable[[str], bool] = symbol_marked_unresolvable,
+        symbol_unresolvable: Callable[[str, str], bool] = symbol_unresolvable_for_mode,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -815,9 +815,9 @@ class BotTaskRegistry:
                         binding.strategy_key not in _STRATEGY_REGISTRY
                     ),
                     # The same durable sweep-produced fact the panel guard
-                    # read (#1795); re-read here so commit and presentation
-                    # answer one rule against the same store.
-                    symbol_unresolvable=self._symbol_unresolvable(binding.symbol),
+                    # read (#1795), through the same mode-scoped predicate, so
+                    # commit and presentation answer one rule against one store.
+                    symbol_unresolvable=self._symbol_unresolvable(binding.symbol, binding.mode),
                     has_exposure=custody.exposure.state != "zero",
                     working_order_count=custody.working_orders.count,
                 )

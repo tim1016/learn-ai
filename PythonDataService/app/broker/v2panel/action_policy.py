@@ -535,12 +535,24 @@ def _confirmation_for_action(
             required_token="FLATTEN",
         )
     if action_id == "retire":
+        # Name the proof that actually enabled this action. Retire has two
+        # independent enabling proofs (#1795) and stating the wrong one
+        # misdescribes an irreversible command: a symbol-proved bot's strategy
+        # is still registered, and saying otherwise would send the operator
+        # hunting a runtime problem that does not exist. Strategy first when
+        # both hold — a missing program is the broader fact.
+        proof = (
+            "Its strategy is no longer registered, so the runtime can never "
+            "honour it again."
+            if ctx.strategy_runtime_missing
+            else "The broker has durably answered that its symbol is not a "
+            "listed asset, so it can never admit again."
+        )
         return OperatorConfirmationCopy(
             title="Retire this registration?",
             body=(
                 f"This clears {ctx.strategy_instance_id} on account "
-                f"{ctx.account_id} from the roster. Its strategy is no longer "
-                "registered, so the runtime can never honour it again."
+                f"{ctx.account_id} from the roster. {proof}"
             ),
             consequence=(
                 "The registration stops issuing feed subscriptions and can "

@@ -23,8 +23,10 @@ type Sleep = Callable[[float], Awaitable[None]]
 # is the sole automatic reconciler (#1776 WP2).
 type ReconciliationListener = Callable[[AccountReconciliationResult], object]
 # Awaited after each successful custody pass, once the verdict is published.
-# The one consumer today is the symbol-validity probe (#1795): custody always
-# reconciles first, and a hook failure is isolated -- it never turns a
+# "Successful" is strict: a ``stale`` verdict skips the hook entirely, so the
+# hook never spends its own broker timeouts on a broker custody just failed to
+# reach. The one consumer today is the symbol-validity probe (#1795): custody
+# always reconciles first, and a hook failure is isolated -- it never turns a
 # succeeded custody pass into a backoff.
 type AfterPassHook = Callable[[], Awaitable[None]]
 # Renew the execution lease three times per TTL. This is a safety-margin
@@ -152,7 +154,13 @@ class ReconciliationSweep:
             )
             if self._on_result is not None:
                 self._on_result(result)
-            if self._after_pass is not None:
+            succeeded = result.verdict != "stale"
+            # Custody first, evidence second -- and only once custody actually
+            # succeeded. A "stale" verdict means the broker snapshot itself did
+            # not arrive, so running the hook here would spend its own per-probe
+            # timeouts against the same unreachable broker and delay the next
+            # custody-recovery attempt before backoff even begins.
+            if succeeded and self._after_pass is not None:
                 try:
                     await self._after_pass()
                 except asyncio.CancelledError:
@@ -168,7 +176,7 @@ class ReconciliationSweep:
                         },
                         exc_info=True,
                     )
-            return result.verdict != "stale"
+            return succeeded
         except asyncio.CancelledError:
             raise
         except Exception:
