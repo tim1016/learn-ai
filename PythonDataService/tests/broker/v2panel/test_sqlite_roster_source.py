@@ -13,16 +13,20 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.commands import submit_retire_strategy_instance
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicSnapshot,
     FillWindowProjection,
     SessionEconomicProjection,
 )
+from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     ControlMetaSnapshot,
     DecisionReceiptResource,
+    TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
@@ -86,6 +90,20 @@ class _Repository:
             ),
             None,
         )
+
+    def strategy_instances_with_live_custody(self) -> set[str]:
+        """Derived, not hardcoded, so a subclass cannot disagree with itself.
+
+        These doubles carry no uncertainties and no attributed positions, so
+        the real query's three arms reduce to its active-run arm. A subclass
+        that changes ``active_run`` must change this answer with it, or the
+        double would claim custody state its own rows contradict.
+        """
+        return {
+            str(registration["strategy_instance_id"])
+            for registration in self.strategy_instances()
+            if self.active_run(str(registration["strategy_instance_id"])) is not None
+        }
 
     def active_run(self, strategy_instance_id: str):
         if strategy_instance_id == "active-spy":
@@ -1122,3 +1140,126 @@ async def test_exhausted_chart_projection_records_its_refusal_too(
         == "sqlite_chart_projection_torn_read_exhausted"
         for record in caplog.records
     )
+
+
+def test_retired_registration_reaches_the_roster_phase_from_a_real_authority(
+    tmp_path: Path,
+) -> None:
+    """Prove the retirement write and the phase mapping together.
+
+    The doubles in this module hand ``build_roster_status`` a literal
+    ``retired_at_ms``. That proved the column mapping and hid the write:
+    nothing ever set ``strategy_instances.retired_at_ms``, so against a real
+    authority every retired bot projected as ``OFF_DUTY`` and the roster's
+    Retired group was unreachable. Driving the real retirement command
+    through a real repository is what closes that gap.
+    """
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-ROSTER", artifacts_root=tmp_path
+    )
+    try:
+        repo.register_strategy_instance(
+            strategy_instance_id="retired-bot",
+            symbol="SPY",
+            config_hash="h" * 64,
+            strategy_key="deployment_validation",
+            display_name="Deployment Validation",
+            config_json=json.dumps(
+                {"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}
+            ),
+        )
+        assert (
+            sqlite_roster_status.build_roster_status(
+                "alpaca", repo.strategy_instance("retired-bot"), repo
+            ).phase
+            == "OFF_DUTY"
+        )
+
+        submit_retire_strategy_instance(
+            repo,
+            account_id="PA-ROSTER",
+            strategy_instance_id="retired-bot",
+            retired_at_ms=1_710_000_000_000,
+        )
+
+        status = sqlite_roster_status.build_roster_status(
+            "alpaca", repo.strategy_instance("retired-bot"), repo
+        )
+        assert status.phase == "RETIRED"
+        assert status.running is False
+        assert status.last_transition_at_ms == 1_710_000_000_000
+    finally:
+        repo.close()
+
+
+def _retire(repo: ClerkSqliteRepository, account_id: str, sid: str, at_ms: int) -> None:
+    submit_retire_strategy_instance(
+        repo,
+        account_id=account_id,
+        strategy_instance_id=sid,
+        retired_at_ms=at_ms,
+    )
+
+
+def _register(repo: ClerkSqliteRepository, sid: str) -> None:
+    repo.register_strategy_instance(
+        strategy_instance_id=sid,
+        symbol="SPY",
+        config_hash="h" * 64,
+        strategy_key="deployment_validation",
+        display_name="Deployment Validation",
+        config_json=json.dumps(
+            {"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}
+        ),
+    )
+
+
+def test_roster_membership_spares_only_the_inert_retired_registrations(
+    tmp_path: Path,
+) -> None:
+    """The safety property behind #1911's cheap path.
+
+    A retired registration is skipped only when the batched custody query has
+    nothing bot-scoped outstanding against it. A retired bot that still carries
+    an unresolved uncertainty is the case #1778 exists for -- it keeps its
+    authored cure -- so it must stay on the fully-projected path.
+    """
+    account_id = "PA-MEMBERSHIP"
+    repo = ClerkSqliteRepository.initialize(
+        account_id=account_id, artifacts_root=tmp_path
+    )
+    try:
+        for sid in ("inert-bot", "troubled-bot", "live-bot"):
+            _register(repo, sid)
+        _retire(repo, account_id, "inert-bot", 1_710_000_000_000)
+        _retire(repo, account_id, "troubled-bot", 1_710_000_000_001)
+        repo.append_transition(
+            TransitionInput(
+                strategy_instance_id="troubled-bot",
+                transition_kind="UNCERTAINTY_RAISED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                clerk_observed_at_ms=1_710_000_000_002,
+                summary_code="UNCERTAINTY_RAISED",
+                facts_json=UncertaintyRaisedFacts(
+                    severity="BLOCKING",
+                    blocks_new_exposure=True,
+                    allows_reduction=True,
+                    reason_code="UNRECONCILED_EXPOSURE",
+                    headline="Attributed exposure is unproven.",
+                    explanation="A fill landed after this bot was retired.",
+                    operator_impact="This bot's exposure cannot be proven flat.",
+                    next_step="Reconcile before treating this bot as finished.",
+                    evidence_refs=["order:1"],
+                ).to_facts_json(),
+            )
+        )
+
+        membership = sqlite_roster_status.roster_membership(repo)
+
+        assert membership.identities == ["inert-bot", "troubled-bot", "live-bot"]
+        assert membership.inert_terminal == frozenset({"inert-bot"})
+        assert membership.with_live_custody == ["troubled-bot", "live-bot"]
+    finally:
+        repo.close()

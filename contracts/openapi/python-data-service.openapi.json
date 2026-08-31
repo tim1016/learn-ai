@@ -8164,6 +8164,246 @@
         "title": "CloseLegExit",
         "type": "object"
       },
+      "CohortActionResult": {
+        "description": "The batch outcome: every leg answered, in request order (ADR 0051 D5).",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "applied_count": {
+            "title": "Applied Count",
+            "type": "integer"
+          },
+          "failed_count": {
+            "title": "Failed Count",
+            "type": "integer"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/CohortLegResult"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "refused_count": {
+            "title": "Refused Count",
+            "type": "integer"
+          },
+          "replayed_count": {
+            "title": "Replayed Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "receipt_id",
+          "recorded_at_ms",
+          "legs",
+          "applied_count",
+          "replayed_count",
+          "refused_count",
+          "failed_count"
+        ],
+        "title": "CohortActionResult",
+        "type": "object"
+      },
+      "CohortArchiveCohort": {
+        "description": "One (strategy_key, symbol) group of archivable members.",
+        "properties": {
+          "enabled_count": {
+            "title": "Enabled Count",
+            "type": "integer"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/CohortArchiveLeg"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "strategy_label": {
+            "title": "Strategy Label",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "strategy_label",
+          "symbol",
+          "legs",
+          "enabled_count"
+        ],
+        "title": "CohortArchiveCohort",
+        "type": "object"
+      },
+      "CohortArchiveLeg": {
+        "description": "One archivable roster member with its executability facts (ADR 0047).",
+        "properties": {
+          "blocker_headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocker Headline"
+          },
+          "concurrency_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concurrency Token"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "enabled",
+          "revision",
+          "concurrency_token",
+          "blocker_headline"
+        ],
+        "title": "CohortArchiveLeg",
+        "type": "object"
+      },
+      "CohortArchiveLegRequest": {
+        "additionalProperties": false,
+        "description": "One leg the operator confirmed \u2014 echoes the presented action facts.\n\nCarries no ``action_id``: this endpoint archives, and nothing else. A\nclient that could name the action could reach a different mutation\nthrough a surface whose confirmation copy described archiving.",
+        "properties": {
+          "concurrency_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Concurrency Token",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "revision",
+          "concurrency_token"
+        ],
+        "title": "CohortArchiveLegRequest",
+        "type": "object"
+      },
+      "CohortArchiveRequest": {
+        "additionalProperties": false,
+        "description": "Archive a batch of finished bots (ADR 0052, ADR 0051 Decisions 2/4/5).",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/CohortArchiveLegRequest"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Legs",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "legs"
+        ],
+        "title": "CohortArchiveRequest",
+        "type": "object"
+      },
+      "CohortArchiveView": {
+        "description": "Backend-authored cohort-archive presentation (ADR 0052).",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "cohorts": {
+            "items": {
+              "$ref": "#/components/schemas/CohortArchiveCohort"
+            },
+            "title": "Cohorts",
+            "type": "array"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "cohorts",
+          "observed_at_ms"
+        ],
+        "title": "CohortArchiveView",
+        "type": "object"
+      },
       "CohortFlattenCohort": {
         "description": "One (strategy_key, symbol) cohort with two or more members.",
         "properties": {
@@ -8319,8 +8559,74 @@
         "title": "CohortFlattenLegRequest",
         "type": "object"
       },
-      "CohortFlattenLegResult": {
-        "description": "One leg's typed outcome \u2014 a receipt or a refusal, never silence.",
+      "CohortFlattenRequest": {
+        "additionalProperties": false,
+        "description": "Execute a batch of per-bot flatten legs (ADR 0051 Decisions 2/4/5).\n\nMembership is explicit: exactly these legs execute, each under the\nderived per-leg idempotency identity ``{idempotency_key}:{sid}``.",
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/CohortFlattenLegRequest"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Legs",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "legs"
+        ],
+        "title": "CohortFlattenRequest",
+        "type": "object"
+      },
+      "CohortFlattenView": {
+        "description": "Backend-authored cohort-flatten presentation (ADR 0051 Decision 3).",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "cohorts": {
+            "items": {
+              "$ref": "#/components/schemas/CohortFlattenCohort"
+            },
+            "title": "Cohorts",
+            "type": "array"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "cohorts",
+          "observed_at_ms"
+        ],
+        "title": "CohortFlattenView",
+        "type": "object"
+      },
+      "CohortLegResult": {
+        "description": "One leg's typed outcome \u2014 a receipt or a refusal, never silence.\n\nShared by every cohort-scoped affordance (ADR 0051 for flatten, ADR 0052\nfor archive): the batch contract an operator depends on when a leg fails\nhalfway through a fleet-wide command does not vary by which action the\nlegs carried.",
         "properties": {
           "error": {
             "anyOf": [
@@ -8364,125 +8670,7 @@
           "result",
           "error"
         ],
-        "title": "CohortFlattenLegResult",
-        "type": "object"
-      },
-      "CohortFlattenRequest": {
-        "additionalProperties": false,
-        "description": "Execute a batch of per-bot flatten legs (ADR 0051 Decisions 2/4/5).\n\nMembership is explicit: exactly these legs execute, each under the\nderived per-leg idempotency identity ``{idempotency_key}:{sid}``.",
-        "properties": {
-          "idempotency_key": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Idempotency Key",
-            "type": "string"
-          },
-          "legs": {
-            "items": {
-              "$ref": "#/components/schemas/CohortFlattenLegRequest"
-            },
-            "maxItems": 64,
-            "minItems": 1,
-            "title": "Legs",
-            "type": "array"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "maxLength": 512,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          }
-        },
-        "required": [
-          "idempotency_key",
-          "legs"
-        ],
-        "title": "CohortFlattenRequest",
-        "type": "object"
-      },
-      "CohortFlattenResult": {
-        "description": "The batch outcome: every leg answered, in request order (ADR 0051 D5).",
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "applied_count": {
-            "title": "Applied Count",
-            "type": "integer"
-          },
-          "failed_count": {
-            "title": "Failed Count",
-            "type": "integer"
-          },
-          "legs": {
-            "items": {
-              "$ref": "#/components/schemas/CohortFlattenLegResult"
-            },
-            "title": "Legs",
-            "type": "array"
-          },
-          "receipt_id": {
-            "title": "Receipt Id",
-            "type": "string"
-          },
-          "recorded_at_ms": {
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "refused_count": {
-            "title": "Refused Count",
-            "type": "integer"
-          },
-          "replayed_count": {
-            "title": "Replayed Count",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "account_id",
-          "receipt_id",
-          "recorded_at_ms",
-          "legs",
-          "applied_count",
-          "replayed_count",
-          "refused_count",
-          "failed_count"
-        ],
-        "title": "CohortFlattenResult",
-        "type": "object"
-      },
-      "CohortFlattenView": {
-        "description": "Backend-authored cohort-flatten presentation (ADR 0051 Decision 3).",
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "cohorts": {
-            "items": {
-              "$ref": "#/components/schemas/CohortFlattenCohort"
-            },
-            "title": "Cohorts",
-            "type": "array"
-          },
-          "observed_at_ms": {
-            "title": "Observed At Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "account_id",
-          "cohorts",
-          "observed_at_ms"
-        ],
-        "title": "CohortFlattenView",
+        "title": "CohortLegResult",
         "type": "object"
       },
       "CommandResponse": {
@@ -21674,6 +21862,7 @@
               "stop",
               "flatten_stop",
               "retire",
+              "archive",
               "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
@@ -21757,6 +21946,7 @@
               "stop",
               "flatten_stop",
               "retire",
+              "archive",
               "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
@@ -21846,6 +22036,7 @@
               "stop",
               "flatten_stop",
               "retire",
+              "archive",
               "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
@@ -21910,6 +22101,7 @@
               "stop",
               "flatten_stop",
               "retire",
+              "archive",
               "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
@@ -22006,6 +22198,7 @@
                 "stop",
                 "flatten_stop",
                 "retire",
+                "archive",
                 "cancel_order",
                 "reconcile_now",
                 "recover_exact_execution_evidence",
@@ -22753,6 +22946,7 @@
                   "stop",
                   "flatten_stop",
                   "retire",
+                  "archive",
                   "cancel_order",
                   "reconcile_now",
                   "recover_exact_execution_evidence",
@@ -22782,6 +22976,7 @@
                   "stop",
                   "flatten_stop",
                   "retire",
+                  "archive",
                   "cancel_order",
                   "reconcile_now",
                   "recover_exact_execution_evidence",
@@ -23956,6 +24151,7 @@
               "stop",
               "flatten_stop",
               "retire",
+              "archive",
               "cancel_order",
               "reconcile_now",
               "recover_exact_execution_evidence",
@@ -33870,6 +34066,7 @@
           "RUN_STARTED",
           "RUN_STOPPED",
           "STRATEGY_INSTANCE_REGISTERED",
+          "STRATEGY_INSTANCE_RETIRED",
           "UNCERTAINTY_RAISED",
           "UNCERTAINTY_REFRESHED",
           "UNCERTAINTY_RESOLVED"
@@ -40128,6 +40325,148 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-archive": {
+      "get": {
+        "operationId": "get_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CohortArchiveView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cohort-archive presentation: archivable bots grouped with per-leg executability facts (ADR 0052)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      },
+      "post": {
+        "operationId": "run_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CohortArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CohortActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive a batch of finished bots with per-leg receipts (ADR 0052)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
       "get": {
         "operationId": "get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get",
@@ -40247,7 +40586,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CohortFlattenResult"
+                  "$ref": "#/components/schemas/CohortActionResult"
                 }
               }
             },

@@ -66,7 +66,7 @@ _FILLED_BROKER_STATES = frozenset({"filled", "partially_filled"})
 # action omitted here is silently deleted on the way to Angular however
 # completely its guard, performer and lens are wired -- which is exactly what
 # happened to `retire` (#1778, S5).
-SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume", "retire"})
+SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume", "retire", "archive"})
 
 
 def adapt_sqlite_panel(
@@ -326,9 +326,15 @@ def _require_one_catalog_economic_revision(
             )
         projection = projections.get(status.strategy_instance_id)
         if projection is None:
-            raise SqliteCatalogProjectionUnavailable(
-                f"Bot '{status.strategy_instance_id}' has no SQLite custody projection."
-            )
+            # A retired row proved inert before this read skipped its custody
+            # projection (#1911); every other row must have one, and a missing
+            # projection there is still a torn read.
+            if status.phase != "RETIRED":
+                raise SqliteCatalogProjectionUnavailable(
+                    f"Bot '{status.strategy_instance_id}' has no SQLite custody projection."
+                )
+            snapshots.append(snapshot)
+            continue
         if (
             projection.account_id != snapshot.account_id
             or projection.strategy_instance_id != snapshot.strategy_instance_id

@@ -33,6 +33,14 @@
       </a>
       <button
         type="button"
+        class="command-button command-button--quiet"
+        (click)="openArchive()"
+      >
+        <span aria-hidden="true">🗄</span>
+        Archive finished
+      </button>
+      <button
+        type="button"
         class="command-button command-button--primary"
         (click)="openDeploy()"
       >
@@ -99,4 +107,12 @@
   [visible]="deployOpen()"
   [accountId]="accountId()"
   (closed)="closeDeploy()"
+/>
+
+<app-cohort-archive-drawer
+  [visible]="archiveOpen()"
+  [broker]="broker()"
+  [accountId]="accountId()"
+  (closed)="closeArchive()"
+  (archived)="catalog.reload()"
 />

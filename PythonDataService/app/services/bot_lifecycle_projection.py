@@ -46,6 +46,13 @@ class AlpacaLifecycleAuthority(Protocol):
         expected_run_id: str | None,
     ) -> AlpacaLifecycleAuthoritySnapshot: ...
 
+    def retire(
+        self,
+        strategy_instance_id: str,
+        retired_at_ms: int,
+        reason: str | None,
+    ) -> None: ...
+
 
 class SqliteAlpacaLifecycleAuthority:
     """Read the lifecycle facts SQLite already owns."""
@@ -70,19 +77,34 @@ class SqliteAlpacaLifecycleAuthority:
             control_revision=snapshot.control_revision,
         )
 
+    def retire(
+        self,
+        strategy_instance_id: str,
+        retired_at_ms: int,
+        reason: str | None,
+    ) -> None:
+        from app.broker.alpaca.clerk.sqlite.commands import (
+            submit_retire_strategy_instance,
+        )
+
+        submit_retire_strategy_instance(
+            self._repository,
+            account_id=self._repository.control_meta_snapshot().account_id,
+            strategy_instance_id=strategy_instance_id,
+            retired_at_ms=retired_at_ms,
+            operator_reason=reason,
+        )
+
 
 class ActiveSqliteAlpacaLifecycleAuthority:
     """Resolve the process-selected SQLite Clerk at each projection boundary."""
 
-    def recovery_candidates(self) -> tuple[tuple[str, str], ...]:
-        """Enumerate SQLite-active runs, including pre-binding crash windows."""
-
+    @staticmethod
+    def _active_repository() -> ClerkSqliteRepository:
+        """The selected Clerk's SQLite repository, or refuse."""
         from app.broker.alpaca.clerk import get_alpaca_clerk
 
         clerk = get_alpaca_clerk()
-        candidate_reader = getattr(clerk, "lifecycle_recovery_candidates", None)
-        if callable(candidate_reader):
-            return tuple(candidate_reader())
         repository = getattr(clerk, "repository", None)
         if getattr(clerk, "authority_kind", None) != "sqlite" or not isinstance(
             repository, ClerkSqliteRepository
@@ -90,9 +112,19 @@ class ActiveSqliteAlpacaLifecycleAuthority:
             raise AlpacaLifecycleAuthorityUnavailableError(
                 "SQLite Alpaca lifecycle authority is unavailable"
             )
+        return repository
+
+    def recovery_candidates(self) -> tuple[tuple[str, str], ...]:
+        """Enumerate SQLite-active runs, including pre-binding crash windows."""
+
+        from app.broker.alpaca.clerk import get_alpaca_clerk
+
+        candidate_reader = getattr(get_alpaca_clerk(), "lifecycle_recovery_candidates", None)
+        if callable(candidate_reader):
+            return tuple(candidate_reader())
         return tuple(
             (candidate.strategy_instance_id, candidate.run_id)
-            for candidate in repository.lifecycle_recovery_candidates()
+            for candidate in self._active_repository().lifecycle_recovery_candidates()
         )
 
     def snapshot(
@@ -102,20 +134,24 @@ class ActiveSqliteAlpacaLifecycleAuthority:
     ) -> AlpacaLifecycleAuthoritySnapshot:
         from app.broker.alpaca.clerk import get_alpaca_clerk
 
-        clerk = get_alpaca_clerk()
-        snapshotter = getattr(clerk, "lifecycle_snapshot", None)
+        snapshotter = getattr(get_alpaca_clerk(), "lifecycle_snapshot", None)
         if callable(snapshotter):
             return snapshotter(strategy_instance_id, expected_run_id)
-        repository = getattr(clerk, "repository", None)
-        if getattr(clerk, "authority_kind", None) != "sqlite" or not isinstance(
-            repository, ClerkSqliteRepository
-        ):
-            raise AlpacaLifecycleAuthorityUnavailableError(
-                "SQLite Alpaca lifecycle authority is unavailable"
-            )
-        return SqliteAlpacaLifecycleAuthority(repository).snapshot(
+        return SqliteAlpacaLifecycleAuthority(self._active_repository()).snapshot(
             strategy_instance_id,
             expected_run_id,
+        )
+
+    def retire(
+        self,
+        strategy_instance_id: str,
+        retired_at_ms: int,
+        reason: str | None,
+    ) -> None:
+        SqliteAlpacaLifecycleAuthority(self._active_repository()).retire(
+            strategy_instance_id,
+            retired_at_ms,
+            reason,
         )
 
 
@@ -209,6 +245,34 @@ class AlpacaLifecycleProjector:
         return self._project(
             strategy_instance_id=strategy_instance_id,
             intent=_RefreshProjection(),
+            now_ms=now_ms,
+            updated_by=updated_by,
+            reason=reason,
+        )
+
+    def retire(
+        self,
+        *,
+        strategy_instance_id: str,
+        now_ms: int,
+        updated_by: str,
+        reason: str,
+    ) -> AlpacaLifecycleProjectionResult:
+        """Commit retirement to the authority, then project it like any fact.
+
+        Retirement used to be written straight to the file lifecycle record,
+        which made it the one lifecycle transition that skipped the authority.
+        Nothing wrote ``strategy_instances.retired_at_ms``, so the V2 catalog
+        — which derives phase from that column — never saw a retired bot, and
+        ``_authority_phase`` read the same NULL and projected
+        ``clear_retirement=True``, silently un-retiring the bot on the next
+        refresh. Writing the authority first and projecting from it puts
+        retirement on the same path as every other transition, and makes the
+        projection self-healing rather than self-defeating.
+        """
+        self._authority.retire(strategy_instance_id, now_ms, reason)
+        return self.refresh(
+            strategy_instance_id=strategy_instance_id,
             now_ms=now_ms,
             updated_by=updated_by,
             reason=reason,

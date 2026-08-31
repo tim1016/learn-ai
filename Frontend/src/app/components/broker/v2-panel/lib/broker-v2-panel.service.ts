@@ -11,6 +11,9 @@ import type {
 import type {
   BotCatalogView,
   BotPanelView,
+  CohortActionResult,
+  CohortArchiveRequest,
+  CohortArchiveView,
   BotPanelLiveSnapshot,
   BotRunHistoryPage,
   BotRunView,
@@ -156,6 +159,36 @@ export class BrokerV2PanelService {
     return this.polls.get<BotPanelView>(
       `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/panel`,
       params,
+    );
+  }
+
+  /**
+   * The archivable roster, grouped and backend-authored (ADR 0052).
+   *
+   * Fetched on demand, never polled: it builds a panel projection per
+   * candidate, which is priced for an operator opening a surface rather than
+   * for a poll loop. Deliberately outside the polled-read scheduler for the
+   * same reason — it is not one of the reads whose fan-out #1912 coalesces.
+   */
+  getCohortArchiveView(broker: string, accountId: string): Promise<CohortArchiveView> {
+    return firstValueFrom(
+      this.http.get<CohortArchiveView>(
+        `${this.base(broker, accountId)}/bots/cohort-archive`,
+      ),
+    );
+  }
+
+  /** Archive the named legs; every leg comes back with a typed outcome. */
+  runCohortArchive(
+    broker: string,
+    accountId: string,
+    request: CohortArchiveRequest,
+  ): Promise<CohortActionResult> {
+    return firstValueFrom(
+      this.http.post<CohortActionResult>(
+        `${this.base(broker, accountId)}/bots/cohort-archive`,
+        request,
+      ),
     );
   }
 

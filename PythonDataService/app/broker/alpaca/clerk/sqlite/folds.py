@@ -50,6 +50,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ReconciliationAttemptedFacts,
     RunStartedFacts,
     RunStoppedFacts,
+    StrategyInstanceRetiredFacts,
     validate_execution_corrected_facts,
     validate_execution_coverage_quarantined_facts,
     validate_execution_coverage_resolved_facts,
@@ -341,6 +342,46 @@ def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         recorded_at_ms=payload["recorded_at_ms"],
     )
     _attach_command_receipt(conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload)
+
+
+def _fold_strategy_instance_retired(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Set the registration's retirement instant, once.
+
+    ``schema.py`` declares ``retired_at_ms`` "set once, never cleared", so the
+    ``IS NULL`` guard is this fold's half of that contract: a log replay, or a
+    genuine re-request of the same command, must not move the instant a later
+    reader treats as the moment the registration stopped being admissible.
+
+    ``run_id`` is null throughout: retirement is instance-scoped, and the
+    guards that admit it have already proved there is no active run.
+    """
+    facts = StrategyInstanceRetiredFacts.from_facts_json(payload["facts_json"])
+    conn.execute(
+        "UPDATE strategy_instances SET retired_at_ms = ? "
+        "WHERE strategy_instance_id = ? AND retired_at_ms IS NULL",
+        (facts.retired_at_ms, payload["strategy_instance_id"]),
+    )
+    _insert_command_row(
+        conn,
+        command_id=payload["command_id"],
+        authority_generation=payload["authority_generation"],
+        idempotency_key=facts.idempotency_key,
+        payload_hash=facts.payload_hash,
+        kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
+        strategy_instance_id=payload["strategy_instance_id"],
+        run_id=None,
+        action=facts.action,
+        intended_end_state=facts.intended_end_state,
+        state="succeeded",
+        recorded_at_ms=payload["recorded_at_ms"],
+    )
+    _attach_command_receipt(
+        conn,
+        command_id=payload["command_id"],
+        terminal_state="succeeded",
+        payload=payload,
+    )
 
 
 def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -1441,6 +1482,7 @@ def _fold_account_hold_resolved_v9(conn: sqlite3.Connection, payload: dict[str, 
 
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered)
+DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_RETIRED", _fold_strategy_instance_retired)
 DEFAULT_FOLD_REGISTRY.register("RUN_STARTED", _fold_run_started)
 DEFAULT_FOLD_REGISTRY.register("RUN_STOPPED", _fold_run_stopped)
 DEFAULT_FOLD_REGISTRY.register("COMMAND_REJECTED", _fold_command_rejected)

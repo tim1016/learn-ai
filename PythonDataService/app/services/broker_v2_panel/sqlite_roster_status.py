@@ -21,6 +21,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
+from app.broker.alpaca.clerk.sqlite.models import BotConfigResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.ibkr.config import live_artifacts_root
 from app.engine.live.bot_lifecycle_state import (
@@ -148,26 +149,76 @@ def terminal_duty_outcome(
     return duty_outcome_view_from_receipt(receipt)
 
 
-def roster_identities(repository: ClerkSqliteRepository) -> list[str]:
-    """Return the activated roster's identities in registration order.
+@dataclass(frozen=True)
+class RosterMembership:
+    """The catalog's membership list, split by how much work each row needs."""
+
+    identities: list[str]
+    """Every registration, in registration order."""
+
+    inert_terminal: frozenset[str]
+    """Retired registrations with no live custody — see :func:`roster_membership`."""
+
+    @property
+    def with_live_custody(self) -> list[str]:
+        """The identities whose rows must be projected in full, in order."""
+        return [
+            strategy_instance_id
+            for strategy_instance_id in self.identities
+            if strategy_instance_id not in self.inert_terminal
+        ]
+
+
+def roster_membership(repository: ClerkSqliteRepository) -> RosterMembership:
+    """Return the activated roster's identities, split by required work.
 
     The catalog needs the membership list before it can read projections for
-    it. Reading identities alone -- rather than building throwaway status
-    rows and keeping only their ids -- is what keeps a catalog request to one
+    it. Reading identities alone -- rather than building throwaway status rows
+    and keeping only their ids -- is what keeps a catalog request to one
     lifecycle-file read per bot instead of two.
+
+    A registration is *inert terminal* when it is retired and the one batched
+    custody query says nothing bot-scoped is outstanding against it. Those rows
+    need neither a custody projection nor a lifecycle file read: retirement
+    fixes every field they carry, and read cost is otherwise linear in a row
+    count that only ever grows (#1911). Everything else -- including a retired
+    bot that still holds custody -- is projected in full, so #1778's authored
+    cure for a stranded retired bot still reaches the roster.
     """
-    return [
-        str(registration["strategy_instance_id"])
-        for registration in repository.strategy_instances()
-    ]
+    registrations = repository.strategy_instances()
+    live_custody = repository.strategy_instances_with_live_custody()
+    identities: list[str] = []
+    inert_terminal: set[str] = set()
+    for registration in registrations:
+        strategy_instance_id = str(registration["strategy_instance_id"])
+        identities.append(strategy_instance_id)
+        if (
+            registration.get("retired_at_ms") is not None
+            and strategy_instance_id not in live_custody
+        ):
+            inert_terminal.add(strategy_instance_id)
+    return RosterMembership(
+        identities=identities,
+        inert_terminal=frozenset(inert_terminal),
+    )
 
 
-def build_roster_status(
-    broker: str,
+def _declared_identity(
     registration: dict[str, object],
     repository: ClerkSqliteRepository,
-) -> BotStatusView:
-    """Compose one roster row from SQLite identity plus durable lifecycle."""
+) -> tuple[str, BotConfigResource, DeclaredConfiguration]:
+    """The immutable SQLite identity every roster row is composed from.
+
+    FR-031: the roster's immutable configuration is read from SQLite, not
+    assumed. Mode, quantity and carryover policy were previously hardcoded to
+    `trade` / `None` / `FORBID`, and `panel_data_source._status_in_binding_mode`
+    only patched them back for `dry_run` -- so a `log_only` bot, which must
+    never submit an order, rendered on the roster as `trade`, and a bot
+    deployed with `ALLOW` carryover rendered as `FORBID`. Both misstate what a
+    bot may do with real money's paper stand-in. `config_json` carries the real
+    values for every row this projection accepts; a row missing them cannot be
+    projected honestly and is refused like any other incomplete config.
+    """
     strategy_instance_id = str(registration["strategy_instance_id"])
     config = repository.bot_config(strategy_instance_id)
     if (
@@ -180,16 +231,69 @@ def build_roster_status(
         raise SqliteCatalogProjectionUnavailable(
             f"Bot '{strategy_instance_id}' has no immutable SQLite configuration."
         )
-    # FR-031: the roster's immutable configuration is read from SQLite, not
-    # assumed. These three were previously hardcoded to `trade` / `None` /
-    # `FORBID`, and `panel_data_source._status_in_binding_mode` only patched
-    # them back for `dry_run` -- so a `log_only` bot, which must never submit
-    # an order, rendered on the roster as `trade`, and a bot deployed with
-    # `ALLOW` carryover rendered as `FORBID`. Both misstate what a bot may do
-    # with real money's paper stand-in. `config_json` carries the real values
-    # for every row this projection accepts; a row missing them cannot be
-    # projected honestly and is refused like any other incomplete config.
-    declared = declared_configuration(strategy_instance_id, config.config_json)
+    return (
+        strategy_instance_id,
+        config,
+        declared_configuration(strategy_instance_id, config.config_json),
+    )
+
+
+def build_terminal_roster_status(
+    broker: str,
+    registration: dict[str, object],
+    repository: ClerkSqliteRepository,
+) -> BotStatusView:
+    """Compose a retired row from SQLite identity alone (#1911).
+
+    A retired registration can never admit another run -- ``run_admission``
+    refuses ``BOT_RETIRED`` -- so every field below is fixed by the fact of
+    retirement, and the per-row work the live builder does to discover them is
+    work with a known answer. That matters because the catalog pays it once
+    per roster row on every poll, and retired rows only ever accumulate.
+
+    Callers must have proved the registration inert first (see
+    ``roster_rows_with_live_custody``): a retired bot that still holds custody
+    keeps its authored cure and takes the live path, because that is the case
+    #1778 exists for.
+
+    ``duty_outcome`` is deliberately ``None`` rather than the terminal outcome
+    of the bot's last run: retiring is an operator stating they have dealt with
+    this registration, which resolves how its final run ended. Live custody is
+    what can still need attention on a retired bot, and that reaches the row
+    through the custody projection, not through this field.
+    """
+    strategy_instance_id, config, declared = _declared_identity(registration, repository)
+    retired_at_ms = registration.get("retired_at_ms")
+    if retired_at_ms is None:
+        raise SqliteCatalogProjectionUnavailable(
+            f"Bot '{strategy_instance_id}' is not retired and has no terminal roster row."
+        )
+    return BotStatusView(
+        strategy_instance_id=strategy_instance_id,
+        strategy_key=config.strategy_key,
+        strategy_label=config.display_name,
+        broker=broker,
+        symbol=str(registration["symbol"]),
+        mode=declared.mode,
+        quantity=declared.quantity,
+        carryover_policy=declared.carryover_policy,
+        running=False,
+        phase="RETIRED",
+        desired_state="STOPPED",
+        active_run_id=None,
+        duty_outcome=None,
+        binding_created_at_ms=int(registration["created_at_ms"]),
+        last_transition_at_ms=int(retired_at_ms),
+    )
+
+
+def build_roster_status(
+    broker: str,
+    registration: dict[str, object],
+    repository: ClerkSqliteRepository,
+) -> BotStatusView:
+    """Compose one roster row from SQLite identity plus durable lifecycle."""
+    strategy_instance_id, config, declared = _declared_identity(registration, repository)
     active_run = repository.active_run(strategy_instance_id)
     retired_at_ms = registration.get("retired_at_ms")
     running = active_run is not None
@@ -226,9 +330,11 @@ def build_roster_status(
 
 __all__ = [
     "DeclaredConfiguration",
+    "RosterMembership",
     "build_roster_status",
+    "build_terminal_roster_status",
     "declared_configuration",
     "lifecycle_record",
-    "roster_identities",
+    "roster_membership",
     "terminal_duty_outcome",
 ]

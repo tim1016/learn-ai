@@ -62,7 +62,8 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import (
 )
 from app.services.broker_v2_panel.sqlite_roster_status import (
     build_roster_status,
-    roster_identities,
+    build_terminal_roster_status,
+    roster_membership,
 )
 from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
@@ -261,8 +262,19 @@ def _bound_roster_statuses(
     account_id: str,
     authority_generation: int,
     control_revision: int,
+    inert_terminal: frozenset[str],
 ) -> list[BotStatusView]:
-    """Read roster identity/lifecycle rows between equal authority fences."""
+    """Read roster identity/lifecycle rows between equal authority fences.
+
+    ``inert_terminal`` is the classification the projection reads were chosen
+    from. It is re-derived here, inside the fence, and any disagreement is a
+    revision mismatch the caller retries: the membership read happens before
+    the projection reads, so a retired bot that acquires live custody in
+    between would otherwise keep its skip-the-projection classification while
+    the economic fence accepted the newer revision -- surfacing the new
+    exposure on a row with no custody projection, no ``needs_attention`` and
+    no recovery command until a later poll.
+    """
     repository = facade.repository
     before = repository.control_meta_snapshot()
     if not _meta_matches(
@@ -274,8 +286,14 @@ def _bound_roster_statuses(
         raise SqliteCatalogRevisionMismatch(
             "SQLite roster identity changed before lifecycle projection."
         )
+    if roster_membership(repository).inert_terminal != inert_terminal:
+        raise SqliteCatalogRevisionMismatch(
+            "SQLite roster custody changed after the catalog chose its projections."
+        )
     statuses = [
-        build_roster_status(broker, registration, repository)
+        build_terminal_roster_status(broker, registration, repository)
+        if str(registration["strategy_instance_id"]) in inert_terminal
+        else build_roster_status(broker, registration, repository)
         for registration in repository.strategy_instances()
     ]
     after = repository.control_meta_snapshot()
@@ -673,13 +691,17 @@ async def read_sqlite_catalog(
         # their ids would read every bot's lifecycle file twice per request
         # (again per coherence retry); the fenced pass below builds each row
         # exactly once, at a revision it can vouch for.
-        strategy_instance_ids = roster_identities(facade.repository)
+        membership = roster_membership(facade.repository)
+        strategy_instance_ids = membership.identities
         if not strategy_instance_ids:
             return []
+        # Only rows that can still need attention are projected. An inert
+        # retired row's custody projection is the dominant per-row cost of this
+        # read and its answer is already known (#1911).
         projections = await read_sqlite_catalog_projections(
             broker,
             account_id,
-            strategy_instance_ids,
+            membership.with_live_custody,
         )
         economic_rollups = await read_sqlite_catalog_economic_rollups(
             broker,
@@ -702,6 +724,7 @@ async def read_sqlite_catalog(
                 account_id=first_snapshot.account_id,
                 authority_generation=first_snapshot.authority_generation,
                 control_revision=first_snapshot.control_revision,
+                inert_terminal=membership.inert_terminal,
             )
             if [status.strategy_instance_id for status in statuses] != strategy_instance_ids:
                 raise SqliteCatalogRevisionMismatch(
@@ -732,19 +755,23 @@ async def read_sqlite_catalog_from_facade(
     """
     account_id = facade.account_id
     for attempt in range(_CATALOG_COHERENCE_ATTEMPTS):
-        strategy_instance_ids = roster_identities(facade.repository)
+        membership = roster_membership(facade.repository)
+        strategy_instance_ids = membership.identities
         if not strategy_instance_ids:
             return []
 
         def read_projection_cut(
             selected_ids: tuple[str, ...] = tuple(strategy_instance_ids),
+            projected_ids: tuple[str, ...] = tuple(membership.with_live_custody),
         ) -> tuple[dict[str, ClerkProjection], dict[str, EconomicSnapshot]]:
             custody_reader = SqliteClerkProjectionReader.from_repository(facade.repository)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
+                # Custody for the rows that can still need attention; economics
+                # for every row, since that read is one batched query (#1911).
                 projections = {
                     strategy_instance_id: projection
-                    for strategy_instance_id in selected_ids
+                    for strategy_instance_id in projected_ids
                     if (
                         projection := custody_reader.bot_snapshot(strategy_instance_id)
                     ) is not None
@@ -774,6 +801,7 @@ async def read_sqlite_catalog_from_facade(
                 account_id=first_snapshot.account_id,
                 authority_generation=first_snapshot.authority_generation,
                 control_revision=first_snapshot.control_revision,
+                inert_terminal=membership.inert_terminal,
             )
             if [status.strategy_instance_id for status in statuses] != strategy_instance_ids:
                 raise SqliteCatalogRevisionMismatch(

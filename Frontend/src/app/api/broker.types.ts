@@ -937,6 +937,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cohort-archive presentation: archivable bots grouped with per-leg executability facts (ADR 0052) */
+        get: operations["get_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_get"];
+        put?: never;
+        /** Archive a batch of finished bots with per-leg receipts (ADR 0052) */
+        post: operations["run_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
         parameters: {
             query?: never;
@@ -7930,6 +7948,100 @@ export interface components {
             kind: "close_leg";
         };
         /**
+         * CohortActionResult
+         * @description The batch outcome: every leg answered, in request order (ADR 0051 D5).
+         */
+        CohortActionResult: {
+            /** Account Id */
+            account_id: string;
+            /** Applied Count */
+            applied_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /** Legs */
+            legs: components["schemas"]["CohortLegResult"][];
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Refused Count */
+            refused_count: number;
+            /** Replayed Count */
+            replayed_count: number;
+        };
+        /**
+         * CohortArchiveCohort
+         * @description One (strategy_key, symbol) group of archivable members.
+         */
+        CohortArchiveCohort: {
+            /** Enabled Count */
+            enabled_count: number;
+            /** Legs */
+            legs: components["schemas"]["CohortArchiveLeg"][];
+            /** Strategy Key */
+            strategy_key: string;
+            /** Strategy Label */
+            strategy_label: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * CohortArchiveLeg
+         * @description One archivable roster member with its executability facts (ADR 0047).
+         */
+        CohortArchiveLeg: {
+            /** Blocker Headline */
+            blocker_headline: string | null;
+            /** Concurrency Token */
+            concurrency_token: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Revision */
+            revision: number | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * CohortArchiveLegRequest
+         * @description One leg the operator confirmed — echoes the presented action facts.
+         *
+         *     Carries no ``action_id``: this endpoint archives, and nothing else. A
+         *     client that could name the action could reach a different mutation
+         *     through a surface whose confirmation copy described archiving.
+         */
+        CohortArchiveLegRequest: {
+            /** Concurrency Token */
+            concurrency_token: string;
+            /** Revision */
+            revision: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * CohortArchiveRequest
+         * @description Archive a batch of finished bots (ADR 0052, ADR 0051 Decisions 2/4/5).
+         */
+        CohortArchiveRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Legs */
+            legs: components["schemas"]["CohortArchiveLegRequest"][];
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * CohortArchiveView
+         * @description Backend-authored cohort-archive presentation (ADR 0052).
+         */
+        CohortArchiveView: {
+            /** Account Id */
+            account_id: string;
+            /** Cohorts */
+            cohorts: components["schemas"]["CohortArchiveCohort"][];
+            /** Observed At Ms */
+            observed_at_ms: number;
+        };
+        /**
          * CohortFlattenCohort
          * @description One (strategy_key, symbol) cohort with two or more members.
          */
@@ -7989,21 +8101,6 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
-         * CohortFlattenLegResult
-         * @description One leg's typed outcome — a receipt or a refusal, never silence.
-         */
-        CohortFlattenLegResult: {
-            error: components["schemas"]["PanelActionErrorResponse"] | null;
-            /**
-             * Outcome
-             * @enum {string}
-             */
-            outcome: "applied" | "replayed" | "refused" | "failed" | "unknown";
-            result: components["schemas"]["PanelActionResult"] | null;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
          * CohortFlattenRequest
          * @description Execute a batch of per-bot flatten legs (ADR 0051 Decisions 2/4/5).
          *
@@ -8019,28 +8116,6 @@ export interface components {
             reason?: string | null;
         };
         /**
-         * CohortFlattenResult
-         * @description The batch outcome: every leg answered, in request order (ADR 0051 D5).
-         */
-        CohortFlattenResult: {
-            /** Account Id */
-            account_id: string;
-            /** Applied Count */
-            applied_count: number;
-            /** Failed Count */
-            failed_count: number;
-            /** Legs */
-            legs: components["schemas"]["CohortFlattenLegResult"][];
-            /** Receipt Id */
-            receipt_id: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Refused Count */
-            refused_count: number;
-            /** Replayed Count */
-            replayed_count: number;
-        };
-        /**
          * CohortFlattenView
          * @description Backend-authored cohort-flatten presentation (ADR 0051 Decision 3).
          */
@@ -8051,6 +8126,26 @@ export interface components {
             cohorts: components["schemas"]["CohortFlattenCohort"][];
             /** Observed At Ms */
             observed_at_ms: number;
+        };
+        /**
+         * CohortLegResult
+         * @description One leg's typed outcome — a receipt or a refusal, never silence.
+         *
+         *     Shared by every cohort-scoped affordance (ADR 0051 for flatten, ADR 0052
+         *     for archive): the batch contract an operator depends on when a leg fails
+         *     halfway through a fleet-wide command does not vary by which action the
+         *     legs carried.
+         */
+        CohortLegResult: {
+            error: components["schemas"]["PanelActionErrorResponse"] | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "applied" | "replayed" | "refused" | "failed" | "unknown";
+            result: components["schemas"]["PanelActionResult"] | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
         };
         /**
          * CommandResponse
@@ -14471,7 +14566,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -14504,7 +14599,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -14533,7 +14628,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -14556,7 +14651,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -14599,7 +14694,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline")[];
+            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline")[];
         };
         /**
          * ParamPropertySchema
@@ -14967,9 +15062,9 @@ export interface components {
          */
         PrimaryActionByLens: {
             /** Operator */
-            operator: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            operator: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline") | null;
             /** Trader */
-            trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline") | null;
         };
         /**
          * ProgramBuildAdmissionFact
@@ -15399,7 +15494,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**
@@ -19795,7 +19890,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_NOT_FLAT" | "EXIT_REDUCING_ORDER_CREATED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_NOT_FLAT" | "EXIT_REDUCING_ORDER_CREATED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -22662,6 +22757,78 @@ export interface operations {
             };
         };
     };
+    get_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CohortArchiveView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_cohort_archive_scoped_api_brokers__broker__accounts__account_id__bots_cohort_archive_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CohortArchiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CohortActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get: {
         parameters: {
             query?: never;
@@ -22720,7 +22887,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CohortFlattenResult"];
+                    "application/json": components["schemas"]["CohortActionResult"];
                 };
             };
             /** @description Validation Error */

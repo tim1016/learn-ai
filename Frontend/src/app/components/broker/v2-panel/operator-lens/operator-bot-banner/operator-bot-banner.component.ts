@@ -36,6 +36,7 @@ const SAFE_FLATTEN_ACTION_IDS: readonly ActionId[] = [
 
 const OVERFLOW_ACTION_IDS: readonly ActionId[] = [
   'retire',
+  'archive',
   ...SAFE_FLATTEN_ACTION_IDS,
 ];
 

@@ -24,6 +24,7 @@
     "SUBMIT_GATE",
     "UNEXPLAINED_ORDER_HOLD",
     "UNKNOWN_HOLD",
+    "archive",
     "blocked",
     "cancel_order",
     "cancel_verified_working_orders",
@@ -129,6 +130,10 @@
     "UNKNOWN_HOLD": {
       "label": "Hold active; cause unrecognised",
       "explanation": "The Clerk holds this account against new entries under a cause this build cannot name. New submits are paused account-wide until it clears. Read the Clerk's own hold record for the cause."
+    },
+    "archive": {
+      "label": "Archive",
+      "explanation": "Take a bot you are finished with off the roster. It must be stopped and flat. Its id is never reused. This is irreversible."
     },
     "blocked": {
       "label": "Blocked",

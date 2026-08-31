@@ -18,6 +18,7 @@ import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.
 import { BrokersService } from '../../../../services/brokers.service';
 import { fmtElapsedSince } from '../../format';
 import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
+import { CohortArchiveDrawerComponent } from '../cohort-archive/cohort-archive-drawer.component';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotTriageDetailComponent } from '../bot-triage-detail/bot-triage-detail.component';
 import {
@@ -58,6 +59,7 @@ interface ScopedSnapshot<T> {
   imports: [
     AccountStripComponent,
     AlpacaDeployDrawerComponent,
+    CohortArchiveDrawerComponent,
     BotTriageDetailComponent,
     BotsRosterComponent,
     RouterLink,
@@ -86,6 +88,7 @@ export class BotsListPageComponent {
   );
   protected readonly pendingBotIds = signal<ReadonlySet<string>>(new Set());
   protected readonly deployOpen = signal(false);
+  protected readonly archiveOpen = signal(false);
   private readonly requestedSid = signal<string | null>(null);
   /** Bumped after an action lands so the detail pane refetches its panel. */
   protected readonly detailRefreshToken = signal(0);
@@ -259,6 +262,14 @@ export class BotsListPageComponent {
 
   protected closeDeploy(): void {
     this.deployOpen.set(false);
+  }
+
+  protected openArchive(): void {
+    this.archiveOpen.set(true);
+  }
+
+  protected closeArchive(): void {
+    this.archiveOpen.set(false);
   }
 
   protected selectBot(sid: string): void {

@@ -22,6 +22,16 @@ export type StationState =
 
 export type ActionId = components['schemas']['PanelAction']['action_id'];
 
+// ── Cohort-scoped affordances (ADR 0051 flatten, ADR 0052 archive) ──────────
+
+export type CohortArchiveView = components['schemas']['CohortArchiveView'];
+export type CohortArchiveCohort = components['schemas']['CohortArchiveCohort'];
+export type CohortArchiveLeg = components['schemas']['CohortArchiveLeg'];
+export type CohortArchiveRequest = components['schemas']['CohortArchiveRequest'];
+/** The batch outcome both cohort actions report. */
+export type CohortActionResult = components['schemas']['CohortActionResult'];
+export type CohortLegResult = components['schemas']['CohortLegResult'];
+
 // ── Operator-blocker reuse (OperatorBlocker contract) ────────────────────────
 
 export type OperatorBlocker = components['schemas']['OperatorBlocker'];

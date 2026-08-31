@@ -707,7 +707,8 @@ def test_bot_uncertainty_authors_scope_impact_and_next_step() -> None:
         evidence_refs=("order:1",),
     )
 
-    guidance = build_projection_guidance(_context(uncertainties=(uncertainty,)))
+    context = _context(uncertainties=(uncertainty,))
+    guidance = build_projection_guidance(context, build_recovery_catalog(context))
 
     assert guidance.scope == "CUSTODY_SUBJECT"
     assert guidance.may_create_exposure is False

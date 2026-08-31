@@ -127,6 +127,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.5,
         help="fraction of the fleet with a stopped run + terminal lifecycle record",
     )
+    parser.add_argument(
+        "--retired-fraction",
+        type=_fraction,
+        default=0.0,
+        help=(
+            "fraction of the *stopped* rows to retire — the inert terminal rows "
+            "the catalog projects from SQLite identity alone (#1911). Use it to "
+            "measure how read cost scales with live rows rather than with every "
+            "row ever registered."
+        ),
+    )
     parser.add_argument("--profile", action="store_true", help="cProfile the catalog reads")
     parser.add_argument(
         "--profile-limit", type=int, default=25, help="profile rows to print"
@@ -155,10 +166,14 @@ def _percentiles(samples_ms: list[float]) -> dict[str, float]:
 
 
 def _build_fleet(
-    artifacts_root: Path, rows: int, stopped_fraction: float
+    artifacts_root: Path, rows: int, stopped_fraction: float, retired_fraction: float = 0.0
 ) -> tuple[ClerkSqliteRepository, list[str]]:
     """Populate a real SQLite authority + file-side lifecycle for N bots."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+    from app.broker.alpaca.clerk.sqlite.commands import (
+        submit_retire_strategy_instance,
+        submit_start_run,
+        submit_stop_run,
+    )
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.engine.live.bot_lifecycle_state import (
         BotDutyOutcome,
@@ -171,6 +186,7 @@ def _build_fleet(
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=artifacts_root)
     now_ms = repo.clock()
     stopped_count = int(rows * stopped_fraction)
+    retired_count = int(stopped_count * retired_fraction)
     sids: list[str] = []
     for index in range(rows):
         sid = f"bench-{index:03d}"
@@ -229,6 +245,17 @@ def _build_fleet(
             now_ms=now_ms,
             reason="bench_populate",
         )
+        # Retire last: the command refuses an unregistered instance, and a
+        # retired row is only interesting to this bench once it has the same
+        # lifecycle artifacts every other stopped row carries.
+        if index < retired_count:
+            submit_retire_strategy_instance(
+                repo,
+                account_id=ACCOUNT_ID,
+                strategy_instance_id=sid,
+                retired_at_ms=now_ms,
+                operator_reason="BENCH_RETIRE",
+            )
     return repo, sids
 
 
@@ -394,7 +421,9 @@ async def _bench_fleet(
     clear_broker_account_snapshot_cache_for_testing()
     set_active_clerk_runtime(None)
 
-    repo, sids = _build_fleet(artifacts_root, rows, args.stopped_fraction)
+    repo, sids = _build_fleet(
+        artifacts_root, rows, args.stopped_fraction, args.retired_fraction
+    )
     stopped_count = int(rows * args.stopped_fraction)
     port = _BenchBrokerPort()
     get_broker_registry().register(port)  # type: ignore[arg-type]

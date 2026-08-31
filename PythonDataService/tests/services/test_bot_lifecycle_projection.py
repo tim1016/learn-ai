@@ -304,3 +304,141 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
         await registry.stop_all()
         set_alpaca_clerk(None)
         repo.close()
+
+
+def test_retirement_reaches_sqlite_and_survives_a_projection_refresh(
+    tmp_path: Path,
+) -> None:
+    """Retirement must be committed to the authority, not just projected.
+
+    ``bot_runner.retire`` used to write only the file lifecycle record.
+    Nothing ever wrote ``strategy_instances.retired_at_ms``, so the two
+    consequences below both held: the V2 catalog derives its phase from that
+    column and therefore rendered a retired bot as ``OFF_DUTY`` (the roster's
+    Retired group was unreachable), and ``_authority_phase`` read the same
+    NULL column, so every routine refresh projected ``clear_retirement=True``
+    and silently un-retired the bot. The single fake that produced a RETIRED
+    roster row returned ``retired_at_ms`` from a literal dict, which proved
+    the column mapping and never the write.
+    """
+    repo = _registered_repo(tmp_path)
+    lifecycle_path = stable_bot_lifecycle_state_path(tmp_path, "paper-projection")
+    projector = AlpacaLifecycleProjector(
+        authority=SqliteAlpacaLifecycleAuthority(repo),
+        lifecycle_repo_for=lambda _sid: BotLifecycleStateRepo(lifecycle_path),
+        require_alpaca_identity=lambda _sid, _exists: None,
+    )
+    now_ms = now_ms_utc()
+    try:
+        projector.retire(
+            strategy_instance_id="paper-projection",
+            now_ms=now_ms,
+            updated_by="operator",
+            reason="finished with this bot",
+        )
+
+        registration = repo.strategy_instance("paper-projection")
+        assert registration is not None
+        assert registration["retired_at_ms"] == now_ms
+        assert BotLifecycleStateRepo(lifecycle_path).read().phase is BotLifecyclePhase.RETIRED
+
+        projector.refresh(
+            strategy_instance_id="paper-projection",
+            now_ms=now_ms + 1,
+            updated_by="operator",
+            reason="routine refresh",
+        )
+
+        assert BotLifecycleStateRepo(lifecycle_path).read().phase is BotLifecyclePhase.RETIRED
+        assert repo.strategy_instance("paper-projection")["retired_at_ms"] == now_ms
+    finally:
+        repo.close()
+
+
+def test_retiring_an_already_retired_instance_keeps_the_first_instant(
+    tmp_path: Path,
+) -> None:
+    """``retired_at_ms`` is set once and never moved (schema.py's contract)."""
+    repo = _registered_repo(tmp_path)
+    lifecycle_path = stable_bot_lifecycle_state_path(tmp_path, "paper-projection")
+    projector = AlpacaLifecycleProjector(
+        authority=SqliteAlpacaLifecycleAuthority(repo),
+        lifecycle_repo_for=lambda _sid: BotLifecycleStateRepo(lifecycle_path),
+        require_alpaca_identity=lambda _sid, _exists: None,
+    )
+    now_ms = now_ms_utc()
+    try:
+        projector.retire(
+            strategy_instance_id="paper-projection",
+            now_ms=now_ms,
+            updated_by="operator",
+            reason="finished with this bot",
+        )
+        projector.retire(
+            strategy_instance_id="paper-projection",
+            now_ms=now_ms + 5_000,
+            updated_by="operator",
+            reason="finished with this bot",
+        )
+
+        assert repo.strategy_instance("paper-projection")["retired_at_ms"] == now_ms
+    finally:
+        repo.close()
+
+
+async def test_archive_takes_a_finished_bot_off_the_roster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The case ``retire`` refuses and #1911 asked for (ADR 0052).
+
+    The bot's strategy is registered and its symbol is fine, so retire refuses
+    it with ``STRATEGY_STILL_RUNNABLE`` -- correctly, for what #1795 covers.
+    ``archive`` is the sanctioned exit for exactly that bot, and it commits to
+    the authority: this asserts ``strategy_instances.retired_at_ms``, not just
+    the file projection, because that column is what the catalog reads and
+    what ``run_admission`` refuses ``BOT_RETIRED`` on.
+    """
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path / "clerk",
+    )
+    broker = _SqliteRuntimeBroker()
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    set_alpaca_clerk(clerk)
+    registry = BotTaskRegistry(
+        tmp_path / "artifacts",
+        feed_resolver=lambda: _FakeFeed([], mode="hold"),
+        boot_recovery_required=False,
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=clerk.start_admission_snapshot,
+        now_ms=now_ms_utc,
+    )
+    admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
+    try:
+        await registry.deploy(
+            broker="alpaca", strategy_instance_id="paper-archive", symbol="SPY"
+        )
+        await registry.stop("alpaca", "paper-archive")
+
+        from app.services.bot_runner import BotRunnerError
+
+        with pytest.raises(BotRunnerError):
+            await registry.retire("alpaca", "paper-archive", updated_by="operator")
+
+        status = await registry.archive(
+            "alpaca", "paper-archive", updated_by="operator"
+        )
+
+        assert status.phase == "RETIRED"
+        registration = repo.strategy_instance("paper-archive")
+        assert registration is not None
+        assert registration["retired_at_ms"] is not None
+        # Idempotent at the operation: a re-click is not an error.
+        assert (
+            await registry.archive("alpaca", "paper-archive", updated_by="operator")
+        ).phase == "RETIRED"
+    finally:
+        await registry.stop_all()
+        set_alpaca_clerk(None)
+        repo.close()

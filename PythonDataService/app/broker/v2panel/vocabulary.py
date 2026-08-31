@@ -110,6 +110,7 @@ ActionId = Literal[
     "stop",
     "flatten_stop",
     "retire",
+    "archive",
     "cancel_order",
     "reconcile_now",
     "recover_exact_execution_evidence",
@@ -128,6 +129,7 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "stop",
     "flatten_stop",
     "retire",
+    "archive",
     "cancel_order",
     "reconcile_now",
     "recover_exact_execution_evidence",
@@ -311,6 +313,11 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     "retire": OperatorCopy(
         "Retire",
         "Permanently decommission this bot. Its id is never reused. This is irreversible.",
+    ),
+    "archive": OperatorCopy(
+        "Archive",
+        "Take a bot you are finished with off the roster. It must be stopped and "
+        "flat. Its id is never reused. This is irreversible.",
     ),
     "cancel_order": OperatorCopy(
         "Cancel order",

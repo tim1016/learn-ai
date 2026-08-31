@@ -78,6 +78,31 @@ class RunStoppedFacts:
 
 
 @dataclass(frozen=True)
+class StrategyInstanceRetiredFacts:
+    """Retirement is instance-scoped, so it carries no ``lifecycle_run_id``.
+
+    A registration is retired once, when it has no active run — the guards in
+    ``evaluate_retirement`` prove that before the command is submitted — so
+    there is no run for the fact to name.
+    """
+
+    idempotency_key: str
+    payload_hash: str
+    kind: str
+    action: str
+    intended_end_state: str
+    retired_at_ms: int
+    operator_reason: str | None = None
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> StrategyInstanceRetiredFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class CommandRejectedFacts:
     idempotency_key: str
     payload_hash: str

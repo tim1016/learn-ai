@@ -200,6 +200,10 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.strategy_instances(self._conn)
 
+    def strategy_instances_with_live_custody(self: ClerkSqliteRepository) -> set[str]:
+        with self._write_lock:
+            return reads.strategy_instances_with_live_custody(self._conn)
+
     def strategy_instance(
         self: ClerkSqliteRepository,
         strategy_instance_id: str,

@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import (
+    AccountFreezeState,
     ClerkCustodySnapshot,
     CustodyCountFact,
     CustodyExposureFact,
@@ -824,3 +825,79 @@ async def test_unresolved_intent_mid_sweep_evaluation_reports_wait_not_intervene
         symbol="SPY",
     )
     assert settled.reason_code == "RECOVERY_UNCERTAIN"
+
+
+class _CustodyThatFreezes:
+    """A freeze lands between the panel arming Archive and the operator clicking.
+
+    Under a freeze the Clerk cannot observe the broker, so it reports zero
+    exposure because it knows nothing -- not because the bot is flat. Archive's
+    enabling proof *is* that reading, so a snapshot it cannot vouch for must
+    refuse the command rather than satisfy it.
+    """
+
+    def __init__(self) -> None:
+        self.frozen = False
+
+    @asynccontextmanager
+    async def __call__(self, sid: str) -> AsyncIterator[ClerkCustodySnapshot]:
+        flat = _flat_custody_snapshot(sid)
+        if not self.frozen:
+            yield flat
+            return
+        yield flat.model_copy(
+            update={
+                "freeze": AccountFreezeState(
+                    active=True,
+                    category="ACCOUNT_STATE_UNPROVABLE",
+                    explanation="Broker observation is unavailable.",
+                    next_step="Restore broker observation and reconcile.",
+                    observed_at_ms=_RTH_MS,
+                )
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_archive_reproves_custody_and_refuses_to_strand_exposure(
+    tmp_path: Path,
+) -> None:
+    """Archive is irreversible, so it re-proves its own precondition.
+
+    Same race as retire's: the panel authors an enabled Archive against a
+    projected snapshot and the operator clicks later. A fill landing in
+    between must refuse the command, not be stranded by it.
+    """
+    feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
+    custody = _CustodyThatAcquiresExposure()
+    registry = _registry(tmp_path, feed, start_custody_guard=custody)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    custody.exposed = True
+
+    with pytest.raises(BotRunnerError) as blocked:
+        await registry.archive("alpaca", _SID, updated_by="operator")
+
+    assert "custody" in str(blocked.value).lower()
+    assert registry.status("alpaca", _SID).phase != "RETIRED"
+
+
+@pytest.mark.asyncio
+async def test_archive_refuses_when_the_clerk_cannot_prove_flatness(
+    tmp_path: Path,
+) -> None:
+    """A freeze at commit time refuses even though exposure reads zero."""
+    feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
+    custody = _CustodyThatFreezes()
+    registry = _registry(tmp_path, feed, start_custody_guard=custody)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    custody.frozen = True
+
+    with pytest.raises(BotRunnerError) as blocked:
+        await registry.archive("alpaca", _SID, updated_by="operator")
+
+    assert "prove" in str(blocked.value).lower()
+    assert registry.status("alpaca", _SID).phase != "RETIRED"

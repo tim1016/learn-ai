@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     CommandRejectedFacts,
     RunStartedFacts,
     RunStoppedFacts,
+    StrategyInstanceRetiredFacts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
@@ -60,14 +61,17 @@ __all__ = [
     "NoActiveRunError",
     "UnknownStrategyInstanceError",
     "stop_command_resource",
+    "submit_retire_strategy_instance",
     "submit_start_run",
     "submit_stop_run",
 ]
 
 ACTION_START = "START"
 ACTION_STOP = "STOP"
+ACTION_RETIRE = "RETIRE"
 INTENDED_END_STATE_ACTIVE = "ACTIVE"
 INTENDED_END_STATE_STOPPED = "STOPPED"
+INTENDED_END_STATE_RETIRED = "RETIRED"
 
 _ALREADY_ACTIVE_REASON = "This bot already has an active run; stop it before starting a new one."
 
@@ -317,6 +321,79 @@ def submit_stop_run(
             operation_state="succeeded",
             clerk_observed_at_ms=clock(),
             summary_code="RUN_STOPPED",
+            facts_json=facts.to_facts_json(),
+        )
+
+    return _commit(
+        repo,
+        command_id=command_id,
+        idempotency_key=idempotency_key,
+        payload_hash=payload_hash,
+        build_transition=build_transition,
+    )
+
+
+def submit_retire_strategy_instance(
+    repo: ClerkSqliteRepository,
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+    retired_at_ms: int,
+    operator_reason: str | None = None,
+    clock: Clock = now_ms_utc,
+) -> CommandSubmission:
+    """Retire a registration in the authority. Purely local — no broker contact.
+
+    Retirement is the fact that makes a registration permanently inadmissible:
+    ``run_admission`` refuses ``BOT_RETIRED``, and the V2 catalog derives its
+    phase from ``strategy_instances.retired_at_ms``. Both read SQLite, so
+    SQLite is where retirement has to be written — the file lifecycle record
+    is a projection of this, never the other way round.
+
+    Unlike Start and Stop the identity carries no ``lifecycle_run_id``:
+    retirement is instance-scoped and happens exactly once, when the guards in
+    ``evaluate_retirement`` have already proved there is no active run. The
+    key therefore names the instance alone, which is also what makes a
+    lost-response retry replay the original retirement rather than mint a
+    second one at a later instant.
+    """
+    reject_colon("strategy_instance_id", strategy_instance_id)
+
+    idempotency_key = f"{account_id}:{strategy_instance_id}:{ACTION_RETIRE}"
+    payload_hash = hashlib.sha256(
+        canonicalize(
+            {
+                "account_id": account_id,
+                "action": ACTION_RETIRE,
+                "intended_end_state": INTENDED_END_STATE_RETIRED,
+                "operator_reason": operator_reason,
+                "strategy_instance_id": strategy_instance_id,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    command_id = f"cmd:{idempotency_key}"
+
+    def build_transition() -> TransitionInput:
+        # Under the write lock, like Start and Stop — see submit_start_run.
+        require_strategy_instance(repo, strategy_instance_id)
+        facts = StrategyInstanceRetiredFacts(
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+            kind="operator_lifecycle",
+            action=ACTION_RETIRE,
+            intended_end_state=INTENDED_END_STATE_RETIRED,
+            retired_at_ms=retired_at_ms,
+            operator_reason=operator_reason,
+        )
+        return TransitionInput(
+            strategy_instance_id=strategy_instance_id,
+            command_id=command_id,
+            transition_kind="STRATEGY_INSTANCE_RETIRED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=clock(),
+            summary_code="STRATEGY_INSTANCE_RETIRED",
             facts_json=facts.to_facts_json(),
         )
 

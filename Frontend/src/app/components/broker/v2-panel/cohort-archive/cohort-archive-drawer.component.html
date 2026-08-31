@@ -1,0 +1,76 @@
+<p-drawer
+  [visible]="visible()"
+  (visibleChange)="$event || onClose()"
+  position="right"
+  [modal]="true"
+  [dismissible]="true"
+  [showCloseIcon]="false"
+  styleClass="cohort-archive-drawer"
+  [style]="{ width: 'min(720px, 96vw)' }"
+>
+  <ng-template #header>
+    <div class="cohort-archive__header">
+      <div>
+        <span>Roster · {{ accountId() }}</span>
+        <h2>Archive finished bots</h2>
+        <p>
+          A bot must be stopped and provably flat. Archiving is irreversible: the
+          registration can start no further runs and its id is never reused. Its
+          history and receipts are kept.
+        </p>
+      </div>
+      <button type="button" aria-label="Close archive finished bots" (click)="onClose()">
+        <i class="pi pi-times" aria-hidden="true"></i>
+      </button>
+    </div>
+  </ng-template>
+
+  @if (visible()) {
+    @if (loading()) {
+      <p role="status">Reading the roster…</p>
+    } @else if (loadFailed()) {
+      <p role="alert">Could not read the archivable roster. Close and reopen to retry.</p>
+    } @else {
+      @if (outcome(); as result) {
+        <app-cohort-archive-outcome [result]="result" />
+      }
+
+      @if (submitError()) {
+        <p role="alert">
+          The archive request did not reach a result. Nothing is confirmed either
+          way — inspect the roster before retrying. Your selection is kept.
+        </p>
+      }
+
+      @if (emptyMessage(); as message) {
+        <p role="status">{{ message }}</p>
+      } @else {
+        <div class="cohort-archive__bulk">
+          <button type="button" (click)="selectAll()" [disabled]="!armedLegs().length">
+            Select all {{ armedLegs().length }}
+          </button>
+          <button type="button" (click)="clearSelection()" [disabled]="!selectedCount()">
+            Clear selection
+          </button>
+        </div>
+
+        @for (cohort of view()?.cohorts ?? []; track cohort.strategy_key + cohort.symbol) {
+          <app-cohort-archive-group
+            [cohort]="cohort"
+            [selected]="selected()"
+            (toggled)="toggle($event)"
+          />
+        }
+
+        <app-cohort-archive-commit
+          [selectedCount]="selectedCount()"
+          [submitting]="submitting()"
+          [canSubmit]="canSubmit()"
+          [confirmText]="confirmText()"
+          (confirmTextChange)="confirmText.set($event)"
+          (submitted)="submit()"
+        />
+      }
+    }
+  }
+</p-drawer>

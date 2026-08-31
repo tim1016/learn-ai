@@ -675,6 +675,82 @@ class CohortFlattenView(BaseModel):
     observed_at_ms: int
 
 
+class CohortArchiveLeg(BaseModel):
+    """One archivable roster member with its executability facts (ADR 0047)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    strategy_instance_id: str
+    enabled: bool
+    revision: int | None
+    concurrency_token: str | None
+    # First blocker headline when archive is presented but refused; ``None``
+    # when armed. A bot the operator cannot yet archive still appears, with
+    # the reason — a surface that hid them would look like the roster had
+    # fewer bots than it does.
+    blocker_headline: str | None
+
+
+class CohortArchiveCohort(BaseModel):
+    """One (strategy_key, symbol) group of archivable members."""
+
+    model_config = ConfigDict(frozen=True)
+
+    strategy_key: str
+    strategy_label: str
+    symbol: str
+    legs: list[CohortArchiveLeg]
+    enabled_count: int
+
+
+class CohortArchiveView(BaseModel):
+    """Backend-authored cohort-archive presentation (ADR 0052)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    cohorts: list[CohortArchiveCohort]
+    observed_at_ms: int
+
+
+class CohortArchiveLegRequest(BaseModel):
+    """One leg the operator confirmed — echoes the presented action facts.
+
+    Carries no ``action_id``: this endpoint archives, and nothing else. A
+    client that could name the action could reach a different mutation
+    through a surface whose confirmation copy described archiving.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=96)
+    revision: int = Field(ge=0)
+    concurrency_token: str = Field(min_length=1, max_length=128)
+
+
+class CohortArchiveRequest(BaseModel):
+    """Archive a batch of finished bots (ADR 0052, ADR 0051 Decisions 2/4/5)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str = Field(min_length=1, max_length=64)
+    reason: str | None = Field(default=None, max_length=512)
+    legs: list[CohortArchiveLegRequest] = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def _legs_are_unique_and_keys_fit(self) -> CohortArchiveRequest:
+        sids = [leg.strategy_instance_id for leg in self.legs]
+        if len(set(sids)) != len(sids):
+            raise ValueError("cohort legs must name distinct bots")
+        for leg in self.legs:
+            if len(self.idempotency_key) + 1 + len(leg.strategy_instance_id) > 128:
+                raise ValueError(
+                    "idempotency_key plus strategy_instance_id exceeds the "
+                    "per-leg idempotency identity budget of 128 characters"
+                )
+        return self
+
+
 class CohortFlattenLegRequest(BaseModel):
     """One leg the operator confirmed — echoes the presented action facts."""
 
@@ -713,8 +789,14 @@ class CohortFlattenRequest(BaseModel):
         return self
 
 
-class CohortFlattenLegResult(BaseModel):
-    """One leg's typed outcome — a receipt or a refusal, never silence."""
+class CohortLegResult(BaseModel):
+    """One leg's typed outcome — a receipt or a refusal, never silence.
+
+    Shared by every cohort-scoped affordance (ADR 0051 for flatten, ADR 0052
+    for archive): the batch contract an operator depends on when a leg fails
+    halfway through a fleet-wide command does not vary by which action the
+    legs carried.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -724,7 +806,7 @@ class CohortFlattenLegResult(BaseModel):
     error: PanelActionErrorResponse | None
 
 
-class CohortFlattenResult(BaseModel):
+class CohortActionResult(BaseModel):
     """The batch outcome: every leg answered, in request order (ADR 0051 D5)."""
 
     model_config = ConfigDict(frozen=True)
@@ -732,7 +814,7 @@ class CohortFlattenResult(BaseModel):
     account_id: str
     receipt_id: str
     recorded_at_ms: int
-    legs: list[CohortFlattenLegResult]
+    legs: list[CohortLegResult]
     applied_count: int
     replayed_count: int
     refused_count: int

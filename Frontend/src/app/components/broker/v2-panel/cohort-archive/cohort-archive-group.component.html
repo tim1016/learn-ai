@@ -1,0 +1,27 @@
+<section class="cohort-archive__group">
+  <h3>
+    <span>{{ cohort().strategy_label }}</span>
+    <app-asset-identity [symbol]="cohort().symbol" size="sm" />
+    <span class="cohort-archive__count">
+      {{ cohort().enabled_count }} of {{ cohort().legs.length }} archivable
+    </span>
+  </h3>
+  <ul>
+    @for (leg of cohort().legs; track leg.strategy_instance_id) {
+      <li [class.cohort-archive__leg--blocked]="!leg.enabled">
+        <label>
+          <input
+            type="checkbox"
+            [checked]="isSelected(leg)"
+            [disabled]="!leg.enabled"
+            (change)="toggled.emit(leg)"
+          />
+          <code>{{ leg.strategy_instance_id }}</code>
+        </label>
+        @if (leg.blocker_headline; as blocker) {
+          <span class="cohort-archive__blocker">{{ blocker }}</span>
+        }
+      </li>
+    }
+  </ul>
+</section>
