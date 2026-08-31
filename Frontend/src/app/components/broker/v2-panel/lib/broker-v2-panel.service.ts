@@ -2,7 +2,7 @@ import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http'
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
-import { firstValueWithinPollTimeout } from '../../../../services/poll-timeout';
+import { PolledReadScheduler } from '../../../../services/polled-read-scheduler';
 import type { components } from '../../../../api/broker.types';
 import type {
   HistoricalExecutionRecoveryPlan,
@@ -48,6 +48,7 @@ export type PaperAccessEvent = components['schemas']['CanaryAdmissionEvent'];
 @Injectable({ providedIn: 'root' })
 export class BrokerV2PanelService {
   private readonly http = inject(HttpClient);
+  private readonly polls = inject(PolledReadScheduler);
 
   private base(broker: string, accountId: string): string {
     return `/api/brokers/${encodeURIComponent(broker)}/accounts/${encodeURIComponent(accountId)}`;
@@ -133,10 +134,10 @@ export class BrokerV2PanelService {
   }
 
   getCatalog(broker: string, accountId: string): Promise<BotCatalogView[]> {
-    // Polled every few seconds; a hang here freezes the roster (S7).
-    return firstValueWithinPollTimeout(
-      this.http.get<BotCatalogView[]>(`${this.base(broker, accountId)}/bots/catalog`),
-    );
+    // Polled every few seconds; a hang here freezes the roster (S7), and
+    // overlapping polls are what turn a 267 ms read into a 2.58 s one
+    // (#1912) — the scheduler answers both.
+    return this.polls.get<BotCatalogView[]>(`${this.base(broker, accountId)}/bots/catalog`);
   }
 
   getPanel(
@@ -149,11 +150,12 @@ export class BrokerV2PanelService {
     if (transactionRef) {
       params = params.set('transaction_ref', transactionRef);
     }
-    return firstValueFrom(
-      this.http.get<BotPanelView>(
-        `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/panel`,
-        { params },
-      ),
+    // Polled by the roster's detail pane on the same tick as the catalog
+    // (#1912), so it shares the roster's scheduler rather than adding to the
+    // fan-out it is trying to remove.
+    return this.polls.get<BotPanelView>(
+      `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/panel`,
+      params,
     );
   }
 
@@ -322,11 +324,10 @@ export class BrokerV2PanelService {
     resolution: ChartLiveResolution,
   ): Promise<ChartLiveResponse> {
     const params = new HttpParams().set('resolution', resolution);
-    return firstValueFrom(
-      this.http.get<ChartLiveResponse>(
-        `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/chart/live`,
-        { params },
-      ),
+    // The tape polls beside the detail pane's panel read (#1912).
+    return this.polls.get<ChartLiveResponse>(
+      `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/chart/live`,
+      params,
     );
   }
 
