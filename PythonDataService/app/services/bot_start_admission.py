@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
-from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, RecoveryEvaluationObservation
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
@@ -45,6 +45,22 @@ logger = logging.getLogger(__name__)
 #: custody subject to scope the count to, or ``None`` for the whole account
 #: (#1793 -- admission always scopes; only the boot report reads account-wide).
 UnresolvedIntentsProbe = Callable[[str | None], Awaitable[int]]
+
+#: Reads the sweep's recovery-evaluation posture, passively (#1808). ``None``
+#: (no producer wired -- synthetic authority, legacy call sites) keeps the
+#: pre-#1808 behavior: every unresolved intent reads ``RECOVERY_UNCERTAIN``.
+RecoveryEvaluationProbe = Callable[[], RecoveryEvaluationObservation | None]
+
+#: How long after authority activation an unresolved intent may present as
+#: "the sweep is still evaluating" (#1808). Post-outage recovery settles
+#: within a handful of 15 s sweep passes; past this bound an intent that is
+#: still unresolved is a real outstanding intent, not evaluation latency.
+RECOVERY_EVALUATION_WINDOW_MS = 120_000
+
+#: The wait-state must not outlive the sweep that produced it (#1808): a
+#: sweep pass publishes roughly every 15 s, so a last completed pass older
+#: than this proves the sweep is no longer evaluating anything.
+RECOVERY_SWEEP_LIVENESS_BOUND_MS = 60_000
 
 CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
@@ -172,6 +188,29 @@ def make_start_request(
     )
 
 
+def _sweep_still_evaluating(
+    recovery_evaluation: RecoveryEvaluationProbe | None,
+    observed_at_ms: int,
+) -> bool:
+    """True while an unresolved intent may honestly read "wait" (#1808).
+
+    Two bounds, both anchored on the producer's timestamps so the wait-state
+    cannot outlive the sweep that produced it: the evaluation window caps the
+    episode from authority activation, and the liveness bound requires the
+    most recent published pass to be young enough to prove the sweep is
+    still working (no pass yet is credible only inside the window).
+    """
+    if recovery_evaluation is None:
+        return False
+    observation = recovery_evaluation()
+    if observation is None:
+        return False
+    if observed_at_ms - observation.evaluation_started_at_ms > RECOVERY_EVALUATION_WINDOW_MS:
+        return False
+    last_pass = observation.last_pass_completed_at_ms
+    return last_pass is None or observed_at_ms - last_pass <= RECOVERY_SWEEP_LIVENESS_BOUND_MS
+
+
 async def resolve_start_runtime_fact(
     *,
     strategy_instance_id: str,
@@ -182,6 +221,7 @@ async def resolve_start_runtime_fact(
     projected_start_count: int,
     restart_threshold: int,
     restart_window_ms: int,
+    recovery_evaluation: RecoveryEvaluationProbe | None = None,
 ) -> StartRuntimeAdmissionFact:
     """Project recovery and restart intensity without mutating runner state."""
     if boot_recovery_required and not boot_recovery_complete:
@@ -210,6 +250,19 @@ async def resolve_start_runtime_fact(
                 next_step="Restore the recovery probe and reconcile before Start.",
             )
         if unresolved > 0:
+            # #1808: during post-outage sweep evaluation the count is expected
+            # to settle on its own; only after the sweep has had its window
+            # (or died) is an unresolved intent an operator's problem.
+            if _sweep_still_evaluating(recovery_evaluation, observed_at_ms):
+                return StartRuntimeAdmissionFact(
+                    state="RECOVERY_SWEEP_EVALUATING",
+                    observed_at_ms=observed_at_ms,
+                    explanation=(
+                        "The reconciliation sweep is still evaluating "
+                        f"{unresolved} order intent(s) for this bot after recovery."
+                    ),
+                    next_step="Wait for the reconciliation sweep to settle, then retry.",
+                )
             return StartRuntimeAdmissionFact(
                 state="RECOVERY_UNCERTAIN",
                 observed_at_ms=observed_at_ms,
