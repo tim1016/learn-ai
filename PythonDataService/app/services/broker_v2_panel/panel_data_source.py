@@ -567,7 +567,9 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             broker,
             sid,
             updated_by=operator,
-            reason=f"Panel archive by {operator}",
+            # The operator's own words when they gave any; the generic line is
+            # a fallback, not a replacement for the audit context they typed.
+            reason=reason or f"Panel archive by {operator}",
         )
         return (
             "Bot archived and taken off the roster. Its history and receipts are "

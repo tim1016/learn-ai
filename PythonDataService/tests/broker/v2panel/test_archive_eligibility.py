@@ -67,6 +67,40 @@ def test_archive_refuses_a_running_bot() -> None:
     assert [b.condition.id for b in blockers] == ["BOT_STILL_RUNNING"]
 
 
+def test_archive_refuses_a_dead_process_whose_run_never_settled() -> None:
+    """`running` and `phase` are different facts, and both are required.
+
+    A task that dies before its stop transition commits reads
+    ``running=False`` while the authority still holds an ACTIVE run.
+    Archiving there would stamp `retired_at_ms` on a registration whose run
+    never ended -- and the fold that writes it states there is no active run.
+    """
+    enabled, blockers = _archive(_ctx(running=False, phase="ON_DUTY"))
+
+    assert enabled is False
+    assert [b.condition.id for b in blockers] == ["BOT_DUTY_NOT_SETTLED"]
+
+
+def test_archive_refuses_while_an_effect_is_still_unresolved() -> None:
+    """An accepted effect can create broker custody after the archive lands.
+
+    Only the commit sees this count -- the panel has no bot-scoped effect
+    view -- which is why the rule takes it as an argument rather than reading
+    it, and why an armed button can still be refused on click.
+    """
+    verdict = evaluate_archive(
+        running=False,
+        phase="OFF_DUTY",
+        has_exposure=False,
+        working_order_count=0,
+        outstanding_effect_count=1,
+        custody_provable=True,
+    )
+
+    assert verdict.eligible is False
+    assert verdict.cause == "ARCHIVE_WOULD_STRAND_CUSTODY"
+
+
 def test_archive_refuses_while_the_bot_still_holds_exposure() -> None:
     enabled, blockers = _archive(_ctx(has_exposure=True))
 
@@ -176,6 +210,7 @@ def test_the_shared_rule_is_what_the_guard_renders() -> None:
             phase=ctx.phase,
             has_exposure=ctx.has_exposure,
             working_order_count=ctx.working_order_count,
+            outstanding_effect_count=0,
             custody_provable=not ctx.freeze_active,
         )
         enabled, _ = _archive(ctx)

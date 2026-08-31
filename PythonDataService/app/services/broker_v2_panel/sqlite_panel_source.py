@@ -266,10 +266,14 @@ def _bound_roster_statuses(
 ) -> list[BotStatusView]:
     """Read roster identity/lifecycle rows between equal authority fences.
 
-    ``inert_terminal`` comes from the same fenced revision as this read (see
-    ``roster_membership``); its rows are composed from SQLite identity alone,
-    which is what keeps a retired registration off the per-row cost curve
-    (#1911).
+    ``inert_terminal`` is the classification the projection reads were chosen
+    from. It is re-derived here, inside the fence, and any disagreement is a
+    revision mismatch the caller retries: the membership read happens before
+    the projection reads, so a retired bot that acquires live custody in
+    between would otherwise keep its skip-the-projection classification while
+    the economic fence accepted the newer revision -- surfacing the new
+    exposure on a row with no custody projection, no ``needs_attention`` and
+    no recovery command until a later poll.
     """
     repository = facade.repository
     before = repository.control_meta_snapshot()
@@ -281,6 +285,10 @@ def _bound_roster_statuses(
     ):
         raise SqliteCatalogRevisionMismatch(
             "SQLite roster identity changed before lifecycle projection."
+        )
+    if roster_membership(repository).inert_terminal != inert_terminal:
+        raise SqliteCatalogRevisionMismatch(
+            "SQLite roster custody changed after the catalog chose its projections."
         )
     statuses = [
         build_terminal_roster_status(broker, registration, repository)

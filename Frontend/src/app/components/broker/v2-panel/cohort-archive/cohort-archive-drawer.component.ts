@@ -12,22 +12,15 @@ import {
 import { Drawer } from 'primeng/drawer';
 
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { ARCHIVE_CONFIRM_TOKEN } from './archive-confirm-token';
+import { CohortArchiveCommitComponent } from './cohort-archive-commit.component';
+import { CohortArchiveGroupComponent } from './cohort-archive-group.component';
+import { CohortArchiveOutcomeComponent } from './cohort-archive-outcome.component';
 import type {
   CohortActionResult,
   CohortArchiveLeg,
   CohortArchiveView,
 } from '../lib/broker-v2-panel.types';
-
-/**
- * The token an operator types to confirm a batch archive.
- *
- * The same word the backend requires on the single-bot action's typed
- * confirmation (`required_token: "ARCHIVE"`). Archiving N registrations is
- * strictly more consequential than archiving one, so the batch asks for the
- * same deliberate act once rather than waiving it because the surface is
- * bulk.
- */
-export const ARCHIVE_CONFIRM_TOKEN = 'ARCHIVE';
 
 /** An armed leg, proven to carry the identity its POST is checked against. */
 type ArmedArchiveLeg = CohortArchiveLeg & {
@@ -55,7 +48,12 @@ function isArmed(leg: CohortArchiveLeg): leg is ArmedArchiveLeg {
 @Component({
   selector: 'app-cohort-archive-drawer',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [Drawer],
+  imports: [
+    Drawer,
+    CohortArchiveCommitComponent,
+    CohortArchiveGroupComponent,
+    CohortArchiveOutcomeComponent,
+  ],
   templateUrl: './cohort-archive-drawer.component.html',
   styleUrl: './cohort-archive-drawer.component.scss',
 })
@@ -72,8 +70,25 @@ export class CohortArchiveDrawerComponent {
 
   protected readonly submitting = signal(false);
   protected readonly outcome = signal<CohortActionResult | null>(null);
+  /** A POST that never returned a typed batch result — network, auth, 5xx. */
+  protected readonly submitError = signal(false);
   protected readonly selected = signal<ReadonlySet<string>>(new Set());
   protected readonly confirmText = signal('');
+
+  /**
+   * Clear everything that could act on a bot.
+   *
+   * Called on close and whenever the account scope changes: Angular reuses
+   * this component across route params, and a selection or a typed
+   * confirmation carried into a different account could arm a click the
+   * operator never made against a bot they never saw.
+   */
+  private clearDestructiveState(): void {
+    this.selected.set(new Set());
+    this.confirmText.set('');
+    this.outcome.set(null);
+    this.submitError.set(false);
+  }
 
   /** Read while the drawer is open; idle while it is closed. */
   private readonly archivable = resource({
@@ -83,9 +98,12 @@ export class CohortArchiveDrawerComponent {
       this.panelService.getCohortArchiveView(params.broker, params.accountId),
   });
 
-  protected readonly view = computed<CohortArchiveView | null>(
-    () => this.archivable.value() ?? null,
-  );
+  protected readonly view = computed<CohortArchiveView | null>(() => {
+    const value = this.archivable.value();
+    // Never hand back another account's legs: the resource keeps its previous
+    // value across a params change, and these legs carry act-on-me tokens.
+    return value?.account_id === this.accountId() ? value : null;
+  });
   protected readonly loading = computed(() => this.archivable.isLoading());
   protected readonly loadFailed = computed(() => this.archivable.error() !== undefined);
 
@@ -104,7 +122,20 @@ export class CohortArchiveDrawerComponent {
       .filter(isArmed),
   );
 
-  protected readonly selectedCount = computed(() => this.selected().size);
+  /**
+   * The selected legs that are still present and still armed.
+   *
+   * Derived rather than reset, so a selection cannot outlive what it referred
+   * to: switching accounts, or a reload that disarms a leg, drops it from the
+   * count and from the submission without anything having to notice the
+   * change and clean up after it.
+   */
+  protected readonly selectedLegs = computed<readonly ArmedArchiveLeg[]>(() => {
+    const chosen = this.selected();
+    return this.armedLegs().filter((leg) => chosen.has(leg.strategy_instance_id));
+  });
+
+  protected readonly selectedCount = computed(() => this.selectedLegs().length);
 
   protected readonly confirmed = computed(
     () => this.confirmText().trim().toUpperCase() === ARCHIVE_CONFIRM_TOKEN,
@@ -114,9 +145,18 @@ export class CohortArchiveDrawerComponent {
     () => this.selectedCount() > 0 && this.confirmed() && !this.submitting(),
   );
 
+  /**
+   * Shown only when the account has no candidates at all.
+   *
+   * Deliberately not keyed on "nothing is armed": an account whose stopped
+   * bots all hold exposure has candidates, each with a backend-authored
+   * reason the operator needs. Replacing that list with a summary would hide
+   * exactly the identities and remediation the service includes them for.
+   */
   protected readonly emptyMessage = computed(() => {
-    if (this.loading() || this.loadFailed() || this.view() === null) return null;
-    return this.armedLegs().length === 0
+    const cohorts = this.view()?.cohorts;
+    if (this.loading() || this.loadFailed() || cohorts === undefined) return null;
+    return cohorts.length === 0
       ? 'No bot on this account can be archived right now. A bot must be stopped and provably flat.'
       : null;
   });
@@ -150,24 +190,20 @@ export class CohortArchiveDrawerComponent {
     // Clearing here rather than from a visibility effect: every route out of
     // the drawer — the close button and the backdrop dismiss — comes through
     // this method, so the next open starts clean without watching for it.
-    this.selected.set(new Set());
-    this.confirmText.set('');
-    this.outcome.set(null);
+    this.clearDestructiveState();
     this.closed.emit();
   }
 
   protected async submit(): Promise<void> {
     if (!this.canSubmit()) return;
-    const chosen = this.selected();
-    const legs = this.armedLegs()
-      .filter((leg) => chosen.has(leg.strategy_instance_id))
-      .map((leg) => ({
-        strategy_instance_id: leg.strategy_instance_id,
-        revision: leg.revision,
-        concurrency_token: leg.concurrency_token,
-      }));
+    const legs = this.selectedLegs().map((leg) => ({
+      strategy_instance_id: leg.strategy_instance_id,
+      revision: leg.revision,
+      concurrency_token: leg.concurrency_token,
+    }));
 
     this.submitting.set(true);
+    this.submitError.set(false);
     try {
       const result = await this.panelService.runCohortArchive(
         this.broker(),
@@ -186,6 +222,13 @@ export class CohortArchiveDrawerComponent {
       // than the one it carried before the batch ran. `reload` rather than a
       // params change: the latter drops the prior value and blanks the list
       // under the outcome the operator is still reading.
+      this.archivable.reload();
+    } catch {
+      // The POST never returned a typed batch result, so no leg outcome is
+      // known. An irreversible command must not leave the button quietly
+      // re-enabling: say the outcome is unknown, and keep the selection so a
+      // retry is a deliberate act rather than a re-selection from scratch.
+      this.submitError.set(true);
       this.archivable.reload();
     } finally {
       this.submitting.set(false);

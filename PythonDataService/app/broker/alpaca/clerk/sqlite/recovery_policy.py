@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SafeFlattenPlan,
     SafeFlattenPlanLeg,
 )
+from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
@@ -53,9 +54,10 @@ RecoveryActionId = Literal[
 ]
 
 FRESH_EVIDENCE_MAX_AGE_MS = 30_000
-_WORKING_BROKER_STATES = frozenset(
-    {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
-)
+# Imported rather than restated: the catalog's inert-terminal test asks the
+# same question of the same column (`reads.WORKING_BROKER_STATES`), and two
+# copies would let "working order" drift between the two answers.
+_WORKING_BROKER_STATES = WORKING_BROKER_STATES
 
 
 class RecoveryPolicyError(Exception):

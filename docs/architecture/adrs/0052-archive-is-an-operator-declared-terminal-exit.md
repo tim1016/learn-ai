@@ -20,7 +20,9 @@ Three findings, in the order they were established.
 
 ### 1. `archive` is a new action id, not a change to `retire`
 
-#1795's guard, copy and contract stay exactly as they are. `archive` is the separate, confirmation-gated action for a registration the operator is finished with, and its guard proves what retirement's custody guards prove: not running, not already `RETIRED`, no attributed exposure, no working orders, and no account freeze making flatness unprovable.
+Issue `#1795`'s guard, copy and contract stay exactly as they are. `archive` is the separate, confirmation-gated action for a registration the operator is finished with. Its guard requires: the process is not running **and** the durable phase has settled to `OFF_DUTY` (two different facts — a task that dies before its stop transition commits reads not-running while the authority still holds an ACTIVE run, and archiving there would stamp `retired_at_ms` on a run that never ended); the account can prove flatness; and there is no attributed exposure, no working order, and no unresolved effect.
+
+The effect count is bot-scoped and visible only at commit — the panel has no such view — so an accepted effect can arm the button and still be refused on click. That asymmetry is the action's existing contract rather than a gap in it: the presented decision is always older than the click, and it fails in the safe direction.
 
 ### 2. It commits the same terminal phase
 

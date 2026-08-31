@@ -894,26 +894,40 @@ class BotTaskRegistry:
                     detail="The roster has no binding for this instance.",
                 )
             status = self.status(broker, strategy_instance_id)
-            async with self._start_custody_guard(binding) as custody:
-                verdict = evaluate_archive(
-                    running=status.running,
-                    phase=status.phase,
-                    has_exposure=custody.exposure.state != "zero",
-                    working_order_count=custody.working_orders.count,
-                    custody_provable=not custody.freeze.active,
+            try:
+                async with self._start_custody_guard(binding) as custody:
+                    verdict = evaluate_archive(
+                        running=status.running,
+                        phase=status.phase,
+                        has_exposure=custody.exposure.state != "zero",
+                        working_order_count=custody.working_orders.count,
+                        # Bot-scoped, and only the commit can see it: an effect
+                        # accepted before its broker order becomes working would
+                        # otherwise create custody for a terminal registration.
+                        outstanding_effect_count=(
+                            custody.unresolved_effects.count + custody.pending_orders.count
+                        ),
+                        custody_provable=not custody.freeze.active,
+                    )
+                if verdict.already_retired:
+                    return status
+                if not verdict.eligible:
+                    headline, detail = _ARCHIVE_REFUSAL[verdict.cause]
+                    raise BotRunnerError(headline, detail=detail)
+                self._lifecycle_projector_for_instance(strategy_instance_id).retire(
+                    strategy_instance_id=strategy_instance_id,
+                    now_ms=self._now_ms(),
+                    updated_by=updated_by,
+                    reason=reason or f"Panel archive by {updated_by}",
                 )
-            if verdict.already_retired:
-                return status
-            if not verdict.eligible:
-                headline, detail = _ARCHIVE_REFUSAL[verdict.cause]
-                raise BotRunnerError(headline, detail=detail)
-            self._lifecycle_projector_for_instance(strategy_instance_id).retire(
-                strategy_instance_id=strategy_instance_id,
-                now_ms=self._now_ms(),
-                updated_by=updated_by,
-                reason=reason or f"Panel archive by {updated_by}",
-            )
-            return self.status(broker, strategy_instance_id)
+                return self.status(broker, strategy_instance_id)
+            finally:
+                # A stopped Dry Run has no managed task to release its synthetic
+                # Clerk, and the custody guard above registers one to read from.
+                # Every other read path releases it when the read ends; a
+                # mutation must too, or each archived Dry Run leaks an open
+                # SQLite authority for the rest of the process lifetime.
+                await self._authority_for(binding).release_if_unused()
 
     async def stop(
         self,

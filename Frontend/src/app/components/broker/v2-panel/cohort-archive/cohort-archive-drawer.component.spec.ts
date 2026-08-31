@@ -25,15 +25,17 @@ function view(legs: CohortArchiveLeg[]): CohortArchiveView {
   return {
     account_id: 'PA1',
     observed_at_ms: 1_700_000_000_000,
-    cohorts: [
-      {
-        strategy_key: 'deployment_validation',
-        strategy_label: 'Deployment Validation',
-        symbol: 'SPY',
-        legs,
-        enabled_count: legs.filter((item) => item.enabled).length,
-      },
-    ],
+    cohorts: legs.length
+      ? [
+          {
+            strategy_key: 'deployment_validation',
+            strategy_label: 'Deployment Validation',
+            symbol: 'SPY',
+            legs,
+            enabled_count: legs.filter((item) => item.enabled).length,
+          },
+        ]
+      : [],
   };
 }
 
@@ -166,13 +168,70 @@ describe('CohortArchiveDrawerComponent', () => {
     expect(screen.getByText(/This action changed since it was presented\./)).toBeTruthy();
   });
 
-  it('says so plainly when nothing on the account can be archived', async () => {
+  it('keeps blocked bots and their reasons visible when none are armed', async () => {
+    // An account whose stopped bots all hold exposure has candidates, each
+    // with a backend-authored reason. Collapsing that into a summary would
+    // hide exactly the identities and remediation the view includes them for.
     const service = fakeService([
-      leg({ enabled: false, revision: null, concurrency_token: null, blocker_headline: null }),
+      leg({
+        strategy_instance_id: 'spy-held-1',
+        enabled: false,
+        revision: null,
+        concurrency_token: null,
+        blocker_headline: 'This bot still holds custody.',
+      }),
     ]);
 
     await open(service);
 
+    expect(await screen.findByText('spy-held-1')).toBeTruthy();
+    expect(screen.getByText('This bot still holds custody.')).toBeTruthy();
+    expect(screen.queryByText(/No bot on this account can be archived/)).toBeNull();
+  });
+
+  it('says so plainly when the account has no candidates at all', async () => {
+    const service = fakeService([]);
+
+    await open(service);
+
     expect(await screen.findByText(/No bot on this account can be archived/)).toBeTruthy();
+  });
+
+  it('reports an unknown outcome and keeps the selection when the POST never lands', async () => {
+    // An irreversible command must not leave the button quietly re-enabling:
+    // the operator cannot tell whether the request reached the server.
+    const service = fakeService([leg()]);
+    service.runCohortArchive = vi.fn().mockRejectedValue(new Error('network down'));
+    await open(service);
+    const user = userEvent.setup();
+
+    await user.click((await screen.findAllByRole('checkbox'))[0]);
+    await user.type(screen.getByLabelText(/Type ARCHIVE to confirm/), 'ARCHIVE');
+    await user.click(screen.getByRole('button', { name: /Archive 1/ }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'did not reach a result',
+    );
+    // Selection preserved, so a retry is deliberate rather than re-selected.
+    expect(screen.getByRole('button', { name: /Archive 1/ })).toBeTruthy();
+  });
+
+  it('drops a selection that no longer names a present, armed leg', async () => {
+    // Derived rather than reset: switching accounts, or a reload that disarms
+    // a leg, must not leave a stale id able to arm the confirm button.
+    const service = fakeService([leg()]);
+    await open(service);
+    const user = userEvent.setup();
+
+    await user.click((await screen.findAllByRole('checkbox'))[0]);
+    expect(screen.getByRole('button', { name: /Archive 1/ })).toBeTruthy();
+
+    service.getCohortArchiveView.mockResolvedValue(
+      view([leg({ enabled: false, revision: null, concurrency_token: null })]),
+    );
+    await user.type(screen.getByLabelText(/Type ARCHIVE to confirm/), 'ARCHIVE');
+    await user.click(screen.getByRole('button', { name: /Archive 1/ }));
+
+    expect(await screen.findByRole('button', { name: /Archive 0/ })).toBeTruthy();
   });
 });

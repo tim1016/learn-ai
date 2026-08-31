@@ -32,36 +32,21 @@
       <p role="alert">Could not read the archivable roster. Close and reopen to retry.</p>
     } @else {
       @if (outcome(); as result) {
-        <section
-          class="cohort-archive__outcome"
-          [attr.role]="result.failed_count + result.refused_count ? 'alert' : 'status'"
-        >
-          <strong>
-            Archived {{ result.applied_count }},
-            already archived {{ result.replayed_count }},
-            refused {{ result.refused_count }},
-            failed {{ result.failed_count }}.
-          </strong>
-          @if (result.failed_count || result.refused_count) {
-            <ul>
-              @for (leg of result.legs; track leg.strategy_instance_id) {
-                @if (leg.error; as error) {
-                  <li>
-                    <code>{{ leg.strategy_instance_id }}</code>
-                    — {{ error.message }}
-                  </li>
-                }
-              }
-            </ul>
-          }
-        </section>
+        <app-cohort-archive-outcome [result]="result" />
+      }
+
+      @if (submitError()) {
+        <p role="alert">
+          The archive request did not reach a result. Nothing is confirmed either
+          way — inspect the roster before retrying. Your selection is kept.
+        </p>
       }
 
       @if (emptyMessage(); as message) {
         <p role="status">{{ message }}</p>
       } @else {
         <div class="cohort-archive__bulk">
-          <button type="button" (click)="selectAll()">
+          <button type="button" (click)="selectAll()" [disabled]="!armedLegs().length">
             Select all {{ armedLegs().length }}
           </button>
           <button type="button" (click)="clearSelection()" [disabled]="!selectedCount()">
@@ -70,57 +55,21 @@
         </div>
 
         @for (cohort of view()?.cohorts ?? []; track cohort.strategy_key + cohort.symbol) {
-          <section class="cohort-archive__group">
-            <h3>
-              {{ cohort.strategy_label }} · {{ cohort.symbol }}
-              <span class="cohort-archive__count">
-                {{ cohort.enabled_count }} of {{ cohort.legs.length }} archivable
-              </span>
-            </h3>
-            <ul>
-              @for (leg of cohort.legs; track leg.strategy_instance_id) {
-                <li [class.cohort-archive__leg--blocked]="!leg.enabled">
-                  <label>
-                    <input
-                      type="checkbox"
-                      [checked]="isSelected(leg)"
-                      [disabled]="!leg.enabled"
-                      (change)="toggle(leg)"
-                    />
-                    <code>{{ leg.strategy_instance_id }}</code>
-                  </label>
-                  @if (leg.blocker_headline; as blocker) {
-                    <span class="cohort-archive__blocker">{{ blocker }}</span>
-                  }
-                </li>
-              }
-            </ul>
-          </section>
+          <app-cohort-archive-group
+            [cohort]="cohort"
+            [selected]="selected()"
+            (toggled)="toggle($event)"
+          />
         }
 
-        <footer class="cohort-archive__commit">
-          <label for="cohort-archive-confirm">
-            Type ARCHIVE to confirm archiving {{ selectedCount() }}
-            {{ selectedCount() === 1 ? 'bot' : 'bots' }}
-          </label>
-          <input
-            id="cohort-archive-confirm"
-            type="text"
-            autocomplete="off"
-            [value]="confirmText()"
-            [disabled]="!selectedCount()"
-            (input)="confirmText.set($any($event.target).value)"
-          />
-          <button
-            type="button"
-            class="cohort-archive__submit"
-            [disabled]="!canSubmit()"
-            [attr.aria-busy]="submitting()"
-            (click)="submit()"
-          >
-            {{ submitting() ? 'Archiving…' : 'Archive ' + selectedCount() }}
-          </button>
-        </footer>
+        <app-cohort-archive-commit
+          [selectedCount]="selectedCount()"
+          [submitting]="submitting()"
+          [canSubmit]="canSubmit()"
+          [confirmText]="confirmText()"
+          (confirmTextChange)="confirmText.set($event)"
+          (submitted)="submit()"
+        />
       }
     }
   }

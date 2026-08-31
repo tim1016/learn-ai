@@ -352,6 +352,7 @@ _RETIRE_BLOCKER_COPY: dict[RetirementBlockedCause, tuple[str, str]] = {
 
 ArchiveBlockedCause = Literal[
     "BOT_STILL_RUNNING",
+    "BOT_DUTY_NOT_SETTLED",
     "ARCHIVE_CUSTODY_UNPROVABLE",
     "ARCHIVE_WOULD_STRAND_CUSTODY",
 ]
@@ -379,6 +380,7 @@ def evaluate_archive(
     phase: str,
     has_exposure: bool,
     working_order_count: int,
+    outstanding_effect_count: int,
     custody_provable: bool,
 ) -> ArchiveVerdict:
     """Decide archive eligibility, nearest obstacle first (ADR 0052).
@@ -399,14 +401,33 @@ def evaluate_archive(
     archiving on it would be treating an unproven fact as an enabling one.
     Retire's custody guard is a backstop behind an independent proof;
     archive's *is* the proof, so it must be believable before it is believed.
+
+    ``running`` and ``phase`` are two different facts and both are required.
+    ``running`` is process liveness; ``phase`` is the durable duty record. They
+    disagree in exactly the window that matters -- a task that has died before
+    its stop transition committed reads ``running=False`` while the authority
+    still holds an ACTIVE run -- and archiving there would stamp
+    ``retired_at_ms`` on a registration whose run never ended. The fold that
+    writes it states there is no active run; this is what makes that true.
+
+    ``outstanding_effect_count`` is bot-scoped and asymmetric by design: the
+    commit-time caller reads it from a freshly reconciled custody snapshot,
+    while the presentation cannot see it and passes zero. That asymmetry is
+    the same one the whole action already has -- the presented decision is
+    always older than the click -- and it fails in the safe direction: an
+    accepted-but-not-yet-working effect can arm the button and will still be
+    refused at commit, rather than committing and letting the effect create
+    broker custody for a terminal registration.
     """
     if phase == "RETIRED":
         return ArchiveVerdict(eligible=False, already_retired=True)
     if running:
         return ArchiveVerdict(eligible=False, cause="BOT_STILL_RUNNING")
+    if phase != "OFF_DUTY":
+        return ArchiveVerdict(eligible=False, cause="BOT_DUTY_NOT_SETTLED")
     if not custody_provable:
         return ArchiveVerdict(eligible=False, cause="ARCHIVE_CUSTODY_UNPROVABLE")
-    if has_exposure or working_order_count:
+    if has_exposure or working_order_count or outstanding_effect_count:
         return ArchiveVerdict(eligible=False, cause="ARCHIVE_WOULD_STRAND_CUSTODY")
     return ArchiveVerdict(eligible=True)
 
@@ -415,6 +436,11 @@ _ARCHIVE_BLOCKER_COPY: dict[ArchiveBlockedCause, tuple[str, str]] = {
     "BOT_STILL_RUNNING": (
         "Stop the bot before archiving it.",
         "A running bot still evaluates bars and can place orders.",
+    ),
+    "BOT_DUTY_NOT_SETTLED": (
+        "This bot's last run has not finished settling.",
+        "Its process is gone but the Clerk still holds an open run. Wait for "
+        "recovery to record how that run ended, then archive.",
     ),
     "ARCHIVE_CUSTODY_UNPROVABLE": (
         "The Clerk cannot prove this bot is flat.",
@@ -436,6 +462,10 @@ def _guard_archive(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]
         phase=ctx.phase,
         has_exposure=ctx.has_exposure,
         working_order_count=ctx.working_order_count,
+        # The panel has no bot-scoped effect count; the commit does, and it is
+        # what enforces this. See `evaluate_archive` on why that asymmetry is
+        # safe here and is the action's existing contract, not a gap in it.
+        outstanding_effect_count=0,
         custody_provable=not ctx.freeze_active,
     )
     if verdict.eligible:

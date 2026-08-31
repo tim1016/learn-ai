@@ -1,0 +1,21 @@
+.cohort-archive__commit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--surface-border, rgb(0 0 0 / 12%));
+
+  label {
+    flex: 1 1 100%;
+    font-size: 0.85rem;
+  }
+
+  input {
+    flex: 0 1 12rem;
+  }
+}
+
+.cohort-archive__submit {
+  cursor: pointer;
+}

@@ -109,16 +109,40 @@ def strategy_instances(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+#: Alpaca order states in which the broker may still act on an order. One
+#: definition, imported by the recovery policy rather than restated there, so
+#: "this bot still has a working order" cannot mean two different things
+#: depending on which side asks.
+WORKING_BROKER_STATES: frozenset[str] = frozenset(
+    {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
+)
+
+#: Effect-operation states that have not reached a terminal outcome. An effect
+#: here can still create broker custody, so a registration carrying one is not
+#: inert however flat it currently reads.
+NONTERMINAL_EFFECT_STATES: frozenset[str] = frozenset(
+    {"reserved", "accepted", "in_progress", "unknown"}
+)
+
+
 def strategy_instances_with_live_custody(conn: sqlite3.Connection) -> set[str]:
     """Roster ids whose custody can still change, or still needs attention.
 
-    The union of the three bot-scoped facts a catalog row's attention flag and
-    its authored recovery command are derived from: an unresolved uncertainty
+    The union of the bot-scoped facts a catalog row's attention flag and its
+    authored recovery command are derived from: an unresolved uncertainty
     (which since v12 is also every active hold and every execution-coverage
     conflict, both being ``uncertainties`` rows), a non-zero attributed
-    position, and an active run. Account-scoped uncertainties are excluded on
+    position, an active run, an order in a working broker state, and a
+    nonterminal effect operation. Account-scoped uncertainties are excluded on
     purpose -- they reach every row alike through the account facts, so they
     say nothing about one bot.
+
+    The last two arms matter for a retired registration specifically: a
+    working order observed after retirement, or an effect accepted in the
+    window before its order becomes working, would otherwise leave that bot's
+    custody projection and its authored recovery command out of the catalog
+    entirely. The order states are the same set ``recovery_policy`` treats as
+    working, and the effect states are its nonterminal ones.
 
     Answering this for the whole roster in one query is what lets the catalog
     skip the per-row projection for a retired registration that is provably
@@ -130,12 +154,21 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection) -> set[str]:
     borderline row takes the fully-projected path. Costing a read is the safe
     direction to be wrong in; going quiet on a bot that needs attention is not.
     """
+    working_states = ", ".join("?" for _ in WORKING_BROKER_STATES)
+    nonterminal_states = ", ".join("?" for _ in NONTERMINAL_EFFECT_STATES)
     rows = conn.execute(
         "SELECT strategy_instance_id FROM uncertainties "
         "WHERE resolved_at_ms IS NULL AND strategy_instance_id IS NOT NULL "
         "UNION SELECT strategy_instance_id FROM positions "
         "WHERE attributed_qty <> 0 AND strategy_instance_id IS NOT NULL "
-        "UNION SELECT strategy_instance_id FROM runs WHERE state = 'ACTIVE'"
+        "UNION SELECT strategy_instance_id FROM runs WHERE state = 'ACTIVE' "
+        "UNION SELECT e.strategy_instance_id FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        f"WHERE LOWER(o.broker_state) IN ({working_states}) "
+        "AND e.strategy_instance_id IS NOT NULL "
+        "UNION SELECT strategy_instance_id FROM effect_operations "
+        f"WHERE state IN ({nonterminal_states}) AND strategy_instance_id IS NOT NULL",
+        (*sorted(WORKING_BROKER_STATES), *sorted(NONTERMINAL_EFFECT_STATES)),
     ).fetchall()
     return {str(row["strategy_instance_id"]) for row in rows}
 

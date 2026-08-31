@@ -12,6 +12,8 @@ leg facts are the per-bot panel's real ones against the real harness.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -31,9 +33,11 @@ from app.broker.contract.registry import (
     reset_broker_registry_for_testing,
 )
 from app.routers.broker_v2_panel import router
+from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     CohortArchiveLegRequest,
     CohortArchiveRequest,
+    PanelActionRequest,
     PanelActionResult,
 )
 from app.services.bot_runner import set_bot_task_registry
@@ -111,7 +115,14 @@ async def test_every_leg_runs_the_per_bot_archive_under_a_derived_identity(
 ) -> None:
     seen: list[tuple[str, str, str]] = []
 
-    async def fake_run_action(broker, account_id, sid, request, *, operator_identity):
+    async def fake_run_action(
+        broker: str,
+        account_id: str,
+        sid: str,
+        request: PanelActionRequest,
+        *,
+        operator_identity: str,
+    ) -> PanelActionResult:
         seen.append((sid, request.action_id, request.idempotency_key))
         return PanelActionResult(
             action_id="archive",  # type: ignore[arg-type]
@@ -142,7 +153,7 @@ async def test_every_leg_runs_the_per_bot_archive_under_a_derived_identity(
 class _MixedLivenessRegistry(_FakeRegistry):
     """Two members are finished; one is still running."""
 
-    def status(self, broker, sid):
+    def status(self, broker: str, sid: str) -> BotStatusView:
         view = super().status(broker, sid)
         if sid in _STOPPED_SIDS:
             return view.model_copy(
@@ -157,7 +168,7 @@ class _MixedLivenessRegistry(_FakeRegistry):
 
 
 @pytest.fixture()
-async def archive_api(tmp_path):
+async def archive_api(tmp_path: Path) -> AsyncIterator[FastAPI]:
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
     set_active_clerk_runtime(None)
@@ -211,7 +222,7 @@ async def archive_api(tmp_path):
 
 
 async def test_the_view_presents_only_archive_candidates_with_real_leg_facts(
-    archive_api,
+    archive_api: FastAPI,
 ) -> None:
     """A running bot is never a leg; a stopped flat one is armed.
 
@@ -239,7 +250,7 @@ async def test_the_view_presents_only_archive_candidates_with_real_leg_facts(
         assert leg["revision"] is not None
 
 
-async def test_a_single_member_group_is_still_presented(archive_api) -> None:
+async def test_a_single_member_group_is_still_presented(archive_api: FastAPI) -> None:
     """Unlike flatten, a lone finished bot must not be hidden.
 
     A flatten cohort of one is just the per-bot action, so ADR 0051 hides it.
