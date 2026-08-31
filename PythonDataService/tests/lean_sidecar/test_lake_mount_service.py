@@ -1,4 +1,4 @@
-"""Orchestrator behavior under ``DATA_LAKE_ENABLED`` (#1834).
+"""Orchestrator behavior when a run reads the lake (#1834).
 
 Drives the real ``run_trusted_sample`` with only the process boundaries
 faked (the launcher HTTP call, the .NET persist call, and — for the
@@ -25,10 +25,8 @@ import pytest
 from app.data_lake.path_policy import lake_subpath
 from app.lean_sidecar.lake_mount import CONTAINER_LAKE_DATA_MOUNT
 from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITIES, LaunchRequest, LaunchResponse
-from app.lean_sidecar.lean_config import CONTAINER_DATA_FOLDER
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from tests._helpers.lake_fixture import seed_lake_corporate_actions, seed_lake_interest_rate, seed_lake_window
-from tests._helpers.lean_store import seed_store_day
 
 DAY_ONE = date(2026, 1, 5)
 DAY_TWO = date(2026, 1, 6)
@@ -133,17 +131,16 @@ def _launcher_is_stale(monkeypatch: pytest.MonkeyPatch) -> None:
 def _polygon_is_off_limits(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make any per-run Polygon staging a loud failure, not a slow test.
 
-    ``run_trusted_sample`` imports both of these inside the live-Polygon
-    branch, so patching the defining modules is enough to catch the
-    branch being taken.
+    Before #1893 this also patched ``availability.ensure_range``, the policy
+    store's fetch-the-missing-range entry point. That function is gone with
+    the store, so the client constructor is now the only way a run could
+    reach Polygon per-run, and patching it is the whole guard.
     """
-    from app.engine.data import availability
     from app.services import polygon_client
 
     def refuse(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("lake-mode run must not stage from Polygon")
 
-    monkeypatch.setattr(availability, "ensure_range", refuse)
     monkeypatch.setattr(polygon_client, "PolygonClientService", refuse)
 
 
@@ -170,7 +167,6 @@ async def test_lake_run_reads_the_mount_and_stages_nothing(
     lake_root = write_root / lake_subpath("raw")
     seed_lake_window(lake_root, SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     # A lake run must not shell out for image metadata either — the
     # lake's own Phase-0 bootstrap owns those files.
     monkeypatch.setattr(
@@ -205,51 +201,6 @@ async def test_lake_run_reads_the_mount_and_stages_nothing(
 
 
 @pytest.mark.asyncio
-async def test_flag_off_run_still_stages_the_workspace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    orchestrator: SimpleNamespace,
-) -> None:
-    from app.config import settings
-    from app.engine.data import availability, policy_store
-    from app.services import lean_sidecar_service as service
-
-    store_root = tmp_path / "polygon-raw"
-    for trading_date in WINDOW:
-        seed_store_day(store_root, SYMBOL, trading_date)
-
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    monkeypatch.setattr(policy_store, "resolve_data_roots", lambda **_k: [store_root])
-    monkeypatch.setattr(
-        availability,
-        "ensure_range",
-        lambda **_k: SimpleNamespace(available_days=len(WINDOW), expected_days=len(WINDOW)),
-    )
-    monkeypatch.setattr(service, "stage_lean_metadata_from_image", lambda *_a, **_k: None)
-
-    result = await service.run_trusted_sample(_request("staged-mode-run"))
-
-    workspace_data = result.workspace_root / "workspace" / "data"
-    staged_zips = sorted(p.name for p in workspace_data.rglob("*.zip"))
-    assert staged_zips == [
-        "20260105_quote.zip",
-        "20260105_trade.zip",
-        "20260106_quote.zip",
-        "20260106_trade.zip",
-        "spy.zip",
-    ]
-
-    config = _read_config(result.workspace_root)
-    assert config["data-folder"] == CONTAINER_DATA_FOLDER
-
-    assert [r.mount_lake_read_only for r in orchestrator.launch_requests] == [False]
-
-    manifest = _read_manifest(result.workspace_root)
-    for relative in manifest["staged_zip_sha256"]:
-        assert (workspace_data / relative).exists()
-
-
-@pytest.mark.asyncio
 async def test_lake_refusal_leaves_the_run_id_reusable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -274,7 +225,6 @@ async def test_lake_refusal_leaves_the_run_id_reusable(
     # that the lake is *empty*, which it is either way.
     (write_root / lake_subpath("raw")).mkdir(parents=True, exist_ok=True)  # a lake with nothing in it
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     with pytest.raises(service.LeanSidecarServiceError, match="lake_incomplete_trade_coverage"):
         await service.run_trusted_sample(_request("reusable-run-id"))
@@ -313,7 +263,6 @@ async def test_a_fixture_replay_never_consults_the_lake_even_when_it_has_no_cove
     write_root = tmp_path / "lean-data-writer"
     (write_root / lake_subpath("raw")).mkdir(parents=True, exist_ok=True)  # empty lake
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     class _FakeFixtureProvider:
         fixture_id = "fake-fixture-v1"
@@ -406,7 +355,6 @@ async def test_an_adjusted_request_also_reaches_the_lake_with_the_flag_on(
     (write_root / lake_subpath("polygon_split_adjusted")).mkdir(parents=True, exist_ok=True)
     seed_lake_window(write_root / lake_subpath("polygon_split_adjusted"), SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     resolved: list[object] = []
     real_resolve = service._resolve_lake_artifacts_or_refuse
@@ -446,7 +394,6 @@ async def test_a_raw_request_does_reach_the_lake_with_the_flag_on(
     (write_root / lake_subpath("raw")).mkdir(parents=True, exist_ok=True)
     seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     await service.run_trusted_sample(_request("raw-reaches-the-lake", adjusted=False))
 
@@ -474,7 +421,6 @@ async def test_stale_launcher_refuses_before_the_workspace_exists(
     write_root = tmp_path / "lean-data-writer"
     seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     with pytest.raises(service.LeanSidecarServiceError, match="lake_mount_unsupported_by_launcher") as excinfo:
         await service.run_trusted_sample(_request("stale-launcher-run"))
@@ -519,7 +465,6 @@ async def test_unreachable_launcher_refuses_before_the_workspace_exists(
     write_root = tmp_path / "lean-data-writer"
     seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     with pytest.raises(LauncherUnreachable, match="unreachable"):
         await service.run_trusted_sample(_request("unreachable-launcher-run"))
@@ -556,7 +501,6 @@ async def test_factor_files_move_the_input_snapshot(
     lake_root = write_root / lake_subpath("raw")
     seed_lake_window(lake_root, SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     seed_lake_corporate_actions(lake_root, SYMBOL, factor_rows="20260105,1,1\n")
     first = await service.run_trusted_sample(_request("factor-snapshot-a"))
@@ -596,7 +540,6 @@ async def test_interest_rate_file_moves_the_input_snapshot(
     lake_root = write_root / lake_subpath("raw")
     seed_lake_window(lake_root, SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     seed_lake_interest_rate(lake_root, rows="date,rate\n20260105,0.0525\n")
     first = await service.run_trusted_sample(_request("interest-rate-snapshot-a"))
@@ -630,7 +573,6 @@ async def test_absent_interest_rate_file_still_produces_a_manifest(
     lake_root = write_root / lake_subpath("raw")
     seed_lake_window(lake_root, SYMBOL, WINDOW)  # no seed_lake_interest_rate call
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     result = await service.run_trusted_sample(_request("interest-rate-absent"))
     manifest = _read_manifest(result.workspace_root)

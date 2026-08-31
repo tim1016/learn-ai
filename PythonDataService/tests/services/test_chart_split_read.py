@@ -19,7 +19,6 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.config import settings
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.path_policy import LeanMinuteBarPath
 from app.lean_sidecar.trading_calendar import (
@@ -792,18 +791,7 @@ def chart_provider(monkeypatch: pytest.MonkeyPatch) -> _ProviderSpy:
     return provider
 
 
-def test_get_chart_data_omits_bar_sources_when_the_flag_is_off(
-    monkeypatch: pytest.MonkeyPatch, chart_provider: _ProviderSpy
-) -> None:
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-
-    result = _run_chart()
-
-    assert "bar_sources" not in result
-    assert result["bars"]
-
-
-def test_get_chart_data_flag_on_matches_flag_off_bars_and_indicators(
+def test_get_chart_data_lake_backed_matches_provider_backed_bars_and_indicators(
     monkeypatch: pytest.MonkeyPatch, chart_provider: _ProviderSpy, lake_root: Path
 ) -> None:
     """Resampling and indicator outputs are identical for identical inputs.
@@ -811,24 +799,40 @@ def test_get_chart_data_flag_on_matches_flag_off_bars_and_indicators(
     The lake holds the same minutes the provider would have served, so the only
     legitimate difference between the two responses is the additive source
     indicator.
+
+    Before #1893 the provider-backed arm was produced by turning
+    ``DATA_LAKE_ENABLED`` off. An **empty** lake produces it now: the composer
+    finds no covered session and falls back to the provider wholesale, which is
+    the same comparison without a flag to flip.
     """
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    flag_off = _run_chart()
+    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root)
+    monkeypatch.setattr(chart_bar_source, "now_ms_utc", lambda: _during(LIVE_SESSION))
+
+    lake_root.mkdir(parents=True, exist_ok=True)  # present but holding nothing
+    provider_backed = _run_chart()
+
+    # The resample/indicator caches key on the request, which is identical across
+    # both arms — without this the second call would be served the first's entry
+    # and the comparison below would be against itself. (The key carried a
+    # sourcing-mode discriminator until #1893; there is one mode now.)
+    chart_service._resample_cache.clear()
+    chart_service._indicator_cache.clear()
 
     _write_lake_day(lake_root, REGULAR_BEFORE)
     _write_lake_day(lake_root, HALF_DAY)
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root)
-    monkeypatch.setattr(chart_bar_source, "now_ms_utc", lambda: _during(LIVE_SESSION))
-    flag_on = _run_chart()
+    lake_backed = _run_chart()
 
     # Warmup pulled the fetch window back before the requested range and those
     # sessions came from the provider, but the operator cannot see them — so the
     # receipt stays quiet. Every *visible* session is lake-backed.
-    assert flag_on.pop("bar_sources")["notice_code"] is None
-    assert flag_on["bars"] == flag_off["bars"]
-    assert flag_on["indicators"] == flag_off["indicators"]
-    assert flag_on == flag_off
+    assert lake_backed.pop("bar_sources")["notice_code"] is None
+    # The empty-lake arm is provider-only by construction; assert that rather
+    # than merely discarding the receipt, so a lake that quietly started
+    # answering here would fail instead of silently weakening the comparison.
+    assert [span["source"] for span in provider_backed.pop("bar_sources")["spans"]] == ["provider"]
+    assert lake_backed["bars"] == provider_backed["bars"]
+    assert lake_backed["indicators"] == provider_backed["indicators"]
+    assert lake_backed == provider_backed
 
 
 def test_get_chart_data_carries_the_source_indicator_when_history_is_lake_backed(
@@ -836,7 +840,6 @@ def test_get_chart_data_carries_the_source_indicator_when_history_is_lake_backed
 ) -> None:
     for window in session_windows_ms_utc(date(2025, 10, 1), HALF_DAY):
         _write_lake_day(lake_root, window.session_date)
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(chart_bar_source, "resolve_lake_root", lambda mode: lake_root)
     monkeypatch.setattr(chart_bar_source, "now_ms_utc", lambda: _during(LIVE_SESSION))
 

@@ -10,11 +10,13 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.config import settings
+from app.data_lake.path_policy import lake_subpath
+from app.data_lake.types import polygon_mode_for
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from app.schemas.engine_chart import EngineChartRequest
 from app.services.engine_chart_service import build_engine_chart, compute_strategy_indicator_results
-from tests._helpers.lean_store import seed_store_day
+from tests._helpers.lake_fixture import seed_lake_daily, seed_lake_minute_day
 
 DAY = date(2026, 1, 5)
 FROM_MS = session_open_ms_utc(DAY)
@@ -23,10 +25,18 @@ TO_MS = session_open_ms_utc(next_trading_day(DAY))
 
 @pytest.fixture
 def chart_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "no-reference-mount"))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-    seed_store_day(tmp_path / "store" / "polygon-adjusted", "SPY", DAY)
+    """Seed one SPY day in the lake's adjusted-mode root.
+
+    #1893 retired the policy store this used to seed; the reader resolves
+    the lake root for the request's adjustment mode now. The indicator and
+    recipe assertions below are unchanged — they only need one day of bars
+    wherever the reader looks.
+    """
+    write_root = tmp_path / "lean-data-writer"
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    adjusted_root = write_root / lake_subpath(polygon_mode_for(True))
+    seed_lake_minute_day(adjusted_root, "SPY", DAY)
+    seed_lake_daily(adjusted_root, "SPY", [DAY])
 
 
 def _request(**overrides: object) -> EngineChartRequest:

@@ -181,19 +181,22 @@ export interface DataRunSpec {
 /**
  * Every way a data-lake read can fail to produce a value.
  *
- * `not_enabled` is a first-class outcome, not an error: `DATA_LAKE_ENABLED`
- * defaults on since #1839, but a deployment can still turn it off (it is the
- * rollback), and a dark router answers a bare 404 on every route. `rejected`
- * carries the endpoint's own typed `{reason, message}` body verbatim so the reason
- * renders through the receipt-label pipe instead of being re-worded here —
- * that covers both the 422 validators and the `artifact_not_found` 404.
+ * There used to be a third outcome, `not_enabled`: the lake router was
+ * registered only when `DATA_LAKE_ENABLED` was on, so a dark deployment
+ * answered a bare 404 on every route. #1893 retired the flag and registers
+ * the router unconditionally, so that state cannot occur and was removed
+ * rather than left as a branch nothing reaches.
+ *
+ * `rejected` carries the endpoint's own typed `{reason, message}` body
+ * verbatim so the reason renders through the receipt-label pipe instead of
+ * being re-worded here — that covers both the 422 validators and the
+ * `artifact_not_found` 404.
  *
  * Named separately from `DataLakeRead` because classification only ever
  * produces a failure; a function that cannot return `ok` should not be
  * typed as if it might.
  */
 export type DataLakeFailure =
-  | { readonly kind: 'not_enabled' }
   | { readonly kind: 'rejected'; readonly reason: string; readonly message: string }
   | { readonly kind: 'unavailable'; readonly message: string };
 

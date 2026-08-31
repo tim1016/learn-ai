@@ -35,7 +35,6 @@ from app.lean_sidecar.lake_mount import (
     LakeMount,
     LakeMountError,
     data_plane_lake_root,
-    lake_mount_enabled,
     launcher_host_lake_root,
     require_lake_metadata,
     resolve_lake_artifacts,
@@ -150,8 +149,14 @@ class TestReadOnlyMountIsRendered:
             )
 
 
-class TestFlagOffIsUnchanged:
-    """AC: with the flag off, the current staging path is unchanged."""
+class TestBuildingWithoutALakeMount:
+    """A command built with no ``LakeMount`` mounts only the workspace.
+
+    This was the flag-off path until #1893 retired ``DATA_LAKE_ENABLED``.
+    The shape it covers outlived the flag: ``build_command``'s ``lake_mount``
+    argument is still optional, because a fixture replay resolves no lake,
+    and these assertions pin what that renders.
+    """
 
     def test_argv_without_lake_mount_has_only_the_workspace_volume(
         self,
@@ -169,29 +174,6 @@ class TestFlagOffIsUnchanged:
     def test_default_config_still_renders_the_workspace_data_folder(self) -> None:
         assert LeanConfig().to_payload()["data-folder"] == CONTAINER_DATA_FOLDER
         assert f"{CONTAINER_WORKSPACE_MOUNT}/data" == CONTAINER_DATA_FOLDER
-
-    def test_flag_ships_default_on(self) -> None:
-        """Asserted on the field default, not on the ambient environment.
-
-        A developer with ``DATA_LAKE_ENABLED=false`` in their ``.env``
-        should not fail this; what #1839 promises is that the *shipped*
-        default is on. The class around it still holds: every assertion in
-        it is about what a flag-OFF deployment renders, which is now the
-        deliberate opt-out rather than the default, and must keep working
-        because turning the flag off is the rollback.
-        """
-        from app.config import Settings
-
-        assert Settings.model_fields["DATA_LAKE_ENABLED"].default is True
-
-    def test_lake_mode_follows_the_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from app.config import settings
-
-        monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-        assert lake_mount_enabled() is False
-
-        monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-        assert lake_mount_enabled() is True
 
     def test_launch_request_does_not_ask_for_the_lake_by_default(self) -> None:
         request = LaunchRequest(

@@ -59,7 +59,7 @@ def _safe_symbol(symbol: str) -> str:
 
     Lazy import: the canonical validator lives with the sidecar workspace
     code; the engine layer reuses it rather than duplicating the ticker
-    alphabet (guiding-philosophy #5). Callers such as ``polygon_export`` do
+    alphabet (guiding-philosophy #5). Callers such as ``polygon_bars`` do
     not pre-validate, so the writers guard the symbol here.
     """
     from app.lean_sidecar.workspace import validate_symbol
@@ -243,7 +243,7 @@ class LeanMinuteDataReader:
         # handlers never observe extended-hours data. ``extended`` returns
         # every bar present in the zip — required for any strategy that
         # explicitly opts into pre/post-market signals. The on-disk cache
-        # (``polygon_export.py``) stores the full session so both modes can
+        # (``polygon_bars.py``) stores the full session so both modes can
         # be served from the same files without reseeding.
         self.session: Literal["regular", "extended"] = session
 

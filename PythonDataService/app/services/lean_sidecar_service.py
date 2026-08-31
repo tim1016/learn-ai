@@ -44,7 +44,6 @@ from app.lean_sidecar.lake_mount import (
     LakeArtifacts,
     LakeMountError,
     data_plane_lake_root,
-    lake_mount_enabled,
     resolve_lake_artifacts,
 )
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
@@ -681,11 +680,7 @@ async def run_trusted_sample(
     # with the *same* id, which is not a fresh-id problem and reads like
     # one. Failing here leaves the id reusable.
     lake_artifacts: LakeArtifacts | None = None
-    if (
-        request.data_policy.source == "polygon"
-        and request.data_policy.provider_kind != "fixture"
-        and lake_mount_enabled()
-    ):
+    if request.data_policy.source == "polygon" and request.data_policy.provider_kind != "fixture":
         lake_artifacts = await _resolve_lake_artifacts_or_refuse(request)
 
     workspace = resolve_workspace(request.run_id, DEFAULT_ARTIFACTS_ROOT)
@@ -804,45 +799,6 @@ async def run_trusted_sample(
         _emit_log(
             f"Lake coverage for {request.symbol}: {len(trading_dates)} trading days under {lake_artifacts.lake_root}"
         )
-    elif data_source == "polygon":
-        # Live polygon runs stage from the shared policy-keyed bar store —
-        # the same zips the Python engine reads — so both engines consume
-        # identical bytes. ``ensure_range`` materializes any missing days
-        # (fail-fast validated, locked, provenance-recorded).
-        from app.engine.data.availability import ensure_range
-        from app.engine.data.lean_format import LeanMinuteDataReader
-        from app.engine.data.policy_store import resolve_data_roots
-        from app.services.polygon_client import PolygonClientService
-
-        adjusted = polygon_adjustment != "raw"
-        store_roots = resolve_data_roots(source="polygon", adjusted=adjusted)
-        report = ensure_range(
-            reference_roots=store_roots[:-1],
-            cache_root=store_roots[-1],
-            symbol=request.symbol,
-            start=request.start_date,
-            end=request.end_date,
-            polygon=PolygonClientService(),
-            adjusted=adjusted,
-            resolution="minute",
-        )
-        _emit_log(f"Bar store coverage for {request.symbol}: {report.available_days}/{report.expected_days} weekdays")
-        # Session-filtered read for the synthesized quote/daily zips —
-        # the same read path the Python engine uses. The trade zips
-        # themselves are byte-copied unfiltered below; LEAN applies its
-        # own session filter at runtime (extendedMarketHours=False).
-        reader = LeanMinuteDataReader(store_roots, session=request.data_policy.session)
-        bars_by_date = []
-        for d in reader.iter_dates(request.symbol, request.start_date, request.end_date):
-            day_bars = reader.read_day(request.symbol, d)
-            if day_bars:
-                bars_by_date.append((d, day_bars))
-        if not bars_by_date:
-            raise LeanSidecarServiceError(
-                f"polygon_returned_zero_bars: window={request.start_date.isoformat()}.."
-                f"{request.end_date.isoformat()}; symbol={request.symbol}"
-            )
-        trading_dates = [d for d, _ in bars_by_date]
     else:
         # Defense-in-depth — Pydantic Literal already rejects unknown values.
         raise LeanSidecarServiceError(f"unknown data_source: {data_source!r}")

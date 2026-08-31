@@ -33,15 +33,11 @@ from app.config import settings
 from app.engine.data.availability import (
     AvailabilityReport,
     check_availability,
-    ensure_range,
 )
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import (
     policy_key,
-    record_fetch,
     resolve_data_roots,
-    resolve_policy_root,
-    symbol_write_lock,
 )
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
@@ -761,87 +757,6 @@ def generate_pine_script(name: str, params: dict[str, Any]) -> PlainTextResponse
 
 
 # ---------------------------------------------------------------------------
-# Polygon → LEAN export endpoint
-# ---------------------------------------------------------------------------
-class LeanExportRequest(BaseModel):
-    symbol: str = Field(..., min_length=1, max_length=20)
-    from_date: str = Field(..., description="YYYY-MM-DD (inclusive)")
-    to_date: str = Field(..., description="YYYY-MM-DD (inclusive)")
-    adjusted: bool = Field(True, description="Apply split/dividend adjustments")
-    resolution: Literal["minute", "daily"] = Field(
-        "minute",
-        description="Resolution to fetch: 'minute' (per-day zips) or 'daily' (one zip per symbol)",
-    )
-
-
-class LeanExportResponse(BaseModel):
-    success: bool
-    symbol: str
-    data_root: str
-    days_written: int
-    files: list[str] = []
-    error: str | None = None
-
-
-@router.post("/export-lean", response_model=LeanExportResponse)
-def export_polygon_to_lean(request: LeanExportRequest) -> LeanExportResponse:
-    """Fetch a Polygon minute-bar range and export it to LEAN zips.
-
-    Writes one ``{YYYYMMDD}_trade.zip`` per trading day under
-    ``{LEAN_DATA_CACHE}/equity/usa/minute/{symbol}/``. The read-only
-    reference mount is never touched — all fetched data lives in the
-    writable cache so the SPY fixture's bit-exact guarantee is preserved.
-    """
-    # Imported lazily — keeps this module importable in test contexts
-    # that don't provide a Polygon API key.
-    from app.engine.data.polygon_export import export_polygon_range_to_lean
-    from app.services.polygon_client import PolygonClientService
-
-    cache_root = resolve_policy_root(source="polygon", adjusted=request.adjusted)
-    cache_root.mkdir(parents=True, exist_ok=True)
-
-    try:
-        polygon = PolygonClientService()
-        with symbol_write_lock(cache_root, request.symbol.upper()):
-            files = export_polygon_range_to_lean(
-                polygon=polygon,
-                output_root=cache_root,
-                symbol=request.symbol.upper(),
-                from_date=request.from_date,
-                to_date=request.to_date,
-                adjusted=request.adjusted,
-                resolution=request.resolution,
-            )
-            record_fetch(
-                cache_root,
-                request.symbol.upper(),
-                source="polygon",
-                adjusted=request.adjusted,
-                resolution=request.resolution,
-                from_date=request.from_date,
-                to_date=request.to_date,
-                fetched_at_ms=now_ms_utc(),
-            )
-    except Exception as exc:
-        logger.exception("[ENGINE] LEAN export failed for %s", request.symbol)
-        return LeanExportResponse(
-            success=False,
-            symbol=request.symbol.upper(),
-            data_root=str(cache_root),
-            days_written=0,
-            error=str(exc),
-        )
-
-    return LeanExportResponse(
-        success=True,
-        symbol=request.symbol.upper(),
-        data_root=str(cache_root),
-        days_written=len(files),
-        files=[str(p) for p in files],
-    )
-
-
-# ---------------------------------------------------------------------------
 # Data availability endpoint
 # ---------------------------------------------------------------------------
 class AvailabilityResponse(BaseModel):
@@ -1088,71 +1003,46 @@ def _materialize_missing_bars(
 ) -> str | None:
     """Put the run's bars on disk before the reader looks for them.
 
-    Two materializers, one question. The lake answers it when it serves this
-    request — it fetches only the missing days, records every artifact in the
-    catalog, and hands back the fingerprint this function passes on (see
-    ``materialize_engine_run`` for what that fingerprint does and does not
-    cover). Otherwise the pre-lake policy store exports the range into its
-    cache and there is no such fingerprint to give.
-
-    The branch below and ``_resolve_lean_data_roots`` above must agree, which
-    is why both ask the same flag rather than each testing it independently:
-    materializing into the lake while reading from the policy store would
-    fetch bars nobody reads and then read bars nobody fetched, and the
-    symptom (an empty backtest after a successful fetch) points at neither
-    seam.
+    One materializer. The lake fetches only the missing days, records every
+    artifact in the catalog, and hands back the fingerprint this function
+    passes on (see ``materialize_engine_run`` for what that fingerprint does
+    and does not cover). #1893 retired the pre-lake policy-store export that
+    used to be the other half of this decision, so there is no longer a
+    branch here for ``_resolve_lean_data_roots`` to have to agree with.
     """
-    if settings.DATA_LAKE_ENABLED:
-        # Lazy for the same reason as the Polygon client below: the lake
-        # pulls in the catalog + provider stack, and this module is imported
-        # by surfaces that never materialize anything.
-        from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
-        from app.data_lake.types import polygon_mode_for
+    # Lazy: the lake pulls in the catalog + provider stack, and this module is
+    # imported by surfaces that never materialize anything.
+    from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
+    from app.data_lake.types import polygon_mode_for
 
-        try:
-            materialized = materialize_engine_run(
-                symbol=symbol,
-                start=start,
-                end=end,
-                resolution=request.resolution,
-                price_adjustment_mode=(
-                    polygon_mode_for(_policy_adjusted(request.data_policy))
-                ),
-                requester=request.strategy_name,
-            )
-        except LakeMaterializationError as exc:
-            # The operator reads the run log, not the service log. A refusal
-            # that surfaces only as a generic "auto_fetch failed" tells them
-            # nothing about which bars the lake could not produce.
-            on_log(f"Lake refused this run: {exc}")
-            raise
-        on_log(
-            f"Lake: fetched {materialized.fetched_artifact_count}, "
-            f"reused {materialized.reused_artifact_count} artifact(s)"
+    try:
+        materialized = materialize_engine_run(
+            symbol=symbol,
+            start=start,
+            end=end,
+            resolution=request.resolution,
+            price_adjustment_mode=polygon_mode_for(_policy_adjusted(request.data_policy)),
+            requester=request.strategy_name,
         )
-        if materialized.incomplete_summary:
-            # The lake judged this harmless for the run's resolution, but the
-            # operator should still see it beside the numbers rather than only
-            # in the service log.
-            on_log(
-                f"Lake: incomplete — {materialized.incomplete_summary}; "
-                f"the {request.resolution} bars this run reads did materialize"
-            )
-        return materialized.availability_hash
-
-    from app.services.polygon_client import PolygonClientService
-
-    ensure_range(
-        reference_roots=data_roots[:-1],
-        cache_root=data_roots[-1],
-        symbol=symbol,
-        start=start,
-        end=end,
-        polygon=PolygonClientService(),
-        adjusted=_policy_adjusted(request.data_policy),
-        resolution=request.resolution,
+    except LakeMaterializationError as exc:
+        # The operator reads the run log, not the service log. A refusal that
+        # surfaces only as a generic "auto_fetch failed" tells them nothing
+        # about which bars the lake could not produce.
+        on_log(f"Lake refused this run: {exc}")
+        raise
+    on_log(
+        f"Lake: fetched {materialized.fetched_artifact_count}, "
+        f"reused {materialized.reused_artifact_count} artifact(s)"
     )
-    return None
+    if materialized.incomplete_summary:
+        # The lake judged this harmless for the run's resolution, but the
+        # operator should still see it beside the numbers rather than only in
+        # the service log.
+        on_log(
+            f"Lake: incomplete — {materialized.incomplete_summary}; "
+            f"the {request.resolution} bars this run reads did materialize"
+        )
+    return materialized.availability_hash
 
 
 def execute_engine_backtest(
@@ -1671,7 +1561,6 @@ def _save_study_sync(
     the Replay tab. Returns None when the save fails — the run itself
     is unaffected; persistence is best-effort.
     """
-    from app.config import settings
 
     backend_url = getattr(settings, "BACKEND_URL", "http://localhost:5000")
     url = f"{backend_url}/api/studies"

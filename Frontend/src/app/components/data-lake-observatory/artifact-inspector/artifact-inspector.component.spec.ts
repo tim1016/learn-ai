@@ -145,13 +145,6 @@ describe('ArtifactInspectorComponent', () => {
     expect(screen.getByText('artifact 99 not found')).toBeTruthy();
   });
 
-  it('still says something true if it is ever opened against a dark lake', async () => {
-    await renderInspector({ kind: 'not_enabled' }, 99);
-
-    expect(await screen.findByText('Data Lake Not Enabled')).toBeTruthy();
-    expect(screen.getByText('The data lake is not enabled on this data plane.')).toBeTruthy();
-  });
-
   it('surfaces a rejection reason instead of a blank panel', async () => {
     await renderInspector({ kind: 'unavailable', message: 'The data plane did not respond.' });
 

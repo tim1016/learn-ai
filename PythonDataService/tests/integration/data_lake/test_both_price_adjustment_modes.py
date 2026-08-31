@@ -214,7 +214,6 @@ def tmp_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # test_gate_chain_convergence.py's identical fixture for the fix this
     # mirrors).
     monkeypatch.setenv("LEAN_LAUNCHER_TOKEN", "test-token")
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     artifacts_root = tmp_path / "artifacts-root"
     artifacts_root.mkdir(parents=True)
     monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)

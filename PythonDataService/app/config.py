@@ -113,11 +113,11 @@ class Settings(BaseSettings):
     # landed only in the lake, so a rollback re-fetches those windows from
     # Polygon on first use. The policy cache is never stale, only behind.
     #
-    # postgres://user:pass@host:5432/dbname — required when DATA_LAKE_ENABLED
-    # is true, which is now the default. A deployment with no POSTGRES_URL
-    # must set DATA_LAKE_ENABLED=false explicitly.
+    # postgres://user:pass@host:5432/dbname — required. The lake is the sole
+    # market-data store (#1893 retired the policy store and the
+    # DATA_LAKE_ENABLED flag that used to select between them), so a
+    # deployment without POSTGRES_URL has no market data at all.
     POSTGRES_URL: str = ""
-    DATA_LAKE_ENABLED: bool = True
     # Rebuildable read model over canonical lifecycle/account artifacts.
     # Requires POSTGRES_URL when enabled; files remain canonical when disabled
     # or unavailable.

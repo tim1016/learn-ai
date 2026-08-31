@@ -32,7 +32,6 @@ public class AppDbContext : DbContext
 
     // Data lake catalog (Slice 1a)
     public DbSet<DataLakeArtifact> DataLakeArtifacts => Set<DataLakeArtifact>();
-    public DbSet<DataLakeRun> DataLakeRuns => Set<DataLakeRun>();
 
     // Research models
     public DbSet<ResearchExperiment> ResearchExperiments => Set<ResearchExperiment>();
@@ -611,27 +610,6 @@ public class AppDbContext : DbContext
             // query stays index-backed instead of falling back to a full scan.
             entity.HasIndex(a => new { a.DataRootId, a.Market, a.Symbol, a.Resolution, a.DataType, a.TradingDate })
                   .HasDatabaseName("ix_data_lake_artifacts_root_scoped_coverage");
-        });
-
-        modelBuilder.Entity<DataLakeRun>(entity =>
-        {
-            entity.HasKey(r => r.Id);
-            // See DataLakeArtifact.DataRootId above — same default removal (#1878).
-            entity.Property(r => r.DataRootId).IsRequired();
-            entity.Property(r => r.RunType).IsRequired().HasMaxLength(20);
-            entity.Property(r => r.RunSpec).IsRequired().HasColumnType("jsonb");
-            entity.Property(r => r.RequestedAtMs).IsRequired();
-
-            entity.Property(r => r.EnsureDataResponse).HasColumnType("jsonb");
-            entity.Property(r => r.ManifestSha256).HasMaxLength(64).IsFixedLength();
-            entity.Property(r => r.DataAvailabilityHash).HasMaxLength(64).IsFixedLength();
-
-            entity.HasOne(r => r.StrategyExecution)
-                  .WithMany()
-                  .HasForeignKey(r => r.StrategyExecutionId)
-                  .OnDelete(DeleteBehavior.SetNull);
-
-            entity.HasIndex(r => r.StrategyExecutionId);
         });
     }
 }

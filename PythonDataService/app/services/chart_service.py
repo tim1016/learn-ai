@@ -23,7 +23,6 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import urllib3.exceptions
 
-from app.config import settings
 from app.lean_sidecar.trading_calendar import session_window_for_date, session_windows_ms_utc
 from app.services.chart_bar_source import compose_chart_bars
 from app.services.dataset_service import (
@@ -263,14 +262,12 @@ def _resample_cache_key(
     session: str,
     forward_fill: bool,
     adjusted: bool,
-    lake_read: bool,
 ) -> str:
-    # ``lake_read`` keys the two sourcing modes apart. Without it a process that
-    # flipped DATA_LAKE_ENABLED would serve a composed entry (and its source
-    # indicator) to a flag-off caller from the same key. It has no default for
-    # exactly that reason: a defaulted discriminator is the silent lie the
-    # parameter exists to prevent. (``adjusted`` loses its default alongside it —
-    # Python cannot put a required parameter after a defaulted one.)
+    # This key carried a ``lake_read`` discriminator until #1893, to stop a
+    # process that flipped DATA_LAKE_ENABLED from serving a composed entry to a
+    # flag-off caller. There is one sourcing mode now, so the discriminator had
+    # exactly one value and has been dropped rather than left keying every entry
+    # against a constant.
     #
     # Known and accepted: the cached entry carries the source indicator computed
     # at fetch time, so for up to one TTL (15 min) after a backfill fills a hole
@@ -278,7 +275,7 @@ def _resample_cache_key(
     # stale — the bars are the same bars either way — and the next miss recomputes
     # it. Keying on lake coverage instead would mean probing the lake on every
     # cache hit, which is the cost this cache exists to avoid.
-    return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}|{lake_read}"
+    return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}"
 
 
 def _indicator_cache_key(resample_key: str, indicators: list[dict[str, Any]]) -> str:
@@ -923,9 +920,6 @@ def _fetch_chart_bars(
     trading date stops forming — this chart renders post-market bars when it is
     ``extended``, so the composer must hold today open that much longer.
     """
-    if not settings.DATA_LAKE_ENABLED:
-        return fetch_bars_chunked(_polygon, ticker, fetch_from, to_date, adjusted=adjusted), None
-
     composed = compose_chart_bars(
         ticker=ticker,
         from_date=fetch_from,
@@ -986,11 +980,6 @@ def get_chart_data(
         }
 
     # ── Layer 1: Fetch + Preprocess + Resample (cached) ──
-    # Known and accepted: with the flag on and adjusted=True the lake is never
-    # read (it stores raw bytes only), so this key holds a second entry whose
-    # bars are identical to the flag-off entry's. One duplicated cache slot per
-    # such range is a smaller price than making the key lie about which sourcing
-    # mode produced the entry it holds.
     resample_key = _resample_cache_key(
         ticker,
         from_date,
@@ -999,7 +988,6 @@ def get_chart_data(
         session,
         forward_fill,
         adjusted,
-        settings.DATA_LAKE_ENABLED,
     )
     cached_resample = _resample_cache.get(resample_key)
 

@@ -16,8 +16,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
+from app.data_lake.path_policy import lake_subpath
+from app.data_lake.types import polygon_mode_for
 from app.main import app
-from tests._helpers.lean_store import seed_store_day
+from tests._helpers.lake_fixture import seed_lake_daily, seed_lake_minute_day
 
 DAY_ONE = date(2026, 1, 5)  # Monday
 DAY_TWO = date(2026, 1, 6)  # Tuesday
@@ -25,14 +27,22 @@ DAY_TWO = date(2026, 1, 6)  # Tuesday
 
 @pytest.fixture
 def store(monkeypatch, tmp_path: Path) -> Path:
-    """Point the bar store at a tmp cache with two seeded SPY days."""
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "no-reference-mount"))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-    policy_root = tmp_path / "store" / "polygon-adjusted"
-    seed_store_day(policy_root, "SPY", DAY_ONE)
-    seed_store_day(policy_root, "SPY", DAY_TWO)
-    return policy_root
+    """Seed the lake's adjusted-mode root with two SPY days.
+
+    Before #1893 this seeded the policy store's ``polygon-adjusted`` cache
+    subtree and turned the lake off. The store is gone; ``resolve_data_roots``
+    now answers with the lake root for the run's adjustment mode, so the same
+    two days are seeded there instead. What the tests below assert —
+    consolidation to the strategy timeframe, exchange-aligned bar starts,
+    coverage, and equality with a live run's ``chart_bars`` — is unchanged.
+    """
+    write_root = tmp_path / "lean-data-writer"
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    adjusted_root = write_root / lake_subpath(polygon_mode_for(True))
+    seed_lake_minute_day(adjusted_root, "SPY", DAY_ONE)
+    seed_lake_minute_day(adjusted_root, "SPY", DAY_TWO)
+    seed_lake_daily(adjusted_root, "SPY", [DAY_ONE, DAY_TWO])
+    return adjusted_root
 
 
 async def _get_bars(client: AsyncClient, **overrides) -> dict:

@@ -1,9 +1,13 @@
-"""`/api/chart/data` router contract — flag-on and flag-off must agree.
+"""`/api/chart/data` router contract — a bad symbol is typed, never a 500.
 
-The split-read (#1837) puts a symbol on the path to a filesystem join when
-``DATA_LAKE_ENABLED`` is on. A ticker the lake cannot address must be rejected
-before that join *and* must not change the answer the caller gets: the same
-status and the same error body the flag-off provider path yields, never a 500.
+The split-read (#1837) puts a symbol on the path to a filesystem join. A
+ticker the lake cannot address must be rejected before that join, and the
+caller must get the router's typed error body rather than an unhandled 500.
+
+These assertions used to be made twice, once per ``DATA_LAKE_ENABLED``
+setting, to prove the two paths agreed. #1893 left one path, so each is
+made once — the typed answer is the contract, and it no longer has a
+second implementation to be compared against.
 """
 
 from __future__ import annotations
@@ -16,7 +20,6 @@ import urllib3.exceptions
 from fastapi import FastAPI
 from httpx import ASGITransport
 
-from app.config import settings
 from app.routers import chart as chart_router
 from app.services import chart_service
 
@@ -61,32 +64,15 @@ async def _post_chart(api: FastAPI) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_chart_data_path_unsafe_ticker_answers_the_same_with_the_lake_on_or_off(
-    api: FastAPI, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    flag_off = await _post_chart(api)
-
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    flag_on = await _post_chart(api)
-
-    assert flag_on.status_code == flag_off.status_code
-    assert flag_on.json() == flag_off.json()
-
-
-@pytest.mark.asyncio
 async def test_chart_data_path_unsafe_ticker_is_typed_no_data_not_a_server_error(
     api: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The symbol rejection routes through the router's existing typed
     no-data mapping — it must never surface as an unhandled 500."""
-    for lake_enabled in (False, True):
-        monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", lake_enabled)
+    response = await _post_chart(api)
 
-        response = await _post_chart(api)
-
-        assert response.status_code == 404, f"DATA_LAKE_ENABLED={lake_enabled}"
-        assert response.json()["detail"]["error_code"] == "NO_DATA"
+    assert response.status_code == 404
+    assert response.json()["detail"]["error_code"] == "NO_DATA"
 
 
 def _unreachable_provider(*_args: object, **_kwargs: object) -> list[dict[str, Any]]:
@@ -116,13 +102,10 @@ async def test_chart_data_provider_unreachable_is_typed_not_a_server_error(
     monkeypatch.setattr(chart_service, "fetch_bars_chunked", _unreachable_provider)
     request = {**_REQUEST, "ticker": "AAPL"}
 
-    for lake_enabled in (False, True):
-        monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", lake_enabled)
+    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await client.post("/api/chart/data", json=request)
 
-        async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
-            response = await client.post("/api/chart/data", json=request)
-
-        assert response.status_code == 503, f"DATA_LAKE_ENABLED={lake_enabled}"
-        detail = response.json()["detail"]
-        assert detail["error_code"] == "PROVIDER_UNREACHABLE"
-        assert "MaxRetryError" not in detail["detail"]
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "PROVIDER_UNREACHABLE"
+    assert "MaxRetryError" not in detail["detail"]

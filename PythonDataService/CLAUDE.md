@@ -54,7 +54,8 @@ hardening pass.
 
 ### Deploy prerequisite: `LEAN_DATA_VOLUME_HOST_PATH`
 
-`DATA_LAKE_ENABLED` defaults **on** (#1839), so a Polygon-sourced sidecar
+The lake is the only market-data store (#1839 flipped it on; #1893 retired
+the flag and the store it selected against), so a Polygon-sourced sidecar
 run reads the lake through a read-only bind mount instead of staging its
 own bars — for both a raw and an adjusted `DataPolicy` alike, since #1866
 gave each price-adjustment mode its own root under the lake. The launcher

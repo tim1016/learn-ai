@@ -232,7 +232,7 @@ def stamp_existing_root(base_root: Path, root_id: UUID, *, force: bool) -> RootC
 
     A **populated** root may only be stamped with :data:`LEGACY_ROOT_ID`.
     The EF migration that shipped alongside this issue backfilled every
-    pre-existing ``DataLakeArtifacts``/``DataLakeRuns`` row to that same
+    pre-existing ``DataLakeArtifacts`` row to that same
     nil UUID; stamping the physical root that holds that data with any
     other UUID would silently orphan it from every root-scoped catalog
     read. An empty root has no existing catalog rows to orphan, so it may

@@ -24,8 +24,6 @@ export interface CoverageProblem {
 export interface CoverageBoard {
   readonly rows: readonly CoverageRow[];
   readonly problems: readonly CoverageProblem[];
-  /** True when the data plane answered 404 — the lake is not enabled. */
-  readonly notEnabled: boolean;
   readonly sessionCount: number;
   readonly firstSessionMs: number | null;
   readonly lastSessionMs: number | null;
@@ -91,15 +89,11 @@ export function buildCoverageBoard(
 ): CoverageBoard {
   const rows: CoverageRow[] = [];
   const problems: CoverageProblem[] = [];
-  let notEnabled = false;
 
   for (const { symbol, read } of reads) {
     switch (read.kind) {
       case 'ok':
         rows.push(toRow(read.value));
-        break;
-      case 'not_enabled':
-        notEnabled = true;
         break;
       case 'rejected':
         problems.push({ symbol, reason: read.reason, message: read.message });
@@ -117,7 +111,6 @@ export function buildCoverageBoard(
   return {
     rows,
     problems,
-    notEnabled,
     sessionCount: axis.length,
     firstSessionMs: axis.length > 0 ? axis[0].tradingDateMs : null,
     lastSessionMs: axis.length > 0 ? axis[axis.length - 1].tradingDateMs : null,

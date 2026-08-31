@@ -22,26 +22,26 @@ FORBIDDEN_SUBSTRINGS = (
     "symbol-properties/",
 )
 
-# Files in which the substrings ARE permitted.
+# Files in which the substrings ARE permitted. This list is meant to shrink:
+# an entry that no longer needs to be here is a guard quietly weaker than it
+# looks, so remove it rather than leaving it as harmless-looking history.
+# #1893 removed two entries that way -- app/engine/data/policy_store.py (its
+# docstring documented the retired cache layout) and app/routers/engine.py
+# (route docstrings that described it).
 # - app/data_lake/path_policy.py: the canonical path-policy module (only permitted author)
-# - app/lean_sidecar/: existing pre-data-lake staging code; retired in Slice 1d
-# - app/engine/data/lean_format.py: existing LEAN reader; replaced in Slice 2
-# - app/engine/data/polygon_export.py: existing exporter; docstrings reference paths; replaced in Slice 2
-# - app/engine/data/availability.py: existing availability checker; docstrings reference paths; replaced in Slice 2
-# - app/engine/data/policy_store.py: policy-keyed shared bar store (2026-07-12); docstring documents
-#   the layout the readers above consume; migrates to path_policy with them in Slice 2
-# - app/engine/tests/: engine-internal tests referencing the above; retired alongside source in Slice 2
-# - app/routers/engine.py: existing route docstrings reference path layout; updated in Slice 1d
-# - app/research/: existing research scripts with hardcoded paths; cleaned up post-Slice 2
+# - app/lean_sidecar/: pre-data-lake staging code
+# - app/engine/data/lean_format.py: the LEAN reader; constructs the paths it reads
+# - app/engine/data/polygon_bars.py: Polygon->TradeBar helpers; docstring references the layout
+# - app/engine/data/availability.py: availability checker; docstrings reference paths
+# - app/engine/tests/: engine-internal tests referencing the above
+# - app/research/: research scripts with hardcoded paths
 ALLOWLISTED = (
     "app/data_lake/path_policy.py",
     "app/lean_sidecar/",
     "app/engine/data/lean_format.py",
-    "app/engine/data/polygon_export.py",
+    "app/engine/data/polygon_bars.py",
     "app/engine/data/availability.py",
-    "app/engine/data/policy_store.py",
     "app/engine/tests/",
-    "app/routers/engine.py",
     "app/research/",
 )
 

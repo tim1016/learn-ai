@@ -171,13 +171,6 @@ class LakeMount:
         return f"{self.host_lake_root}:{CONTAINER_LAKE_DATA_MOUNT}:ro"
 
 
-def lake_mount_enabled() -> bool:
-    """True when sidecar runs should read the lake instead of staging."""
-    from app.config import settings
-
-    return bool(settings.DATA_LAKE_ENABLED)
-
-
 def data_plane_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:
     """The lake root as *this* process sees it, for one adjustment mode.
 

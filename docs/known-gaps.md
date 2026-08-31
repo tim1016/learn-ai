@@ -316,8 +316,8 @@ a defect.
   curve, and only `run_verdict.status="incomplete"` to show for it
   (`execute_engine_backtest`, `app/routers/engine.py`). An engine that cannot
   fail on empty input is an honesty defect, and the reproduction is now easier
-  to hit than before: with `DATA_LAKE_ENABLED` on and `auto_fetch` off, the
-  lake root is legitimately empty for any window nobody has materialized yet.
+  to hit than before: with `auto_fetch` off, the lake root is legitimately
+  empty for any window nobody has materialized yet.
 - **F7 — QC-ID hard-required client-side though ignored for proof-less
   candidates (low).** Flag-form validation out of sync with the backend
   recording rule

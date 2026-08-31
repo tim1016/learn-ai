@@ -33,17 +33,18 @@ public class ActivateDataRootScopedCatalogIdentityMigrationTests
 
         Assert.False(await ConstraintExistsAsync(connection, "ck_raw_only_for_canonical_data_root"));
 
-        foreach (var table in new[] { "DataLakeArtifacts", "DataLakeRuns" })
-        {
-            await using var command = new NpgsqlCommand(
-                "SELECT column_default FROM information_schema.columns " +
-                "WHERE table_schema = 'public' AND table_name = @table AND column_name = 'DataRootId';",
-                connection);
-            command.Parameters.AddWithValue("table", table);
-            var columnDefault = await command.ExecuteScalarAsync();
+        // DataLakeRuns was checked here too until #1893 dropped it. Leaving it in
+        // would not have failed -- information_schema returns no row for a table
+        // that no longer exists, so ExecuteScalarAsync yields null and the
+        // assertion passes without testing anything. Removed rather than left
+        // as a check that cannot fail.
+        await using var command = new NpgsqlCommand(
+            "SELECT column_default FROM information_schema.columns " +
+            "WHERE table_schema = 'public' AND table_name = 'DataLakeArtifacts' AND column_name = 'DataRootId';",
+            connection);
+        var columnDefault = await command.ExecuteScalarAsync();
 
-            Assert.True(columnDefault is null or DBNull, $"{table}.DataRootId still has a server default: {columnDefault}");
-        }
+        Assert.True(columnDefault is null or DBNull, $"DataLakeArtifacts.DataRootId still has a server default: {columnDefault}");
     }
 
     [Fact]

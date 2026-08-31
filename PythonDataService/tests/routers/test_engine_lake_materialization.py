@@ -1,14 +1,13 @@
-"""Which materializer an engine run uses, and what it records afterwards.
+"""How an engine run materializes its bars, and what it records afterwards.
 
-The engine has always ensured its bars exist before reading them. With
-``DATA_LAKE_ENABLED`` that job moves from the policy store's ``ensure_range``
-to the lake's ``ensure_data``, and the run comes back carrying the lake's
-fingerprint for what it materialized. With the flag off — the default —
-nothing about the run changes.
+The engine has always ensured its bars exist before reading them. Since
+#1893 retired the policy store there is exactly one materializer — the
+lake's ``ensure_data`` — and the run comes back carrying the lake's
+fingerprint for what it materialized.
 
 The lake itself is exercised in ``tests/unit/data_lake/test_run_materialization.py``;
-here the materializer is a stand-in, because what is under test is the
-engine's choice of it and what the run does with the answer.
+here the materializer is a stand-in, because what is under test is what the
+engine asks of it and what the run does with the answer.
 """
 
 from __future__ import annotations
@@ -122,61 +121,33 @@ def offline_persistence(monkeypatch):
 
 @pytest.fixture
 def seeded_roots(monkeypatch, tmp_path: Path) -> dict[str, Path]:
-    """Seed the same SPY days into both the lake and the policy cache.
+    """Seed the SPY days into the lake's raw root and return it.
 
-    Whichever root the run resolves, the engine finds bars — so a
-    difference in the response is a difference in materialization, not a
-    difference in what happened to be on disk.
+    This used to seed the policy cache too, so that a flag-off run found
+    bars wherever it resolved. #1893 left one store, so there is one root
+    to seed and a difference in the response is a difference in
+    materialization rather than in what happened to be on disk.
     """
     write_root = tmp_path / "writer-root"
     lake_dir = write_root / lake_subpath("raw")
     lake_dir.mkdir(parents=True)
     (write_root / "staging").mkdir()
-    policy_root = tmp_path / "store" / "polygon-adjusted"
 
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "no-reference-mount"))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
 
     for day in SEEDED_DAYS:
         seed_store_day(lake_dir, "SPY", day)
-        seed_store_day(policy_root, "SPY", day)
-    return {"lake": lake_dir, "policy": policy_root}
-
-
-def test_flag_off_run_still_materializes_through_the_policy_store(seeded_roots, monkeypatch):
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    ensured: list[dict] = []
-    monkeypatch.setattr(engine_router, "ensure_range", lambda **kwargs: ensured.append(kwargs))
-
-    def _must_not_run(**kwargs):
-        raise AssertionError("the lake was consulted with the flag off")
-
-    monkeypatch.setattr(run_materialization, "materialize_engine_run", _must_not_run)
-
-    response = _run()
-
-    assert response.success, response.error
-    assert len(ensured) == 1
-    assert ensured[0]["symbol"] == "SPY"
-    # No lake bytes were read, so the run has no lake fingerprint to claim.
-    assert response.lake_data_availability_hash is None
+    return lake_dir
 
 
 def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     calls: list[dict] = []
 
     def _fake_materialize(**kwargs):
         calls.append(kwargs)
-        return _materialization(seeded_roots["lake"])
+        return _materialization(seeded_roots)
 
     monkeypatch.setattr(run_materialization, "materialize_engine_run", _fake_materialize)
-
-    def _must_not_run(**kwargs):
-        raise AssertionError("the policy-store exporter ran with the lake on")
-
-    monkeypatch.setattr(engine_router, "ensure_range", _must_not_run)
 
     response = _run()
 
@@ -200,12 +171,11 @@ def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
 
 def test_flag_on_run_records_the_manifest_of_what_it_materialized(seeded_roots, monkeypatch):
     """The response carries the content-derived fingerprint, not a placeholder."""
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    records = _lake_artifacts(seeded_roots["lake"])
+    records = _lake_artifacts(seeded_roots)
     monkeypatch.setattr(
         run_materialization,
         "materialize_engine_run",
-        lambda **kwargs: _materialization(seeded_roots["lake"]),
+        lambda **kwargs: _materialization(seeded_roots),
     )
 
     response = _run()
@@ -220,8 +190,7 @@ def test_flag_on_run_records_the_manifest_of_what_it_materialized(seeded_roots, 
 
 def test_flag_on_run_surfaces_incomplete_coverage_to_the_operator(seeded_roots, monkeypatch):
     """A run reading a lake that reports itself incomplete must say so in the log."""
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    partial = _materialization(seeded_roots["lake"], incomplete_summary="metadata/io_error")
+    partial = _materialization(seeded_roots, incomplete_summary="metadata/io_error")
     monkeypatch.setattr(run_materialization, "materialize_engine_run", lambda **kwargs: partial)
     log: list[str] = []
 
@@ -232,7 +201,6 @@ def test_flag_on_run_surfaces_incomplete_coverage_to_the_operator(seeded_roots, 
 
 def test_a_lake_refusal_reaches_the_operator_log(seeded_roots, monkeypatch):
     """The reason the lake refused must not be buried in the service log."""
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     def _refuse(**kwargs):
         raise run_materialization.LakeMaterializationError("incomplete minute coverage for SPY")
@@ -254,11 +222,10 @@ def test_flag_on_run_reads_the_lake_tree_and_nothing_else(seeded_roots, monkeypa
     leaving the policy cache untouched must take those bars away. If the
     second run still traded, the flag would not have moved the authority.
     """
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     monkeypatch.setattr(
         run_materialization,
         "materialize_engine_run",
-        lambda **kwargs: _materialization(seeded_roots["lake"]),
+        lambda **kwargs: _materialization(seeded_roots),
     )
 
     with_lake = _run()
@@ -266,7 +233,7 @@ def test_flag_on_run_reads_the_lake_tree_and_nothing_else(seeded_roots, monkeypa
     assert with_lake.total_trades > 0, "baseline run produced no trades; the test proves nothing"
 
     for day in SEEDED_DAYS:
-        (seeded_roots["lake"] / "equity" / "usa" / "minute" / "spy" / f"{day:%Y%m%d}_trade.zip").unlink()
+        (seeded_roots / "equity" / "usa" / "minute" / "spy" / f"{day:%Y%m%d}_trade.zip").unlink()
     without_lake = _run()
 
     assert without_lake.total_trades == 0
@@ -274,7 +241,6 @@ def test_flag_on_run_reads_the_lake_tree_and_nothing_else(seeded_roots, monkeypa
 
 def test_flag_on_run_without_auto_fetch_claims_no_manifest(seeded_roots, monkeypatch):
     """No materialization, no fingerprint — a run must not claim bytes it never asked for."""
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     def _must_not_run(**kwargs):
         raise AssertionError("auto_fetch=False must not materialize anything")
@@ -290,7 +256,6 @@ def test_flag_on_run_without_auto_fetch_claims_no_manifest(seeded_roots, monkeyp
 
 
 def test_a_lake_that_cannot_materialize_fails_the_run_loudly(seeded_roots, monkeypatch):
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     def _explode(**kwargs):
         raise run_materialization.LakeMaterializationError("provider_no_data")
@@ -315,12 +280,11 @@ def test_flag_on_run_materializes_the_legacy_adjusted_default_into_its_own_root(
     segment of the root, so the same request materializes the adjusted root
     instead of failing.
     """
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     calls: list[dict] = []
 
     def _fake_materialize(**kwargs):
         calls.append(kwargs)
-        return _materialization(seeded_roots["lake"])
+        return _materialization(seeded_roots)
 
     monkeypatch.setattr(run_materialization, "materialize_engine_run", _fake_materialize)
     request = EngineBacktestRequest(
