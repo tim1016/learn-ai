@@ -103,6 +103,9 @@ def test_store_reads_missing_and_corrupt_files_as_empty(tmp_path: Path) -> None:
     store.path.write_text("{not json", encoding="utf-8")
     assert store.read_all() == {}
 
+    store.path.write_text('["valid json, wrong shape"]', encoding="utf-8")
+    assert store.read_all() == {}
+
 
 async def test_probe_records_definitive_answers_only(tmp_path: Path) -> None:
     store = SymbolValidityStore(tmp_path)
