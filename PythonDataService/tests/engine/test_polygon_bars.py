@@ -1,4 +1,4 @@
-"""Tests for app.engine.data.polygon_export pure helpers.
+"""Tests for app.engine.data.polygon_bars pure helpers.
 
 The full export path writes zip files; these tests focus on the pure
 helpers that do UTC → Eastern conversion and trading-day bucketing,
@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from app.engine.data.polygon_export import (
+from app.engine.data.polygon_bars import (
     group_by_trading_date,
     polygon_bar_to_trade_bar,
 )

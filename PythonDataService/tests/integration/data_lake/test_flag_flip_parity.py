@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -582,22 +583,35 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
 def _write_cache_provenance(cache_root: Path, symbol: str) -> None:
     """Give the cache the provenance document the importer requires.
 
-    Written through ``policy_store.record_fetch``, the same function the
-    pre-lake fetch path uses, so the document is the shape a real cache
-    carries rather than one invented for this test.
-    """
-    from app.engine.data.policy_store import record_fetch
+    This used to call ``policy_store.record_fetch`` so the document would be
+    the shape a real cache carries rather than one invented for a test. #1893
+    deleted that writer with the rest of the store's write path, so the
+    document is written literally here.
 
-    record_fetch(
-        cache_root,
-        symbol,
-        source="polygon",
-        adjusted=False,
-        resolution="minute",
-        from_date=DAY_ONE.isoformat(),
-        to_date=DAY_THREE.isoformat(),
-        fetched_at_ms=session_open_ms_utc(DAY_ONE),
-    )
+    The shape is not invented even so: it is what ``cache_import`` validates
+    on the way in (``_read_provenance``: schema_version, a ``symbol`` matching
+    the directory, ``policy.source == "polygon"``, a boolean
+    ``policy.adjusted``, and a ``fetches`` list). The importer is the only
+    reader that still exists, so its contract is the definition now -- and if
+    that contract changes, this test fails on the import rather than drifting
+    quietly against a writer nothing runs.
+    """
+    document = {
+        "schema_version": 1,
+        "symbol": symbol,
+        "policy": {"source": "polygon", "adjusted": False},
+        "fetches": [
+            {
+                "resolution": "minute",
+                "from_date": DAY_ONE.isoformat(),
+                "to_date": DAY_THREE.isoformat(),
+                "fetched_at_ms": session_open_ms_utc(DAY_ONE),
+            }
+        ],
+    }
+    prov_path = cache_root / "provenance" / f"{symbol.lower()}.json"
+    prov_path.parent.mkdir(parents=True, exist_ok=True)
+    prov_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
 
 
 def _close_materialization_pool(catalog_client) -> None:

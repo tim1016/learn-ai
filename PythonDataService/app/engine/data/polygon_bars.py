@@ -1,14 +1,12 @@
-"""Polygon → LEAN-format zip exporter.
+"""Polygon minute aggregates -> LEAN ``TradeBar``s, grouped by trading day.
 
-Bridge between Polygon's minute aggregates (as returned by
-``app.services.polygon_client.PolygonClientService.fetch_aggregates``)
-and the LEAN minute-bar zip format consumed by ``LeanMinuteDataReader``.
-
-The exporter accepts any iterable of Polygon-style bar dicts (so the
-caller may inject bars fetched directly, loaded from Postgres once a
-cache layer exists, or replayed from a test fixture) and writes one
-``{YYYYMMDD}_trade.zip`` per distinct Eastern-time trading day under
-``{output_root}/equity/usa/minute/{symbol}/``.
+This module was ``polygon_export.py``, the Polygon -> LEAN-format zip
+exporter: it wrote one ``{YYYYMMDD}_trade.zip`` per Eastern-time trading day
+under ``{output_root}/equity/usa/minute/{symbol}/`` for the policy store.
+#1893 retired that store and deleted the exporter, leaving the two pure
+conversion helpers the writing was built on. It is named for what it does now
+rather than for the function it used to hold, so a reader looking for an
+exporter does not find a module that no longer has one.
 
 Each input bar is expected to look like::
 
@@ -21,9 +19,9 @@ Each input bar is expected to look like::
         "volume": 12345,
     }
 
-Bars outside regular trading hours are kept — callers that want
-RTH-only data should filter upstream. This matches LEAN's behavior,
-which stores the full session and filters at the consolidator.
+Bars outside regular trading hours are kept -- callers that want RTH-only
+data should filter upstream. This matches LEAN's behavior, which stores the
+full session and filters at the consolidator.
 """
 
 from __future__ import annotations

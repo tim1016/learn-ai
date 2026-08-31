@@ -1,7 +1,8 @@
 """Policy vocabulary and root resolution for both backtest engines.
 
 This module was the policy-keyed on-disk bar store: one write boundary
-(Polygon -> ``polygon_export``), three readers, and a cache tree keyed by
+(Polygon -> the exporter that lived in ``polygon_bars.py``), three readers,
+and a cache tree keyed by
 the DataPolicy dimensions that change bytes. #1893 retired that store --
 the lake is the only place historical bars live now (ADR 0049) -- and what
 survives here is the vocabulary and the root lookup its callers still need:

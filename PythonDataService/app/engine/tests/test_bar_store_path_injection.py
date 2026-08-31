@@ -4,7 +4,7 @@ The policy store and the LEAN-format writers build filesystem paths from a
 caller-supplied ``symbol``. These tests pin two layers of defense:
 
 * ``validate_symbol`` rejects any non-ticker character before a path join
-  (closes the real gap: ``polygon_export`` does not pre-validate).
+  (closes the real gap: ``polygon_bars`` does not pre-validate).
 * ``ensure_within_root`` rebuilds with ``realpath`` and a root-prefix check,
   the sanitizer CodeQL recognizes, and catches symlink escapes at runtime.
 """

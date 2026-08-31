@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
-from app.engine.data.polygon_export import group_by_trading_date, polygon_bar_to_trade_bar
+from app.engine.data.polygon_bars import group_by_trading_date, polygon_bar_to_trade_bar
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
 from app.services.dataset_service import (

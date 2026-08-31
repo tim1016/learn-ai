@@ -83,9 +83,9 @@ def test_policy_store_write_path_symbol_is_gone(symbol: str) -> None:
 
 
 def test_the_full_range_exporter_is_gone() -> None:
-    from app.engine.data import polygon_export
+    from app.engine.data import polygon_bars
 
-    assert not hasattr(polygon_export, "export_polygon_range_to_lean")
+    assert not hasattr(polygon_bars, "export_polygon_range_to_lean")
 
 
 def test_the_lean_export_route_is_not_registered() -> None:
