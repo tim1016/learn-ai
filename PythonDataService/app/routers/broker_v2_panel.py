@@ -43,6 +43,9 @@ from app.schemas.broker_v2_panel import (
     ChartHistoryResponse,
     ChartHistoryTimeframe,
     ChartLiveResponse,
+    CohortFlattenRequest,
+    CohortFlattenResult,
+    CohortFlattenView,
     LiveSnapshotUnavailableResponse,
     PanelAction,
     PanelActionErrorResponse,
@@ -57,8 +60,8 @@ from app.schemas.canary_admission import (
     CanaryAdmissionEvent,
 )
 from app.schemas.run_admission import RunAdmissionDecision
+from app.services.broker_v2_panel import cohort_flatten, panel_deploy, panel_errors, panel_scope
 from app.services.broker_v2_panel import panel_data_source as ds
-from app.services.broker_v2_panel import panel_deploy, panel_errors, panel_scope
 from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
     ActionOutcomeUnknownError,
@@ -562,6 +565,44 @@ async def run_action_scoped(broker: str, account_id: str, sid: str, request: Pan
 async def run_action_unscoped(broker: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
     account_id = await _resolve_default_account(broker)
     return await _run_action(broker, account_id, sid, request)
+
+
+# ── §11b Cohort flatten (ADR 0051, #1802) ────────────────────────────────────
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/cohort-flatten",
+    response_model=CohortFlattenView,
+    summary="Cohort-flatten presentation: (strategy, symbol) groups with per-leg executability facts (ADR 0051)",
+)
+async def get_cohort_flatten_scoped(broker: str, account_id: str) -> CohortFlattenView:
+    try:
+        return await cohort_flatten.get_cohort_flatten_view(broker, account_id)
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/bots/cohort-flatten",
+    response_model=CohortFlattenResult,
+    summary="Execute a batch of per-bot flatten legs with per-leg receipts (ADR 0051)",
+)
+async def run_cohort_flatten_scoped(
+    broker: str, account_id: str, request: CohortFlattenRequest
+) -> CohortFlattenResult:
+    try:
+        result = await cohort_flatten.run_cohort_flatten(
+            broker,
+            account_id,
+            request,
+            operator_identity=settings.PANEL_OPERATOR_IDENTITY,
+        )
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
+    for leg in result.legs:
+        if leg.outcome in ("applied", "replayed"):
+            schedule_live_projection_refresh(broker, account_id, leg.strategy_instance_id)
+    return result
 
 
 # ── §8 Chart endpoints (account-scoped + unscoped alias) ─────────────────────

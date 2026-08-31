@@ -937,6 +937,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/cohort-flatten": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cohort-flatten presentation: (strategy, symbol) groups with per-leg executability facts (ADR 0051) */
+        get: operations["get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get"];
+        put?: never;
+        /** Execute a batch of per-bot flatten legs with per-leg receipts (ADR 0051) */
+        post: operations["run_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/deploy": {
         parameters: {
             query?: never;
@@ -7910,6 +7928,129 @@ export interface components {
              * @constant
              */
             kind: "close_leg";
+        };
+        /**
+         * CohortFlattenCohort
+         * @description One (strategy_key, symbol) cohort with two or more members.
+         */
+        CohortFlattenCohort: {
+            /** Enabled Count */
+            enabled_count: number;
+            /** Legs */
+            legs: components["schemas"]["CohortFlattenLeg"][];
+            /** Strategy Key */
+            strategy_key: string;
+            /** Strategy Label */
+            strategy_label: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * CohortFlattenLeg
+         * @description One presented cohort member with its executability facts (ADR 0047).
+         *
+         *     A leg is armed only when the member's own presented flatten-class action
+         *     is armed — the token and revision here are the per-bot action's, so the
+         *     later POST executes exactly what was presented.
+         */
+        CohortFlattenLeg: {
+            /** Action Id */
+            action_id: ("flatten_stop" | "execute_safe_flatten") | null;
+            /** Blocker Headline */
+            blocker_headline: string | null;
+            /** Concurrency Token */
+            concurrency_token: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Exposure */
+            exposure: {
+                [key: string]: number;
+            };
+            /** Revision */
+            revision: number | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * CohortFlattenLegRequest
+         * @description One leg the operator confirmed — echoes the presented action facts.
+         */
+        CohortFlattenLegRequest: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "flatten_stop" | "execute_safe_flatten";
+            /** Concurrency Token */
+            concurrency_token: string;
+            /** Revision */
+            revision: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * CohortFlattenLegResult
+         * @description One leg's typed outcome — a receipt or a refusal, never silence.
+         */
+        CohortFlattenLegResult: {
+            error: components["schemas"]["PanelActionErrorResponse"] | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "applied" | "replayed" | "refused" | "failed" | "unknown";
+            result: components["schemas"]["PanelActionResult"] | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * CohortFlattenRequest
+         * @description Execute a batch of per-bot flatten legs (ADR 0051 Decisions 2/4/5).
+         *
+         *     Membership is explicit: exactly these legs execute, each under the
+         *     derived per-leg idempotency identity ``{idempotency_key}:{sid}``.
+         */
+        CohortFlattenRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Legs */
+            legs: components["schemas"]["CohortFlattenLegRequest"][];
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * CohortFlattenResult
+         * @description The batch outcome: every leg answered, in request order (ADR 0051 D5).
+         */
+        CohortFlattenResult: {
+            /** Account Id */
+            account_id: string;
+            /** Applied Count */
+            applied_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /** Legs */
+            legs: components["schemas"]["CohortFlattenLegResult"][];
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Refused Count */
+            refused_count: number;
+            /** Replayed Count */
+            replayed_count: number;
+        };
+        /**
+         * CohortFlattenView
+         * @description Backend-authored cohort-flatten presentation (ADR 0051 Decision 3).
+         */
+        CohortFlattenView: {
+            /** Account Id */
+            account_id: string;
+            /** Cohorts */
+            cohorts: components["schemas"]["CohortFlattenCohort"][];
+            /** Observed At Ms */
+            observed_at_ms: number;
         };
         /**
          * CommandResponse
@@ -22508,6 +22649,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotCatalogView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CohortFlattenView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_cohort_flatten_scoped_api_brokers__broker__accounts__account_id__bots_cohort_flatten_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CohortFlattenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CohortFlattenResult"];
                 };
             };
             /** @description Validation Error */
