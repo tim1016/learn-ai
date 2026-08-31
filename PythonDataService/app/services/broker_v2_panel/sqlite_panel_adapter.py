@@ -326,9 +326,15 @@ def _require_one_catalog_economic_revision(
             )
         projection = projections.get(status.strategy_instance_id)
         if projection is None:
-            raise SqliteCatalogProjectionUnavailable(
-                f"Bot '{status.strategy_instance_id}' has no SQLite custody projection."
-            )
+            # A retired row proved inert before this read skipped its custody
+            # projection (#1911); every other row must have one, and a missing
+            # projection there is still a torn read.
+            if status.phase != "RETIRED":
+                raise SqliteCatalogProjectionUnavailable(
+                    f"Bot '{status.strategy_instance_id}' has no SQLite custody projection."
+                )
+            snapshots.append(snapshot)
+            continue
         if (
             projection.account_id != snapshot.account_id
             or projection.strategy_instance_id != snapshot.strategy_instance_id

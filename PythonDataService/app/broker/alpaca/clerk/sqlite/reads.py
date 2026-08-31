@@ -109,6 +109,37 @@ def strategy_instances(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def strategy_instances_with_live_custody(conn: sqlite3.Connection) -> set[str]:
+    """Roster ids whose custody can still change, or still needs attention.
+
+    The union of the three bot-scoped facts a catalog row's attention flag and
+    its authored recovery command are derived from: an unresolved uncertainty
+    (which since v12 is also every active hold and every execution-coverage
+    conflict, both being ``uncertainties`` rows), a non-zero attributed
+    position, and an active run. Account-scoped uncertainties are excluded on
+    purpose -- they reach every row alike through the account facts, so they
+    say nothing about one bot.
+
+    Answering this for the whole roster in one query is what lets the catalog
+    skip the per-row projection for a retired registration that is provably
+    inert (#1911), without ever going quiet on the retired-but-stranded bot
+    #1778 exists for.
+
+    Deliberately a superset: ``attributed_qty <> 0`` admits a quantity the
+    float-aware ``position_quantity_is_nonzero`` would call flat, so a
+    borderline row takes the fully-projected path. Costing a read is the safe
+    direction to be wrong in; going quiet on a bot that needs attention is not.
+    """
+    rows = conn.execute(
+        "SELECT strategy_instance_id FROM uncertainties "
+        "WHERE resolved_at_ms IS NULL AND strategy_instance_id IS NOT NULL "
+        "UNION SELECT strategy_instance_id FROM positions "
+        "WHERE attributed_qty <> 0 AND strategy_instance_id IS NOT NULL "
+        "UNION SELECT strategy_instance_id FROM runs WHERE state = 'ACTIVE'"
+    ).fetchall()
+    return {str(row["strategy_instance_id"]) for row in rows}
+
+
 def strategy_instance(conn: sqlite3.Connection, strategy_instance_id: str) -> dict | None:
     row = conn.execute(
         "SELECT strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms "
