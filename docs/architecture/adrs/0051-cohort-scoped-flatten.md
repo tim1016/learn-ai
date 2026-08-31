@@ -8,17 +8,19 @@
 
 ## Context
 
-Every panel action today is per-bot: `POST /{broker}/accounts/{account_id}/bots/{sid}/actions` executes one `PanelActionRequest` under three invariants (action-scoped concurrency token, idempotency ledger, channel-derived identity — `action_execution_service.execute_action`). `flatten_stop` is Clerk-attributed by construction: the performer reduces exactly the requesting bot's attributed exposure and cancels its working entries, with per-bot receipts. Nothing in the stack can flatten more than one bot per request, and nothing presents a cohort-level affordance.
+Every panel action today is per-bot: `POST /{broker}/accounts/{account_id}/bots/{sid}/actions` executes one `PanelActionRequest` under three invariants (action-scoped concurrency token, idempotency ledger, channel-derived identity — `action_execution_service.execute_action`). The flatten-class actions are Clerk-attributed by construction: the performer reduces exactly the requesting bot's attributed exposure, with per-bot receipts. Nothing in the stack can flatten more than one bot per request, and nothing presents a cohort-level affordance.
+
+Which flatten-class action a bot presents depends on its authority surface. Under the active SQLite authority — the only production surface post-cutover — `adapt_sqlite_panel` retains only `resume`/`retire` from the generic lifecycle actions (`SQLITE_PANEL_LIFECYCLE_ACTION_IDS`, the deliberate #1778-era design), so `flatten_stop` never reaches those panels; the presented flatten is the recovery ladder's `execute_safe_flatten`, which arms for a stopped bot with reconciled attributed exposure — precisely T3's stranded state — and presents disabled while a run is active. The ladder's order (stop first, then flatten) is the same sequence T3's stop wave already followed. `flatten_stop` remains in the leg vocabulary for the surfaces that do present it.
 
 ## Decision
 
-### 1. A cohort flatten is a batch of per-bot `flatten_stop` legs — never an account-level position flatten
+### 1. A cohort flatten is a batch of per-bot flatten-class legs — never an account-level position flatten
 
 Each leg runs the **existing, unchanged** per-bot pipeline: the same availability guard, the same action-scoped concurrency token, the same idempotency ledger, the same performer, the same Clerk-attributed reduction and per-bot receipts. The cohort layer adds orchestration only. PRD #1752 user story 2 is inherited rather than re-proven: a leg cannot touch another bot's position because the per-bot action cannot.
 
 ### 2. Membership is explicit in the request; the backend never infers it at execution time
 
-`POST /{broker}/accounts/{account_id}/bots/cohort-flatten` names the exact legs (`strategy_instance_id` + that leg's presented `concurrency_token` and `revision`). The backend executes precisely the named legs — membership, not exclusion. Inferring membership server-side at act time ("flatten everything in cohort X") would be an account-scoped fact driving per-bot behaviour: the defect family #1773 exists to kill, and the fact-scope rule (a fact must not drive consumers with a different admission contract) applies to affordances too.
+`POST /{broker}/accounts/{account_id}/bots/cohort-flatten` names the exact legs (`strategy_instance_id`, the presented flatten-class `action_id`, and that leg's presented `concurrency_token` and `revision`). The backend executes precisely the named legs — membership, not exclusion. Inferring membership server-side at act time ("flatten everything in cohort X") would be an account-scoped fact driving per-bot behaviour: the defect family #1773 exists to kill, and the fact-scope rule (a fact must not drive consumers with a different admission contract) applies to affordances too.
 
 ### 3. The presentation is backend-authored and carries executability facts
 
@@ -50,7 +52,7 @@ The wire surface is two scoped routes plus their schemas. The roster-side afford
 
 ## Consequences
 
-- T3's remedy drops from N×3 clicks to: open the cohort surface → confirm one batch (with per-leg receipts and typed per-leg refusals coming back in one response). Reconcile/resume remain per-bot where they belong — they are admission decisions, not exposure reductions.
+- T3's remedy drops from N×3 clicks to: open the cohort surface → confirm one batch (with per-leg receipts and typed per-leg refusals coming back in one response). Reconcile/resume remain per-bot where they belong — they are admission decisions, not exposure reductions. A cohort of still-running members presents its legs disabled with their blockers: the ladder requires the stop wave first, which in T3's scenario has already happened by the time the cohort strands.
 - The mechanism is symbol-agnostic and program-agnostic: a "fleet flatten" is the same POST with more legs; no new machinery is owed for the fleet case.
 - **Follow-up owed (filed from #1802):** the roster/triage cohort affordance consuming these routes.
 - The OpenAPI contract, generated frontend types, and their snapshots move with the new schemas in the same PR (repo contract-gate rule).

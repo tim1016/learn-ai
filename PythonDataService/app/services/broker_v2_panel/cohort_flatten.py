@@ -16,11 +16,13 @@ not a poll loop.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Literal, cast
 
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
+    BotPanelView,
     CohortFlattenActionId,
     CohortFlattenCohort,
     CohortFlattenLeg,
@@ -47,8 +49,11 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-#: Presentation preference order: the running bot's ``flatten_stop`` first,
-#: the stranded stopped bot's recovery-ladder ``execute_safe_flatten`` second.
+#: Presentation preference order. Where a surface presents both, the
+#: lifecycle ``flatten_stop`` wins; under the active SQLite authority only
+#: the recovery ladder's ``execute_safe_flatten`` reaches the panel, and a
+#: running member presents it disabled — the ladder is stop first, then
+#: flatten, which is exactly T3's stop-wave-then-flatten sequence.
 _FLATTEN_ACTION_IDS: tuple[CohortFlattenActionId, ...] = (
     "flatten_stop",
     "execute_safe_flatten",
@@ -73,12 +78,12 @@ def _presented_flatten(actions: list[PanelAction]) -> PanelAction | None:
     return None
 
 
-def _leg_from_panel_action(row: BotCatalogView, action: PanelAction | None) -> CohortFlattenLeg:
+def _leg_from_panel(panel: BotPanelView, action: PanelAction | None) -> CohortFlattenLeg:
     blocker_headline: str | None = None
     if action is not None and not action.enabled and action.blockers:
         blocker_headline = action.blockers[0].headline
     return CohortFlattenLeg(
-        strategy_instance_id=row.strategy_instance_id,
+        strategy_instance_id=panel.strategy_instance_id,
         # Narrowing is proven by construction: ``_presented_flatten`` only
         # returns actions whose id is in the closed flatten pair.
         action_id=(
@@ -88,7 +93,10 @@ def _leg_from_panel_action(row: BotCatalogView, action: PanelAction | None) -> C
         revision=None if action is None else action.revision,
         concurrency_token=None if action is None else action.concurrency_token,
         blocker_headline=blocker_headline,
-        exposure=row.exposure,
+        # From the same panel cut as the presented action, never the earlier
+        # catalog cut: the blast-radius quantity the operator confirms must
+        # be the one the accepted token will flatten.
+        exposure=panel.exposure,
     )
 
 
@@ -111,7 +119,7 @@ async def get_cohort_flatten_view(broker: str, account_id: str) -> CohortFlatten
             panel = await panel_data_source.get_panel(
                 broker, resolved, row.strategy_instance_id
             )
-            legs.append(_leg_from_panel_action(row, _presented_flatten(panel.actions)))
+            legs.append(_leg_from_panel(panel, _presented_flatten(panel.actions)))
         cohorts.append(
             CohortFlattenCohort(
                 strategy_key=strategy_key,
@@ -236,6 +244,34 @@ async def run_cohort_flatten(
                     error,
                     outcome="failed",
                     receipt_id=None,
+                    reason_code=None,
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # A performer can raise outside the typed hierarchies after real
+            # work was attempted (e.g. a claim error escaping a recovery
+            # EXIT). The batch contract still owes this leg a typed answer
+            # and its siblings their turns — translate to the same
+            # outcome-unknown shape the per-bot surface reports, keeping the
+            # derived leg key so the operator can inspect Clerk evidence for
+            # exactly this identity.
+            logger.exception(
+                "cohort flatten leg failed outside the typed action taxonomy",
+                extra={
+                    "action": "cohort_flatten_leg_untyped_failure",
+                    "account_id": resolved,
+                    "strategy_instance_id": leg.strategy_instance_id,
+                    "leg_action_id": leg.action_id,
+                },
+            )
+            legs.append(
+                _leg_error(
+                    leg,
+                    error,
+                    outcome="unknown",
+                    receipt_id=leg_request.idempotency_key,
                     reason_code=None,
                 )
             )

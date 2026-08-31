@@ -22,7 +22,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.registry import (
@@ -43,11 +43,21 @@ from app.services.broker_v2_panel.action_execution_service import (
     StaleRevisionError,
     reset_idempotency_store_for_testing,
 )
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    _broker_position_fixture,
+    _FakeReadPort,
+    _FakeTradePort,
+    _make_held_position,
+)
 from tests.broker.v2panel.fixtures import ACCT
 from tests.broker.v2panel.test_panel_router import _FakeBrokerPort, _FakeRegistry
 
 _COHORT_SIDS = ("qq-bot-1", "qq-bot-2", "qq-bot-3")
 _LONER_SID = "solo-bot-1"
+# The first cohort member is stranded in T3's exact state: run stopped with
+# reconciled attributed exposure, which arms the recovery ladder's
+# execute_safe_flatten on its panel.
+_STRANDED_SID = _COHORT_SIDS[0]
 
 
 def _leg(sid: str, token: str = "token-1") -> CohortFlattenLegRequest:
@@ -212,20 +222,38 @@ def test_request_rejects_duplicate_legs_and_oversized_identity() -> None:
 # ── router-level integration against the real harness ────────────────────────
 
 
+class _MixedLivenessRegistry(_FakeRegistry):
+    """The stranded member is genuinely stopped; its siblings run."""
+
+    def status(self, broker, sid):
+        view = super().status(broker, sid)
+        if sid == _STRANDED_SID:
+            return view.model_copy(
+                update={
+                    "running": False,
+                    "phase": "OFF_DUTY",
+                    "desired_state": "STOPPED",
+                    "active_run_id": None,
+                }
+            )
+        return view
+
+
 @pytest.fixture()
-def cohort_api(tmp_path):
+async def cohort_api(tmp_path):
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
     set_active_clerk_runtime(None)
     sids = (*_COHORT_SIDS, _LONER_SID)
-    set_bot_task_registry(_FakeRegistry(tmp_path, sids=sids))  # type: ignore[arg-type]
+    set_bot_task_registry(_MixedLivenessRegistry(tmp_path, sids=sids))  # type: ignore[arg-type]
     port = _FakeBrokerPort()
     get_broker_registry().register(port)  # type: ignore[arg-type]
     repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path)
     for sid in sids:
         repo.register_strategy_instance(
             strategy_instance_id=sid,
-            symbol="QQQ" if sid in _COHORT_SIDS else "TSLA",
+            # _make_held_position enters SPY, so the cohort trades SPY.
+            symbol="SPY" if sid in _COHORT_SIDS else "TSLA",
             config_hash="config-1",
             strategy_key="deployment_validation",
             display_name="Deployment Validation",
@@ -239,7 +267,26 @@ def cohort_api(tmp_path):
             strategy_instance_id=sid,
             lifecycle_run_id=f"run-{sid}",
         )
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=port, trade=port)  # type: ignore[arg-type]
+    # T3's stranded state for the first member: a filled, attributed entry,
+    # then a stop — leaving exposure the recovery ladder must flatten.
+    await _make_held_position(
+        repo, account_id=ACCT, strategy_instance_id=_STRANDED_SID, run_id=f"run-{_STRANDED_SID}"
+    )
+    submit_stop_run(
+        repo,
+        account_id=ACCT,
+        strategy_instance_id=_STRANDED_SID,
+        lifecycle_run_id=f"run-{_STRANDED_SID}",
+        operator_reason="cohort-stop-wave",
+    )
+    # The facade's broker ports see exactly the attributed position, so the
+    # reconciliation below lands clean and the ladder's flatten arms.
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_FakeReadPort(positions=[_broker_position_fixture("SPY", quantity=10.0)]),  # type: ignore[arg-type]
+        trade=_FakeTradePort(),  # type: ignore[arg-type]
+    )
+    await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
     set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
     app = FastAPI()
     app.include_router(router)
@@ -267,13 +314,28 @@ async def test_presentation_groups_multi_member_cohorts_with_real_leg_facts(
         assert response.status_code == 200, response.text
         view = response.json()
 
-        # Only the three-member QQQ cohort qualifies; the TSLA loner does not.
-        assert [c["symbol"] for c in view["cohorts"]] == ["QQQ"]
+        # Only the three-member SPY cohort qualifies; the TSLA loner does not.
+        assert [c["symbol"] for c in view["cohorts"]] == ["SPY"]
         cohort = view["cohorts"][0]
         assert cohort["strategy_key"] == "deployment_validation"
         assert [leg["strategy_instance_id"] for leg in cohort["legs"]] == list(
             _COHORT_SIDS
         )
+
+        # T3's stranded member — stopped with reconciled attributed exposure —
+        # presents an ARMED recovery-ladder flatten with its blast radius from
+        # the same panel cut as the token.
+        by_sid = {leg["strategy_instance_id"]: leg for leg in cohort["legs"]}
+        stranded = by_sid[_STRANDED_SID]
+        assert stranded["action_id"] == "execute_safe_flatten"
+        assert stranded["enabled"] is True
+        assert stranded["concurrency_token"]
+        assert stranded["exposure"] == {"SPY": 10.0}
+        assert cohort["enabled_count"] == 1
+        # Running members present disabled — the ladder is stop first, then
+        # flatten; an armed flatten on a running member would be a lie.
+        for sid in _COHORT_SIDS[1:]:
+            assert by_sid[sid]["enabled"] is False
 
         # Every presented leg fact is the per-bot panel's own presented
         # flatten action — token, revision, enabled — never synthesized.
@@ -300,12 +362,13 @@ async def test_presentation_groups_multi_member_cohorts_with_real_leg_facts(
 async def test_posting_legs_round_trips_typed_per_leg_outcomes(
     cohort_api: FastAPI,
 ) -> None:
-    """POST the presented legs end-to-end through the real pipeline.
+    """POST every presented leg end-to-end through the real pipeline.
 
-    In this flat-fleet harness no flatten can apply, so every leg must come
-    back as a typed refusal/failure — and crucially each leg answers
-    individually instead of the first one aborting the batch (#1802's
-    constraint, proven against the real router)."""
+    The stranded member's armed recovery-ladder flatten genuinely APPLIES
+    (real repo, real recovery dispatcher, fake broker ports); its running
+    siblings' disabled legs come back as typed refusals — and crucially each
+    leg answers individually instead of the first refusal aborting the batch
+    (#1802's constraint, proven against the real router)."""
     async with _client(cohort_api) as client:
         view = (
             await client.get(
@@ -315,6 +378,7 @@ async def test_posting_legs_round_trips_typed_per_leg_outcomes(
         presented = [
             leg for leg in view["cohorts"][0]["legs"] if leg["action_id"] is not None
         ]
+        assert presented, "the harness must present at least the stranded leg"
         legs = [
             {
                 "strategy_instance_id": leg["strategy_instance_id"],
@@ -323,17 +387,6 @@ async def test_posting_legs_round_trips_typed_per_leg_outcomes(
                 "concurrency_token": leg["concurrency_token"],
             }
             for leg in presented
-        ] or [
-            # No flatten-class action presented at all in this posture: the
-            # typed-refusal path is still proven with an echo of a leg the
-            # panel would refuse as unavailable.
-            {
-                "strategy_instance_id": sid,
-                "action_id": "flatten_stop",
-                "revision": 0,
-                "concurrency_token": "not-presented",
-            }
-            for sid in _COHORT_SIDS
         ]
 
         response = await client.post(
@@ -351,9 +404,25 @@ async def test_posting_legs_round_trips_typed_per_leg_outcomes(
         assert [leg["strategy_instance_id"] for leg in result["legs"]] == [
             leg["strategy_instance_id"] for leg in legs
         ]
+        outcomes = {
+            leg["strategy_instance_id"]: leg["outcome"] for leg in result["legs"]
+        }
+        # The armed stranded leg executed for real through the recovery
+        # dispatcher, with its own receipt...
+        assert outcomes[_STRANDED_SID] == "applied"
+        applied = next(
+            leg for leg in result["legs"]
+            if leg["strategy_instance_id"] == _STRANDED_SID
+        )
+        assert applied["result"] is not None
+        assert applied["result"]["receipt_id"]
+        # ...and its disabled siblings refused with typed errors, without
+        # aborting the batch.
         for leg in result["legs"]:
+            if leg["strategy_instance_id"] == _STRANDED_SID:
+                continue
             assert leg["outcome"] in {"refused", "failed", "unknown"}
             assert leg["error"] is not None
             assert leg["error"]["message"]
-        assert result["applied_count"] == 0
+        assert result["applied_count"] == 1
         assert result["receipt_id"] == "wave-e2e"

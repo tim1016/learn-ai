@@ -621,10 +621,13 @@ class PanelActionErrorResponse(BaseModel):
 
 # ── §11b Cohort flatten (ADR 0051, #1802) ────────────────────────────────────
 
-#: The flatten-class action ids a cohort leg may execute — ``flatten_stop``
-#: for a running bot, ``execute_safe_flatten`` for a stranded stopped one.
-#: A closed subset on purpose: the cohort wrapper composes existing per-bot
-#: mutations; it never introduces one.
+#: The flatten-class action ids a cohort leg may execute. Under the active
+#: SQLite authority the presented flatten surface is the recovery ladder's
+#: ``execute_safe_flatten`` (the SQLite panel adapter retains only
+#: resume/retire from generic lifecycle actions, so ``flatten_stop`` never
+#: reaches those panels); ``flatten_stop`` stays in the closed pair for the
+#: surfaces that do present it. A closed subset on purpose: the cohort
+#: wrapper composes existing per-bot mutations; it never introduces one.
 CohortFlattenActionId = Literal["flatten_stop", "execute_safe_flatten"]
 
 
