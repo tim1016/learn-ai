@@ -236,12 +236,18 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
     ).read_text(encoding="utf-8")
 
     constructions = source.count("ReconciliationSweep(")
-    publishers = source.count("on_result=facade.publish_reconciliation")
+    # The sweep-attributed seam on purpose (#1808): it publishes the verdict
+    # (delegating to publish_reconciliation) AND stamps the sweep-liveness
+    # timestamp the recovery-evaluation observation reads. Wiring the plain
+    # publisher would keep reads fresh but let a dead sweep masquerade as
+    # alive through one-off admission reconciliations.
+    publishers = source.count("on_result=facade.publish_sweep_reconciliation")
 
     assert constructions > 0, "no sweep construction found; update this guard"
     assert publishers == constructions, (
         f"{constructions} ReconciliationSweep construction(s) but {publishers} "
-        "publish their verdict; every sweep must feed the read projection"
+        "publish their verdict via the sweep-attributed seam; every sweep must "
+        "feed the read projection and the sweep-liveness observation"
     )
 
 

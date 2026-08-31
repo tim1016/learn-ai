@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.models import (
     CustodyCountFact,
     CustodyExposureFact,
     HoldState,
+    RecoveryEvaluationObservation,
 )
 from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.marketdata.feed import FeedHealth
@@ -56,11 +57,14 @@ from app.schemas.run_admission import (
 )
 from app.services.bot_binding_repository import alpaca_v1_action_plan
 from app.services.bot_start_admission import (
+    RECOVERY_EVALUATION_WINDOW_MS,
+    RECOVERY_SWEEP_LIVENESS_BOUND_MS,
     BotStartAdmission,
     StartRequest,
     market_data_admission_fact,
     market_data_capability_account_id,
     new_run_binding,
+    resolve_start_runtime_fact,
     seal_binding_to_custody_snapshot,
 )
 from app.services.market_liveness import compose_market_liveness
@@ -667,3 +671,130 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
     # 1_000 minted the run binding; 5_000 was the pre-await snapshot;
     # market_liveness must see 9_000 (the post-await recapture), never 5_000.
     assert seen_observed_at_ms == [9_000]
+
+
+# ── #1808: "sweep still evaluating" vs "recovery probe broken" ──────────────
+#
+# During post-outage sweep evaluation an unresolved-intent count is expected
+# to settle without intervention. ``resolve_start_runtime_fact`` presents
+# that window as ``RECOVERY_SWEEP_EVALUATING`` (wait) instead of
+# ``RECOVERY_UNCERTAIN`` (intervene) — but only while the observation says
+# the sweep is young enough and alive enough to still be evaluating.
+
+_ANCHOR_MS = 1_700_000_000_000
+
+
+def _evaluation(
+    *,
+    started_at_ms: int = _ANCHOR_MS,
+    last_pass_completed_at_ms: int | None = None,
+) -> RecoveryEvaluationObservation:
+    return RecoveryEvaluationObservation(
+        evaluation_started_at_ms=started_at_ms,
+        last_pass_completed_at_ms=last_pass_completed_at_ms,
+    )
+
+
+async def _runtime_fact_with_unresolved_intent(
+    *,
+    observed_at_ms: int,
+    recovery_evaluation: RecoveryEvaluationObservation | None,
+    wired: bool = True,
+) -> StartRuntimeAdmissionFact:
+    async def one_unresolved(subject_id: str | None) -> int:
+        del subject_id
+        return 1
+
+    return await resolve_start_runtime_fact(
+        strategy_instance_id=_SID,
+        observed_at_ms=observed_at_ms,
+        boot_recovery_required=False,
+        boot_recovery_complete=True,
+        unresolved_intents_probe=one_unresolved,
+        recovery_evaluation=((lambda: recovery_evaluation) if wired else None),
+        projected_start_count=0,
+        restart_threshold=100,
+        restart_window_ms=60_000,
+    )
+
+
+async def test_unresolved_intent_inside_evaluation_window_reports_sweep_evaluating() -> None:
+    fact = await _runtime_fact_with_unresolved_intent(
+        observed_at_ms=_ANCHOR_MS + 5_000,
+        recovery_evaluation=_evaluation(),
+    )
+
+    assert fact.state == "RECOVERY_SWEEP_EVALUATING"
+    assert "still evaluating" in fact.explanation
+    assert "1 order intent(s)" in fact.explanation
+    assert fact.next_step is not None and "Wait" in fact.next_step
+
+
+async def test_unresolved_intent_after_evaluation_window_reports_recovery_uncertain() -> None:
+    fact = await _runtime_fact_with_unresolved_intent(
+        observed_at_ms=_ANCHOR_MS + RECOVERY_EVALUATION_WINDOW_MS + 1,
+        recovery_evaluation=_evaluation(
+            last_pass_completed_at_ms=_ANCHOR_MS + RECOVERY_EVALUATION_WINDOW_MS,
+        ),
+    )
+
+    assert fact.state == "RECOVERY_UNCERTAIN"
+    assert "Resolve recovery intents" in (fact.next_step or "")
+
+
+async def test_unresolved_intent_with_dead_sweep_reports_recovery_uncertain() -> None:
+    """The wait-state must not outlive the sweep that produced it: a pass
+    completed long ago proves the sweep is no longer evaluating, however
+    young the evaluation window still is."""
+    fact = await _runtime_fact_with_unresolved_intent(
+        observed_at_ms=_ANCHOR_MS + RECOVERY_SWEEP_LIVENESS_BOUND_MS + 10_000,
+        recovery_evaluation=_evaluation(last_pass_completed_at_ms=_ANCHOR_MS),
+    )
+
+    assert fact.state == "RECOVERY_UNCERTAIN"
+
+
+async def test_unresolved_intent_with_live_sweep_mid_window_waits() -> None:
+    observed = _ANCHOR_MS + 60_000
+    fact = await _runtime_fact_with_unresolved_intent(
+        observed_at_ms=observed,
+        recovery_evaluation=_evaluation(last_pass_completed_at_ms=observed - 5_000),
+    )
+
+    assert fact.state == "RECOVERY_SWEEP_EVALUATING"
+
+
+async def test_unresolved_intent_without_observation_keeps_recovery_uncertain() -> None:
+    """No observation wired (synthetic authority, legacy tests): unchanged."""
+    fact = await _runtime_fact_with_unresolved_intent(
+        observed_at_ms=_ANCHOR_MS + 1_000,
+        recovery_evaluation=None,
+        wired=False,
+    )
+
+    assert fact.state == "RECOVERY_UNCERTAIN"
+
+
+async def test_probe_failure_reports_recovery_uncertain_even_mid_evaluation() -> None:
+    """A broken probe is the intervene case regardless of sweep posture —
+    collapsing it into the wait-state would erase the one signal separating
+    a broken probe from a transient count (#1808)."""
+
+    async def raising_probe(subject_id: str | None) -> int:
+        del subject_id
+        raise RuntimeError("probe down")
+
+    fact = await resolve_start_runtime_fact(
+        strategy_instance_id=_SID,
+        observed_at_ms=_ANCHOR_MS + 1_000,
+        boot_recovery_required=False,
+        boot_recovery_complete=True,
+        unresolved_intents_probe=raising_probe,
+        recovery_evaluation=lambda: _evaluation(),
+        projected_start_count=0,
+        restart_threshold=100,
+        restart_window_ms=60_000,
+    )
+
+    assert fact.state == "RECOVERY_UNCERTAIN"
+    assert "could not prove recovery completeness" in fact.explanation

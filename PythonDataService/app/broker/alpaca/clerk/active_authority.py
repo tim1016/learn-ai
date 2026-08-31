@@ -322,7 +322,7 @@ async def select_active_clerk_runtime(
             # The sweep is the sole automatic reconciler; publishing its
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
-            on_result=facade.publish_reconciliation,
+            on_result=facade.publish_sweep_reconciliation,
             # Custody first, evidence second: the symbol-validity probe runs
             # only after a succeeded pass, through the same guarded read port,
             # and records durably what the read path may then consume (#1795).
@@ -553,7 +553,7 @@ async def select_synthetic_clerk_runtime(
             # The sweep is the sole automatic reconciler; publishing its
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
-            on_result=facade.publish_reconciliation,
+            on_result=facade.publish_sweep_reconciliation,
         )
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)

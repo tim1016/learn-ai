@@ -52,6 +52,12 @@ class BootRecoveryIncompleteError(BotRunnerError):
     http_status = 503
 
 
+class RecoverySweepEvaluatingError(BotRunnerError):
+    """The reconciliation sweep is still evaluating recovery (#1808) — wait."""
+
+    http_status = 503
+
+
 class RecoveryUncertainError(BotRunnerError):
     http_status = 409
 
@@ -105,6 +111,7 @@ def raise_run_refusal(decision: RunAdmissionDecision) -> NoReturn:
         )
     error_types = {
         "BOOT_RECOVERY_INCOMPLETE": BootRecoveryIncompleteError,
+        "RECOVERY_SWEEP_EVALUATING": RecoverySweepEvaluatingError,
         "RECOVERY_UNCERTAIN": RecoveryUncertainError,
         "RESTART_INTENSITY_EXCEEDED": RestartIntensityRefusedError,
         "RESUME_CARRYOVER_UNSUPPORTED": RecoveryUncertainError,
