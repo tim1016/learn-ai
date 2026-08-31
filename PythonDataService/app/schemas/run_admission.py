@@ -63,6 +63,7 @@ class StartRuntimeAdmissionFact(BaseModel):
     state: Literal[
         "READY",
         "BOOT_RECOVERY_INCOMPLETE",
+        "RECOVERY_SWEEP_EVALUATING",
         "RECOVERY_UNCERTAIN",
         "RESTART_INTENSITY_EXCEEDED",
     ]

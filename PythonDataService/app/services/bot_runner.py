@@ -143,6 +143,7 @@ from app.services.bot_start_admission import (
     AdmittedBotStart,
     BotStartAdmission,
     MarketLivenessFactResolver,
+    RecoveryEvaluationProbe,
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartAdmissionUnavailable,
@@ -248,6 +249,7 @@ class BotTaskRegistry:
         self._boot_recovery_required = boot_recovery_required
         self._boot_recovery_complete = False
         self._unresolved_intents_probe: UnresolvedIntentsProbe | None = None
+        self._recovery_evaluation: RecoveryEvaluationProbe | None = None
         # When set, the boot sweep skips bots whose binding carries a broker
         # tag that is not in this set (e.g. IBKR bots share the same
         # artifacts_root but are managed by the host daemon, not the
@@ -694,6 +696,7 @@ class BotTaskRegistry:
             boot_recovery_required=self._boot_recovery_required,
             boot_recovery_complete=self._boot_recovery_complete,
             unresolved_intents_probe=self._unresolved_intents_probe,
+            recovery_evaluation=self._recovery_evaluation,
             projected_start_count=self._projected_start_count(strategy_instance_id, observed_at_ms),
             restart_threshold=self._restart_policy.threshold,
             restart_window_ms=self._restart_policy.window_ms,
@@ -1098,6 +1101,7 @@ class BotTaskRegistry:
         recover: Callable[[], Awaitable[None]] | None = None,
         reconcile: Callable[[], Awaitable[object]] | None = None,
         unresolved_intents_probe: UnresolvedIntentsProbe | None = None,
+        recovery_evaluation: RecoveryEvaluationProbe | None = None,
     ) -> BootRecoveryReport:
         """Reconcile durable ON_DUTY state against the (empty) task registry.
 
@@ -1114,6 +1118,7 @@ class BotTaskRegistry:
             unresolved_intents_probe=unresolved_intents_probe,
         )
         self._unresolved_intents_probe = unresolved_intents_probe
+        self._recovery_evaluation = recovery_evaluation
         self._boot_recovery_complete = True
         # Direction 2: heal replay receipts a dead process owed (orphaned
         # `pending` or a terminal run that never scheduled). After the sweep so

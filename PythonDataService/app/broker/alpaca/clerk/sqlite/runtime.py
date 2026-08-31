@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     InstanceCustodyProof,
     ReconciliationVerdict,
+    RecoveryEvaluationObservation,
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
@@ -213,6 +214,11 @@ class SqliteAlpacaClerkFacade:
         # concurrent reconciliation can replace the timestamp between the two
         # reads and the snapshot reports one verdict with another pass's time.
         self._last_published: _PublishedReconciliation | None = None
+        # #1808: anchors the recovery-evaluation episode Start/Resume
+        # admission reads passively, so a post-outage unresolved-intent count
+        # can present as "the sweep is still evaluating" instead of
+        # "intervene" while this authority is young.
+        self._evaluation_started_at_ms = repo.clock()
 
     @property
     def account_id(self) -> str:
@@ -907,6 +913,21 @@ class SqliteAlpacaClerkFacade:
             result=result, observed_at_ms=self._repo.clock()
         )
         return result
+
+    def recovery_evaluation_observation(self) -> RecoveryEvaluationObservation:
+        """The sweep's evaluation posture, for Start/Resume admission (#1808).
+
+        Passive by construction: two process-local timestamps, no broker
+        contact, no ledger append. The consumer applies the staleness bounds
+        (``bot_start_admission``); this facade only stamps the observations.
+        """
+        published = self._last_published
+        return RecoveryEvaluationObservation(
+            evaluation_started_at_ms=self._evaluation_started_at_ms,
+            last_pass_completed_at_ms=(
+                None if published is None else published.observed_at_ms
+            ),
+        )
 
     async def reconcile_account(
         self,

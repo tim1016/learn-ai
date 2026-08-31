@@ -752,3 +752,75 @@ async def test_retire_reproves_custody_and_refuses_to_strand_exposure(
 
     assert "custody" in str(blocked.value).lower()
     assert registry.status("alpaca", _SID).phase != "RETIRED"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_intent_mid_sweep_evaluation_reports_wait_not_intervene(
+    tmp_path: Path,
+) -> None:
+    """#1808: with the sweep's evaluation observation wired, an unresolved
+    intent during post-outage settling refuses Start as
+    ``RECOVERY_SWEEP_EVALUATING`` (wait) rather than ``RECOVERY_UNCERTAIN``
+    (intervene). The refusal is still a refusal — only the prose changes."""
+    from app.broker.alpaca.clerk.models import RecoveryEvaluationObservation
+    from app.services.bot_runner_errors import RecoverySweepEvaluatingError
+    from app.services.bot_start_admission import RECOVERY_EVALUATION_WINDOW_MS
+
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    async def no_op() -> None:
+        return None
+
+    async def one_unresolved_intent(subject_id: str | None) -> int:
+        return 1 if subject_id in (None, f"bot:{_SID}") else 0
+
+    now = bot_runner_module.now_ms_utc()
+    evaluating = RecoveryEvaluationObservation(
+        evaluation_started_at_ms=now,
+        last_pass_completed_at_ms=None,
+    )
+
+    await registry.run_boot_recovery(
+        recover=no_op,
+        reconcile=no_op,
+        unresolved_intents_probe=one_unresolved_intent,
+        recovery_evaluation=lambda: evaluating,
+    )
+
+    preview = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert preview.allowed is False
+    assert preview.reason_code == "RECOVERY_SWEEP_EVALUATING"
+    with pytest.raises(RecoverySweepEvaluatingError) as refused:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+        )
+    assert refused.value.admission_decision is not None
+    assert refused.value.admission_decision.reason_code == preview.reason_code
+
+    # Once the evaluation window has lapsed with the intent still unresolved,
+    # the same wiring reports the intervene state — the wait-state cannot
+    # outlive the sweep evaluation that produced it.
+    expired = RecoveryEvaluationObservation(
+        evaluation_started_at_ms=now - RECOVERY_EVALUATION_WINDOW_MS - 1,
+        last_pass_completed_at_ms=now - RECOVERY_EVALUATION_WINDOW_MS,
+    )
+    await registry.run_boot_recovery(
+        recover=no_op,
+        reconcile=no_op,
+        unresolved_intents_probe=one_unresolved_intent,
+        recovery_evaluation=lambda: expired,
+    )
+
+    settled = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+    assert settled.reason_code == "RECOVERY_UNCERTAIN"

@@ -422,6 +422,29 @@ class ReconciliationSummary(BaseModel):
     recorded_at_ms: int
 
 
+class RecoveryEvaluationObservation(BaseModel):
+    """The reconciliation sweep's recovery-evaluation posture (#1808).
+
+    Produced by the active authority's publish seam — the sweep is the sole
+    automatic reconciler (#1776) — and read passively at Start/Resume
+    admission, so a refusal during post-outage evaluation can say "the sweep
+    is still evaluating; wait" instead of "intervene". Process-local
+    observations, never custody facts: the producer stamps the timestamps and
+    the consumer applies the staleness bounds at act time (the #1773 rule —
+    no consumer manufactures its own freshness).
+
+    ``evaluation_started_at_ms`` anchors the current evaluation episode
+    (authority activation). ``last_pass_completed_at_ms`` is the observation
+    time of the most recently published sweep pass, ``None`` before the first
+    one — the consumer's proof the sweep is still alive.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    evaluation_started_at_ms: int = Field(ge=0)
+    last_pass_completed_at_ms: int | None = Field(default=None, ge=0)
+
+
 class AccountFreezeState(BaseModel):
     """The only two durable account-freeze outcomes allowed by ADR 0030."""
 
