@@ -351,6 +351,15 @@ a defect.
   fleet load, which is consistent with this being *open*. Its concurrency
   condition is carried into **#1801**, which must remeasure the 10-concurrent
   case explicitly; delete this bullet then, not before.
+  **Offline remeasure 2026-08-31**
+  (`docs/audits/read-latency-profile-2026-08-31.md`, reproducible via
+  `scripts/bench_panel_read_latency.py`): serialization **confirmed with a
+  mechanism** — per read, the row work splits into an event-loop-blocking
+  roster-building slice and a GIL-holding `to_thread` projection slice, so
+  10 concurrent reads serialize on both (catalog 44 ms alone → ~1.6 s each
+  at 10 concurrent, 144 rows, with ~3.8× total-work inflation; GC ruled
+  out). The bullet still stands until the live 10-concurrent remeasure on
+  the deployed topology.
 - **F14 — `gallery/snapshot` unbounded by liveness (low).** 5.6 s / 751 KB /
   25 tiles including retired bots (`app/routers/broker_v2_gallery.py`; study
   §7).
