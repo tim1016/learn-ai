@@ -320,10 +320,12 @@ public class SchemaMigrationTests
         "ck_resolution_enum",
         "ck_data_type_enum",
         "ck_price_adjustment_mode_enum",
-        "ck_status_enum",
-        "ck_data_lake_runs_run_type",
-        "ck_data_lake_runs_ensure_data_status",
-        "ck_data_lake_runs_engine_status"
+        "ck_status_enum"
+        // The three ck_data_lake_runs_* constraints were listed here until
+        // #1893 dropped DataLakeRuns. They are still created by the raw-SQL
+        // migrations that predate the drop -- and still restored by
+        // DropDataLakeRuns.Down -- but they do not survive to head, which is
+        // what this list asserts.
     ];
 
     private static readonly string[] RawSqlMigrationIndexes =

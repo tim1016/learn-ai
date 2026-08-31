@@ -103,34 +103,7 @@ DATA_LAKE_ARTIFACTS = TableExpectation(
 )
 
 
-DATA_LAKE_RUNS = TableExpectation(
-    name="DataLakeRuns",
-    columns=(
-        ColumnExpectation("Id", "uuid", nullable=False),
-        # See DATA_LAKE_ARTIFACTS.DataRootId above — same backfill, same
-        # migration.
-        ColumnExpectation("DataRootId", "uuid", nullable=False),
-        ColumnExpectation("StrategyExecutionId", "integer", nullable=True),
-        ColumnExpectation("EngineRunId", "character varying", nullable=True),
-        ColumnExpectation("RunType", "character varying", nullable=False),
-        ColumnExpectation("RunSpec", "jsonb", nullable=False),
-        ColumnExpectation("WorkspacePath", "text", nullable=True),
-        ColumnExpectation("ManifestSha256", "character", nullable=True),
-        ColumnExpectation("DataAvailabilityHash", "character", nullable=True),
-        ColumnExpectation("EnsureDataStatus", "character varying", nullable=True),
-        ColumnExpectation("EnsureDataResponse", "jsonb", nullable=True),
-        ColumnExpectation("EngineStatus", "character varying", nullable=True),
-        ColumnExpectation("RequestedAtMs", "bigint", nullable=False),
-        ColumnExpectation("StartedAtMs", "bigint", nullable=True),
-        ColumnExpectation("CompletedAtMs", "bigint", nullable=True),
-    ),
-    primary_key=("Id",),
-    check_constraints=(
-        "ck_data_lake_runs_run_type",
-        "ck_data_lake_runs_ensure_data_status",
-        "ck_data_lake_runs_engine_status",
-    ),
-)
-
-
-ALL_TABLES: tuple[TableExpectation, ...] = (DATA_LAKE_ARTIFACTS, DATA_LAKE_RUNS)
+# DATA_LAKE_RUNS was mirrored here until #1893 dropped the table. It was
+# schema-only on both stacks — declared, migrated, never written — so the
+# mirror described a capability that did not exist (ADR 0049 amendment A3).
+ALL_TABLES: tuple[TableExpectation, ...] = (DATA_LAKE_ARTIFACTS,)

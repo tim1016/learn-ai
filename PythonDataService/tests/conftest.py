@@ -210,9 +210,8 @@ def _raise_if_catalog_truncation_is_unsafe(fixturenames: Iterable[str]) -> None:
 @pytest.fixture(autouse=True)
 def _guard_data_lake_catalog_truncation(request: pytest.FixtureRequest) -> None:
     """Block any ``clean_artifacts``-style fixture (tests/unit/data_lake,
-    tests/integration/data_lake) from truncating DataLakeArtifacts /
-    DataLakeRuns unless POSTGRES_URL has been explicitly attested as
-    ephemeral.
+    tests/integration/data_lake) from truncating DataLakeArtifacts unless
+    POSTGRES_URL has been explicitly attested as ephemeral.
 
     Same class of bug as ``_isolate_data_lake_write_root`` and
     ``_isolate_strategy_validation_flag_ledger`` above -- a developer's real
