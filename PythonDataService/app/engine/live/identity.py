@@ -110,12 +110,17 @@ def strategy_instance_artifact_dir(
     if not namespace or namespace != Path(namespace).name:
         raise ValueError(f"artifact namespace must be a single path segment: {namespace!r}")
     safe_sid = safe_strategy_instance_path_segment(strategy_instance_id)
-    namespace_root = os.path.realpath(
-        os.path.join(os.fspath(artifacts_root), namespace)
-    )
-    candidate = os.path.realpath(os.path.join(namespace_root, safe_sid))
+    # Resolution belongs to `confine_path_to_root` alone. Resolving here first
+    # made this function realpath four times per call -- twice for a namespace
+    # root the confinement check then re-resolved, and twice for the candidate
+    # -- and the catalog calls it once per roster row, where path construction
+    # measured ~3x the cost of the lifecycle file read it guards (#1801 §11
+    # lever 3). `realpath` is idempotent, so dropping the pre-resolution is
+    # behaviour-preserving and leaves the sanitizer shape CodeQL recognises
+    # exactly where it was.
+    namespace_root = Path(artifacts_root) / namespace
     return confine_path_to_root(
-        Path(candidate),
-        Path(namespace_root),
+        namespace_root / safe_sid,
+        namespace_root,
         label="strategy instance artifact",
     )

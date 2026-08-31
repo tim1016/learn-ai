@@ -121,6 +121,7 @@ def failed_sqlite_projection(
         uncertainties=(),
         latest_account_reconciliation=None,
     )
+    recovery_actions = build_recovery_catalog(context)
     return ClerkProjection(
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
@@ -138,8 +139,8 @@ def failed_sqlite_projection(
         uncertainties=(),
         latest_reconciliation=None,
         terminal_receipts=(),
-        guidance=build_projection_guidance(context),
-        recovery_actions=build_recovery_catalog(context),
+        guidance=build_projection_guidance(context, recovery_actions),
+        recovery_actions=recovery_actions,
         generated_at_ms=now_ms,
     )
 

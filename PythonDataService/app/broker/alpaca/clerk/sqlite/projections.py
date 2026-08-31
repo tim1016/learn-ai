@@ -234,6 +234,7 @@ class SqliteClerkProjectionReader:
             holds = self._holds(strategy_instance_id)
             reconciliation = self._latest_reconciliation(strategy_instance_id, now_ms)
             receipts = self._terminal_receipts(strategy_instance_id)
+        recovery_actions = build_recovery_catalog(context)
         return ClerkProjection(
             account_id=self._account_id,
             strategy_instance_id=strategy_instance_id,
@@ -251,8 +252,8 @@ class SqliteClerkProjectionReader:
             uncertainties=context.uncertainties[:CURRENT_STATE_LIMIT],
             latest_reconciliation=reconciliation,
             terminal_receipts=receipts,
-            guidance=build_projection_guidance(context),
-            recovery_actions=build_recovery_catalog(context),
+            guidance=build_projection_guidance(context, recovery_actions),
+            recovery_actions=recovery_actions,
             generated_at_ms=now_ms,
         )
 
