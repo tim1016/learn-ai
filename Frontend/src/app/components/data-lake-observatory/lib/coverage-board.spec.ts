@@ -111,13 +111,6 @@ describe('buildCoverageBoard', () => {
     expect(board.problems[0].reason).toBe('unavailable');
   });
 
-  it('flags the whole board dark when a read comes back not enabled', () => {
-    const board = buildCoverageBoard([{ symbol: 'SPY', read: { kind: 'not_enabled' } }]);
-
-    expect(board.notEnabled).toBe(true);
-    expect(board.rows).toEqual([]);
-  });
-
   it('takes the session axis from the longest row so a failed symbol cannot shorten it', () => {
     const board = buildCoverageBoard([
       { symbol: 'AAA', read: coverage('AAA', [{ day: 18, status: 'complete', artifactId: 1 }]) },

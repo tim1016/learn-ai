@@ -156,14 +156,9 @@ services:
       # Data lake writer root (Slice 1b). Container path of the host-bind mount above.
       - LEAN_DATA_WRITE_ROOT=/lean-data-writer
       # Data lake catalog — asyncpg URL; same host/db/creds as the backend.
-      # Required when DATA_LAKE_ENABLED=true (the default since #1839) or for
-      # schema-drift integration tests.
+      # Required: the lake is the only market-data store (ADR 0049, #1893), so
+      # a deployment without this has no historical bars at all.
       - POSTGRES_URL=postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
-      # The lake is the market-data authority (ADR 0049). Named here rather
-      # than left to the Settings default so an operator reading compose can
-      # see it, and can turn it off in one place. Off falls every seam back to
-      # the pre-lake policy store.
-      - DATA_LAKE_ENABLED=${DATA_LAKE_ENABLED:-true}
       # DEPLOY PREREQUISITE for flag-on LEAN sidecar runs, and deliberately
       # NOT an entry in this block. The launcher is a HOST process, not a
       # compose service; only it reads LEAN_DATA_VOLUME_HOST_PATH

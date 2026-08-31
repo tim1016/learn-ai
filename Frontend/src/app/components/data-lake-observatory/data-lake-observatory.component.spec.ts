@@ -146,13 +146,6 @@ describe('DataLakeObservatoryComponent', () => {
       originalEventSource;
   });
 
-  it('names the dark lake instead of spinning or crashing', async () => {
-    await renderObservatory({ storage: { kind: 'not_enabled' }, defaults: { kind: 'not_enabled' } });
-
-    expect(await screen.findByText(/data lake is not enabled/)).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Coverage' })).toBeNull();
-  });
-
   it('renders an empty catalog honestly rather than as zeroed tables', async () => {
     await renderObservatory();
 

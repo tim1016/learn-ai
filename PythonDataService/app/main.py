@@ -66,6 +66,9 @@ from app.routers import (
     volatility,
     walk_forward,
 )
+from app.routers import (
+    data_lake as data_lake_router,
+)
 from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
@@ -633,8 +636,10 @@ app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_P
 # unconditionally, like clerk_transactions.router's comparable reads.
 app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 
-# Data lake (Slice 1a) — gated by DATA_LAKE_ENABLED.
-# When disabled, the prefix has no registered routes; clients get 404.
+# Data lake (Slice 1a). Registered unconditionally since #1893 retired
+# DATA_LAKE_ENABLED — the lake is the only market-data store, so there is
+# no deployment in which these routes should be absent. A 404 from this
+# prefix now means the route does not exist, never "the lake is off".
 #
 # DATA_PLANE_CONTROL_DEPENDENCIES (mutating-only), not the always-on
 # PROTECTED_DATA_PLANE_READ_DEPENDENCIES its neighbours above carry. Those
@@ -651,8 +656,6 @@ app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE
 # dependency and there is no argument for these two being the exception.
 # Decided at the flag flip (#1839, carry-forward A6) rather than inherited
 # from the flag-dark slice that first registered the router.
-from app.routers import data_lake as data_lake_router  # noqa: E402
-
 app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 
 # Dev-only broker fault-injection seam (PRD #1354) — gated by

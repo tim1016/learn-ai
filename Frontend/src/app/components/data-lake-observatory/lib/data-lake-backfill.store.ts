@@ -144,13 +144,6 @@ export class DataLakeBackfillStore {
     } catch (error) {
       const classified = classifyDataLakeError(error);
       this.phaseState.set('failed');
-      if (classified.kind === 'not_enabled') {
-        this.errorState.set({
-          code: 'data_lake_not_enabled',
-          message: 'The data plane refused the backfill: the data lake is not enabled.',
-        });
-        return;
-      }
       this.errorState.set({
         code: classified.kind === 'rejected' ? classified.reason : 'submission_failed',
         message: classified.message,

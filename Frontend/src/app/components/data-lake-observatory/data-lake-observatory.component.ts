@@ -24,7 +24,6 @@ const DEFAULT_LOOKBACK_DAYS = 30;
 const EMPTY_BOARD: CoverageBoard = {
   rows: [],
   problems: [],
-  notEnabled: false,
   sessionCount: 0,
   firstSessionMs: null,
   lastSessionMs: null,
@@ -105,17 +104,6 @@ export class DataLakeObservatoryComponent {
     return read?.kind === 'ok' ? read.value : null;
   });
 
-  /**
-   * True as soon as any of the three reads answers 404. One dark route
-   * means the router is not mounted at all, so the whole page is dark.
-   */
-  protected readonly notEnabled = computed(
-    () =>
-      this.board().notEnabled ||
-      this.storage.value()?.kind === 'not_enabled' ||
-      this.defaults.value()?.kind === 'not_enabled',
-  );
-
   protected readonly hasSymbols = computed(
     () => parseSymbols(this.query().symbolsText, this.maxSymbolLength()).symbols.length > 0,
   );
@@ -128,9 +116,6 @@ export class DataLakeObservatoryComponent {
     () => this.backfillDefaults()?.max_trading_range_days ?? MAX_TRADING_RANGE_DAYS,
   );
 
-  // Only ever consulted while `notEnabled()` is false, so the dark-lake
-  // reason `describeFailure` synthesizes never reaches this panel — the
-  // page-wide banner has already taken over by then.
   protected readonly storageProblem = computed(() => describeFailure(this.storage.value()));
 
   protected apply(next: ObservatoryQuery): void {

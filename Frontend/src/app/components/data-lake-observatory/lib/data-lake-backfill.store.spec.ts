@@ -120,7 +120,7 @@ describe('DataLakeBackfillStore', () => {
     expect(store.reattached()).toBe(false);
   });
 
-  it('names a refused submission as "not enabled" when the route is dark', async () => {
+  it('names an untyped refusal as a submission failure rather than inventing a reason', async () => {
     const startJob = vi
       .fn()
       .mockRejectedValue(new HttpErrorResponse({ status: 404, statusText: 'Not Found' }));
@@ -129,10 +129,7 @@ describe('DataLakeBackfillStore', () => {
     await store.start(SPEC);
 
     expect(store.phase()).toBe('failed');
-    expect(store.error()).toEqual({
-      code: 'data_lake_not_enabled',
-      message: 'The data plane refused the backfill: the data lake is not enabled.',
-    });
+    expect(store.error()?.code).toBe('submission_failed');
   });
 
   it("carries a typed rejection's own reason code onto the run", async () => {

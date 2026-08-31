@@ -53,15 +53,18 @@ describe('DataLakeService', () => {
     http.verify();
   });
 
-  it('reports an untyped 404 — the unmounted router — as "not enabled"', async () => {
+  it('reports an untyped 404 as unavailable, not as a typed rejection', async () => {
     const pending = service.storageSummary();
 
     // FastAPI's own body when the route does not exist: a bare string.
+    // This meant "the router is unmounted because the flag is off" until
+    // #1893; the router is always mounted now, so an untyped 404 is simply
+    // unexpected and must not be dressed up as a known outcome.
     http
       .expectOne((candidate) => candidate.url === `${BASE}/storage-summary`)
       .flush({ detail: 'Not Found' }, { status: 404, statusText: 'Not Found' });
 
-    await expect(pending).resolves.toEqual({ kind: 'not_enabled' });
+    await expect(pending).resolves.toMatchObject({ kind: 'unavailable' });
     http.verify();
   });
 
@@ -154,7 +157,7 @@ describe('classifyDataLakeError', () => {
       classifyDataLakeError(
         new HttpErrorResponse({ status: 404, statusText: 'Not Found', error: { detail: 'Not Found' } }),
       ),
-    ).toEqual({ kind: 'not_enabled' });
+    ).toMatchObject({ kind: 'unavailable' });
   });
 
   it('keeps a typed reason on any status, not just the two it was written for', () => {
@@ -171,11 +174,7 @@ describe('classifyDataLakeError', () => {
 });
 
 describe('describeFailure', () => {
-  it('gives every failure a reason code, including the dark lake', () => {
-    expect(describeFailure({ kind: 'not_enabled' })).toEqual({
-      reason: 'data_lake_not_enabled',
-      message: 'The data lake is not enabled on this data plane.',
-    });
+  it('gives every failure a reason code', () => {
     expect(describeFailure({ kind: 'unavailable', message: 'no answer' })).toEqual({
       reason: 'unavailable',
       message: 'no answer',

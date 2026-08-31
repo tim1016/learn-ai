@@ -143,13 +143,14 @@ function typedProblem(error: HttpErrorResponse): DataLakeProblem | null {
 /**
  * Maps a failed data-lake request onto its named outcome.
  *
- * The typed body is consulted before the status code, because the status
- * alone cannot separate the two 404s this surface produces: one means the
- * catalog has no such artifact (`{reason: "artifact_not_found"}`), the
- * other means `main.py` never mounted the router because
- * `DATA_LAKE_ENABLED` is off. Only a 404 with no typed body is the dark
- * lake; a typed one is a rejection like any other and renders its reason
- * through the receipt-label pipe.
+ * The typed body is consulted before the status code. This used to separate
+ * two different 404s: the catalog having no such artifact
+ * (`{reason: "artifact_not_found"}`) versus `main.py` never mounting the
+ * router because `DATA_LAKE_ENABLED` was off. #1893 retired the flag and the
+ * router is always mounted, so the only 404 this surface produces is the
+ * typed one, which renders its reason through the receipt-label pipe. An
+ * untyped 404 is now genuinely unexpected and folds into `unavailable`
+ * rather than claiming the lake is switched off.
  */
 export function classifyDataLakeError(error: unknown): DataLakeFailure {
   if (!(error instanceof HttpErrorResponse)) {
@@ -157,7 +158,6 @@ export function classifyDataLakeError(error: unknown): DataLakeFailure {
   }
   const problem = typedProblem(error);
   if (problem !== null) return { kind: 'rejected', ...problem };
-  if (error.status === 404) return { kind: 'not_enabled' };
   if (error.status === 422) {
     return { kind: 'rejected', reason: 'validation_failed', message: error.message };
   }
@@ -172,18 +172,9 @@ export function classifyDataLakeError(error: unknown): DataLakeFailure {
  * renders — reason through the receipt-label pipe, message as the
  * backend's own words.
  *
- * `not_enabled` gets a reason code of its own rather than a null, so a
- * surface that only knows how to render a problem still says something
- * true instead of going blank. A surface that treats the dark lake
- * specially — the Observatory page, which shows a page-wide banner —
- * checks the kind directly and never reaches this.
  */
 export function describeFailure(read: DataLakeRead<unknown> | undefined): DataLakeProblem | null {
   if (read === undefined || read.kind === 'ok') return null;
   if (read.kind === 'rejected') return { reason: read.reason, message: read.message };
-  if (read.kind === 'unavailable') return { reason: 'unavailable', message: read.message };
-  return {
-    reason: 'data_lake_not_enabled',
-    message: 'The data lake is not enabled on this data plane.',
-  };
+  return { reason: 'unavailable', message: read.message };
 }
