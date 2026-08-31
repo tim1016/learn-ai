@@ -1,6 +1,6 @@
 # ADR 0052 — Archive is an operator-declared terminal exit, and terminal rows leave the read path
 
-**Status:** Proposed 2026-08-31 — the read-path half is implemented; the archive half is not. Do not treat the Decision section below as shipped.
+**Status:** Accepted 2026-08-31
 **Provenance:** Decision ticket [#1911](https://github.com/tim1016/learn-ai/issues/1911). Source: `docs/audits/read-latency-profile-live-2026-08-31.md` §13 — a profiling session ended with 142 stopped, flat bots that `retire` refused, because `STRATEGY_STILL_RUNNABLE` is correct for every one of them.
 **Decision drivers:** #1801 measured read *and* deploy cost as linear in roster rows (~2.9 ms/row live; deploy 6.3× from 53 → 144 rows), and roster rows only ever accumulate. The 2026-08-26 fleet-stress run described its 94 leftover rows as "legacy roster rows retained deliberately as read-scale ballast" — i.e. the baseline was 94 rows before a single bot was deployed that day.
 **Related:** #1795 (Retire clears a *provably dead* registration — untouched by this ADR), #1778 (a retired bot holding stranded exposure keeps its authored cure), ADR 0051 (cohort-scoped flatten — the affordance shape a cohort archive should follow), #1776 (reads project the sweep's verdict; no second reconciler), #1801 (the cost curve this reduces).
@@ -13,7 +13,7 @@ Three findings, in the order they were established.
 
 **2. Retirement did not reduce read cost.** Even a correctly retired row was projected in full — a custody projection and a lifecycle file read per row, per poll. **Fixed** — see the inert-terminal commit on this branch.
 
-**3. A healthy stopped bot still cannot be removed.** This is the half that remains, and the reason this ADR is Proposed rather than Accepted. #1795's Retire contract is correct for what it covers and is not re-litigated here; it explicitly deferred "a healthy stopped bot… a destructive lifecycle action with its own safety story". This is that story.
+**3. A healthy stopped bot still could not be removed.** #1795's Retire contract is correct for what it covers and is not re-litigated here; it explicitly deferred "a healthy stopped bot… a destructive lifecycle action with its own safety story". This ADR is that story, and `archive` is its implementation.
 
 ## Decision
 
@@ -40,5 +40,7 @@ A terminal row carries `duty_outcome=None` rather than its last run's outcome. R
 ## Consequences
 
 Read cost becomes linear in *live* rows. Measured on `scripts/bench_panel_read_latency --retired-fraction` at 144 rows: sequential catalog p50 **32.67 ms → 19.37 ms** and 6-concurrent p50 **473.34 ms → 259.55 ms** when half the roster is retired.
+
+The cohort form ships with an operator surface rather than waiting on one: cohort-flatten landed backend-only under ADR 0051 and its UI is still open as #1909, so a second unclicked batch endpoint would have left #1911's motivating 142 bots exactly as unreachable as before. The batch execution taxonomy both cohorts run under now lives in one module (`cohort_execution`), so the contract an operator depends on when a leg fails halfway through a fleet-wide command has one home rather than two that can drift.
 
 **Not decided here, and deliberately so.** The catalog runs N per-bot custody projections where one account-wide projection holds the same rows. Collapsing them would remove the row-count curve for *all* rows rather than only terminal ones — but the account-wide projection applies its limits account-wide, so per-bot slices could be silently truncated. That is a correctness hazard and belongs to #1801's follow-up with its own PR, not to this one.
