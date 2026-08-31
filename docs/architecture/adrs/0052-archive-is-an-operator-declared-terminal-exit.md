@@ -3,6 +3,7 @@
 **Status:** Accepted 2026-08-31
 **Provenance:** Decision ticket [#1911](https://github.com/tim1016/learn-ai/issues/1911). Source: `docs/audits/read-latency-profile-live-2026-08-31.md` §13 — a profiling session ended with 142 stopped, flat bots that `retire` refused, because `STRATEGY_STILL_RUNNABLE` is correct for every one of them.
 **Decision drivers:** #1801 measured read *and* deploy cost as linear in roster rows (~2.9 ms/row live; deploy 6.3× from 53 → 144 rows), and roster rows only ever accumulate. The 2026-08-26 fleet-stress run described its 94 leftover rows as "legacy roster rows retained deliberately as read-scale ballast" — i.e. the baseline was 94 rows before a single bot was deployed that day.
+**Vocabulary:** `CONTEXT.md` § "Registration exit (resolved 2026-08-31)" — the two exits, what proves each, and the inert-terminal test the read path keys on.
 **Related:** #1795 (Retire clears a *provably dead* registration — untouched by this ADR), #1778 (a retired bot holding stranded exposure keeps its authored cure), ADR 0051 (cohort-scoped flatten — the affordance shape a cohort archive should follow), #1776 (reads project the sweep's verdict; no second reconciler), #1801 (the cost curve this reduces).
 
 ## Context

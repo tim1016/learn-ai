@@ -1911,6 +1911,21 @@ proves its running build at Start/Resume.
 - **Redrive** — the watchdog's bounded automatic re-submission of a reduction for a stale `EXIT_NOT_FLAT` episode; identity `exit-redrive-<episode-hex12>-<attempt>`, at most 3 per episode, counted by the command namespace (not a mutable timestamp).
 - **`EXIT_STUCK`** — the durable custody-subject escalation raised when redrives exhaust; blocks new exposure, allows reduction toward zero, and clears on the same attributed-flat proof that clears `EXIT_NOT_FLAT`.
 
+## Registration exit (resolved 2026-08-31)
+
+**Lineage: live.**
+
+Decision record: ADR 0052.
+
+- **Registration exit** — the terminal act that takes a bot off the roster for good. Two exits reach it, distinguished by what proves them; both write the same terminal duty fact, so nothing downstream branches on which was used. A registration that has taken either can never admit another run.
+  _Avoid_: delete, remove, decommission (none of these say what is kept — the bot's history and receipts survive an exit).
+- **Retire** — the exit for a registration that is *provably dead*: its strategy program is gone from the runtime, or the broker has durably answered that its symbol is not a listed asset. The proof is system-derived, so retire is offered on evidence the operator did not supply.
+  _Avoid_: end, kill, retire-as-cleanup (retire is not "I am done with this bot" — that is archive).
+- **Archive** — the exit for a registration the operator is *finished with*. The proof is custody: stopped, flat, no working orders, and an account that can prove it. Because custody is the enabling proof rather than a backstop, an account that cannot observe the broker refuses archive outright rather than reading its own ignorance as flatness.
+  _Avoid_: retire (the contract is different), soft delete, hide (an archived bot is still readable and still auditable).
+- **Inert terminal row** — a registration that has taken an exit and against which nothing bot-scoped is outstanding: no unresolved uncertainty, no non-zero attributed position, no active run. The catalog projects such a row from identity alone, which is what keeps read cost linear in live rows rather than in every row ever registered. A row that fails the test — an exited bot still holding custody — is projected in full and keeps its authored cure.
+  _Avoid_: dead row, archived row (the second names one of the two exits, and the test is about outstanding custody, not about which exit was taken).
+
 ## Data lake (resolved 2026-08-27)
 
 **Lineage: live.**
