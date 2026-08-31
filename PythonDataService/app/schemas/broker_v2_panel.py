@@ -619,6 +619,126 @@ class PanelActionErrorResponse(BaseModel):
     reason_code: str | None
 
 
+# ── §11b Cohort flatten (ADR 0051, #1802) ────────────────────────────────────
+
+#: The flatten-class action ids a cohort leg may execute. Under the active
+#: SQLite authority the presented flatten surface is the recovery ladder's
+#: ``execute_safe_flatten`` (the SQLite panel adapter retains only
+#: resume/retire from generic lifecycle actions, so ``flatten_stop`` never
+#: reaches those panels); ``flatten_stop`` stays in the closed pair for the
+#: surfaces that do present it. A closed subset on purpose: the cohort
+#: wrapper composes existing per-bot mutations; it never introduces one.
+CohortFlattenActionId = Literal["flatten_stop", "execute_safe_flatten"]
+
+
+class CohortFlattenLeg(BaseModel):
+    """One presented cohort member with its executability facts (ADR 0047).
+
+    A leg is armed only when the member's own presented flatten-class action
+    is armed — the token and revision here are the per-bot action's, so the
+    later POST executes exactly what was presented.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    strategy_instance_id: str
+    action_id: CohortFlattenActionId | None
+    enabled: bool
+    revision: int | None
+    concurrency_token: str | None
+    # First blocker headline when the presented action is disabled; ``None``
+    # when armed or when no flatten-class action is presented at all.
+    blocker_headline: str | None
+    # Attributed exposure from the roster row — blast-radius copy input.
+    exposure: dict[str, float]
+
+
+class CohortFlattenCohort(BaseModel):
+    """One (strategy_key, symbol) cohort with two or more members."""
+
+    model_config = ConfigDict(frozen=True)
+
+    strategy_key: str
+    strategy_label: str
+    symbol: str
+    legs: list[CohortFlattenLeg]
+    enabled_count: int
+
+
+class CohortFlattenView(BaseModel):
+    """Backend-authored cohort-flatten presentation (ADR 0051 Decision 3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    cohorts: list[CohortFlattenCohort]
+    observed_at_ms: int
+
+
+class CohortFlattenLegRequest(BaseModel):
+    """One leg the operator confirmed — echoes the presented action facts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=96)
+    action_id: CohortFlattenActionId
+    revision: int = Field(ge=0)
+    concurrency_token: str = Field(min_length=1, max_length=128)
+
+
+class CohortFlattenRequest(BaseModel):
+    """Execute a batch of per-bot flatten legs (ADR 0051 Decisions 2/4/5).
+
+    Membership is explicit: exactly these legs execute, each under the
+    derived per-leg idempotency identity ``{idempotency_key}:{sid}``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str = Field(min_length=1, max_length=64)
+    reason: str | None = Field(default=None, max_length=512)
+    legs: list[CohortFlattenLegRequest] = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def _legs_are_unique_and_keys_fit(self) -> CohortFlattenRequest:
+        sids = [leg.strategy_instance_id for leg in self.legs]
+        if len(set(sids)) != len(sids):
+            raise ValueError("cohort legs must name distinct bots")
+        for leg in self.legs:
+            if len(self.idempotency_key) + 1 + len(leg.strategy_instance_id) > 128:
+                raise ValueError(
+                    "idempotency_key plus strategy_instance_id exceeds the "
+                    "per-leg idempotency identity budget of 128 characters"
+                )
+        return self
+
+
+class CohortFlattenLegResult(BaseModel):
+    """One leg's typed outcome — a receipt or a refusal, never silence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    strategy_instance_id: str
+    outcome: Literal["applied", "replayed", "refused", "failed", "unknown"]
+    result: PanelActionResult | None
+    error: PanelActionErrorResponse | None
+
+
+class CohortFlattenResult(BaseModel):
+    """The batch outcome: every leg answered, in request order (ADR 0051 D5)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    receipt_id: str
+    recorded_at_ms: int
+    legs: list[CohortFlattenLegResult]
+    applied_count: int
+    replayed_count: int
+    refused_count: int
+    failed_count: int
+
+
 # ── §8 Chart shapes ──────────────────────────────────────────────────────────
 
 ChartSource = Literal["ibkr", "polygon", "mixed"]
