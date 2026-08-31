@@ -261,7 +261,7 @@ async def resolve_start_runtime_fact(
                         "The reconciliation sweep is still evaluating "
                         f"{unresolved} order intent(s) for this bot after recovery."
                     ),
-                    next_step="Wait for the reconciliation sweep to settle before Start.",
+                    next_step="Wait for the reconciliation sweep to settle, then retry.",
                 )
             return StartRuntimeAdmissionFact(
                 state="RECOVERY_UNCERTAIN",

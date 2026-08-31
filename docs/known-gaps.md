@@ -455,17 +455,6 @@ is the durable index, the issue is the working brief.
   are now spaced, and exhaustion leaves a structured record instead of an
   indistinguishable 503. The guard itself is unchanged, and the attempt *count*
   was deliberately not raised — that is a magnitude, and #1801 owns it.
-- **T4 — transient `RECOVERY_UNCERTAIN` during post-outage sweeps (low,
-  observation).** A resume read can briefly return `RECOVERY_UNCERTAIN` before
-  settling. Honest but unexplained. **#1806.** Note that two distinct branches
-  return this state with different prose (`bot_start_admission.py:188-212`) —
-  probe failure and outstanding intents. #1793 deliberately did not collapse
-  them, and neither should the copy work. **Still open, and not a copy edit:**
-  distinguishing "the sweep is still evaluating" from "the probe is broken"
-  needs a sweep-in-flight fact, and no such fact exists anywhere in the
-  data plane today (`grep` for `sweep_in_flight`/`reconcile_in_flight`
-  returns nothing). It needs a new fact with a producer, so it is design
-  work, which is why the two shippable #1806 items landed without it.
 - **Copy nit (low).** A "Crashed"-labelled row could carry the explanation
   "Off duty and flat." — a clerk-derived explanation beside a
   lifecycle-derived label. Cosmetic sibling of T6. **FIXED 2026-08-26

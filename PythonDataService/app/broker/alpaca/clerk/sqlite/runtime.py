@@ -219,6 +219,11 @@ class SqliteAlpacaClerkFacade:
         # can present as "the sweep is still evaluating" instead of
         # "intervene" while this authority is young.
         self._evaluation_started_at_ms = repo.clock()
+        # Stamped only by publish_sweep_reconciliation — the periodic sweep's
+        # own wiring — never by one-off admission/action reconciliations that
+        # also publish. A custody-guard pass during a mutating Start/Resume
+        # must not read as evidence the background sweep is alive.
+        self._last_sweep_pass_completed_at_ms: int | None = None
 
     @property
     def account_id(self) -> str:
@@ -914,6 +919,22 @@ class SqliteAlpacaClerkFacade:
         )
         return result
 
+    def publish_sweep_reconciliation(
+        self, result: AccountReconciliationResult
+    ) -> AccountReconciliationResult:
+        """The periodic sweep's publish seam: verdict plus sweep liveness.
+
+        The reconciliation sweep wires ``on_result`` here instead of
+        :meth:`publish_reconciliation` so the #1808 evaluation observation's
+        liveness timestamp is attributable to the *periodic* sweep alone. A
+        one-off admission or action reconciliation still publishes the
+        verdict (reads must project it), but must not masquerade as proof
+        the background sweep is alive.
+        """
+        published = self.publish_reconciliation(result)
+        self._last_sweep_pass_completed_at_ms = self._repo.clock()
+        return published
+
     def recovery_evaluation_observation(self) -> RecoveryEvaluationObservation:
         """The sweep's evaluation posture, for Start/Resume admission (#1808).
 
@@ -921,12 +942,9 @@ class SqliteAlpacaClerkFacade:
         contact, no ledger append. The consumer applies the staleness bounds
         (``bot_start_admission``); this facade only stamps the observations.
         """
-        published = self._last_published
         return RecoveryEvaluationObservation(
             evaluation_started_at_ms=self._evaluation_started_at_ms,
-            last_pass_completed_at_ms=(
-                None if published is None else published.observed_at_ms
-            ),
+            last_pass_completed_at_ms=self._last_sweep_pass_completed_at_ms,
         )
 
     async def reconcile_account(

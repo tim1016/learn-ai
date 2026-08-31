@@ -1081,13 +1081,19 @@ async def test_recovery_evaluation_observation_tracks_the_published_sweep(
     assert before.last_pass_completed_at_ms is None
     assert before.evaluation_started_at_ms > 0
 
+    # A one-off (non-sweep) publication — the custody guard's act-time
+    # reconcile during a mutating Start/Resume — must not read as sweep
+    # liveness: only the sweep's own wiring stamps the pass timestamp.
+    await facade.reconcile_account(trigger="MANUAL")
+    assert facade.recovery_evaluation_observation().last_pass_completed_at_ms is None
+
     await ReconciliationSweep(
         repo=repo,
         read=broker,
         trade=broker,
         intake=intake,
         max_passes=1,
-        on_result=facade.publish_reconciliation,
+        on_result=facade.publish_sweep_reconciliation,
     ).run()
 
     after = facade.recovery_evaluation_observation()
