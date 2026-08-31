@@ -77,12 +77,24 @@ Every port of mathematical logic from a reference source ships with:
 
 ## Pre-push test-suite hygiene
 
-Before pushing or opening a PR, run the full per-stack test suite and **distinguish your work's failures from inherited failures**.
+**The full project-scope suite is CI's job, not local dev's** (decided
+2026-08-30). Locally, run *targeted* tests — the suites for every surface the
+diff touches, plus every suite that consumes a shared helper you edited — and
+let CI run the full per-stack sweep. The full local run (~8 min Python on the
+host venv; frontend container runs that OOM under load) duplicates what CI
+does minutes later; spend that wall-time only as an explicit choice when the
+blast radius is genuinely unknowable, never as a default.
 
-- **Run at project scope**, not just the files you touched. Tests for unrelated areas can break from a shared-helper edit, an env-var rename, or a Pydantic / pandas / SDK upgrade. Per-file pytest is for fast iteration; the project-scope run is what CI does and what reviewers will see.
-  - Python: `podman exec polygon-data-service python -m pytest /app/tests`
-  - .NET: `cd Backend.Tests && dotnet test`
-  - Frontend: `podman exec my-frontend npx ng test --watch=false`
+- **Pick targets by consumer, not just by file.** A shared-helper edit breaks
+  suites far from the diff (a parent spec pins a child component's copy; an
+  env-var rename trips ~33 router tests). Run the tests for what you changed
+  AND for what imports it.
+  - Python: `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/<targeted paths>` (host venv)
+  - .NET: `cd Backend.Tests && dotnet test --filter <scope>`
+  - Frontend: `podman exec my-frontend npx ng test --include='exact.spec.ts'` (exact spec file, never a directory glob)
+- **When CI finds a failure your targeted run missed**, reproduce at that
+  scope locally, fix, and re-push — that is the loop working as designed, not
+  a reason to reinstate full local runs.
 - **Establish a baseline before you treat a failure as "not mine."** Stash your changes, check out `origin/<base-branch>`, run the same command, and confirm the failure is pre-existing. Anything not on that pre-existing list is yours to fix or surface.
 - **Pre-existing failures must be surfaced in the PR description**, not silently ignored. They're inherited tech debt, but they shouldn't mask your work's failures or make a reviewer wonder what's new.
 - **Container-state hygiene** when iterating with `podman cp`: copy specific files (`podman cp local/path/file.py container:/app/path/file.py`), never directories with trailing `/` or container destinations that already exist as a directory — `podman cp src/ container:/app/dst` will create `/app/dst/src/` if `/app/dst/` exists, polluting test discovery. After a long iteration session, `rm -rf` any duplicated paths you created (or rebuild the container) before treating a test-suite run as authoritative.
