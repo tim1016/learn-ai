@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.v2panel.action_policy import evaluate_retirement
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
@@ -190,9 +191,10 @@ _RETIRE_REFUSAL: dict[str | None, tuple[str, str]] = {
         "Stop the bot before retiring its registration.",
     ),
     "STRATEGY_STILL_RUNNABLE": (
-        "This bot's strategy program still exists.",
-        "Retire only clears a registration whose strategy program the runtime "
-        "no longer has.",
+        "No proof this bot can never run again.",
+        "Retire clears a registration that is provably dead: its strategy "
+        "program is gone from the runtime, or the broker has durably answered "
+        "that its symbol is not a listed asset.",
     ),
     "RETIRE_WOULD_STRAND_CUSTODY": (
         "The bot still holds custody.",
@@ -226,11 +228,13 @@ class BotTaskRegistry:
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None = None,
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
+        symbol_unresolvable: Callable[[str, str], bool] = symbol_unresolvable_for_mode,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
         self._restart_policy = restart_policy or RestartIntensityPolicy()
         self._now_ms = now_ms
+        self._symbol_unresolvable = symbol_unresolvable
         self._market_liveness = market_liveness or market_liveness_fact
         self._registry_generation = uuid4().hex
         self._bots: dict[str, ManagedBot] = {}
@@ -810,6 +814,10 @@ class BotTaskRegistry:
                     strategy_runtime_missing=(
                         binding.strategy_key not in _STRATEGY_REGISTRY
                     ),
+                    # The same durable sweep-produced fact the panel guard
+                    # read (#1795), through the same mode-scoped predicate, so
+                    # commit and presentation answer one rule against one store.
+                    symbol_unresolvable=self._symbol_unresolvable(binding.symbol, binding.mode),
                     has_exposure=custody.exposure.state != "zero",
                     working_order_count=custody.working_orders.count,
                 )

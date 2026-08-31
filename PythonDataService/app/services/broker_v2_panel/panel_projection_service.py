@@ -764,6 +764,7 @@ def build_panel(
     dry_run_activity: list[DryRunActivity] | None = None,
     authority_account_id: str | None = None,
     market_pulse: MarketPulseView,
+    symbol_unresolvable: bool = False,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
 
@@ -856,6 +857,7 @@ def build_panel(
         account_working_order_count=_account_working_order_count(entries),
         account_expected_exposure={},
         resume_admission=resume_admission,
+        symbol_unresolvable=symbol_unresolvable,
     )
 
     resolved_authority_account_id = authority_account_id or default_authority_account_id(

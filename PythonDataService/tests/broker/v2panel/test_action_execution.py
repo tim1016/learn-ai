@@ -610,6 +610,7 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
                 run_id="run-1",
                 symbol="SPY",
                 use_rth=True,
+                mode="trade",
                 strategy_key="deployment_validation",
                 sealed_program=None,
             )

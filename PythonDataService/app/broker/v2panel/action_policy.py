@@ -56,6 +56,11 @@ class ActionGuardContext:
     # registration). Defaults False: a caller that has not resolved the
     # registry leaves retire disabled rather than offering it speculatively.
     strategy_runtime_missing: bool = False
+    # True when the durable symbol-validity store holds a definitive broker
+    # answer that this bot's symbol is not a listed asset (#1795) — the second,
+    # independent proof of permanent inadmissibility. Same fail-closed default
+    # as above: an unresolved fact leaves retire disabled, never enabled.
+    symbol_unresolvable: bool = False
 
 
 @dataclass(frozen=True)
@@ -286,6 +291,7 @@ def evaluate_retirement(
     running: bool,
     phase: str,
     strategy_runtime_missing: bool,
+    symbol_unresolvable: bool,
     has_exposure: bool,
     working_order_count: int,
 ) -> RetirementVerdict:
@@ -294,30 +300,30 @@ def evaluate_retirement(
     Ordered so an operator learns the closest thing they can act on, and so
     the custody guards are the last word: retire must never strand exposure.
 
-    ``strategy_runtime_missing`` is the only proof available here that a
-    registration can never run again, and it is a *narrower* condition than
-    the one retire exists to clear. A bot bound to an unresolvable instrument
-    is equally dead, and is the case that motivated this guard -- but its
-    strategy key is alive, so this predicate does not fire for it (T1,
-    2026-08-26; #1795).
+    Two independent proofs of "this registration can never admit again" make
+    a bot retire-eligible, and either alone suffices (#1795):
 
-    The blocker copy is worded accordingly. It says the strategy program
-    exists, which is what this actually checks; an earlier wording claimed
-    "This bot can still run", which the same panel contradicted by refusing
-    Resume permanently on the very bot retire exists for.
+    - ``strategy_runtime_missing`` -- the strategy key is gone from the
+      runtime registry (dead vocabulary / legacy registration).
+    - ``symbol_unresolvable`` -- the durable symbol-validity store holds a
+      definitive broker answer that the bound symbol is not a listed asset.
+      Produced by the reconciliation sweep's post-pass probe and read
+      passively here, because a broker lookup is barred from this path by
+      the #1776 pure-read invariant, and no admission reason code is
+      structurally permanent (``MARKET_DATA_STALE`` is also what a *warming*
+      symbol reports, so keying on it would make every starting bot
+      retire-eligible).
 
-    Widening this needs a durable, read-safe proof of symbol validity, which
-    does not exist yet: no admission reason code is structurally permanent
-    (``MARKET_DATA_STALE`` is also what a *warming* symbol reports, so keying
-    on it would make every starting bot retire-eligible), and a broker
-    security lookup is barred from this path by the #1776 pure-read
-    invariant. See #1795.
+    When neither proof holds the refusal keeps the ``STRATEGY_STILL_RUNNABLE``
+    cause: the registration is not provably dead. That covers both a genuinely
+    healthy bot and a dead-symbol bot the sweep has not yet observed -- the
+    blocker copy is worded to claim no more than that.
     """
     if phase == "RETIRED":
         return RetirementVerdict(eligible=False, already_retired=True)
     if running:
         return RetirementVerdict(eligible=False, cause="BOT_STILL_RUNNING")
-    if not strategy_runtime_missing:
+    if not strategy_runtime_missing and not symbol_unresolvable:
         return RetirementVerdict(eligible=False, cause="STRATEGY_STILL_RUNNABLE")
     if has_exposure or working_order_count:
         return RetirementVerdict(eligible=False, cause="RETIRE_WOULD_STRAND_CUSTODY")
@@ -330,10 +336,11 @@ _RETIRE_BLOCKER_COPY: dict[RetirementBlockedCause, tuple[str, str]] = {
         "A running bot still evaluates bars and can place orders.",
     ),
     "STRATEGY_STILL_RUNNABLE": (
-        "This bot's strategy program still exists.",
-        "Retire only clears a registration whose strategy program the runtime "
-        "no longer has. It does not cover a bot that cannot run for another "
-        "reason -- an unresolvable symbol, for instance.",
+        "No proof this bot can never run again.",
+        "Retire clears a registration that is provably dead: its strategy "
+        "program is gone from the runtime, or the broker has durably answered "
+        "that its symbol is not a listed asset. Neither proof holds for this "
+        "bot.",
     ),
     "RETIRE_WOULD_STRAND_CUSTODY": (
         "This bot still holds custody.",
@@ -346,10 +353,11 @@ _RETIRE_BLOCKER_COPY: dict[RetirementBlockedCause, tuple[str, str]] = {
 def _guard_retire(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
     """Present the shared retirement rule as operator guidance (S5).
 
-    Retire cleans up a registration the runtime can no longer honour -- the
-    legacy bot bound to a strategy key that no longer exists. It is not "end
-    this bot's life": a healthy stopped bot stays out of scope, because that
-    is a destructive lifecycle action with its own safety story.
+    Retire cleans up a registration the runtime can no longer honour -- a
+    strategy key that no longer exists, or a symbol the broker has durably
+    answered is unlisted (#1795). It is not "end this bot's life": a healthy
+    stopped bot stays out of scope, because that is a destructive lifecycle
+    action with its own safety story.
 
     The rule itself lives in :func:`evaluate_retirement` because the
     committing operation must re-prove it against fresh custody; this guard
@@ -359,6 +367,7 @@ def _guard_retire(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]
         running=ctx.running,
         phase=ctx.phase,
         strategy_runtime_missing=ctx.strategy_runtime_missing,
+        symbol_unresolvable=ctx.symbol_unresolvable,
         has_exposure=ctx.has_exposure,
         working_order_count=ctx.working_order_count,
     )
@@ -526,12 +535,24 @@ def _confirmation_for_action(
             required_token="FLATTEN",
         )
     if action_id == "retire":
+        # Name the proof that actually enabled this action. Retire has two
+        # independent enabling proofs (#1795) and stating the wrong one
+        # misdescribes an irreversible command: a symbol-proved bot's strategy
+        # is still registered, and saying otherwise would send the operator
+        # hunting a runtime problem that does not exist. Strategy first when
+        # both hold — a missing program is the broader fact.
+        proof = (
+            "Its strategy is no longer registered, so the runtime can never "
+            "honour it again."
+            if ctx.strategy_runtime_missing
+            else "The broker has durably answered that its symbol is not a "
+            "listed asset, so it can never admit again."
+        )
         return OperatorConfirmationCopy(
             title="Retire this registration?",
             body=(
                 f"This clears {ctx.strategy_instance_id} on account "
-                f"{ctx.account_id} from the roster. Its strategy is no longer "
-                "registered, so the runtime can never honour it again."
+                f"{ctx.account_id} from the roster. {proof}"
             ),
             consequence=(
                 "The registration stops issuing feed subscriptions and can "

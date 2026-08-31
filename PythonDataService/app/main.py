@@ -204,11 +204,33 @@ async def lifespan(app: FastAPI):
         # Resolve the broker account before constructing the sole writer. The
         # append-only activation fence must select SQLite; a missing or invalid
         # activation installs no broker-mutation capability.
+        # Symbols provider for the sweep's post-pass validity probe (#1795):
+        # a fresh one-shot binding read per call, so a bot deployed after boot
+        # is probed without a restart. Injected as a callable so the clerk
+        # layer stays free of bot-registration imports.
+        #
+        # Dry Run bindings are excluded: they are sealed to a synthetic sim
+        # account and never contact the Alpaca broker, so Alpaca's asset
+        # universe is not their admission invariant and asking about their
+        # symbols spends broker calls on a fact no consumer may act on
+        # (`symbol_unresolvable_for_mode` refuses the mode anyway).
+        from app.broker.ibkr.config import live_artifacts_root
+        from app.services.bot_binding_repository import live_state_binding_repository
+
+        def _alpaca_roster_symbols() -> list[str]:
+            bindings = live_state_binding_repository(live_artifacts_root()).list_for_broker(
+                "alpaca"
+            )
+            return sorted(
+                {binding.symbol for binding in bindings if binding.mode != "dry_run"}
+            )
+
         alpaca_clerk_runtime = await select_active_clerk_runtime(
             read=alpaca_broker,
             trade=alpaca_broker,
             artifacts_root=alpaca_clerk_root,
             stream_health_gate=alpaca_stream_health_gate,
+            roster_symbols=_alpaca_roster_symbols,
         )
         set_active_clerk_runtime(alpaca_clerk_runtime)
         if alpaca_clerk_runtime.clerk is not None:

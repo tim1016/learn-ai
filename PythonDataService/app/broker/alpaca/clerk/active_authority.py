@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.trade_evidence import (
     SqliteTradeUpdateEvidenceSink,
     TradeUpdateEvidenceSink,
 )
+from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.utils.timestamps import now_ms_utc
 
@@ -194,8 +195,15 @@ async def select_active_clerk_runtime(
     execution_lease_wait_timeout_s: float = DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
     execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     stream_health_gate: StreamHealthGate | None = None,
+    roster_symbols: Callable[[], Sequence[str]] | None = None,
 ) -> ActiveClerkRuntime:
-    """Resolve the account, validate activation, and construct one authority."""
+    """Resolve the account, validate activation, and construct one authority.
+
+    ``roster_symbols`` opts the sweep into the post-pass symbol-validity probe
+    (#1795): a callable returning the fleet's bound symbols, injected here so
+    the clerk layer never imports the bot-registration services. ``None`` (the
+    default, and every test/synthetic path) constructs no probe.
+    """
     try:
         account = await read.get_account()
     except Exception as exc:
@@ -315,6 +323,18 @@ async def select_active_clerk_runtime(
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
             on_result=facade.publish_reconciliation,
+            # Custody first, evidence second: the symbol-validity probe runs
+            # only after a succeeded pass, through the same guarded read port,
+            # and records durably what the read path may then consume (#1795).
+            after_pass=(
+                SymbolValidityProbe(
+                    store=SymbolValidityStore(artifacts_root),
+                    read=guarded_read,
+                    roster_symbols=roster_symbols,
+                ).run_due
+                if roster_symbols is not None
+                else None
+            ),
         )
         sweep.start_lease_heartbeat()
         # #1777 WP4: the stream-health hold runs on its own fixed cadence,
