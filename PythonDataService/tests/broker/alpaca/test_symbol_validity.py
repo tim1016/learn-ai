@@ -42,7 +42,7 @@ def _asset(symbol: str, *, tradable: bool = True, status: str = "active") -> Bro
 class _FakeRead:
     """get_asset-only read port: symbol -> asset, None, or a raised error."""
 
-    def __init__(self, answers: dict[str, BrokerAsset | None | Exception]) -> None:
+    def __init__(self, answers: dict[str, BrokerAsset | Exception | None]) -> None:
         self.answers = answers
         self.calls: list[str] = []
 
