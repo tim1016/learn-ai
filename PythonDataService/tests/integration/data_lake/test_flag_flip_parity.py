@@ -270,7 +270,6 @@ def test_both_engines_resolve_the_same_artifact_hashes_for_one_run(
     """
     from app.lean_sidecar.lake_mount import resolve_lake_artifacts
 
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     _seed_lake_run_prerequisites(imported_lake)
 
     engine_roots = resolve_data_roots(source="polygon", adjusted=False)
@@ -404,7 +403,6 @@ def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
     """
     from app.services.chart_bar_source import compose_chart_bars
 
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     def _provider_must_not_be_called(from_date: str, to_date: str):
         raise AssertionError(f"the provider was called for {from_date}..{to_date} over a fully-covered window")
@@ -441,7 +439,6 @@ def test_chart_serves_an_adjusted_request_from_its_own_imported_root(
     """
     from app.services.chart_bar_source import compose_chart_bars
 
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
 
     def _provider_must_not_be_called(from_date: str, to_date: str):
         raise AssertionError(f"the provider was called for {from_date}..{to_date} over a fully-covered window")
@@ -538,7 +535,6 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
     cache_root = _seed_cache(tmp_path / "lean-cache" / "polygon-raw", symbol)
     write_root = tmp_path / "lean-data-writer"
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
     # import_cache_root requires any --lake-root to carry a valid marker
     # (issue #1878, PR B of #1861) -- stamped with the service's own default
     # active root so materialize_engine_run's later catalog reads (which
