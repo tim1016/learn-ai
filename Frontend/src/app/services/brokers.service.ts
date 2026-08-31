@@ -2,7 +2,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
-import { firstValueWithinPollTimeout } from './poll-timeout';
+import { PolledReadScheduler } from './polled-read-scheduler';
 
 import type {
   BrokerAccountSnapshot,
@@ -63,6 +63,7 @@ export interface SqliteTimelineQuery {
 @Injectable({ providedIn: 'root' })
 export class BrokersService {
   private readonly http = inject(HttpClient);
+  private readonly polls = inject(PolledReadScheduler);
   private readonly base = '/api/brokers';
   private readonly accountsBase = '/api/accounts';
   private readonly accountReads = new Map<
@@ -78,8 +79,8 @@ export class BrokersService {
 
     // Polled, and the promise below is cached — a hang would be handed to
     // every later caller until expiry, not just this one.
-    const promise = firstValueWithinPollTimeout(
-      this.http.get<BrokerAccountSnapshot>(`${this.base}/${broker}/account`),
+    const promise = this.polls.get<BrokerAccountSnapshot>(
+      `${this.base}/${broker}/account`,
     );
     const entry = {
       expiresAtMs: Date.now() + BrokersService.ACCOUNT_CACHE_MS,
@@ -267,10 +268,9 @@ export class BrokersService {
    * under `/api/brokers` (the proxy attaches the shared secret for that prefix).
    */
   getClerkStatus(broker = 'alpaca'): Promise<ClerkStatus> {
-    // Shares the roster page's poll guard with getAccount (S7).
-    return firstValueWithinPollTimeout(
-      this.http.get<ClerkStatus>(`${this.base}/${broker}/clerk/status`),
-    );
+    // Shares the roster page's poll guard with getAccount (S7), and its
+    // scheduler: the two fire on the same 15 s tick (#1912).
+    return this.polls.get<ClerkStatus>(`${this.base}/${broker}/clerk/status`);
   }
 
   /**
