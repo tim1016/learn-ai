@@ -651,13 +651,9 @@ app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE
 # dependency and there is no argument for these two being the exception.
 # Decided at the flag flip (#1839, carry-forward A6) rather than inherited
 # from the flag-dark slice that first registered the router.
-if settings.DATA_LAKE_ENABLED:
-    from app.routers import data_lake as data_lake_router
+from app.routers import data_lake as data_lake_router  # noqa: E402
 
-    app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
-    logger.info("data lake routes ENABLED")
-else:
-    logger.info("data lake routes disabled (set DATA_LAKE_ENABLED=true to enable)")
+app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 
 # Dev-only broker fault-injection seam (PRD #1354) — gated by
 # ALPACA_FAULT_INJECTION_ENABLED. When disabled the prefix has no registered

@@ -172,10 +172,15 @@ class LakeMount:
 
 
 def lake_mount_enabled() -> bool:
-    """True when sidecar runs should read the lake instead of staging."""
-    from app.config import settings
+    """True — sidecar runs always read the lake.
 
-    return bool(settings.DATA_LAKE_ENABLED)
+    Kept as a function rather than inlined at its call sites: it is the one
+    place that answered "lake or staging?", and #1893 removed the staging
+    answer rather than the question. A future mount decision (a second
+    physical root, a read-only replica) has an obvious home; call sites do
+    not have to be re-found.
+    """
+    return True
 
 
 def data_plane_lake_root(price_adjustment_mode: PriceAdjustmentMode) -> Path:

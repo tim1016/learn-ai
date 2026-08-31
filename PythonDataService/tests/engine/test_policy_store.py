@@ -2,30 +2,55 @@
 
 from __future__ import annotations
 
-import json
-import threading
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from app.config import settings
 from app.data_lake import path_policy
-from app.engine.data.availability import _missing_spans, ensure_range
+from app.engine.data.availability import _missing_spans
 from app.engine.data.policy_store import (
     policy_key,
-    read_provenance,
-    record_fetch,
-    resolve_cache_root,
     resolve_data_roots,
-    resolve_policy_root,
     snapshot_minute_trade_zips,
-    symbol_write_lock,
 )
-from app.lean_sidecar.trading_calendar import expected_sessions, is_trading_day
+from app.lean_sidecar.trading_calendar import expected_sessions
 from app.lean_sidecar.workspace import SymbolValidationError
 
 FETCHED_AT_MS = 1783958400000
+
+
+def test_resolve_data_roots_returns_the_lake_root_alone(monkeypatch, tmp_path: Path):
+    """The lake is the only reader root (#1893).
+
+    The pre-lake arrangement stacked a read-only reference mount in front of a
+    policy-keyed cache subtree, selected by DATA_LAKE_ENABLED. Both are gone:
+    a run must be able to say which bytes it consumed, and a fixture silently
+    outranking the lake would make that answer a lie.
+    """
+    monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(tmp_path))
+
+    roots = resolve_data_roots(source="polygon", adjusted=False)
+
+    assert roots == [path_policy.resolve_lake_root("raw")]
+    assert roots[0].exists(), "the lake root is created if missing"
+
+
+def test_resolve_data_roots_serves_each_adjustment_mode_from_its_own_root(monkeypatch, tmp_path: Path):
+    """``adjusted`` selects a different physical root, and is never refused.
+
+    Since #1866 the mode is a segment of the root, so raw and split-adjusted
+    requests cannot name the same directory -- which is what makes returning
+    the requested mode's bytes, rather than raising, the honest answer.
+    """
+    monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(tmp_path))
+
+    raw = resolve_data_roots(source="polygon", adjusted=False)
+    adjusted = resolve_data_roots(source="polygon", adjusted=True)
+
+    assert raw == [path_policy.resolve_lake_root("raw")]
+    assert adjusted == [path_policy.resolve_lake_root("polygon_split_adjusted")]
+    assert raw != adjusted
 
 
 def test_policy_key_encodes_source_and_adjustment():
@@ -33,196 +58,30 @@ def test_policy_key_encodes_source_and_adjustment():
     assert policy_key(source="polygon", adjusted=False) == "polygon-raw"
 
 
-def test_resolve_policy_root_nests_under_cache_root(tmp_path: Path):
-    root = resolve_policy_root(source="polygon", adjusted=False, cache_root=tmp_path)
-    assert root == tmp_path / "polygon-raw"
 
 
-def test_resolve_cache_root_honors_env(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-    assert resolve_cache_root() == tmp_path / "store"
 
 
-def test_resolve_data_roots_reference_first_and_creates_policy_root(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    ref = tmp_path / "reference"
-    ref.mkdir()
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(ref))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-
-    roots = resolve_data_roots(source="polygon", adjusted=True)
-
-    assert roots == [ref, tmp_path / "store" / "polygon-adjusted"]
-    assert roots[1].is_dir()
 
 
-def test_resolve_data_roots_skips_missing_reference(monkeypatch, tmp_path: Path):
-    """The reference mount is only stacked in front when it exists.
-
-    Flag explicitly off: the reference-vs-policy ordering is the policy
-    store's own concern, and since #1839 a raw request with the flag on
-    resolves the lake instead (which has no reference mount to skip).
-    """
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-
-    roots = resolve_data_roots(source="polygon", adjusted=False)
-
-    assert roots == [tmp_path / "store" / "polygon-raw"]
 
 
-def test_resolve_data_roots_ignores_the_lake_while_the_flag_is_off(monkeypatch, tmp_path: Path):
-    """Opt-out posture: the lake may exist on disk, but nothing reads it."""
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-
-    roots = resolve_data_roots(source="polygon", adjusted=False)
-
-    assert roots == [tmp_path / "store" / "polygon-raw"]
 
 
-def test_turning_the_flag_off_returns_a_reader_to_the_policy_bars(monkeypatch, tmp_path: Path):
-    """The rollback, demonstrated rather than reasoned about.
-
-    #1839 made the lake the default, so "turn the flag off" is now the
-    rollback procedure and not merely the shipped state. Both trees hold the
-    same window here, which is the situation an actual rollback lands in --
-    the lake was written while the flag was on, and the policy cache is still
-    where it was. What must be true is that with the flag off the reader sees
-    the *policy* bars and the lake root is absent from the search order
-    entirely: present-but-lower-priority would let a day the policy cache
-    happens to lack be served out of the lake, which is exactly the silent
-    cross-tree read the policy keying exists to prevent.
-    """
-    from tests._helpers.lake_fixture import seed_lake_minute_day
-    from tests._helpers.lean_store import seed_store_day
-
-    trading_date = date(2026, 1, 5)  # Monday
-    write_root = tmp_path / "writer"
-    lake_root = write_root / "lake"
-    policy_root = tmp_path / "store" / "polygon-raw"
-
-    seed_lake_minute_day(lake_root, "SPY", trading_date, count=3, with_quote=False)
-    seed_store_day(policy_root, "SPY", trading_date, count=3)
-
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-
-    roots = resolve_data_roots(source="polygon", adjusted=False)
-
-    assert roots == [policy_root]
-    assert lake_root not in roots
-    assert path_policy.resolve_lake_root("raw") not in roots
-
-    from app.engine.data.lean_format import LeanMinuteDataReader
-
-    rolled_back = list(LeanMinuteDataReader(roots, session="extended").read_day("SPY", trading_date))
-    from_policy = list(
-        LeanMinuteDataReader([policy_root], session="extended").read_day("SPY", trading_date)
-    )
-
-    assert rolled_back == from_policy
-    assert len(rolled_back) == 3
 
 
-def test_resolve_data_roots_returns_the_lake_alone_when_the_flag_is_on(monkeypatch, tmp_path: Path):
-    """Flag on, raw request: the lake is the authority, so it is the only root."""
-    reference = tmp_path / "reference"
-    reference.mkdir()
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(reference))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-
-    roots = resolve_data_roots(source="polygon", adjusted=False)
-
-    assert roots == [tmp_path / "writer" / "lake" / "raw"]
-    assert roots[0].is_dir()
 
 
-def test_resolve_data_roots_lake_is_the_tree_ensure_data_writes(monkeypatch, tmp_path: Path):
-    """Reader and writer must not disagree about where the lake is."""
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-
-    assert resolve_data_roots(source="polygon", adjusted=False) == [path_policy.resolve_lake_root("raw")]
 
 
-def test_resolve_data_roots_serves_an_adjusted_request_from_its_own_root(monkeypatch, tmp_path: Path):
-    """An adjusted request resolves a different directory, not a refusal.
-
-    This test used to assert the opposite: with one raw-only lake, an
-    adjusted request was refused (``LakeAdjustmentUnsupportedError`` → 409),
-    because returning the raw root would have handed a run raw prices while
-    it believed it read adjusted ones — materially wrong across a split.
-    #1866 made the mode a segment of the root, so the seam can now answer
-    honestly instead of refusing. The 409 that blocked a default Strategy Lab
-    backtest with the flag on is gone with it.
-    """
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", True)
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-
-    adjusted_roots = resolve_data_roots(source="polygon", adjusted=True)
-    raw_roots = resolve_data_roots(source="polygon", adjusted=False)
-
-    assert adjusted_roots == [tmp_path / "writer" / "lake" / "polygon_split_adjusted"]
-    assert raw_roots == [tmp_path / "writer" / "lake" / "raw"]
-    assert adjusted_roots != raw_roots
 
 
-def test_resolve_data_roots_flag_off_still_serves_adjusted(monkeypatch, tmp_path: Path):
-    """The refusal is lake-specific: flag off, adjusted=True works as always."""
-    monkeypatch.setattr(settings, "DATA_LAKE_ENABLED", False)
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path / "does-not-exist"))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(tmp_path / "store"))
-
-    roots = resolve_data_roots(source="polygon", adjusted=True)
-
-    assert roots == [tmp_path / "store" / "polygon-adjusted"]
 
 
-@pytest.mark.parametrize("mode", ["raw", "polygon_split_adjusted", "lean_adjusted"])
-def test_symbol_write_lock_refuses_any_lake_mode_root(monkeypatch, tmp_path: Path, mode: str):
-    """Only app.data_lake writes to the lake; a zip with no catalog row is invisible.
-
-    Parameterized over every mode because the refusal used to be an exact
-    match against the single lake root. Since #1839 the lake is a tree of
-    mode subtrees, so an exact match would have waved through a policy-store
-    write aimed at any mode the reader did not happen to be resolving.
-    """
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    lake = path_policy.resolve_lake_root(mode)
-    lake.mkdir(parents=True)
-
-    with pytest.raises(ValueError, match="is inside the data lake"), symbol_write_lock(lake, "SPY"):
-        pass
 
 
-def test_symbol_write_lock_refuses_the_lake_container_itself(monkeypatch, tmp_path: Path):
-    """The container is not a data root, but it is still not ours to write."""
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    container = path_policy.resolve_lake_container()
-    container.mkdir(parents=True)
-
-    with pytest.raises(ValueError, match="is inside the data lake"), symbol_write_lock(container, "SPY"):
-        pass
 
 
-def test_symbol_write_lock_still_serializes_policy_cache_writes(monkeypatch, tmp_path: Path):
-    """The refusal above is about the lake, not about locking in general."""
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path / "writer"))
-    policy_root = tmp_path / "store" / "polygon-raw"
-    policy_root.mkdir(parents=True)
-
-    with symbol_write_lock(policy_root, "SPY"):
-        assert (policy_root / "locks" / "spy.lock").is_file()
 
 
 def test_snapshot_minute_trade_zips_is_path_independent_and_reference_first(tmp_path: Path):
@@ -327,113 +186,18 @@ def test_snapshot_minute_trade_zips_ignores_symlink_that_escapes_root(tmp_path: 
         )
 
 
-def test_record_fetch_creates_and_appends(tmp_path: Path):
-    record_fetch(
-        tmp_path,
-        "SPY",
-        source="polygon",
-        adjusted=False,
-        resolution="minute",
-        from_date="2026-01-05",
-        to_date="2026-01-06",
-        fetched_at_ms=FETCHED_AT_MS,
-    )
-    record_fetch(
-        tmp_path,
-        "SPY",
-        source="polygon",
-        adjusted=False,
-        resolution="daily",
-        from_date="2026-01-05",
-        to_date="2026-02-27",
-        fetched_at_ms=FETCHED_AT_MS + 1,
-    )
-
-    doc = read_provenance(tmp_path, "SPY")
-    assert doc is not None
-    assert doc["schema_version"] == 1
-    assert doc["policy"] == {"source": "polygon", "adjusted": False}
-    assert [f["resolution"] for f in doc["fetches"]] == ["minute", "daily"]
-    assert doc["fetches"][0]["fetched_at_ms"] == FETCHED_AT_MS
 
 
-def test_record_fetch_rejects_policy_mismatch(tmp_path: Path):
-    record_fetch(
-        tmp_path,
-        "SPY",
-        source="polygon",
-        adjusted=False,
-        resolution="minute",
-        from_date="2026-01-05",
-        to_date="2026-01-06",
-        fetched_at_ms=FETCHED_AT_MS,
-    )
-
-    with pytest.raises(ValueError, match="policy mismatch"):
-        record_fetch(
-            tmp_path,
-            "SPY",
-            source="polygon",
-            adjusted=True,
-            resolution="minute",
-            from_date="2026-01-05",
-            to_date="2026-01-06",
-            fetched_at_ms=FETCHED_AT_MS,
-        )
 
 
-def test_read_provenance_absent_returns_none(tmp_path: Path):
-    assert read_provenance(tmp_path, "SPY") is None
 
 
-def test_symbol_write_lock_rejects_path_unsafe_symbol(tmp_path: Path):
-    with pytest.raises(SymbolValidationError), symbol_write_lock(tmp_path, "../evil"):
-        pass
 
 
-def test_read_provenance_rejects_path_unsafe_symbol(tmp_path: Path):
-    with pytest.raises(SymbolValidationError):
-        read_provenance(tmp_path, "../evil")
 
 
-def test_record_fetch_rejects_path_unsafe_symbol(tmp_path: Path):
-    with pytest.raises(SymbolValidationError):
-        record_fetch(
-            tmp_path,
-            "../evil",
-            source="polygon",
-            adjusted=False,
-            resolution="minute",
-            from_date="2025-01-06",
-            to_date="2025-01-06",
-            fetched_at_ms=FETCHED_AT_MS,
-        )
 
 
-def test_symbol_write_lock_serializes_writers(tmp_path: Path):
-    """Two threads contending for the same symbol never overlap."""
-    active = 0
-    max_active = 0
-    guard = threading.Lock()
-
-    def worker() -> None:
-        nonlocal active, max_active
-        with symbol_write_lock(tmp_path, "SPY"):
-            with guard:
-                active += 1
-                max_active = max(max_active, active)
-            # Give the other thread a chance to (incorrectly) enter.
-            threading.Event().wait(0.05)
-            with guard:
-                active -= 1
-
-    threads = [threading.Thread(target=worker) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    assert max_active == 1
 
 
 class _FakePolygon:
@@ -473,202 +237,26 @@ class _FakePolygon:
         return bars
 
 
-def test_ensure_range_writes_provenance_with_policy(tmp_path: Path):
-    polygon = _FakePolygon()
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-
-    report = ensure_range(
-        reference_roots=[],
-        cache_root=policy_root,
-        symbol="SPY",
-        start=date(2026, 1, 5),
-        end=date(2026, 1, 6),
-        polygon=polygon,
-        adjusted=False,
-        resolution="minute",
-    )
-
-    assert report.is_complete
-    assert polygon.adjusted_seen == [False]
-    doc = json.loads((policy_root / "provenance" / "spy.json").read_text())
-    assert doc["policy"] == {"source": "polygon", "adjusted": False}
-    assert doc["fetches"][0]["from_date"] == "2026-01-05"
 
 
-def test_ensure_range_skips_fetch_when_complete(tmp_path: Path):
-    polygon = _FakePolygon()
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-    window = {"start": date(2026, 1, 5), "end": date(2026, 1, 6)}
-
-    for _ in range(2):
-        ensure_range(
-            reference_roots=[],
-            cache_root=policy_root,
-            symbol="SPY",
-            polygon=polygon,
-            adjusted=False,
-            resolution="minute",
-            **window,
-        )
-
-    assert polygon.calls == 1
 
 
-def test_ensure_range_concurrent_runs_fetch_once(tmp_path: Path):
-    """Two runs racing on the same symbol serialize on the store lock and
-    the loser observes the winner's zips instead of re-fetching."""
-    polygon = _FakePolygon()
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-    errors: list[Exception] = []
-    barrier = threading.Barrier(2)
-
-    def worker() -> None:
-        try:
-            barrier.wait(timeout=5)
-            ensure_range(
-                reference_roots=[],
-                cache_root=policy_root,
-                symbol="SPY",
-                start=date(2026, 1, 5),
-                end=date(2026, 1, 6),
-                polygon=polygon,
-                adjusted=False,
-                resolution="minute",
-            )
-        except Exception as exc:  # surface to the main thread's assertion
-            errors.append(exc)
-
-    threads = [threading.Thread(target=worker) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    assert not errors
-    assert polygon.calls == 1
-    zips = sorted(p.name for p in (policy_root / "equity" / "usa" / "minute" / "spy").glob("*_trade.zip"))
-    assert zips == ["20260105_trade.zip", "20260106_trade.zip"]
 
 
 def _minute_zip(policy_root: Path, trading_date: date) -> Path:
     return policy_root / "equity" / "usa" / "minute" / "spy" / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
 
 
-def _ensure_spy(polygon: _FakePolygon, policy_root: Path, start: date, end: date):
-    return ensure_range(
-        reference_roots=[],
-        cache_root=policy_root,
-        symbol="SPY",
-        start=start,
-        end=end,
-        polygon=polygon,
-        adjusted=False,
-        resolution="minute",
-    )
 
 
-def test_ensure_range_fetches_only_the_missing_day(tmp_path: Path):
-    """One hole in a covered window costs one one-day request, not a re-export.
-
-    Before #1830 the whole window was re-exported whenever any single day
-    was missing, which is how one symbol's provenance accumulated 43
-    fetches of the same two years.
-    """
-    polygon = _FakePolygon()
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-    window = (date(2026, 1, 5), date(2026, 1, 16))
-    _ensure_spy(polygon, policy_root, *window)
-    _minute_zip(policy_root, date(2026, 1, 8)).unlink()
-    polygon.ranges.clear()
-
-    report = _ensure_spy(polygon, policy_root, *window)
-
-    assert report.is_complete
-    assert polygon.ranges == [("2026-01-08", "2026-01-08")]
 
 
-def test_ensure_range_batches_days_a_weekend_apart_into_one_request(tmp_path: Path):
-    """Adjacency is in trading days: Friday and Monday are one span.
-
-    Calendar adjacency would split a missing month into weekly requests,
-    which is the per-request cost the batching exists to respect.
-    """
-    polygon = _FakePolygon()
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-    window = (date(2026, 1, 5), date(2026, 1, 16))
-    _ensure_spy(polygon, policy_root, *window)
-    for hole in (date(2026, 1, 9), date(2026, 1, 12)):
-        _minute_zip(policy_root, hole).unlink()
-    polygon.ranges.clear()
-
-    _ensure_spy(polygon, policy_root, *window)
-
-    assert polygon.ranges == [("2026-01-09", "2026-01-12")]
 
 
-def test_ensure_range_splits_gaps_separated_by_a_covered_day(tmp_path: Path):
-    polygon = _FakePolygon()
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-    window = (date(2026, 1, 5), date(2026, 1, 16))
-    _ensure_spy(polygon, policy_root, *window)
-    for hole in (date(2026, 1, 6), date(2026, 1, 8)):
-        _minute_zip(policy_root, hole).unlink()
-    polygon.ranges.clear()
-
-    _ensure_spy(polygon, policy_root, *window)
-
-    assert polygon.ranges == [("2026-01-06", "2026-01-06"), ("2026-01-08", "2026-01-08")]
 
 
-def test_ensure_range_records_only_the_delta_in_provenance(tmp_path: Path):
-    polygon = _FakePolygon()
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-    window = (date(2026, 1, 5), date(2026, 1, 16))
-    _ensure_spy(polygon, policy_root, *window)
-    _minute_zip(policy_root, date(2026, 1, 13)).unlink()
-
-    _ensure_spy(polygon, policy_root, *window)
-
-    fetches = json.loads((policy_root / "provenance" / "spy.json").read_text())["fetches"]
-    assert [(f["from_date"], f["to_date"]) for f in fetches] == [
-        ("2026-01-05", "2026-01-16"),
-        ("2026-01-13", "2026-01-13"),
-    ]
 
 
-def test_ensure_range_over_a_provider_blackout_refetches_only_that_day(tmp_path: Path):
-    """A day the provider has no bars for never becomes available.
-
-    ``date(2026, 1, 8)`` here is an ordinary trading Thursday, not a real
-    NYSE holiday — the point of this test is a blackout the calendar
-    can't see (an outage, a delisting gap, anything provider-side), so
-    ``_iter_weekdays`` counting it as an expected day is not the bug:
-    such a window genuinely can never report complete and re-fetches on
-    every call. This pins that the repeated fetch is bounded to the one
-    blacked-out day rather than the whole window. A window whose only
-    gap actually *is* a real exchange holiday no longer even re-fetches
-    — see ``test_missing_spans_drops_a_holiday_from_the_grouping`` and
-    ``test_ensure_range_makes_zero_further_calls_for_a_holiday_only_gap``.
-    """
-    outage_day = date(2026, 1, 8)
-    polygon = _FakePolygon(blackout={outage_day})
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-    window = (date(2026, 1, 5), date(2026, 1, 16))
-    _ensure_spy(polygon, policy_root, *window)
-    polygon.ranges.clear()
-
-    report = _ensure_spy(polygon, policy_root, *window)
-
-    assert report.missing_days == [outage_day]
-    assert polygon.ranges == [("2026-01-08", "2026-01-08")]
 
 
 def test_missing_spans_drops_a_holiday_from_the_grouping():
@@ -685,34 +273,3 @@ def test_missing_spans_drops_a_holiday_from_the_grouping():
     assert spans == [(date(2025, 12, 30), date(2025, 12, 30))]
 
 
-def test_ensure_range_makes_zero_further_calls_for_a_holiday_only_gap(tmp_path: Path):
-    """Once every real trading session in a window is cached, a re-check
-    whose only naively-"missing" day is a real NYSE holiday makes ZERO
-    further provider calls — there is nothing to fetch for a day the
-    market never opened. Contrast with
-    ``test_ensure_range_over_a_provider_blackout_refetches_only_that_day``,
-    where the blacked-out day *is* a real trading session and the
-    re-fetch is merely bounded, not eliminated."""
-    window = (date(2025, 12, 30), date(2026, 1, 2))
-    holiday = date(2026, 1, 1)  # New Year's Day, observed Thursday
-    # Derive/assert the holiday's status from the canonical calendar —
-    # never hardcode "this date is a non-session" as a bare fact.
-    assert holiday.weekday() < 5  # passes check_availability's naive weekday filter
-    assert not is_trading_day(holiday)  # ...but is not a real NYSE session
-    assert holiday not in expected_sessions(*window)
-
-    polygon = _FakePolygon(blackout={holiday})
-    policy_root = tmp_path / "polygon-raw"
-    policy_root.mkdir()
-    _ensure_spy(polygon, policy_root, *window)
-    calls_after_first = polygon.calls
-    assert calls_after_first >= 1
-
-    report = _ensure_spy(polygon, policy_root, *window)
-
-    # check_availability's weekday-only filter still can't see the
-    # holiday, so it's reported "missing" and the window "incomplete" —
-    # but nothing further was fetched for it.
-    assert report.missing_days == [holiday]
-    assert not report.is_complete
-    assert polygon.calls == calls_after_first

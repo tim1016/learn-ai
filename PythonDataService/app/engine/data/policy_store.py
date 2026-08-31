@@ -36,71 +36,28 @@ Concurrency: writers must hold :func:`symbol_write_lock` for the
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import logging
 import os
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from app.config import settings
 from app.data_lake import path_policy
 from app.data_lake.types import polygon_mode_for
 
 logger = logging.getLogger(__name__)
-
-PROVENANCE_SCHEMA_VERSION = 1
 
 BarSource = Literal["polygon"]
 COMPATIBILITY_FIXTURE_SCHEMA_VERSION = 1
 COMPATIBILITY_FIXTURE_ID_PREFIX = "bar-store-v1-"
 
 
-def resolve_cache_root() -> Path:
-    """Return the writable cache root for Polygon-sourced LEAN zips.
-
-    Reads ``LEAN_DATA_CACHE`` if set, otherwise defaults to a sibling
-    ``lean-cache`` directory next to the service. Policy roots live
-    underneath this directory.
-    """
-    configured = os.environ.get("LEAN_DATA_CACHE")
-    if configured:
-        return Path(configured)
-    return Path(__file__).resolve().parents[3] / "lean-cache"
-
-
-def resolve_reference_root() -> Path:
-    """Return the read-only LEAN reference Data directory.
-
-    Reads ``LEAN_DATA_ROOT`` if set; otherwise the standard local
-    development location. The reference mount is policy-neutral vendored
-    ground truth (the bit-exact SPY fixture) and always wins over the
-    cache when both cover a date.
-    """
-    configured = os.environ.get("LEAN_DATA_ROOT")
-    if configured:
-        return Path(configured)
-    return Path("/sessions/ecstatic-hopeful-volta/mnt/Lean/Data")
-
-
 def policy_key(*, source: BarSource, adjusted: bool) -> str:
     """Derive the cache-subtree key from the byte-changing policy dims."""
     return f"{source}-{'adjusted' if adjusted else 'raw'}"
-
-
-def resolve_policy_root(
-    *,
-    source: BarSource,
-    adjusted: bool,
-    cache_root: Path | None = None,
-) -> Path:
-    """Return the policy-keyed cache subtree (not created)."""
-    root = cache_root if cache_root is not None else resolve_cache_root()
-    return root / policy_key(source=source, adjusted=adjusted)
 
 
 def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
@@ -129,19 +86,9 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     adjustment mode a segment of the root, so the honest answer is now a
     different directory instead of a refusal.
     """
-    if settings.DATA_LAKE_ENABLED:
-        root = path_policy.resolve_lake_root(polygon_mode_for(adjusted))
-        root.mkdir(parents=True, exist_ok=True)
-        return [root]
-
-    roots: list[Path] = []
-    ref = resolve_reference_root()
-    if ref.exists():
-        roots.append(ref)
-    policy_root = resolve_policy_root(source=source, adjusted=adjusted)
-    policy_root.mkdir(parents=True, exist_ok=True)
-    roots.append(policy_root)
-    return roots
+    root = path_policy.resolve_lake_root(polygon_mode_for(adjusted))
+    root.mkdir(parents=True, exist_ok=True)
+    return [root]
 
 
 def snapshot_minute_trade_zips(
@@ -224,134 +171,3 @@ def _safe_symbol(symbol: str) -> str:
     from app.lean_sidecar.workspace import validate_symbol
 
     return validate_symbol(symbol)
-
-
-@contextmanager
-def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
-    """Exclusive advisory lock for cache writes to ``(policy_root, symbol)``.
-
-    Two concurrent runs that ``ensure_range`` the same symbol serialize
-    here; the loser of the race re-checks availability under the lock
-    and skips its fetch. ``fcntl.flock`` is process- and thread-safe on
-    the Linux container filesystems this service runs on.
-
-    The lake cannot be written through this lock. ``app.data_lake`` is the
-    only writer to ``LEAN_DATA_WRITE_ROOT`` (see its package docstring); it
-    coordinates through the catalog's claim/lease, not through a lock file,
-    and a zip the policy-store exporter dropped into the lake would sit
-    there with no catalog row describing it — unfindable by the readers
-    that consult the catalog, and invisible to every manifest fingerprint.
-    Since ``resolve_data_roots`` hands out the lake root when the flag is
-    on, an unconverted caller can reach here with it; refuse loudly instead.
-
-    The LEAN sidecar's live-Polygon staging path (``run_trusted_sample`` in
-    ``app.services.lean_sidecar_service``) is exactly such an unconverted
-    caller — it still calls ``ensure_range`` (and therefore this lock) for a
-    ``data_source == "polygon"`` request — but #1848's lake-mount preflight
-    keeps it from ever reaching here with the lake root while the flag is
-    on: ``run_trusted_sample`` resolves ``lake_artifacts`` (or refuses the
-    run outright) before the workspace exists, and its branch dispatch tries
-    ``elif lake_artifacts is not None`` — which is true whenever the flag is
-    on and the source is Polygon — before it ever falls through to the
-    ``ensure_range`` branch. So this refusal is reachable in principle but
-    not, today, from the sidecar; ``tests/lean_sidecar/test_lake_mount_service.py::test_lake_run_reads_the_mount_and_stages_nothing``
-    pins it by making ``ensure_range`` itself raise if the lake-mode run
-    ever calls it, and ``test_symbol_write_lock_refuses_the_lake_root``
-    (this module's own test file) pins this function's refusal in isolation.
-    """
-    safe = _safe_symbol(symbol)
-    root_real = os.path.realpath(os.fspath(policy_root))
-    # Compared against the container holding every per-mode lake root, not
-    # against one root: since #1839 the lake is a tree of mode subtrees, and
-    # an exact match on a single root would wave through a policy-store write
-    # aimed at any other mode's subtree. Prefix containment is also the more
-    # honest question — "is this path part of the lake at all?"
-    lake_container_real = os.path.realpath(os.fspath(path_policy.resolve_lake_container()))
-    if root_real == lake_container_real or root_real.startswith(lake_container_real.rstrip(os.sep) + os.sep):
-        raise ValueError(
-            f"{policy_root} is inside the data lake; the policy store may not write there — "
-            "materialize through app.data_lake.run_materialization instead"
-        )
-    root_prefix = root_real.rstrip(os.sep) + os.sep
-    lock_candidate = os.path.realpath(os.path.join(root_real, "locks", f"{safe.lower()}.lock"))
-    if not lock_candidate.startswith(root_prefix):
-        raise ValueError(f"lock path {lock_candidate!r} escapes root {root_real!r}")
-    lock_path = Path(lock_candidate)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w", encoding="ascii") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-
-
-def _provenance_path(policy_root: Path, symbol: str) -> Path:
-    return policy_root / "provenance" / f"{_safe_symbol(symbol).lower()}.json"
-
-
-def read_provenance(policy_root: Path, symbol: str) -> dict | None:
-    """Return the symbol's provenance document, or None when absent."""
-    root_real = os.path.realpath(os.fspath(policy_root))
-    candidate = os.path.realpath(os.fspath(_provenance_path(policy_root, symbol)))
-    root_prefix = root_real.rstrip(os.sep) + os.sep
-    if not candidate.startswith(root_prefix):
-        raise ValueError(f"provenance path {candidate!r} escapes root {root_real!r}")
-    path = Path(candidate)
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def record_fetch(
-    policy_root: Path,
-    symbol: str,
-    *,
-    source: BarSource,
-    adjusted: bool,
-    resolution: str,
-    from_date: str,
-    to_date: str,
-    fetched_at_ms: int,
-) -> Path:
-    """Append a fetch record to the symbol's provenance document.
-
-    Caller must hold :func:`symbol_write_lock` for the same
-    ``(policy_root, symbol)`` — the read-merge-write below is not atomic
-    on its own. Raises ``ValueError`` when an existing document carries
-    a different policy than the given root claims: that means a caller
-    resolved the wrong policy root, exactly the silent-mismatch class
-    this store exists to prevent.
-    """
-    root_real = os.path.realpath(os.fspath(policy_root))
-    candidate = os.path.realpath(os.fspath(_provenance_path(policy_root, symbol)))
-    root_prefix = root_real.rstrip(os.sep) + os.sep
-    if not candidate.startswith(root_prefix):
-        raise ValueError(f"provenance path {candidate!r} escapes root {root_real!r}")
-    path = Path(candidate)
-    expected_policy = {"source": source, "adjusted": adjusted}
-    doc = read_provenance(policy_root, symbol)
-    if doc is None:
-        doc = {
-            "schema_version": PROVENANCE_SCHEMA_VERSION,
-            "symbol": _safe_symbol(symbol),
-            "policy": expected_policy,
-            "fetches": [],
-        }
-    elif doc.get("policy") != expected_policy:
-        raise ValueError(
-            f"provenance policy mismatch under {policy_root}: file says {doc.get('policy')}, caller says {expected_policy}"
-        )
-    doc["fetches"].append(
-        {
-            "resolution": resolution,
-            "from_date": from_date,
-            "to_date": to_date,
-            "fetched_at_ms": fetched_at_ms,
-        }
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-    return path

@@ -23,7 +23,6 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import urllib3.exceptions
 
-from app.config import settings
 from app.lean_sidecar.trading_calendar import session_window_for_date, session_windows_ms_utc
 from app.services.chart_bar_source import compose_chart_bars
 from app.services.dataset_service import (
@@ -923,9 +922,6 @@ def _fetch_chart_bars(
     trading date stops forming — this chart renders post-market bars when it is
     ``extended``, so the composer must hold today open that much longer.
     """
-    if not settings.DATA_LAKE_ENABLED:
-        return fetch_bars_chunked(_polygon, ticker, fetch_from, to_date, adjusted=adjusted), None
-
     composed = compose_chart_bars(
         ticker=ticker,
         from_date=fetch_from,
@@ -999,7 +995,6 @@ def get_chart_data(
         session,
         forward_fill,
         adjusted,
-        settings.DATA_LAKE_ENABLED,
     )
     cached_resample = _resample_cache.get(resample_key)
 

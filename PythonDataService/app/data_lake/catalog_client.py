@@ -59,7 +59,8 @@ async def init_pool() -> None:
     if not settings.POSTGRES_URL:
         raise RuntimeError(
             "POSTGRES_URL is empty; cannot initialize catalog_client. "
-            "Set the env var or disable the data lake (DATA_LAKE_ENABLED=False)."
+            "The lake is the sole market-data store, so there is no store to "
+            "fall back to — set POSTGRES_URL."
         )
     _pools[loop] = await asyncpg.create_pool(
         settings.POSTGRES_URL,
