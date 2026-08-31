@@ -322,7 +322,7 @@ async def select_active_clerk_runtime(
             # The sweep is the sole automatic reconciler; publishing its
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
-            on_result=facade.publish_reconciliation,
+            on_result=facade.publish_sweep_reconciliation,
             # Custody first, evidence second: the symbol-validity probe runs
             # only after a succeeded pass, through the same guarded read port,
             # and records durably what the read path may then consume (#1795).
@@ -553,7 +553,14 @@ async def select_synthetic_clerk_runtime(
             # The sweep is the sole automatic reconciler; publishing its
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
-            on_result=facade.publish_reconciliation,
+            on_result=facade.publish_sweep_reconciliation,
+            # ADR 0050: no on_lease_revived here, deliberately. Lease
+            # *revival* applies to this synthetic heartbeat like any other,
+            # but the post-revival recovery pass is real-paper-scoped (the
+            # boot-recovery candidates come from the account authority, not
+            # per-strategy synthetic repos), so a revived synthetic lease
+            # relies on the boot scan for its terminal-evidence closure —
+            # the same posture every authority had before ADR 0050.
         )
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)

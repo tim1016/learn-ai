@@ -391,6 +391,8 @@ async def lifespan(app: FastAPI):
         else None
     )
     if _boot_clerk is not None:
+        from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+
         async def _unresolved_intents(subject_id: str | None) -> int:
             return await _boot_clerk.unresolved_effect_count(subject_id=subject_id)
 
@@ -398,6 +400,14 @@ async def lifespan(app: FastAPI):
             recover=_boot_clerk.recover,
             reconcile=_boot_clerk.reconcile_once,
             unresolved_intents_probe=_unresolved_intents,
+            # #1808: the sweep's evaluation posture lets an unresolved-intent
+            # refusal say "still evaluating — wait" during post-outage
+            # settling instead of sending the operator to intervene.
+            recovery_evaluation=(
+                _boot_clerk.recovery_evaluation_observation
+                if isinstance(_boot_clerk, SqliteAlpacaClerkFacade)
+                else None
+            ),
         )
     else:
         await bot_task_registry.run_boot_recovery()
@@ -410,6 +420,17 @@ async def lifespan(app: FastAPI):
         else None
     )
     if _pending_sweep is not None:
+        if _boot_clerk is not None:
+            # ADR 0050: after a supervised lease revival, re-run the boot
+            # scan's repair pass in-process so terminal STOP evidence for
+            # bots that crashed on the dead handle commits without waiting
+            # for the next container restart.
+            async def _post_revival_recovery() -> None:
+                await bot_task_registry.run_lease_recovery(
+                    reconcile=_boot_clerk.reconcile_once,
+                )
+
+            _pending_sweep.set_on_lease_revived(_post_revival_recovery)
         _pending_sweep.start()
         logger.info(
             "Alpaca reconciliation sweep started (authority=%s).",

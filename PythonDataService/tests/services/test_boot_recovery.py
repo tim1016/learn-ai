@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.live.bot_lifecycle_state import (
+    BotDutyOutcome,
     BotLifecyclePhase,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
@@ -33,6 +34,7 @@ from app.engine.live.desired_state import (
 )
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_boot_recovery import (
+    LEASE_REVIVAL_PROVENANCE,
     BootAuthorityPreparationError,
     BotBootRecovery,
     BotRecoveryCandidate,
@@ -648,3 +650,125 @@ async def test_boot_sweep_refuses_corrupt_binding_for_sqlite_active_run(
     with pytest.raises(BootAuthorityPreparationError, match="candidate enumeration"):
         await rebooted.run_boot_recovery()
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
+
+
+# ── ADR 0050: terminal-evidence preservation and revival provenance ──────────
+
+
+def _projector_for(lifecycle_repo: BotLifecycleStateRepo) -> AlpacaLifecycleProjector:
+    return AlpacaLifecycleProjector(
+        authority=ActiveSqliteAlpacaLifecycleAuthority(),
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
+    )
+
+
+async def test_repair_pass_preserves_same_run_terminal_evidence(
+    tmp_path: Path,
+) -> None:
+    """A run that finalized file-side (CRASHED, with its exact reason) but
+    whose SQLite STOP could not commit — the T7 lease outage — gets the STOP
+    committed without its durable outcome being overwritten by generic
+    interrupted evidence (ADR 0050)."""
+    artifacts_root = _artifacts_root(tmp_path)
+    lifecycle_repo = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(artifacts_root, _SID)
+    )
+    lifecycle_repo.update(
+        now_ms=_T0,
+        updated_by="bot_runner",
+        phase=BotLifecyclePhase.OFF_DUTY,
+        active_run_id=None,
+        reason="terminal_outcome:EXECUTION_LEASE_LOST",
+        duty_outcome=BotDutyOutcome(
+            kind="CRASHED",
+            reason_code="EXECUTION_LEASE_LOST",
+            recorded_at_ms=_T0,
+            run_id="run-1",
+        ),
+    )
+    desired_repo = DesiredStateRepo(
+        stable_desired_state_path(artifacts_root, _SID),
+        trusted_root=artifacts_root / "live_state",
+    )
+    desired_repo.set(
+        DesiredState.STOPPED, updated_by="bot_runner", now_ms=_T0, reason="terminal"
+    )
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    clerk.known_runs.add((_SID, "run-1"))
+    set_alpaca_clerk(clerk)
+    stops: list[tuple[str, str]] = []
+
+    async def record_stop(strategy_instance_id: str, run_id: str) -> None:
+        stops.append((strategy_instance_id, run_id))
+
+    report = await BotBootRecovery(
+        artifacts_root,
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        lifecycle_projector=_projector_for(lifecycle_repo),
+        desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        recovery_candidates=lambda: (
+            BotRecoveryCandidate(_SID, "run-1", sqlite_active=True),
+        ),
+        stop_authority_run=record_stop,
+        manages_instance=lambda _strategy_instance_id: True,
+        is_running=lambda _strategy_instance_id: False,
+        now_ms=lambda: _T0 + 5,
+    ).run()
+
+    # The SQLite side of the terminal evidence is closed...
+    assert stops == [(_SID, "run-1")]
+    # ...and the more specific durable outcome survives untouched.
+    record = lifecycle_repo.read()
+    assert record is not None
+    assert record.duty_outcome is not None
+    assert record.duty_outcome.kind == "CRASHED"
+    assert record.duty_outcome.reason_code == "EXECUTION_LEASE_LOST"
+    assert report.interrupted_instances == ()
+
+
+async def test_lease_recovery_pass_stamps_revival_provenance(
+    tmp_path: Path,
+) -> None:
+    """A repair run under the revival provenance must say so — the records
+    it writes must not claim a container restart that never happened."""
+    artifacts_root = _artifacts_root(tmp_path)
+    lifecycle_repo = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(artifacts_root, _SID)
+    )
+    desired_repo = DesiredStateRepo(
+        stable_desired_state_path(artifacts_root, _SID),
+        trusted_root=artifacts_root / "live_state",
+    )
+    # A silent death: SQLite-active run, no task, no terminal evidence.
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    clerk.known_runs.add((_SID, "run-1"))
+    set_alpaca_clerk(clerk)
+
+    async def record_stop(strategy_instance_id: str, run_id: str) -> None:
+        del strategy_instance_id, run_id
+
+    report = await BotBootRecovery(
+        artifacts_root,
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        lifecycle_projector=_projector_for(lifecycle_repo),
+        desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        recovery_candidates=lambda: (
+            BotRecoveryCandidate(_SID, "run-1", sqlite_active=True),
+        ),
+        stop_authority_run=record_stop,
+        manages_instance=lambda _strategy_instance_id: True,
+        is_running=lambda _strategy_instance_id: False,
+        now_ms=lambda: _T0 + 5,
+    ).run(provenance=LEASE_REVIVAL_PROVENANCE)
+
+    assert report.interrupted_instances == (_SID,)
+    record = lifecycle_repo.read()
+    assert record is not None
+    assert record.updated_by == "bot_runner_lease_revival"
+    assert record.duty_outcome is not None
+    assert record.duty_outcome.kind == "EXITED_UNVERIFIED"
+    assert record.duty_outcome.reason_code == "INTERRUPTED_BY_AUTHORITY_OUTAGE"
+    desired = desired_repo.read()
+    assert desired is not None
+    assert desired.updated_by == "bot_runner_lease_revival"

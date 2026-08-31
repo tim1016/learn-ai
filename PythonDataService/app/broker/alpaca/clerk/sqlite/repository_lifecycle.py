@@ -335,6 +335,7 @@ def _initialize_repository_unfenced(
         fold_registry=fold_registry,
         lease_owner=owner,
         lease_ttl_ms=lease_ttl_ms,
+        authority_generation=authority_generation,
     )
 
 
@@ -578,4 +579,5 @@ def _open_repository_unfenced(
         fold_registry=fold_registry,
         lease_owner=owner,
         lease_ttl_ms=lease_ttl_ms,
+        authority_generation=control_row["authority_generation"],
     )

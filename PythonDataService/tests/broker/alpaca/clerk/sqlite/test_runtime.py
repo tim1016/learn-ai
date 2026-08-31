@@ -1062,3 +1062,43 @@ async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
     assert projection.reconciled_at_ms > 0, "the sweep's verdict never reached the projection"
 
     repo.close()
+
+
+async def test_recovery_evaluation_observation_tracks_the_published_sweep(
+    tmp_path: Path,
+) -> None:
+    """#1808: the facade stamps the evaluation anchor at activation and the
+    last published pass time — the two passive facts Start/Resume admission
+    reads to tell "sweep still evaluating" from "recovery probe broken"."""
+    from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    intake = ReentrantAsyncLock()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, intake=intake)
+
+    before = facade.recovery_evaluation_observation()
+    assert before.last_pass_completed_at_ms is None
+    assert before.evaluation_started_at_ms > 0
+
+    # A one-off (non-sweep) publication — the custody guard's act-time
+    # reconcile during a mutating Start/Resume — must not read as sweep
+    # liveness: only the sweep's own wiring stamps the pass timestamp.
+    await facade.reconcile_account(trigger="MANUAL")
+    assert facade.recovery_evaluation_observation().last_pass_completed_at_ms is None
+
+    await ReconciliationSweep(
+        repo=repo,
+        read=broker,
+        trade=broker,
+        intake=intake,
+        max_passes=1,
+        on_result=facade.publish_sweep_reconciliation,
+    ).run()
+
+    after = facade.recovery_evaluation_observation()
+    assert after.evaluation_started_at_ms == before.evaluation_started_at_ms
+    assert after.last_pass_completed_at_ms is not None
+    assert after.last_pass_completed_at_ms >= before.evaluation_started_at_ms
+
+    repo.close()

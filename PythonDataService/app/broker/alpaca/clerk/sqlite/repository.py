@@ -184,6 +184,7 @@ class ClerkSqliteRepository(
         fold_registry: FoldRegistry,
         lease_owner: str,
         lease_ttl_ms: int,
+        authority_generation: int,
     ) -> None:
         self._account_id = account_id
         self._account_dir = account_dir
@@ -196,6 +197,11 @@ class ClerkSqliteRepository(
         self._folds = fold_registry
         self._lease_owner = lease_owner
         self._lease_ttl_ms = lease_ttl_ms
+        # ADR 0050: pinned at open so lease revival can prove, atomically at
+        # the store, that no authority ceremony ran while this handle's lease
+        # was expired. Never re-read after open -- a fresh read would see a
+        # post-ceremony value and defeat the fence.
+        self._authority_generation_at_open = authority_generation
         self._poisoned = False
         self._reconciliation_in_progress = False
         # Pinned contracts doc §2: "one application-owned write coordinator
@@ -349,10 +355,49 @@ class ClerkSqliteRepository(
         The same write coordinator used by transitions prevents a heartbeat
         from sharing this connection with another mutating call. Ownership
         and expiry still use the strict compare-and-swap check above, so a
-        stale handle cannot resurrect itself after missing its deadline.
+        stale handle cannot silently resurrect itself after missing its
+        deadline — the only path back is :meth:`revive_execution_lease`,
+        whose stricter store-validated conditions prove nobody else ever
+        held the account in between (ADR 0050).
         """
         with self._write_lock:
             self._renew_execution_lease()
+
+    def revive_execution_lease(self) -> None:
+        """Revive this handle's expired lease iff nobody else ever took it.
+
+        ADR 0050: one atomic conditional UPDATE that re-extends the expiry
+        only where ``execution_lease_owner`` still equals this process's
+        owner token *and* ``authority_generation`` still equals the value
+        pinned when this handle was opened. Any competing writer must first
+        flip the owner through the atomic acquire, and any reset ceremony
+        bumps the generation — so owner-unchanged and generation-unchanged
+        proves, at the store, that no other writer held this account since
+        our last renewal. Reviving in that state is indistinguishable from a
+        TTL long enough to have covered the freeze.
+
+        Deliberately narrower than the open-time acquire: revival never
+        takes over an unheld (``NULL``) or foreign-owned lease, even a
+        lapsed one — a contested account gets a restart, not a coup.
+
+        Raises :class:`ExecutionLeaseLost` when the store refuses; the
+        handle is then permanently fail-closed and the ADR 0047 restart
+        ceremony is the only cure.
+        """
+        with self._write_lock:
+            self._assert_not_poisoned()
+            now = self._clock()
+            cursor = self._conn.execute(
+                "UPDATE control_meta SET execution_lease_expires_at_ms = ? "
+                "WHERE id = 1 AND execution_lease_owner = ? AND authority_generation = ?",
+                (now + self._lease_ttl_ms, self._lease_owner, self._authority_generation_at_open),
+            )
+            self._conn.commit()
+            if cursor.rowcount == 0:
+                raise ExecutionLeaseLost(
+                    f"account {self._account_id!r} execution lease cannot be revived; "
+                    "another writer or an authority ceremony has held this account"
+                )
 
     def _assert_not_poisoned(self) -> None:
         if self._poisoned:
