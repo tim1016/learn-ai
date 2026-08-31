@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.commands import submit_retire_strategy_instance
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicSnapshot,
     FillWindowProjection,
@@ -23,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ControlMetaSnapshot,
     DecisionReceiptResource,
 )
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
@@ -1122,3 +1124,53 @@ async def test_exhausted_chart_projection_records_its_refusal_too(
         == "sqlite_chart_projection_torn_read_exhausted"
         for record in caplog.records
     )
+
+
+def test_retired_registration_reaches_the_roster_phase_from_a_real_authority(
+    tmp_path: Path,
+) -> None:
+    """Prove the retirement write and the phase mapping together.
+
+    The doubles in this module hand ``build_roster_status`` a literal
+    ``retired_at_ms``. That proved the column mapping and hid the write:
+    nothing ever set ``strategy_instances.retired_at_ms``, so against a real
+    authority every retired bot projected as ``OFF_DUTY`` and the roster's
+    Retired group was unreachable. Driving the real retirement command
+    through a real repository is what closes that gap.
+    """
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-ROSTER", artifacts_root=tmp_path
+    )
+    try:
+        repo.register_strategy_instance(
+            strategy_instance_id="retired-bot",
+            symbol="SPY",
+            config_hash="h" * 64,
+            strategy_key="deployment_validation",
+            display_name="Deployment Validation",
+            config_json=json.dumps(
+                {"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}
+            ),
+        )
+        assert (
+            sqlite_roster_status.build_roster_status(
+                "alpaca", repo.strategy_instance("retired-bot"), repo
+            ).phase
+            == "OFF_DUTY"
+        )
+
+        submit_retire_strategy_instance(
+            repo,
+            account_id="PA-ROSTER",
+            strategy_instance_id="retired-bot",
+            retired_at_ms=1_710_000_000_000,
+        )
+
+        status = sqlite_roster_status.build_roster_status(
+            "alpaca", repo.strategy_instance("retired-bot"), repo
+        )
+        assert status.phase == "RETIRED"
+        assert status.running is False
+        assert status.last_transition_at_ms == 1_710_000_000_000
+    finally:
+        repo.close()

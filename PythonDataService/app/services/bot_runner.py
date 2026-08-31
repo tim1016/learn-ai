@@ -830,7 +830,8 @@ class BotTaskRegistry:
             if not verdict.eligible:
                 headline, detail = _RETIRE_REFUSAL[verdict.cause]
                 raise BotRunnerError(headline, detail=detail)
-            self._lifecycle_repo(strategy_instance_id).retire(
+            self._lifecycle_projector_for_instance(strategy_instance_id).retire(
+                strategy_instance_id=strategy_instance_id,
                 now_ms=self._now_ms(),
                 updated_by=updated_by,
                 reason=reason or f"Panel retire by {updated_by}",

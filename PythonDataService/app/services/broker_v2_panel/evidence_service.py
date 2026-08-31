@@ -41,6 +41,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Bot registered",
         "The Account Clerk registered this bot identity for custody.",
     ),
+    "STRATEGY_INSTANCE_RETIRED": (
+        "Bot retired",
+        "The Account Clerk retired this bot identity; no further run can start.",
+    ),
     "RUN_STARTED": ("Run started", "The Account Clerk admitted this bot run."),
     "RUN_STOPPED": ("Run stopped", "The Account Clerk stopped this bot run."),
     "COMMAND_REJECTED": ("Command rejected", "The Account Clerk rejected the command."),
