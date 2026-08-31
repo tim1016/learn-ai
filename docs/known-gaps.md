@@ -258,22 +258,17 @@ a defect.
   `app/services/broker_v2_panel/sqlite_panel_adapter.py:61`
   `SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume"})`.
 - **F16 — `retire`'s eligibility guard is narrower than the class it exists
-  to clear (medium).** *Reframed 2026-08-26.* This was filed as dead
-  vocabulary alongside F2, but `retire` **is** presented:
-  `SQLITE_PANEL_LIFECYCLE_ACTION_IDS` is
-  `frozenset({"resume", "retire"})` (`sqlite_panel_adapter.py:69`) and the
-  projection tests confirm it renders, disabled, for a runnable strategy. The
-  defect is the guard, not the adapter — do not follow F2's pointer here. The
-  2026-08-26 run re-found it as T1 with a sharper root cause — the guard requires a
-  dead *strategy key* while the zombie's dead thing is its *symbol*, so the
-  panel simultaneously says "This bot can still run." and "Resume is
-  blocked." **The contradiction was fixed 2026-08-26**: the blocker now states
-  what the guard checks (the strategy *program* exists) and makes no claim
-  about runnability. **The widening is still open and is now `needs-design`
-  (#1795)** — it needs a durable read-safe proof of symbol validity, and none
-  exists: no admission reason code is structurally permanent
-  (`MARKET_DATA_STALE` is also what a *warming* symbol reports), and a broker
-  security lookup is barred from the read path by #1776.
+  to clear. RESOLVED 2026-08-30 (#1795).** *Reframed 2026-08-26; widened
+  2026-08-30.* The guard required a dead *strategy key* while the zombie's
+  dead thing was its *symbol*, so the panel simultaneously said "This bot can
+  still run." and "Resume is blocked." The contradiction was fixed
+  2026-08-26 (blocker copy claims no runnability), and the widening landed
+  2026-08-30: the reconciliation sweep's post-pass probe records definitive
+  `get_asset` answers durably (`app/broker/alpaca/symbol_validity.py`), and
+  `evaluate_retirement` accepts either proof of permanent inadmissibility —
+  dead strategy key, or a broker-confirmed unlisted symbol — with the
+  custody guard still the last word. The read path stays pure (#1776): both
+  the panel guard and the retire commit read the store, never the broker.
 - **F17 — `prepare_safe_flatten` enablement vs. its view-action nature
   (low; reduced 2026-08-26).** The executor landed (#1756) and the POST path
   now raises a typed `ActionNotAvailableError` — "This recovery capability is
@@ -447,9 +442,10 @@ is the durable index, the issue is the working brief.
   emergent effect is cohort-scale stranding whose only remedy is N×3 clicks.
   **#1802** (needs design) — a cohort-scoped flatten, the inverse-scoped
   sibling of the Two-Tap account-hold rule.
-- **T1 — narrow retire misses its motivating case (medium, partially fixed).**
-  The operator-visible contradiction is gone (2026-08-26); the widening is
-  `needs-design`. See §9 F16 and **#1795**.
+- **T1 — narrow retire misses its motivating case. RESOLVED 2026-08-30.**
+  The operator-visible contradiction went 2026-08-26; the widening landed
+  2026-08-30 via the sweep-produced symbol-validity store. See §9 F16 and
+  **#1795**.
 - **T5 — panel reads 503 under write pressure (medium).** An honest
   fail-closed torn-read guard, but one torn read ends the request, so it
   surfaces as flakiness exactly when an operator inspects an active bot.

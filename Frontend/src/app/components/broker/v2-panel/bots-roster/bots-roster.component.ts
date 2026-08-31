@@ -58,6 +58,12 @@ interface RailGroupView {
   readonly key: RailGroup;
   readonly label: string;
   readonly rows: readonly RailBotRow[];
+  /**
+   * True only for the `retired` group in its resting state (#1795): the
+   * header and count stay visible so fleet members never silently vanish,
+   * but the rows collapse so a growing retired set cannot stretch the rail.
+   */
+  readonly collapsed: boolean;
 }
 
 const GROUPS: readonly GroupDefinition[] = [
@@ -76,7 +82,12 @@ const GROUPS: readonly GroupDefinition[] = [
  * width for it.
  *
  * `retired` has no chip in the design but is still grouped and rendered when
- * populated — dropping the group would silently hide fleet members.
+ * populated — dropping the group would silently hide fleet members. Its rows
+ * rest collapsed behind a disclosure so the retired backlog cannot stretch
+ * the rail; the group auto-expands whenever a retired bot still needs
+ * attention (hiding an alerting row behind a collapse is how authored cures
+ * went missing in #1778), when the Retired chip is selected, or while a
+ * search term is active.
  */
 @Component({
   selector: 'app-bots-roster',
@@ -95,6 +106,8 @@ export class BotsRosterComponent {
 
   protected readonly searchTerm = signal('');
   protected readonly groupFilter = signal<RailGroup | null>(null);
+  /** Operator's explicit disclosure choice; forced expansion overrides it. */
+  protected readonly retiredExpanded = signal(false);
 
   /**
    * The canonical action-id → tone map (`lifecycle-action.ts`), reused rather
@@ -129,19 +142,27 @@ export class BotsRosterComponent {
     const buckets = this.grouped();
 
     return GROUPS.filter((group) => filter === null || filter === group.key)
-      .map((group) => ({
-        key: group.key,
-        label: group.label,
-        rows: (buckets.get(group.key) ?? [])
+      .map((group) => {
+        const rows = (buckets.get(group.key) ?? [])
           .filter((bot) => this.matchesTerm(bot, term))
           .sort((left, right) => (right.last_activity_at_ms ?? 0) - (left.last_activity_at_ms ?? 0))
-          .map((bot) => this.toRow(bot)),
-      }))
+          .map((bot) => this.toRow(bot));
+        return {
+          key: group.key,
+          label: group.label,
+          rows,
+          collapsed: group.key === 'retired' && this.retiredCollapsed(rows, term, filter),
+        };
+      })
       .filter((group) => group.rows.length > 0);
   });
 
+  /** Rows actually shown — a collapsed group contributes none. */
   protected readonly visibleCount = computed(() =>
-    this.groups().reduce((total, group) => total + group.rows.length, 0),
+    this.groups().reduce(
+      (total, group) => total + (group.collapsed ? 0 : group.rows.length),
+      0,
+    ),
   );
 
   protected readonly emptyMessage = computed(() =>
@@ -158,6 +179,25 @@ export class BotsRosterComponent {
   /** Clicking the active chip clears the filter, so "all" needs no chip of its own. */
   protected toggleGroup(group: RailGroup): void {
     this.groupFilter.update((current) => (current === group ? null : group));
+  }
+
+  protected toggleRetired(): void {
+    this.retiredExpanded.update((expanded) => !expanded);
+  }
+
+  /**
+   * Collapsed is the retired group's resting state; three conditions force it
+   * open regardless of the operator's disclosure choice: an alerting retired
+   * row (its authored cure must stay reachable, #1778), the Retired chip, and
+   * an active search (a hidden match would read as "bot not found").
+   */
+  private retiredCollapsed(
+    rows: readonly RailBotRow[],
+    term: string,
+    filter: RailGroup | null,
+  ): boolean {
+    if (this.retiredExpanded() || filter === 'retired' || term !== '') return false;
+    return !rows.some((row) => row.bot.needs_attention);
   }
 
   protected select(bot: BotCatalogView): void {

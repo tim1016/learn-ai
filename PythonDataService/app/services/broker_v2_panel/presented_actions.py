@@ -57,12 +57,17 @@ def build_actions(
     account_working_order_count: int,
     account_expected_exposure: dict[str, float],
     resume_admission: RunAdmissionDecision | None,
+    symbol_unresolvable: bool = False,
 ) -> list[PanelAction]:
     """Build the closed presented-action set for one bot (§11, §12).
 
     ``exposure`` is the bot's attributed net exposure per symbol (from the S0
     rollup) — it gates ``flatten_stop`` when the bot is stopped but still holds
     a position.
+
+    ``symbol_unresolvable`` is the durable symbol-validity fact (#1795); the
+    fail-closed ``False`` default means a caller that has not read the store
+    leaves retire disabled rather than offering it speculatively.
     """
     has_exposure = any(abs(qty) > 0 for qty in exposure.values())
     del channel_fresh, account_working_order_count, account_expected_exposure
@@ -82,6 +87,7 @@ def build_actions(
         exposure=exposure,
         working_order_count=working_order_count,
         strategy_runtime_missing=strategy_runtime_missing(status.strategy_key),
+        symbol_unresolvable=symbol_unresolvable,
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
 

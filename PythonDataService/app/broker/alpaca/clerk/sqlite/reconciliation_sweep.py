@@ -22,6 +22,11 @@ type Sleep = Callable[[float], Awaitable[None]]
 # project custody learn what the sweep found -- the sweep, not the facade,
 # is the sole automatic reconciler (#1776 WP2).
 type ReconciliationListener = Callable[[AccountReconciliationResult], object]
+# Awaited after each successful custody pass, once the verdict is published.
+# The one consumer today is the symbol-validity probe (#1795): custody always
+# reconciles first, and a hook failure is isolated -- it never turns a
+# succeeded custody pass into a backoff.
+type AfterPassHook = Callable[[], Awaitable[None]]
 # Renew the execution lease three times per TTL. This is a safety-margin
 # choice, not ported math: at 3x cadence a single missed renewal (transient
 # disk stall, scheduler delay) still leaves ~2/3 of the TTL before the lease
@@ -46,9 +51,11 @@ class ReconciliationSweep:
         max_passes: int | None = None,
         intake: ReentrantAsyncLock | None = None,
         on_result: ReconciliationListener | None = None,
+        after_pass: AfterPassHook | None = None,
     ) -> None:
         self._repo = repo
         self._on_result = on_result
+        self._after_pass = after_pass
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._interval_s = interval_s
@@ -145,6 +152,22 @@ class ReconciliationSweep:
             )
             if self._on_result is not None:
                 self._on_result(result)
+            if self._after_pass is not None:
+                try:
+                    await self._after_pass()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Isolated on purpose: the custody pass above succeeded,
+                    # and a probe failure must not push the sweep into backoff.
+                    logger.warning(
+                        "reconciliation sweep after-pass hook errored; continuing",
+                        extra={
+                            "action": "reconcile_sweep_after_pass_error",
+                            "account_id": self._repo.account_id,
+                        },
+                        exc_info=True,
+                    )
             return result.verdict != "stale"
         except asyncio.CancelledError:
             raise
@@ -157,4 +180,4 @@ class ReconciliationSweep:
             return False
 
 
-__all__ = ["ReconciliationListener", "ReconciliationSweep"]
+__all__ = ["AfterPassHook", "ReconciliationListener", "ReconciliationSweep"]

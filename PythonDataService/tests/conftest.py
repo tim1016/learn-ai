@@ -52,6 +52,25 @@ def _clerk_market_liveness_defaults_tradable(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_symbol_validity_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1795: the symbol-validity store lives under the gitignored clerk
+    artifacts dir, and its production root resolver validates Alpaca
+    credentials on first use. Same class of hazard #1739 fixed for the flag
+    ledger: a developer's machine-local observations (or a credentials
+    failure) must never change a test outcome. Every test reads an empty
+    per-test store instead; a test that wants observations records them via
+    ``SymbolValidityStore`` at its own root or injects its own predicate.
+    """
+    from app.broker.alpaca import symbol_validity
+
+    isolated_root = tmp_path / "symbol-validity-isolated"
+    monkeypatch.setattr(symbol_validity, "_store_root", lambda: isolated_root)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_strategy_validation_flag_ledger(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

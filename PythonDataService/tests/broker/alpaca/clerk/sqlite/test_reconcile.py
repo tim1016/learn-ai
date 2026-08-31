@@ -1870,6 +1870,58 @@ async def test_sweep_survives_a_broker_error_and_continues_to_the_next_pass(
     assert sleep_calls == [30.0, 60.0]
 
 
+async def test_sweep_awaits_the_after_pass_hook_after_each_successful_pass(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#1795: custody first, evidence second — the hook runs post-verdict."""
+    read = _FakeRead(orders=[], positions=[])
+    hook_calls: list[int] = []
+
+    async def after_pass() -> None:
+        hook_calls.append(1)
+
+    async def fake_sleep(seconds: float) -> None:
+        del seconds
+
+    sweep = ReconciliationSweep(
+        repo=repo,
+        read=read,
+        trade=_FakeTrade(),
+        sleep=fake_sleep,
+        max_passes=2,
+        after_pass=after_pass,
+    )
+    await sweep.run()
+
+    assert len(hook_calls) == 2
+
+
+async def test_sweep_isolates_an_after_pass_hook_failure_from_the_custody_verdict(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """A probe failure must never push a succeeded custody pass into backoff."""
+    read = _FakeRead(orders=[], positions=[])
+    sleep_calls: list[float] = []
+
+    async def failing_hook() -> None:
+        raise RuntimeError("probe exploded")
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    sweep = ReconciliationSweep(
+        repo=repo,
+        read=read,
+        trade=_FakeTrade(),
+        sleep=fake_sleep,
+        max_passes=2,
+        after_pass=failing_hook,
+    )
+    await sweep.run()  # must not raise
+
+    assert sleep_calls == [15.0], "hook failure kept the success cadence, no backoff"
+
+
 async def test_sweep_failure_leaves_durable_admission_blocker(
     repo: ClerkSqliteRepository,
 ) -> None:

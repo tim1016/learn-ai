@@ -89,12 +89,52 @@ describe('BotsRosterComponent', () => {
   });
 
   /** Retired bots have no chip in the design, but must not vanish from the fleet. */
-  it('still groups retired bots, and only then offers their chip', async () => {
+  it('rests retired bots collapsed behind a disclosure that still shows their count', async () => {
     await renderRail([fakeCatalogBot({ strategy_instance_id: 'gone-bot', phase: 'RETIRED', running: false })]);
 
-    expect(await screen.findByRole('heading', { name: 'Retired · 1' })).toBeTruthy();
-    expect(screen.getByText('gone-bot')).toBeTruthy();
+    const disclose = await screen.findByRole('button', { name: /Retired · 1/ });
+    expect(screen.getByRole('heading', { name: /Retired · 1/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retired 1' })).toBeTruthy();
+    expect(disclose.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('gone-bot')).toBeNull();
+
+    fireEvent.click(disclose);
+
+    expect(await screen.findByText('gone-bot')).toBeTruthy();
+    expect(disclose.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.click(disclose);
+    expect(screen.queryByText('gone-bot')).toBeNull();
+  });
+
+  it('keeps an alerting retired bot visible despite the resting collapse', async () => {
+    await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'stranded-bot',
+        phase: 'RETIRED',
+        running: false,
+        needs_attention: true,
+      }),
+    ]);
+
+    expect(await screen.findByText('stranded-bot')).toBeTruthy();
+  });
+
+  it('expands retired rows while a search term or the retired chip is active', async () => {
+    await renderRail([
+      fakeCatalogBot({ strategy_instance_id: 'gone-bot', phase: 'RETIRED', running: false }),
+      fakeCatalogBot({ strategy_instance_id: 'running-bot' }),
+    ]);
+
+    await screen.findByText('running-bot');
+    expect(screen.queryByText('gone-bot')).toBeNull();
+
+    fireEvent.input(searchBox(), { target: { value: 'gone' } });
+    expect(await screen.findByText('gone-bot')).toBeTruthy();
+
+    fireEvent.input(searchBox(), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retired 1' }));
+    expect(await screen.findByText('gone-bot')).toBeTruthy();
   });
 
   it('omits the retired chip when no bot is retired', async () => {
@@ -319,6 +359,8 @@ describe('BotsRosterComponent', () => {
       }),
     ]);
 
+    // A quiet retired row rests collapsed; disclose it to read its tone.
+    fireEvent.click(await screen.findByRole('button', { name: /Retired · 1/ }));
     await screen.findByText('retired-quiet');
     const value = container.querySelector('.rail-row__value');
     expect(value?.getAttribute('data-tone')).toBe('muted');

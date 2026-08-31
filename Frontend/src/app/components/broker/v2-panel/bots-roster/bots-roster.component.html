@@ -28,7 +28,7 @@
 </div>
 
 <div class="rail-list" role="region" aria-label="Alpaca bots roster" tabindex="0">
-  @if (visibleCount() === 0) {
+  @if (groups().length === 0) {
     <div class="rail-empty" role="status">
       <strong>{{ bots().length === 0 ? 'Fleet is empty' : 'Nothing in this view' }}</strong>
       <span>{{ emptyMessage() }}</span>
@@ -36,9 +36,26 @@
   } @else {
     @for (group of groups(); track group.key) {
       <h2 class="rail-group" [attr.data-group]="group.key">
-        {{ group.label }} · {{ group.rows.length }}
+        @if (group.key === 'retired') {
+          <!-- Disclosure, not removal: the count stays visible so retired
+               fleet members never silently vanish from the rail. -->
+          <button
+            type="button"
+            class="rail-group__disclose"
+            [attr.aria-expanded]="!group.collapsed"
+            (click)="toggleRetired()"
+          >
+            {{ group.label }} · {{ group.rows.length }}
+            <span class="rail-group__chevron" aria-hidden="true">{{
+              group.collapsed ? '▸' : '▾'
+            }}</span>
+          </button>
+        } @else {
+          {{ group.label }} · {{ group.rows.length }}
+        }
       </h2>
-      <ul class="rail-group__rows">
+      @if (!group.collapsed) {
+        <ul class="rail-group__rows">
         @for (row of group.rows; track row.bot.strategy_instance_id) {
           <li>
             <button
@@ -81,7 +98,8 @@
             }
           </li>
         }
-      </ul>
+        </ul>
+      }
     }
   }
 </div>

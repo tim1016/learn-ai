@@ -111,6 +111,27 @@
   &[data-group='running'] { color: var(--bull); }
 }
 
+.rail-group__disclose {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+}
+
+.rail-group__chevron {
+  font-size: var(--fs-xs);
+  line-height: 1;
+}
+
 .rail-group__rows {
   margin: 0;
   padding: 0;
