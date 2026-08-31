@@ -29,7 +29,7 @@ import os
 import re
 from datetime import date
 from pathlib import Path
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import asyncpg
 import httpx
@@ -112,7 +112,7 @@ async def pool():
 
 
 @pytest.fixture
-def tmp_lake(tmp_path: Path, monkeypatch):
+def tmp_lake(tmp_path: Path, monkeypatch, request):
     """Point LEAN_DATA_WRITE_ROOT at a tmp_path tree with lake/ + staging/.
 
     Also points app.lean_sidecar.config.DEFAULT_ARTIFACTS_ROOT at a sibling
@@ -122,7 +122,27 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     module's docstring), so the respx launcher mock must stage files there
     rather than return them base64-encoded. The ``artifacts_root`` fixture
     below exposes the same path to test bodies.
+
+    Also gives each test its own ``DATA_LAKE_ROOT_ID`` (deterministic, derived
+    from the test name). One ``DataRootId`` means one physical root, and this
+    fixture mints a fresh physical root per test — so sharing the process-wide
+    default id across concurrently-running tests violates that invariant, and
+    it is not a theoretical concern: metadata staling is keyed by
+    ``(DataRootId, PriceAdjustmentMode, FilePath)`` with no digest in the
+    predicate (see ``catalog_client.mark_metadata_artifacts_stale_for_path``),
+    and the two metadata ``FilePath``\\ s are the same canonical strings in
+    every test. Under pytest-xdist, one test completing its bundle therefore
+    staled the *other* test's already-complete metadata rows; the cache-hit
+    test's second call then reclaimed its own rows through the ``'stale'``
+    branch of ``steal_or_retry_minute_bar`` and reported them as fetched
+    (``fetched_artifact_count == 2``) — the intermittent PRD #1885 story-18
+    failure. The disjoint symbols/digests/dates documented on
+    ``_SECOND_CALL_DAY_OFFSETS_MS`` cannot prevent this; only a per-test root
+    id makes the staling scopes disjoint.
     """
+    monkeypatch.setattr(
+        settings, "DATA_LAKE_ROOT_ID", str(uuid5(NAMESPACE_URL, f"learn-ai/test-lake-root/{request.node.name}"))
+    )
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
@@ -174,6 +194,10 @@ _DAY_OFFSETS_MS = {
 # to move to fully avoid a claim race (ensure_data.py's non-minute-bar/
 # non-metadata claim paths have no reclaim-on-failure — see
 # app.data_lake.ensure_data's "polling not implemented in Slice 1c").
+# Claim disjointness alone is NOT full isolation, though: metadata
+# staling is keyed by (DataRootId, mode, FilePath) with no digest, so
+# the per-test DATA_LAKE_ROOT_ID minted by tmp_lake is what makes the
+# staling scopes disjoint too (see that fixture's docstring).
 # 2024-06-03 09:30:00 ET = UTC 2024-06-03 13:30:00 = 1717421400000 ms UTC
 _SECOND_CALL_DAY_OFFSETS_MS = {
     date(2024, 6, 3): 1717421400000,
