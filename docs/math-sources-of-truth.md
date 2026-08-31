@@ -26,26 +26,29 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 > comparator; the AGENTS.md "update both registries" rule is satisfied by the new
 > row in `docs/architecture/engine-authority-map.md` plus this explicit note.
 
-> **No-new-concept note — flag-gated engine data-resolution path (#1833).** With
-> `DATA_LAKE_ENABLED`, the Python engine's backtest data root resolves through
-> `PythonDataService/app/data_lake/run_materialization.py::materialize_engine_run`
-> instead of the policy store's `app.engine.data.availability::ensure_range`; with
-> the flag off (the shipped default — migration state is flag-dark until #1839
-> decides the cutover), `ensure_range` is unchanged. Neither path introduces a new
-> math concept: both resolve *which bytes the reader opens*, not a formula over
-> them — the LEAN-format minute/daily bar readers, the indicators, and every
-> strategy math concept in this registry are byte-for-byte the same regardless of
-> which materializer supplied the underlying zip. This satisfies the AGENTS.md
-> "update both registries" rule via the new row in
-> `docs/architecture/engine-authority-map.md` plus this explicit note.
+> **No-new-concept note — engine data-resolution path (#1833).** The Python
+> engine's backtest data root resolves through
+> `PythonDataService/app/data_lake/run_materialization.py::materialize_engine_run`.
+> This introduces no new math concept: it resolves *which bytes the reader
+> opens*, not a formula over them — the LEAN-format minute/daily bar readers,
+> the indicators, and every strategy math concept in this registry are
+> byte-for-byte the same regardless of which materializer supplied the
+> underlying zip. This satisfies the AGENTS.md "update both registries" rule via
+> the new row in `docs/architecture/engine-authority-map.md` plus this explicit
+> note.
 >
-> **Amended by #1839 (the flag flip).** `DATA_LAKE_ENABLED` now defaults ON, so
-> the lake path above is the shipped one for both a **raw** and an *adjusted*
-> request — since #1866, each price-adjustment mode resolves to its own root
-> under the lake (`app/data_lake/path_policy.py::resolve_lake_root`), so
-> adjusted requests are no longer carved out to the policy store. The
-> no-new-concept finding is unchanged either way: both paths still resolve
-> which bytes the reader opens, not a formula over them.
+> **Amended by #1839 and #1893.** This note originally described a *choice*
+> between two materializers, gated by `DATA_LAKE_ENABLED`: the lake's
+> `materialize_engine_run` against the policy store's
+> `app.engine.data.availability::ensure_range`. #1839 flipped the flag on for
+> both a **raw** and an *adjusted* request — since #1866 each price-adjustment
+> mode resolves to its own root under the lake
+> (`app/data_lake/path_policy.py::resolve_lake_root`), so adjusted requests
+> stopped being carved out to the policy store. #1893 then retired the store,
+> `ensure_range`, and the flag outright, so there is no longer a second
+> materializer to choose between. The no-new-concept finding is what survives
+> unchanged: resolution picks which bytes the reader opens, never a formula
+> over them.
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
 |---|---|---|---|---|---|
