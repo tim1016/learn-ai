@@ -11,26 +11,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.signal_program_seal import ProgramBuildGitProvenance, semantic_payload_hash
+from app.schemas.signal_program_seal import (
+    ProgramBuildGitProvenance,
+    semantic_payload_hash,
+    strip_absent_git_provenance,
+)
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _INT64_MAX = 9_223_372_036_854_775_807
-
-
-def strip_absent_git_provenance(payload: dict) -> dict:
-    """Drop an absent evidence lineage from a payload about to be hashed.
-
-    Plans and ledger events recorded before ``git_provenance`` existed hashed
-    an evidence payload without the field; serializing the ``None`` into the
-    hashed payload would invalidate every one of them — including the fleet's
-    hash-chained admission ledger. Present lineage stays under the hash.
-    Every canary content hash (plan identity, event hash) must go through
-    this, on both the construction and the validation side.
-    """
-    evidence = payload.get("evidence")
-    if isinstance(evidence, dict) and evidence.get("git_provenance") is None:
-        evidence.pop("git_provenance", None)
-    return payload
 
 
 class CanaryActivationEvidence(BaseModel):
@@ -193,5 +181,4 @@ __all__ = [
     "CanaryAdmissionEvent",
     "CanaryAdmissionLedger",
     "CanaryRollbackDecision",
-    "strip_absent_git_provenance",
 ]

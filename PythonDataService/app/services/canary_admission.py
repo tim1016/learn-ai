@@ -57,9 +57,8 @@ from app.schemas.canary_admission import (
     CanaryAdmissionEvent,
     CanaryAdmissionLedger,
     CanaryRollbackDecision,
-    strip_absent_git_provenance,
 )
-from app.schemas.signal_program_seal import semantic_payload_hash
+from app.schemas.signal_program_seal import semantic_payload_hash, strip_absent_git_provenance
 from app.services.bot_carryover import StopCustodyOutcome
 from app.services.signal_program_admission import (
     DEFAULT_QUALIFICATION_MANIFEST,

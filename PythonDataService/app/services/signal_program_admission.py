@@ -34,6 +34,7 @@ from app.schemas.signal_program_seal import (
     SignalDataContract,
     seal_bot_program,
     semantic_payload_hash,
+    strip_absent_git_provenance,
 )
 from app.services.bot_binding_repository import BrokerBotBinding
 
@@ -66,9 +67,7 @@ class ProgramBuildQualificationReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_receipt_hash(self) -> ProgramBuildQualificationReceipt:
-        payload = self.model_dump(mode="json", exclude={"receipt_hash"})
-        if payload.get("git_provenance") is None:
-            payload.pop("git_provenance", None)
+        payload = strip_absent_git_provenance(self.model_dump(mode="json", exclude={"receipt_hash"}))
         if semantic_payload_hash(payload) != self.receipt_hash:
             raise ValueError("qualification receipt hash does not match its payload")
         return self

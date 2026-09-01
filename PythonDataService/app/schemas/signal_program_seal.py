@@ -49,6 +49,29 @@ class ProgramBuildGitProvenance(BaseModel):
     dirty: bool
 
 
+def strip_absent_git_provenance(payload: dict) -> dict:
+    """Drop an absent git lineage from a payload about to be content-hashed.
+
+    Receipts, plans, and ledger events recorded before ``git_provenance``
+    existed hashed payloads without the field; serializing the ``None`` into
+    the hashed payload would invalidate every one of them — the committed
+    build-receipt manifest and the fleet's hash-chained canary admission
+    ledger included. Present lineage stays under the hash. Every content hash
+    whose payload can carry the field (receipt hash, plan identity, event
+    hash) must go through this, on both the construction and the validation
+    side. Mutates ``payload`` in place and returns it; callers always pass a
+    freshly dumped dict. Covers both shapes the field appears in: at the
+    payload's top level (build receipts) and nested under ``evidence``
+    (canary plans and events).
+    """
+    if payload.get("git_provenance") is None:
+        payload.pop("git_provenance", None)
+    evidence = payload.get("evidence")
+    if isinstance(evidence, dict) and evidence.get("git_provenance") is None:
+        evidence.pop("git_provenance", None)
+    return payload
+
+
 class SignalDataContract(BaseModel):
     """Closed source-series and bar-semantics contract."""
 
