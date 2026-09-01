@@ -57,6 +57,7 @@ from app.schemas.canary_admission import (
     CanaryAdmissionEvent,
     CanaryAdmissionLedger,
     CanaryRollbackDecision,
+    strip_absent_git_provenance,
 )
 from app.schemas.signal_program_seal import semantic_payload_hash
 from app.services.bot_carryover import StopCustodyOutcome
@@ -208,7 +209,7 @@ def plan_canary_activation(
         "expected_ledger_head_hash": _ledger_head_hash(ledger),
         "evidence": evidence.model_dump(mode="json"),
     }
-    token = semantic_payload_hash(payload)
+    token = semantic_payload_hash(strip_absent_git_provenance(payload))
     return CanaryActivationPlan(plan_id=token, confirmation_token=token, **payload)
 
 
@@ -383,12 +384,15 @@ def _prove_activation_evidence(
         qualification_receipt_hash=receipt.receipt_hash,
         qualification_suite=receipt.qualification_suite,
         qualified_at_ms=receipt.qualified_at_ms,
+        git_provenance=receipt.git_provenance,
     )
 
 
 def _activation_plan_hash(plan: CanaryActivationPlan) -> str:
     return semantic_payload_hash(
-        plan.model_dump(mode="json", exclude={"plan_id", "confirmation_token"})
+        strip_absent_git_provenance(
+            plan.model_dump(mode="json", exclude={"plan_id", "confirmation_token"})
+        )
     )
 
 
@@ -415,7 +419,9 @@ def _new_admission_event(
         "evidence": None if evidence is None else evidence.model_dump(mode="json"),
         "previous_event_hash": _ledger_head_hash(ledger),
     }
-    return CanaryAdmissionEvent(event_hash=semantic_payload_hash(payload), **payload)
+    return CanaryAdmissionEvent(
+        event_hash=semantic_payload_hash(strip_absent_git_provenance(payload)), **payload
+    )
 
 
 def _resolve_ledger_path(ledger_path: Path | None) -> Path:

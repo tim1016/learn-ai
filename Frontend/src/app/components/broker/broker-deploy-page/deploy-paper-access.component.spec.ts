@@ -127,6 +127,45 @@ describe('DeployPaperAccessComponent', () => {
     expect(service.preparePaperAccess).not.toHaveBeenCalled();
   });
 
+  it('surfaces the receipt git lineage in the audit details', async () => {
+    const service = panelServiceMock();
+    service.preparePaperAccess.mockResolvedValueOnce({
+      ...PLAN,
+      evidence: {
+        ...PLAN.evidence,
+        git_provenance: { commit_sha: 'f'.repeat(40), dirty: true },
+      },
+    });
+    const { fixture } = await render(DeployPaperAccessComponent, {
+      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY },
+      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const review = screen.getByRole('region', { name: 'Review Paper access' });
+    expect(within(review).getByText('Qualified source')).toBeTruthy();
+    expect(within(review).getByText('f'.repeat(40))).toBeTruthy();
+    expect(within(review).getByText(/uncommitted edits included/i)).toBeTruthy();
+  });
+
+  it('omits the git lineage row when the receipt predates it', async () => {
+    const service = panelServiceMock();
+    const { fixture } = await render(DeployPaperAccessComponent, {
+      inputs: { accountId: 'paper-account-1', strategy: AVAILABLE_STRATEGY },
+      providers: [{ provide: BrokerV2PanelService, useValue: service }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review & enable Paper' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const review = screen.getByRole('region', { name: 'Review Paper access' });
+    expect(within(review).queryByText('Qualified source')).toBeNull();
+  });
+
   it('renders the backend-authored refusal and offers a fresh review', async () => {
     const service = panelServiceMock();
     service.preparePaperAccess.mockRejectedValueOnce(

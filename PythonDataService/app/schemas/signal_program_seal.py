@@ -31,6 +31,24 @@ class ResolvedSignalParameter(BaseModel):
     origin: ParameterOrigin
 
 
+class ProgramBuildGitProvenance(BaseModel):
+    """Where a build receipt's qualified bytes live in version control.
+
+    Recorded evidence, never a gate: ``commit_sha`` is the last commit that
+    touched the program's declared artifact/wiring paths, and ``dirty``
+    reports whether any of those paths differed from HEAD when the lineage
+    was stamped. ``dirty=False`` means the qualified bytes are reproducible
+    from ``commit_sha``; ``dirty=True`` is a permanent record that receipts
+    can be minted from bytes git never saw. Absent entirely on receipts
+    minted before this field existed, or when git was unavailable.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    dirty: bool
+
+
 class SignalDataContract(BaseModel):
     """Closed source-series and bar-semantics contract."""
 

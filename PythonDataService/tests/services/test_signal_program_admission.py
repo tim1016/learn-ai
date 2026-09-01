@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import settings
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -23,6 +24,7 @@ from app.services.signal_program_admission import (
     DEFAULT_QUALIFICATION_MANIFEST,
     LegacyProgramUnreconstructibleError,
     ProgramBuildQualificationManifest,
+    ProgramBuildQualificationReceipt,
     SignalProgramSealError,
     build_start_program_seal,
     legacy_migration_clone_instance_id,
@@ -222,9 +224,19 @@ def test_committed_receipt_matches_current_artifacts_and_golden_root() -> None:
         contract=contract,
         qualified_at_ms=committed.qualified_at_ms,
         qualification_suite=committed.qualification_suite,
+        # Recorded lineage is carried forward, not re-derived, so the committed
+        # value is the expected value (see _prior_receipt_reuse in the runner).
+        git_provenance=(
+            None
+            if committed.git_provenance is None
+            else committed.git_provenance.model_dump(mode="json")
+        ),
     )
 
-    assert committed.model_dump(mode="json") == generated
+    dumped = committed.model_dump(mode="json")
+    if dumped.get("git_provenance") is None:
+        dumped.pop("git_provenance", None)  # absent lineage is omitted, never null
+    assert dumped == generated
 
 
 def test_tampered_qualification_receipt_fails_closed(tmp_path: Path) -> None:
@@ -802,3 +814,49 @@ def test_an_unreadable_wiring_path_fails_closed_rather_than_raising(
 
     assert proof.state == "UNPROVEN"
     assert "unreadable" in proof.explanation
+
+
+_GIT_PROVENANCE = {"commit_sha": "a" * 40, "dirty": False}
+
+
+def test_receipt_hash_covers_git_provenance_when_present() -> None:
+    """A receipt minted with git provenance binds it under the receipt hash,
+    so recorded lineage cannot be edited in isolation any more than the
+    digests can."""
+    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    assert contract is not None
+    payload = qualification_receipt_payload(
+        program_key="ema_crossover_signal",
+        contract=contract,
+        qualified_at_ms=1,
+        qualification_suite="tests/engine/strategy/test_x.py::test_y",
+        git_provenance=_GIT_PROVENANCE,
+    )
+
+    receipt = ProgramBuildQualificationReceipt.model_validate(payload)
+
+    assert receipt.git_provenance is not None
+    assert receipt.git_provenance.commit_sha == "a" * 40
+    assert receipt.git_provenance.dirty is False
+    tampered = {**payload, "git_provenance": {**_GIT_PROVENANCE, "dirty": True}}
+    with pytest.raises(ValidationError, match="receipt hash does not match"):
+        ProgramBuildQualificationReceipt.model_validate(tampered)
+
+
+def test_receipt_without_git_provenance_keeps_its_pre_provenance_hash() -> None:
+    """Receipts minted before git provenance existed hash without the field.
+    The committed manifest's receipts must stay valid byte-for-byte, so an
+    absent provenance is omitted from the payload rather than serialized as
+    null."""
+    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    assert contract is not None
+    payload = qualification_receipt_payload(
+        program_key="ema_crossover_signal",
+        contract=contract,
+        qualified_at_ms=1,
+        qualification_suite="tests/engine/strategy/test_x.py::test_y",
+    )
+
+    assert "git_provenance" not in payload
+    receipt = ProgramBuildQualificationReceipt.model_validate(payload)
+    assert receipt.git_provenance is None

@@ -38,7 +38,10 @@ export type DeployReadinessCheck = components['schemas']['AlpacaPaperDeployReadi
 export type DeployExecutionMode = components['schemas']['AlpacaPaperExecutionMode'];
 export type DeploySizingOption = components['schemas']['AlpacaPaperSizingOption'];
 export type RunAdmissionDecision = components['schemas']['RunAdmissionDecision'];
-export type PaperAccessPlan = components['schemas']['CanaryActivationPlan'];
+// Pydantic emits -Input/-Output variants for the plan (its nested evidence
+// model carries a defaulted field); the two are byte-identical, so one alias
+// serves both the plan response and the confirm request body.
+export type PaperAccessPlan = components['schemas']['CanaryActivationPlan-Output'];
 export type PaperAccessEvent = components['schemas']['CanaryAdmissionEvent'];
 
 /**

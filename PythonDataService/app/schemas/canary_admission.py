@@ -11,10 +11,26 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.signal_program_seal import semantic_payload_hash
+from app.schemas.signal_program_seal import ProgramBuildGitProvenance, semantic_payload_hash
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _INT64_MAX = 9_223_372_036_854_775_807
+
+
+def strip_absent_git_provenance(payload: dict) -> dict:
+    """Drop an absent evidence lineage from a payload about to be hashed.
+
+    Plans and ledger events recorded before ``git_provenance`` existed hashed
+    an evidence payload without the field; serializing the ``None`` into the
+    hashed payload would invalidate every one of them — including the fleet's
+    hash-chained admission ledger. Present lineage stays under the hash.
+    Every canary content hash (plan identity, event hash) must go through
+    this, on both the construction and the validation side.
+    """
+    evidence = payload.get("evidence")
+    if isinstance(evidence, dict) and evidence.get("git_provenance") is None:
+        evidence.pop("git_provenance", None)
+    return payload
 
 
 class CanaryActivationEvidence(BaseModel):
@@ -30,6 +46,12 @@ class CanaryActivationEvidence(BaseModel):
     qualification_receipt_hash: str = Field(pattern=_SHA256_PATTERN)
     qualification_suite: str = Field(min_length=1)
     qualified_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    # The reviewed receipt's recorded git lineage, copied verbatim so the
+    # human enabling Paper sees whether the qualified bytes were ever
+    # committed. Optional: receipts minted before the field carry none, and
+    # the ledger events hashed before it must keep validating — see
+    # ``strip_absent_git_provenance``.
+    git_provenance: ProgramBuildGitProvenance | None = None
 
 
 class CanaryActivationPlan(BaseModel):
@@ -55,7 +77,9 @@ class CanaryActivationPlan(BaseModel):
         if self.expires_at_ms <= self.created_at_ms:
             raise ValueError("activation plan expiry must be after creation")
         expected = semantic_payload_hash(
-            self.model_dump(mode="json", exclude={"plan_id", "confirmation_token"})
+            strip_absent_git_provenance(
+                self.model_dump(mode="json", exclude={"plan_id", "confirmation_token"})
+            )
         )
         if self.plan_id != expected or self.confirmation_token != expected:
             raise ValueError("activation plan identity does not match its payload")
@@ -102,7 +126,9 @@ class CanaryAdmissionEvent(BaseModel):
             raise ValueError("an activation event requires its proof evidence")
         if self.action == "revoked" and self.evidence is not None:
             raise ValueError("a revocation event cannot replace activation evidence")
-        expected = semantic_payload_hash(self.model_dump(mode="json", exclude={"event_hash"}))
+        expected = semantic_payload_hash(
+            strip_absent_git_provenance(self.model_dump(mode="json", exclude={"event_hash"}))
+        )
         if self.event_hash != expected:
             raise ValueError("canary admission event hash does not match its payload")
         return self
@@ -167,4 +193,5 @@ __all__ = [
     "CanaryAdmissionEvent",
     "CanaryAdmissionLedger",
     "CanaryRollbackDecision",
+    "strip_absent_git_provenance",
 ]
