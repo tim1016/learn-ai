@@ -981,6 +981,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
+        # No lean_parameter_names: the twin hardcodes 14/30/70, so a run
+        # overriding window/oversold/overbought is honestly reported as
+        # parameters_unrepresentable_by_twin rather than compared against a
+        # twin running different rules.
+        lean_twin="rsi_mean_reversion",
     ),
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",

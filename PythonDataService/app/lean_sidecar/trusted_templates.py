@@ -17,6 +17,7 @@ from app.lean_sidecar.trusted_samples.deployment_validation import DEPLOYMENT_VA
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.trusted_samples.ema_crossover_2_bps import EMA_CROSSOVER_2_BPS_SOURCE
 from app.lean_sidecar.trusted_samples.ema_crossover_signal import EMA_CROSSOVER_SIGNAL_SOURCE
+from app.lean_sidecar.trusted_samples.rsi_mean_reversion import RSI_MEAN_REVERSION_SOURCE
 
 
 class TrustedTemplate(StrEnum):
@@ -27,6 +28,7 @@ class TrustedTemplate(StrEnum):
     EMA_CROSSOVER = "ema_crossover"
     EMA_CROSSOVER_SIGNAL = "ema_crossover_signal"
     EMA_CROSSOVER_2_BPS = "ema_crossover_2_bps"
+    RSI_MEAN_REVERSION = "rsi_mean_reversion"
     DEPLOYMENT_VALIDATION = "deployment_validation"
 
 
@@ -58,6 +60,10 @@ TRUSTED_TEMPLATE_DEFINITIONS: Final[Mapping[TrustedTemplate, TrustedTemplateDefi
         ),
         TrustedTemplate.EMA_CROSSOVER_2_BPS: TrustedTemplateDefinition(
             source=EMA_CROSSOVER_2_BPS_SOURCE,
+            brokerage_policy="interactive_brokers",
+        ),
+        TrustedTemplate.RSI_MEAN_REVERSION: TrustedTemplateDefinition(
+            source=RSI_MEAN_REVERSION_SOURCE,
             brokerage_policy="interactive_brokers",
         ),
         TrustedTemplate.DEPLOYMENT_VALIDATION: TrustedTemplateDefinition(

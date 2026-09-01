@@ -34923,6 +34923,7 @@
           "ema_crossover",
           "ema_crossover_signal",
           "ema_crossover_2_bps",
+          "rsi_mean_reversion",
           "deployment_validation"
         ],
         "title": "TrustedTemplate",

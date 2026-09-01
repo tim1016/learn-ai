@@ -20253,7 +20253,7 @@ export interface components {
          * @description Stable wire names for bundled LEAN algorithm sources.
          * @enum {string}
          */
-        TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "deployment_validation";
+        TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "rsi_mean_reversion" | "deployment_validation";
         /**
          * UnderlyingSnapshot
          * @description Underlying asset info from snapshot
