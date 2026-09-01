@@ -27,12 +27,14 @@ from app.schemas.run_admission import ProgramBuildAdmissionFact, StrategyValidat
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
     ParameterOrigin,
+    ProgramBuildGitProvenance,
     ResolvedSignalParameter,
     SealedBotProgram,
     SignalClockContract,
     SignalDataContract,
     seal_bot_program,
     semantic_payload_hash,
+    strip_absent_git_provenance,
 )
 from app.services.bot_binding_repository import BrokerBotBinding
 
@@ -56,11 +58,17 @@ class ProgramBuildQualificationReceipt(BaseModel):
     wiring_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     qualification_suite: str
     qualified_at_ms: int = Field(ge=0)
+    # Recorded lineage of the qualified bytes (see ProgramBuildGitProvenance).
+    # Optional so the receipts minted before it existed keep their committed
+    # hashes: an absent provenance is omitted from the hashed payload, never
+    # serialized as null into it.
+    git_provenance: ProgramBuildGitProvenance | None = None
     receipt_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def validate_receipt_hash(self) -> ProgramBuildQualificationReceipt:
-        if semantic_payload_hash(self.model_dump(mode="json", exclude={"receipt_hash"})) != self.receipt_hash:
+        payload = strip_absent_git_provenance(self.model_dump(mode="json", exclude={"receipt_hash"}))
+        if semantic_payload_hash(payload) != self.receipt_hash:
             raise ValueError("qualification receipt hash does not match its payload")
         return self
 
@@ -506,6 +514,7 @@ def qualification_receipt_payload(
     contract: SignalProgramContract,
     qualified_at_ms: int,
     qualification_suite: str,
+    git_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return generator output for the committed qualification manifest."""
     payload: dict[str, Any] = {
@@ -518,6 +527,8 @@ def qualification_receipt_payload(
         "qualification_suite": qualification_suite,
         "qualified_at_ms": qualified_at_ms,
     }
+    if git_provenance is not None:
+        payload["git_provenance"] = git_provenance
     return {**payload, "receipt_hash": semantic_payload_hash(payload)}
 
 

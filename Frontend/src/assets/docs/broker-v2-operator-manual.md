@@ -143,6 +143,22 @@ This toggle governs *only* the wiring half. Drift in the artifact half is the
 admission control this proof was built around and keeps refusing runs in both
 toggle positions.
 
+### Recorded lineage: were the qualified bytes ever committed?
+
+Each receipt also records where its qualified bytes live in version control:
+the last commit that touched the program's declared artifact and wiring paths,
+and whether any of those paths carried uncommitted edits when the lineage was
+stamped. This is recorded evidence, never a gate — the qualification job
+happily proves a dirty tree, and the receipt then says so permanently. The
+Paper-access review renders it under **Audit details** as `Qualified source`:
+a commit hash marked "committed bytes" means the exact qualified bytes are
+reproducible from that commit; "uncommitted edits included" means the bytes
+passed qualification but git never saw them, so treat them as unreproducible
+until the program is re-qualified from a committed tree. Receipts minted
+before this field existed carry no lineage and gain it, without being
+re-dated, on the next qualification run; a checkout without git degrades to a
+receipt with no lineage, never a failed qualification.
+
 A strategy instance deployed before this seal existed has no v2 seal on file.
 Its first Resume after this feature attempts migration, and migration
 succeeds only when the v1 configuration is *exactly* reconstructible — never

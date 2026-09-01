@@ -5227,7 +5227,7 @@
             "type": "string"
           },
           "plan": {
-            "$ref": "#/components/schemas/CanaryActivationPlan"
+            "$ref": "#/components/schemas/CanaryActivationPlan-Input"
           }
         },
         "required": [
@@ -5241,6 +5241,16 @@
         "additionalProperties": false,
         "description": "Fresh proof that one program is eligible for canary activation.",
         "properties": {
+          "git_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgramBuildGitProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "golden_trace_root": {
             "pattern": "^[0-9a-f]{64}$",
             "title": "Golden Trace Root",
@@ -5296,7 +5306,94 @@
         "title": "CanaryActivationEvidence",
         "type": "object"
       },
-      "CanaryActivationPlan": {
+      "CanaryActivationPlan-Input": {
+        "additionalProperties": false,
+        "description": "Short-lived, content-addressed intent awaiting explicit confirmation.",
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "actor": {
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "confirmation_token": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/CanaryActivationEvidence"
+          },
+          "expected_ledger_head_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Ledger Head Hash"
+          },
+          "expires_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "ledger_path": {
+            "minLength": 1,
+            "title": "Ledger Path",
+            "type": "string"
+          },
+          "plan_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "program_key": {
+            "minLength": 1,
+            "title": "Program Key",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "plan_id",
+          "confirmation_token",
+          "program_key",
+          "account_id",
+          "actor",
+          "reason",
+          "created_at_ms",
+          "expires_at_ms",
+          "ledger_path",
+          "evidence"
+        ],
+        "title": "CanaryActivationPlan",
+        "type": "object"
+      },
+      "CanaryActivationPlan-Output": {
         "additionalProperties": false,
         "description": "Short-lived, content-addressed intent awaiting explicit confirmation.",
         "properties": {
@@ -23122,6 +23219,27 @@
           "explanation"
         ],
         "title": "ProgramBuildAdmissionFact",
+        "type": "object"
+      },
+      "ProgramBuildGitProvenance": {
+        "additionalProperties": false,
+        "description": "Where a build receipt's qualified bytes live in version control.\n\nRecorded evidence, never a gate: ``commit_sha`` is the last commit that\ntouched the program's declared artifact/wiring paths, and ``dirty``\nreports whether any of those paths differed from HEAD when the lineage\nwas stamped. ``dirty=False`` means the qualified bytes are reproducible\nfrom ``commit_sha``; ``dirty=True`` is a permanent record that receipts\ncan be minted from bytes git never saw. Absent entirely on receipts\nminted before this field existed, or when git was unavailable.",
+        "properties": {
+          "commit_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "title": "Commit Sha",
+            "type": "string"
+          },
+          "dirty": {
+            "title": "Dirty",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "commit_sha",
+          "dirty"
+        ],
+        "title": "ProgramBuildGitProvenance",
         "type": "object"
       },
       "ProjectedCommandResponse": {
@@ -41803,7 +41921,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CanaryActivationPlan"
+                  "$ref": "#/components/schemas/CanaryActivationPlan-Output"
                 }
               }
             },

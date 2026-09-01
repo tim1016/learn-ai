@@ -85,7 +85,7 @@ def test_qualify_signal_program_builds_raises_and_reports_pytest_failure(
     )
 
     with pytest.raises(runner.QualificationFailedError, match="assertion failed"):
-        runner.qualify_signal_program_builds(prior_qualified_at_ms={}, fresh_qualified_at_ms=1)
+        runner.qualify_signal_program_builds(prior_receipts={}, fresh_qualified_at_ms=1)
 
 
 def _written_manifest(tmp_path: Path, payload: dict) -> Path:
@@ -94,7 +94,7 @@ def _written_manifest(tmp_path: Path, payload: dict) -> Path:
     return path
 
 
-def _ema_receipt(qualified_at_ms: int) -> tuple[dict, str]:
+def _ema_receipt(qualified_at_ms: int, git_provenance: dict | None = None) -> tuple[dict, str]:
     contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
     assert contract is not None
     suite = runner._QUALIFICATION_SUITES["ema_crossover_signal"]
@@ -104,6 +104,7 @@ def _ema_receipt(qualified_at_ms: int) -> tuple[dict, str]:
             contract=contract,
             qualified_at_ms=qualified_at_ms,
             qualification_suite=suite,
+            git_provenance=git_provenance,
         ),
         suite,
     )
@@ -114,7 +115,7 @@ def test_reuses_qualified_at_ms_when_the_receipt_identity_is_unchanged(tmp_path:
     receipt, suite = _ema_receipt(committed_at_ms)
     path = _written_manifest(tmp_path, {"schema_version": 2, "receipts": [receipt]})
 
-    index = runner._prior_qualified_at_ms(path)
+    index = runner._prior_receipt_reuse(path)
 
     identity = runner._qualified_identity(
         program_key="ema_crossover_signal",
@@ -124,14 +125,14 @@ def test_reuses_qualified_at_ms_when_the_receipt_identity_is_unchanged(tmp_path:
         wiring_digest=receipt["wiring_digest"],
         qualification_suite=suite,
     )
-    assert index[identity] == committed_at_ms
+    assert index[identity].qualified_at_ms == committed_at_ms
 
 
 def test_mints_a_fresh_timestamp_when_the_artifact_digest_changed(tmp_path: Path) -> None:
     receipt, suite = _ema_receipt(1_700_000_000_000)
     path = _written_manifest(tmp_path, {"schema_version": 2, "receipts": [receipt]})
 
-    index = runner._prior_qualified_at_ms(path)
+    index = runner._prior_receipt_reuse(path)
 
     changed = runner._qualified_identity(
         program_key="ema_crossover_signal",
@@ -141,7 +142,7 @@ def test_mints_a_fresh_timestamp_when_the_artifact_digest_changed(tmp_path: Path
         wiring_digest=receipt["wiring_digest"],
         qualification_suite=suite,
     )
-    assert index.get(changed, 1_700_000_000_555) == 1_700_000_000_555
+    assert changed not in index
 
 
 def test_mints_a_fresh_timestamp_when_only_the_wiring_changed(tmp_path: Path) -> None:
@@ -157,7 +158,7 @@ def test_mints_a_fresh_timestamp_when_only_the_wiring_changed(tmp_path: Path) ->
     receipt, suite = _ema_receipt(1_700_000_000_000)
     path = _written_manifest(tmp_path, {"schema_version": 2, "receipts": [receipt]})
 
-    index = runner._prior_qualified_at_ms(path)
+    index = runner._prior_receipt_reuse(path)
 
     wiring_moved = runner._qualified_identity(
         program_key="ema_crossover_signal",
@@ -167,7 +168,7 @@ def test_mints_a_fresh_timestamp_when_only_the_wiring_changed(tmp_path: Path) ->
         wiring_digest="c" * 64,  # simulates an edited program factory
         qualification_suite=suite,
     )
-    assert index.get(wiring_moved, 1_700_000_000_555) == 1_700_000_000_555
+    assert wiring_moved not in index
 
 
 def test_a_manifest_from_another_schema_version_is_read_not_rejected(tmp_path: Path) -> None:
@@ -178,7 +179,7 @@ def test_a_manifest_from_another_schema_version_is_read_not_rejected(tmp_path: P
     alien = {key: value for key, value in receipt.items() if key != "wiring_digest"}
     path = _written_manifest(tmp_path, {"schema_version": 1, "receipts": [alien]})
 
-    index = runner._prior_qualified_at_ms(path)
+    index = runner._prior_receipt_reuse(path)
 
     assert index == {}
 
@@ -197,3 +198,136 @@ def test_tampered_committed_receipt_fails_its_own_hash_self_check() -> None:
 
     with pytest.raises(ValidationError, match="qualification receipt hash does not match"):
         ProgramBuildQualificationManifest.model_validate({"schema_version": 1, "receipts": [tampered]})
+
+
+_COMMITTED_PROVENANCE = {"commit_sha": "b" * 40, "dirty": False}
+_CURRENT_PROVENANCE = {"commit_sha": "c" * 40, "dirty": True}
+
+
+def _passing_subprocess(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=["pytest"], returncode=0, stdout="", stderr="")
+
+
+def _qualified_ema_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prior_manifest: dict | None,
+) -> dict:
+    """Run the full qualification assembly with suites and git state faked."""
+    monkeypatch.setattr(runner.subprocess, "run", _passing_subprocess)
+    monkeypatch.setattr(runner, "_current_git_provenance", lambda _paths: _CURRENT_PROVENANCE)
+    prior_receipts: dict = {}
+    if prior_manifest is not None:
+        prior_receipts = runner._prior_receipt_reuse(_written_manifest(tmp_path, prior_manifest))
+
+    manifest = runner.qualify_signal_program_builds(
+        prior_receipts=prior_receipts,
+        fresh_qualified_at_ms=1_700_000_000_555,
+    )
+
+    return next(
+        receipt
+        for receipt in manifest["receipts"]
+        if receipt["program_key"] == "ema_crossover_signal"
+    )
+
+
+def test_reuses_git_provenance_with_the_timestamp_when_identity_is_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unchanged identity keeps its recorded provenance even when the repo
+    has since moved on — re-running with unchanged code stays a byte-for-byte
+    no-op, which is what keeps `--check` stable in CI regardless of the
+    checkout's git state."""
+    prior, _suite = _ema_receipt(1_700_000_000_000, git_provenance=_COMMITTED_PROVENANCE)
+
+    receipt = _qualified_ema_receipt(
+        tmp_path, monkeypatch, {"schema_version": 2, "receipts": [prior]}
+    )
+
+    assert receipt["qualified_at_ms"] == 1_700_000_000_000
+    assert receipt["git_provenance"] == _COMMITTED_PROVENANCE
+
+
+def test_backfills_git_provenance_when_the_prior_receipt_has_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A receipt minted before provenance existed gains it on the next run
+    without being re-dated. The claim is about the bytes, not the original
+    qualification event: the identity match just re-verified that the current
+    tree still produces this exact artifact digest, so the current git state
+    truthfully locates those bytes."""
+    prior, _suite = _ema_receipt(1_700_000_000_000)
+
+    receipt = _qualified_ema_receipt(
+        tmp_path, monkeypatch, {"schema_version": 2, "receipts": [prior]}
+    )
+
+    assert receipt["qualified_at_ms"] == 1_700_000_000_000
+    assert receipt["git_provenance"] == _CURRENT_PROVENANCE
+
+
+def test_stamps_current_git_provenance_on_a_new_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = _qualified_ema_receipt(tmp_path, monkeypatch, None)
+
+    assert receipt["qualified_at_ms"] == 1_700_000_000_555
+    assert receipt["git_provenance"] == _CURRENT_PROVENANCE
+
+
+def test_receipts_omit_git_provenance_when_git_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No git on the path degrades to a receipt without lineage, never a
+    failed qualification — provenance is recorded evidence, not a gate."""
+    monkeypatch.setattr(runner.subprocess, "run", _passing_subprocess)
+    monkeypatch.setattr(runner, "_current_git_provenance", lambda _paths: None)
+
+    manifest = runner.qualify_signal_program_builds(
+        prior_receipts={},
+        fresh_qualified_at_ms=1_700_000_000_555,
+    )
+
+    assert all("git_provenance" not in receipt for receipt in manifest["receipts"])
+
+
+def test_current_git_provenance_is_none_when_git_cannot_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _no_git(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(runner.subprocess, "run", _no_git)
+
+    assert runner._current_git_provenance(("app/main.py",)) is None
+
+
+def test_current_git_provenance_reads_the_paths_last_commit_and_dirtiness() -> None:
+    """Against the real repo: the provenance of a committed, unmodified file
+    is that file's last-touching commit with a clean flag."""
+    provenance = runner._current_git_provenance(("app/main.py",))
+
+    assert provenance is not None
+    expected_sha = subprocess.run(
+        ["git", "log", "-1", "--format=%H", "--", "app/main.py"],
+        cwd=runner._SERVICE_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert provenance["commit_sha"] == expected_sha
+    expected_dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain", "--", "app/main.py"],
+            cwd=runner._SERVICE_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    assert provenance["dirty"] is expected_dirty

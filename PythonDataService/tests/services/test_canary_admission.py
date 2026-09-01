@@ -13,9 +13,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 import app.services.strategy_validation_admission as validation_admission
-from app.schemas.canary_admission import CanaryActivationPlan, CanaryRollbackDecision
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.schemas.canary_admission import (
+    CanaryActivationPlan,
+    CanaryAdmissionEvent,
+    CanaryRollbackDecision,
+)
+from app.schemas.signal_program_seal import semantic_payload_hash
 from app.schemas.strategy_validation import StrategyValidationFlagRequest
 from app.services.broker_v2_panel.strategy_catalog import compose_strategy_catalog
 from app.services.canary_admission import (
@@ -30,6 +37,7 @@ from app.services.canary_admission import (
     plan_canary_activation,
     revoke_canary_pairing,
 )
+from app.services.signal_program_admission import qualification_receipt_payload
 from app.services.strategy_validation_manifest import (
     append_strategy_validation_flag_event,
     strategy_registry_seeds,
@@ -394,6 +402,102 @@ def test_canary_pairing_admission_fails_closed_on_a_tampered_ledger(tmp_path: Pa
         account_id="paper-account",
         ledger_path=ledger_path,
     ) is False
+
+
+def _legacy_activation_evidence_payload() -> dict:
+    """Evidence exactly as the fleet ledger recorded it before git provenance."""
+    return {
+        "validation_event_id": "evt-1",
+        "validation_snapshot_sha256": "a" * 64,
+        "program_version": "ema-crossover-signal-v1",
+        "golden_trace_root": "b" * 64,
+        "running_artifact_digest": "c" * 64,
+        "qualification_receipt_hash": "d" * 64,
+        "qualification_suite": "tests/engine/strategy/test_x.py::test_y",
+        "qualified_at_ms": 1_700_000_000_000,
+    }
+
+
+def _activation_event_payload(evidence: dict) -> dict:
+    return {
+        "schema_version": 1,
+        "sequence": 1,
+        "action": "activated",
+        "program_key": "ema_crossover_signal",
+        "account_id": "paper-account",
+        "actor": "local:test-operator",
+        "reason": "Begin the reviewed one-share EMA paper canary.",
+        "recorded_at_ms": _NOW,
+        "evidence": evidence,
+        "previous_event_hash": None,
+    }
+
+
+def test_plan_binds_the_receipt_git_provenance(tmp_path: Path) -> None:
+    """The ceremony's reviewed evidence carries the receipt's recorded git
+    lineage, so the human enabling Paper sees whether the qualified bytes
+    were ever committed."""
+    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    assert contract is not None
+    receipt = qualification_receipt_payload(
+        program_key="ema_crossover_signal",
+        contract=contract,
+        qualified_at_ms=1_700_000_000_000,
+        qualification_suite="tests/engine/strategy/test_x.py::test_y",
+        git_provenance={"commit_sha": "e" * 40, "dirty": True},
+    )
+    manifest_path = tmp_path / "receipts.json"
+    manifest_path.write_text(
+        json.dumps({"schema_version": 2, "receipts": [receipt]}), encoding="utf-8"
+    )
+
+    plan = plan_canary_activation(
+        program_key="ema_crossover_signal",
+        account_id="paper-account",
+        actor="local:test-operator",
+        reason="Begin the reviewed one-share EMA paper canary.",
+        ledger_path=tmp_path / "canary-admission.json",
+        qualification_manifest_path=manifest_path,
+        clock=lambda: _NOW,
+    )
+
+    assert plan.evidence.git_provenance is not None
+    assert plan.evidence.git_provenance.commit_sha == "e" * 40
+    assert plan.evidence.git_provenance.dirty is True
+
+
+def test_activation_event_written_before_git_provenance_still_validates() -> None:
+    """The fleet's hash-chained ledger predates git provenance. Its events
+    hashed an evidence payload without the field, and must keep validating
+    unchanged — an optional field may never invalidate recorded history."""
+    payload = _activation_event_payload(_legacy_activation_evidence_payload())
+
+    event = CanaryAdmissionEvent(event_hash=semantic_payload_hash(payload), **payload)
+
+    assert event.evidence is not None
+    assert event.evidence.git_provenance is None
+
+
+def test_activation_event_hash_covers_git_provenance_when_present() -> None:
+    evidence = {
+        **_legacy_activation_evidence_payload(),
+        "git_provenance": {"commit_sha": "e" * 40, "dirty": False},
+    }
+    payload = _activation_event_payload(evidence)
+    event_hash = semantic_payload_hash(payload)
+
+    event = CanaryAdmissionEvent(event_hash=event_hash, **payload)
+    assert event.evidence is not None
+    assert event.evidence.git_provenance is not None
+
+    tampered_evidence = {
+        **evidence,
+        "git_provenance": {"commit_sha": "e" * 40, "dirty": True},
+    }
+    with pytest.raises(ValidationError, match="event hash does not match"):
+        CanaryAdmissionEvent(
+            event_hash=event_hash, **_activation_event_payload(tampered_evidence)
+        )
 
 
 def _ema_plan(ledger_path: Path) -> CanaryActivationPlan:

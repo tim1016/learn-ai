@@ -180,6 +180,25 @@
                       <code>{{ state.plan.plan_id }}</code>
                     </dd>
                   </div>
+                  @if (state.plan.evidence.git_provenance; as lineage) {
+                    <div class="min-w-0">
+                      <dt
+                        class="text-[length:var(--fs-xxs)] uppercase text-[var(--text-subtle)]"
+                      >
+                        Qualified source
+                      </dt>
+                      <dd
+                        class="mt-0.5 mb-0 [overflow-wrap:anywhere] text-[length:var(--fs-sm)]"
+                      >
+                        <code>{{ lineage.commit_sha }}</code>
+                        {{
+                          lineage.dirty
+                            ? "— uncommitted edits included"
+                            : "— committed bytes"
+                        }}
+                      </dd>
+                    </div>
+                  }
                 </dl>
               </details>
 

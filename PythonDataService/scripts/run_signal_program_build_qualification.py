@@ -34,8 +34,10 @@ Usage::
 Re-running with unchanged code is a byte-for-byte no-op: a receipt whose
 (program_key, program_version, golden_trace_root, artifact_digest,
 qualification_suite) tuple already matches the committed manifest keeps its
-original ``qualified_at_ms`` rather than mint a new one, mirroring the golden
-fixture lifecycle rule ("regenerated only with justification").
+original ``qualified_at_ms`` and recorded ``git_provenance`` rather than mint
+new ones, mirroring the golden fixture lifecycle rule ("regenerated only with
+justification"). A matched receipt that predates the provenance field is
+backfilled once from the current git state.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.services.signal_program_admission import (
@@ -412,16 +414,24 @@ def _qualified_identity(**fields: str) -> tuple[str, ...]:
     return tuple(fields[name] for name in _QUALIFIED_IDENTITY_FIELDS)
 
 
-def _prior_qualified_at_ms(path: Path) -> dict[tuple[str, ...], int]:
-    """Map each already-qualified identity to the timestamp it earned.
+class _ReusableReceiptFacts(NamedTuple):
+    """What an unchanged identity carries forward from the committed manifest."""
+
+    qualified_at_ms: int
+    git_provenance: dict[str, Any] | None
+
+
+def _prior_receipt_reuse(path: Path) -> dict[tuple[str, ...], _ReusableReceiptFacts]:
+    """Map each already-qualified identity to the facts it carries forward.
 
     Reads the committed manifest as raw JSON rather than through
     ``ProgramBuildQualificationManifest``. The only thing wanted here is the
-    prior timestamp for an unchanged identity, and parsing through the model
-    would couple timestamp reuse to the *current* receipt schema — so a schema
-    bump would re-date every receipt, which is exactly the churn the reuse
-    rule exists to prevent (issue #1735 bumps it to v2). A receipt missing any
-    identity field simply does not match, and mints a fresh timestamp.
+    prior timestamp and recorded lineage for an unchanged identity, and
+    parsing through the model would couple reuse to the *current* receipt
+    schema — so a schema bump would re-date every receipt, which is exactly
+    the churn the reuse rule exists to prevent (issue #1735 bumps it to v2).
+    A receipt missing any identity field simply does not match, and mints a
+    fresh timestamp.
 
     A corrupt manifest still raises: silently re-dating every receipt because
     the file could not be parsed is the failure this whole job exists to
@@ -430,19 +440,66 @@ def _prior_qualified_at_ms(path: Path) -> dict[tuple[str, ...], int]:
     if not path.is_file():
         return {}
     payload = json.loads(path.read_text(encoding="utf-8"))
-    index: dict[tuple[str, ...], int] = {}
+    index: dict[tuple[str, ...], _ReusableReceiptFacts] = {}
     for receipt in payload.get("receipts", ()):
         values = {field: receipt.get(field) for field in _QUALIFIED_IDENTITY_FIELDS}
         stamp = receipt.get("qualified_at_ms")
         if any(value is None for value in values.values()) or not isinstance(stamp, int):
             continue
-        index[_qualified_identity(**values)] = stamp
+        index[_qualified_identity(**values)] = _ReusableReceiptFacts(
+            qualified_at_ms=stamp,
+            git_provenance=receipt.get("git_provenance"),
+        )
     return index
+
+
+_GIT_COMMAND_TIMEOUT_SECONDS = 30
+
+
+def _current_git_provenance(paths: tuple[str, ...]) -> dict[str, Any] | None:
+    """Locate ``paths``' bytes in version control, or ``None`` when git cannot.
+
+    ``commit_sha`` is the last commit that touched any of the program's
+    declared artifact/wiring paths — not HEAD, so an unrelated commit
+    elsewhere in the repo never churns a receipt — and ``dirty`` reports
+    whether any of those paths currently differ from HEAD (staged, unstaged,
+    or untracked). Provenance is recorded evidence, never a gate: a missing
+    git binary or a non-repo checkout degrades to ``None`` with a warning
+    rather than failing the qualification.
+    """
+    try:
+        last_commit = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", *paths],
+            cwd=_SERVICE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", *paths],
+            cwd=_SERVICE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        sys.stderr.write(f"git provenance unavailable ({exc}); receipts omit lineage\n")
+        return None
+    commit_sha = last_commit.stdout.strip()
+    if last_commit.returncode != 0 or status.returncode != 0 or not commit_sha:
+        sys.stderr.write(
+            "git provenance unavailable (git returned no last-touching commit); "
+            "receipts omit lineage\n"
+        )
+        return None
+    return {"commit_sha": commit_sha, "dirty": bool(status.stdout.strip())}
 
 
 def qualify_signal_program_builds(
     *,
-    prior_qualified_at_ms: dict[tuple[str, ...], int],
+    prior_receipts: dict[tuple[str, ...], _ReusableReceiptFacts],
     fresh_qualified_at_ms: int,
 ) -> dict[str, Any]:
     """Run every registered qualification suite and assemble the build-receipt manifest.
@@ -471,13 +528,25 @@ def qualify_signal_program_builds(
             wiring_digest=running_wiring_digest(contract),
             qualification_suite=qualification_suite,
         )
-        qualified_at_ms = prior_qualified_at_ms.get(identity, fresh_qualified_at_ms)
+        prior = prior_receipts.get(identity)
+        # Recorded lineage follows the timestamp's reuse rule so a re-run with
+        # unchanged code stays a byte-for-byte no-op (unrelated commits move
+        # HEAD, not a program's last-touching commit). A matched receipt that
+        # predates the field is backfilled instead of left blank: the identity
+        # match just re-verified that the current tree still produces this
+        # exact digest, so the current git state truthfully locates the bytes.
+        git_provenance = (
+            prior.git_provenance
+            if prior is not None and prior.git_provenance is not None
+            else _current_git_provenance(contract.artifact_paths + contract.wiring_artifact_paths)
+        )
         receipts.append(
             qualification_receipt_payload(
                 program_key=program_key,
                 contract=contract,
-                qualified_at_ms=qualified_at_ms,
+                qualified_at_ms=prior.qualified_at_ms if prior is not None else fresh_qualified_at_ms,
                 qualification_suite=qualification_suite,
+                git_provenance=git_provenance,
             )
         )
     return {"schema_version": 2, "receipts": receipts}
@@ -491,14 +560,14 @@ def _manifest_text(manifest: dict[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    prior_qualified_at_ms = _prior_qualified_at_ms(args.manifest_path)
+    prior_receipts = _prior_receipt_reuse(args.manifest_path)
     fresh_qualified_at_ms = (
         args.qualified_at_ms if args.qualified_at_ms is not None else now_ms_utc()
     )
 
     try:
         manifest = qualify_signal_program_builds(
-            prior_qualified_at_ms=prior_qualified_at_ms,
+            prior_receipts=prior_receipts,
             fresh_qualified_at_ms=fresh_qualified_at_ms,
         )
     except QualificationFailedError as exc:

@@ -6918,13 +6918,14 @@ export interface components {
         CanaryActivationConfirmation: {
             /** Confirmation Token */
             confirmation_token: string;
-            plan: components["schemas"]["CanaryActivationPlan"];
+            plan: components["schemas"]["CanaryActivationPlan-Input"];
         };
         /**
          * CanaryActivationEvidence
          * @description Fresh proof that one program is eligible for canary activation.
          */
         CanaryActivationEvidence: {
+            git_provenance?: components["schemas"]["ProgramBuildGitProvenance"] | null;
             /** Golden Trace Root */
             golden_trace_root: string;
             /** Program Version */
@@ -6946,7 +6947,40 @@ export interface components {
          * CanaryActivationPlan
          * @description Short-lived, content-addressed intent awaiting explicit confirmation.
          */
-        CanaryActivationPlan: {
+        "CanaryActivationPlan-Input": {
+            /** Account Id */
+            account_id: string;
+            /** Actor */
+            actor: string;
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            evidence: components["schemas"]["CanaryActivationEvidence"];
+            /** Expected Ledger Head Hash */
+            expected_ledger_head_hash?: string | null;
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Ledger Path */
+            ledger_path: string;
+            /** Plan Id */
+            plan_id: string;
+            /** Program Key */
+            program_key: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+        };
+        /**
+         * CanaryActivationPlan
+         * @description Short-lived, content-addressed intent awaiting explicit confirmation.
+         */
+        "CanaryActivationPlan-Output": {
             /** Account Id */
             account_id: string;
             /** Actor */
@@ -15109,6 +15143,24 @@ export interface components {
              * @enum {string}
              */
             wiring?: "MATCHED" | "DRIFTED" | "NOT_CHECKED";
+        };
+        /**
+         * ProgramBuildGitProvenance
+         * @description Where a build receipt's qualified bytes live in version control.
+         *
+         *     Recorded evidence, never a gate: ``commit_sha`` is the last commit that
+         *     touched the program's declared artifact/wiring paths, and ``dirty``
+         *     reports whether any of those paths differed from HEAD when the lineage
+         *     was stamped. ``dirty=False`` means the qualified bytes are reproducible
+         *     from ``commit_sha``; ``dirty=True`` is a permanent record that receipts
+         *     can be minted from bytes git never saw. Absent entirely on receipts
+         *     minted before this field existed, or when git was unavailable.
+         */
+        ProgramBuildGitProvenance: {
+            /** Commit Sha */
+            commit_sha: string;
+            /** Dirty */
+            dirty: boolean;
         };
         /** ProjectedCommandResponse */
         ProjectedCommandResponse: {
@@ -23408,7 +23460,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CanaryActivationPlan"];
+                    "application/json": components["schemas"]["CanaryActivationPlan-Output"];
                 };
             };
             /** @description Validation Error */
