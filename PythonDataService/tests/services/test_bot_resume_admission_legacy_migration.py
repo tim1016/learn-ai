@@ -178,7 +178,7 @@ def _admission(repository: BotBindingRepository | None, *, now_values: list[int]
 
 
 @pytest.mark.asyncio
-async def test_resume_preview_appends_a_reconstructible_seal_and_clears_program_build(
+async def test_resume_preview_appends_a_reconstructible_seal_but_parameters_gate_denies(
 ) -> None:
     """PRD Sec 11.5 append case: preview alone proves reconstruction, no clone.
 
@@ -191,13 +191,26 @@ async def test_resume_preview_appends_a_reconstructible_seal_and_clears_program_
     ``strategy_params`` instead recorded explicit values with no origin
     evidence has no factual source for them and must clone -- see
     ``test_resume_fails_closed_when_no_lineage_writer_is_configured`` below.
+
+    Since 2026-09-01 the registry's validated point (gap=0.0, rsi_min=30)
+    deliberately differs from the Params defaults (the LEAN-parity point a
+    no-params legacy binding resolves to and reconstructs exactly), so this
+    exact reconstruction now fails Start admission on exactly the
+    parameters gate -- the same consequence
+    ``test_legacy_migration_seal_appends_to_same_instance_preserving_v1_bytes``
+    (``test_signal_program_admission.py``) encodes for
+    ``prove_running_program_build`` directly; this test proves the same
+    thing through the real ``BotResumeAdmission.preview`` orchestration.
     """
     prior = _prior(strategy_params=None)
     admission = _admission(repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3])
 
     decision = await admission.preview(prior, _status())
 
-    assert decision.reason_code != "PROGRAM_BUILD_UNPROVEN"
+    assert decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
+    assert decision.explanation == (
+        "This instance resolved parameters the golden qualification corpus does not cover."
+    )
 
 
 @pytest.mark.asyncio
