@@ -49,7 +49,7 @@ def _binding(**updates: object) -> BrokerBotBinding:
         "quantity": 1,
         "carryover_policy": "FORBID",
         "action_plan": alpaca_v1_action_plan("SPY"),
-        "strategy_params": {"gap": 0.2, "rsi_min": 50.0, "rsi_max": 70.0},
+        "strategy_params": {"gap": 0.0, "rsi_min": 30.0, "rsi_max": 70.0},
         "strategy_param_origins": {
             "gap": "deploy_override",
             "rsi_min": "registered_default",
@@ -433,7 +433,16 @@ def test_legacy_migration_seal_appends_to_same_instance_preserving_v1_bytes(tmp_
         }
     )
     proof = prove_running_program_build(resumed, verified_at_ms=_NOW + 1)
-    assert proof.state == "PROVEN"
+    # Since 2026-09-01 the registry's validated point (gap=0.0, rsi_min=30)
+    # deliberately differs from the Params defaults (the LEAN-parity point a
+    # no-params legacy binding resolves to), so an exact reconstruction now
+    # fails the parameters gate — and ONLY that gate. Pinning the exact
+    # explanation keeps every other regression (root, digest, reconstruction
+    # bytes) distinguishable: any of those produces a different message.
+    assert proof.state == "UNPROVEN"
+    assert proof.explanation == (
+        "This instance resolved parameters the golden qualification corpus does not cover."
+    )
     resumed = resumed.model_copy(update={"program_build": proof})
 
     repository.record_launch(resumed, launch_reason="resume")

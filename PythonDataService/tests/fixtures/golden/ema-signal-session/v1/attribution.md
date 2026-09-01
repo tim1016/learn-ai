@@ -8,7 +8,10 @@ settings identity needed to detect a semantic signal-program change.
 
 - Reference: `docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md`
 - Parameters: each cell's signal symbol (`AAPL`, `QQQ`, `SPY`, or `TSLA`),
-  `gap=0.20`, `rsi_min=50`, `rsi_max=70`.
+  plus the registry's current `validated_settings` — since 2026-09-01:
+  `gap=0.0`, `gap_bps=0.0`, `rsi_min=30`, `rsi_max=70` (see "Regeneration
+  2026-09-01" below; the LEAN-parity point `gap=0.20`, `rsi_min=50` stays
+  pinned by the Params defaults and the ENG-007 fixture).
 - Root generation: `trace_corpus_root(entries)` in
   `app.engine.strategy.signal_program`, encoded as canonical sorted-key JSON
   and SHA-256.
@@ -78,3 +81,32 @@ an automatic one.
 This regeneration is justified under `.claude/rules/numerical-rigor.md`
 ("regenerated only with justification"): the reference behaviour changed
 because a defect in it was fixed. It is not a re-mint to make a test pass.
+
+## Regeneration 2026-09-01 — validated point moved to the relaxed parameters
+
+Regenerated with
+`python -m scripts.generate_signal_program_trace_corpus --program
+ema_crossover_signal --output
+tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json` after a
+deliberate operator decision to move the registry's `validated_settings`
+from `{gap: 0.20, gap_bps: 0.0, rsi_min: 50.0, rsi_max: 70.0}` to
+`{gap: 0.0, gap_bps: 0.0, rsi_min: 30.0, rsi_max: 70.0}` (pure crossover
+with an RSI band, no absolute gap floor). Justification: replaying five
+sessions of live-retained SPY minute bars (2026-08-26 → 2026-09-01)
+showed the 0.20 point produces **zero** ENTER signals — the deployable
+point was unreachable in practice — while the decision math itself is
+unchanged (the program's `artifact_digest` is identical before and after;
+only the settings identity moved).
+
+### Consequence
+
+`golden_trace_root` moves from
+`16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184` to
+`e4aec86a55fa7c7aab7305a3cf45eadf705450b2a9ee4ea6a19682d4e49b8309`, and
+the committed build receipt was re-qualified against it
+(`scripts/run_signal_program_build_qualification.py`). As with the
+2026-08-28 move, **any bot sealed against the old root must be
+re-sealed** (deploy a fresh instance); the admission fence refuses
+Start/Resume for old seals by design. The LEAN-parity claim is
+unaffected: the Params defaults still encode the reconciled `gap=0.20`,
+`rsi_min=50` point and the ENG-007 fixture still pins it.
