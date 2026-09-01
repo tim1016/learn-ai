@@ -18,7 +18,10 @@ from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
 from app.services.bot_registry_projection import read_dry_run_activity
 from tests._helpers.bot_runner.custody import _SID, _T0, _registry
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
-from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
+from tests._helpers.bot_runner.ema_parity import (
+    _ema_parity_bars_through_first_exit,
+    admit_lean_parity_settings_for_start_admission,
+)
 
 from ._support import _install_fake_clerk, _wait_for
 
@@ -80,6 +83,9 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
 ) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    # Dry-run mechanics test reusing the LEAN-parity bars fixture -- not
+    # exercising deploy admission, see the helper's docstring.
+    admit_lean_parity_settings_for_start_admission(monkeypatch)
     bars = _ema_parity_bars_through_first_exit()
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
