@@ -44,9 +44,19 @@ interface RailBotRow {
    * recovery mutation.
    */
   readonly action: PanelAction | null;
-  /** Second line: backend `status_label` plus a compact exposure/fills fact. */
+  /**
+   * Second line: a compact exposure/fills fact, preceded by the backend
+   * `status_label` on every row whose label is not the redundant "Working".
+   */
   readonly detail: string;
   readonly dotTone: 'bear' | 'warn' | 'bull' | 'info' | 'muted';
+  /**
+   * Whether the dot should read as live. Deliberately separate from
+   * `dotTone`: liveness and health are orthogonal, and folding them into the
+   * tone would leave a running row that needs attention (tone `warn`) looking
+   * as stopped as a crashed one.
+   */
+  readonly live: boolean;
   /**
    * Explicit accessible name. The severity dot is decorative, so attention
    * state has to reach assistive tech as words, not just colour.
@@ -64,6 +74,33 @@ interface RailGroupView {
    * but the rows collapse so a growing retired set cannot stretch the rail.
    */
   readonly collapsed: boolean;
+}
+
+/** Is this row live — the state whose label reads "Working"?
+ *
+ * Mirrors `status_label_for`'s precedence rather than reading `running` alone:
+ * that function answers "Retired" for a RETIRED phase *before* it looks at
+ * liveness, so a running retired row is labelled "Retired". `groupOf` orders
+ * its checks the same way for the same reason.
+ */
+function isWorking(bot: BotCatalogView): boolean {
+  return bot.running && bot.phase !== 'RETIRED';
+}
+
+/** May the row drop the word "Working" and let the pulsing dot carry it?
+ *
+ * Only where something else still says the row is live. For a healthy live bot
+ * two things do: the pulse, and the "Running" heading it sits under. An
+ * attention row has neither — it sits under "Needs attention", so if a
+ * reduced-motion reader also loses the pulse, nothing distinguishes it from a
+ * stopped attention row. Those rows keep the word.
+ *
+ * Deliberately narrower than `isWorking`, which still governs the dot: an
+ * attention row that is running *is* live and must pulse. This asks the
+ * different question of whether the text may go silent about it.
+ */
+function omitsWorkingLabel(bot: BotCatalogView): boolean {
+  return isWorking(bot) && !bot.needs_attention;
 }
 
 const GROUPS: readonly GroupDefinition[] = [
@@ -252,9 +289,22 @@ export class BotsRosterComponent {
       // precisely how the authored cure went missing.
       action: bot.row_action ?? null,
       dotTone: this.dotTone(bot, group, attention),
-      ariaLabel: attention
-        ? `${bot.strategy_instance_id}, needs attention: ${detail}`
-        : `${bot.strategy_instance_id}, ${detail}`,
+      // Both names, in the order the row reads them. The sid alone was enough
+      // when it titled the row; now that the strategy titles it, a screen
+      // reader that announced only the sid would describe a different row than
+      // the one on screen. Where `detail` dropped "Working" for the dot, the
+      // announcement restores it — the dot is `aria-hidden`, so nothing else
+      // would speak liveness. Where `detail` kept the label, `detail` already
+      // carries it and repeating it here would stutter.
+      live: isWorking(bot),
+      ariaLabel: [
+        `${bot.strategy_label}, ${bot.strategy_instance_id}`,
+        attention ? 'needs attention' : null,
+        omitsWorkingLabel(bot) ? bot.status_label : null,
+        detail,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(', '),
     };
   }
 
@@ -296,13 +346,26 @@ export class BotsRosterComponent {
    * only from catalog fields. No gate id is invented — `BotCatalogView` has no
    * such field, and the detail pane names the gate from the panel view.
    */
+  /** The row's facts, without the identifier the template renders beside them.
+   *
+   * "Working" is omitted where `omitsWorkingLabel` allows it: the pulsing dot
+   * and the "Running" heading both already say it, and repeating it in text
+   * costs the line the room the bot's own name now occupies.
+   *
+   * Every other label stays, including "Working" on an attention row. A red
+   * dot cannot distinguish "Crashed" from "Exited unverified", and #1778
+   * exists because a crash that read like a deliberate stop hid three dead
+   * bots.
+   */
   private detailText(bot: BotCatalogView, exposure: string): string {
-    const facts: string[] = [exposure];
+    const facts: string[] = omitsWorkingLabel(bot)
+      ? [exposure]
+      : [bot.status_label, exposure];
     const fills = bot.fills_today;
     if (fills !== null && fills > 0) {
       facts.push(`${fmtInteger(fills)} ${fills === 1 ? 'fill' : 'fills'}`);
     }
-    return `${bot.status_label} · ${facts.join(' · ')}`;
+    return facts.join(' · ');
   }
 
   private dotTone(

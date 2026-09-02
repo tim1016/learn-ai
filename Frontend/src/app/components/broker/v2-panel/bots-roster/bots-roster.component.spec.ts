@@ -185,12 +185,79 @@ describe('BotsRosterComponent', () => {
     expect(await screen.findByText(/No bots match this filter/i)).toBeTruthy();
   });
 
-  it('carries the backend status label and derived facts on each row', async () => {
+  it('titles a row with its strategy and names the bot beside the facts', async () => {
     await renderRail([
-      fakeCatalogBot({ status_label: 'Working', exposure: { SPY: 12 }, fills_today: 3 }),
+      fakeCatalogBot({
+        strategy_instance_id: 'spy-bot',
+        strategy_label: 'EMA Crossover Signal',
+        status_label: 'Working',
+        running: true,
+        exposure: { SPY: 12 },
+        fills_today: 3,
+      }),
     ]);
 
-    expect(await screen.findByText('Working · +12 SPY · 3 fills')).toBeTruthy();
+    // The strategy heads the row; the bot's own name took the slot the
+    // redundant "Working" used to occupy.
+    expect(await screen.findByText('EMA Crossover Signal')).toBeTruthy();
+    expect(screen.getByText('spy-bot')).toBeTruthy();
+    expect(screen.getByText('· +12 SPY · 3 fills')).toBeTruthy();
+  });
+
+  it('shows a running row as live without printing the word', async () => {
+    // The dot is the only thing still saying "Working" to a sighted reader, so
+    // it has to be marked live — and the aria-label has to keep saying it,
+    // because the dot is aria-hidden.
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'live-bot',
+        status_label: 'Working',
+        running: true,
+        exposure: {},
+      }),
+    ]);
+
+    expect(screen.queryByText(/Working/)).toBeNull();
+    expect(container.querySelector('.rail-row__dot--live')).not.toBeNull();
+    expect(
+      await screen.findByRole('button', { name: /live-bot.*Working/ }),
+    ).toBeTruthy();
+  });
+
+  it('keeps "Working" on a live attention row, which has no heading to say it', async () => {
+    // A healthy live row has two liveness cues: the pulse and the "Running"
+    // heading above it. An attention row sits under "Needs attention", so a
+    // reduced-motion reader who also loses the pulse would have none — and
+    // could not tell it from a stopped attention row. It keeps the word.
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'busy-but-sick',
+        status_label: 'Working',
+        running: true,
+        needs_attention: true,
+        exposure: {},
+      }),
+    ]);
+
+    expect(await screen.findByText(/Working · /)).toBeTruthy();
+    // Still genuinely live, so the dot still pulses — the word is the fallback
+    // for when motion is unavailable, not a replacement for it.
+    expect(container.querySelector('.rail-row__dot--live')).not.toBeNull();
+  });
+
+  it('leaves a stopped row unmarked and still spelling out its state', async () => {
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'idle-bot',
+        status_label: 'Off duty',
+        running: false,
+        phase: 'OFF_DUTY',
+        exposure: {},
+      }),
+    ]);
+
+    expect(await screen.findByText(/Off duty/)).toBeTruthy();
+    expect(container.querySelector('.rail-row__dot--live')).toBeNull();
   });
 
   it('names a crashed run instead of showing it as an ordinary off-duty row', async () => {
@@ -207,8 +274,10 @@ describe('BotsRosterComponent', () => {
       }),
     ]);
 
-    expect(await screen.findByText(/^Crashed · /)).toBeTruthy();
-    expect(screen.queryByText(/^Off duty · /)).toBeNull();
+    // Only "Working" is dropped for the dot. A red dot cannot tell a crash
+    // from an exit-unverified, so every other label still has to be printed.
+    expect(await screen.findByText(/Crashed · /)).toBeTruthy();
+    expect(screen.queryByText(/Off duty · /)).toBeNull();
   });
 
   it('orders attention bots ahead of running bots', async () => {

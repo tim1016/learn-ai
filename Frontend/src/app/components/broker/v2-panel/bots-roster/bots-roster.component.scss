@@ -172,6 +172,30 @@
   &[data-tone='warn'] { background: var(--warn); }
   &[data-tone='bull'] { background: var(--bull); }
   &[data-tone='info'] { background: var(--info); }
+
+  // The dot now carries "Working" on its own, so a live row has to *look*
+  // live: colour alone cannot separate running from stopped for a red/green
+  // colour-blind reader, and the word that used to say it is gone. Motion is
+  // that second channel, and it is keyed off liveness rather than tone — a
+  // running row that needs attention is amber and still running, and folding
+  // the two together would render it as still as a crashed one.
+  &--live {
+    animation: rail-dot-pulse 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes rail-dot-pulse {
+  0%,
+  100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+// Motion is the redundant channel, never the only one: the tone still reads
+// and the aria-label still speaks "Working" without it.
+@media (prefers-reduced-motion: reduce) {
+  .rail-row__dot--live {
+    animation: none;
+  }
 }
 
 .rail-row__body {
@@ -188,11 +212,28 @@
   justify-content: space-between;
 }
 
-.rail-row__sid {
+// Titles the row. Prose, not an identifier, so it drops the mono face the sid
+// keeps below.
+.rail-row__strategy {
   overflow: hidden;
-  font-family: var(--font-mono);
   font-size: var(--fs-sm);
   font-weight: var(--fw-semi);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// The bot's own name, now on the detail line where "Working" used to sit. Mono
+// because it is an identifier the operator types into the filter and matches
+// against a receipt.
+.rail-row__sid {
+  // Does not shrink: the facts give up their width first (see below). Capped
+  // so a pathologically long identifier still cannot swallow the whole line —
+  // past the cap it ellipsizes rather than pushing the facts out entirely.
+  flex: 0 0 auto;
+  max-width: 60%;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -216,11 +257,26 @@
 }
 
 .rail-row__detail {
+  display: flex;
+  min-width: 0;
+  gap: 0.28rem;
   overflow: hidden;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  // The facts yield the line to the identifier rather than the other way
+  // round: a truncated sid names no bot at all — and two similarly named bots
+  // become indistinguishable — while truncated facts still read. This is the
+  // only shrinking item, so it absorbs the whole shortfall before the sid's
+  // cap is ever reached.
+  > span:last-child {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 .rail-empty {
