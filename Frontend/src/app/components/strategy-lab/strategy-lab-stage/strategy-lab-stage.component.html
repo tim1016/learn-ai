@@ -1,0 +1,31 @@
+<section class="stage" aria-label="Strategy evidence">
+  @for (notice of notices(); track notice) {
+    <p class="stage__notice" role="note">{{ notice }}</p>
+  }
+
+  <div class="stage__evidence" [class.stage__evidence--stale]="running() && run() !== null">
+    @if (run(); as currentRun) {
+      <app-strategy-lab-chart
+        [run]="currentRun"
+        [markers]="markers()"
+        [equityPoints]="equityPoints()"
+      />
+    } @else {
+      <app-validation-stage-placeholder
+        [symbol]="symbol()"
+        [resolution]="resolution()"
+        [fillMode]="fillMode()"
+        [engine]="engine()"
+        [dataPolicyNote]="dataPolicyNote()"
+      />
+    }
+
+    @if (running()) {
+      <div class="stage__progress" role="status" aria-live="polite">
+        <span class="stage__pulse" aria-hidden="true"></span>
+        <strong>{{ runStatus() || "Running validation…" }}</strong>
+        @if (runPhaseDetail()) { <span>{{ runPhaseDetail() }}</span> }
+      </div>
+    }
+  </div>
+</section>
