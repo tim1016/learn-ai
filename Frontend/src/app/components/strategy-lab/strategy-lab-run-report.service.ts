@@ -67,6 +67,14 @@ export class StrategyLabRunReport {
   });
   readonly loading = computed(() => this.runResource.isLoading() && !this.run());
   readonly loadError = computed(() => this.runResource.error());
+  /**
+   * A run was asked for and the server answered that it does not exist —
+   * distinct from a report that failed to load (`loadError`) and from one
+   * still in flight (`loading`).
+   */
+  readonly notFound = computed(
+    () => this.activeRunId() !== null && !this.loading() && !this.loadError() && this.run() === null,
+  );
 
   private readonly verdictEnvelope = computed(() =>
     parseRunVerdictEnvelope(this.run()?.verdictJson ?? null),

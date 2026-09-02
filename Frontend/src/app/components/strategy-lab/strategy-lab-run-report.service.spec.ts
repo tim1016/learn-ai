@@ -103,7 +103,23 @@ describe("StrategyLabRunReport", () => {
 
     expect(report.loadError()).toBeTruthy();
     expect(report.run()).toBeNull();
+    expect(report.notFound()).toBe(false);
     expect(stopPolling).toHaveBeenCalled();
+  });
+
+  it("reports a run the server does not have as missing, not as a load failure", async () => {
+    const { report } = makeReport({ data: { backtestRun: null }, loading: false }, 404);
+    await Promise.resolve();
+
+    expect(report.notFound()).toBe(true);
+    expect(report.loadError()).toBeUndefined();
+  });
+
+  it("does not call an unselected run missing", async () => {
+    const { report } = makeReport({ data: { backtestRun: null }, loading: false }, null);
+    await Promise.resolve();
+
+    expect(report.notFound()).toBe(false);
   });
 
   it("keeps polling only while a parity verdict is pending", async () => {

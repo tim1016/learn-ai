@@ -64,6 +64,10 @@
                 <div class="lab-notice lab-notice--error" role="alert">
                   Run report could not be loaded. Try again from History.
                 </div>
+              } @else if (report.notFound()) {
+                <div class="lab-notice lab-notice--error" role="alert">
+                  Saved run #{{ report.activeRunId() }} was not found.
+                </div>
               }
             </aside>
 

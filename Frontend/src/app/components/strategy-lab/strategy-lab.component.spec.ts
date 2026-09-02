@@ -11,7 +11,7 @@ import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { within } from "@testing-library/angular";
 import { Apollo } from "apollo-angular";
-import { of, throwError } from "rxjs";
+import { BehaviorSubject, of, throwError } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
@@ -126,9 +126,8 @@ async function createLab(
     restoreRun?: number;
     activeRun?: number;
     backtestRun?: BacktestRunDetail | null;
-    /** Makes the run-detail `apollo.query` (the fetch `loadRun` uses to
-     *  restore configuration) reject, simulating a transient transport or
-     *  GraphQL failure independent of whether the fetched run is valid. */
+    /** Makes the run-detail watch query surface a GraphQL/transport error,
+     *  which is a different failure from the fetched run being unrestorable. */
     backtestRunQueryError?: Error;
   } = {},
 ) {
@@ -138,14 +137,35 @@ async function createLab(
   const query: Record<string, string> = {};
   if (options.activeRun) query["run"] = String(options.activeRun);
   if (options.restoreRun) query["restoreRun"] = String(options.restoreRun);
-  const params = convertToParamMap(query);
+  // A subject, not `of(...)`: the query string is the workbench's only run
+  // input now, so tests drive run selection and back-navigation by pushing
+  // params the way the router does.
+  const queryParamMap = new BehaviorSubject(convertToParamMap(query));
+  const runDetail = options.backtestRunQueryError
+    ? { data: undefined, loading: false, error: options.backtestRunQueryError }
+    : { data: { backtestRun: options.backtestRun ?? null }, loading: false };
+  const watchQuery = vi.fn((request: WatchQueryRequest) =>
+    // StrategyLabRunReport watches the single-run detail query (variables.id);
+    // the run-history rail watches the paged list query — same mock, two shapes.
+    request.variables && "id" in request.variables
+      ? { valueChanges: of(runDetail), stopPolling: vi.fn() }
+      : {
+          valueChanges: of({ data: { backtestRuns: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }),
+          refetch: vi.fn(),
+        },
+  );
+  const runDetailWatchCount = (): number =>
+    watchQuery.mock.calls.filter(([request]) => request.variables && "id" in request.variables).length;
   await TestBed.configureTestingModule({
     imports: [StrategyLabComponent],
     providers: [
       provideZonelessChangeDetection(),
       provideHttpClient(withInterceptors([bypassAuxiliaryChartRequests])),
       provideHttpClientTesting(),
-      { provide: ActivatedRoute, useValue: { queryParamMap: of(params), snapshot: { queryParamMap: params } } },
+      {
+        provide: ActivatedRoute,
+        useValue: { queryParamMap, snapshot: { queryParamMap: queryParamMap.value } },
+      },
       { provide: Router, useValue: { navigate } },
       { provide: JobsService, useValue: { jobs, job: vi.fn(() => null), startJob: vi.fn(), fetchResult: vi.fn(), cancelJob: vi.fn() } },
       {
@@ -155,34 +175,23 @@ async function createLab(
           nextTradingDayOpen: vi.fn(async () => ({ session_open_ms_utc: 1_700_000_000_000 })),
         },
       },
-      {
-        provide: Apollo,
-        useValue: {
-          query: vi.fn(() =>
-            options.backtestRunQueryError
-              ? throwError(() => options.backtestRunQueryError)
-              : of({ data: { backtestRun: options.backtestRun ?? null } }),
-          ),
-          // StrategyLabRunReport watches the single-run detail query (variables.id);
-          // the run-history rail watches the paged list query — same mock, two shapes.
-          watchQuery: vi.fn((request: WatchQueryRequest) =>
-            request.variables && "id" in request.variables
-              ? {
-                  valueChanges: of({ data: { backtestRun: options.backtestRun ?? null }, loading: false }),
-                  stopPolling: vi.fn(),
-                }
-              : {
-                  valueChanges: of({ data: { backtestRuns: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }),
-                  refetch: vi.fn(),
-                },
-          ),
-        },
-      },
+      { provide: Apollo, useValue: { watchQuery } },
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);
   fixture.detectChanges();
-  return { fixture, http: TestBed.inject(HttpTestingController), navigate, diagnose };
+  const navigateToQuery = (next: Record<string, string>): void => {
+    queryParamMap.next(convertToParamMap(next));
+    fixture.detectChanges();
+  };
+  return {
+    fixture,
+    http: TestBed.inject(HttpTestingController),
+    navigate,
+    diagnose,
+    navigateToQuery,
+    runDetailWatchCount,
+  };
 }
 
 describe("Strategy Lab Workbench", () => {
@@ -251,18 +260,39 @@ describe("Strategy Lab Workbench", () => {
 
   it("does not discard the custom QCAlgorithm that produced the run just completed", async () => {
     const saved = run();
-    const { fixture, http } = await createLab({ backtestRun: saved });
+    const { fixture, http, navigateToQuery } = await createLab({ backtestRun: saved });
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
     await fixture.whenStable();
 
     const lab = fixture.componentInstance;
     lab.config.changeEngine("lean");
     lab.config.customLeanSource.set("class Edited(QCAlgorithm): pass");
+    // What the runner does on completion: claim the run, then push `?run=N`.
     lab.runs.justProducedRunId.set(saved.id);
-    await lab.loadRun(saved.id);
-    await fixture.whenStable();
+    navigateToQuery({ run: String(saved.id) });
+    await vi.waitFor(() => {
+      expect(lab.runs.justProducedRunId()).toBeNull();
+    });
 
     expect(lab.config.customLeanSource()).toBe("class Edited(QCAlgorithm): pass");
+  });
+
+  it("loads the run detail once per selected run rather than once per surface", async () => {
+    const saved = run();
+    const { fixture, http, runDetailWatchCount } = await createLab({
+      activeRun: saved.id,
+      backtestRun: saved,
+    });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await vi.waitFor(() => {
+      expect(fixture.componentInstance.report.run()).not.toBeNull();
+    });
+    await fixture.whenStable();
+
+    // The report service is the single source of truth for the loaded run;
+    // configuration restore reads it rather than fetching the same run again.
+    expect(runDetailWatchCount()).toBe(1);
+    http.verify();
   });
 
   it("keeps the run button enabled when the saved-run fetch fails transiently", async () => {
@@ -272,8 +302,9 @@ describe("Strategy Lab Workbench", () => {
       backtestRunQueryError: new Error("Network error"),
     });
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const root = fixture.nativeElement as HTMLElement;
     await vi.waitFor(() => {
-      expect(fixture.componentInstance.runs.runError()).toBe("Network error");
+      expect(root.textContent).toContain("Run report could not be loaded");
     });
 
     // A transport/query failure says nothing about the configuration on
@@ -281,6 +312,19 @@ describe("Strategy Lab Workbench", () => {
     // message that describes a restore problem rather than the fetch that
     // actually failed.
     expect(fixture.componentInstance.config.configurationWarning()).toBeNull();
+    expect(fixture.componentInstance.config.rerunBlocked()).toBe(false);
+    http.verify();
+  });
+
+  it("names a saved run that no longer exists instead of blaming the report", async () => {
+    const { fixture, http } = await createLab({ activeRun: 404, backtestRun: null });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const root = fixture.nativeElement as HTMLElement;
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain("Saved run #404 was not found.");
+    });
+
+    expect(root.textContent).not.toContain("Run report could not be loaded");
     expect(fixture.componentInstance.config.rerunBlocked()).toBe(false);
     http.verify();
   });

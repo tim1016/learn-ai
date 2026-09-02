@@ -1,7 +1,13 @@
-import { ChangeDetectionStrategy, Component, effect, inject, signal } from "@angular/core";
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
 import { Router } from "@angular/router";
-import { firstValueFrom } from "rxjs";
-import { Apollo } from "apollo-angular";
 import { Drawer } from "primeng/drawer";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 
@@ -10,11 +16,7 @@ import {
   RUN_DOCK_SOURCE,
   RUN_DOCK_STORAGE_KEY,
 } from "../../shared/run-dock/run-dock-source";
-import {
-  BACKTEST_RUN_DETAIL_QUERY,
-  type BacktestRunDetail,
-  type BacktestRunDetailQueryResult,
-} from "../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
 import { EngineLabRunHistoryComponent } from "../lean-engine/engine-lab-run-history/engine-lab-run-history.component";
 import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
 import { LeanSourceEditorComponent } from "./lean-source-editor/lean-source-editor.component";
@@ -60,7 +62,6 @@ import { toStrategyLabConfiguration } from "./strategy-lab.models";
   ],
 })
 export class StrategyLabComponent {
-  private readonly apollo = inject(Apollo);
   private readonly router = inject(Router);
   readonly config = inject(StrategyLabConfigStore);
   readonly runs = inject(StrategyLabRunner);
@@ -68,25 +69,34 @@ export class StrategyLabComponent {
 
   protected readonly leanSourceOpen = signal(false);
 
-  private loadedRunId: number | null = null;
-  private collapsedForRunId: number | null = null;
+  /**
+   * The report resource re-emits a new run object on every 5s poll. Collapsing
+   * it to the run's identity means downstream reacts once per distinct run
+   * instead of once per poll — signal equality is the guard, so no field has
+   * to remember which run was already adopted.
+   */
+  private readonly loadedRun = computed(() => this.report.run());
+  private readonly loadedRunId = computed(() => this.loadedRun()?.id ?? null);
 
   constructor() {
     const strategiesReady = this.config.loadStrategies();
+
+    // The URL is the report's only input. Setting a signal to the value it
+    // already holds is a no-op, so a repeated `?run=N` costs nothing and
+    // `?run=` disappearing (browser Back) clears the run off the page.
     effect(() => {
       const runId = this.config.activeRunParam();
-      if (runId === null || runId === this.loadedRunId) return;
-      this.loadedRunId = runId;
-      this.runs.clearRunError();
-      void this.loadRun(runId, strategiesReady);
+      this.report.activeRunId.set(runId);
+      if (runId !== null) this.runs.clearRunError();
     });
+
     effect(() => {
-      const runId = this.report.run()?.id ?? null;
-      if (runId === null || runId === this.collapsedForRunId) return;
-      this.collapsedForRunId = runId;
-      // Transient only: `configNavOverride` is the operator's saved preference
-      // and a completed run is an event, not a setting.
-      this.config.configNavCollapsed.set(true);
+      if (this.loadedRunId() === null) return;
+      // The run id is the whole tracked dependency. Everything adoption does
+      // — reading and clearing `justProducedRunId`, collapsing the rail,
+      // rewriting the configuration — writes signals this effect must not
+      // also depend on, or it would retrigger itself.
+      untracked(() => void this.adoptRun(strategiesReady));
     });
   }
 
@@ -103,48 +113,36 @@ export class StrategyLabComponent {
     });
   }
 
-  async loadRun(runId: number, strategiesReady?: Promise<void>): Promise<void> {
-    this.report.activeRunId.set(runId);
+  /**
+   * Bring the configuration on screen in line with the run the report just
+   * loaded. A transport or "no such run" failure is the report's own state
+   * (`loadError` / `notFound`) and never reaches here — so it can never set
+   * the rerun-blocking `configurationWarning`, which would disable the Run
+   * button for a configuration that is still perfectly valid.
+   */
+  private async adoptRun(strategiesReady: Promise<void>): Promise<void> {
+    const run = this.loadedRun();
+    if (run === null) return;
+    // Transient only: `configNavOverride` is the operator's saved preference
+    // and a completed run is an event, not a setting.
+    this.config.configNavCollapsed.set(true);
     // The run the runner just produced already matches the configuration on
     // screen. Restoring it anyway would call applyStrategy, which nulls
     // customLeanSource — silently discarding the QCAlgorithm that produced it.
-    if (this.runs.justProducedRunId() === runId) {
+    if (this.runs.justProducedRunId() === run.id) {
       this.runs.justProducedRunId.set(null);
       return;
     }
     this.config.activeTab.set("configuration");
-    await (strategiesReady ?? Promise.resolve());
+    await strategiesReady;
     try {
-      const response = await firstValueFrom(
-        this.apollo.query<BacktestRunDetailQueryResult>({
-          query: BACKTEST_RUN_DETAIL_QUERY,
-          variables: { id: runId },
-          fetchPolicy: "network-only",
-        }),
-      );
-      const run = response.data?.backtestRun;
-      if (run === null || run === undefined) {
-        this.runs.runError.set(`Saved run #${runId} was not found.`);
-        return;
-      }
-      try {
-        this.restoreConfiguration(run);
-      } catch (error) {
-        // A restore failure means the persisted configuration itself can't be
-        // reapplied — distinct from the fetch above failing, and the only
-        // case where the rerun-blocking `configurationWarning` belongs here.
-        const message = error instanceof Error
-          ? error.message
-          : "The saved configuration could not be restored.";
-        this.config.configurationWarning.set(message);
-        this.runs.runError.set(message);
-      }
+      this.restoreConfiguration(run);
     } catch (error) {
-      // A transport/query failure says nothing about the configuration on
-      // screen, which is still valid and rerunnable — never set
-      // `configurationWarning` here, or a transient GraphQL blip would
-      // permanently disable the Run button until an unrelated field edit.
-      this.runs.runError.set(error instanceof Error ? error.message : "Failed to load the saved run.");
+      const message = error instanceof Error
+        ? error.message
+        : "The saved configuration could not be restored.";
+      this.config.configurationWarning.set(message);
+      this.runs.runError.set(message);
     }
   }
 
