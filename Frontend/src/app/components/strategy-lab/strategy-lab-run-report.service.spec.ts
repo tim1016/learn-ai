@@ -1,7 +1,7 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { Apollo } from "apollo-angular";
-import { from } from "rxjs";
+import { from, Subject } from "rxjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { makeTrade, curve, makeRun } from "./testing/run-fixtures";
@@ -120,6 +120,58 @@ describe("StrategyLabRunReport", () => {
     await Promise.resolve();
 
     expect(report.notFound()).toBe(false);
+  });
+
+  it("keeps the loaded run on screen until its replacement arrives", async () => {
+    const first = makeRun({ id: 11 });
+    const second = makeRun({ id: 12 });
+    const replacement = new Subject<{ data: { backtestRun: unknown }; loading: boolean }>();
+    const watchQuery = vi.fn(({ variables }: { variables: { id: number } }) => ({
+      valueChanges: variables.id === first.id
+        ? from([{ data: { backtestRun: first }, loading: false }])
+        : replacement.asObservable(),
+      stopPolling: vi.fn(),
+    }));
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        StrategyLabRunReport,
+        { provide: Apollo, useValue: { watchQuery } },
+      ],
+    });
+    const report = TestBed.inject(StrategyLabRunReport);
+    report.activeRunId.set(first.id);
+    TestBed.tick();
+    await Promise.resolve();
+    expect(report.displayRun()?.id).toBe(first.id);
+
+    // A re-run points the page at the new run before its query resolves.
+    report.activeRunId.set(second.id);
+    TestBed.tick();
+    await Promise.resolve();
+
+    // Nothing is destroyed before its replacement exists (spec §3.4): the
+    // stage keeps rendering the previous run — with its own markers and
+    // equity — while `run()` stays honest about nothing being loaded yet.
+    expect(report.run()).toBeNull();
+    expect(report.loading()).toBe(true);
+    expect(report.notFound()).toBe(false);
+    expect(report.displayRun()?.id).toBe(first.id);
+    expect(report.equityPoints()).not.toEqual([]);
+
+    replacement.next({ data: { backtestRun: second }, loading: false });
+    TestBed.tick();
+    await Promise.resolve();
+
+    expect(report.displayRun()?.id).toBe(second.id);
+  });
+
+  it("drops the displayed run when the replacement turns out not to exist", async () => {
+    const { report } = makeReport({ data: { backtestRun: null }, loading: false }, 404);
+    await Promise.resolve();
+
+    expect(report.notFound()).toBe(true);
+    expect(report.displayRun()).toBeNull();
   });
 
   it("keeps polling only while a parity verdict is pending", async () => {

@@ -50,7 +50,7 @@
                 />
               }
 
-              @if (report.run(); as currentRun) {
+              @if (report.displayRun(); as currentRun) {
                 @if (report.engineResult(); as result) {
                   <app-strategy-lab-run-stats
                     [run]="currentRun"
@@ -72,7 +72,7 @@
             </aside>
 
             <app-strategy-lab-stage
-              [run]="report.run()"
+              [run]="report.displayRun()"
               [markers]="report.markers()"
               [equityPoints]="report.equityPoints()"
               [notices]="report.reportNotices()"

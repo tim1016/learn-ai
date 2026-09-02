@@ -1,4 +1,4 @@
-import { computed, inject, Injectable, signal } from "@angular/core";
+import { computed, inject, Injectable, linkedSignal, signal } from "@angular/core";
 import { rxResource } from "@angular/core/rxjs-interop";
 import { Apollo } from "apollo-angular";
 import { filter, map, of } from "rxjs";
@@ -17,6 +17,12 @@ import type {
   LeanAnalysisFinding,
 } from "../lean-engine/engine-results/engine-results.component";
 import { parseRunVerdictEnvelope, type StrategyLabParityView } from "./strategy-lab.models";
+
+interface RunDisplaySource {
+  readonly run: BacktestRunDetail | null;
+  readonly selected: boolean;
+  readonly settled: boolean;
+}
 
 /**
  * Every derivation the one-page workbench needs from one persisted run.
@@ -76,13 +82,39 @@ export class StrategyLabRunReport {
     () => this.activeRunId() !== null && !this.loading() && !this.loadError() && this.run() === null,
   );
 
+  /**
+   * The run the page presents, which is not always the run it is loading.
+   *
+   * A re-run points `activeRunId` at the new run before that run's query
+   * resolves, so `run()` is null for the whole in-flight window — the chart
+   * would unmount and the operator would watch a blank gap open where the
+   * evidence was. Holding the last loaded run here keeps the previous chart
+   * mounted (dimmed, under the stage's progress overlay) until its replacement
+   * exists, then swaps atomically. It is dropped as soon as the run is
+   * deselected, missing, or unloadable, so it can never present evidence the
+   * page is no longer claiming.
+   */
+  private readonly displayRunState = linkedSignal<RunDisplaySource, BacktestRunDetail | null>({
+    source: () => ({
+      run: this.run(),
+      selected: this.activeRunId() !== null,
+      settled: this.notFound() || this.loadError() !== undefined,
+    }),
+    computation: (source, previous) => {
+      if (source.run !== null) return source.run;
+      if (!source.selected || source.settled) return null;
+      return previous?.value ?? null;
+    },
+  });
+  readonly displayRun = this.displayRunState.asReadonly();
+
   private readonly verdictEnvelope = computed(() =>
-    parseRunVerdictEnvelope(this.run()?.verdictJson ?? null),
+    parseRunVerdictEnvelope(this.displayRun()?.verdictJson ?? null),
   );
   readonly verdict = computed(() => this.verdictEnvelope().verdict);
 
   readonly engineResult = computed<EngineResultData | null>(() => {
-    const run = this.run();
+    const run = this.displayRun();
     if (!run) return null;
     const analytics = run.validationAnalytics;
     return {
@@ -113,7 +145,7 @@ export class StrategyLabRunReport {
   });
 
   readonly markers = computed<TradingMarker[]>(() =>
-    (this.run()?.trades ?? []).flatMap((trade) => {
+    (this.displayRun()?.trades ?? []).flatMap((trade) => {
       const outcome = trade.pnL > 0 ? "WIN" : trade.pnL < 0 ? "LOSS" : "BREAK EVEN";
       const color = trade.pnL > 0 ? "#26a69a" : trade.pnL < 0 ? "#ef5350" : "#90a4ae";
       return [{
@@ -134,11 +166,11 @@ export class StrategyLabRunReport {
   );
 
   readonly equityPoints = computed<TradingPoint[]>(() =>
-    this.run()?.equityCurve?.realized?.points.map((point) => ({ timeMs: point.t, value: point.e })) ?? [],
+    this.displayRun()?.equityCurve?.realized?.points.map((point) => ({ timeMs: point.t, value: point.e })) ?? [],
   );
 
   readonly reportNotices = computed<string[]>(() => {
-    const run = this.run();
+    const run = this.displayRun();
     if (!run) return [];
 
     const notices: string[] = [];
@@ -174,7 +206,7 @@ export class StrategyLabRunReport {
   });
 
   readonly parity = computed<StrategyLabParityView | null>(() => {
-    const verdicts = this.run()?.parityVerdicts ?? [];
+    const verdicts = this.displayRun()?.parityVerdicts ?? [];
     if (verdicts.length === 0) return null;
     const latest = [...verdicts].sort((left, right) => right.createdAt - left.createdAt)[0];
     return toParityView(latest);
