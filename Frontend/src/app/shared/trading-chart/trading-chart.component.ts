@@ -188,7 +188,8 @@ export class TradingChartComponent implements OnDestroy {
       const heights = this.paneHeights();
       if (chart === null || !canvas) return;
       chart.panes().forEach((pane, index) => pane.setHeight(heights[index] ?? MIN_PANE_HEIGHT));
-      chart.resize(canvas.nativeElement.clientWidth, this.chartHeight());
+      const width = canvas.nativeElement.clientWidth;
+      if (width > 0) chart.resize(width, this.chartHeight());
     });
 
     // Measure: independent of the chart's lifetime, so a data change no longer

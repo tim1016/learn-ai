@@ -145,6 +145,12 @@ describe("TradingChartComponent", () => {
     expect(chartHarness.paneHeights[0]).toHaveBeenCalledWith(470);
     expect(chartHarness.paneHeights[1]).toHaveBeenCalledWith(205);
 
+    // jsdom never lays out real boxes, so the canvas reports 0 width unless
+    // stubbed — give it the width a mounted canvas would actually have so
+    // this test exercises the normal (non-zero) resize path.
+    const canvas = fixture.nativeElement.querySelector(".trading-chart__canvas") as HTMLElement;
+    Object.defineProperty(canvas, "clientWidth", { value: 640, configurable: true });
+
     fixture.componentInstance.availableHeight.set(1350);
     fixture.detectChanges();
     await fixture.whenStable();
@@ -154,7 +160,27 @@ describe("TradingChartComponent", () => {
     // pane at its pre-measurement height.
     expect(chartHarness.paneHeights[0]).toHaveBeenLastCalledWith(940);
     expect(chartHarness.paneHeights[1]).toHaveBeenLastCalledWith(410);
-    expect(chartHarness.resize).toHaveBeenLastCalledWith(expect.any(Number), 1350);
+    expect(chartHarness.resize).toHaveBeenLastCalledWith(640, 1350);
+  });
+
+  it("does not resize the chart to zero width while the canvas is unmeasured", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("equity", EQUITY);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    // jsdom reports 0 clientWidth with no stub, which is also the real state
+    // of a canvas that has not been laid out yet. A measurement firing in
+    // that window must still apply pane heights but must not collapse the
+    // chart to 0px wide — it self-heals on the next real measurement.
+    chartHarness.resize.mockClear();
+    fixture.componentInstance.availableHeight.set(1350);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(chartHarness.paneHeights[0]).toHaveBeenLastCalledWith(940);
+    expect(chartHarness.paneHeights[1]).toHaveBeenLastCalledWith(410);
+    expect(chartHarness.resize).not.toHaveBeenCalled();
   });
 
   it("falls back to fixed pane heights when the viewport is below the floor", async () => {
