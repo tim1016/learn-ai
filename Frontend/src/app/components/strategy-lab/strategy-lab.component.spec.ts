@@ -351,6 +351,29 @@ describe("Strategy Lab Workbench", () => {
     http.verify();
   });
 
+  it("switches off History so a run that fails to load is not a silent dead end", async () => {
+    const { fixture, http, navigateToQuery } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+
+    const lab = fixture.componentInstance;
+    // The operator is browsing History, not the workbench, when they click a
+    // saved run — `selectHistoryRun` only navigates, so drive the resulting
+    // URL change the way the router would.
+    lab.config.activeTab.set("history");
+    fixture.detectChanges();
+    expect(lab.config.activeTab()).toBe("history");
+
+    // The clicked run has since been deleted: the detail query resolves with
+    // no run, which is `notFound`, not a transport failure.
+    navigateToQuery({ run: "404" });
+
+    await vi.waitFor(() => {
+      expect(lab.config.activeTab()).toBe("configuration");
+    });
+    http.verify();
+  });
+
   it("blocks a rerun only when restoring the fetched configuration itself fails", async () => {
     const malformed = run({ parameters: "{" });
     const { fixture, http } = await createLab({ activeRun: malformed.id, backtestRun: malformed });

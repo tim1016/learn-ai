@@ -87,7 +87,15 @@ export class StrategyLabComponent {
     effect(() => {
       const runId = this.config.activeRunParam();
       this.report.activeRunId.set(runId);
-      if (runId !== null) this.runs.clearRunError();
+      if (runId !== null) {
+        this.runs.clearRunError();
+        // Switch to the workbench synchronously on the URL change, not after
+        // the fetch resolves in `adoptRun` — a run picked from History that
+        // fails to load (deleted, transient GraphQL error) must still land
+        // the operator where the error notice renders, or the click is a
+        // silent dead end.
+        this.config.activeTab.set("configuration");
+      }
     });
 
     effect(() => {
@@ -133,7 +141,6 @@ export class StrategyLabComponent {
       this.runs.justProducedRunId.set(null);
       return;
     }
-    this.config.activeTab.set("configuration");
     await strategiesReady;
     try {
       this.restoreConfiguration(run);
