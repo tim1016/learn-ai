@@ -81,6 +81,24 @@ Per-cell gate results:
 Input fixture hashes: W3mo `0eb06aa97f4e9159b4b73a89dbad29b551922930611065a0c39cbaab754039e4`,
 W6mo `e89d2b230a31d8dfdd5617a19088686e84c9671145cba54c459c2b848f359bd9`.
 
+### The executable half
+
+A receipt records a result once; it cannot fail when the code moves. The W3mo
+cell's reference outputs are therefore committed as golden fixture **`ENG-009`**
+(`PythonDataService/tests/fixtures/golden/strategy-parity/ENG-009/v1/`), replayed
+by `tests/integration/reconciliation/test_rsi_mean_reversion_lean_golden.py`
+against both the hand-coded algorithm and the StrategySpec evaluator. Order
+timestamps, directions, quantities and fees are asserted exactly; fill prices and
+final equity at `atol=0.000001, rtol=0`, with zero observed error.
+
+The committed window is 2026-02-02 → 2026-02-25 — the head of this cell, cut at a
+bar where the strategy is flat. It starts at the LEAN run's own start date, so
+RSI(14) warmup is bar-for-bar identical rather than re-seeded, and it ends flat so
+the Python engine's end-of-algorithm liquidation adds no fill the longer LEAN run
+never made. Its bars are read from the source run's staged workspace, whose bytes
+hash-match the receipt's `staged_zip_sha256`; the `lean-cache` copies are
+re-encoded and no longer do.
+
 ## Accepted divergence: median duration convention
 
 Both cells report `status: diverged` with
@@ -121,7 +139,8 @@ changes persisted statistics repo-wide and
 belongs in its own change with its own regression test, not smuggled into the
 PR that introduces this twin. Per `numerical-rigor.md` the divergence is **not**
 accepted as tolerance: the convention is simply wrong relative to the reference
-and should be repaired.
+and should be repaired. It is carried in the repository's open-defect authority,
+`docs/known-gaps.md` § 5, so it survives this receipt no longer being read.
 
 Because the sole divergence is a statistics-formatting convention with zero
 trade-level, input, or readiness divergences across both cells, this receipt
@@ -136,7 +155,9 @@ against LEAN, and the median convention as a separate open defect.
   axis, so the committed matrix is implicitly EMA-only. This twin emits an
   honest RSI-shaped `state.csv` (`ts_ms_utc,close,rsi,signal`) rather than dummy
   EMA columns, which would fake the exact agreement that gate exists to detect.
-  Extending the matrix to a second strategy is separate work.
+  Extending the matrix to a second strategy is separate work. The trade-level
+  cross-engine claim is covered instead by `ENG-009` above; what stays uncovered
+  is Gate 2's *per-bar* indicator comparison for this strategy.
 - **`POST /runs/{id}/cross-reconcile`.** Unusable for any current
   Polygon-sourced run: `cross_runner.py` wires its reader at
   `<workspace>/data`, but lake-mode runs read from the read-only lake mount and
