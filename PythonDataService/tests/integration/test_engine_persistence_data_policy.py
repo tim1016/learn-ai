@@ -304,3 +304,49 @@ def test_compatibility_profile_pins_exact_shared_bar_fixture(tmp_path) -> None:
     assert request.data_policy.fixture_id.startswith("bar-store-v1-")
     assert request.data_policy.fixture_sha256 is not None
     assert len(request.data_policy.fixture_sha256) == 64
+
+
+def test_mismatched_params_and_policy_symbols_are_rejected() -> None:
+    """The two symbol surfaces must name the same instrument (#1917 review).
+
+    ``EngineBacktestRequest`` reads the instrument from two places nothing
+    else reconciles: the strategy is built from ``params.symbol`` while the
+    bar fixture, the persisted policy, and the LEAN parity companion all read
+    ``data_policy.symbol``. Left unchecked, a request naming AAPL in one and
+    SPY in the other runs AAPL against a SPY companion and produces a parity
+    verdict comparing different instruments.
+    """
+    from app.routers.engine import EngineBacktestRequest
+
+    policy = _raw_policy() | {"symbol": "SPY"}
+    with pytest.raises(ValidationError, match=r"disagrees with data_policy\.symbol"):
+        EngineBacktestRequest(
+            strategy_name="rsi_mean_reversion",
+            params={"symbol": "AAPL"},
+            from_date="2025-01-13",
+            to_date="2025-01-17",
+            resolution="minute",
+            data_policy=policy,
+        )
+
+
+def test_symbol_agreement_ignores_case_and_surrounding_whitespace() -> None:
+    """Agreement is judged on the trimmed uppercase form.
+
+    That is exactly the normalization ``_synthesize_legacy_data_policy``
+    applies when it derives a policy from ``params.symbol``, so a caller that
+    hand-writes the policy is held to the same rule and not to a stricter one.
+    """
+    from app.routers.engine import EngineBacktestRequest
+
+    request = EngineBacktestRequest(
+        strategy_name="rsi_mean_reversion",
+        params={"symbol": " spy "},
+        from_date="2025-01-13",
+        to_date="2025-01-17",
+        resolution="minute",
+        data_policy=_raw_policy(),
+    )
+
+    assert request.data_policy is not None
+    assert request.data_policy.symbol == "SPY"

@@ -323,6 +323,40 @@ class EngineBacktestRequest(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_symbol_agreement(self) -> EngineBacktestRequest:
+        """Reject a request whose two symbol surfaces name different instruments.
+
+        The engine reads the instrument from two places that nothing else
+        reconciles: the Python strategy is built from ``params.symbol``, while
+        ``_pin_compatibility_fixture``, ``_record_actual_strategy_bars``, the
+        persisted ``DataPolicyJson``, and the LEAN parity companion all read
+        ``data_policy.symbol``. A caller that supplies both may legally send
+        ``params.symbol="AAPL"`` with ``data_policy.symbol="SPY"``, and the run
+        would then execute AAPL while pinning SPY's bar fixture and dispatching
+        a SPY companion -- a parity verdict comparing different instruments,
+        which is worse than no verdict because it looks like a finding
+        (#1917 review).
+
+        Only an explicitly supplied policy can disagree: the synthesizer above
+        derives the policy's symbol from ``params.symbol``. Comparison is on
+        the trimmed uppercase form, because that is exactly the normalization
+        the synthesizer applies.
+        """
+        if self.data_policy is None:
+            return self
+        supplied = self.params.get("symbol") if isinstance(self.params, dict) else None
+        if not isinstance(supplied, str) or not supplied.strip():
+            return self
+        requested = supplied.strip().upper()
+        policy_symbol = self.data_policy.symbol.strip().upper()
+        if requested != policy_symbol:
+            raise ValueError(
+                f"params.symbol={requested!r} disagrees with data_policy.symbol={policy_symbol!r}; "
+                "both name the instrument this run trades and must match"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_compatibility_profile(self) -> EngineBacktestRequest:
         if self.compatibility_profile is None:
             return self
