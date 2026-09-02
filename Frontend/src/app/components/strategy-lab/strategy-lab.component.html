@@ -8,7 +8,7 @@
       <p-tabpanels>
         <p-tabpanel value="configuration">
           <div class="workbench">
-            <aside class="workbench__rail" aria-label="Run controls">
+            <aside class="workbench__rail" aria-label="Configuration and run statistics">
               @if (config.strategiesLoading()) {
                 <div class="lab-notice" role="status">Loading strategies…</div>
               } @else if (config.strategiesError(); as error) {

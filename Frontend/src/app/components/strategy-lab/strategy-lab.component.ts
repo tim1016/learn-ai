@@ -127,11 +127,24 @@ export class StrategyLabComponent {
         this.runs.runError.set(`Saved run #${runId} was not found.`);
         return;
       }
-      this.restoreConfiguration(run);
+      try {
+        this.restoreConfiguration(run);
+      } catch (error) {
+        // A restore failure means the persisted configuration itself can't be
+        // reapplied — distinct from the fetch above failing, and the only
+        // case where the rerun-blocking `configurationWarning` belongs here.
+        const message = error instanceof Error
+          ? error.message
+          : "The saved configuration could not be restored.";
+        this.config.configurationWarning.set(message);
+        this.runs.runError.set(message);
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The saved configuration could not be restored.";
-      this.config.configurationWarning.set(message);
-      this.runs.runError.set(message);
+      // A transport/query failure says nothing about the configuration on
+      // screen, which is still valid and rerunnable — never set
+      // `configurationWarning` here, or a transient GraphQL blip would
+      // permanently disable the Run button until an unrelated field edit.
+      this.runs.runError.set(error instanceof Error ? error.message : "Failed to load the saved run.");
     }
   }
 

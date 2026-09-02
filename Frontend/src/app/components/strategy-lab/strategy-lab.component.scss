@@ -4,9 +4,10 @@
 }
 
 .strategy-lab {
-  // Tab list + the run dock's 36px collapsed strip. The dock is
+  // The shell's top bar (this page renders inside it, not above it) + the
+  // tab list + the run dock's 36px collapsed strip. The dock is
   // position:fixed; expanded (320px) it deliberately overlays.
-  --strategy-lab-chrome: calc(var(--page-pad-y) * 2 + 48px + 36px);
+  --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + 36px);
   display: grid;
   gap: var(--space-4);
   min-width: 0;
@@ -37,6 +38,14 @@
   gap: var(--space-3);
   min-width: 0;
   min-height: 0;
+}
+
+.workbench__stage app-strategy-lab-stage {
+  // The notice above it is conditionally rendered — an Angular comment
+  // node when absent, which is not a grid item — so auto-placement would
+  // otherwise drop the chart into row 1 (auto) whenever no notice is
+  // showing, collapsing it to content height. Pin it to the flexible row.
+  grid-row: 2;
 }
 
 .lab-notice {

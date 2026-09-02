@@ -122,7 +122,15 @@ const bypassAuxiliaryChartRequests: HttpInterceptorFn = (request, next) => {
 };
 
 async function createLab(
-  options: { restoreRun?: number; activeRun?: number; backtestRun?: BacktestRunDetail | null } = {},
+  options: {
+    restoreRun?: number;
+    activeRun?: number;
+    backtestRun?: BacktestRunDetail | null;
+    /** Makes the run-detail `apollo.query` (the fetch `loadRun` uses to
+     *  restore configuration) reject, simulating a transient transport or
+     *  GraphQL failure independent of whether the fetched run is valid. */
+    backtestRunQueryError?: Error;
+  } = {},
 ) {
   const jobs = signal<never[]>([]);
   const navigate = vi.fn(async () => true);
@@ -150,7 +158,11 @@ async function createLab(
       {
         provide: Apollo,
         useValue: {
-          query: vi.fn(() => of({ data: { backtestRun: options.backtestRun ?? null } })),
+          query: vi.fn(() =>
+            options.backtestRunQueryError
+              ? throwError(() => options.backtestRunQueryError)
+              : of({ data: { backtestRun: options.backtestRun ?? null } }),
+          ),
           // StrategyLabRunReport watches the single-run detail query (variables.id);
           // the run-history rail watches the paged list query — same mock, two shapes.
           watchQuery: vi.fn((request: WatchQueryRequest) =>
@@ -243,10 +255,44 @@ describe("Strategy Lab Workbench", () => {
     lab.config.changeEngine("lean");
     lab.config.customLeanSource.set("class Edited(QCAlgorithm): pass");
     lab.runs.justProducedRunId.set(saved.id);
-    lab.loadRun(saved.id);
+    await lab.loadRun(saved.id);
     await fixture.whenStable();
 
     expect(lab.config.customLeanSource()).toBe("class Edited(QCAlgorithm): pass");
+  });
+
+  it("keeps the run button enabled when the saved-run fetch fails transiently", async () => {
+    const saved = run();
+    const { fixture, http } = await createLab({
+      activeRun: saved.id,
+      backtestRunQueryError: new Error("Network error"),
+    });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await vi.waitFor(() => {
+      expect(fixture.componentInstance.runs.runError()).toBe("Network error");
+    });
+
+    // A transport/query failure says nothing about the configuration on
+    // screen, which is still valid — it must not get silently disabled by a
+    // message that describes a restore problem rather than the fetch that
+    // actually failed.
+    expect(fixture.componentInstance.config.configurationWarning()).toBeNull();
+    expect(fixture.componentInstance.config.rerunBlocked()).toBe(false);
+    http.verify();
+  });
+
+  it("blocks a rerun only when restoring the fetched configuration itself fails", async () => {
+    const malformed = run({ parameters: "{" });
+    const { fixture, http } = await createLab({ activeRun: malformed.id, backtestRun: malformed });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await vi.waitFor(() => {
+      expect(fixture.componentInstance.config.configurationWarning()).not.toBeNull();
+    });
+
+    expect(fixture.componentInstance.config.configurationWarning()).toMatch(/Saved run parameters are malformed/);
+    expect(fixture.componentInstance.runs.runError()).toMatch(/Saved run parameters are malformed/);
+    expect(fixture.componentInstance.config.rerunBlocked()).toBe(true);
+    http.verify();
   });
 
   it("opens the registered QCAlgorithm in a drawer without probing the launcher", async () => {
