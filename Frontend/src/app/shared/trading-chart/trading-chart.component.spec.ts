@@ -15,12 +15,14 @@ const chartHarness: {
   paneHeights: ReturnType<typeof vi.fn>[];
   timeScale: { fitContent: ReturnType<typeof vi.fn> };
   seriesData: ReturnType<typeof vi.fn>[];
+  resize: ReturnType<typeof vi.fn>;
 } = {
   options: null,
   addSeries: vi.fn(),
   paneHeights: [],
   timeScale: { fitContent: vi.fn() },
   seriesData: [],
+  resize: vi.fn(),
 };
 
 const createChart = vi.fn((_element: HTMLElement, options: Record<string, unknown>) => {
@@ -32,12 +34,13 @@ const createChart = vi.fn((_element: HTMLElement, options: Record<string, unknow
   });
   chartHarness.paneHeights = [vi.fn(), vi.fn(), vi.fn()];
   chartHarness.timeScale = { fitContent: vi.fn() };
+  chartHarness.resize = vi.fn();
   return {
     addSeries: chartHarness.addSeries,
     panes: vi.fn(() => chartHarness.paneHeights.map((setHeight) => ({ setHeight }))),
     timeScale: vi.fn(() => chartHarness.timeScale),
     priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
-    resize: vi.fn(),
+    resize: chartHarness.resize,
     remove: vi.fn(),
   };
 });
@@ -126,9 +129,32 @@ describe("TradingChartComponent", () => {
     // Weights 470 (price) : 205 (equity) = 675 total; a 1350px viewport scales both 2x.
     expect(fixture.componentInstance.paneHeights()).toEqual([940, 410]);
     expect(fixture.componentInstance.chartHeight()).toBe(1350);
-    // A resize must not tear down and rebuild the whole chart — only the
-    // ResizeObserver's own direct chart.resize() call should react to it.
+    // A resize must not tear down and rebuild the whole chart — the size
+    // effect re-applies heights to the chart that is already mounted.
     expect(createChart).toHaveBeenCalledOnce();
+  });
+
+  it("re-applies the distributed pane heights to the live chart on every measurement", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("equity", EQUITY);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    // The first render happens before the observer has measured anything, so
+    // the fixed weights are what reach the chart.
+    expect(chartHarness.paneHeights[0]).toHaveBeenCalledWith(470);
+    expect(chartHarness.paneHeights[1]).toHaveBeenCalledWith(205);
+
+    fixture.componentInstance.availableHeight.set(1350);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    // Before the build/size split, setHeight ran only inside rebuildChart, so a
+    // measurement moved the canvas and the CSS variable while leaving every
+    // pane at its pre-measurement height.
+    expect(chartHarness.paneHeights[0]).toHaveBeenLastCalledWith(940);
+    expect(chartHarness.paneHeights[1]).toHaveBeenLastCalledWith(410);
+    expect(chartHarness.resize).toHaveBeenLastCalledWith(expect.any(Number), 1350);
   });
 
   it("falls back to fixed pane heights when the viewport is below the floor", async () => {
