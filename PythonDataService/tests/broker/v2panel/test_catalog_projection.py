@@ -383,17 +383,49 @@ def test_an_attention_row_without_a_primary_capability_offers_nothing() -> None:
     assert catalog[0].row_action is None
 
 
-def test_a_reconcile_only_attention_row_offers_no_rail_command() -> None:
+def test_a_crash_with_no_custody_problem_offers_no_reconcile_on_the_rail() -> None:
     """``reconcile_now`` is a refresh, and the rail asks for a cure.
 
     ``recovery_policy`` marks ``reconcile_now`` ``available=True``
     unconditionally -- it reads no hold, uncertainty or exposure -- so it wins
     ``_primary_action_id`` for any attention row whose genuinely-gated cures
-    are all unavailable. A bot that crashed flat, with empty ``holds`` and
-    ``uncertainties``, therefore showed "Reconcile now" on the rail while its
-    own panel read "No recovery action is required". The row still says it
-    needs attention, because it does; what it must not do is name a refresh as
-    the cure. The panel keeps offering it.
+    are all unavailable. This bot's attention comes from an unclean exit, not
+    from custody: ``holds`` and ``uncertainties`` are both empty, so there is
+    nothing to reconcile. It showed "Reconcile now" on the rail anyway, while
+    its own panel read "No recovery action is required".
+
+    The row still says it needs attention, because it does. What it must not do
+    is name a refresh as the cure. The panel keeps offering it.
+    """
+    catalog = build_sqlite_catalog(
+        [_status(sid=SID, running=False, phase="OFF_DUTY", duty_kind="CRASHED")],
+        projections={
+            SID: _projection(
+                sid=SID,
+                recovery_actions=(
+                    _recovery_capability(action_id="reconcile_now", label="Reconcile now"),
+                ),
+            )
+        },
+        economic_rollups={SID: _economic_snapshot(sid=SID)},
+        account_id=ACCT,
+    )
+
+    row = catalog[0]
+    assert row.needs_attention is True
+    assert row.row_action is None
+
+
+def test_a_bot_scoped_custody_problem_keeps_its_reconcile_command() -> None:
+    """The other half of the rule, and the one that is easy to break.
+
+    Suppressing ``reconcile_now`` by action id alone would strip the command
+    from rows where reconciliation *is* the authored cure: an
+    ``ORDER_OUTCOME_UNKNOWN`` uncertainty names it as its own next step, and a
+    stranded position without a clean account reconciliation leaves every
+    higher-priority action unavailable, so ``reconcile_now`` is legitimately
+    primary and legitimately the only command. Dropping it there is exactly the
+    "attention row with no command at all" #1778 exists to prevent.
     """
     catalog = build_sqlite_catalog(
         [_status(sid=SID)],
@@ -410,9 +442,9 @@ def test_a_reconcile_only_attention_row_offers_no_rail_command() -> None:
         account_id=ACCT,
     )
 
-    row = catalog[0]
-    assert row.needs_attention is True
-    assert row.row_action is None
+    row_action = catalog[0].row_action
+    assert row_action is not None
+    assert row_action.action_id == "reconcile_now"
 
 
 def test_an_account_scoped_hold_puts_no_per_bot_command_on_any_row() -> None:
