@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOrder,
     RecoveryCapability,
 )
+from app.broker.alpaca.clerk.sqlite.recovery_policy import UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
 from app.schemas.broker_bots import BotStatusView
@@ -211,14 +212,42 @@ def _catalog_row_action(
     token, blockers **and typed confirmation** all travel with it. Emitting it
     here carries that flow onto the row rather than bypassing it -- while
     returning ``None`` left an attention row with no command at all (#1778).
+
+    An ``UNCONDITIONAL_RECOVERY_ACTION_IDS`` primary needs a custody problem to
+    reach the rail, and that test lives only here. Those capabilities are
+    available without reading any custody state, so they win
+    ``_primary_action_id`` for any attention row whose genuinely-gated cures are
+    all unavailable -- printing "Reconcile now" next to a bot that crashed flat
+    with empty ``holds`` and ``uncertainties``, while that same bot's panel read
+    "No recovery action is required". Being always available, such an action
+    proves nothing by *being* primary; the rail asks "what is this row's cure?"
+    and it cannot answer on its own.
+
+    It is emphatically not suppressed outright. When this bot owns a hold or
+    uncertainty, reconciliation is frequently the authored cure -- an
+    ``ORDER_OUTCOME_UNKNOWN`` uncertainty names it as its own next step, and a
+    stranded position without a clean account reconciliation leaves every
+    earlier action unavailable. Dropping the button there would strip the row's
+    only command and re-open #1778. So the custody problem, not the action id,
+    is what decides: the same predicate that admits a non-attention row, asked
+    a second time of an action that cannot speak for itself.
+
+    The panel is untouched either way -- a voluntary custody refresh is a
+    legitimate operator move, just not a row-level alarm. Which actions have
+    this property is the recovery policy's fact, imported rather than restated,
+    so renaming one cannot leave a stale literal here silently re-surfacing the
+    button.
     """
-    if not row_needs_attention and not _has_bot_scoped_custody_problem(projection):
+    bot_scoped_custody_problem = _has_bot_scoped_custody_problem(projection)
+    if not row_needs_attention and not bot_scoped_custody_problem:
         return None
     primary = next(
         (item for item in projection.recovery_actions if item.primary),
         None,
     )
     if primary is None:
+        return None
+    if primary.action_id in UNCONDITIONAL_RECOVERY_ACTION_IDS and not bot_scoped_custody_problem:
         return None
     return _panel_action(primary, projection.control_revision)
 
