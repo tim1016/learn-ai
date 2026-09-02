@@ -1,6 +1,12 @@
 import { Injector, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter, Router, type UrlTree } from '@angular/router';
+import {
+  convertToParamMap,
+  provideRouter,
+  Router,
+  UrlTree,
+  type PartialMatchRouteSnapshot,
+} from '@angular/router';
 import { describe, expect, it } from 'vitest';
 
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
@@ -24,33 +30,33 @@ describe('routes', () => {
     });
   });
 
-  it('redirects a persisted run URL onto the one-page workbench', () => {
+  it.each([
+    ['204', '/strategy-lab?run=204'],
+    ['a b', '/strategy-lab?run=a%20b'],
+  ])('redirects a persisted run URL (id %s) onto the one-page workbench', (id, expectedUrl) => {
     const route = routes.find((candidate) => candidate.path === 'strategy-lab/runs/:id');
     const redirect = route?.redirectTo;
     if (typeof redirect !== 'function') throw new Error('Strategy Lab run route is not a redirect.');
 
     TestBed.configureTestingModule({ providers: [provideRouter([])] });
-    const tree = runInInjectionContext(TestBed.inject(Injector), () =>
-      redirect(
-        // Angular's RedirectFunction parameter is a Pick<ActivatedRouteSnapshot, ...>
-        // whose exact member list isn't part of the public type surface, so a literal
-        // needs an assertion to construct at all. Sanctioned exception (see task brief).
-        {
-          routeConfig: route ?? null,
-          url: [],
-          params: { id: '204' },
-          queryParams: {},
-          fragment: null,
-          data: {},
-          outlet: 'primary',
-          title: undefined,
-        } as never,
-      ),
-    );
+    const params = { id };
+    const queryParams = {};
+    const redirectData: PartialMatchRouteSnapshot = {
+      routeConfig: route ?? null,
+      url: [],
+      params,
+      queryParams,
+      fragment: null,
+      data: {},
+      outlet: 'primary',
+      title: undefined,
+      paramMap: convertToParamMap(params),
+      queryParamMap: convertToParamMap(queryParams),
+    };
+    const tree = runInInjectionContext(TestBed.inject(Injector), () => redirect(redirectData));
 
-    // Same reasoning as above: the redirect function's return type isn't narrowed
-    // to UrlTree in the public typings even though that's what it returns here.
-    expect(TestBed.inject(Router).serializeUrl(tree as UrlTree)).toBe('/strategy-lab?run=204');
+    if (!(tree instanceof UrlTree)) throw new Error('Redirect did not produce a UrlTree.');
+    expect(TestBed.inject(Router).serializeUrl(tree)).toBe(expectedUrl);
   });
 
   it('resolves the legacy engine/runs/:id bookmark onto the one-page workbench', async () => {
