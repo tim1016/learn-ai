@@ -224,6 +224,27 @@ describe('BotsRosterComponent', () => {
     ).toBeTruthy();
   });
 
+  it('keeps "Working" on a live attention row, which has no heading to say it', async () => {
+    // A healthy live row has two liveness cues: the pulse and the "Running"
+    // heading above it. An attention row sits under "Needs attention", so a
+    // reduced-motion reader who also loses the pulse would have none — and
+    // could not tell it from a stopped attention row. It keeps the word.
+    const { container } = await renderRail([
+      fakeCatalogBot({
+        strategy_instance_id: 'busy-but-sick',
+        status_label: 'Working',
+        running: true,
+        needs_attention: true,
+        exposure: {},
+      }),
+    ]);
+
+    expect(await screen.findByText(/Working · /)).toBeTruthy();
+    // Still genuinely live, so the dot still pulses — the word is the fallback
+    // for when motion is unavailable, not a replacement for it.
+    expect(container.querySelector('.rail-row__dot--live')).not.toBeNull();
+  });
+
   it('leaves a stopped row unmarked and still spelling out its state', async () => {
     const { container } = await renderRail([
       fakeCatalogBot({
