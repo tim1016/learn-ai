@@ -229,6 +229,28 @@ describe("Strategy Lab Workbench", () => {
     http.verify();
   });
 
+  it("clears the run off the page when back-navigation drops the run parameter", async () => {
+    const saved = run();
+    const { fixture, http, navigateToQuery } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const root = fixture.nativeElement as HTMLElement;
+    await vi.waitFor(() => {
+      expect(root.querySelector("app-strategy-lab-run-stats")).not.toBeNull();
+    });
+
+    // Back off `?run=N` lands on bare /strategy-lab: the statistics and chart
+    // must go with the run, not linger as evidence of a run no longer selected.
+    navigateToQuery({});
+    await vi.waitFor(() => {
+      expect(root.querySelector("app-strategy-lab-run-stats")).toBeNull();
+    });
+
+    expect(root.querySelector("app-strategy-lab-chart")).toBeNull();
+    expect(root.textContent).toContain("Run a validation to populate the equity curve");
+    expect(root.textContent).not.toContain("was not found");
+    http.verify();
+  });
+
   it("opens a selected history run on the same page", async () => {
     const { fixture, http, navigate } = await createLab();
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
