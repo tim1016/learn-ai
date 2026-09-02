@@ -1425,6 +1425,47 @@
         }
       },
       "status": "active"
+    },
+    {
+      "id": "ENG-009",
+      "name": "RSI Mean Reversion LEAN trade parity",
+      "category": "strategy-parity",
+      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/rsi_mean_reversion.py",
+      "canonical_callable": "RsiMeanReversionAlgorithm",
+      "reference": {
+        "kind": "cross_engine",
+        "oracle": "QuantConnect LEAN at source commit 261366a7e26ae942df858ab20df4fef8fa07de67",
+        "citation": "Pinned LEAN sidecar receipt companion-pg-1ef2ef27539b413a9628, the W3mo cell of docs/references/reconciliations/rsi-mean-reversion-lean-2026-09-01.md; see attribution.md for image, algorithm, and input hashes."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon/Massive",
+        "generated_by": "tests/fixtures/golden/rsi-mean-reversion-lean/generate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "Order timestamps, directions, quantities, and fees are exact; Decimal fill prices and final equity are pinned at absolute tolerance 0.000001. Observed max errors are zero."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "3ad6f5c06eb04b03d679c94954181f12e3ec924afddc883bb07cc4c0bada8bc3",
+            "output.json": "8b36c14f1f89f995518860c06e37bdb774d069bbdfc72bbc547e2617569f3078"
+          },
+          "file_sha256": {
+            "input.arrow": "f46b94d715339ef883ba293041e88a9528b9c17a5ed80413ac80b100b029a07e",
+            "output.json": "2794bf08016375f039b3a2f116238979445b7742b09b27a322f2402ef109ba34",
+            "attribution.md": "732f7a5d567537be70c732fe92bf8f9e6d585006b57a9bf611d2f3504f6bbd2d"
+          }
+        }
+      },
+      "status": "active"
     }
   ]
 }
