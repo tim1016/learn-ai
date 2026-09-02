@@ -23,6 +23,7 @@ export class StrategyLabStageComponent {
   readonly markers = input<readonly TradingMarker[]>([]);
   readonly equityPoints = input<readonly TradingPoint[]>([]);
   readonly notices = input<readonly string[]>([]);
+  readonly error = input<string | null>(null);
   readonly running = input(false);
   readonly runStatus = input("");
   readonly runPhaseDetail = input("");

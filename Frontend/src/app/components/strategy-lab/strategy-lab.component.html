@@ -67,26 +67,21 @@
               }
             </aside>
 
-            <section class="workbench__stage" aria-label="Strategy evidence">
-              @if (runs.runError() ?? config.configurationWarning(); as error) {
-                <div class="lab-notice lab-notice--error" role="alert">{{ error }}</div>
-              }
-
-              <app-strategy-lab-stage
-                [run]="report.run()"
-                [markers]="report.markers()"
-                [equityPoints]="report.equityPoints()"
-                [notices]="report.reportNotices()"
-                [running]="runs.running()"
-                [runStatus]="runs.runStatusBanner()"
-                [runPhaseDetail]="runs.runPhaseDetail()"
-                [symbol]="config.effectiveSymbol()"
-                [resolution]="config.resolution()"
-                [fillMode]="config.fillMode()"
-                [engine]="config.engine()"
-                [dataPolicyNote]="config.dataPolicyNote()"
-              />
-            </section>
+            <app-strategy-lab-stage
+              [run]="report.run()"
+              [markers]="report.markers()"
+              [equityPoints]="report.equityPoints()"
+              [notices]="report.reportNotices()"
+              [error]="runs.runError() ?? config.configurationWarning()"
+              [running]="runs.running()"
+              [runStatus]="runs.runStatusBanner()"
+              [runPhaseDetail]="runs.runPhaseDetail()"
+              [symbol]="config.effectiveSymbol()"
+              [resolution]="config.resolution()"
+              [fillMode]="config.fillMode()"
+              [engine]="config.engine()"
+              [dataPolicyNote]="config.dataPolicyNote()"
+            />
           </div>
         </p-tabpanel>
 

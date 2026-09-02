@@ -32,22 +32,6 @@
   overflow-y: auto;
 }
 
-.workbench__stage {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: var(--space-3);
-  min-width: 0;
-  min-height: 0;
-}
-
-.workbench__stage app-strategy-lab-stage {
-  // The notice above it is conditionally rendered — an Angular comment
-  // node when absent, which is not a grid item — so auto-placement would
-  // otherwise drop the chart into row 1 (auto) whenever no notice is
-  // showing, collapsing it to content height. Pin it to the flexible row.
-  grid-row: 2;
-}
-
 .lab-notice {
   border: 1px solid var(--border-light);
   border-radius: var(--radius);

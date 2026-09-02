@@ -3,10 +3,22 @@
 .stage {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: var(--space-2);
   min-width: 0;
   min-height: 0;
   height: 100%;
+}
+
+// Exactly two grid children, always: a variable-length notice list would
+// otherwise auto-place its second entry into the flexible row and push the
+// evidence column onto an implicit content-height row. The spacing lives
+// here rather than on `.stage`'s `gap` so an empty list costs no height.
+.stage__notices {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.stage__notices:not(:empty) {
+  padding-block-end: var(--space-2);
 }
 
 .stage__notice {
@@ -17,6 +29,11 @@
   background: var(--bg-surface);
   color: var(--text-subtle);
   font-size: var(--fs-xs);
+}
+
+.stage__notice--error {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+  color: var(--danger);
 }
 
 .stage__evidence {

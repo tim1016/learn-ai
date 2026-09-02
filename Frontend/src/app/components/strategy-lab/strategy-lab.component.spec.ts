@@ -211,7 +211,11 @@ describe("Strategy Lab Workbench", () => {
 
     const rail = root.querySelector(".workbench__rail");
     expect(rail?.querySelector("app-strategy-lab-run-stats")).not.toBeNull();
-    expect(root.querySelector(".workbench__stage app-strategy-lab-stage")).not.toBeNull();
+    // The stage is the workbench grid's own second column — no wrapper section,
+    // which would duplicate its "Strategy evidence" landmark and reintroduce
+    // the auto-placement drift the stage's two-child grid now prevents.
+    expect(root.querySelector(".workbench > app-strategy-lab-stage")).not.toBeNull();
+    expect(root.querySelectorAll("[aria-label='Strategy evidence']")).toHaveLength(1);
     expect(root.textContent).not.toContain("Back to workbench");
     http.verify();
   });

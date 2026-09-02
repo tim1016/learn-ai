@@ -1,7 +1,12 @@
 <section class="stage" aria-label="Strategy evidence">
-  @for (notice of notices(); track notice) {
-    <p class="stage__notice" role="note">{{ notice }}</p>
-  }
+  <div class="stage__notices">
+    @if (error(); as message) {
+      <p class="stage__notice stage__notice--error" role="alert">{{ message }}</p>
+    }
+    @for (notice of notices(); track notice) {
+      <p class="stage__notice" role="note">{{ notice }}</p>
+    }
+  </div>
 
   <div class="stage__evidence" [class.stage__evidence--stale]="running() && run() !== null">
     @if (run(); as currentRun) {
