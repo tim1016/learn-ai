@@ -135,6 +135,23 @@ not yet provide:
   #1687 (calendar-derived cutoffs plus a golden fixture). The former evaluator
   run-ledger `force_flat_at` was deleted under ADR 0038 and is not a migration
   target.
+- **LEAN-compatible `median()` uses the wrong convention on even-count subsets
+  (medium).** `PythonDataService/app/engine/results/lean_statistics.py:481`
+  averages the two middle values, while LEAN's `Median()` extension is a
+  QuickSelect at index `n / 2` that returns the upper-middle element with no
+  interpolation. The two agree on odd counts and disagree on every even one,
+  affecting `medianTradeDuration`, `medianWinningTradeDuration`, and
+  `medianLosingTradeDuration` for every strategy. Confirmed against LEAN across
+  two independent windows during the RSI mean reversion twin's reconciliation:
+  the W3mo cell's eight sorted durations make it exact (LEAN `7.00:15:00` is the
+  upper-middle element; ours `6.12:07:30` is the mean of the two middle), and the
+  W6mo cell agrees on 15 trades (odd) while diverging on 10 winning trades
+  (even). Not accepted as a tolerance per `numerical-rigor.md` — the convention
+  is wrong relative to the reference. Left unfixed there because the helper is
+  strategy-independent and correcting it shifts persisted statistics repo-wide;
+  it needs its own change with a regression test and a golden-fixture sweep.
+  *(verified 2026-09-01; evidence in
+  `docs/references/reconciliations/rsi-mean-reversion-lean-2026-09-01.md`)*
 - **`FailureRow.ts_ms` mislabel** — a host-local time string is typed/named as
   `ms-UTC`; rename to `ts_local` and convert at ingestion. *(was VCR-P3-K)*
 

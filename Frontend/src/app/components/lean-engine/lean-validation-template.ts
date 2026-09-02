@@ -2,12 +2,13 @@ import type { TrustedRunRequest } from '../../services/lean-sidecar.types';
 
 export type LeanValidationTemplate = Extract<
   NonNullable<TrustedRunRequest['template']>,
-  'ema_crossover_signal' | 'ema_crossover_2_bps' | 'deployment_validation'
+  'ema_crossover_signal' | 'ema_crossover_2_bps' | 'rsi_mean_reversion' | 'deployment_validation'
 >;
 
 const TEMPLATE_LABELS: Readonly<Record<LeanValidationTemplate, string>> = {
   ema_crossover_signal: 'EMA Crossover Signal',
   ema_crossover_2_bps: 'EMA Crossover 2 bps',
+  rsi_mean_reversion: 'RSI Mean Reversion',
   deployment_validation: 'Deployment Validation',
 };
 
@@ -15,6 +16,7 @@ const LEGACY_STRATEGY_TEMPLATES: Readonly<Record<string, LeanValidationTemplate>
   ema_crossover_signal: 'ema_crossover_signal',
   ema_crossover_2_bps: 'ema_crossover_2_bps',
   spy_ema_crossover: 'ema_crossover_signal',
+  rsi_mean_reversion: 'rsi_mean_reversion',
   deployment_validation: 'deployment_validation',
 };
 
@@ -23,6 +25,7 @@ export function isLeanValidationTemplate(
 ): template is LeanValidationTemplate {
   return template === 'ema_crossover_signal' ||
     template === 'ema_crossover_2_bps' ||
+    template === 'rsi_mean_reversion' ||
     template === 'deployment_validation';
 }
 

@@ -1,0 +1,56 @@
+{
+  "source_run_id": "companion-pg-1ef2ef27539b413a9628",
+  "lean_source_commit": "261366a7e26ae942df858ab20df4fef8fa07de67",
+  "lean_image_digest": "sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771",
+  "parameters": {
+    "window": "14",
+    "oversold": "30",
+    "overbought": "70",
+    "resolution_minutes": "15"
+  },
+  "filled_order_events": [
+    {
+      "ms_utc": 1770138900000,
+      "direction": "buy",
+      "fill_price": "689.12",
+      "fill_quantity": 144,
+      "order_fee": "1.0"
+    },
+    {
+      "ms_utc": 1770410700000,
+      "direction": "sell",
+      "fill_price": "690.75",
+      "fill_quantity": -144,
+      "order_fee": "1.0"
+    },
+    {
+      "ms_utc": 1770912900000,
+      "direction": "buy",
+      "fill_price": "686.32",
+      "fill_quantity": 145,
+      "order_fee": "1.0"
+    },
+    {
+      "ms_utc": 1771602300000,
+      "direction": "sell",
+      "fill_price": "688.05",
+      "fill_quantity": -145,
+      "order_fee": "1.0"
+    },
+    {
+      "ms_utc": 1771863300000,
+      "direction": "buy",
+      "fill_price": "680.7",
+      "fill_quantity": 147,
+      "order_fee": "1.0"
+    },
+    {
+      "ms_utc": 1772030700000,
+      "direction": "sell",
+      "fill_price": "690.92",
+      "fill_quantity": -147,
+      "order_fee": "1.0"
+    }
+  ],
+  "final_equity": "101981.91"
+}

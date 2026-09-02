@@ -305,3 +305,9 @@ if __name__ == "__main__":
             print(f"FAIL: {t.__name__}\n       {e}")
             failed += 1
     sys.exit(1 if failed else 0)
+
+
+def test_rsi_mean_reversion_advertises_its_matching_lean_validation_template():
+    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "rsi_mean_reversion")
+
+    assert strategy["lean_twin"] == "rsi_mean_reversion"

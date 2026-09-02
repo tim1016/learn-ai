@@ -302,6 +302,18 @@ class StrategyRegistration:
     # dispatcher copies these exact resolved values into the companion request;
     # an empty tuple means the LEAN template is parameter-free.
     lean_parameter_names: tuple[str, ...] = ()
+    # Validated strategy parameters the LEAN twin receives through the
+    # forwarded ``data_policy`` rather than through ``strategy_parameters`` --
+    # so overriding one still describes the same rules on both engines and must
+    # not make the companion unavailable. Declared per registration, never
+    # inferred: it is only true when *this strategy's* template honors the
+    # value. ``rsi_mean_reversion`` declares ``resolution_minutes`` because its
+    # template consolidates at whatever ``bar_minutes`` it is handed, while
+    # ``ema_crossover``'s rejects anything but 15 -- declaring it there would
+    # trade an honest ``unavailable`` verdict for a companion that crashes.
+    # ``symbol`` is excluded universally in ``parity_companion`` instead: every
+    # twin reads it from the policy, so no registration has to say so.
+    lean_data_policy_parameter_names: tuple[str, ...] = ()
     # Evidence-chart recipe resolved from the same validated parameter model
     # the strategy executes. Keeping this on the registration prevents the UI
     # from guessing strategy semantics from parameter names.
@@ -981,6 +993,18 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
+        # No lean_parameter_names: the twin hardcodes 14/30/70, so a run
+        # overriding window/oversold/overbought is honestly reported as
+        # parameters_unrepresentable_by_twin rather than compared against a
+        # twin running different rules.
+        lean_twin="rsi_mean_reversion",
+        # ``resolution_minutes`` is the exception: ``_record_actual_strategy_bars``
+        # writes this strategy's executed consolidator period into
+        # ``data_policy.strategy_bars`` before the companion is dispatched, and
+        # the template consolidates at exactly that ``bar_minutes``. A 30-minute
+        # run therefore reaches both engines identically and is a legitimate
+        # parity pair, not an unrepresentable override (#1917 review).
+        lean_data_policy_parameter_names=("resolution_minutes",),
     ),
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",
