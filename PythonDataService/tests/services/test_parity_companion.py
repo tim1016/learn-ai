@@ -84,6 +84,23 @@ def test_new_parity_group_id_is_run_id_safe():
             REASON_PARAMETERS_UNREPRESENTABLE,
         ),
         ("ema_crossover_signal", {}, None),
+        # A changed cadence is representable for rsi_mean_reversion, whose
+        # template consolidates at whatever bar_minutes the forwarded data
+        # policy carries; the policy carries the executed period, so both
+        # engines run the same cadence (#1917 review).
+        (
+            "rsi_mean_reversion",
+            {"params": {"symbol": "SPY", "resolution_minutes": 30}},
+            None,
+        ),
+        # The exception is per template, not global: a changed RSI threshold
+        # reaches no twin and is still unrepresentable.
+        (
+            "rsi_mean_reversion",
+            {"params": {"symbol": "SPY", "resolution_minutes": 30, "oversold": 25.0}},
+            REASON_PARAMETERS_UNREPRESENTABLE,
+        ),
+        ("rsi_mean_reversion", {}, None),
     ],
 )
 def test_companion_ineligibility_reasons(strategy, overrides, expected):
@@ -229,3 +246,54 @@ def test_mark_parity_failed_swallows_transport_errors():
 
     # Must not raise — parity bookkeeping is best-effort.
     mark_parity_failed("pg-x", status="run_failed", detail="test")
+
+
+def test_only_templates_that_honor_a_cadence_declare_it_policy_backed() -> None:
+    """``lean_data_policy_parameter_names`` is a per-template claim.
+
+    ``ema_crossover``'s source rejects any ``bar_minutes`` but 15, so declaring
+    ``resolution_minutes`` policy-backed there would swap an honest
+    ``unavailable`` verdict for a companion that raises inside LEAN. Only
+    ``rsi_mean_reversion``'s template consolidates at the cadence it is handed.
+    """
+    from app.lean_sidecar.trusted_templates import trusted_template_definition
+
+    for key, registration in _STRATEGY_REGISTRY.items():
+        declared = set(registration.lean_data_policy_parameter_names or ())
+        if "resolution_minutes" not in declared:
+            continue
+        assert registration.lean_twin is not None, f"{key} declares policy-backed params without a twin"
+        source = trusted_template_definition(registration.lean_twin).source
+        assert "bar_minutes != 15" not in source, (
+            f"{key}'s twin pins bar_minutes but the registration claims the cadence is policy-backed"
+        )
+
+
+def test_policy_backed_cadence_matches_the_period_the_engine_actually_ran() -> None:
+    """The claim rests on the executed consolidator reaching the twin.
+
+    ``_record_actual_strategy_bars`` overwrites ``data_policy.strategy_bars``
+    with the strategy's real consolidation period before dispatch, and
+    ``lean_sidecar_service`` derives the twin's ``bar_minutes`` from that
+    multiplier. If that wiring ever changed, a 30-minute Python run would be
+    paired with a 15-minute twin and the manufactured divergence would be
+    reported as a finding.
+    """
+    from decimal import Decimal
+
+    from app.engine.execution.portfolio import Portfolio
+    from app.engine.strategy.base import StrategyContext
+    from app.routers.engine import _record_actual_strategy_bars
+
+    registration = _STRATEGY_REGISTRY["rsi_mean_reversion"]
+    assert "resolution_minutes" in registration.lean_data_policy_parameter_names
+    request = _request(strategy_name="rsi_mean_reversion", params={"symbol": "SPY", "resolution_minutes": 30})
+    strategy = registration.build(registration.param_schema(symbol="SPY", resolution_minutes=30))
+    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal(100_000)))
+    strategy.initialize()
+
+    _record_actual_strategy_bars(request, strategy)
+
+    assert request.data_policy is not None
+    assert request.data_policy.strategy_bars.timespan == "minute"
+    assert request.data_policy.strategy_bars.multiplier == 30

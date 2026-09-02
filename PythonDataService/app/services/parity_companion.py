@@ -97,7 +97,15 @@ def _has_parameters_the_twin_cannot_see(
     from a parity harness, because it looks like a finding.
 
     ``symbol`` is excluded: it reaches the twin through the data policy, not
-    through ``strategy_parameters``.
+    through ``strategy_parameters``. So does anything the registration lists in
+    ``lean_data_policy_parameter_names`` -- for ``rsi_mean_reversion`` that is
+    ``resolution_minutes``, whose executed value ``_record_actual_strategy_bars``
+    writes into ``data_policy.strategy_bars`` before dispatch and whose template
+    consolidates at exactly that cadence. A 30-minute run reaches both engines
+    identically, so denying it a companion would retire real parity coverage for
+    no gain (#1917 review). ``symbol`` stays hardcoded here because every twin
+    reads it from the policy; the declarative set exists for the ones that are
+    only true per template.
 
     An *override* is a value that differs from the schema default, not merely
     a key that was sent. Strategy Lab materializes every default into
@@ -118,8 +126,9 @@ def _has_parameters_the_twin_cannot_see(
     ``PARITY_VERDICT_SCHEMA_VERSION`` and is deliberately left out of scope.
     """
     forwarded = set(registration.lean_parameter_names or ())
+    policy_backed = set(registration.lean_data_policy_parameter_names or ())
     supplied = request.params or {}
-    candidates = set(supplied) - {"symbol"} - forwarded
+    candidates = set(supplied) - {"symbol"} - forwarded - policy_backed
     if not candidates:
         return False
 
