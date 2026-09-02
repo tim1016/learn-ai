@@ -163,6 +163,32 @@ describe("TradingChartComponent", () => {
     expect(chartHarness.resize).toHaveBeenLastCalledWith(640, 1350);
   });
 
+  it("applies a width-only resize to the live chart", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("equity", EQUITY);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const canvas = fixture.nativeElement.querySelector(".trading-chart__canvas") as HTMLElement;
+    Object.defineProperty(canvas, "clientWidth", { value: 640, configurable: true });
+    fixture.componentInstance.availableHeight.set(1350);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(chartHarness.resize).toHaveBeenLastCalledWith(640, 1350);
+
+    // A horizontal browser resize changes the wrap's width and leaves its
+    // height alone. When only the height was tracked, signal equality stopped
+    // the size effect re-running and the new width never reached the chart —
+    // the canvas stayed clipped or left dead space.
+    fixture.componentInstance.availableWidth.set(900);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(chartHarness.resize).toHaveBeenLastCalledWith(900, 1350);
+    // A resize is not a data change: the chart is resized in place.
+    expect(createChart).toHaveBeenCalledOnce();
+  });
+
   it("does not resize the chart to zero width while the canvas is unmeasured", async () => {
     const fixture = await createComponent();
     fixture.componentRef.setInput("equity", EQUITY);

@@ -149,6 +149,8 @@ export class TradingChartComponent implements OnDestroy {
   });
   /** Measured height of the scroll wrap. 0 until the observer first fires. */
   readonly availableHeight = signal(0);
+  /** Measured width of the scroll wrap. 0 until the observer first fires. */
+  readonly availableWidth = signal(0);
 
   /**
    * Pane heights are proportional to the available height, using the fixed
@@ -188,7 +190,12 @@ export class TradingChartComponent implements OnDestroy {
       const heights = this.paneHeights();
       if (chart === null || !canvas) return;
       chart.panes().forEach((pane, index) => pane.setHeight(heights[index] ?? MIN_PANE_HEIGHT));
-      const width = canvas.nativeElement.clientWidth;
+      // The measured width, not just the height: a horizontal-only browser
+      // resize leaves `availableHeight` unchanged, and signal equality would
+      // stop this effect ever re-running — the canvas would keep the width it
+      // was built with. The canvas's own width is the fallback for the first
+      // pass, before the observer has measured anything.
+      const width = this.availableWidth() || canvas.nativeElement.clientWidth;
       if (width > 0) chart.resize(width, this.chartHeight());
     });
 
@@ -200,8 +207,11 @@ export class TradingChartComponent implements OnDestroy {
       const observer = new ResizeObserver((entries) => {
         // The wrap's height is layout-driven; the canvas's is driven by
         // chartHeight, so observing the canvas would be a feedback loop.
-        const height = entries[0]?.contentRect.height ?? wrap.nativeElement.clientHeight;
+        const box = entries[0]?.contentRect;
+        const height = box?.height ?? wrap.nativeElement.clientHeight;
         if (height > 0) this.availableHeight.set(Math.round(height));
+        const width = box?.width ?? wrap.nativeElement.clientWidth;
+        if (width > 0) this.availableWidth.set(Math.round(width));
       });
       observer.observe(wrap.nativeElement);
       onCleanup(() => observer.disconnect());
