@@ -8,6 +8,7 @@
   // tab list + the run dock's 36px collapsed strip. The dock is
   // position:fixed; expanded (320px) it deliberately overlays.
   --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + 36px);
+
   display: grid;
   gap: var(--space-4);
   min-width: 0;

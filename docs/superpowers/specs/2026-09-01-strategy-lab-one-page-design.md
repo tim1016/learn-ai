@@ -95,7 +95,11 @@ A componentless child route under `/strategy-lab` would work, at the cost of a p
 reading `firstChild.paramMap`. The query param achieves the same thing with less
 machinery and reuses an existing mechanism: the store already subscribes to
 `queryParamMap` for launch params (`strategy`, `engine`, `symbol`, `from`, `to`,
-`resolution`, `tab`), so `run` is one more entry in `parseEngineLaunchParams`.
+`resolution`, `tab`), so `run` reuses that same subscription — but as its own
+signal, **not** as an entry in `parseEngineLaunchParams`. Folding it into
+`EngineLaunchParams` would change `appliedLaunchParamsKey` on every run load and
+re-apply the whole launch-param path, resetting `activeTab` and the strategy
+selection. See §4.4, which is the authority on that split.
 
 **3.2 — What lives under the configuration. Decision: all of it.** Evidence grade,
 headline metrics (Returns / Risk-adjusted / Activity), "More statistics", and the
