@@ -1,0 +1,85 @@
+:host { display: block; min-width: 0; min-height: 0; height: 100%; }
+
+.stage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+// Exactly two grid children, always: a variable-length notice list would
+// otherwise auto-place its second entry into the flexible row and push the
+// evidence column onto an implicit content-height row. The spacing lives
+// here rather than on `.stage`'s `gap` so an empty list costs no height.
+.stage__notices {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.stage__notices:not(:empty) {
+  padding-block-end: var(--space-2);
+}
+
+.stage__notice {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.stage__notice--error {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+  color: var(--danger);
+}
+
+.stage__evidence {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+// A run in flight must not let the previous run read as live evidence.
+.stage__evidence--stale > app-strategy-lab-chart {
+  opacity: 0.42;
+  filter: saturate(0.6);
+}
+
+.stage__progress {
+  position: absolute;
+  z-index: 2;
+  inset-inline: 50%;
+  top: var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: max-content;
+  max-width: min(90%, 640px);
+  translate: -50% 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.stage__progress span:last-child {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}

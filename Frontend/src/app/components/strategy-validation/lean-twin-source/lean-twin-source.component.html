@@ -1,0 +1,38 @@
+<section class="lean-twin" aria-labelledby="lean-twin-title">
+  <header>
+    <div>
+      <p class="lean-twin__eyebrow">Registered validation twin</p>
+      <h3 id="lean-twin-title">QCAlgorithm source</h3>
+    </div>
+    @if (result(); as state) {
+      @if (state.kind === "available") {
+        <app-copy-button
+          variant="button"
+          [text]="state.source.source"
+          label="Copy source"
+          ariaLabel="Copy QCAlgorithm source"
+        />
+      }
+    }
+  </header>
+
+  @if (sourceResource.isLoading()) {
+    <p class="lean-twin__state" role="status">Loading registered QCAlgorithm…</p>
+  } @else if (result(); as state) {
+    @switch (state.kind) {
+      @case ("available") {
+        <pre class="lean-twin__source"><code>{{ state.source.source }}</code></pre>
+        <footer>
+          <span>{{ state.source.template }}</span>
+          <code title="Registered source SHA-256">{{ state.source.source_sha256 }}</code>
+        </footer>
+      }
+      @case ("unregistered") {
+        <p class="lean-twin__state" role="status">{{ state.detail }}</p>
+      }
+      @case ("unavailable") {
+        <p class="lean-twin__state lean-twin__state--error" role="alert">{{ state.detail }}</p>
+      }
+    }
+  }
+</section>

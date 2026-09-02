@@ -4,6 +4,11 @@
 }
 
 .strategy-lab {
+  // The shell's top bar (this page renders inside it, not above it) + the
+  // tab list + the run dock's 36px collapsed strip. The dock is
+  // position:fixed; expanded (320px) it deliberately overlays.
+  --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + 36px);
+
   display: grid;
   gap: var(--space-4);
   min-width: 0;
@@ -11,27 +16,24 @@
 
 .workbench {
   display: grid;
-  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
   gap: var(--space-4);
   min-width: 0;
-  align-items: start;
+  min-height: 0;
+  height: calc(100dvh - var(--strategy-lab-chrome));
+  align-items: stretch;
 }
 
 .workbench__rail {
   display: grid;
   gap: var(--space-3);
   min-width: 0;
+  min-height: 0;
   align-content: start;
+  overflow-y: auto;
 }
 
-.workbench__stage {
-  display: grid;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.lab-notice,
-.run-status {
+.lab-notice {
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
   background: var(--bg-surface);
@@ -43,28 +45,6 @@
 .lab-notice--error {
   border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
   color: var(--danger);
-}
-
-.run-status {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.run-status span:last-child {
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.run-status__pulse {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
 :host ::ng-deep .p-tablist {
@@ -85,5 +65,7 @@
 @media (max-width: 900px) {
   .workbench {
     grid-template-columns: minmax(0, 1fr);
+    height: auto;
   }
+  .workbench__rail { overflow-y: visible; }
 }

@@ -10,6 +10,7 @@ import type {
   StrategyValidationDetail,
   StrategyValidationFlagEvent,
 } from '../../services/strategy-validation.types';
+import { LeanSourceService } from '../../services/lean-source.service';
 import { StrategyValidationService } from '../../services/strategy-validation.service';
 import { StrategyValidationComponent } from './strategy-validation.component';
 
@@ -238,11 +239,27 @@ class FakeStrategyValidationService {
   );
 }
 
+// This suite doesn't exercise the registered-twin viewer (that's
+// lean-twin-source.component.spec.ts); it just needs a deterministic
+// LeanSourceService so `<app-lean-twin-source>` doesn't make a real HTTP
+// call from every render() below.
+const LEAN_TWIN_SOURCE_STUB_PROVIDER = {
+  provide: LeanSourceService,
+  useValue: {
+    getStrategySource: () =>
+      Promise.resolve({
+        kind: 'unregistered' as const,
+        detail: 'No registered LEAN validation source in this test fixture.',
+      }),
+  },
+};
+
 describe('StrategyValidationComponent', () => {
   it('renders validated and unvalidated strategies in the catalog', async () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
       ],
     });
@@ -258,6 +275,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
       ],
     });
@@ -283,6 +301,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
       ],
     });
@@ -299,6 +318,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
       ],
     });
@@ -330,6 +350,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useValue: service },
       ],
     });
@@ -345,6 +366,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
       ],
     });
@@ -362,6 +384,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
       ],
     });
@@ -386,6 +409,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useValue: service },
       ],
     });
@@ -404,6 +428,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         {
           provide: ActivatedRoute,
           useValue: { queryParamMap: of(convertToParamMap({ strategy: 'ema_crossover_signal' })) },
@@ -423,6 +448,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useValue: service },
       ],
     });
@@ -440,6 +466,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useValue: service },
       ],
     });
@@ -464,6 +491,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useValue: service },
       ],
     });
@@ -487,6 +515,7 @@ describe('StrategyValidationComponent', () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
+        LEAN_TWIN_SOURCE_STUB_PROVIDER,
         { provide: StrategyValidationService, useValue: service },
       ],
     });

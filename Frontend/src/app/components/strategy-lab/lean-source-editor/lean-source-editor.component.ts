@@ -44,13 +44,25 @@ export class LeanSourceEditorComponent implements AfterViewInit, OnDestroy {
     params: () => this.strategyName(),
     loader: ({ params }) => this.leanSource.getStrategySource(params),
   });
-  protected readonly registeredSource = computed(() =>
-    this.sourceResource.hasValue() ? this.sourceResource.value() : null,
-  );
+  protected readonly registeredSource = computed(() => {
+    const result = this.sourceResource.hasValue() ? this.sourceResource.value() : null;
+    return result?.kind === "available" ? result.source : null;
+  });
+  protected readonly sourceFailure = computed(() => {
+    const result = this.sourceResource.hasValue() ? this.sourceResource.value() : null;
+    return result && result.kind !== "available" ? result : null;
+  });
   protected readonly currentSource = computed(() =>
     this.customSource() ?? this.registeredSource()?.source ?? null,
   );
   protected readonly canEdit = computed(() => this.customSource() !== null);
+  /**
+   * `LeanSourceService` reports a 404 or a transport failure as a resolved
+   * result, so "the resource has a value" says nothing about whether a
+   * registered QCAlgorithm exists. Only an actual source can seed custom
+   * editing — without this the toggle looked available and did nothing.
+   */
+  protected readonly canUseCustomSource = computed(() => this.registeredSource() !== null);
   protected readonly runtimeLabel = computed(() => {
     switch (this.launcherStatus()) {
       case "ready": return "Runtime ready";

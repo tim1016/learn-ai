@@ -1,5 +1,6 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
+import { render } from "@testing-library/angular";
 import { RouterTestingModule } from "@angular/router/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -54,6 +55,10 @@ async function renderSummary(options: {
   return fixture;
 }
 
+async function makeResult(overrides: Partial<EngineResultData> = {}): Promise<EngineResultData> {
+  return result(overrides);
+}
+
 function recordedContext(metricId: string, variantId: string, producer: string): MetricDocumentationContext {
   return {
     metricId,
@@ -98,5 +103,24 @@ describe("ResultsSummaryComponent — metric documentation modals", () => {
     expect(root.querySelectorAll('button[aria-label$="trader guide"]')).toHaveLength(8);
     expect(root.querySelector('button[aria-label="Open Sortino trader guide"]')).not.toBeNull();
     expect(root.querySelector('button[aria-label="Open Total fees trader guide"]')).not.toBeNull();
+  });
+
+  it("stacks its metric groups in one column for the workbench rail", async () => {
+    const { container } = await render(ResultsSummaryComponent, {
+      imports: [RouterTestingModule],
+      inputs: {
+        result: await makeResult(),
+        verdict: null,
+        metricDocumentation: [],
+        runId: null,
+      },
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    const summary = container.querySelector<HTMLElement>(".results-summary");
+    if (!summary) throw new Error("results-summary root is missing");
+
+    const gridTemplateColumns = getComputedStyle(summary).gridTemplateColumns;
+    expect(gridTemplateColumns).toBe("minmax(0, 1fr)");
   });
 });

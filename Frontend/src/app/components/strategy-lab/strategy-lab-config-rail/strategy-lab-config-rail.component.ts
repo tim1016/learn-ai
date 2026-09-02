@@ -57,6 +57,7 @@ export class StrategyLabConfigRailComponent {
   readonly commissionChanged = output<number>();
   readonly launcherCheckRequested = output();
   readonly runRequested = output();
+  readonly leanSourceRequested = output();
 
   readonly selectedStrategy = computed(() =>
     this.strategies().find((strategy) => strategy.name === this.selectedStrategyName()) ?? null,

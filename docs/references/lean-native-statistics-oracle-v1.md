@@ -213,7 +213,7 @@ From `Frontend/`:
 ```bash
 npx ng test --watch=false \
   --include='src/app/components/lean-engine/engine-results/engine-results.component.spec.ts' \
-  --include='src/app/components/engine-lab/run-report/run-report.component.spec.ts'
+  --include='src/app/components/strategy-lab/strategy-lab-run-report.service.spec.ts'
 ```
 
 The paired verdict is `agree` only when the input fixture, trades, readiness

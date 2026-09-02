@@ -1,5 +1,5 @@
-import { ChangeDetectionStrategy, Component } from "@angular/core";
-import { Routes } from "@angular/router";
+import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
+import { Router, Routes, type RedirectFunction } from "@angular/router";
 import {
   brokerBotsRedirectGuard,
   brokerGalleryRedirectGuard,
@@ -9,6 +9,14 @@ import {
 // The guard always returns a UrlTree so this component never renders.
 @Component({ template: '', changeDetection: ChangeDetectionStrategy.OnPush })
 class NeverRendersComponent {}
+
+// Shared by every legacy persisted-run URL (strategy-lab/runs/:id and the
+// older engine/runs/:id bookmark). Both must redirect straight to this same
+// final destination rather than to each other: Angular's router does not
+// chain a redirect target that is itself a redirect route within one
+// navigation, so a two-hop redirect silently falls through to the wildcard.
+const redirectToStrategyLabRun: RedirectFunction = ({ params }) =>
+  inject(Router).parseUrl(`/strategy-lab?run=${encodeURIComponent(String(params["id"] ?? ""))}`);
 
 /**
  * Retired Interactive Broker navigation.
@@ -161,11 +169,12 @@ export const routes: Routes = [
       ).then((m) => m.DataQualityDocsComponent),
   },
   {
+    // The workbench and this URL must be the SAME route config: a different
+    // one would destroy and recreate StrategyLabComponent, tearing down its
+    // component-scoped config store and runner while a run is in flight.
     path: "strategy-lab/runs/:id",
-    loadComponent: () =>
-      import("./components/strategy-lab/results-page/strategy-lab-results.component").then(
-        (m) => m.StrategyLabResultsComponent
-      ),
+    redirectTo: redirectToStrategyLabRun,
+    pathMatch: "full",
   },
   {
     path: "strategy-lab/docs",
@@ -200,8 +209,11 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // Redirects straight to the final destination (not to strategy-lab/runs/:id)
+    // for the same reason as that route: Angular does not chain a redirect
+    // through another redirect route within one navigation.
     path: "engine/runs/:id",
-    redirectTo: "strategy-lab/runs/:id",
+    redirectTo: redirectToStrategyLabRun,
     pathMatch: "full",
   },
   {

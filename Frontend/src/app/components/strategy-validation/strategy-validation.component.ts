@@ -17,6 +17,7 @@ import type {
   StrategyValidationSummary,
 } from '../../services/strategy-validation.types';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { LeanTwinSourceComponent } from './lean-twin-source/lean-twin-source.component';
 import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-code/quantconnect-reference-code.component';
 import { StrategyProofPipelineComponent } from './strategy-proof-pipeline/strategy-proof-pipeline.component';
 
@@ -25,6 +26,7 @@ import { StrategyProofPipelineComponent } from './strategy-proof-pipeline/strate
   imports: [
     RouterLink,
     ReceiptLabelPipe,
+    LeanTwinSourceComponent,
     QuantConnectReferenceCodeComponent,
     StrategyProofPipelineComponent,
   ],

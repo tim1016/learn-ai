@@ -36,13 +36,27 @@ const CONFIG_NAV_KEY = "engineLab.configNavOverride";
 @Injectable()
 export class StrategyLabConfigStore {
   private readonly http = inject(HttpClient);
+  private readonly route = inject(ActivatedRoute);
   private readonly launchParams = toSignal(
-    inject(ActivatedRoute).queryParamMap.pipe(map(parseEngineLaunchParams)),
+    this.route.queryParamMap.pipe(map(parseEngineLaunchParams)),
     { initialValue: {} },
   );
   private readonly appliedLaunchParamsKey = signal<string | null>(null);
   private readonly retainingHistoricalSelection = signal(false);
   private readonly configNavOverride = signal<"expanded" | "collapsed" | null>(loadNavOverride());
+
+  /**
+   * The persisted run the page is displaying. Deliberately separate from
+   * `launchParams`: run loading and launch-param application are two
+   * mechanisms over one query string, and folding them together would make
+   * every run load re-apply the launch params.
+   */
+  readonly activeRunParam = toSignal(
+    this.route.queryParamMap.pipe(
+      map((params) => parseRunId(params.get("run") ?? params.get("restoreRun"))),
+    ),
+    { initialValue: null },
+  );
 
   readonly engine = signal<EngineChoice>("python");
   readonly strategies = signal<StrategyInfo[]>([]);
@@ -433,6 +447,11 @@ function isEngineResolution(value: unknown): value is EngineResolution {
 
 function parseIsoDate(value: string | null): string | undefined {
   return value !== null && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
+}
+
+function parseRunId(value: string | null): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function nonBlank(value: string | null): string | undefined {
