@@ -44,9 +44,14 @@ export class LeanSourceEditorComponent implements AfterViewInit, OnDestroy {
     params: () => this.strategyName(),
     loader: ({ params }) => this.leanSource.getStrategySource(params),
   });
-  protected readonly registeredSource = computed(() =>
-    this.sourceResource.hasValue() ? this.sourceResource.value() : null,
-  );
+  protected readonly registeredSource = computed(() => {
+    const result = this.sourceResource.hasValue() ? this.sourceResource.value() : null;
+    return result?.kind === "available" ? result.source : null;
+  });
+  protected readonly sourceFailure = computed(() => {
+    const result = this.sourceResource.hasValue() ? this.sourceResource.value() : null;
+    return result && result.kind !== "available" ? result : null;
+  });
   protected readonly currentSource = computed(() =>
     this.customSource() ?? this.registeredSource()?.source ?? null,
   );

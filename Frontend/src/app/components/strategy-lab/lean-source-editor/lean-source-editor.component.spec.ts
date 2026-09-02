@@ -46,7 +46,7 @@ afterEach(() => {
 
 describe("LeanSourceEditorComponent", () => {
   it("shows the QCAlgorithm without treating an undetected runtime as an error", async () => {
-    const getStrategySource = vi.fn(async () => REGISTERED_SOURCE);
+    const getStrategySource = vi.fn(async () => ({ kind: "available" as const, source: REGISTERED_SOURCE }));
     const result = await render(LeanSourceEditorComponent, {
       inputs: {
         strategyName: REGISTERED_SOURCE.strategy_name,
@@ -75,7 +75,10 @@ describe("LeanSourceEditorComponent", () => {
       },
       providers: [
         provideZonelessChangeDetection(),
-        { provide: LeanSourceService, useValue: { getStrategySource: async () => REGISTERED_SOURCE } },
+        {
+          provide: LeanSourceService,
+          useValue: { getStrategySource: async () => ({ kind: "available" as const, source: REGISTERED_SOURCE }) },
+        },
       ],
     });
     const toggle = await screen.findByRole("checkbox", { name: /Use custom source/i });
@@ -96,11 +99,12 @@ describe("LeanSourceEditorComponent", () => {
 
   it("does not restore the previous strategy source when undoing after a strategy switch", async () => {
     const user = userEvent.setup();
-    const getStrategySource = vi.fn(async (strategyName: string) =>
-      strategyName === SECOND_REGISTERED_SOURCE.strategy_name
+    const getStrategySource = vi.fn(async (strategyName: string) => ({
+      kind: "available" as const,
+      source: strategyName === SECOND_REGISTERED_SOURCE.strategy_name
         ? SECOND_REGISTERED_SOURCE
         : REGISTERED_SOURCE,
-    );
+    }));
     const { rerender } = await render(LeanSourceEditorComponent, {
       inputs: {
         strategyName: REGISTERED_SOURCE.strategy_name,
@@ -138,5 +142,29 @@ describe("LeanSourceEditorComponent", () => {
     expect(editor.textContent).toContain("SecondAlgorithm");
     expect(editor.textContent).not.toContain("MyAlgorithm");
     expect(editor.textContent).not.toContain("strategy A edit");
+  });
+
+  it("says a strategy has no registered twin instead of blaming the system", async () => {
+    await render(LeanSourceEditorComponent, {
+      inputs: {
+        strategyName: "sma_crossover",
+        launcherStatus: "unknown",
+      },
+      providers: [
+        provideZonelessChangeDetection(),
+        {
+          provide: LeanSourceService,
+          useValue: {
+            getStrategySource: vi.fn(async () => ({
+              kind: "unregistered" as const,
+              detail: "Strategy 'sma_crossover' has no registered LEAN validation source",
+            })),
+          },
+        },
+      ],
+    });
+
+    expect(await screen.findByText(/has no registered LEAN validation source/)).toBeTruthy();
+    expect(screen.queryByText("Registered QCAlgorithm source is unavailable.")).toBeNull();
   });
 });

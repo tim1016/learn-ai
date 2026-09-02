@@ -42,8 +42,8 @@
   }
   @if (sourceResource.isLoading()) {
     <p class="lean-source__load-state" role="status">Loading registered QCAlgorithm…</p>
-  } @else if (sourceResource.error()) {
-    <p class="lean-source__load-state" role="status">Registered QCAlgorithm source is unavailable.</p>
+  } @else if (sourceFailure(); as failure) {
+    <p class="lean-source__load-state" role="status">{{ failure.detail }}</p>
   }
 
   <div class="lean-source__editor" [class.lean-source__editor--editable]="canEdit()" #editorHost></div>
