@@ -1,5 +1,5 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from "@angular/core";
-import { ActivatedRoute, Router } from "@angular/router";
+import { ChangeDetectionStrategy, Component, effect, inject, signal } from "@angular/core";
+import { Router } from "@angular/router";
 import { firstValueFrom } from "rxjs";
 import { Apollo } from "apollo-angular";
 import { Drawer } from "primeng/drawer";
@@ -17,11 +17,13 @@ import {
 } from "../../graphql/backtest-runs.query";
 import { EngineLabRunHistoryComponent } from "../lean-engine/engine-lab-run-history/engine-lab-run-history.component";
 import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
-import { ValidationStagePlaceholderComponent } from "../lean-engine/validation-stage-placeholder/validation-stage-placeholder.component";
 import { LeanSourceEditorComponent } from "./lean-source-editor/lean-source-editor.component";
 import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail/strategy-lab-config-rail.component";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
+import { StrategyLabRunReport } from "./strategy-lab-run-report.service";
+import { StrategyLabRunStatsComponent } from "./run-stats/strategy-lab-run-stats.component";
+import { StrategyLabStageComponent } from "./strategy-lab-stage/strategy-lab-stage.component";
 import { toStrategyLabConfiguration } from "./strategy-lab.models";
 
 /**
@@ -40,9 +42,10 @@ import { toStrategyLabConfiguration } from "./strategy-lab.models";
     Drawer,
     StrategyLabConfigRailComponent,
     EngineLabRunHistoryComponent,
-    ValidationStagePlaceholderComponent,
     LeanSourceEditorComponent,
     RunDockComponent,
+    StrategyLabRunStatsComponent,
+    StrategyLabStageComponent,
   ],
   templateUrl: "./strategy-lab.component.html",
   styleUrl: "./strategy-lab.component.scss",
@@ -50,6 +53,7 @@ import { toStrategyLabConfiguration } from "./strategy-lab.models";
   providers: [
     StrategyLabConfigStore,
     StrategyLabRunner,
+    StrategyLabRunReport,
     EngineRunDockSource,
     { provide: RUN_DOCK_SOURCE, useExisting: EngineRunDockSource },
     { provide: RUN_DOCK_STORAGE_KEY, useValue: "run-dock-expanded:strategy-lab" },
@@ -58,20 +62,32 @@ import { toStrategyLabConfiguration } from "./strategy-lab.models";
 export class StrategyLabComponent {
   private readonly apollo = inject(Apollo);
   private readonly router = inject(Router);
-  private readonly route = inject(ActivatedRoute);
   readonly config = inject(StrategyLabConfigStore);
   readonly runs = inject(StrategyLabRunner);
+  readonly report = inject(StrategyLabRunReport);
 
   protected readonly leanSourceOpen = signal(false);
 
-  private readonly restoreRunId = parseRunId(this.route.snapshot.queryParamMap.get("restoreRun"));
+  private loadedRunId: number | null = null;
+  private collapsedForRunId: number | null = null;
 
   constructor() {
     const strategiesReady = this.config.loadStrategies();
-    if (this.restoreRunId !== null) {
+    effect(() => {
+      const runId = this.config.activeRunParam();
+      if (runId === null || runId === this.loadedRunId) return;
+      this.loadedRunId = runId;
       this.runs.clearRunError();
-      void this.restoreSavedRun(this.restoreRunId, strategiesReady);
-    }
+      void this.loadRun(runId, strategiesReady);
+    });
+    effect(() => {
+      const runId = this.report.run()?.id ?? null;
+      if (runId === null || runId === this.collapsedForRunId) return;
+      this.collapsedForRunId = runId;
+      // Transient only: `configNavOverride` is the operator's saved preference
+      // and a completed run is an event, not a setting.
+      this.config.configNavCollapsed.set(true);
+    });
   }
 
   selectHistoryRun(id: string): void {
@@ -81,11 +97,23 @@ export class StrategyLabComponent {
       return;
     }
 
-    void this.router.navigate(["/strategy-lab/runs", numericId]);
+    void this.router.navigate(["/strategy-lab"], {
+      queryParams: { run: numericId },
+      queryParamsHandling: "merge",
+    });
   }
 
-  private async restoreSavedRun(runId: number, strategiesReady: Promise<void>): Promise<void> {
-    await strategiesReady;
+  async loadRun(runId: number, strategiesReady?: Promise<void>): Promise<void> {
+    this.report.activeRunId.set(runId);
+    // The run the runner just produced already matches the configuration on
+    // screen. Restoring it anyway would call applyStrategy, which nulls
+    // customLeanSource — silently discarding the QCAlgorithm that produced it.
+    if (this.runs.justProducedRunId() === runId) {
+      this.runs.justProducedRunId.set(null);
+      return;
+    }
+    this.config.activeTab.set("configuration");
+    await (strategiesReady ?? Promise.resolve());
     try {
       const response = await firstValueFrom(
         this.apollo.query<BacktestRunDetailQueryResult>({
@@ -99,18 +127,11 @@ export class StrategyLabComponent {
         this.runs.runError.set(`Saved run #${runId} was not found.`);
         return;
       }
-      this.config.activeTab.set("configuration");
-      try {
-        this.restoreConfiguration(run);
-      } catch (error) {
-        const message = error instanceof Error
-          ? error.message
-          : "The saved configuration could not be restored.";
-        this.config.configurationWarning.set(message);
-        this.runs.runError.set(message);
-      }
+      this.restoreConfiguration(run);
     } catch (error) {
-      this.runs.runError.set(error instanceof Error ? error.message : "Failed to load the saved run.");
+      const message = error instanceof Error ? error.message : "The saved configuration could not be restored.";
+      this.config.configurationWarning.set(message);
+      this.runs.runError.set(message);
     }
   }
 
@@ -132,9 +153,4 @@ export class StrategyLabComponent {
     this.config.selectStrategy(name);
     this.runs.clearRunError();
   }
-}
-
-function parseRunId(value: string | null): number | null {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }

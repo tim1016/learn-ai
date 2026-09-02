@@ -39,6 +39,9 @@ export class StrategyLabRunner {
   readonly runStatusBanner = signal("");
   readonly runPhaseDetail = signal("");
   readonly runError = signal<string | null>(null);
+  /** The run this runner just persisted, so the workbench can skip a restore
+   *  that would clobber the configuration which produced it. */
+  readonly justProducedRunId = signal<number | null>(null);
 
   constructor() {
     this.wireEngineJobEffect();
@@ -348,7 +351,11 @@ export class StrategyLabRunner {
           `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${formatCurrency(response.net_profit)}`,
         );
         if (response.study_id != null) {
-          await this.router.navigate(["/strategy-lab/runs", response.study_id]);
+          this.justProducedRunId.set(response.study_id);
+          await this.router.navigate(["/strategy-lab"], {
+            queryParams: { run: response.study_id },
+            queryParamsHandling: "merge",
+          });
         }
         else {
           this.runError.set(
@@ -375,7 +382,11 @@ export class StrategyLabRunner {
           "LEAN run finished",
           `Persisted as study #${response.strategy_execution_id}.`,
         );
-        await this.router.navigate(["/strategy-lab/runs", response.strategy_execution_id]);
+        this.justProducedRunId.set(response.strategy_execution_id);
+        await this.router.navigate(["/strategy-lab"], {
+          queryParams: { run: response.strategy_execution_id },
+          queryParamsHandling: "merge",
+        });
       } else {
         this.runError.set(
           "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",

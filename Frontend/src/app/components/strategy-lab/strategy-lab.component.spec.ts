@@ -1,11 +1,17 @@
-import { provideHttpClient } from "@angular/common/http";
+import {
+  HttpErrorResponse,
+  HttpResponse,
+  provideHttpClient,
+  withInterceptors,
+  type HttpInterceptorFn,
+} from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { within } from "@testing-library/angular";
 import { Apollo } from "apollo-angular";
-import { of } from "rxjs";
+import { of, throwError } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
@@ -89,29 +95,75 @@ function strategyCatalog() {
   }];
 }
 
-async function createLab(options: { restoreRun?: number; backtestRun?: BacktestRunDetail | null } = {}) {
+interface WatchQueryRequest {
+  variables?: Record<string, unknown>;
+}
+
+/**
+ * Once a run loads, the workbench mounts the real chart, which pulls in
+ * auxiliary data this suite never asserts on: the indicator catalog, a
+ * stock snapshot, and the run's chart bars. Short-circuiting those requests
+ * keeps `HttpTestingController` scoped to what each test manages explicitly
+ * (`/api/engine/strategies`, the LEAN source fetch) and keeps zoneless
+ * `whenStable()` from hanging on a request nothing in the test ever flushes.
+ * The chart bars fetch is answered with an error, not a fabricated payload,
+ * so the chart's own `catchError` path handles it the way a real outage
+ * would — a fabricated 200 with no `coverage`/`bars` would crash the chart's
+ * own computed signals instead.
+ */
+const bypassAuxiliaryChartRequests: HttpInterceptorFn = (request, next) => {
+  if (request.url.endsWith("/api/dataset/available") || request.url.endsWith("/graphql")) {
+    return of(new HttpResponse({ status: 200, body: null }));
+  }
+  if (request.url.endsWith("/api/engine/chart")) {
+    return throwError(() => new HttpErrorResponse({ status: 503, url: request.url }));
+  }
+  return next(request);
+};
+
+async function createLab(
+  options: { restoreRun?: number; activeRun?: number; backtestRun?: BacktestRunDetail | null } = {},
+) {
   const jobs = signal<never[]>([]);
   const navigate = vi.fn(async () => true);
   const diagnose = vi.fn();
-  const params = convertToParamMap(options.restoreRun ? { restoreRun: String(options.restoreRun) } : {});
+  const query: Record<string, string> = {};
+  if (options.activeRun) query["run"] = String(options.activeRun);
+  if (options.restoreRun) query["restoreRun"] = String(options.restoreRun);
+  const params = convertToParamMap(query);
   await TestBed.configureTestingModule({
     imports: [StrategyLabComponent],
     providers: [
       provideZonelessChangeDetection(),
-      provideHttpClient(),
+      provideHttpClient(withInterceptors([bypassAuxiliaryChartRequests])),
       provideHttpClientTesting(),
       { provide: ActivatedRoute, useValue: { queryParamMap: of(params), snapshot: { queryParamMap: params } } },
       { provide: Router, useValue: { navigate } },
       { provide: JobsService, useValue: { jobs, job: vi.fn(() => null), startJob: vi.fn(), fetchResult: vi.fn(), cancelJob: vi.fn() } },
-      { provide: LeanSidecarService, useValue: { diagnose, nextTradingDayOpen: vi.fn() } },
+      {
+        provide: LeanSidecarService,
+        useValue: {
+          diagnose,
+          nextTradingDayOpen: vi.fn(async () => ({ session_open_ms_utc: 1_700_000_000_000 })),
+        },
+      },
       {
         provide: Apollo,
         useValue: {
           query: vi.fn(() => of({ data: { backtestRun: options.backtestRun ?? null } })),
-          watchQuery: vi.fn(() => ({
-            valueChanges: of({ data: { backtestRuns: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }),
-            refetch: vi.fn(),
-          })),
+          // StrategyLabRunReport watches the single-run detail query (variables.id);
+          // the run-history rail watches the paged list query — same mock, two shapes.
+          watchQuery: vi.fn((request: WatchQueryRequest) =>
+            request.variables && "id" in request.variables
+              ? {
+                  valueChanges: of({ data: { backtestRun: options.backtestRun ?? null }, loading: false }),
+                  stopPolling: vi.fn(),
+                }
+              : {
+                  valueChanges: of({ data: { backtestRuns: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }),
+                  refetch: vi.fn(),
+                },
+          ),
         },
       },
     ],
@@ -133,19 +185,68 @@ describe("Strategy Lab Workbench", () => {
     expect(root.textContent).toContain("History");
     expect(root.textContent).not.toContain("Run a strategy, inspect its evidence");
     expect(root.querySelector("app-strategy-lab-config-rail")).not.toBeNull();
-    expect(root.querySelector("app-engine-run-report")).toBeNull();
     http.verify();
   });
 
-  it("opens a selected history run on its dedicated Results route", async () => {
+  it("populates statistics under the configuration and the chart on the stage", async () => {
+    const saved = run();
+    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const root = fixture.nativeElement as HTMLElement;
+    await vi.waitFor(() => {
+      expect(root.querySelector("app-strategy-lab-run-stats")).not.toBeNull();
+    });
+
+    const rail = root.querySelector(".workbench__rail");
+    expect(rail?.querySelector("app-strategy-lab-run-stats")).not.toBeNull();
+    expect(root.querySelector(".workbench__stage app-strategy-lab-stage")).not.toBeNull();
+    expect(root.textContent).not.toContain("Back to workbench");
+    http.verify();
+  });
+
+  it("opens a selected history run on the same page", async () => {
     const { fixture, http, navigate } = await createLab();
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
     await fixture.whenStable();
 
     fixture.componentInstance.selectHistoryRun("91");
 
-    expect(navigate).toHaveBeenCalledWith(["/strategy-lab/runs", 91]);
+    expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({
+      queryParams: { run: 91 },
+      queryParamsHandling: "merge",
+    }));
     http.verify();
+  });
+
+  it("collapses the configuration on completion without writing the saved preference", async () => {
+    localStorage.removeItem("engineLab.configNavOverride");
+    const saved = run();
+    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await vi.waitFor(() => {
+      expect(fixture.componentInstance.config.configNavCollapsed()).toBe(true);
+    });
+
+    // Completion is an event, not a setting: the operator's stored preference
+    // must be untouched so a reload does not inherit an automatic collapse.
+    expect(localStorage.getItem("engineLab.configNavOverride")).toBeNull();
+    http.verify();
+  });
+
+  it("does not discard the custom QCAlgorithm that produced the run just completed", async () => {
+    const saved = run();
+    const { fixture, http } = await createLab({ backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+
+    const lab = fixture.componentInstance;
+    lab.config.changeEngine("lean");
+    lab.config.customLeanSource.set("class Edited(QCAlgorithm): pass");
+    lab.runs.justProducedRunId.set(saved.id);
+    lab.loadRun(saved.id);
+    await fixture.whenStable();
+
+    expect(lab.config.customLeanSource()).toBe("class Edited(QCAlgorithm): pass");
   });
 
   it("opens the registered QCAlgorithm in a drawer without probing the launcher", async () => {
@@ -188,6 +289,15 @@ describe("Strategy Lab saved configuration", () => {
     const { fixture, http } = await createLab({ restoreRun: saved.id, backtestRun: saved });
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
     const root = fixture.nativeElement as HTMLElement;
+    // Restoring a persisted run loads its report, which auto-collapses the
+    // configuration to the compact strip (see the "collapses the
+    // configuration on completion" spec) — expand it back to inspect the
+    // restored controls, the same way an operator would.
+    await vi.waitFor(() => {
+      expect(root.querySelector(".config-strip__expand")).not.toBeNull();
+    });
+    root.querySelector<HTMLButtonElement>(".config-strip__expand")?.click();
+    fixture.detectChanges();
     await vi.waitFor(() => {
       expect(root.querySelector(".config-rail")).not.toBeNull();
     });
@@ -207,8 +317,6 @@ describe("Strategy Lab saved configuration", () => {
     const executionInputs = root.querySelectorAll<HTMLInputElement>("details.advanced fieldset:last-of-type input");
     expect(executionInputs[0]?.value).toBe("75000");
     expect(executionInputs[1]?.value).toBe("0.35");
-    expect(root.querySelector("app-engine-run-report")).toBeNull();
-    expect(root.querySelector("app-strategy-lab-results-sidebar")).toBeNull();
     http.verify();
   });
 

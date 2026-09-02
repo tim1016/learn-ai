@@ -50,22 +50,36 @@
                 />
               }
 
+              @if (report.run(); as currentRun) {
+                @if (report.engineResult(); as result) {
+                  <app-strategy-lab-run-stats
+                    [run]="currentRun"
+                    [result]="result"
+                    [verdict]="report.verdict()"
+                    [parity]="report.parity()"
+                    [tradesTruncated]="currentRun.tradesTruncated"
+                  />
+                }
+              } @else if (report.loadError()) {
+                <div class="lab-notice lab-notice--error" role="alert">
+                  Run report could not be loaded. Try again from History.
+                </div>
+              }
             </aside>
 
             <section class="workbench__stage" aria-label="Strategy evidence">
-              @if (runs.running()) {
-                <div class="run-status" role="status" aria-live="polite">
-                  <span class="run-status__pulse" aria-hidden="true"></span>
-                  <strong>{{ runs.runStatusBanner() || "Running validation…" }}</strong>
-                  @if (runs.runPhaseDetail()) { <span>{{ runs.runPhaseDetail() }}</span> }
-                </div>
-              }
-
               @if (runs.runError() ?? config.configurationWarning(); as error) {
                 <div class="lab-notice lab-notice--error" role="alert">{{ error }}</div>
               }
 
-              <app-validation-stage-placeholder
+              <app-strategy-lab-stage
+                [run]="report.run()"
+                [markers]="report.markers()"
+                [equityPoints]="report.equityPoints()"
+                [notices]="report.reportNotices()"
+                [running]="runs.running()"
+                [runStatus]="runs.runStatusBanner()"
+                [runPhaseDetail]="runs.runPhaseDetail()"
                 [symbol]="config.effectiveSymbol()"
                 [resolution]="config.resolution()"
                 [fillMode]="config.fillMode()"
