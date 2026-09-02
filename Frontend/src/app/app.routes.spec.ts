@@ -59,6 +59,21 @@ describe('routes', () => {
     expect(TestBed.inject(Router).serializeUrl(tree)).toBe(expectedUrl);
   });
 
+  it.each([
+    '/strategy-lab/runs/204/extra',
+    '/engine/runs/204/extra',
+  ])('does not treat %s as a persisted-run bookmark', async (url) => {
+    // Without pathMatch: 'full' the run routes prefix-match, so a trailing
+    // segment still fired the redirect with id 204 instead of falling through
+    // to the wildcard — a URL that is not a run bookmark opened a run.
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl(url);
+
+    expect(router.url).toBe('/data-lab');
+  });
+
   it('resolves the legacy engine/runs/:id bookmark onto the one-page workbench', async () => {
     // Angular's router does not chain a redirect target that is itself a
     // redirect route within one navigation (it re-matches the redirected URL

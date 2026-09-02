@@ -174,6 +174,7 @@ export const routes: Routes = [
     // component-scoped config store and runner while a run is in flight.
     path: "strategy-lab/runs/:id",
     redirectTo: redirectToStrategyLabRun,
+    pathMatch: "full",
   },
   {
     path: "strategy-lab/docs",
