@@ -683,14 +683,19 @@ def test_continuity_policy_deadline_and_trigger_detection() -> None:
     async def _sink(event):  # pragma: no cover - never called here
         raise AssertionError
 
+    def _next_trigger(last_end: int) -> int:
+        # Fake decision clock: triggers at k * 15 min + 60 s; smallest one strictly after last_end.
+        candidate = (last_end // 900_000) * 900_000 + 60_000
+        return candidate if candidate > last_end else candidate + 900_000
+
     policy = ContinuityPolicy(
         decision_session="rth",
-        next_trigger_ms=lambda last_end: ((last_end // 900_000) + 1) * 900_000 + 60_000,
+        next_trigger_ms=_next_trigger,
         substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
         record_event=_sink,
     )
     assert policy.delivery_allowance_ms == 20_000
-    assert policy.deadline_ms(900_000) == 1_800_000 + 60_000 + 20_000
+    assert policy.deadline_ms(900_000) == 960_000 + 20_000
     assert policy.is_trigger_ms(1_860_000) is True
     assert policy.is_trigger_ms(1_800_000) is False
 
@@ -1256,10 +1261,16 @@ class _RecordingSink:
         return ContinuityEventRef(run_id="run-1", evidence_seq=len(self.events))
 
 
+def _next_trigger(last_end: int) -> int:
+    # Fake decision clock: triggers at k * 15 min + 60 s; smallest one strictly after last_end.
+    candidate = (last_end // _TF) * _TF + 60_000
+    return candidate if candidate > last_end else candidate + _TF
+
+
 def _policy(sink: _RecordingSink, *, grant=None) -> ContinuityPolicy:
     return ContinuityPolicy(
         decision_session="rth",
-        next_trigger_ms=lambda last_end: ((last_end // _TF) + 1) * _TF + 60_000,
+        next_trigger_ms=_next_trigger,
         substitution_grant=grant or (lambda s, e: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED")),
         record_event=sink,
     )
