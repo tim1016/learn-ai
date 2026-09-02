@@ -23,7 +23,7 @@ Copied from the repo rules and the spec. Every task's requirements implicitly in
 - **Accessibility:** AXE-clean, WCAG AA. Every interactive control has an accessible name.
 - **Test naming:** `*.component.spec.ts`, `*.service.spec.ts`. Assert rendered output, not private signal values.
 - **Frontend lint gate:** `npx eslint Frontend/src/ --max-warnings 0` — project scope, zero warnings.
-- **Frontend test gate:** scoped runs during development (`--include='exact.spec.ts'`, never directory globs — the container OOMs), but a **full** `ng test` sweep before push, because parent specs in this repo pin child component copy.
+- **Frontend test gate:** run tests on the **host**, from this worktree's `Frontend/` — `cd Frontend && npx ng test [--include=…]`. **Not** `podman exec my-frontend`: that container mounts the *main* checkout shared with other live sessions, so it tests someone else's tree and can report a false green on work that is not in it. Scoped runs during development (`--include='exact.spec.ts'`, never directory globs), and a **full** `ng test` sweep before push, because parent specs in this repo pin child component copy.
 - **No backend change.** No Python, .NET, GraphQL, or OpenAPI surface moves in this plan.
 - **Commit trailer:** every commit ends with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
 
@@ -223,7 +223,7 @@ describe("toEngineTrade", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab-run-report.service.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab-run-report.service.spec.ts'
 ```
 
 Expected: FAIL — `Cannot find module './strategy-lab-run-report.service'`.
@@ -313,7 +313,7 @@ Copy `engineResult`, `markers`, `equityPoints`, `reportNotices`, and `parity` fr
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab-run-report.service.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab-run-report.service.spec.ts'
 ```
 
 Expected: PASS, 8 tests.
@@ -410,7 +410,7 @@ describe("StrategyLabRunStatsComponent", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/run-stats/strategy-lab-run-stats.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/run-stats/strategy-lab-run-stats.component.spec.ts'
 ```
 
 Expected: FAIL — module not found.
@@ -481,7 +481,7 @@ export class StrategyLabRunStatsComponent {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/run-stats/strategy-lab-run-stats.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/run-stats/strategy-lab-run-stats.component.spec.ts'
 ```
 
 Expected: PASS, 2 tests.
@@ -612,7 +612,7 @@ describe("StrategyLabStageComponent", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab-stage/strategy-lab-stage.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab-stage/strategy-lab-stage.component.spec.ts'
 ```
 
 Expected: FAIL — module not found.
@@ -770,7 +770,7 @@ export class StrategyLabStageComponent {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab-stage/strategy-lab-stage.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab-stage/strategy-lab-stage.component.spec.ts'
 ```
 
 Expected: PASS, 4 tests.
@@ -896,8 +896,8 @@ it("says a strategy has no registered twin instead of blaming the system", async
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/services/lean-source.service.spec.ts'
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/lean-source-editor/lean-source-editor.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/services/lean-source.service.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/lean-source-editor/lean-source-editor.component.spec.ts'
 ```
 
 Expected: FAIL — the service still returns `LeanStrategySource`, and the editor has no unregistered branch.
@@ -991,8 +991,8 @@ In `lean-source-editor.component.html`, replace the load-state block:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/services/lean-source.service.spec.ts'
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/lean-source-editor/lean-source-editor.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/services/lean-source.service.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/lean-source-editor/lean-source-editor.component.spec.ts'
 ```
 
 Expected: PASS.
@@ -1095,8 +1095,8 @@ it("opens the registered QCAlgorithm in a drawer without probing the launcher", 
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab-config-rail/strategy-lab-config-rail.component.spec.ts'
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab-config-rail/strategy-lab-config-rail.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab.component.spec.ts'
 ```
 
 Expected: FAIL — no trigger button exists; the editor still renders inline in the stage.
@@ -1181,8 +1181,8 @@ In `strategy-lab.component.html`: delete the `@if (config.engine() === "lean" &&
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab-config-rail/strategy-lab-config-rail.component.spec.ts'
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab-config-rail/strategy-lab-config-rail.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab.component.spec.ts'
 ```
 
 Expected: PASS.
@@ -1261,7 +1261,7 @@ is the only way to invoke it directly.
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/app.routes.spec.ts'
+cd Frontend && npx ng test --include='src/app/app.routes.spec.ts'
 ```
 
 Expected: FAIL — `redirectTo` is undefined; the route still has `loadComponent`.
@@ -1286,10 +1286,22 @@ Delete the `StrategyLabResultsComponent` import from `app.routes.spec.ts`.
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/app.routes.spec.ts'
+cd Frontend && npx ng test --include='src/app/app.routes.spec.ts'
 ```
 
-Expected: PASS. The legacy `engine/runs/:id` → `strategy-lab/runs/:id` → `/strategy-lab?run=N` chain resolves through Angular's recursive redirect application.
+Expected: PASS.
+
+**Correction, established during implementation (see the design spec's "Correction, found
+during implementation").** This step originally expected the legacy
+`engine/runs/:id` → `strategy-lab/runs/:id` → `/strategy-lab?run=N` chain to resolve
+"through Angular's recursive redirect application". That is **false** for
+`@angular/router@22.0.8`: `expandSegmentAgainstRouteUsingRedirect` recurses via
+`processSegment(..., false, ...)`, forcing `allowRedirects` to `false` on the re-match, so a
+redirect whose target is itself a redirect route throws `NoMatch` on the second hop and
+falls through to the `**` wildcard — the legacy deep link would have died silently. The
+shipped code therefore redirects `engine/runs/:id` **directly** to the final URL through the
+same shared `redirectToStrategyLabRun` function, and the test pins the resolved URL rather
+than the route-config shape.
 
 - [ ] **Step 5: Commit**
 
@@ -1404,7 +1416,7 @@ Extend `createLab` to accept `activeRun?: number` and put it in the query param 
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab.component.spec.ts'
 ```
 
 Expected: FAIL — `app-strategy-lab-run-stats` is never rendered; `loadRun` and `justProducedRunId` do not exist.
@@ -1632,8 +1644,8 @@ git rm -r Frontend/src/app/components/engine-lab Frontend/src/app/components/str
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab.component.spec.ts'
-podman exec my-frontend npx ng test --include='src/app/app.routes.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/app.routes.spec.ts'
 ```
 
 Expected: PASS. Then confirm nothing still imports the deleted surfaces:
@@ -1697,7 +1709,7 @@ it("stacks its metric groups in one column for the workbench rail", async () => 
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/results-summary/results-summary.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/results-summary/results-summary.component.spec.ts'
 ```
 
 Expected: FAIL — two columns.
@@ -1709,7 +1721,7 @@ In `results-summary.component.scss`: change `.results-summary`'s `grid-template-
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/results-summary/results-summary.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/results-summary/results-summary.component.spec.ts'
 ```
 
 Expected: PASS.
@@ -1781,7 +1793,7 @@ it("uses the fixed heights until a measurement arrives", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/shared/trading-chart/trading-chart.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/shared/trading-chart/trading-chart.component.spec.ts'
 ```
 
 Expected: FAIL — `availableHeight` does not exist.
@@ -1852,8 +1864,8 @@ In `strategy-lab-chart.component.scss`, make the host fill its grid cell:
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/shared/trading-chart/trading-chart.component.spec.ts'
-podman exec my-frontend npx ng test --include='src/app/components/strategy-lab/strategy-lab-chart/strategy-lab-chart.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/shared/trading-chart/trading-chart.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-lab/strategy-lab-chart/strategy-lab-chart.component.spec.ts'
 ```
 
 Expected: PASS.
@@ -1947,7 +1959,7 @@ describe("LeanTwinSourceComponent", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-validation/lean-twin-source/lean-twin-source.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-validation/lean-twin-source/lean-twin-source.component.spec.ts'
 ```
 
 Expected: FAIL — module not found.
@@ -2099,8 +2111,8 @@ In `strategy-validation.component.ts`, add `LeanTwinSourceComponent` to `imports
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-podman exec my-frontend npx ng test --include='src/app/components/strategy-validation/lean-twin-source/lean-twin-source.component.spec.ts'
-podman exec my-frontend npx ng test --include='src/app/components/strategy-validation/strategy-validation.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-validation/lean-twin-source/lean-twin-source.component.spec.ts'
+cd Frontend && npx ng test --include='src/app/components/strategy-validation/strategy-validation.component.spec.ts'
 ```
 
 Expected: PASS. If the 508-line `strategy-validation.component.spec.ts` fails because its `LeanSourceService` is now called, add a stub provider returning `{ kind: "unregistered", detail: "…" }` to its TestBed.
@@ -2141,7 +2153,7 @@ Expected: clean. Cross-file drift (imports orphaned by the Task 7 deletions) sur
 - [ ] **Step 2: Full frontend suite**
 
 ```bash
-podman exec my-frontend npx ng test
+cd Frontend && npx ng test
 ```
 
 Expected: green. A scoped run cannot substitute: parent specs in this repo pin child component copy, and exit code 137 means the container OOMed rather than that a test failed — rerun rather than treating it as a result.
@@ -2151,7 +2163,7 @@ Expected: green. A scoped run cannot substitute: parent specs in this repo pin c
 If a suite fails, confirm whether it also fails on the base commit before treating it as inherited:
 
 ```bash
-git stash && git checkout origin/master -- Frontend/src && podman exec my-frontend npx ng test --include='<the failing spec>'
+git stash && git checkout origin/master -- Frontend/src && cd Frontend && npx ng test --include='<the failing spec>'
 git checkout HEAD -- Frontend/src && git stash pop
 ```
 

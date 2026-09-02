@@ -170,8 +170,17 @@ is precisely the kind of magical abstraction the repo's quality gate exists to c
   height: calc(100dvh - var(--strategy-lab-chrome));  // tab list + 36px dock strip
 }
 .workbench__rail  { overflow-y: auto; }
-.workbench__stage { min-height: 0; }                  // lets the chart shrink to fit
+app-strategy-lab-stage { min-height: 0; }             // lets the chart shrink to fit
 ```
+
+**Correction, found during final review.** This section originally wrapped the stage in a
+`<section class="workbench__stage" aria-label="Strategy evidence">` carrying the run-error
+notice. That wrapper is gone: it duplicated the "Strategy evidence" landmark the stage's own
+root already declares (tripping axe's `landmark-unique`), and its
+`grid-template-rows: auto minmax(0, 1fr)` with a conditionally rendered notice needed a
+`grid-row: 2` pin on the stage to place the chart. The run error is now an `error` input on
+the stage, rendered beside the report notices inside the stage's own notice container, and
+`app-strategy-lab-stage` is the workbench grid's second column directly.
 
 `--strategy-lab-chrome` is declared on `.strategy-lab` in the component's own stylesheet,
 not globally — it describes this page's chrome and nothing else's.

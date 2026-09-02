@@ -111,6 +111,10 @@
   color: $text-subtle;
 }
 
+.lean-source__load-state--error {
+  color: $bear;
+}
+
 .lean-source__editor {
   min-height: 360px;
   max-height: 620px;

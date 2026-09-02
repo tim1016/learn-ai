@@ -166,5 +166,31 @@ describe("LeanSourceEditorComponent", () => {
 
     expect(await screen.findByText(/has no registered LEAN validation source/)).toBeTruthy();
     expect(screen.queryByText("Registered QCAlgorithm source is unavailable.")).toBeNull();
+    // An unregistered twin is a fact about the strategy, not a broken system.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("raises a failed source lookup as an alert, unlike an unregistered twin", async () => {
+    await render(LeanSourceEditorComponent, {
+      inputs: {
+        strategyName: REGISTERED_SOURCE.strategy_name,
+        launcherStatus: "unknown",
+      },
+      providers: [
+        provideZonelessChangeDetection(),
+        {
+          provide: LeanSourceService,
+          useValue: {
+            getStrategySource: vi.fn(async () => ({
+              kind: "unavailable" as const,
+              detail: "The registered QCAlgorithm source could not be loaded.",
+            })),
+          },
+        },
+      ],
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The registered QCAlgorithm source could not be loaded.");
   });
 });
