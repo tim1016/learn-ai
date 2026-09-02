@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TradingChartComponent, TRADING_CHART_FACTORY } from "./trading-chart.component";
 
+const EQUITY = [{
+  id: "equity", name: "Realized equity", type: "area", color: "#fff", lineType: "steps",
+  points: [{ timeMs: 1_700_000_000_000, value: 100_100 }],
+}];
+
 const chartHarness: {
   options: Record<string, unknown> | null;
   addSeries: ReturnType<typeof vi.fn>;
@@ -110,10 +115,7 @@ describe("TradingChartComponent", () => {
 
   it("distributes measured height across panes proportionally to their weights", async () => {
     const fixture = await createComponent();
-    fixture.componentRef.setInput("equity", [{
-      id: "equity", name: "Realized equity", type: "area", color: "#fff", lineType: "steps",
-      points: [{ timeMs: 1_700_000_000_000, value: 100_100 }],
-    }]);
+    fixture.componentRef.setInput("equity", EQUITY);
     fixture.detectChanges();
     await fixture.whenStable();
 
@@ -131,10 +133,7 @@ describe("TradingChartComponent", () => {
 
   it("falls back to fixed pane heights when the viewport is below the floor", async () => {
     const fixture = await createComponent();
-    fixture.componentRef.setInput("equity", [{
-      id: "equity", name: "Realized equity", type: "area", color: "#fff", lineType: "steps",
-      points: [{ timeMs: 1_700_000_000_000, value: 100_100 }],
-    }]);
+    fixture.componentRef.setInput("equity", EQUITY);
     fixture.detectChanges();
     await fixture.whenStable();
 
@@ -148,13 +147,31 @@ describe("TradingChartComponent", () => {
 
   it("uses the fixed heights until a measurement arrives", async () => {
     const fixture = await createComponent();
-    fixture.componentRef.setInput("equity", [{
-      id: "equity", name: "Realized equity", type: "area", color: "#fff", lineType: "steps",
-      points: [{ timeMs: 1_700_000_000_000, value: 100_100 }],
-    }]);
+    fixture.componentRef.setInput("equity", EQUITY);
     fixture.detectChanges();
     await fixture.whenStable();
 
     expect(fixture.componentInstance.chartHeight()).toBe(675);
+  });
+
+  it("rebuilds the chart when candle data changes after mount", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("candles", [
+      { timeMs: 1_700_000_000_000, open: 100, high: 102, low: 99, close: 101, volume: 20 },
+    ]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(createChart).toHaveBeenCalledOnce();
+
+    fixture.componentRef.setInput("candles", [
+      { timeMs: 1_700_000_000_000, open: 100, high: 102, low: 99, close: 101, volume: 20 },
+      { timeMs: 1_700_000_060_000, open: 101, high: 104, low: 100, close: 103, volume: 15 },
+    ]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    // Data changes must still rebuild the chart — only availableHeight()
+    // changes (resizes) are excluded from the mount effect's dependencies.
+    expect(createChart).toHaveBeenCalledTimes(2);
   });
 });

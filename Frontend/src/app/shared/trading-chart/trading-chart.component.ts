@@ -203,12 +203,12 @@ export class TradingChartComponent implements OnDestroy {
     // Read outside reactive tracking: this mount effect rebuilds the whole
     // chart on data changes, not on every resize. A live resize is handled
     // by observeResize()'s direct chart.resize() call instead — reading
-    // paneHeights() here untracked keeps availableHeight() out of this
-    // effect's dependencies so resizing doesn't tear the chart down.
+    // paneHeights()/chartHeight() here untracked keeps availableHeight() out
+    // of this effect's dependencies so resizing doesn't tear the chart down.
     const paneHeights = untracked(() => this.paneHeights());
     const chart = this.createChart(element, {
       width: element.clientWidth,
-      height: paneHeights.reduce((total, height) => total + height, 0),
+      height: untracked(() => this.chartHeight()),
       layout: {
         background: { color: THEME.bg },
         textColor: THEME.text,
