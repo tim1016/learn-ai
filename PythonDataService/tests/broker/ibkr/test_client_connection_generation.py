@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.broker.ibkr import client as client_module
-from app.broker.ibkr.client import IbkrClient
+from app.broker.ibkr.client import ConnectionRefusedDueToSentinelError, IbkrClient
 from app.broker.ibkr.config import IbkrSettings
 
 
@@ -68,4 +68,23 @@ async def test_connection_generation_unchanged_on_failed_connect(
     monkeypatch.setattr(client._ib, "connectAsync", _refuse)
     with pytest.raises(Exception):
         await client.connect()
+    assert client.connection_generation == 0
+
+
+async def test_connection_generation_unchanged_when_the_sentinel_refuses(
+    client: IbkrClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The socket opens, then the account fails the paper/live sentinel.
+
+    This is the case the rule is actually worded against ("+1 after the
+    sentinel checks pass"), and the only one that pins the increment's
+    *placement*: a transport-level failure never reaches the sentinel block,
+    so moving the ``+= 1`` up beside ``connectAsync``'s ``break`` would still
+    pass every other test here.
+    """
+    monkeypatch.setattr(client._ib, "managedAccounts", lambda: ["U123456"])
+
+    with pytest.raises(ConnectionRefusedDueToSentinelError):
+        await client.connect()
+
     assert client.connection_generation == 0
