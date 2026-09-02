@@ -1,0 +1,7 @@
+:host { display: block; min-width: 0; }
+
+.run-stats {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}

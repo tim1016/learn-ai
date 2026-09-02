@@ -1,0 +1,14 @@
+<section class="run-stats" aria-label="Run statistics">
+  <app-strategy-lab-results-summary
+    [result]="result()"
+    [verdict]="verdict()"
+    [metricDocumentation]="run().metricDocumentation ?? []"
+    [runId]="run().id"
+  />
+  <app-strategy-lab-results-sidebar [run]="run()" />
+  <app-strategy-lab-deep-dives
+    [result]="result()"
+    [tradesTruncated]="tradesTruncated()"
+    [parity]="parity()"
+  />
+</section>
