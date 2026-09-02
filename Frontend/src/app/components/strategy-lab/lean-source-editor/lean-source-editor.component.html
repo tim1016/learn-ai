@@ -17,7 +17,7 @@
       <input
         type="checkbox"
         [checked]="canEdit()"
-        [disabled]="!sourceResource.hasValue()"
+        [disabled]="!canUseCustomSource()"
         (change)="toggleCustomSource($event)"
       />
       <span>Use custom source for this LEAN run</span>

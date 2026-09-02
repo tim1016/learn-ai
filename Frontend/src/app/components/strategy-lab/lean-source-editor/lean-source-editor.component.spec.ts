@@ -193,4 +193,30 @@ describe("LeanSourceEditorComponent", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("The registered QCAlgorithm source could not be loaded.");
   });
+
+  it.each([
+    ["a failed lookup", { kind: "unavailable" as const, detail: "The registered QCAlgorithm source could not be loaded." }],
+    ["an unregistered twin", { kind: "unregistered" as const, detail: "Strategy 'sma_crossover' has no registered LEAN validation source" }],
+  ])("offers no custom-source toggle after %s", async (_case, result) => {
+    await render(LeanSourceEditorComponent, {
+      inputs: {
+        strategyName: REGISTERED_SOURCE.strategy_name,
+        launcherStatus: "ready",
+      },
+      providers: [
+        provideZonelessChangeDetection(),
+        {
+          provide: LeanSourceService,
+          useValue: { getStrategySource: vi.fn(async () => result) },
+        },
+      ],
+    });
+
+    // The service resolves a 404 or a transport failure into a successful
+    // result, so "the resource has a value" enabled a toggle with nothing to
+    // seed custom editing from — clicking it did nothing at all.
+    const toggle = await screen.findByRole("checkbox", { name: /Use custom source/i });
+    if (!(toggle instanceof HTMLInputElement)) throw new Error("Custom-source toggle is not an input");
+    expect(toggle.disabled).toBe(true);
+  });
 });
