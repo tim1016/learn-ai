@@ -134,16 +134,24 @@ export class StrategyLabComponent {
     // Transient only: `configNavOverride` is the operator's saved preference
     // and a completed run is an event, not a setting.
     this.config.configNavCollapsed.set(true);
-    // The run the runner just produced already matches the configuration on
-    // screen. Restoring it anyway would call applyStrategy, which nulls
-    // customLeanSource — silently discarding the QCAlgorithm that produced it.
-    if (this.runs.justProducedRunId() === run.id) {
-      this.runs.justProducedRunId.set(null);
-      return;
-    }
+    // The persisted fields are restored even for a run this page just
+    // produced: the operator can have changed still-enabled controls while
+    // the job ran, and the report must not render beside inputs that no
+    // longer describe it. The one thing the restore would destroy is the
+    // submitted QCAlgorithm — `restoreStrategy` → `applyStrategy` nulls
+    // `customLeanSource`, and custom source is the only route to a
+    // parameterized LEAN run — so carry that across instead of skipping.
+    const justProduced = this.runs.justProducedRunId() === run.id;
+    const submittedSource = justProduced ? this.config.customLeanSource() : null;
     await strategiesReady;
+    // `activeRunParam` can move while the strategy catalog loads. A stale
+    // invocation must not restore its run's configuration over the run now
+    // selected, or over no run at all.
+    if (this.report.activeRunId() !== run.id) return;
+    if (justProduced) this.runs.justProducedRunId.set(null);
     try {
       this.restoreConfiguration(run);
+      if (submittedSource !== null) this.config.customLeanSource.set(submittedSource);
     } catch (error) {
       const message = error instanceof Error
         ? error.message

@@ -299,6 +299,67 @@ describe("Strategy Lab Workbench", () => {
     expect(lab.config.customLeanSource()).toBe("class Edited(QCAlgorithm): pass");
   });
 
+  it("restores the finished run over controls the operator changed while it ran", async () => {
+    const saved = run();
+    const { fixture, http, navigateToQuery } = await createLab({ backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+
+    const lab = fixture.componentInstance;
+    lab.config.changeEngine("lean");
+    lab.config.customLeanSource.set("class Edited(QCAlgorithm): pass");
+    lab.runs.justProducedRunId.set(saved.id);
+    // Nothing locks the still-enabled controls while a job runs, so the
+    // configuration on screen is not automatically the one that produced the
+    // finished run.
+    lab.config.initialCash.set(1_000);
+    lab.config.fillMode.set("signal_bar_close");
+    navigateToQuery({ run: String(saved.id) });
+
+    // The report must not render beside inputs that no longer describe it —
+    // "Run validation" has to reproduce what is displayed.
+    await vi.waitFor(() => {
+      expect(lab.config.initialCash()).toBe(75_000);
+    });
+    expect(lab.config.fillMode()).toBe("next_bar_open");
+    // The one thing the restore would otherwise destroy: `applyStrategy` nulls
+    // the custom source, and custom source is the only route to a
+    // parameterized LEAN run.
+    expect(lab.config.customLeanSource()).toBe("class Edited(QCAlgorithm): pass");
+    http.verify();
+  });
+
+  it("abandons a restore for a run the operator has already navigated away from", async () => {
+    localStorage.removeItem("engineLab.configNavOverride");
+    const saved = run();
+    const { fixture, http, navigateToQuery } = await createLab({
+      activeRun: saved.id,
+      backtestRun: saved,
+    });
+    const lab = fixture.componentInstance;
+    // The catalog request is deliberately left in flight: `adoptRun` captures
+    // its run, collapses the rail, and then awaits it — that await is the
+    // window `activeRunId` can move under.
+    const strategies = http.expectOne((request) => request.url.endsWith("/api/engine/strategies"));
+    await vi.waitFor(() => {
+      expect(lab.config.configNavCollapsed()).toBe(true);
+    });
+
+    navigateToQuery({});
+    strategies.flush(strategyCatalog());
+    await fixture.whenStable();
+    // A macrotask turn, so every continuation parked on the catalog promise —
+    // the one inside `adoptRun` included — has run before the assertions.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Run 91 is no longer on the page, so its configuration must not be
+    // written over the defaults the operator is now looking at.
+    expect(lab.report.displayRun()).toBeNull();
+    expect(lab.config.initialCash()).toBe(100_000);
+    expect(lab.config.fillMode()).toBe("signal_bar_close");
+    http.verify();
+  });
+
   it("loads the run detail once per selected run rather than once per surface", async () => {
     const saved = run();
     const { fixture, http, runDetailWatchCount } = await createLab({
