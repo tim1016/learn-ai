@@ -117,6 +117,15 @@ _TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY: frozenset[TrustedTemplate] = frozenset(
 )
 
 
+def _claimed_twins() -> set[str]:
+    """Template names some registered strategy declares as its ``lean_twin``."""
+    return {
+        registration.lean_twin
+        for registration in _STRATEGY_REGISTRY.values()
+        if registration.lean_twin is not None
+    }
+
+
 def test_every_declared_lean_twin_resolves_to_a_bundled_template() -> None:
     """A strategy may not point at a template that does not exist."""
     declared = {
@@ -141,12 +150,7 @@ def test_every_strategy_twin_template_is_claimed_by_a_strategy() -> None:
     escape hatch is deliberate and documented, not silent: put it in
     ``_TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY`` with a reason.
     """
-    claimed = {
-        registration.lean_twin
-        for registration in _STRATEGY_REGISTRY.values()
-        if registration.lean_twin is not None
-    }
-
+    claimed = _claimed_twins()
     unclaimed = {
         template
         for template in TrustedTemplate
@@ -162,12 +166,7 @@ def test_every_strategy_twin_template_is_claimed_by_a_strategy() -> None:
 
 def test_exemption_list_does_not_name_a_claimed_template() -> None:
     """The escape hatch must not outlive the gap it documents."""
-    claimed = {
-        registration.lean_twin
-        for registration in _STRATEGY_REGISTRY.values()
-        if registration.lean_twin is not None
-    }
-
+    claimed = _claimed_twins()
     stale = {t.value for t in _TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY if t.value in claimed}
 
     assert not stale, f"exempted templates are now claimed; drop them from the exemption list: {sorted(stale)}"
