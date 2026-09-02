@@ -109,7 +109,11 @@
         }
       </fieldset>
 
-      @if (engine() !== "python") {
+      @if (engine() === "lean") {
+        <!-- LEAN only: `both` routes through the Python job, whose contract
+             carries no custom source, so the compatibility companion runs the
+             registered twin. Offering the editor there would promise an
+             execution that silently discards the operator's code. -->
         <button
           type="button"
           class="lean-source-trigger"
@@ -119,7 +123,9 @@
           <span>Edit QCAlgorithm source</span>
           <i class="pi pi-angle-right" aria-hidden="true"></i>
         </button>
+      }
 
+      @if (engine() !== "python") {
         <section class="lean-launcher" aria-label="LEAN launcher">
           <div><span>LEAN launcher</span><strong>{{ launcherStatus() }}</strong></div>
           @if (leanTemplateLabel()) { <p>{{ leanTemplateLabel() }}</p> }

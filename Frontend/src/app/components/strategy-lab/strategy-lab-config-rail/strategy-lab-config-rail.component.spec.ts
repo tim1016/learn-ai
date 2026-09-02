@@ -193,4 +193,22 @@ describe("StrategyLabConfigRailComponent", () => {
     expect((fixture.nativeElement as HTMLElement)
       .querySelector("button[aria-label='Edit QCAlgorithm source']")).toBeNull();
   });
+
+  it("hides the QCAlgorithm editor in Both mode, which cannot carry a custom source", async () => {
+    const fixture = await createRail(false, "both");
+    const root = fixture.nativeElement as HTMLElement;
+
+    // `StrategyLabRunner.run()` routes `both` through `runPython()`, whose
+    // payload has no custom-source field — the compatibility companion runs
+    // the registered twin, so offering the editor here promised an execution
+    // that silently discarded the operator's QCAlgorithm.
+    expect(root.querySelector("button[aria-label='Edit QCAlgorithm source']")).toBeNull();
+    // The LEAN runtime still has to be reachable for the companion run, so
+    // the launcher panel stays.
+    const advanced = root.querySelector<HTMLDetailsElement>("details.advanced");
+    if (!advanced) throw new Error("Advanced disclosure is missing");
+    advanced.open = true;
+    fixture.detectChanges();
+    expect(advanced.textContent).toContain("LEAN launcher");
+  });
 });
