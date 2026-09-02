@@ -107,4 +107,54 @@ describe("TradingChartComponent", () => {
     fixture.detectChanges();
     expect(root.querySelector(".trading-chart__rail")).not.toBeNull();
   });
+
+  it("distributes measured height across panes proportionally to their weights", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("equity", [{
+      id: "equity", name: "Realized equity", type: "area", color: "#fff", lineType: "steps",
+      points: [{ timeMs: 1_700_000_000_000, value: 100_100 }],
+    }]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    fixture.componentInstance.availableHeight.set(1350);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    // Weights 470 (price) : 205 (equity) = 675 total; a 1350px viewport scales both 2x.
+    expect(fixture.componentInstance.paneHeights()).toEqual([940, 410]);
+    expect(fixture.componentInstance.chartHeight()).toBe(1350);
+    // A resize must not tear down and rebuild the whole chart — only the
+    // ResizeObserver's own direct chart.resize() call should react to it.
+    expect(createChart).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to fixed pane heights when the viewport is below the floor", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("equity", [{
+      id: "equity", name: "Realized equity", type: "area", color: "#fff", lineType: "steps",
+      points: [{ timeMs: 1_700_000_000_000, value: 100_100 }],
+    }]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    fixture.componentInstance.availableHeight.set(180);
+    fixture.detectChanges();
+
+    // Two panes at a 120px floor cannot fit 180px, so the wrap scrolls instead
+    // of squashing the price pane into unreadability.
+    expect(fixture.componentInstance.chartHeight()).toBe(675);
+  });
+
+  it("uses the fixed heights until a measurement arrives", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("equity", [{
+      id: "equity", name: "Realized equity", type: "area", color: "#fff", lineType: "steps",
+      points: [{ timeMs: 1_700_000_000_000, value: 100_100 }],
+    }]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.chartHeight()).toBe(675);
+  });
 });

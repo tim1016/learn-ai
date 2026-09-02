@@ -10,6 +10,8 @@ import {
   input,
   model,
   output,
+  signal,
+  untracked,
   viewChild,
 } from "@angular/core";
 import {
@@ -58,6 +60,7 @@ const PANE_HEIGHTS = {
   equity: 205,
   indicator: 185,
 } as const;
+const MIN_PANE_HEIGHT = 120;
 export const TRADING_CHART_FACTORY = new InjectionToken<typeof createAppChart>(
   "TRADING_CHART_FACTORY",
   { providedIn: "root", factory: () => createAppChart },
@@ -106,6 +109,7 @@ export class TradingChartComponent implements OnDestroy {
   readonly indicatorRemoved = output<string>();
 
   private readonly chartCanvas = viewChild<ElementRef<HTMLDivElement>>("chartCanvas");
+  private readonly canvasWrap = viewChild<ElementRef<HTMLDivElement>>("canvasWrap");
   private chart: IChartApi | null = null;
   private resizeObserver: ResizeObserver | null = null;
 
@@ -145,10 +149,27 @@ export class TradingChartComponent implements OnDestroy {
     }
     return result;
   });
-  readonly chartHeight = computed(() => this.panes().reduce(
-    (height, pane) => height + pane.height,
-    0,
-  ));
+  /** Measured height of the scroll wrap. 0 until the observer first fires. */
+  readonly availableHeight = signal(0);
+
+  /**
+   * Pane heights are proportional to the available height, using the fixed
+   * PANE_HEIGHTS as weights so relative proportions are unchanged. Below the
+   * floor the fixed heights return and `.trading-chart__canvas-wrap` scrolls —
+   * squashing a price pane to nothing is worse than a scrollbar.
+   */
+  readonly paneHeights = computed<number[]>(() => {
+    const weights = this.panes().map((pane) => pane.height);
+    const weightTotal = weights.reduce((total, weight) => total + weight, 0);
+    const available = this.availableHeight();
+    if (available <= 0 || weightTotal === 0) return weights;
+    const scaled = weights.map((weight) => Math.round((weight / weightTotal) * available));
+    return scaled.some((height) => height < MIN_PANE_HEIGHT) ? weights : scaled;
+  });
+
+  readonly chartHeight = computed(() =>
+    this.paneHeights().reduce((total, height) => total + height, 0),
+  );
 
   constructor() {
     effect(() => {
@@ -179,9 +200,15 @@ export class TradingChartComponent implements OnDestroy {
 
   private rebuildChart(panes: readonly PaneModel[], element: HTMLDivElement): void {
     this.destroyChart();
+    // Read outside reactive tracking: this mount effect rebuilds the whole
+    // chart on data changes, not on every resize. A live resize is handled
+    // by observeResize()'s direct chart.resize() call instead — reading
+    // paneHeights() here untracked keeps availableHeight() out of this
+    // effect's dependencies so resizing doesn't tear the chart down.
+    const paneHeights = untracked(() => this.paneHeights());
     const chart = this.createChart(element, {
       width: element.clientWidth,
-      height: this.chartHeight(),
+      height: paneHeights.reduce((total, height) => total + height, 0),
       layout: {
         background: { color: THEME.bg },
         textColor: THEME.text,
@@ -214,7 +241,7 @@ export class TradingChartComponent implements OnDestroy {
       this.renderNormalizedSeries(chart, pane.series, pane.referenceLevels, index + 1);
     });
     this.renderNormalizedSeries(chart, panes[0]?.series ?? [], [], 0);
-    chart.panes().forEach((pane, index) => pane.setHeight(panes[index]?.height ?? PANE_HEIGHTS.indicator));
+    chart.panes().forEach((pane, index) => pane.setHeight(paneHeights[index] ?? PANE_HEIGHTS.indicator));
     chart.timeScale().fitContent();
     this.chart = chart;
     this.observeResize(element);
@@ -324,12 +351,18 @@ export class TradingChartComponent implements OnDestroy {
   }
 
   private observeResize(element: HTMLDivElement): void {
-    if (typeof ResizeObserver === "undefined" || this.chart === null) return;
+    const wrap = this.canvasWrap()?.nativeElement;
+    if (typeof ResizeObserver === "undefined" || this.chart === null || !wrap) return;
     this.resizeObserver = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? element.clientWidth;
+      const rect = entries[0]?.contentRect;
+      // The wrap's height is layout-driven; the canvas's is driven by
+      // chartHeight, so observing the canvas would be a feedback loop.
+      const height = rect?.height ?? wrap.clientHeight;
+      if (height > 0) this.availableHeight.set(Math.round(height));
+      const width = element.clientWidth;
       if (width > 0) this.chart?.resize(width, this.chartHeight());
     });
-    this.resizeObserver.observe(element);
+    this.resizeObserver.observe(wrap);
   }
 
   private destroyChart(): void {
