@@ -166,11 +166,22 @@ describe('BotsListPageComponent', () => {
     expect(within(accountPosture).getByText('Paper')).toBeTruthy();
   });
 
-  it('carries the backend status label on the rail row', async () => {
-    await renderPage([fakeCatalogBot({ status_label: 'Working', phase: 'ON_DUTY', running: true })]);
+  it('titles the rail row with its strategy and names the bot below it', async () => {
+    await renderPage([
+      fakeCatalogBot({
+        strategy_instance_id: 'spy-bot',
+        strategy_label: 'EMA Crossover Signal',
+        status_label: 'Working',
+        phase: 'ON_DUTY',
+        running: true,
+      }),
+    ]);
 
     expect(await screen.findByRole('heading', { name: 'Running · 1' })).toBeTruthy();
-    expect(screen.getByText(/^Working ·/)).toBeTruthy();
+    expect(screen.getByText('EMA Crossover Signal')).toBeTruthy();
+    // "Working" is the pulsing dot's job now; the row prints the bot's name.
+    expect(screen.getByText('spy-bot')).toBeTruthy();
+    expect(screen.queryByText(/^Working ·/)).toBeNull();
   });
 
   it('names attention state on the rail row rather than relying on colour', async () => {

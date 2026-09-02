@@ -66,10 +66,15 @@
               [attr.aria-current]="selectedSid() === row.bot.strategy_instance_id ? 'true' : null"
               (click)="select(row.bot)"
             >
-              <span class="rail-row__dot" [attr.data-tone]="row.dotTone" aria-hidden="true"></span>
+              <span
+                class="rail-row__dot"
+                [class.rail-row__dot--live]="row.live"
+                [attr.data-tone]="row.dotTone"
+                aria-hidden="true"
+              ></span>
               <span class="rail-row__body">
                 <span class="rail-row__head">
-                  <span class="rail-row__sid">{{ row.bot.strategy_instance_id }}</span>
+                  <span class="rail-row__strategy">{{ row.bot.strategy_label }}</span>
                   <span class="rail-row__value" [attr.data-tone]="row.valueTone">
                     @if (row.value.kind === 'time') {
                       <app-timestamp-display [value]="row.value.atMs" mode="local" />
@@ -78,7 +83,10 @@
                     }
                   </span>
                 </span>
-                <span class="rail-row__detail">{{ row.detail }}</span>
+                <span class="rail-row__detail">
+                  <span class="rail-row__sid">{{ row.bot.strategy_instance_id }}</span>
+                  <span>&#183; {{ row.detail }}</span>
+                </span>
               </span>
             </button>
             @if (row.action; as action) {
