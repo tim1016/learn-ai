@@ -3,7 +3,7 @@ import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DataPolicy } from "../../../models/data-policy";
-import type { StrategyInfo } from "../strategy-lab.models";
+import type { EngineChoice, StrategyInfo } from "../strategy-lab.models";
 import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail.component";
 
 const STRATEGY: StrategyInfo = {
@@ -35,7 +35,10 @@ const DATA_POLICY: DataPolicy = {
   fixture_sha256: "a".repeat(64),
 };
 
-async function createRail(collapsed = false): Promise<ComponentFixture<StrategyLabConfigRailComponent>> {
+async function createRail(
+  collapsed = false,
+  engine: EngineChoice = "both",
+): Promise<ComponentFixture<StrategyLabConfigRailComponent>> {
   TestBed.resetTestingModule();
   await TestBed.configureTestingModule({
     imports: [StrategyLabConfigRailComponent],
@@ -43,7 +46,7 @@ async function createRail(collapsed = false): Promise<ComponentFixture<StrategyL
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabConfigRailComponent);
   fixture.componentRef.setInput("collapsed", collapsed);
-  fixture.componentRef.setInput("engine", "both");
+  fixture.componentRef.setInput("engine", engine);
   fixture.componentRef.setInput("dataPolicy", DATA_POLICY);
   fixture.componentRef.setInput("range", {
     symbol: "SPY",
@@ -169,5 +172,25 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(advanced.textContent).toContain("Strategy parameters");
     expect(advanced.querySelectorAll(".advanced-params input")).toHaveLength(3);
     expect(advanced.textContent).toContain("Fills and fees are defined by the aligned LEAN template.");
+  });
+
+  it("offers the QCAlgorithm editor only when an engine that runs LEAN is selected", async () => {
+    const fixture = await createRail(false, "lean");
+    const requested = vi.fn();
+    fixture.componentInstance.leanSourceRequested.subscribe(requested);
+    const root = fixture.nativeElement as HTMLElement;
+
+    const button = root.querySelector<HTMLButtonElement>("button[aria-label='Edit QCAlgorithm source']");
+    if (!button) throw new Error("QCAlgorithm editor trigger is missing");
+    button.click();
+
+    expect(requested).toHaveBeenCalled();
+  });
+
+  it("hides the QCAlgorithm editor for the Python engine", async () => {
+    const fixture = await createRail(false, "python");
+
+    expect((fixture.nativeElement as HTMLElement)
+      .querySelector("button[aria-label='Edit QCAlgorithm source']")).toBeNull();
   });
 });

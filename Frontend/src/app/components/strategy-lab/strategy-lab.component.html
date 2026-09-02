@@ -46,6 +46,7 @@
                   (commissionChanged)="config.commissionPerOrder.set($event)"
                   (launcherCheckRequested)="runs.checkLeanLauncher()"
                   (runRequested)="runs.run()"
+                  (leanSourceRequested)="leanSourceOpen.set(true)"
                 />
               }
 
@@ -71,15 +72,6 @@
                 [engine]="config.engine()"
                 [dataPolicyNote]="config.dataPolicyNote()"
               />
-
-              @if (config.engine() === "lean" && config.selectedStrategyName(); as strategyName) {
-                <app-lean-source-editor
-                  [strategyName]="strategyName"
-                  [launcherStatus]="runs.leanLauncherStatus()"
-                  [customSource]="config.customLeanSource()"
-                  (customSourceChange)="config.customLeanSource.set($event)"
-                />
-              }
             </section>
           </div>
         </p-tabpanel>
@@ -89,6 +81,24 @@
         </p-tabpanel>
       </p-tabpanels>
   </p-tabs>
+
+  @if (leanSourceOpen() && config.selectedStrategyName(); as strategyName) {
+    <p-drawer
+      [visible]="true"
+      (visibleChange)="leanSourceOpen.set($event)"
+      position="right"
+      [modal]="true"
+      [dismissible]="true"
+      [style]="{ width: 'min(960px, 92vw)' }"
+    >
+      <app-lean-source-editor
+        [strategyName]="strategyName"
+        [launcherStatus]="runs.leanLauncherStatus()"
+        [customSource]="config.customLeanSource()"
+        (customSourceChange)="config.customLeanSource.set($event)"
+      />
+    </p-drawer>
+  }
 
   <app-run-dock />
 </main>

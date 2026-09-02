@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
+import { ChangeDetectionStrategy, Component, inject, signal } from "@angular/core";
 import { ActivatedRoute, Router } from "@angular/router";
 import { firstValueFrom } from "rxjs";
 import { Apollo } from "apollo-angular";
+import { Drawer } from "primeng/drawer";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 
 import { RunDockComponent } from "../../shared/run-dock/run-dock.component";
@@ -36,6 +37,7 @@ import { toStrategyLabConfiguration } from "./strategy-lab.models";
     Tab,
     TabPanels,
     TabPanel,
+    Drawer,
     StrategyLabConfigRailComponent,
     EngineLabRunHistoryComponent,
     ValidationStagePlaceholderComponent,
@@ -59,6 +61,8 @@ export class StrategyLabComponent {
   private readonly route = inject(ActivatedRoute);
   readonly config = inject(StrategyLabConfigStore);
   readonly runs = inject(StrategyLabRunner);
+
+  protected readonly leanSourceOpen = signal(false);
 
   private readonly restoreRunId = parseRunId(this.route.snapshot.queryParamMap.get("restoreRun"));
 

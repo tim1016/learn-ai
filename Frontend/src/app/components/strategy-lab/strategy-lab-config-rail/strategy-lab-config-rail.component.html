@@ -110,6 +110,17 @@
       </fieldset>
 
       @if (engine() !== "python") {
+        <button
+          type="button"
+          class="lean-source-trigger"
+          aria-label="Edit QCAlgorithm source"
+          aria-haspopup="dialog"
+          (click)="leanSourceRequested.emit()"
+        >
+          <span>Edit QCAlgorithm source</span>
+          <i class="pi pi-angle-right" aria-hidden="true"></i>
+        </button>
+
         <section class="lean-launcher" aria-label="LEAN launcher">
           <div><span>LEAN launcher</span><strong>{{ launcherStatus() }}</strong></div>
           @if (leanTemplateLabel()) { <p>{{ leanTemplateLabel() }}</p> }

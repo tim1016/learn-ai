@@ -148,12 +148,18 @@ describe("Strategy Lab Workbench", () => {
     http.verify();
   });
 
-  it("loads the registered QCAlgorithm in LEAN mode without probing the launcher", async () => {
+  it("opens the registered QCAlgorithm in a drawer without probing the launcher", async () => {
     const { fixture, http, diagnose } = await createLab();
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
     await fixture.whenStable();
 
     fixture.componentInstance.config.changeEngine("lean");
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector("app-lean-source-editor")).toBeNull();
+
+    root.querySelector<HTMLButtonElement>("button[aria-label='Edit QCAlgorithm source']")?.click();
     fixture.detectChanges();
     http.expectOne((request) => request.url.endsWith(
       "/api/engine/strategies/ema_crossover_signal/lean-source",
@@ -169,9 +175,7 @@ describe("Strategy Lab Workbench", () => {
 
     const view = within(fixture.nativeElement);
     expect(view.getByText("QCAlgorithm source")).toBeDefined();
-    expect(view.getByText("Runtime undetected")).toBeDefined();
     expect(view.getByLabelText("QCAlgorithm source editor").textContent).toContain("class MyAlgorithm");
-    expect(view.queryByRole("alert")).toBeNull();
     expect(diagnose).not.toHaveBeenCalled();
     http.verify();
   });
