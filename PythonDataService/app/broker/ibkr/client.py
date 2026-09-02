@@ -263,6 +263,10 @@ class IbkrClient:
         # restore event (1101/1102). The counter is observable (logged + read
         # by diagnostics) per numerical-rigor's "surfaced, never silenced".
         self._connection_lost: bool = False
+        # Monotonic count of successful ``connect()`` calls. Every real-time
+        # bar lease records the generation it was acquired under so a lease
+        # from a previous socket can be fenced (spec #1921 §4.2 rule 1).
+        self._connection_generation: int = 0
         self._connectivity_lost_count: int = 0
         self._subscriptions_stale: bool = False
         self._data_farm_degraded: bool = False
@@ -484,6 +488,7 @@ class IbkrClient:
             )
 
         self._connected_account = account_id
+        self._connection_generation += 1
         self.mark_recovery_succeeded()
         self._subscriptions_stale = False
         self._data_farm_degraded = False
@@ -567,6 +572,11 @@ class IbkrClient:
         socket to TWS stays open while TWS's own uplink to IB is down.
         """
         return self._connection_lost
+
+    @property
+    def connection_generation(self) -> int:
+        """Number of successful connects this process has made; fences stale leases."""
+        return self._connection_generation
 
     @property
     def connectivity_lost_count(self) -> int:
