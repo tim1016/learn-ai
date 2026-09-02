@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOrder,
     RecoveryCapability,
 )
+from app.broker.alpaca.clerk.sqlite.recovery_policy import UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
 from app.schemas.broker_bots import BotStatusView
@@ -211,6 +212,18 @@ def _catalog_row_action(
     token, blockers **and typed confirmation** all travel with it. Emitting it
     here carries that flow onto the row rather than bypassing it -- while
     returning ``None`` left an attention row with no command at all (#1778).
+
+    An ``UNCONDITIONAL_RECOVERY_ACTION_IDS`` primary is skipped, and only here.
+    Those capabilities are available without reading any custody state, so they
+    win ``_primary_action_id`` for any attention row whose genuinely-gated cures
+    are all unavailable -- printing "Reconcile now" next to a bot that crashed
+    flat with empty ``holds`` and ``uncertainties``, while that same bot's panel
+    read "No recovery action is required". The rail asks "what is this row's
+    cure?", and an always-available action cannot answer it. The panel keeps
+    offering them: a voluntary custody refresh is a legitimate operator move,
+    just not a row-level alarm. Which actions have that property is the recovery
+    policy's fact, imported rather than restated, so renaming one cannot leave a
+    stale literal here silently re-surfacing the button.
     """
     if not row_needs_attention and not _has_bot_scoped_custody_problem(projection):
         return None
@@ -218,7 +231,7 @@ def _catalog_row_action(
         (item for item in projection.recovery_actions if item.primary),
         None,
     )
-    if primary is None:
+    if primary is None or primary.action_id in UNCONDITIONAL_RECOVERY_ACTION_IDS:
         return None
     return _panel_action(primary, projection.control_revision)
 

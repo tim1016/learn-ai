@@ -810,6 +810,21 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
     )
 
 
+# The capabilities ``_decide`` marks available without reading any custody
+# state. ``reconcile_now`` is the whole set today: its branch returns
+# ``available=True`` unconditionally, consulting no hold, uncertainty or
+# exposure, because a custody refresh is always a legal operator move.
+#
+# That makes it undiagnostic. It outranks every action below it in
+# ``_primary_action_id``'s priority, so it becomes ``primary`` for any subject
+# whose genuinely-gated cures are all unavailable -- including one with nothing
+# wrong at all. A surface asking "what is this subject's cure?" (the roster
+# rail) must skip these; a surface offering "what may I run?" (the bot panel)
+# must keep them. Exported so that question is answered from the policy that
+# creates the property, not re-derived by each consumer against a literal.
+UNCONDITIONAL_RECOVERY_ACTION_IDS: frozenset[RecoveryActionId] = frozenset({"reconcile_now"})
+
+
 def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
     priority = (
         "recover_exact_execution_evidence",

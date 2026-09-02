@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     RecoveryCapability,
     RecoveryConfirmation,
 )
+from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionId
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.services.broker_v2_panel.catalog_projection_service import (
@@ -150,10 +151,12 @@ def _recovery_capability(
     *,
     primary: bool = True,
     available: bool = True,
+    action_id: RecoveryActionId = "cancel_verified_working_orders",
+    label: str = "Cancel verified working orders",
 ) -> RecoveryCapability:
     return RecoveryCapability(
-        action_id="cancel_verified_working_orders",
-        label="Cancel verified working orders",
+        action_id=action_id,
+        label=label,
         explanation="Cancel the orders the Clerk can still prove it owns.",
         available=available,
         unavailable_reason_code=None if available else "EVIDENCE_UNAVAILABLE",
@@ -378,6 +381,38 @@ def test_an_attention_row_without_a_primary_capability_offers_nothing() -> None:
     )
 
     assert catalog[0].row_action is None
+
+
+def test_a_reconcile_only_attention_row_offers_no_rail_command() -> None:
+    """``reconcile_now`` is a refresh, and the rail asks for a cure.
+
+    ``recovery_policy`` marks ``reconcile_now`` ``available=True``
+    unconditionally -- it reads no hold, uncertainty or exposure -- so it wins
+    ``_primary_action_id`` for any attention row whose genuinely-gated cures
+    are all unavailable. A bot that crashed flat, with empty ``holds`` and
+    ``uncertainties``, therefore showed "Reconcile now" on the rail while its
+    own panel read "No recovery action is required". The row still says it
+    needs attention, because it does; what it must not do is name a refresh as
+    the cure. The panel keeps offering it.
+    """
+    catalog = build_sqlite_catalog(
+        [_status(sid=SID)],
+        projections={
+            SID: _projection(
+                sid=SID,
+                holds=(_hold(scope="CUSTODY_SUBJECT", sid=SID),),
+                recovery_actions=(
+                    _recovery_capability(action_id="reconcile_now", label="Reconcile now"),
+                ),
+            )
+        },
+        economic_rollups={SID: _economic_snapshot(sid=SID)},
+        account_id=ACCT,
+    )
+
+    row = catalog[0]
+    assert row.needs_attention is True
+    assert row.row_action is None
 
 
 def test_an_account_scoped_hold_puts_no_per_bot_command_on_any_row() -> None:

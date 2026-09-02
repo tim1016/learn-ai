@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedUncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    UNCONDITIONAL_RECOVERY_ACTION_IDS,
     AuthorityRecoveryProof,
     RecoveryActionUnavailableError,
     RecoveryPolicyContext,
@@ -53,6 +54,23 @@ def _context(**overrides) -> RecoveryPolicyContext:
     }
     values.update(overrides)
     return RecoveryPolicyContext(**values)
+
+
+def test_unconditional_action_ids_really_are_available_with_nothing_wrong() -> None:
+    """Pin the property ``UNCONDITIONAL_RECOVERY_ACTION_IDS`` asserts.
+
+    The roster rail skips these on the strength of one claim: they are
+    available without reading custody state, so their being ``primary`` proves
+    nothing about the subject. A clean context -- no uncertainties, no
+    positions, no conflicts -- is exactly the case where a *gated* cure must be
+    unavailable, so anything still available here is undiagnostic by
+    construction. If a future change gates one of these, this fails and the
+    rail's exclusion must be revisited rather than silently over-hiding.
+    """
+    catalog = {action.action_id: action for action in build_recovery_catalog(_context())}
+
+    for action_id in UNCONDITIONAL_RECOVERY_ACTION_IDS:
+        assert catalog[action_id].available is True, action_id
 
 
 def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
