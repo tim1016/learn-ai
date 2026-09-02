@@ -206,10 +206,22 @@ not a setting.
 ### 4.4 Routing and run loading
 
 - `app.routes.ts`: `strategy-lab/runs/:id` becomes an Angular 22 **redirect function**
-  returning a `UrlTree` for `/strategy-lab?run=<id>`. `engine/runs/:id` already redirects
-  to `strategy-lab/runs/:id` and therefore keeps working through it unchanged, as does the
+  returning a `UrlTree` for `/strategy-lab?run=<id>`. The
   `[routerLink]="['/strategy-lab/runs', id]"` in
-  `analytical-manual/metric-reference-entry.component.html`.
+  `analytical-manual/metric-reference-entry.component.html` keeps working through it
+  unchanged.
+
+  **Correction, found during implementation.** This section originally claimed that
+  `engine/runs/:id` — which redirects to `strategy-lab/runs/:id` — would keep working
+  "through Angular's recursive redirect application". **That is false** for
+  `@angular/router@22.0.8`. `expandSegmentAgainstRouteUsingRedirect` recurses via
+  `processSegment(..., false, ...)`, forcing the local `allowRedirects` flag to `false` on
+  the re-match, so a redirect whose target is itself a redirect route throws `NoMatch` on
+  the second hop and falls through to the `**` wildcard. The legacy deep link would have
+  silently died. `engine/runs/:id` therefore redirects **directly** to the final URL
+  through the same shared `redirectToStrategyLabRun` function, and a
+  `router.navigateByUrl('/engine/runs/204')` test pins the resolved URL — a route-config
+  shape assertion could not have caught this.
 - `run` is read by a **separate** signal over `queryParamMap`, accepting `?restoreRun=N` as
   an alias so existing bookmarks resolve identically. It is deliberately *not* added to
   `EngineLaunchParams`: `applyLaunchParams` is guarded by `appliedLaunchParamsKey`, so
