@@ -7,10 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from app.marketdata.feed import ContinuityEventKind, MarketDataBar
+from app.marketdata.feed import ContinuityEventKind, FeedContinuityEvent, MarketDataBar
 from app.schemas.run_replay import RunReplayReceipt
 from app.services.bot_binding_repository import BotBindingRepository, BotRunRecord
 from app.services.run_replay_proof import (
+    CONTINUITY_DIGEST_FIELDS,
     RunReplayUnavailableError,
     bar_set_digest,
     bounded_replay_bars,
@@ -179,11 +180,67 @@ def test_bar_set_digest_is_unchanged_for_realtime_streams_and_changes_with_a_sub
     assert with_substitute != before
 
 
+_BAR_SET_DIGEST_GOLDEN = "984093029698708f176ae172127e9cac2111943b50de7969aa2865d99c1c9eec"
+"""Frozen sha256 of the two-realtime-bar set below.
+
+Pinned, not recomputed: ``bar_set_digest`` omits ``provenance`` when it is
+``"realtime"`` precisely so every digest written before substitution existed
+still names the same stream. A change to the payload shape, the key set, or
+the JSON canonicalization would silently invalidate every stored receipt, and
+only a golden catches that -- the relational tests above all move together."""
+
+
+def test_bar_set_digest_matches_its_frozen_golden() -> None:
+    assert bar_set_digest([_retained(seq=1), _retained(seq=2)]) == _BAR_SET_DIGEST_GOLDEN
+
+
 def test_continuity_event_digest_is_stable_and_order_sensitive() -> None:
     events = [_event(seq=1, evidence_seq=3, kind="interruption"), _event(seq=2, evidence_seq=5, kind="recovered")]
     assert continuity_event_digest(events) == continuity_event_digest(list(events))
     assert continuity_event_digest(events) != continuity_event_digest(events[:1])
     assert continuity_event_digest(events) != continuity_event_digest(list(reversed(events)))
+
+
+_DIGESTED_FIELD_SAMPLES: dict[str, object] = {
+    "kind": "refused",
+    "symbol": "QQQ",
+    "observed_at_ms": _T0 + 999,
+    "cause": "stall",
+    "generation_from": 7,
+    "generation_to": 8,
+    "window_start_ms": _T0,
+    "window_end_ms": _T0 + 60_000,
+    "bar_identity": "feed-a:SPY:1:2",
+    "authorization_id": "auth-1",
+    "reason": "DECISION_BAR_MISSED",
+    "last_delivered_end_ms": _T0 + 120_000,
+    "deadline_ms": _T0 + 140_000,
+    "contribution_count": 9,
+}
+
+
+def test_the_digested_fields_are_exactly_the_events_own_fields_minus_feed_id() -> None:
+    """A field added to the model and forgotten in the digest stops being committed to."""
+    digested = set(CONTINUITY_DIGEST_FIELDS)
+    assert set(FeedContinuityEvent.model_fields) - {"feed_id"} == digested
+    assert digested == set(_DIGESTED_FIELD_SAMPLES)
+
+
+@pytest.mark.parametrize("field", sorted(_DIGESTED_FIELD_SAMPLES))
+def test_changing_any_digested_field_changes_the_continuity_digest(field: str) -> None:
+    base = _event(seq=1, evidence_seq=3, kind="interruption")
+    changed = base.model_copy(update={field: _DIGESTED_FIELD_SAMPLES[field]})
+    assert changed != base, "the sample must actually differ from the baseline"
+
+    assert continuity_event_digest([changed]) != continuity_event_digest([base])
+
+
+def test_feed_id_is_the_one_field_the_digest_deliberately_ignores() -> None:
+    """Where the fact was observed is storage identity, not the fact (see the docstring)."""
+    base = _event(seq=1, evidence_seq=3, kind="interruption")
+    assert continuity_event_digest([base.model_copy(update={"feed_id": "other"})]) == (
+        continuity_event_digest([base])
+    )
 
 
 def test_bounded_replay_bars_prefers_the_evidence_bound() -> None:

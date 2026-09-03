@@ -225,7 +225,12 @@ async def test_a_complete_open_minute_is_flushed_and_delivered_before_the_wait(
 async def test_a_minute_stitched_by_the_real_assembler_crosses_the_reconnect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Nine 5-second bars on one socket, three on the next, one delivered minute."""
+    """Nine 5-second bars on one socket, three on the next, one delivered minute.
+
+    Also the positive edge of ruling P9: the interruption *touched* this minute
+    (it was open and short when delivery stopped), and the touched rule still
+    delivers it, because the reconnect proved it complete by count.
+    """
     sink = _RecordingSink()
     source = _Source(
         [*_rth_minute_raw(_MINUTE0, range(0, 45, 5)), IBKRBarInterrupted("x", cause="socket_down")],
@@ -242,6 +247,151 @@ async def test_a_minute_stitched_by_the_real_assembler_crosses_the_reconnect(
     assert bars[0].continuity_event_ref == "run-1:2"
     assert bars[0].volume == 12  # every contribution from both sockets survived
     assert [e.kind for e in sink.events] == ["interruption", "recovered"]
+
+
+async def test_an_interruption_outliving_the_open_minute_refuses_the_short_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling P9: a 9/12 minute is never delivered just because one socket built it.
+
+    The reconnect's first source bar lands in the *next* minute, so 15:00 emits
+    with one generation's contributions and ``spans_interruption=False``.
+    Nothing on the bar says it was cut short; only the loop saw it open when
+    delivery stopped, so only the loop can refuse it.
+    """
+    sink = _RecordingSink()
+    source = _Source(
+        [
+            _ibkr_bar(_MINUTE0 - 60_000),
+            *_rth_minute_raw(_MINUTE0, range(0, 45, 5)),  # 9 of 12
+            IBKRBarInterrupted("x", cause="socket_down"),
+        ],
+        [*_rth_minute_raw(_MINUTE0 + 60_000, range(0, 15, 5))],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    delivered: list = []
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        async for bar in feed.stream_bars("SPY", continuity=_policy(sink)):
+            delivered.append(bar)
+
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert [b.start_ms for b in delivered] == [_MINUTE0 - 60_000]  # the 9/12 minute never shipped
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "refused"]
+    assert sink.events[-1].window_start_ms == _MINUTE0
+    assert sink.events[-1].window_end_ms == _MINUTE0 + 60_000
+    assert sink.events[-1].contribution_count == 9
+
+
+async def test_a_stall_outliving_the_open_minute_refuses_the_short_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stall path reaches the same refusal — it is the same interruption choreography."""
+    sink = _RecordingSink()
+    source = _Source(
+        [
+            _ibkr_bar(_MINUTE0 - 60_000),
+            *_rth_minute_raw(_MINUTE0, range(0, 45, 5)),
+            IBKRBarSubscriptionStalled("stalled"),
+        ],
+        [*_rth_minute_raw(_MINUTE0 + 60_000, range(0, 15, 5))],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await _collect(feed, _policy(sink), 2)
+
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert sink.events[0].cause == "stall"
+    assert sink.events[-1].kind == "refused" and sink.events[-1].contribution_count == 9
+
+
+async def test_an_ordinary_gap_with_no_interruption_is_delivered_without_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling P11: a gap the live stream simply had (no interruption) stays non-fatal.
+
+    The port promises ordinary bar gaps are silent (spec §6). Scanning for
+    wholly-missed minutes on *every* emitted bar would turn a quiet two-minute
+    RTH stretch into a run-ending refusal.
+    """
+    sink = _RecordingSink()
+    source = _Source([_ibkr_bar(_MINUTE0), _ibkr_bar(_MINUTE0 + 180_000)])
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    bars = await _collect(feed, _policy(sink), 2)
+
+    assert [b.start_ms for b in bars] == [_MINUTE0, _MINUTE0 + 180_000]
+    assert sink.events == []
+
+
+async def test_contiguous_missed_minutes_are_offered_as_one_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling P11: one episode, one window, one event — not one per minute."""
+    sink = _RecordingSink()
+    source = _Source(
+        [_ibkr_bar(_MINUTE0 - 60_000), IBKRBarInterrupted("x", cause="socket_down")],
+        [_ibkr_bar(_MINUTE0 + 180_000)],  # 15:00, 15:01 and 15:02 never assembled
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await _collect(feed, _policy(sink), 2)
+
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    refusals = [e for e in sink.events if e.kind == "refused"]
+    assert len(refusals) == 1
+    assert refusals[0].window_start_ms == _MINUTE0
+    assert refusals[0].window_end_ms - refusals[0].window_start_ms == 180_000
+    assert refusals[0].contribution_count is None  # nothing was ever assembled for it
+
+
+async def test_a_missed_window_outside_the_session_is_one_gap_and_the_run_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sink = _RecordingSink()
+    pre = _MINUTE0 - 8 * 3_600_000  # 07:00 ET
+    source = _Source(
+        [_ibkr_bar(pre - 60_000, phase="PRE"), IBKRBarInterrupted("x", cause="socket_down")],
+        [_ibkr_bar(pre + 180_000, phase="PRE")],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: pre + 30_000)
+    feed = IbkrMarketDataFeed(_client())
+
+    bars = await _collect(feed, _policy(sink), 2)
+
+    assert [b.start_ms for b in bars] == [pre - 60_000, pre + 180_000]
+    gaps = [e for e in sink.events if e.kind == "gap"]
+    assert len(gaps) == 1
+    assert (gaps[0].window_start_ms, gaps[0].window_end_ms) == (pre, pre + 180_000)
+
+
+async def test_a_missed_window_straddling_the_session_open_is_split_at_the_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inside or outside is decided per window, so a straddle is two facts, not one."""
+    sink = _RecordingSink()
+    open_ms = _MINUTE0 - 3_600_000  # the fake session boundary this module's fixture uses
+    source = _Source(
+        [_ibkr_bar(open_ms - 120_000, phase="PRE"), IBKRBarInterrupted("x", cause="socket_down")],
+        [_ibkr_bar(open_ms + 120_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await _collect(feed, _policy(sink), 2)
+
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "gap", "refused"]
+    assert (sink.events[2].window_start_ms, sink.events[2].window_end_ms) == (open_ms - 60_000, open_ms)
+    assert (sink.events[3].window_start_ms, sink.events[3].window_end_ms) == (open_ms, open_ms + 120_000)
 
 
 async def test_a_flushed_trigger_bar_earns_the_deadline_the_interruption_records(

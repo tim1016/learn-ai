@@ -379,6 +379,73 @@ def test_bars_and_events_share_one_causal_order_per_run(tmp_path: Path) -> None:
         ledger.close()
 
 
+def test_every_continuity_event_field_has_a_column_to_land_in(tmp_path: Path) -> None:
+    """The module docstring's durability claim, made checkable.
+
+    ``RetainedContinuityEvent`` subclasses ``FeedContinuityEvent`` with
+    ``extra="forbid"``, which catches a *column* the model has no field for.
+    The other direction -- a field added to the model and forgotten in the
+    ``CREATE TABLE`` and the ``INSERT`` -- is what this pins.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        columns = {
+            str(row[1])
+            for row in ledger._conn.execute("PRAGMA table_info(source_stream_events)")
+        }
+    finally:
+        ledger.close()
+
+    assert set(FeedContinuityEvent.model_fields) <= columns
+
+
+def test_the_contribution_count_of_a_short_minute_survives_the_round_trip(tmp_path: Path) -> None:
+    """A refusal that says 'nine of twelve' is a different fact from one that does not."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        ledger.append_event(
+            _event(
+                kind="refused",
+                reason="SUBSTITUTION_NOT_AUTHORIZED",
+                window_start_ms=1_700_000_000_000,
+                window_end_ms=1_700_000_060_000,
+                contribution_count=9,
+            ),
+            run_id="run-a",
+        )
+        ledger.append_event(
+            _event(kind="gap", window_start_ms=1_700_000_060_000, window_end_ms=1_700_000_180_000),
+            run_id="run-a",
+        )
+        counts = [event.contribution_count for event in ledger.events(run_id="run-a")]
+    finally:
+        ledger.close()
+
+    assert counts == [9, None]
+
+
+def test_an_events_table_from_an_earlier_commit_gains_the_contribution_count_column(
+    tmp_path: Path,
+) -> None:
+    """Ledgers written by an earlier commit of this branch already have the table."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    path = ledger.path
+    ledger.close()
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("ALTER TABLE source_stream_events DROP COLUMN contribution_count")
+        conn.commit()
+    finally:
+        conn.close()
+
+    reopened = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        reopened.append_event(_event(kind="gap", contribution_count=3), run_id="run-a")
+        assert [e.contribution_count for e in reopened.events(run_id="run-a")] == [3]
+    finally:
+        reopened.close()
+
+
 def test_provenance_and_continuity_columns_persist(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:

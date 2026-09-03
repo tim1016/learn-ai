@@ -177,6 +177,16 @@ _EVIDENCE_BAR_COLUMNS = {
 }
 """Provenance columns added to ``source_bars`` by #1921, as ``ALTER TABLE`` fragments."""
 
+_EVIDENCE_EVENT_COLUMNS = {
+    "contribution_count": "contribution_count INTEGER",
+}
+"""Columns added to ``source_stream_events`` after the table first shipped.
+
+Ledgers created by an earlier commit of the continuity branch already have the
+table without this column, so it is added the same way the ``source_bars``
+provenance columns are: guarded by ``PRAGMA table_info``, defaulting to NULL,
+which is the value every pre-existing event legitimately has."""
+
 
 def verify_ledger_file(path: Path, *, account_id: str) -> int:
     """Integrity-check one ledger file read-only and return its retained-bar count.
@@ -298,8 +308,8 @@ class SourceBarLedger:
                     INSERT INTO source_stream_events (
                         run_id, kind, feed_id, symbol, observed_at_ms, cause, generation_from, generation_to,
                         window_start_ms, window_end_ms, bar_identity, authorization_id, reason,
-                        last_delivered_end_ms, deadline_ms
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        last_delivered_end_ms, deadline_ms, contribution_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run_id,
@@ -317,6 +327,7 @@ class SourceBarLedger:
                         event.reason,
                         event.last_delivered_end_ms,
                         event.deadline_ms,
+                        event.contribution_count,
                     ),
                 )
                 evidence_seq = self._journal(
@@ -647,7 +658,8 @@ class SourceBarLedger:
                 authorization_id TEXT,
                 reason TEXT,
                 last_delivered_end_ms INTEGER,
-                deadline_ms INTEGER
+                deadline_ms INTEGER,
+                contribution_count INTEGER
             );
             CREATE TABLE IF NOT EXISTS source_evidence_journal (
                 evidence_seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -697,7 +709,9 @@ class SourceBarLedger:
         never rewritten, and takes no write lock at all once migrated.
         """
         with self._lock:
-            migrated = self._bar_columns().issuperset(_EVIDENCE_BAR_COLUMNS)
+            migrated = self._bar_columns().issuperset(
+                _EVIDENCE_BAR_COLUMNS
+            ) and self._table_columns("source_stream_events").issuperset(_EVIDENCE_EVENT_COLUMNS)
             if migrated and not self._has_unjournaled_bars():
                 return
             self._conn.execute("BEGIN IMMEDIATE")
@@ -709,6 +723,10 @@ class SourceBarLedger:
                 for name, ddl in _EVIDENCE_BAR_COLUMNS.items():
                     if name not in columns:
                         self._conn.execute(f"ALTER TABLE source_bars ADD COLUMN {ddl}")
+                event_columns = self._table_columns("source_stream_events")
+                for name, ddl in _EVIDENCE_EVENT_COLUMNS.items():
+                    if name not in event_columns:
+                        self._conn.execute(f"ALTER TABLE source_stream_events ADD COLUMN {ddl}")
                 for row in self._conn.execute(_UNJOURNALED_BARS).fetchall():
                     self._journal(
                         run_id=None,
@@ -723,7 +741,16 @@ class SourceBarLedger:
 
     def _bar_columns(self) -> set[str]:
         """The column names ``source_bars`` currently has on disk."""
-        return {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(source_bars)")}
+        return self._table_columns("source_bars")
+
+    def _table_columns(self, table: str) -> set[str]:
+        """The column names ``table`` currently has on disk.
+
+        ``table`` is never caller-supplied: the two names come from this
+        module's own migration maps, which is why the interpolation is safe
+        (``PRAGMA`` takes no bound parameters).
+        """
+        return {str(row["name"]) for row in self._conn.execute(f"PRAGMA table_info({table})")}
 
     def _has_unjournaled_bars(self) -> bool:
         """Whether any retained bar still lacks its journal position.

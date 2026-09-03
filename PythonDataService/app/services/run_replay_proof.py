@@ -101,6 +101,30 @@ def bar_set_digest(bars: Sequence[RetainedSourceBar]) -> str:
     return _canonical_digest(payload)
 
 
+CONTINUITY_DIGEST_FIELDS: tuple[str, ...] = (
+    "kind",
+    "symbol",
+    "observed_at_ms",
+    "cause",
+    "generation_from",
+    "generation_to",
+    "window_start_ms",
+    "window_end_ms",
+    "bar_identity",
+    "authorization_id",
+    "reason",
+    "last_delivered_end_ms",
+    "deadline_ms",
+    "contribution_count",
+)
+"""Every ``FeedContinuityEvent`` field the continuity digest covers.
+
+Exported so a test can assert this list against the model's own fields: a
+field added to ``FeedContinuityEvent`` and forgotten here would silently stop
+being part of what the receipt commits to. ``feed_id`` is the one deliberate
+omission (see :func:`continuity_event_digest`)."""
+
+
 def continuity_event_digest(events: Sequence[RetainedContinuityEvent]) -> str:
     """Stable content digest of one run's continuity facts, in journal order.
 
@@ -111,22 +135,7 @@ def continuity_event_digest(events: Sequence[RetainedContinuityEvent]) -> str:
     the same evidence as the reverse.
     """
     payload = [
-        {
-            "kind": event.kind,
-            "symbol": event.symbol,
-            "observed_at_ms": event.observed_at_ms,
-            "cause": event.cause,
-            "generation_from": event.generation_from,
-            "generation_to": event.generation_to,
-            "window_start_ms": event.window_start_ms,
-            "window_end_ms": event.window_end_ms,
-            "bar_identity": event.bar_identity,
-            "authorization_id": event.authorization_id,
-            "reason": event.reason,
-            "last_delivered_end_ms": event.last_delivered_end_ms,
-            "deadline_ms": event.deadline_ms,
-        }
-        for event in events
+        {name: getattr(event, name) for name in CONTINUITY_DIGEST_FIELDS} for event in events
     ]
     return _canonical_digest(payload)
 

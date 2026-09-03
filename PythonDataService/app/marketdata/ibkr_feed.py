@@ -55,9 +55,9 @@ from app.marketdata.feed import (
     MarketDataFeedError,
 )
 from app.marketdata.ibkr_continuity import (
-    SOURCE_BAR_MS,
     ContinuityState,
     is_unresolvable,
+    resolve_missed_windows,
     resolve_unresolvable_window,
     wait_for_healthy,
 )
@@ -292,6 +292,12 @@ class IbkrMarketDataFeed:
                     if complete is not None
                     else None
                 )
+                if complete is None and assembler.open_minute_start_ms is not None:
+                    # The interruption outlived the open minute. When the first
+                    # post-reconnect source bar lands in a later minute, this one
+                    # emits from a single generation and nothing on the bar says
+                    # it was cut short -- so the loop remembers (ruling P9).
+                    state.touched_minute_starts.add(assembler.open_minute_start_ms)
                 deadline_ms = policy.deadline_ms(state.last_delivered_end_ms)
                 state.interruption_deadline_ms = deadline_ms
                 await state.record(
@@ -337,6 +343,7 @@ class IbkrMarketDataFeed:
                     },
                 )
                 state.generation = new_generation
+                state.scan_missed_windows = True
             except NotConnectedError as exc:
                 deadline_ms = state.interruption_deadline_ms
                 if state.last_delivered_end_ms is None or deadline_ms is None:
@@ -355,20 +362,24 @@ class IbkrMarketDataFeed:
     ) -> MarketDataBar | None:
         """Return the deliverable form of one assembled minute, or ``None``.
 
-        Minutes the interruption swallowed whole — everything between the last
-        delivered bar and this one — are resolved first and in order, then the
-        bar itself. ``None`` means the minute was omitted as a recorded gap;
-        an unresolvable minute inside the decision session raises instead.
+        For the first bar after a recovery, minutes the interruption swallowed
+        whole — everything between the last delivered bar and this one — are
+        resolved first and in order, then the bar itself. ``None`` means the
+        minute was omitted as a recorded gap; an unresolvable minute inside the
+        decision session raises instead.
         """
-        if state.last_delivered_end_ms is not None and ibkr_bar.start_ms > state.last_delivered_end_ms:
-            for window_start_ms in range(
-                state.last_delivered_end_ms, ibkr_bar.start_ms, SOURCE_BAR_MS
-            ):
-                await resolve_unresolvable_window(
-                    state, window_start_ms, window_start_ms + SOURCE_BAR_MS
-                )
-        if is_unresolvable(ibkr_bar):
-            await resolve_unresolvable_window(state, ibkr_bar.start_ms, ibkr_bar.end_ms)
+        if state.scan_missed_windows:
+            state.scan_missed_windows = False
+            await resolve_missed_windows(state, ibkr_bar.start_ms)
+        touched = ibkr_bar.start_ms in state.touched_minute_starts
+        state.touched_minute_starts.discard(ibkr_bar.start_ms)
+        if is_unresolvable(ibkr_bar, interruption_touched=touched):
+            await resolve_unresolvable_window(
+                state,
+                ibkr_bar.start_ms,
+                ibkr_bar.end_ms,
+                contribution_count=ibkr_bar.contribution_count,
+            )
             return None
         bar = self._translate(ibkr_bar)
         if bar.provenance == "realtime_across_reconnect" and state.last_recovered_ref is not None:
@@ -514,7 +525,7 @@ class IbkrMarketDataFeed:
         """Map an IbkrMinuteBar to the neutral MarketDataBar at the boundary."""
         if ibkr_bar.provenance == "ibkr_historical":
             provenance: BarProvenanceTag = "history"
-        elif getattr(ibkr_bar, "spans_interruption", False):
+        elif ibkr_bar.spans_interruption:
             provenance = "realtime_across_reconnect"
         else:
             provenance = "realtime"

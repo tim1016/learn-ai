@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.bar_models import IbkrMinuteBar
@@ -49,6 +49,18 @@ class ContinuityState:
     #: Deadline the in-flight interruption recorded, and the only one any wait
     #: for that interruption may enforce. ``None`` until one is observed.
     interruption_deadline_ms: int | None = None
+    #: Minute starts an interruption touched: the open minute the assembler
+    #: still held when delivery stopped. Whether a minute's contributions span
+    #: generations is a property of the merge, but whether an interruption
+    #: *touched* it is a fact only the loop can see -- an interruption that
+    #: outlives the open minute leaves it with one generation's contributions
+    #: and nothing on the bar itself records that it was cut short (ruling P9).
+    touched_minute_starts: set[int] = field(default_factory=set)
+    #: Whether the next emitted bar must be scanned for wholly-missed minutes
+    #: behind it. Set on recovery, cleared once that bar resolves: a gap that no
+    #: interruption explains is an ordinary gap, and ordinary gaps are
+    #: non-fatal (ruling P11).
+    scan_missed_windows: bool = False
 
     async def record(self, event: FeedContinuityEvent) -> ContinuityEventRef:
         try:
@@ -112,8 +124,20 @@ def inside_decision_session(state: ContinuityState, window_start_ms: int) -> boo
     return state.policy.decision_session == "rth" and session_state_at_ms(now_ms=window_start_ms).phase == "RTH"
 
 
-async def resolve_unresolvable_window(state: ContinuityState, window_start_ms: int, window_end_ms: int) -> None:
-    """Rule 3 for one minute nothing real-time can prove complete: gap outside the session, refusal inside."""
+async def resolve_unresolvable_window(
+    state: ContinuityState,
+    window_start_ms: int,
+    window_end_ms: int,
+    *,
+    contribution_count: int | None = None,
+) -> None:
+    """Rule 3 for one window nothing real-time can prove complete: gap outside the session, refusal inside.
+
+    ``contribution_count`` is how many 5-second contributions the emitted
+    minute actually held, when the window is one such minute. A window nothing
+    was ever assembled for carries ``None`` -- absent is a different fact from
+    zero, and a coalesced multi-minute window has no single count.
+    """
     if not inside_decision_session(state, window_start_ms):
         await state.record(
             state.event(
@@ -121,6 +145,7 @@ async def resolve_unresolvable_window(state: ContinuityState, window_start_ms: i
                 window_start_ms=window_start_ms,
                 window_end_ms=window_end_ms,
                 last_delivered_end_ms=state.last_delivered_end_ms,
+                contribution_count=contribution_count,
             )
         )
         logger.warning(
@@ -143,6 +168,7 @@ async def resolve_unresolvable_window(state: ContinuityState, window_start_ms: i
             window_start_ms=window_start_ms,
             window_end_ms=window_end_ms,
             last_delivered_end_ms=state.last_delivered_end_ms,
+            contribution_count=contribution_count,
         )
     )
     logger.error(
@@ -155,11 +181,60 @@ async def resolve_unresolvable_window(state: ContinuityState, window_start_ms: i
     )
 
 
-def is_unresolvable(bar: IbkrMinuteBar) -> bool:
-    """An emitted minute is unresolvable iff it spans an interruption and cannot be proven complete by count."""
-    if not getattr(bar, "spans_interruption", False):
+def session_uniform_windows(
+    state: ContinuityState, start_ms: int, end_ms: int
+) -> list[tuple[int, int]]:
+    """Split ``[start_ms, end_ms)`` into the fewest windows of one session verdict each.
+
+    Contiguous unresolvable minutes are one window, not N (ruling P11): a
+    consumer that may one day authorize a substitution needs to be asked about
+    the *episode*, and a reader of the journal needs one fact per episode. The
+    only reason to split is that ``inside_decision_session`` disagrees across
+    the range -- a window straddling the RTH open is half a refusal and half a
+    gap, so it is cut at the boundary.
+    """
+    windows: list[tuple[int, int]] = []
+    run_start: int | None = None
+    run_inside = False
+    for minute_start_ms in range(start_ms, end_ms, SOURCE_BAR_MS):
+        inside = inside_decision_session(state, minute_start_ms)
+        if run_start is None:
+            run_start, run_inside = minute_start_ms, inside
+        elif inside != run_inside:
+            windows.append((run_start, minute_start_ms))
+            run_start, run_inside = minute_start_ms, inside
+    if run_start is not None:
+        windows.append((run_start, end_ms))
+    return windows
+
+
+async def resolve_missed_windows(state: ContinuityState, until_start_ms: int) -> None:
+    """Resolve every minute an interruption swallowed whole, coalesced by session verdict.
+
+    Runs only for the first emitted bar after a recorded interruption. A gap
+    with no interruption behind it is an ordinary gap, which the port promises
+    is non-fatal (spec §6) -- scanning on every bar would make one fatal.
+    """
+    last_delivered_end_ms = state.last_delivered_end_ms
+    if last_delivered_end_ms is None or until_start_ms <= last_delivered_end_ms:
+        return
+    for window_start_ms, window_end_ms in session_uniform_windows(
+        state, last_delivered_end_ms, until_start_ms
+    ):
+        await resolve_unresolvable_window(state, window_start_ms, window_end_ms)
+
+
+def is_unresolvable(bar: IbkrMinuteBar, *, interruption_touched: bool = False) -> bool:
+    """Whether an emitted minute an interruption touched cannot be proven complete.
+
+    A minute is *touched* when its contributions span connection generations
+    (``spans_interruption``) or when the loop saw it open as delivery stopped
+    (``interruption_touched``, ruling P9). Untouched minutes -- including the
+    first minute of generation 1, which a mid-minute deploy leaves short
+    (ruling R2) -- keep today's behaviour.
+    """
+    if not (bar.spans_interruption or interruption_touched):
         return False
     if bar.session_phase != "RTH":
         return True
-    count = getattr(bar, "contribution_count", None)
-    return count is None or count < RTH_CONTRIBUTIONS_PER_MINUTE
+    return bar.contribution_count is None or bar.contribution_count < RTH_CONTRIBUTIONS_PER_MINUTE

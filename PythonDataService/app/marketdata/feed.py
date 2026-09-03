@@ -100,7 +100,13 @@ class MarketDataBar(BaseModel):
     close: Decimal
     volume: int
     fetched_at_ms: int = Field(..., description="Wall-clock at which the bar was assembled, int64 ms UTC.")
-    feed_id: str = Field(..., description="Provenance tag, e.g. 'ibkr'. NOT an execution identity.")
+    feed_id: str = Field(
+        ...,
+        description=(
+            "Source feed identity, e.g. 'ibkr'. NOT an execution identity and NOT the bar's "
+            "provenance (see `provenance`)."
+        ),
+    )
     session_phase: BarSessionPhase = "UNKNOWN"
     provenance: BarProvenanceTag = Field(
         default="realtime", description="How this bar was produced; see BarProvenanceTag."
@@ -183,6 +189,14 @@ class FeedContinuityEvent(BaseModel):
     reason: str | None = None
     last_delivered_end_ms: int | None = None
     deadline_ms: int | None = None
+    contribution_count: int | None = Field(
+        default=None,
+        description=(
+            "How many source contributions the minute this fact is about actually held, "
+            "when it is one emitted-but-incomplete minute. None for a window nothing was "
+            "ever assembled for — absent is a different fact from zero."
+        ),
+    )
 
 
 class ContinuityEventRef(BaseModel):
