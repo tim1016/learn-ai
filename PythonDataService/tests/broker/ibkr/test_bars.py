@@ -1004,3 +1004,70 @@ async def test_active_line_cap_ignores_a_pending_line_from_a_previous_generation
     assert restarted.release() is False
     assert live.release() is True
     assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_waiter_woken_after_a_reconnect_does_not_spend_pacing_budget() -> None:
+    """A woken waiter must re-read the generation before it can lead an acquisition.
+
+    Uses a real ``_RealtimeBarRequestPacer`` — its budget is the thing under
+    test — with only the injected clock and sleep hooks under the test's
+    control. A waiter that resumes on the pre-reconnect key becomes the leader
+    for a dead line and burns a pacing slot on a ``reqRealTimeBars`` that is
+    never issued. That slot is exactly what a fleet-wide reconnect storm (60
+    new lines per 600 s, when the pacer actually sleeps) cannot spare.
+    """
+    now = 0.0
+    sleeps: list[float] = []
+    leader_is_pacing = asyncio.Event()
+    release_pacer = asyncio.Event()
+
+    async def gated_sleep(delay_s: float) -> None:
+        nonlocal now
+        sleeps.append(delay_s)
+        leader_is_pacing.set()
+        await release_pacer.wait()
+        now += delay_s
+
+    pacer = bars_mod._RealtimeBarRequestPacer(
+        max_requests=1,
+        window_s=10.0,
+        clock=lambda: now,
+        sleep=gated_sleep,
+    )
+    await pacer.acquire()  # window now full: the next new line has to pace
+    assert sleeps == []
+
+    registry = bars_mod._RealtimeBarSubscriptionRegistry(pacer)
+    client = _GenClient()
+    client.ib.bars = []
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+
+    leader = asyncio.ensure_future(
+        registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    )
+    await asyncio.wait_for(leader_is_pacing.wait(), timeout=1.0)
+    waiter = asyncio.ensure_future(
+        registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    )
+    await asyncio.sleep(0)  # the waiter parks on the leader's pending future
+
+    client.connection_generation = 2  # the reconnect lands while the leader paces
+    release_pacer.set()
+
+    leader_lease = await asyncio.wait_for(leader, timeout=1.0)
+    waiter_lease = await asyncio.wait_for(waiter, timeout=1.0)
+
+    assert leader_lease.generation == 2
+    assert waiter_lease.generation == 2
+    assert waiter_lease.multiplexed is True  # it joined the live line
+    assert client.ib.realtime_bar_request_count == 1  # one request, live generation only
+    # Two pacer waits, both the leader's: the pass that was parked when the
+    # socket flipped, and the pass that actually issued the request. A waiter
+    # that led under the dead key would add a third — budget spent on a
+    # request that is never made.
+    assert sleeps == [10.0, 10.0]
+
+    waiter_lease.release()
+    leader_lease.release()
+    assert client.ib.realtime_bar_cancel_count == 1

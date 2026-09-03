@@ -236,48 +236,61 @@ class _RealtimeBarSubscriptionRegistry:
                 "reqRealTimeBars requires a qualified contract with a positive conId."
             )
 
+        # One pass per connection generation. Every ``continue`` below re-reads
+        # the generation and rebuilds the key: a pass that survives an await
+        # may be looking at a socket that no longer exists, and acting on the
+        # stale key would file a request under — or spend pacing budget on —
+        # a line that can never be used.
         while True:
             generation = _client_generation(client)
             self._evict_older_generations(client, generation)
             key = (id(client), generation, con_id, bar_size, what_to_show, use_rth)
 
-            while True:
-                existing = self._subscriptions.get(key)
-                if existing is not None:
-                    start_index = len(existing.bars)
-                    existing.consumer_count += 1
-                    return _RealtimeBarLease(
-                        registry=self,
-                        key=key,
-                        subscription=existing,
-                        bars=existing.bars,
-                        start_index=start_index,
-                        multiplexed=True,
-                        consumer_count=existing.consumer_count,
-                        generation=existing.generation,
-                    )
+            existing = self._subscriptions.get(key)
+            if existing is not None:
+                start_index = len(existing.bars)
+                existing.consumer_count += 1
+                return _RealtimeBarLease(
+                    registry=self,
+                    key=key,
+                    subscription=existing,
+                    bars=existing.bars,
+                    start_index=start_index,
+                    multiplexed=True,
+                    consumer_count=existing.consumer_count,
+                    generation=existing.generation,
+                )
 
-                pending = self._pending.get(key)
-                if pending is None:
-                    max_active = self._max_active_for_client(client)
-                    client_key = id(client)
-                    reserved = sum(
-                        existing_key[0] == client_key and existing_key[1] == generation
-                        for existing_key in (*self._subscriptions, *self._pending)
-                    )
-                    if reserved >= max_active:
-                        raise IBKRBarStreamError(
-                            "IBKR real-time-bar local active-line cap reached: "
-                            f"{reserved}/{max_active}. Reuse or release a subscription, "
-                            "raise IBKR_REALTIME_BAR_MAX_ACTIVE only when the username's "
-                            "market-data allocation supports it, or use an external data provider."
-                        )
-                    pending = asyncio.get_running_loop().create_future()
-                    self._pending[key] = pending
-                    break
+            pending = self._pending.get(key)
+            if pending is not None:
+                # Another consumer is opening this exact line. Restart rather
+                # than resuming with this pass's key: the socket may have been
+                # replaced while we waited, and a woken waiter that trusts the
+                # old key becomes the leader for a dead one.
                 await asyncio.shield(pending)
+                continue
+
+            max_active = self._max_active_for_client(client)
+            client_key = id(client)
+            reserved = sum(
+                existing_key[0] == client_key and existing_key[1] == generation
+                for existing_key in (*self._subscriptions, *self._pending)
+            )
+            if reserved >= max_active:
+                raise IBKRBarStreamError(
+                    "IBKR real-time-bar local active-line cap reached: "
+                    f"{reserved}/{max_active}. Reuse or release a subscription, "
+                    "raise IBKR_REALTIME_BAR_MAX_ACTIVE only when the username's "
+                    "market-data allocation supports it, or use an external data provider."
+                )
+            pending = asyncio.get_running_loop().create_future()
+            self._pending[key] = pending
 
             try:
+                # No await separates the generation read above from this call,
+                # so the pacer is only ever entered under a live generation and
+                # never spends budget on a dead key. It can still move during a
+                # real pacing sleep, which is what the check below catches.
                 await self._pacer.acquire()
                 if _client_generation(client) != generation:
                     # The socket was replaced while we waited on the pacer:
