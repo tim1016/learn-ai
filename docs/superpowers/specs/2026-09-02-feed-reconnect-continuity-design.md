@@ -26,7 +26,20 @@ validation flag gates live behaviour), `.claude/rules/temporal-rigor.md`, `numer
 
 ## 0. Response to the review rounds
 
-### Round 6 (this revision)
+### Round 7 (implementation review of PR #1922)
+
+The reviewer read the built code against this revision and ADR 0053.
+
+| Finding | Verified | Change |
+|---|---|---|
+| After a count-complete flush the landing minute is not touched: a reconnect landing at :10 delivered a 10/12 minute as `realtime` inside the decision session | Yes — rule 3's touch conditions named the open minute and wholly-missed minutes but not the minute the resubscribed line lands in, although rule 4 already says that bar "decides which minute the live stream can complete" | Rule 3 gains the landing minute as a touched minute; `ContinuityLoop.observe_source_bar` records it from the raw-progress callback (ADR 0053 §18). Also closes the fail-open half of #1923 |
+| The wait checked the deadline only while the socket was unhealthy; a line healthy again after the deadline (a stall detected late) passed as ordinary `realtime` | Yes — rule 7 says "raises when `now ≥ policy.deadline_ms(L)`", unconditionally | The wait checks the deadline before health (ADR 0053 §16) |
+| `NotConnectedError` on the resubscribe after a recorded recovery only waited again: the second generation's death and the third generation's recovery left no evidence, and the bar was stamped with the wrong recovery | Yes — rule 9 requires every continuity fact to be emitted | Recorded as a second `interruption`/`recovered` pair under the first interruption's deadline (ADR 0053 §16) |
+| `docs/math-sources-of-truth.md` still named `bars.py::aggregate_realtime_bar`; the decision clock's schedule functions carried no provenance blocks | Yes | Registry rows for the moved fold, the parity-tested floor and the trigger schedule; provenance blocks on `rth_trigger_instants` / `next_trigger_ms` |
+| Dispute of ruling P3: absorbing an exact redelivery of *any* contribution of a flushed minute is broader than temporal-rigor's live relaxation (most-recently-accepted element only) | Yes | `_absorb_after_flush` absorbs only the flushed minute's most recent contribution; every other print of it is fatal (ADR 0053 §14) |
+| Non-blocking: `flush_if_complete` flushes a 12-contribution pre-market minute although "outside RTH the count test is undefined" | The inconsistency is real, but between the two rules the wrong one was the touched rule: 12 five-second contributions is every print a minute can hold in any session phase, so the flushed minute *is* complete, while a touched 12-contribution pre-market minute was being omitted as a gap. The "undefined" count test only ever concerned a *short* minute where sparse bars are normal | Rule 3 restated: the count proves completeness in every phase; the phase decides only gap vs refusal for an unprovable minute. `flush_if_complete` unchanged (ADR 0053 §3) |
+
+### Round 6 (revision 7)
 
 | Finding | Verified | Change |
 |---|---|---|
@@ -240,12 +253,17 @@ ever the shape that was replayed.
      contributions span connection generations (`spans_interruption`); it was the open minute
      when the interruption began (the feed records that minute's start, because an interruption
      that outlives it leaves it holding one generation's contributions and the flag then reads
-     false); or it lies wholly inside the interruption window (the first post-reconnect source
-     bar lands more than one minute after `last_source_ms`). A minute nothing interrupted — a
-     mid-minute deploy's first minute included — is not touched and keeps today's behaviour.
-   - A touched minute that cannot be proven complete by count in RTH is **unresolvable from
-     real-time data**. Outside RTH the count test is undefined (sparse bars are normal), so
-     every touched minute there is unresolvable.
+     false); it lies wholly inside the interruption window (the first post-reconnect source
+     bar lands more than one minute after `last_source_ms`); or it is the **landing minute** —
+     the one the first post-reconnect source bar falls in (rule 4), whose earlier prints the
+     interruption lost and which likewise holds one generation's contributions (round 7). A
+     minute nothing interrupted — a mid-minute deploy's first minute included — is not touched
+     and keeps today's behaviour.
+   - A touched minute that cannot be proven complete by count is **unresolvable from
+     real-time data**. Twelve contributions is every print a minute can hold, so a touched
+     minute holding them is complete in any session phase (round 7). Fewer is unprovable
+     everywhere: short in RTH, where IBKR delivers 12/12; undecidable outside it, where sparse
+     bars are normal. The phase decides only what an unresolvable minute becomes (next bullets).
    - The wholly-missed scan runs **after a recovery only**, for the first emitted bar following
      a recorded interruption, and is then cleared. A gap no interruption explains is an ordinary
      gap and stays non-fatal (§6). Contiguous unresolvable minutes are **coalesced into one
