@@ -14,7 +14,7 @@
 
 - Every temporal value in flight, at rest, or on the wire is `int64 ms UTC`. No ISO strings, no naive datetimes, no `datetime.now()` without `tz=`, no `pd.to_datetime` without `utc=True`.
 - No hardcoded session times (`time(9,30)` / `time(16,0)` / `04:00` / `20:00`) — session structure comes from `app/lean_sidecar/trading_calendar.py` (`session_open_ms_utc`, `session_close_ms_utc`, `is_trading_day`, `next_trading_day`, `session_window_for_date`).
-- Decision-bucket floor is the ET-anchored floor used by `app/engine/consolidators/trade_bar_consolidator.py`; there is exactly one implementation of it after this plan (`app/utils/timestamps.py::floor_to_period_ms_et`).
+- Decision-bucket floor is the ET-anchored floor used by `app/engine/consolidators/trade_bar_consolidator.py`. **Amended by ruling P5 during execution:** that file and `app/utils/timestamps.py` are sealed program artifacts (`registry.artifact_paths`) and must not change on this branch, so the floor is duplicated once, in `app/services/decision_clock.py::floor_to_period_ms_et`, with a provenance block naming the consolidator as canonical and a load-bearing parity test (CLAUDE.md philosophy #5). Task 6's original text ("exactly one implementation") is superseded.
 - `continuity=None` on `stream_bars` must preserve today's behavior exactly (existing AC4 tests in `tests/marketdata/test_feed.py` stay unchanged and green).
 - The chart aggregator (`app/services/live_bar_aggregator.py`) is not modified and its behavior does not change.
 - Constants (verbatim from the spec): RTH contributions per minute `12` (= `60_000 // 5_000`); delivery allowance `20_000` ms; wait poll `250` ms; kill switch env `IBKR_FEED_CONTINUITY_ENABLED` (default `true`).
