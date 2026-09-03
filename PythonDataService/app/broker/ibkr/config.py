@@ -91,6 +91,11 @@ class IbkrSettings(BaseSettings):
     # Enable/disable the read-only IBKR data-plane client entirely.
     broker_enabled: bool = True
 
+    # Kill switch for same-run feed continuity (#1921). ``False`` makes the
+    # shared MarketDataFeed ignore any ContinuityPolicy a consumer presents and
+    # fail fast on every interruption exactly as before the feature existed.
+    feed_continuity_enabled: bool = True
+
     # Auto-connect during FastAPI startup. When False, the lifespan
     # instantiates the IbkrClient but does NOT call connect().
     # ``broker_enabled=false`` takes precedence —

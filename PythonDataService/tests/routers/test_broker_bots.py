@@ -7,6 +7,7 @@ deploy → running roster row → stop → OFF_DUTY roster row.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.routers.broker_bots import router
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.utils.timestamps import now_ms_utc
@@ -48,7 +49,14 @@ class _FakeReadPort:
 class _HoldFeed:
     feed_id = "fake"
 
-    async def stream_bars(self, symbol: str, *, use_rth: bool = True):
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
+    ) -> AsyncIterator[MarketDataBar]:
+        del continuity
         yield MarketDataBar(
             symbol=symbol,
             start_ms=_T0,

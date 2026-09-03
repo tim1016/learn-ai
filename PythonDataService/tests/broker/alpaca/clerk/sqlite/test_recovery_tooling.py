@@ -755,7 +755,7 @@ def _market_bar(symbol: str, end_ms: int, close: str) -> MarketDataBar:
 def _ledger_with_bars(tmp_path: Path, *, closes: list[str]) -> Path:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
     for index, close in enumerate(closes):
-        ledger.append_history(_market_bar("SPY", NOW_MS + (index + 1) * 60_000, close))
+        ledger.append_history(_market_bar("SPY", NOW_MS + (index + 1) * 60_000, close), run_id="run-a")
     ledger.close()
     return ledger.path
 
@@ -805,7 +805,7 @@ def test_backup_bundle_carries_the_source_bar_ledger_and_restore_brings_it_back(
     # The live ledger moves on after the backup; a restore must bring the
     # ledger back to the bundle's cut and keep the newer ledger as evidence.
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
-    ledger.append(_market_bar("SPY", NOW_MS + 3 * 60_000, "102"))
+    ledger.append(_market_bar("SPY", NOW_MS + 3 * 60_000, "102"), run_id="run-a")
     ledger.close()
     assert _ledger_closes(tmp_path) == ["100", "101", "102"]
 
@@ -903,7 +903,7 @@ def test_restore_that_fails_between_the_two_swaps_takes_the_published_ledger_bac
     _ledger_with_bars(tmp_path, closes=["100", "101"])
     backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
-    ledger.append(_market_bar("SPY", NOW_MS + 3 * 60_000, "102"))
+    ledger.append(_market_bar("SPY", NOW_MS + 3 * 60_000, "102"), run_id="run-a")
     ledger.close()
     _accounts_root, account_dir = recovery_module.writes.account_paths(tmp_path, ACCOUNT_ID)
     db_before = (account_dir / "clerk.db").read_bytes()
@@ -939,7 +939,7 @@ def test_backup_verification_refuses_a_valid_ledger_cut_for_another_account(tmp_
     backup = create_verified_backup(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock)
     assert backup.source_bars is not None
     foreign = SourceBarLedger(artifacts_root=tmp_path / "elsewhere", account_id="PA-OTHER")
-    foreign.append_history(_market_bar("SPY", NOW_MS + 60_000, "100"))
+    foreign.append_history(_market_bar("SPY", NOW_MS + 60_000, "100"), run_id="run-a")
     foreign.close()
     backup.source_bars.path.write_bytes(foreign.path.read_bytes())
     manifest = json.loads(backup.manifest_path.read_text(encoding="utf-8"))

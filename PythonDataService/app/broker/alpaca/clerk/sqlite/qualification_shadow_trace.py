@@ -51,7 +51,7 @@ from app.engine.strategy.registry import (
     StrategyRegistration,
 )
 from app.engine.strategy.signal_program import EvaluationTrace, Settlement, trace_root
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.spec_strategy_runner import InMemoryDataReader
@@ -134,8 +134,10 @@ class _QualifiedBarFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
         del use_rth  # the qualified corpus is already RTH-filtered
+        del continuity  # a replayed corpus has no connection to lose
         for bar in self._bars:
             if bar.symbol != symbol:
                 continue

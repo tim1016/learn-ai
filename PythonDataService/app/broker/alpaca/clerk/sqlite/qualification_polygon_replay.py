@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.engine.strategy.signal_program import Settlement
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.schemas.account_custody_synthetic_qualification import (
     SyntheticPolygonReplayEvidence,
@@ -74,6 +74,9 @@ class _PolygonReplayClient:
     def __init__(self, bars: list[SimpleNamespace]) -> None:
         self.ib = _PolygonReplayIb(bars)
         self.connection_lost = False
+        # The replay never reconnects, but the generation fence the live path
+        # runs on every loop iteration is unconditional, so it needs a value.
+        self.connection_generation = 1
 
     def require_connected(self) -> None:
         return
@@ -96,7 +99,13 @@ class PolygonReplayMarketDataFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
+        if continuity is not None:
+            # The replay never reconnects, and its client carries no settings
+            # for the delegate's kill switch to read: a policy here is a
+            # harness bug, not a run to keep alive.
+            raise ValueError("Polygon replay carries no continuity policy")
         async for bar in self._delegate.stream_bars(symbol, use_rth=use_rth):
             yield bar.model_copy(update={"feed_id": self.feed_id})
 

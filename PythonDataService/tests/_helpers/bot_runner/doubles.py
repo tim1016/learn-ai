@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from app.broker.alpaca.clerk.models import (
@@ -27,7 +28,7 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_sto
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, FeedHealth, MarketDataBar
 from app.schemas.action_plan import ActionPlan
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import AlpacaLifecycleAuthoritySnapshot
@@ -43,6 +44,10 @@ class _FakeFeed:
     - ``finite``  — yield the given bars, then end (BAR_STREAM_ENDED path).
     - ``hold``    — yield the bars, then wait forever (stop/cancel paths).
     - ``crash``   — yield the bars, then raise ``error``.
+    - ``interrupt`` — yield the first bar, record the interruption/recovered
+      pair a real feed records across a broker-socket reconnect (#1921), then
+      yield the rest tagged ``realtime_across_reconnect`` and hold. It never
+      raises: a count-complete recovery is not a feed death.
     """
 
     feed_id = "fake"
@@ -60,16 +65,56 @@ class _FakeFeed:
         self._error = error
         self.bars_consumed = 0
         self._observed_at_ms = observed_at_ms
+        self.continuity_seen: ContinuityPolicy | None = None
 
-    async def stream_bars(self, symbol: str, *, use_rth: bool = True):
-        for bar in self._bars:
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
+    ) -> AsyncIterator[MarketDataBar]:
+        self.continuity_seen = continuity
+        reconnected = False
+        for index, bar in enumerate(self._bars):
+            if self._mode == "interrupt" and index == 1:
+                await self._record_reconnect(continuity, symbol)
+                reconnected = True
+            if reconnected:
+                bar = bar.model_copy(update={"provenance": "realtime_across_reconnect"})
             self.bars_consumed += 1
             yield bar
         if self._mode == "crash":
             assert self._error is not None
             raise self._error
-        if self._mode == "hold":
+        if self._mode in {"hold", "interrupt"}:
             await asyncio.Event().wait()
+
+    async def _record_reconnect(self, continuity: ContinuityPolicy | None, symbol: str) -> None:
+        """Record what a feed that survived a socket loss would have recorded.
+
+        A consumer that offered no policy gets no events -- the pre-#1921
+        behavior -- and the stream continues either way.
+        """
+        if continuity is None:
+            return
+        await continuity.record_event(
+            FeedContinuityEvent(
+                kind="interruption",
+                feed_id=self.feed_id,
+                symbol=symbol,
+                observed_at_ms=now_ms_utc(),
+                cause="socket_down",
+            )
+        )
+        await continuity.record_event(
+            FeedContinuityEvent(
+                kind="recovered",
+                feed_id=self.feed_id,
+                symbol=symbol,
+                observed_at_ms=now_ms_utc(),
+            )
+        )
 
     async def recent_closed_bars(
         self,

@@ -28,9 +28,13 @@ import pytest
 from httpx import ASGITransport
 
 from app.marketdata.feed import (
+    ContinuityEventRef,
+    ContinuityPolicy,
+    FeedContinuityEvent,
     FeedHealth,
     MarketDataBar,
     MarketDataFeedError,
+    SubstitutionRefusal,
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
 from tests._helpers.ibkr_feed_adversarial import NeverFirstBarFeedFixture
@@ -66,7 +70,18 @@ def _make_ibkr_bar(
         venue="SMART",
         session_phase="RTH",
         use_rth=True,
+        contribution_count=12,
+        spans_interruption=False,
     )
+
+
+def _make_ibkr_bar_with(**overrides: Any) -> SimpleNamespace:
+    """Build the default fake bar with named attributes replaced.
+
+    Used by the provenance tests, which vary only ``provenance`` /
+    ``spans_interruption`` and want every other field left at its default.
+    """
+    return SimpleNamespace(**(vars(_make_ibkr_bar()) | overrides))
 
 
 def _fake_connected_client(*, connected: bool = True, connection_lost: bool = False) -> MagicMock:
@@ -112,6 +127,7 @@ class _FakeBarSource:
         *,
         use_rth: bool = True,
         on_source_bar=None,
+        assembler=None,
     ):  # type: ignore[override]
         from app.broker.ibkr.bars import IBKRBarStreamError
 
@@ -349,6 +365,7 @@ async def test_stalled_subscription_is_replaced_without_ending_the_bot_feed(
         *,
         use_rth=True,
         on_source_bar=None,
+        assembler=None,
     ):
         nonlocal call_count
         call_count += 1
@@ -385,6 +402,7 @@ async def test_health_is_scoped_per_symbol_when_one_sibling_never_advances(
         *,
         use_rth=True,
         on_source_bar=None,
+        assembler=None,
     ):
         del use_rth
         if symbol == "SPY":
@@ -720,3 +738,105 @@ async def test_recent_closed_bars_anchors_cutoff_before_history_request(
     feed = IbkrMarketDataFeed(_fake_connected_client())
 
     assert await feed.recent_closed_bars("SPY", use_rth=False) == []
+
+
+# ---------------------------------------------------------------------------
+# #1921 — reconnect continuity: bar provenance, typed feed errors, the policy
+# ---------------------------------------------------------------------------
+
+
+def test_market_data_bar_provenance_defaults_to_realtime() -> None:
+    bar = MarketDataBar(
+        symbol="SPY",
+        start_ms=0,
+        end_ms=60_000,
+        open=Decimal("1"),
+        high=Decimal("1"),
+        low=Decimal("1"),
+        close=Decimal("1"),
+        volume=0,
+        fetched_at_ms=60_000,
+        feed_id="ibkr",
+    )
+
+    assert bar.provenance == "realtime"
+    assert bar.authorization_id is None and bar.continuity_event_ref is None
+
+
+def test_market_data_feed_error_carries_a_typed_reason() -> None:
+    error = MarketDataFeedError("deadline passed", reason="DECISION_BAR_MISSED")
+
+    assert error.reason == "DECISION_BAR_MISSED"
+    assert str(error) == "DECISION_BAR_MISSED: deadline passed"
+    assert MarketDataFeedError("plain").reason is None
+
+
+def test_continuity_policy_deadline_and_trigger_detection() -> None:
+    async def _sink(event: FeedContinuityEvent) -> ContinuityEventRef:  # pragma: no cover - never called here
+        raise AssertionError("the policy must not record an event for pure arithmetic")
+
+    def _next_trigger(last_end: int) -> int:
+        # Fake decision clock: triggers at k * 15 min + 60 s; smallest one strictly after last_end.
+        candidate = (last_end // 900_000) * 900_000 + 60_000
+        return candidate if candidate > last_end else candidate + 900_000
+
+    policy = ContinuityPolicy(
+        decision_session="rth",
+        next_trigger_ms=_next_trigger,
+        substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+        record_event=_sink,
+    )
+
+    assert policy.delivery_allowance_ms == 20_000
+    assert policy.deadline_ms(900_000) == 960_000 + 20_000
+    assert policy.is_trigger_ms(1_860_000) is True
+    assert policy.is_trigger_ms(1_800_000) is False
+
+
+def test_continuity_policy_refuses_a_session_it_has_no_trigger_set_for() -> None:
+    """``DecisionSession`` reserves "all"; a policy may not be authored against it yet.
+
+    Refused where the policy is written, not mid-stream: the feed's
+    session check would fail open on "all" while the decision clock raised.
+    """
+    async def _sink(event: FeedContinuityEvent) -> ContinuityEventRef:  # pragma: no cover - never called
+        raise AssertionError("construction must fail before any event can be recorded")
+
+    with pytest.raises(ValueError, match="'all'"):
+        ContinuityPolicy(
+            decision_session="all",
+            next_trigger_ms=lambda last_end: last_end + 60_000,
+            substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+            record_event=_sink,
+        )
+
+
+def test_translate_maps_ibkr_provenance_to_port_provenance() -> None:
+    assert IbkrMarketDataFeed._translate(_make_ibkr_bar()).provenance == "realtime"
+
+    spanning = IbkrMarketDataFeed._translate(_make_ibkr_bar_with(spans_interruption=True))
+    assert spanning.provenance == "realtime_across_reconnect"
+
+    historical = IbkrMarketDataFeed._translate(_make_ibkr_bar_with(provenance="ibkr_historical"))
+    assert historical.provenance == "history"
+
+    # History wins over spanning: a backfilled bar is history however its
+    # contributions were stitched together upstream.
+    both = _make_ibkr_bar_with(provenance="ibkr_historical", spans_interruption=True)
+    assert IbkrMarketDataFeed._translate(both).provenance == "history"
+
+
+async def test_stream_bars_accepts_continuity_none_and_behaves_as_before(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bar = _make_ibkr_bar()
+
+    async def fake_source(_client, _symbol, *, use_rth=True, on_source_bar=None, **_kwargs):
+        yield bar
+
+    monkeypatch.setattr("app.marketdata.ibkr_feed.stream_minute_bars", fake_source)
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+
+    observed = await anext(feed.stream_bars("SPY", continuity=None))
+
+    assert observed.start_ms == bar.start_ms

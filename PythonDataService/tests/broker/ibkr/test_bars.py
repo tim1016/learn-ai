@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -11,14 +11,15 @@ import pytest
 
 from app.broker.ibkr import bars as bars_mod
 from app.broker.ibkr.bars import (
+    IBKRBarInterrupted,
     IBKRBarStreamError,
     IBKRBarSubscriptionStalled,
-    LiveBarCounters,
-    aggregate_realtime_bar,
+    MinuteAssembler,
     fetch_historical_minute_bars,
     stream_minute_bars,
     stream_raw_5s_bars,
 )
+from app.broker.ibkr.minute_assembler import LiveBarCounters, aggregate_realtime_bar
 
 
 def _bar(second: int, open_: str, high: str, low: str, close: str, volume: int):
@@ -355,6 +356,9 @@ class _FakeClient:
         self.ib = _FakeIb()
         self._connected = connected
         self.connection_lost = connection_lost
+        # The generation fence is unconditional on the real client, so every
+        # fake that reaches it carries one too.
+        self.connection_generation = 1
 
     def require_connected(self) -> None:
         return
@@ -366,7 +370,7 @@ class _FakeClient:
 @pytest.mark.asyncio
 async def test_stream_minute_bars_yields_closed_bar_and_cancels() -> None:
     client = _FakeClient()
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     emitted = await stream.__anext__()
     await stream.aclose()
 
@@ -390,6 +394,7 @@ async def test_stream_minute_bars_reports_raw_source_activity() -> None:
         "SPY",
         use_rth=True,
         on_source_bar=source_ms.append,
+        assembler=MinuteAssembler(),
     )
 
     await stream.__anext__()
@@ -439,6 +444,7 @@ async def test_minute_stream_one_print_then_silence_invalidates_without_a_closed
         use_rth=True,
         on_source_bar=source_ms.append,
         stall_timeout_s=0.01,
+        assembler=MinuteAssembler(),
     )
 
     with pytest.raises(IBKRBarSubscriptionStalled, match="stalled"):
@@ -480,12 +486,15 @@ async def test_stream_minute_bars_halts_on_connection_lost() -> None:
     Before the fix the loop only checked ``index >= len(bars)`` and slept,
     spinning indefinitely while the live engine went silently blind. Now an
     empty/stalled feed with a lost connection raises ``IBKRBarStreamError``.
+
+    ``connection_lost`` is the TWS-1100 soft loss (socket up, market data
+    gone); #1921 gave it its own message and ``cause``.
     """
     client = _FakeClient(connection_lost=True)
     client.ib.bars = []  # no bars ever arrive → loop reaches the liveness gate
 
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
-    with pytest.raises(IBKRBarStreamError, match="connection lost"):
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
+    with pytest.raises(IBKRBarStreamError, match="connectivity lost"):
         await stream.__anext__()
     # The cancel still ran in finally despite the raise.
     assert client.ib.cancelled is True
@@ -504,10 +513,10 @@ async def test_stream_minute_bars_cancel_exception_does_not_mask_original() -> N
 
     client.ib.cancelRealTimeBars = _raising_cancel  # type: ignore[assignment]
 
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     # The connectivity-lost error survives; the cancel's ConnectionError is
     # swallowed (logged at debug) rather than masking it.
-    with pytest.raises(IBKRBarStreamError, match="connection lost"):
+    with pytest.raises(IBKRBarStreamError, match="connectivity lost"):
         await stream.__anext__()
 
 
@@ -559,7 +568,7 @@ async def test_same_symbol_5s_and_1m_consumers_share_one_broker_subscription(
     monkeypatch.setattr(bars_mod, "_REALTIME_BAR_SUBSCRIPTIONS", registry)
 
     raw_stream = stream_raw_5s_bars(client, "SPY", use_rth=True)
-    minute_stream = stream_minute_bars(client, "SPY", use_rth=True)
+    minute_stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     raw_next = asyncio.create_task(raw_stream.__anext__())
     minute_next = asyncio.create_task(minute_stream.__anext__())
 
@@ -622,6 +631,41 @@ async def test_late_shared_consumer_starts_after_existing_list_tail() -> None:
     assert client.ib.realtime_bar_cancel_count == 0
     second.release()
     assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_reconnecting_consumer_resumes_after_its_watermark_not_at_the_tail() -> None:
+    """#1923: a print appended past a consumer's watermark before it re-acquired is still its print.
+
+    The first consumer opens the line and both queued prints fall behind its
+    tail. A consumer whose assembler already holds the :55 print re-acquires
+    the same line: tail semantics would skip the :00 print that closes its
+    minute, and the landing minute would then be refused short for no reason.
+    """
+    client = _FakeClient()
+    first = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
+    await first.__anext__()
+
+    assembler = MinuteAssembler()
+    assembler.feed(client.ib.bars[0], symbol="SPY", generation=1, venue=None, use_rth=True)
+    seen: list[int] = []
+    second = stream_minute_bars(
+        client,
+        "SPY",
+        use_rth=True,
+        on_source_bar=seen.append,
+        assembler=assembler,
+        stall_timeout_s=1.0,  # without the resume this waits for a print that never comes
+    )
+    try:
+        emitted = await second.__anext__()
+    finally:
+        await second.aclose()
+        await first.aclose()
+
+    assert seen == [int(client.ib.bars[1].time.timestamp() * 1000)]
+    assert emitted.start_ms == int(client.ib.bars[0].time.replace(second=0).timestamp() * 1000)
+    assert client.ib.realtime_bar_request_count == 1
 
 
 @pytest.mark.asyncio
@@ -739,7 +783,7 @@ def test_live_idempotent_skip_logs_at_info_not_warning(
     )
 
     caplog.clear()
-    with caplog.at_level("INFO", logger="app.broker.ibkr.bars"):
+    with caplog.at_level("INFO", logger="app.broker.ibkr.minute_assembler"):
         aggregate_realtime_bar(
             current,
             _bar(0, "100", "101", "99", "100.5", 10),
@@ -775,7 +819,7 @@ def test_live_applied_correction_still_logs_at_warning(
     )
 
     caplog.clear()
-    with caplog.at_level("INFO", logger="app.broker.ibkr.bars"):
+    with caplog.at_level("INFO", logger="app.broker.ibkr.minute_assembler"):
         aggregate_realtime_bar(
             current,
             _bar(0, "100", "101", "99", "100.5", 10),
@@ -789,3 +833,438 @@ def test_live_applied_correction_still_logs_at_warning(
     assert len(corrections) == 1
     assert corrections[0].levelname == "WARNING"
     assert counters.applied_correction == 1
+
+
+# ---------------------------------------------------------------------------
+# Connection-generation fencing (#1921). ``ib_async`` reuses one ``IB()``
+# across reconnects: ``Wrapper.reset()`` orphans the old ``bars`` list and
+# ``Client.reset()`` restarts request ids. A lease taken on the previous
+# socket must therefore be detected as stale on every loop iteration, and
+# its release must never send ``cancelRealTimeBars`` — the reqId it holds
+# may already belong to a subscription on the new socket.
+# ---------------------------------------------------------------------------
+
+
+class _GenClient(_FakeClient):
+    """Fake client whose generation the test can bump; named for the tests below."""
+
+
+@pytest.fixture(autouse=True)
+def _fresh_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        bars_mod,
+        "_REALTIME_BAR_SUBSCRIPTIONS",
+        bars_mod._RealtimeBarSubscriptionRegistry(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_generation_lease_raises_interrupted_even_when_socket_is_back() -> None:
+    client = _GenClient()
+    client.ib.bars = []  # nothing to deliver: force the idle branch
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0, assembler=MinuteAssembler())
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)  # one idle iteration under generation 1
+    client.connection_generation = 2  # reconnect happened; socket reports connected
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_socket_down_raises_interrupted_with_cause() -> None:
+    client = _GenClient()
+    client.ib.bars = []
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client._connected = False
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "socket_down"
+    assert "IBKR connection lost" in str(excinfo.value)
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_soft_loss_1100_raises_interrupted_with_cause() -> None:
+    client = _GenClient()
+    client.ib.bars = []
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.connection_lost = True  # TWS 1100: socket up, market data gone
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "soft_loss_1100"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_raw_5s_stream_drains_queued_prints_before_the_interruption() -> None:
+    """The raw chart stream drains the same way: a queued print is still a print."""
+    client = _GenClient()
+    backlog = client.ib.bars
+    client.ib.bars = []
+    stream = stream_raw_5s_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.ib.bars.extend(backlog)
+    client.connection_generation = 2
+
+    drained = [await asyncio.wait_for(first, timeout=2.0)]
+    drained.append(await asyncio.wait_for(stream.__anext__(), timeout=2.0))
+
+    assert [bar.close for bar in drained] == [Decimal("100.5"), Decimal("101.5")]
+    with pytest.raises(IBKRBarInterrupted):
+        await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_raw_5s_stream_stale_generation_raises_interrupted() -> None:
+    client = _GenClient()
+    client.ib.bars = []
+    stream = stream_raw_5s_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.connection_generation = 2
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+    assert client.ib.realtime_bar_cancel_count == 0
+
+
+@pytest.mark.asyncio
+async def test_queued_prints_are_drained_before_the_interruption_surfaces() -> None:
+    """The check runs every iteration, and the queue is emptied before it fires.
+
+    Ruling P10: ``Wrapper.reset()`` orphans this list on reconnect, so nothing
+    the new socket produces can ever land on it — every bar still queued is a
+    print the old socket really delivered. They are folded first, then the
+    interruption surfaces, so the interruption is neither deferred by a 60 s
+    stall nor paid for with observations the vendor did send.
+    """
+    client = _GenClient()
+    backlog = client.ib.bars  # two 5-second bars, spanning a minute boundary
+    client.ib.bars = []
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0, assembler=MinuteAssembler())
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.ib.bars.extend(backlog)
+    client.connection_generation = 2
+
+    drained = await asyncio.wait_for(first, timeout=2.0)
+
+    assert drained.close == Decimal("100.5")  # the minute the queued prints closed
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+
+
+class _AlwaysQueuedBars(list):
+    """A bar list that always has one more bar queued behind the reader.
+
+    Reading a bar appends the next, so ``index >= len(bars)`` never holds and
+    the loop's idle branch is never reached. A liveness gate that only guarded
+    that branch could therefore never fire against this list; the
+    every-iteration gate can. The cap keeps a gate that never fires
+    *terminating* — it eventually runs out of bars and reaches the idle branch
+    — rather than spinning the event loop forever.
+    """
+
+    def __init__(self, make_bar, *, cap: int = 200) -> None:
+        super().__init__([make_bar(0)])
+        self._make_bar = make_bar
+        self._cap = cap
+
+    def __getitem__(self, item):
+        if len(self) < self._cap:
+            self.append(self._make_bar(len(self)))
+        return super().__getitem__(item)
+
+
+@pytest.mark.asyncio
+async def test_the_liveness_gate_fires_on_a_stream_that_never_goes_idle() -> None:
+    """The gate runs every iteration, not only when the bar list is empty.
+
+    The drain tests above cannot show this: their queues run dry, so an
+    idle-branch-only gate would still fire, just later. Here the queue never
+    runs dry. ``ib_async`` stops appending on a Gateway disconnect, but a
+    reconnect can land while a backlog is still being worked through, and a
+    consumer blind until the backlog clears is exactly the silent-blindness
+    failure this gate exists to prevent.
+    """
+    base = datetime(2026, 5, 4, 14, 30, tzinfo=UTC)
+
+    def _make(index: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            time=base + timedelta(seconds=5 * index),
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+            close=Decimal("100.5"), volume=1,
+        )
+
+    client = _GenClient()
+    client.ib.bars = _AlwaysQueuedBars(_make)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0, assembler=MinuteAssembler())
+
+    first = await stream.__anext__()  # closes 14:30 without ever idling
+    assert first.start_ms == int(base.timestamp() * 1000)
+
+    client.connection_generation = 2  # a reconnect, with the backlog still flowing
+
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_queued_prints_reach_the_shared_assembler_before_the_interruption() -> None:
+    """Two prints of one minute, a reconnect, and both contributions survive.
+
+    This is the case the drain exists for: the minute is still open, so nothing
+    is yielded, and discarding the queue would leave the caller's assembler
+    holding 0/12 when the reconnect could have completed 12/12.
+    """
+    client = _GenClient()
+    minute_start_ms = int(datetime(2026, 5, 4, 14, 30, tzinfo=UTC).timestamp() * 1000)
+    queued = [
+        _bar(0, "100", "101", "99", "100.5", 10),
+        _bar(5, "100.5", "102", "100", "101.5", 20),
+    ]
+    client.ib.bars = []
+    assembler = bars_mod.MinuteAssembler()
+    stream = stream_minute_bars(
+        client, "SPY", use_rth=True, stall_timeout_s=60.0, assembler=assembler
+    )
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.ib.bars.extend(queued)
+    client.connection_generation = 2
+
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+
+    assert excinfo.value.cause == "generation_changed"
+    assert assembler.open_minute_start_ms == minute_start_ms
+    assert assembler.current is not None and len(assembler.current.contributions) == 2
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stale_lease_release_never_cancels_on_the_new_socket() -> None:
+    client = _GenClient()
+    client.ib.bars = []
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.connection_generation = 2
+    with pytest.raises(IBKRBarInterrupted):
+        await asyncio.wait_for(first, timeout=2.0)
+    await stream.aclose()  # releases the stale lease
+    assert client.ib.realtime_bar_cancel_count == 0
+
+
+@pytest.mark.asyncio
+async def test_acquire_after_generation_change_opens_a_new_line() -> None:
+    client = _GenClient()
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+    registry = bars_mod._REALTIME_BAR_SUBSCRIPTIONS
+    lease_old = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    client.connection_generation = 2
+    lease_new = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    assert lease_new.multiplexed is False
+    assert lease_new.generation == 2
+    assert lease_old.generation == 1
+    assert client.ib.realtime_bar_request_count == 2
+    lease_new.release()
+    lease_old.release()
+    assert client.ib.realtime_bar_cancel_count == 1  # only the live generation cancelled
+
+
+@pytest.mark.asyncio
+async def test_acquire_restarts_when_generation_moves_during_pacing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _GenClient()
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+    registry = bars_mod._REALTIME_BAR_SUBSCRIPTIONS
+
+    async def _bump_generation() -> None:
+        client.connection_generation = 2
+
+    monkeypatch.setattr(registry._pacer, "acquire", _bump_generation)
+    lease = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    assert lease.generation == 2
+    lease.release()
+
+
+@pytest.mark.asyncio
+async def test_active_line_cap_ignores_evicted_previous_generations() -> None:
+    """A reconnect must not exhaust the cap with lines the old socket owned."""
+    client = _GenClient()
+    registry = bars_mod._RealtimeBarSubscriptionRegistry(default_max_active=1)
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+
+    old = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    client.connection_generation = 2
+    new = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+
+    assert new.generation == 2
+    assert old.release() is False
+    assert new.release() is True
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_active_line_cap_ignores_a_pending_line_from_a_previous_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A line still waiting on the pacer when the socket flips must not hold a slot."""
+    client = _GenClient()
+    registry = bars_mod._RealtimeBarSubscriptionRegistry(default_max_active=1)
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+    reached_pacer = asyncio.Event()
+    unblock_pacer = asyncio.Event()
+
+    async def _gated_acquire() -> None:
+        if reached_pacer.is_set():
+            return
+        reached_pacer.set()
+        await unblock_pacer.wait()
+
+    monkeypatch.setattr(registry._pacer, "acquire", _gated_acquire)
+
+    pending = asyncio.ensure_future(
+        registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    )
+    await asyncio.wait_for(reached_pacer.wait(), timeout=1.0)
+    client.connection_generation = 2
+
+    live = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    assert live.generation == 2
+
+    unblock_pacer.set()
+    restarted = await asyncio.wait_for(pending, timeout=1.0)
+    # The stalled acquisition restarted and multiplexed onto the live socket
+    # rather than filing a request under the generation it started in.
+    assert restarted.generation == 2
+    assert restarted.multiplexed is True
+    assert client.ib.realtime_bar_request_count == 1
+
+    assert restarted.release() is False
+    assert live.release() is True
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_waiter_woken_after_a_reconnect_does_not_spend_pacing_budget() -> None:
+    """A woken waiter must re-read the generation before it can lead an acquisition.
+
+    Uses a real ``_RealtimeBarRequestPacer`` — its budget is the thing under
+    test — with only the injected clock and sleep hooks under the test's
+    control. A waiter that resumes on the pre-reconnect key becomes the leader
+    for a dead line and burns a pacing slot on a ``reqRealTimeBars`` that is
+    never issued. That slot is exactly what a fleet-wide reconnect storm (60
+    new lines per 600 s, when the pacer actually sleeps) cannot spare.
+    """
+    now = 0.0
+    sleeps: list[float] = []
+    leader_is_pacing = asyncio.Event()
+    release_pacer = asyncio.Event()
+
+    async def gated_sleep(delay_s: float) -> None:
+        nonlocal now
+        sleeps.append(delay_s)
+        leader_is_pacing.set()
+        await release_pacer.wait()
+        now += delay_s
+
+    pacer = bars_mod._RealtimeBarRequestPacer(
+        max_requests=1,
+        window_s=10.0,
+        clock=lambda: now,
+        sleep=gated_sleep,
+    )
+    await pacer.acquire()  # window now full: the next new line has to pace
+    assert sleeps == []
+
+    registry = bars_mod._RealtimeBarSubscriptionRegistry(pacer)
+    client = _GenClient()
+    client.ib.bars = []
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+
+    leader = asyncio.ensure_future(
+        registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    )
+    await asyncio.wait_for(leader_is_pacing.wait(), timeout=1.0)
+    waiter = asyncio.ensure_future(
+        registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    )
+    await asyncio.sleep(0)  # the waiter parks on the leader's pending future
+
+    client.connection_generation = 2  # the reconnect lands while the leader paces
+    release_pacer.set()
+
+    leader_lease = await asyncio.wait_for(leader, timeout=1.0)
+    waiter_lease = await asyncio.wait_for(waiter, timeout=1.0)
+
+    assert leader_lease.generation == 2
+    assert waiter_lease.generation == 2
+    assert waiter_lease.multiplexed is True  # it joined the live line
+    assert client.ib.realtime_bar_request_count == 1  # one request, live generation only
+    # Two pacer waits, both the leader's: the pass that was parked when the
+    # socket flipped, and the pass that actually issued the request. A waiter
+    # that led under the dead key would add a third — budget spent on a
+    # request that is never made.
+    assert sleeps == [10.0, 10.0]
+
+    waiter_lease.release()
+    leader_lease.release()
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_assembler_stitches_one_minute_across_two_stream_calls() -> None:
+    """The consumer-owned assembler is what makes a reconnect survivable.
+
+    The first call takes three 5-second bars on generation 1 and is
+    interrupted; the second call, on generation 2, delivers the rest of the
+    same minute. The minute must emit once, complete by count, and admit that
+    its contributions arrived over two connections.
+    """
+    assembler = MinuteAssembler()
+    client = _GenClient()
+    client.ib.bars = [_bar(second, "100", "100", "100", "100", 1) for second in (0, 5, 10)]
+
+    first = stream_minute_bars(client, "SPY", use_rth=True, assembler=assembler, stall_timeout_s=60.0)
+    pending = asyncio.ensure_future(first.__anext__())
+    await asyncio.sleep(0.15)  # drain the three bars, then idle
+    assert assembler.open_minute_start_ms == int(client.ib.bars[0].time.timestamp() * 1000)
+    client.connection_generation = 2
+    with pytest.raises(IBKRBarInterrupted):
+        await asyncio.wait_for(pending, timeout=2.0)
+    await first.aclose()
+
+    client.ib.bars = [_bar(second, "100", "100", "100", "100", 1) for second in range(15, 60, 5)]
+    client.ib.bars.append(
+        SimpleNamespace(
+            time=datetime(2026, 5, 4, 14, 31, 0, tzinfo=UTC),
+            open=Decimal("101"),
+            high=Decimal("101"),
+            low=Decimal("101"),
+            close=Decimal("101"),
+            volume=1,
+        )
+    )
+    second_stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=assembler, stall_timeout_s=60.0)
+    emitted = await asyncio.wait_for(second_stream.__anext__(), timeout=2.0)
+    await second_stream.aclose()
+
+    assert emitted.start_ms == int(datetime(2026, 5, 4, 14, 30, 0, tzinfo=UTC).timestamp() * 1000)
+    assert emitted.contribution_count == 12
+    assert emitted.spans_interruption is True

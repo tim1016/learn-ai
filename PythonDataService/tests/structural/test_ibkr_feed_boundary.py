@@ -43,6 +43,7 @@ APP_ROOT = Path(__file__).resolve().parents[2] / "app"
 # exceptions in _ALLOWED_EXCEPTIONS.
 RETAINED_FEED_MODULES = [
     "app.marketdata.feed",
+    "app.marketdata.ibkr_continuity",
     "app.marketdata.ibkr_feed",
     "app.broker.ibkr.bar_models",
     "app.broker.ibkr.bars",
@@ -56,6 +57,7 @@ RETAINED_FEED_MODULES = [
     "app.broker.ibkr.auto_reconnect_monitor",
     "app.broker.ibkr.contracts",
     "app.broker.ibkr.market_data",
+    "app.broker.ibkr.minute_assembler",
     "app.broker.ibkr.surface",
     "app.services.market_data_capability_service",
 ]

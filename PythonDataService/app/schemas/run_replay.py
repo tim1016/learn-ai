@@ -77,6 +77,13 @@ class RunReplayReceipt(BaseModel):
     sealed_program_hash: str | None
     generated_at_ms: int = Field(ge=0, le=_INT64_MAX)
     error: str | None = None
+    # The continuity facts (#1921) the replayed input sits among, and the
+    # journal position both were read at. Optional so a receipt written before
+    # the continuity channel existed still validates: ``None`` means "this run
+    # recorded no continuity evidence", which is a different fact from the
+    # digest of an empty event list.
+    continuity_event_digest: str | None = None
+    evidence_end_seq: int | None = Field(default=None, ge=1)
 
 
 __all__ = [

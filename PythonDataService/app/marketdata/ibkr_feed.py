@@ -1,9 +1,10 @@
 """IBKR-backed implementation of the broker-neutral MarketDataFeed port.
 
 This module backs ``MarketDataFeed`` with the existing, proven IBKR bar path
-(``app/broker/ibkr/bars.stream_minute_bars``).  It is the **only** file in
-``app/marketdata/`` that imports IBKR types; all other consumers depend only on
-the neutral port in ``feed.py``.
+(``app/broker/ibkr/bars.stream_minute_bars``).  It and its continuity helper
+``ibkr_continuity.py`` are the **only** files in ``app/marketdata/`` that
+import IBKR types; all other consumers depend only on the neutral port in
+``feed.py``.
 
 Architecture (phase-3 design §4 + #1258 L2 "one shared feed, in-process fan-out"):
 
@@ -34,17 +35,27 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass
 
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import (
+    IBKRBarInterrupted,
     IBKRBarStreamError,
     IBKRBarSubscriptionStalled,
+    MinuteAssembler,
     fetch_historical_minute_bars,
     stream_minute_bars,
 )
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
-from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
+from app.marketdata.feed import (
+    BarProvenanceTag,
+    ContinuityPolicy,
+    FeedHealth,
+    MarketDataBar,
+    MarketDataFeedError,
+)
+from app.marketdata.ibkr_continuity import ContinuityLoop, ResolvedBar
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -102,6 +113,7 @@ class IbkrMarketDataFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncGenerator[MarketDataBar, None]:
         """Yield closed 1-minute bars for ``symbol``.
 
@@ -114,12 +126,21 @@ class IbkrMarketDataFeed:
         transparently. Closed-minute output gaps are non-fatal; source-heartbeat
         silence is evaluated against IBKR's documented one-bar-per-five-seconds
         ``reqRealTimeBars`` contract.
+
+        ``continuity`` is how a caller that cannot miss a decision bar states
+        its decision clock, its substitution authority and its evidence sink.
+        With a policy, a survivable interruption (socket down, 1100 soft loss,
+        stall, reconnect) is waited out under the caller's deadline and the
+        open minute is stitched across the gap; every minute that cannot be
+        proven complete fails the run closed rather than being delivered
+        short. ``None`` — the default — keeps the pre-#1921 behavior, as does
+        ``IBKR_FEED_CONTINUITY_ENABLED=false``.
         """
         normalized_symbol = symbol.upper()
-        state = self._state_for(normalized_symbol)
-        if state.active_count == 0:
-            state.first_bar_seen = False
-        state.active_count += 1
+        liveness = self._state_for(normalized_symbol)
+        if liveness.active_count == 0:
+            liveness.first_bar_seen = False
+        liveness.active_count += 1
         logger.info(
             "MarketDataFeed consumer attached",
             extra={
@@ -127,37 +148,93 @@ class IbkrMarketDataFeed:
                 "feed_id": self.feed_id,
                 "symbol": normalized_symbol,
                 "use_rth": use_rth,
-                "active_count": state.active_count,
+                "active_count": liveness.active_count,
             },
         )
+        try:
+            stream = (
+                self._stream_bars_legacy(normalized_symbol, liveness, use_rth=use_rth)
+                if continuity is None or self._continuity_disabled(normalized_symbol)
+                else self._stream_bars_with_continuity(
+                    normalized_symbol, liveness, use_rth=use_rth, policy=continuity
+                )
+            )
+            # Closed explicitly, so a consumer that stops early releases the
+            # broker line now rather than when the generator finalizer runs.
+            async with aclosing(stream) as bars:
+                async for bar in bars:
+                    yield bar
+        finally:
+            liveness.active_count = max(0, liveness.active_count - 1)
+            if liveness.active_count == 0:
+                liveness.first_bar_seen = False
+            logger.info(
+                "MarketDataFeed consumer detached",
+                extra={
+                    "action": "marketdata_consumer_detached",
+                    "feed_id": self.feed_id,
+                    "symbol": normalized_symbol,
+                    "active_count": liveness.active_count,
+                },
+            )
+
+    def _continuity_disabled(self, symbol: str) -> bool:
+        """Whether the kill switch refuses the policy this caller authored."""
+        if self._client.settings.feed_continuity_enabled:
+            return False
+        logger.warning(
+            "Feed continuity disabled by IBKR_FEED_CONTINUITY_ENABLED; "
+            "failing fast on interruptions",
+            extra={
+                "action": "marketdata_continuity_disabled",
+                "feed_id": self.feed_id,
+                "symbol": symbol,
+            },
+        )
+        return True
+
+    async def _stream_bars_legacy(
+        self,
+        symbol: str,
+        liveness: _SymbolLiveness,
+        *,
+        use_rth: bool,
+    ) -> AsyncGenerator[MarketDataBar, None]:
+        """Pre-#1921 delivery: replace a stalled line, fail fast on everything else."""
         try:
             replacements = 0
             while True:
                 try:
-                    async for ibkr_bar in stream_minute_bars(
-                        self._client,
-                        normalized_symbol,
-                        use_rth=use_rth,
-                        on_source_bar=lambda source_ms: self._observe_source_bar(
-                            normalized_symbol,
-                            source_ms,
-                        ),
-                    ):
-                        bar = self._translate(ibkr_bar)
-                        state.last_bar_ms = bar.start_ms
-                        state.last_bar_wall_ms = now_ms_utc()
-                        state.first_bar_seen = True
-                        yield bar
+                    async with aclosing(
+                        stream_minute_bars(
+                            self._client,
+                            symbol,
+                            use_rth=use_rth,
+                            on_source_bar=lambda source_ms: self._observe_source_bar(
+                                symbol,
+                                source_ms,
+                            ),
+                            # Per attempt: this path does not carry a minute across a
+                            # replaced subscription, and never did.
+                            assembler=MinuteAssembler(),
+                        )
+                    ) as minute_bars:
+                        async for ibkr_bar in minute_bars:
+                            bar = self._translate(ibkr_bar)
+                            liveness.last_bar_ms = bar.start_ms
+                            liveness.last_bar_wall_ms = now_ms_utc()
+                            liveness.first_bar_seen = True
+                            yield bar
                     break
                 except IBKRBarSubscriptionStalled as exc:
-                    state.first_bar_seen = False
+                    liveness.first_bar_seen = False
                     replacements += 1
                     logger.warning(
                         "Replacing stalled IBKR real-time-bar subscription",
                         extra={
                             "action": "marketdata_stalled_subscription_replaced",
                             "feed_id": self.feed_id,
-                            "symbol": normalized_symbol,
+                            "symbol": symbol,
                             "use_rth": use_rth,
                             "replacement_count": replacements,
                             "reason": str(exc),
@@ -165,19 +242,76 @@ class IbkrMarketDataFeed:
                     )
         except (IBKRBarStreamError, NotConnectedError) as exc:
             raise MarketDataFeedError(str(exc)) from exc
-        finally:
-            state.active_count = max(0, state.active_count - 1)
-            if state.active_count == 0:
-                state.first_bar_seen = False
-            logger.info(
-                "MarketDataFeed consumer detached",
-                extra={
-                    "action": "marketdata_consumer_detached",
-                    "feed_id": self.feed_id,
-                    "symbol": normalized_symbol,
-                    "active_count": state.active_count,
-                },
+
+    async def _stream_bars_with_continuity(
+        self,
+        symbol: str,
+        liveness: _SymbolLiveness,
+        *,
+        use_rth: bool,
+        policy: ContinuityPolicy,
+    ) -> AsyncGenerator[MarketDataBar, None]:
+        """Deliver under a ``ContinuityPolicy``: survive an interruption, or fail closed.
+
+        The retry loop is all this method is. ``ContinuityLoop`` owns the rest:
+        the one ``MinuteAssembler`` that outlives every resubscribe, so the
+        minute open when the socket died is finished by the new one; the
+        deadline the wait is held to; and the resolution of every minute the
+        merge cannot prove complete — omitted as a ``gap`` outside the decision
+        session, refused (fatally) inside it.
+        """
+        loop = ContinuityLoop(
+            client=self._client, feed_id=self.feed_id, symbol=symbol, policy=policy
+        )
+
+        def _on_source_bar(source_ms: int) -> None:
+            self._observe_source_bar(symbol, source_ms)
+            loop.observe_source_bar(source_ms)
+
+        while True:
+            try:
+                async with aclosing(
+                    stream_minute_bars(
+                        self._client,
+                        symbol,
+                        use_rth=use_rth,
+                        on_source_bar=_on_source_bar,
+                        assembler=loop.assembler,
+                    )
+                ) as minute_bars:
+                    async for ibkr_bar in minute_bars:
+                        resolved = await loop.resolve_emitted(ibkr_bar)
+                        if resolved is not None:
+                            yield self._deliver(resolved, liveness)
+                return
+            except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as exc:
+                held = await loop.open_interruption(exc)
+                if held is not None:
+                    yield self._deliver(held, liveness)
+                liveness.first_bar_seen = False
+                await loop.await_recovery()
+            except NotConnectedError as exc:
+                await loop.await_recovery_after_race(exc)
+            except IBKRBarStreamError as exc:
+                raise MarketDataFeedError(str(exc)) from exc
+
+    def _deliver(self, resolved: ResolvedBar, liveness: _SymbolLiveness) -> MarketDataBar:
+        """Translate one resolved minute at the port boundary and mark the feed live."""
+        bar = self._translate(resolved.bar)
+        if resolved.continuity_event_ref is not None:
+            # The loop decided this minute was assembled across the
+            # interruption; the generation set alone cannot see a
+            # same-generation restore, so the port takes the loop's word.
+            bar = bar.model_copy(
+                update={
+                    "provenance": "realtime_across_reconnect",
+                    "continuity_event_ref": resolved.continuity_event_ref,
+                }
             )
+        liveness.last_bar_ms = bar.start_ms
+        liveness.last_bar_wall_ms = now_ms_utc()
+        liveness.first_bar_seen = True
+        return bar
 
     async def recent_closed_bars(
         self,
@@ -310,6 +444,12 @@ class IbkrMarketDataFeed:
     @staticmethod
     def _translate(ibkr_bar: IbkrMinuteBar) -> MarketDataBar:
         """Map an IbkrMinuteBar to the neutral MarketDataBar at the boundary."""
+        if ibkr_bar.provenance == "ibkr_historical":
+            provenance: BarProvenanceTag = "history"
+        elif ibkr_bar.spans_interruption:
+            provenance = "realtime_across_reconnect"
+        else:
+            provenance = "realtime"
         return MarketDataBar(
             symbol=ibkr_bar.symbol,
             start_ms=ibkr_bar.start_ms,
@@ -322,6 +462,7 @@ class IbkrMarketDataFeed:
             fetched_at_ms=ibkr_bar.fetched_at_ms,
             feed_id="ibkr",
             session_phase=ibkr_bar.session_phase,
+            provenance=provenance,
         )
 
 

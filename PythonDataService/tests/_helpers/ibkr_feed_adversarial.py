@@ -95,6 +95,9 @@ class _AdversarialIbkrClient:
     def __init__(self, transport: _AdversarialRealtimeBarTransport) -> None:
         self.ib = transport
         self.connection_lost = False
+        # The real client's generation fence is unconditional; this fixture
+        # drives the production bar stream, so it carries one too.
+        self.connection_generation = 1
 
     def require_connected(self) -> None:
         return
@@ -126,6 +129,14 @@ class _AdversarialFeedFixture:
         )
         monkeypatch.setattr(
             "app.broker.ibkr.bars.now_ms_utc",
+            self.clock.now_ms,
+        )
+        # The minute assembler stamps ``fetched_at_ms`` from its own module
+        # namespace (#1921 split it out of ``bars``), so the fake wall clock
+        # has to be installed there too or assembled minutes would claim a
+        # real-world assembly time inside a 2026-05-04 fixture.
+        monkeypatch.setattr(
+            "app.broker.ibkr.minute_assembler.now_ms_utc",
             self.clock.now_ms,
         )
         monkeypatch.setattr(

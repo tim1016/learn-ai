@@ -1,32 +1,27 @@
 """Real-time underlying minute bars from IBKR.
 
-IBKR's ``reqRealTimeBars`` emits 5-second TRADES bars. This module
-aggregates those into closed 1-minute bars for the live engine, enforcing
-the repo's timestamp policy at the ingestion boundary: every yielded model
-uses ``int64`` ms UTC.
+IBKR's ``reqRealTimeBars`` emits 5-second TRADES bars. This module owns the
+broker side of that feed — the shared-subscription registry, the liveness
+gate, the historical fetch, and the streams — and folds 5-second bars into
+closed 1-minute bars through
+:class:`~app.broker.ibkr.minute_assembler.MinuteAssembler`, enforcing the
+repo's timestamp policy at the ingestion boundary: every yielded model uses
+``int64`` ms UTC.
 
-All same-process consumers for the same ``(client, contract, whatToShow,
-useRTH)`` tuple share one underlying ``reqRealTimeBars`` subscription. The
+All same-process consumers for the same ``(client, connection generation,
+contract, whatToShow, useRTH)`` tuple share one underlying
+``reqRealTimeBars`` subscription; a reconnect fences the old line off. The
 registry reference-counts consumers and cancels the broker subscription only
 when the last consumer leaves. New subscriptions are paced at IBKR's
 documented ceiling of 60 requests per 600 seconds. ``ib_async`` separately
 throttles ordinary socket messages at the 45-per-second rate pinned by
 ``IbkrClient``, below the default 50 requests/second connection limit.
 
-Two duplicate policies govern how a repeated source timestamp is treated
-(see ``DuplicatePolicy``):
-
-* ``"strict"`` (default) — any duplicate or non-monotonic source timestamp
-  fails fast. This is the finite-historical-ingestion contract from
-  ``.claude/rules/numerical-rigor.md`` and keeps the parity tests honest.
-* ``"live_idempotent"`` — used only by the live 5-second subscription.
-  IBKR's docs do not promise duplicate-free delivery for an active
-  ``reqRealTimeBars`` subscription, so a redelivery of the most recent
-  5-second bar is absorbed idempotently and surfaced (logged + counted)
-  rather than crashing the live run. A redelivery that carries *different*
-  OHLCV is treated as a correction to the still-open minute. Any timestamp
-  belonging to an already-emitted minute is strictly less than the current
-  minute's bars and therefore still fails fast as a regression.
+The aggregation primitives — ``MinuteAssembler``, ``aggregate_realtime_bar``,
+``LiveBarCounters``, ``IBKRBarStreamError``, and the ``DuplicatePolicy``
+contract they implement — live in ``app.broker.ibkr.minute_assembler`` (#1921)
+so an interruption that ends a stream call does not discard the open minute.
+Import them from there; this module imports only the ones it uses itself.
 """
 
 from __future__ import annotations
@@ -35,44 +30,60 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from decimal import Decimal
-from typing import Literal
-from zoneinfo import ZoneInfo
+from typing import Literal, NamedTuple
 
 from app.broker.ibkr.api_evidence import (
     evidence_request,
     evidence_response,
     get_ibkr_api_evidence_recorder,
 )
-from app.broker.ibkr.bar_models import BarProvenance, IbkrMinuteBar
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
-from app.marketdata.feed import BarSessionPhase
-from app.services.session_authority import session_state_at_ms
+from app.broker.ibkr.minute_assembler import (
+    IBKRBarStreamError,
+    MinuteAssembler,
+    _bar_time_ms,
+    _contribution,
+    _session_phase_for_ms,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-DuplicatePolicy = Literal["strict", "live_idempotent"]
 NO_BAR_WARNING_INITIAL_INTERVAL_S = 30.0
 NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
 REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
-_NY_TZ = ZoneInfo("America/New_York")
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
 _REALTIME_BAR_REQUEST_WINDOW_S = 600.0
 _REALTIME_BAR_DEFAULT_MAX_ACTIVE = 100
 
 
-class IBKRBarStreamError(Exception):
-    """Raised when IBKR real-time bars violate timestamp invariants."""
-
-
 class IBKRBarSubscriptionStalled(IBKRBarStreamError):
     """Raised when a connected real-time-bar request stops advancing."""
+
+
+class IBKRBarInterrupted(IBKRBarStreamError):
+    """A broker line stopped for a survivable reason: socket down, 1100 soft loss, or reconnect.
+
+    Consumers with a continuity policy recover from this; everyone else treats it
+    as the fatal ``IBKRBarStreamError`` it subclasses.
+    """
+
+    def __init__(
+        self, message: str, *, cause: Literal["socket_down", "soft_loss_1100", "generation_changed"]
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
+def _client_generation(client: IbkrClient) -> int:
+    """Read the connection generation every lease and registry key is fenced by."""
+    return client.connection_generation
 
 
 class _RealtimeBarRequestPacer:
@@ -131,13 +142,22 @@ class _RealtimeBarRequestPacer:
             await self._sleep(wait_s)
 
 
-_SubscriptionKey = tuple[int, int, int, str, bool]
+class _SubscriptionKey(NamedTuple):
+    """Identity of one shared ``reqRealTimeBars`` line, generation included."""
+
+    client_id: int
+    generation: int
+    con_id: int
+    bar_size: int
+    what_to_show: str
+    use_rth: bool
 
 
 @dataclass
 class _RealtimeBarSubscription:
     client: IbkrClient
     bars: list[object]
+    generation: int
     consumer_count: int = 1
     invalidated: bool = False
 
@@ -153,6 +173,7 @@ class _RealtimeBarLease:
     start_index: int
     multiplexed: bool
     consumer_count: int
+    generation: int
     _released: bool = False
 
     @property
@@ -212,9 +233,19 @@ class _RealtimeBarSubscriptionRegistry:
             raise IBKRBarStreamError(
                 "reqRealTimeBars requires a qualified contract with a positive conId."
             )
-        key = (id(client), con_id, bar_size, what_to_show, use_rth)
 
+        # One pass per connection generation. Every ``continue`` below re-reads
+        # the generation and rebuilds the key: a pass that survives an await
+        # may be looking at a socket that no longer exists, and acting on the
+        # stale key would file a request under — or spend pacing budget on —
+        # a line that can never be used.
         while True:
+            generation = _client_generation(client)
+            self._evict_older_generations(client, generation)
+            key = _SubscriptionKey(
+                id(client), generation, con_id, bar_size, what_to_show, use_rth
+            )
+
             existing = self._subscriptions.get(key)
             if existing is not None:
                 start_index = len(existing.bars)
@@ -227,51 +258,111 @@ class _RealtimeBarSubscriptionRegistry:
                     start_index=start_index,
                     multiplexed=True,
                     consumer_count=existing.consumer_count,
+                    generation=existing.generation,
                 )
 
             pending = self._pending.get(key)
-            if pending is None:
-                max_active = self._max_active_for_client(client)
-                client_key = id(client)
-                reserved = sum(
-                    existing_key[0] == client_key
-                    for existing_key in (*self._subscriptions, *self._pending)
-                )
-                if reserved >= max_active:
-                    raise IBKRBarStreamError(
-                        "IBKR real-time-bar local active-line cap reached: "
-                        f"{reserved}/{max_active}. Reuse or release a subscription, "
-                        "raise IBKR_REALTIME_BAR_MAX_ACTIVE only when the username's "
-                        "market-data allocation supports it, or use an external data provider."
-                    )
-                pending = asyncio.get_running_loop().create_future()
-                self._pending[key] = pending
-                break
-            await asyncio.shield(pending)
+            if pending is not None:
+                # Another consumer is opening this exact line. Restart rather
+                # than resuming with this pass's key: the socket may have been
+                # replaced while we waited, and a woken waiter that trusts the
+                # old key becomes the leader for a dead one.
+                await asyncio.shield(pending)
+                continue
 
-        try:
-            await self._pacer.acquire()
-            bars = client.ib.reqRealTimeBars(
-                contract,
-                bar_size,
-                what_to_show,
-                useRTH=use_rth,
+            max_active = self._max_active_for_client(client)
+            client_key = id(client)
+            reserved = sum(
+                existing_key.client_id == client_key and existing_key.generation == generation
+                for existing_key in (*self._subscriptions, *self._pending)
             )
-            subscription = _RealtimeBarSubscription(client=client, bars=bars)
-            self._subscriptions[key] = subscription
-            return _RealtimeBarLease(
-                registry=self,
-                key=key,
-                subscription=subscription,
-                bars=bars,
-                start_index=0,
-                multiplexed=False,
-                consumer_count=1,
+            if reserved >= max_active:
+                raise IBKRBarStreamError(
+                    "IBKR real-time-bar local active-line cap reached: "
+                    f"{reserved}/{max_active}. Reuse or release a subscription, "
+                    "raise IBKR_REALTIME_BAR_MAX_ACTIVE only when the username's "
+                    "market-data allocation supports it, or use an external data provider."
+                )
+            pending = asyncio.get_running_loop().create_future()
+            self._pending[key] = pending
+
+            try:
+                # No await separates the generation read above from this call,
+                # so the pacer is only ever entered under a live generation and
+                # never spends budget on a dead key. It can still move during a
+                # real pacing sleep, which is what the check below catches.
+                await self._pacer.acquire()
+                if _client_generation(client) != generation:
+                    # The socket was replaced while we waited on the pacer:
+                    # requesting bars now would file them under a dead key.
+                    logger.info(
+                        "Restarting real-time-bar acquisition on a newer connection generation",
+                        extra={
+                            "action": "ibkr_realtime_bar_generation_restart",
+                            "generation": generation,
+                            "con_id": con_id,
+                        },
+                    )
+                    continue
+                bars = client.ib.reqRealTimeBars(
+                    contract,
+                    bar_size,
+                    what_to_show,
+                    useRTH=use_rth,
+                )
+                subscription = _RealtimeBarSubscription(
+                    client=client, bars=bars, generation=generation
+                )
+                self._subscriptions[key] = subscription
+                return _RealtimeBarLease(
+                    registry=self,
+                    key=key,
+                    subscription=subscription,
+                    bars=bars,
+                    start_index=0,
+                    multiplexed=False,
+                    consumer_count=1,
+                    generation=generation,
+                )
+            finally:
+                self._pending.pop(key, None)
+                if not pending.done():
+                    pending.set_result(None)
+
+    def _evict_older_generations(self, client: IbkrClient, generation: int) -> None:
+        """Drop registry entries whose socket is gone; never send a cancel for them."""
+        stale = [
+            key
+            for key in self._subscriptions
+            if key.client_id == id(client) and key.generation < generation
+        ]
+        for key in stale:
+            subscription = self._subscriptions.pop(key)
+            subscription.invalidated = True
+            logger.info(
+                "Evicted real-time-bar subscription from a previous connection generation",
+                extra={
+                    "action": "ibkr_realtime_bar_generation_evicted",
+                    "generation": key.generation,
+                    "con_id": key.con_id,
+                },
             )
-        finally:
-            self._pending.pop(key, None)
-            if not pending.done():
-                pending.set_result(None)
+
+    def _dropped_as_stale(
+        self,
+        key: _SubscriptionKey,
+        subscription: _RealtimeBarSubscription,
+    ) -> bool:
+        """Drop a subscription whose socket is gone; return whether it was dropped.
+
+        ``ib_async`` restarts request ids on reconnect, so the reqId this
+        subscription holds may already belong to a line on the new socket:
+        never send ``cancelRealTimeBars`` across generations.
+        """
+        if subscription.generation == _client_generation(subscription.client):
+            return False
+        self._subscriptions.pop(key, None)
+        return True
 
     def _max_active_for_client(self, client: IbkrClient) -> int:
         settings = getattr(client, "settings", None)
@@ -288,6 +379,8 @@ class _RealtimeBarSubscriptionRegistry:
             return False
         subscription.consumer_count -= 1
         if subscription.consumer_count > 0:
+            return False
+        if self._dropped_as_stale(key, subscription):
             return False
 
         self._subscriptions.pop(key, None)
@@ -306,6 +399,8 @@ class _RealtimeBarSubscriptionRegistry:
         subscription = self._subscriptions.get(key)
         if subscription is not expected:
             return False
+        if self._dropped_as_stale(key, subscription):
+            return False
 
         self._subscriptions.pop(key, None)
         subscription.invalidated = True
@@ -317,19 +412,6 @@ class _RealtimeBarSubscriptionRegistry:
 
 
 _REALTIME_BAR_SUBSCRIPTIONS = _RealtimeBarSubscriptionRegistry()
-
-
-@dataclass
-class LiveBarCounters:
-    """Observable counters for idempotent live redelivery handling.
-
-    Owned by ``stream_minute_bars`` and threaded into
-    ``aggregate_realtime_bar`` so a live run can report how often IBKR
-    redelivered a 5-second bar without it being a fatal event.
-    """
-
-    skipped_duplicate: int = 0
-    applied_correction: int = 0
 
 
 @dataclass
@@ -414,38 +496,6 @@ class _BarDeliveryLogger:
         self.first_bar_logged = True
 
 
-def _to_utc_ms(value: datetime | int | float | str) -> int:
-    """Convert an IBKR bar timestamp to canonical int64 ms UTC."""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            raise IBKRBarStreamError("IBKR bar timestamp is naive; expected tz-aware UTC datetime.")
-        return int(value.astimezone(UTC).timestamp() * 1000)
-    if isinstance(value, str):
-        text = value.strip()
-        for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d"):
-            try:
-                parsed = datetime.strptime(text, fmt)
-            except ValueError:
-                continue
-            return int(parsed.replace(tzinfo=_NY_TZ).astimezone(UTC).timestamp() * 1000)
-        raise IBKRBarStreamError(f"IBKR bar timestamp string has unsupported format: {value!r}.")
-    numeric = float(value)
-    # ib_async/IB API bars commonly expose epoch seconds. Accept ms too for
-    # tests/future wrappers by checking magnitude.
-    if numeric > 10_000_000_000:
-        return int(numeric)
-    return int(numeric * 1000)
-
-
-def _minute_start_ms(ts_ms: int) -> int:
-    return ts_ms - (ts_ms % 60_000)
-
-
-def _session_phase_for_ms(ts_ms: int) -> BarSessionPhase:
-    """Classify one instant through the canonical session authority."""
-    return session_state_at_ms(now_ms=ts_ms).phase
-
-
 def _bars_expected_now(use_rth: bool) -> bool:
     """Return whether a real-time stock bar should be arriving now."""
     phase = _session_phase_for_ms(now_ms_utc())
@@ -463,13 +513,26 @@ def _check_realtime_subscription_liveness(
     stall_timeout_s: float,
     last_progress_at: float,
 ) -> tuple[float, bool, bool]:
-    """Fail closed on a disconnected, invalidated, or bounded-stall line."""
+    """Fail closed on a stale-generation, disconnected, invalidated, or stalled line."""
+    if lease.generation != _client_generation(client):
+        raise IBKRBarInterrupted(
+            f"IBKR connection was re-established while streaming {symbol} 5-second bars; "
+            "this lease belongs to the previous socket.",
+            cause="generation_changed",
+        )
     connected = client.is_connected()
     connection_lost = client.connection_lost
-    if not connected or connection_lost:
-        raise IBKRBarStreamError(
-            f"IBKR connection lost while streaming {symbol} 5-second "
-            "bars; halting rather than hanging on a dead feed."
+    if not connected:
+        raise IBKRBarInterrupted(
+            f"IBKR connection lost while streaming {symbol} 5-second bars; "
+            "halting rather than hanging on a dead feed.",
+            cause="socket_down",
+        )
+    if connection_lost:
+        raise IBKRBarInterrupted(
+            f"IBKR connectivity lost (code 1100) while streaming {symbol} 5-second bars; "
+            "halting rather than streaming a dead feed.",
+            cause="soft_loss_1100",
         )
     if lease.invalidated:
         raise IBKRBarSubscriptionStalled(
@@ -493,241 +556,6 @@ def _contract_venue(contract: object) -> str | None:
     primary = getattr(contract, "primaryExchange", None)
     venue = str(primary or exchange or "").strip().upper()
     return venue or None
-
-
-@dataclass(frozen=True)
-class _Contribution:
-    """One 5-second bar's OHLCV contribution to a minute."""
-
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume: int
-
-
-@dataclass
-class _MinuteAccumulator:
-    """Accumulates 5-second contributions, keyed by source timestamp.
-
-    Contributions are stored per source ``ms`` rather than folded into a
-    running OHLCV so a same-timestamp correction can replace one
-    contribution and have ``high``/``low`` recomputed correctly. A minute
-    holds at most twelve 5-second bars, so the storage cost is trivial.
-    """
-
-    symbol: str
-    start_ms: int
-    venue: str | None = None
-    use_rth: bool | None = None
-    provenance: BarProvenance = "ibkr_realtime"
-    contributions: dict[int, _Contribution] = field(default_factory=dict)
-
-    @property
-    def open(self) -> Decimal:
-        return self.contributions[min(self.contributions)].open
-
-    @property
-    def high(self) -> Decimal:
-        return max(c.high for c in self.contributions.values())
-
-    @property
-    def low(self) -> Decimal:
-        return min(c.low for c in self.contributions.values())
-
-    @property
-    def close(self) -> Decimal:
-        return self.contributions[max(self.contributions)].close
-
-    @property
-    def volume(self) -> int:
-        return sum(c.volume for c in self.contributions.values())
-
-    def to_model(self) -> IbkrMinuteBar:
-        return IbkrMinuteBar(
-            symbol=self.symbol,
-            start_ms=self.start_ms,
-            end_ms=self.start_ms + 60_000,
-            open=self.open,
-            high=self.high,
-            low=self.low,
-            close=self.close,
-            volume=self.volume,
-            fetched_at_ms=now_ms_utc(),
-            provenance=self.provenance,
-            venue=self.venue,
-            session_phase=_session_phase_for_ms(self.start_ms),
-            use_rth=self.use_rth,
-        )
-
-
-def _decimal_attr(obj, *names: str) -> Decimal:
-    """Read the first present attribute from ``obj`` and coerce to ``Decimal``.
-
-    The bar protocol differs slightly between sources: ``ib_async``'s
-    ``RealTimeBar`` exposes the open as ``open_`` (trailing underscore to
-    avoid shadowing the ``open()`` builtin in dataclass code), while the
-    in-repo test fakes use plain ``open`` because the name is legal as
-    an attribute. Try each candidate in order; raise if none are present.
-    """
-    for name in names:
-        if hasattr(obj, name):
-            return Decimal(str(getattr(obj, name)))
-    raise IBKRBarStreamError(f"5-second bar missing all of: {names!r}")
-
-
-def _volume_attr(obj) -> int:
-    return int(getattr(obj, "volume", getattr(obj, "barCount", 0)) or 0)
-
-
-def _bar_time_ms(obj) -> int:
-    value = getattr(obj, "time", getattr(obj, "date", None))
-    if value is None:
-        raise IBKRBarStreamError("IBKR 5-second bar is missing a time/date field.")
-    return _to_utc_ms(value)
-
-
-def _contribution(bar) -> _Contribution:
-    # ib_async.RealTimeBar uses ``open_`` (trailing underscore to avoid
-    # shadowing the ``open()`` builtin); test fakes use plain ``open``.
-    # Accept either so this works against both wire types.
-    return _Contribution(
-        open=_decimal_attr(bar, "open", "open_"),
-        high=_decimal_attr(bar, "high"),
-        low=_decimal_attr(bar, "low"),
-        close=_decimal_attr(bar, "close"),
-        volume=_volume_attr(bar),
-    )
-
-
-def _handle_duplicate(
-    current: _MinuteAccumulator | None,
-    source_ms: int,
-    incoming: _Contribution,
-    *,
-    symbol: str,
-    policy: DuplicatePolicy,
-    counters: LiveBarCounters | None,
-) -> tuple[_MinuteAccumulator, IbkrMinuteBar | None, int]:
-    """Resolve a 5-second bar whose timestamp equals the last accepted one.
-
-    ``strict`` raises. ``live_idempotent`` absorbs an exact redelivery
-    (skip) or applies a correction in place. The duplicate always belongs
-    to the still-open minute: ``last_source_ms`` is, by construction, the
-    most recent contribution in ``current``.
-    """
-    if policy == "strict":
-        raise IBKRBarStreamError(f"Duplicate IBKR 5-second bar timestamp: {source_ms}.")
-    if policy != "live_idempotent":
-        raise IBKRBarStreamError(f"Unknown duplicate policy: {policy!r}.")
-
-    if current is None or source_ms not in current.contributions:
-        # Invariant violation: a duplicate of last_source_ms must live in
-        # the open minute. Surface rather than silently mis-handle.
-        raise IBKRBarStreamError(
-            f"Duplicate IBKR 5-second bar timestamp {source_ms} not found in open minute."
-        )
-
-    existing = current.contributions[source_ms]
-    if existing == incoming:
-        if counters is not None:
-            counters.skipped_duplicate += 1
-        # Logged at INFO, not WARNING — the live-idempotent ADR's
-        # "surface, never silence" intent is satisfied by the
-        # ``skipped_duplicate`` counter and the aggregate-stall
-        # SUBSCRIPTION_STALE WARNING. Per-bar visibility doesn't need
-        # to land in the Incidents panel. The "Applied correction"
-        # log below stays WARNING because it actually changes the
-        # bar's value.
-        logger.info(
-            "Idempotent skip of redelivered IBKR 5-second bar",
-            extra={"symbol": symbol, "source_ms": source_ms, "action": "skipped_duplicate"},
-        )
-        return current, None, source_ms
-
-    current.contributions[source_ms] = incoming
-    if counters is not None:
-        counters.applied_correction += 1
-    logger.warning(
-        "Applied correction to redelivered IBKR 5-second bar in open minute",
-        extra={"symbol": symbol, "source_ms": source_ms, "action": "applied_correction"},
-    )
-    return current, None, source_ms
-
-
-def aggregate_realtime_bar(
-    current: _MinuteAccumulator | None,
-    bar,
-    *,
-    symbol: str,
-    last_source_ms: int | None,
-    policy: DuplicatePolicy = "strict",
-    counters: LiveBarCounters | None = None,
-    venue: str | None = None,
-    use_rth: bool | None = None,
-    provenance: BarProvenance = "ibkr_realtime",
-) -> tuple[_MinuteAccumulator, IbkrMinuteBar | None, int]:
-    """Fold one IBKR 5-second bar into a minute accumulator.
-
-    Returns ``(accumulator, emitted_minute_or_None, source_ms)``. The
-    returned ``source_ms`` becomes the caller's ``last_source_ms`` — for an
-    absorbed duplicate it is unchanged so monotonicity stays anchored to the
-    last *distinct* timestamp.
-    """
-    source_ms = _bar_time_ms(bar)
-    incoming = _contribution(bar)
-
-    if last_source_ms is not None:
-        if source_ms == last_source_ms:
-            return _handle_duplicate(
-                current,
-                source_ms,
-                incoming,
-                symbol=symbol,
-                policy=policy,
-                counters=counters,
-            )
-        if source_ms < last_source_ms:
-            raise IBKRBarStreamError(
-                f"Non-monotonic IBKR 5-second bar timestamp: {source_ms} after {last_source_ms}."
-            )
-
-    start_ms = _minute_start_ms(source_ms)
-
-    if current is None:
-        return (
-            _MinuteAccumulator(
-                symbol=symbol,
-                start_ms=start_ms,
-                venue=venue,
-                use_rth=use_rth,
-                provenance=provenance,
-                contributions={source_ms: incoming},
-            ),
-            None,
-            source_ms,
-        )
-
-    if start_ms == current.start_ms:
-        current.contributions[source_ms] = incoming
-        return current, None, source_ms
-
-    if start_ms < current.start_ms:
-        raise IBKRBarStreamError(f"IBKR bar minute regressed from {current.start_ms} to {start_ms}.")
-
-    emitted = current.to_model()
-    return (
-        _MinuteAccumulator(
-            symbol=symbol,
-            start_ms=start_ms,
-            venue=venue,
-            use_rth=use_rth,
-            provenance=provenance,
-            contributions={source_ms: incoming},
-        ),
-        emitted,
-        source_ms,
-    )
 
 
 async def fetch_historical_minute_bars(
@@ -809,6 +637,178 @@ async def fetch_historical_minute_bars(
     return out
 
 
+class _LeasedBar(NamedTuple):
+    """One raw 5-second bar, with the facts about the line that delivered it."""
+
+    raw: object
+    venue: str | None
+    generation: int
+
+
+def _resume_index(bars: Sequence[object], start_index: int, last_source_ms: int | None) -> int:
+    """Where a consumer's delivery begins on a leased list.
+
+    A consumer resuming after an interruption picks up where its assembler
+    left off, not at the list's tail: prints another consumer of this line --
+    or a same-generation 1100 -> 1102 restore -- already appended past its
+    watermark are still its prints, and skipping them leaves its landing
+    minute short for no reason (#1923). A consumer with no watermark is new
+    and keeps the lease's tail semantics: the mutable list is not a replay.
+    """
+    if last_source_ms is None:
+        return start_index
+    index = start_index
+    while index > 0 and _bar_time_ms(bars[index - 1]) > last_source_ms:
+        index -= 1
+    return index
+
+
+async def _iter_leased_raw_bars(
+    client: IbkrClient,
+    symbol: str,
+    *,
+    use_rth: bool,
+    stall_timeout_s: float,
+    evidence_source: str,
+    consumer_label: str,
+    no_bar_message: str,
+    first_bar_message: str,
+    last_source_ms: int | None = None,
+    on_source_bar: Callable[[int], None] | None = None,
+) -> AsyncIterator[_LeasedBar]:
+    """Yield raw 5-second bars off one leased ``reqRealTimeBars`` line.
+
+    Everything both public streams do around the bar itself lives here: the
+    shared-subscription lease and its evidence, the per-iteration liveness
+    gate, the ruling-P10 drain, the no-delivery log, and the release. The
+    callers differ only in how they map a raw bar.
+
+    Progress -- what the stall timer measures and what ``on_source_bar``
+    reports -- is "the raw source timestamp strictly advanced", because that
+    is exactly when a bar carries an observation this line has not delivered
+    before. A redelivery absorbed as a duplicate, or skipped because its
+    minute was already flushed, carries none and leaves ``last_source_ms``
+    where it was. Pass ``last_source_ms`` when an earlier generation of this
+    stream already advanced it.
+    """
+    client.require_connected()
+    contract = await qualify_underlying(client, symbol)
+    lease = await _REALTIME_BAR_SUBSCRIPTIONS.acquire(
+        client,
+        contract,
+        bar_size=5,
+        what_to_show="TRADES",
+        use_rth=use_rth,
+    )
+    bars = lease.bars
+    index = _resume_index(bars, lease.start_index, last_source_ms)
+    sym = symbol.upper()
+    venue = _contract_venue(contract)
+    delivery_logger = _BarDeliveryLogger(
+        symbol=sym,
+        con_id=int(contract.conId),
+        use_rth=use_rth,
+    )
+    delivery_logger.log_subscribed(
+        initial_bar_count=len(bars),
+        multiplexed=lease.multiplexed,
+        consumer_count=lease.consumer_count,
+    )
+    recorder = get_ibkr_api_evidence_recorder()
+    recorder.record(
+        source=f"{evidence_source}.subscribe",
+        symbol=sym,
+        request=evidence_request(
+            "reqRealTimeBars",
+            contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
+            barSize=5,
+            whatToShow="TRADES",
+            useRTH=use_rth,
+            realTimeBarsOptions=[],
+            requestIssued=not lease.multiplexed,
+            multiplexed=lease.multiplexed,
+            consumerCount=lease.consumer_count,
+        ),
+        response=evidence_response(
+            "realTimeBarList",
+            fields={
+                "bar_count": len(bars),
+                "start_index": index,
+                "lease_start_index": lease.start_index,
+            },
+        ),
+    )
+    last_progress_at = time.monotonic()
+
+    def _observe(raw_bar) -> _LeasedBar:
+        nonlocal last_progress_at, last_source_ms
+        delivery_logger.log_first_bar(bar_count=len(bars), message=first_bar_message)
+        recorder.record(
+            source=f"{evidence_source}.bar",
+            symbol=sym,
+            request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
+            response=evidence_response("realTimeBar", objects=[raw_bar]),
+        )
+        source_ms = _bar_time_ms(raw_bar)
+        if last_source_ms is None or source_ms > last_source_ms:
+            last_source_ms = source_ms
+            last_progress_at = time.monotonic()
+            if on_source_bar is not None:
+                on_source_bar(source_ms)
+        return _LeasedBar(raw_bar, venue, lease.generation)
+
+    try:
+        while True:
+            # --- liveness gate: every iteration, before touching ``bars`` ---
+            # ib_async stops appending to ``bars`` on a Gateway disconnect and
+            # raises nothing, so without this check the loop would spin forever
+            # yielding no bars and the live engine would go silently blind. It
+            # runs on every iteration, not only when idle: a reconnect can land
+            # while undelivered bars are still queued on the orphaned list.
+            try:
+                last_progress_at, connected, connection_lost = _check_realtime_subscription_liveness(
+                    client=client,
+                    lease=lease,
+                    symbol=symbol,
+                    use_rth=use_rth,
+                    stall_timeout_s=stall_timeout_s,
+                    last_progress_at=last_progress_at,
+                )
+            except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as interruption:
+                # Ruling P10: the queue holds real pre-disconnect prints, and
+                # only pre-disconnect prints -- ``Wrapper.reset()`` orphans this
+                # list, so the new socket can never append to it. Delivering
+                # them before surfacing the interruption is the difference
+                # between a minute the reconnect can complete and a minute the
+                # run must refuse.
+                queued = list(bars[index:])
+                index += len(queued)
+                for raw_bar in queued:
+                    yield _observe(raw_bar)
+                raise interruption
+            # --- end liveness gate ---
+            if index >= len(bars):
+                delivery_logger.maybe_log_no_bar(
+                    bar_count=len(bars),
+                    connected=connected,
+                    connection_lost=connection_lost,
+                    message=no_bar_message,
+                )
+                await asyncio.sleep(0.1)
+                continue
+            raw_bar = bars[index]
+            index += 1
+            yield _observe(raw_bar)
+    finally:
+        cancelled = lease.release()
+        logger.debug(
+            "Released %s consumer for %s (broker_subscription_cancelled=%s)",
+            consumer_label,
+            symbol,
+            cancelled,
+        )
+
+
 async def stream_raw_5s_bars(
     client: IbkrClient,
     symbol: str,
@@ -834,89 +834,22 @@ async def stream_raw_5s_bars(
     that list so a 5-second chart and a 1-minute consolidator consume one
     shared market-data line rather than opening duplicate lines.
     """
-    client.require_connected()
-    contract = await qualify_underlying(client, symbol)
-    lease = await _REALTIME_BAR_SUBSCRIPTIONS.acquire(
-        client,
-        contract,
-        bar_size=5,
-        what_to_show="TRADES",
-        use_rth=use_rth,
-    )
-    bars = lease.bars
     sym = symbol.upper()
-    venue = _contract_venue(contract)
-    delivery_logger = _BarDeliveryLogger(
-        symbol=sym,
-        con_id=int(contract.conId),
-        use_rth=use_rth,
-    )
-    delivery_logger.log_subscribed(
-        initial_bar_count=len(bars),
-        multiplexed=lease.multiplexed,
-        consumer_count=lease.consumer_count,
-    )
-    recorder = get_ibkr_api_evidence_recorder()
-    recorder.record(
-        source="bars.stream_raw_5s_bars.subscribe",
-        symbol=sym,
-        request=evidence_request(
-            "reqRealTimeBars",
-            contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
-            barSize=5,
-            whatToShow="TRADES",
-            useRTH=use_rth,
-            realTimeBarsOptions=[],
-            requestIssued=not lease.multiplexed,
-            multiplexed=lease.multiplexed,
-            consumerCount=lease.consumer_count,
-        ),
-        response=evidence_response(
-            "realTimeBarList",
-            fields={"bar_count": len(bars), "start_index": lease.start_index},
-        ),
-    )
-    index = lease.start_index
-    last_progress_at = time.monotonic()
-    last_source_ms: int | None = None
-    try:
-        while True:
-            if index >= len(bars):
-                last_progress_at, connected, connection_lost = (
-                    _check_realtime_subscription_liveness(
-                        client=client,
-                        lease=lease,
-                        symbol=symbol,
-                        use_rth=use_rth,
-                        stall_timeout_s=stall_timeout_s,
-                        last_progress_at=last_progress_at,
-                    )
-                )
-                delivery_logger.maybe_log_no_bar(
-                    bar_count=len(bars),
-                    connected=connected,
-                    connection_lost=connection_lost,
-                    message="IBKR reqRealTimeBars has not delivered raw 5-second bars",
-                )
-                await asyncio.sleep(0.1)
-                continue
-            raw_bar = bars[index]
-            index += 1
-            delivery_logger.log_first_bar(
-                bar_count=len(bars),
-                message="IBKR reqRealTimeBars delivered first raw 5-second bar",
-            )
-            recorder.record(
-                source="bars.stream_raw_5s_bars.bar",
-                symbol=sym,
-                request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
-                response=evidence_response("realTimeBar", objects=[raw_bar]),
-            )
-            source_ms = _bar_time_ms(raw_bar)
-            if last_source_ms is None or source_ms > last_source_ms:
-                last_source_ms = source_ms
-                last_progress_at = time.monotonic()
-            contribution = _contribution(raw_bar)
+    async with aclosing(
+        _iter_leased_raw_bars(
+            client,
+            symbol,
+            use_rth=use_rth,
+            stall_timeout_s=stall_timeout_s,
+            evidence_source="bars.stream_raw_5s_bars",
+            consumer_label="raw 5-second bar",
+            no_bar_message="IBKR reqRealTimeBars has not delivered raw 5-second bars",
+            first_bar_message="IBKR reqRealTimeBars delivered first raw 5-second bar",
+        )
+    ) as leased_bars:
+        async for leased in leased_bars:
+            source_ms = _bar_time_ms(leased.raw)
+            contribution = _contribution(leased.raw)
             yield IbkrMinuteBar(
                 symbol=sym,
                 start_ms=source_ms,
@@ -928,17 +861,10 @@ async def stream_raw_5s_bars(
                 volume=contribution.volume,
                 fetched_at_ms=now_ms_utc(),
                 provenance="ibkr_realtime",
-                venue=venue,
+                venue=leased.venue,
                 session_phase=_session_phase_for_ms(source_ms),
                 use_rth=use_rth,
             )
-    finally:
-        cancelled = lease.release()
-        logger.debug(
-            "Released raw 5-second bar consumer for %s (broker_subscription_cancelled=%s)",
-            symbol,
-            cancelled,
-        )
 
 
 async def stream_minute_bars(
@@ -948,6 +874,7 @@ async def stream_minute_bars(
     use_rth: bool = True,
     on_source_bar: Callable[[int], None] | None = None,
     stall_timeout_s: float = REALTIME_BAR_STALL_TIMEOUT_S,
+    assembler: MinuteAssembler,
 ) -> AsyncIterator[IbkrMinuteBar]:
     """Yield closed 1-minute bars built from IBKR 5-second TRADES bars.
 
@@ -956,117 +883,45 @@ async def stream_minute_bars(
     crash a live trading run. Exact redeliveries are skipped and
     different-valued redeliveries correct the still-open minute; both are
     counted on ``LiveBarCounters`` and logged.
+
+    The ``assembler`` is the caller's, because it outlives this call: a caller
+    that resubscribes after ``IBKRBarInterrupted`` hands the same assembler to
+    the next call and the contributions from both sockets fold into one minute.
+    Each contribution is tagged with the delivering lease's generation, so such
+    a minute emits with ``spans_interruption=True`` by construction. A caller
+    that does not want to survive an interruption places a fresh
+    ``MinuteAssembler()`` per call, which is the pre-#1921 behaviour.
     """
-    client.require_connected()
-    contract = await qualify_underlying(client, symbol)
-    lease = await _REALTIME_BAR_SUBSCRIPTIONS.acquire(
-        client,
-        contract,
-        bar_size=5,
-        what_to_show="TRADES",
-        use_rth=use_rth,
-    )
-    bars = lease.bars
     sym = symbol.upper()
-    venue = _contract_venue(contract)
-    delivery_logger = _BarDeliveryLogger(
-        symbol=sym,
-        con_id=int(contract.conId),
-        use_rth=use_rth,
-    )
-    delivery_logger.log_subscribed(
-        initial_bar_count=len(bars),
-        multiplexed=lease.multiplexed,
-        consumer_count=lease.consumer_count,
-    )
-    recorder = get_ibkr_api_evidence_recorder()
-    recorder.record(
-        source="bars.stream_minute_bars.subscribe",
-        symbol=sym,
-        request=evidence_request(
-            "reqRealTimeBars",
-            contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
-            barSize=5,
-            whatToShow="TRADES",
-            useRTH=use_rth,
-            realTimeBarsOptions=[],
-            requestIssued=not lease.multiplexed,
-            multiplexed=lease.multiplexed,
-            consumerCount=lease.consumer_count,
-        ),
-        response=evidence_response(
-            "realTimeBarList",
-            fields={"bar_count": len(bars), "start_index": lease.start_index},
-        ),
-    )
-    index = lease.start_index
-    current: _MinuteAccumulator | None = None
-    last_source_ms: int | None = None
-    counters = LiveBarCounters()
-    last_progress_at = time.monotonic()
     try:
-        while True:
-            if index >= len(bars):
-                # No new 5-second bar yet. Before sleeping, confirm the feed is
-                # still live: ib_async stops appending to ``bars`` on a Gateway
-                # disconnect and raises nothing, so without this check the loop
-                # would spin forever yielding no bars and the live engine would
-                # go silently blind. Surface a fatal error instead.
-                last_progress_at, connected, connection_lost = (
-                    _check_realtime_subscription_liveness(
-                        client=client,
-                        lease=lease,
-                        symbol=symbol,
-                        use_rth=use_rth,
-                        stall_timeout_s=stall_timeout_s,
-                        last_progress_at=last_progress_at,
-                    )
-                )
-                delivery_logger.maybe_log_no_bar(
-                    bar_count=len(bars),
-                    connected=connected,
-                    connection_lost=connection_lost,
-                    message="IBKR reqRealTimeBars has not delivered 5-second bars",
-                )
-                await asyncio.sleep(0.1)
-                continue
-            raw_bar = bars[index]
-            index += 1
-            delivery_logger.log_first_bar(
-                bar_count=len(bars),
-                message="IBKR reqRealTimeBars delivered first 5-second bar",
-            )
-            recorder.record(
-                source="bars.stream_minute_bars.bar",
-                symbol=sym,
-                request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
-                response=evidence_response("realTimeBar", objects=[raw_bar]),
-            )
-            previous_source_ms = last_source_ms
-            current, emitted, last_source_ms = aggregate_realtime_bar(
-                current,
-                raw_bar,
-                symbol=sym,
-                last_source_ms=last_source_ms,
-                policy="live_idempotent",
-                counters=counters,
-                venue=venue,
+        async with aclosing(
+            _iter_leased_raw_bars(
+                client,
+                symbol,
                 use_rth=use_rth,
-                provenance="ibkr_realtime",
+                stall_timeout_s=stall_timeout_s,
+                evidence_source="bars.stream_minute_bars",
+                consumer_label="minute-bar",
+                no_bar_message="IBKR reqRealTimeBars has not delivered 5-second bars",
+                first_bar_message="IBKR reqRealTimeBars delivered first 5-second bar",
+                last_source_ms=assembler.last_source_ms,
+                on_source_bar=on_source_bar,
             )
-            if last_source_ms != previous_source_ms:
-                last_progress_at = time.monotonic()
-                if on_source_bar is not None:
-                    on_source_bar(last_source_ms)
-            if emitted is not None:
-                yield emitted
+        ) as leased_bars:
+            async for leased in leased_bars:
+                emitted = assembler.feed(
+                    leased.raw,
+                    symbol=sym,
+                    generation=leased.generation,
+                    venue=leased.venue,
+                    use_rth=use_rth,
+                )
+                if emitted is not None:
+                    yield emitted
     finally:
-        cancelled = lease.release()
         logger.debug(
-            "Released minute-bar consumer for %s (broker_subscription_cancelled=%s, "
-            "skipped_duplicate=%d, applied_correction=%d)",
+            "Minute-bar consumer for %s detached (skipped_duplicate=%d, applied_correction=%d)",
             symbol,
-            cancelled,
-            counters.skipped_duplicate,
-            counters.applied_correction,
+            assembler.counters.skipped_duplicate,
+            assembler.counters.applied_correction,
         )

@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.qualification import (
     run_synthetic_custody_rehearsal,
     synthesize_polygon_5s_bars,
 )
+from app.broker.alpaca.clerk.sqlite.qualification_polygon_replay import PolygonReplayMarketDataFeed
 from app.broker.alpaca.clerk.sqlite.qualification_storage_recovery import (
     _verify_production_authority_identity,
     prove_mount_topology,
@@ -35,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.recovery import (
     RecoveryRefused,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.marketdata.feed import ContinuityEventRef, ContinuityPolicy, FeedContinuityEvent, SubstitutionRefusal
 from app.schemas.account_custody_synthetic_qualification import (
     SyntheticUiCorrelationEvidence,
 )
@@ -99,6 +101,26 @@ def test_synthetic_5s_composition_preserves_exact_minute_ohlcv() -> None:
     assert min(bar.low for bar in raw) == aggregate.low
     assert raw[-1].close == aggregate.close
     assert sum(bar.volume for bar in raw) == aggregate.volume
+
+
+@pytest.mark.asyncio
+async def test_polygon_replay_refuses_a_continuity_policy() -> None:
+    """The replay never reconnects; a policy would reach a delegate kill switch its client cannot answer."""
+
+    async def _never_records(event: FeedContinuityEvent) -> ContinuityEventRef:
+        raise AssertionError(f"no continuity event may be recorded by a replay: {event.kind}")
+
+    policy = ContinuityPolicy(
+        decision_session="rth",
+        next_trigger_ms=lambda last_end_ms: last_end_ms + 60_000,
+        substitution_grant=lambda start_ms, end_ms: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+        record_event=_never_records,
+    )
+    feed = PolygonReplayMarketDataFeed([])
+
+    with pytest.raises(ValueError, match="continuity"):
+        async for _ in feed.stream_bars("SPY", continuity=policy):
+            pass
 
 
 @pytest.mark.slow

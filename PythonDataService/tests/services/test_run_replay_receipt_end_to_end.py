@@ -90,7 +90,7 @@ def _retain_all(tmp_path: Path) -> None:
     )
     try:
         for bar in _ema_parity_bars_through_first_exit():
-            ledger.append(bar)
+            ledger.append(bar, run_id="run-a")
     finally:
         ledger.close()
 
@@ -157,7 +157,8 @@ async def test_end_to_end_regenerating_run_one_after_later_appends_is_stable(
                         "end_ms": last.end_ms + offset * 60_000,
                         "fetched_at_ms": last.fetched_at_ms + offset * 60_000,
                     }
-                )
+                ),
+                run_id="run-a",
             )
     finally:
         ledger.close()

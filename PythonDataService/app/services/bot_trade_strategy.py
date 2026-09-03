@@ -42,11 +42,17 @@ from app.engine.strategy.signal_program import (
     trace_root,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
+from app.marketdata.feed import (
+    ContinuityPolicy,
+    FeedHealth,
+    MarketDataBar,
+    MarketDataFeed,
+)
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
+from app.services.feed_continuity_policy import admit_on_delivery, continuity_policy_for
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -176,11 +182,25 @@ class _RecordingSignalIntentExecutor:
 
 
 class _RetainedSourceBarFeed:
-    """Append exact source observations before strategy warmup or advance."""
+    """Append exact source observations before strategy warmup or advance.
 
-    def __init__(self, source: MarketDataFeed, ledger: SourceBarLedger) -> None:
+    Also the run's continuity boundary (#1921): it hands the source the policy
+    this run was constructed with, and admits -- or refuses -- each recovered
+    bar on delivery, before the observation reaches the ledger or the session.
+    """
+
+    def __init__(
+        self,
+        source: MarketDataFeed,
+        ledger: SourceBarLedger,
+        *,
+        run_id: str,
+        continuity: ContinuityPolicy | None = None,
+    ) -> None:
         self._source = source
         self._ledger = ledger
+        self._run_id = run_id
+        self._continuity = continuity
         self.feed_id = source.feed_id
 
     @property
@@ -201,13 +221,25 @@ class _RetainedSourceBarFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
+        # The run authors its own decision clock, substitution authority and
+        # evidence sink once, at construction (ruling P1). Accepting the
+        # parameter satisfies the MarketDataFeed Protocol; honouring a
+        # *different* policy would silently retarget the run's evidence, so a
+        # caller in the wrapper chain may only pass the one it was built with.
+        if continuity is not None and continuity is not self._continuity:
+            raise ValueError(
+                "_RetainedSourceBarFeed streams under the continuity policy its run was "
+                "constructed with; a caller may not substitute a different one."
+            )
         # Capture first, then apply the sealed session policy locally. Asking
         # the provider for RTH-only data would make the authority ledger
         # depend on a lossy upstream filter and prevent a later program from
         # replaying its own session rule over the same observations.
-        async for bar in self._source.stream_bars(symbol, use_rth=False):
-            self._ledger.append(bar)
+        async for bar in self._source.stream_bars(symbol, use_rth=False, continuity=self._continuity):
+            await admit_on_delivery(self._continuity, bar)
+            self._ledger.append(bar, run_id=self._run_id)
             if _includes_session_phase(bar, use_rth=use_rth):
                 yield bar
             else:
@@ -243,6 +275,12 @@ class _RetainedSourceBarFeed:
                     fetched_at_ms=row.fetched_at_ms,
                     feed_id=row.provider,
                     session_phase=row.session_phase,
+                    # Carry the continuity chain through the rebuild (ruling
+                    # P4): a resumed run must not warm up on bars that claim
+                    # to be ordinary when a reconnect produced them.
+                    provenance=row.provenance,
+                    authorization_id=row.authorization_id,
+                    continuity_event_ref=row.continuity_event_ref,
                 )
                 for row in retained
                 if _includes_session_phase(row, use_rth=use_rth)
@@ -251,7 +289,7 @@ class _RetainedSourceBarFeed:
             symbol, use_rth=False, lookback_days=lookback_days
         )
         for bar in bars:
-            self._ledger.append_history(bar)
+            self._ledger.append_history(bar, run_id=self._run_id)
         return [bar for bar in bars if _includes_session_phase(bar, use_rth=use_rth)]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
@@ -666,7 +704,16 @@ async def run_trade_bot(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
-    run_feed = _RetainedSourceBarFeed(feed, source_bars) if source_bars is not None else feed
+    run_feed = (
+        feed
+        if source_bars is None
+        else _RetainedSourceBarFeed(
+            feed,
+            source_bars,
+            run_id=binding.run_id,
+            continuity=continuity_policy_for(binding, source_bars),
+        )
+    )
     async for evaluation in strategy_evaluations(
         binding,
         run_feed,
@@ -942,7 +989,12 @@ async def run_dry_run_bot(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
-    retained_feed = _RetainedSourceBarFeed(feed, source_bars)
+    retained_feed = _RetainedSourceBarFeed(
+        feed,
+        source_bars,
+        run_id=binding.run_id,
+        continuity=continuity_policy_for(binding, source_bars),
+    )
     async for evaluation in strategy_evaluations(
         binding,
         retained_feed,

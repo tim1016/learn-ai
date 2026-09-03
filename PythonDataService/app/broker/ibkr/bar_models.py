@@ -50,6 +50,12 @@ class IbkrMinuteBar(BaseModel):
     venue: str | None = None
     session_phase: BarSessionPhase = "UNKNOWN"
     use_rth: bool | None = None
+    contribution_count: int | None = Field(
+        default=None, ge=0, description="5-second bars folded into this minute; None when unknown (historical)."
+    )
+    spans_interruption: bool = Field(
+        default=False, description="Contributions arrived over more than one connection generation."
+    )
 
 
 class IbkrBarsSnapshot(BaseModel):

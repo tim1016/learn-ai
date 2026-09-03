@@ -70,7 +70,7 @@ async def test_generate_produces_a_parity_receipt_for_a_faithful_run(tmp_path: P
         account_id=paper_evidence_account_id_for_strategy(_SID),
     )
     for bar in bars:
-        ledger.append(bar)
+        ledger.append(bar, run_id="run-a")
     ledger.close()
     service = _service(
         tmp_path,
@@ -124,7 +124,7 @@ async def test_generate_with_truncated_evidence_is_indeterminate_never_parity(tm
         account_id=paper_evidence_account_id_for_strategy(_SID),
     )
     for bar in bars:
-        ledger.append(bar)
+        ledger.append(bar, run_id="run-a")
     ledger.close()
     service = _service(
         tmp_path, evidence,
@@ -148,7 +148,7 @@ async def test_generate_without_any_end_bound_refuses(tmp_path: Path) -> None:
         account_id=paper_evidence_account_id_for_strategy(_SID),
     )
     for bar in bars:
-        ledger.append(bar)
+        ledger.append(bar, run_id="run-a")
     ledger.close()
     service = _service(tmp_path, evidence, record=_run_record(bars[0].start_ms - 1), outcome=None)
 

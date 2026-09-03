@@ -13,7 +13,7 @@ import pytest
 
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBarBindingError, SyntheticBroker
 from app.broker.contract.models import BrokerOrderLeg
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, MarketDataBar
 from app.services import source_bar_ledger
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
 from app.services.source_bar_ledger import (
@@ -50,20 +50,20 @@ def _bar(
 def test_source_bar_ledger_is_idempotent_but_refuses_revised_identity(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
 
-    first = ledger.append(_bar())
-    replay = ledger.append(_bar())
+    first = ledger.append(_bar(), run_id="run-a")
+    replay = ledger.append(_bar(), run_id="run-a")
 
     assert replay == first
     assert len(ledger.bars(provider="polygon-minute", symbol="SPY")) == 1
     with pytest.raises(SourceBarConflictError, match="SOURCE_BAR_IDENTITY_CONFLICT"):
-        ledger.append(_bar(close="502.25"))
+        ledger.append(_bar(close="502.25"), run_id="run-a")
 
 
 def test_source_bar_ledger_treats_later_fetch_time_as_exact_redelivery(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
 
-    retained = ledger.append(_bar())
-    replay = ledger.append(_bar(fetched_at_ms=1_700_000_099_000))
+    retained = ledger.append(_bar(), run_id="run-a")
+    replay = ledger.append(_bar(fetched_at_ms=1_700_000_099_000), run_id="run-a")
 
     assert replay == retained
     assert ledger.find_by_market_bar(_bar()) == retained
@@ -71,10 +71,10 @@ def test_source_bar_ledger_treats_later_fetch_time_as_exact_redelivery(tmp_path:
 
 def test_source_bar_ledger_uses_sqlite_identity_index_after_restart(tmp_path: Path) -> None:
     original = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    original.append(_bar())
+    original.append(_bar(), run_id="run-a")
     restarted = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
 
-    retained = restarted.append(_bar(start_ms=1_700_000_060_000))
+    retained = restarted.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
 
     assert retained.seq == 2
     assert restarted.path.name == "source_bars.sqlite3"
@@ -82,19 +82,19 @@ def test_source_bar_ledger_uses_sqlite_identity_index_after_restart(tmp_path: Pa
 
 def test_source_bar_ledger_rejects_non_monotonic_live_delivery(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    ledger.append(_bar(start_ms=1_700_000_060_000))
+    ledger.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
 
     with pytest.raises(SourceBarConflictError, match="SOURCE_BAR_NON_MONOTONIC_LIVE"):
-        ledger.append(_bar())
+        ledger.append(_bar(), run_id="run-a")
 
 
 def test_source_bar_ledger_rejects_history_after_live_delivery_begins(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    ledger.append_history(_bar())
-    ledger.append(_bar(start_ms=1_700_000_060_000))
+    ledger.append_history(_bar(), run_id="run-a")
+    ledger.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
 
     with pytest.raises(SourceBarConflictError, match="SOURCE_BAR_HISTORY_AFTER_LIVE"):
-        ledger.append_history(_bar(start_ms=1_700_000_120_000))
+        ledger.append_history(_bar(start_ms=1_700_000_120_000), run_id="run-a")
 
 
 def test_source_bar_ledger_fails_closed_at_its_explicit_retention_limit(
@@ -103,10 +103,10 @@ def test_source_bar_ledger_fails_closed_at_its_explicit_retention_limit(
 ) -> None:
     monkeypatch.setattr(source_bar_ledger, "SOURCE_BAR_STREAM_CAPACITY", 1)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    ledger.append(_bar())
+    ledger.append(_bar(), run_id="run-a")
 
     with pytest.raises(SourceBarRetentionLimitError, match="SOURCE_BAR_RETENTION_LIMIT"):
-        ledger.append(_bar(start_ms=1_700_000_060_000))
+        ledger.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
 
 
 @pytest.mark.asyncio
@@ -117,14 +117,21 @@ async def test_retained_feed_persists_unfiltered_stream_before_applying_rth_poli
         def __init__(self) -> None:
             self.use_rth_calls: list[bool] = []
 
-        async def stream_bars(self, _symbol: str, *, use_rth: bool = True):
+        async def stream_bars(
+            self,
+            _symbol: str,
+            *,
+            use_rth: bool = True,
+            continuity: ContinuityPolicy | None = None,
+        ):
+            del continuity
             self.use_rth_calls.append(use_rth)
             yield _bar().model_copy(update={"session_phase": "PRE"})
             yield _bar(start_ms=1_700_000_060_000).model_copy(update={"session_phase": "RTH"})
 
     source = _Source()
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    retained = _RetainedSourceBarFeed(source, ledger)
+    retained = _RetainedSourceBarFeed(source, ledger, run_id="run-1")
 
     yielded = [bar async for bar in retained.stream_bars("SPY", use_rth=True)]
 
@@ -139,7 +146,7 @@ async def test_retained_feed_persists_unfiltered_stream_before_applying_rth_poli
 @pytest.mark.asyncio
 async def test_synthetic_port_fills_only_from_the_retained_decision_bar_and_recovers(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    retained = ledger.append(_bar())
+    retained = ledger.append(_bar(), run_id="run-a")
     broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
 
     order = await broker.submit(
@@ -159,10 +166,10 @@ async def test_synthetic_port_fills_only_from_the_retained_decision_bar_and_reco
 @pytest.mark.asyncio
 async def test_synthetic_port_consumes_order_scoped_exact_bar_binding(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    evaluated = ledger.append(_bar(close="501.25"))
+    evaluated = ledger.append(_bar(close="501.25"), run_id="run-a")
     broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
     broker.bind_evaluated_bar("bot:ema:enter", evaluated)
-    ledger.append(_bar(close="502.25", start_ms=1_700_000_060_000))
+    ledger.append(_bar(close="502.25", start_ms=1_700_000_060_000), run_id="run-a")
 
     order = await broker.submit(
         BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
@@ -182,7 +189,7 @@ async def test_synthetic_position_projection_preserves_average_cost_through_redu
     broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
 
     async def submit(order_id: str, side: str, quantity: int, close: str, offset: int) -> None:
-        retained = ledger.append(_bar(close=close, start_ms=1_700_000_000_000 + offset))
+        retained = ledger.append(_bar(close=close, start_ms=1_700_000_000_000 + offset), run_id="run-a")
         broker.bind_evaluated_bar(order_id, retained)
         await broker.submit(
             BrokerOrderLeg(symbol="SPY", side=side, quantity=quantity),
@@ -209,7 +216,7 @@ async def test_synthetic_position_projection_preserves_average_cost_through_redu
 
 def test_synthetic_port_rejects_binding_from_another_account_authority(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    retained = ledger.append(_bar())
+    retained = ledger.append(_bar(), run_id="run-a")
     broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
 
     with pytest.raises(SyntheticBarBindingError, match="different account authority"):
@@ -235,7 +242,7 @@ def _submit_in_thread(
 
 def test_synthetic_port_serializes_concurrent_order_id_and_sequence_writes(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-    ledger.append(_bar())
+    ledger.append(_bar(), run_id="run-a")
     first = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
     second = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
     barrier = threading.Barrier(2)
@@ -279,7 +286,7 @@ def test_close_checkpoints_and_truncates_the_wal(tmp_path: Path) -> None:
     """
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="PA-WAL")
     for index in range(3):
-        ledger.append_history(_bar(start_ms=1_800_000_000_000 + index * 60_000))
+        ledger.append_history(_bar(start_ms=1_800_000_000_000 + index * 60_000), run_id="run-a")
     wal_path = ledger.path.with_name(f"{ledger.path.name}-wal")
     assert wal_path.exists() and wal_path.stat().st_size > 0, "setup: writes must land in the WAL first"
     bystander = sqlite3.connect(ledger.path)
@@ -304,7 +311,7 @@ def test_close_fails_loudly_when_a_reader_still_holds_the_wal(
     monkeypatch.setattr(source_bar_ledger, "_BUSY_TIMEOUT_MS", 50)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="PA-WAL")
     for index in range(3):
-        ledger.append_history(_bar(start_ms=1_800_000_000_000 + index * 60_000))
+        ledger.append_history(_bar(start_ms=1_800_000_000_000 + index * 60_000), run_id="run-a")
     wal_path = ledger.path.with_name(f"{ledger.path.name}-wal")
     reader = sqlite3.connect(ledger.path, isolation_level=None)
     try:
@@ -330,7 +337,7 @@ def test_ledger_refuses_another_accounts_evidence_on_open_and_in_verification(tm
     it in place (an operator copy), or foreign ``bar_ref`` evidence would mix
     with this account's new appends (#1740 review)."""
     foreign = SourceBarLedger(artifacts_root=tmp_path, account_id="PA-OTHER")
-    foreign.append_history(_bar())
+    foreign.append_history(_bar(), run_id="run-a")
     foreign.close()
 
     assert verify_ledger_file(foreign.path, account_id="PA-OTHER") == 1
@@ -348,3 +355,233 @@ def test_ledger_refuses_another_accounts_evidence_on_open_and_in_verification(tm
     assert verify_ledger_file(empty.path, account_id="PA-MINE") == 0, (
         "an empty ledger carries no evidence and cannot be foreign"
     )
+
+
+def _event(kind: str = "interruption", observed_at_ms: int = 1_700_000_000_500, **extra) -> FeedContinuityEvent:
+    return FeedContinuityEvent(kind=kind, feed_id="ibkr", symbol="SPY", observed_at_ms=observed_at_ms, **extra)
+
+
+def test_bars_and_events_share_one_causal_order_per_run(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        first = ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+        ref = ledger.append_event(_event(cause="socket_down", generation_from=1), run_id="run-a")
+        second = ledger.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
+        assert first.run_id == "run-a" and first.evidence_seq is not None
+        assert ref.run_id == "run-a" and ref.ref() == f"run-a:{ref.evidence_seq}"
+        assert first.evidence_seq < ref.evidence_seq < second.evidence_seq
+        events = ledger.events(run_id="run-a")
+        assert [e.kind for e in events] == ["interruption"]
+        assert events[0].cause == "socket_down" and events[0].generation_from == 1
+        assert ledger.evidence_end_seq() == second.evidence_seq
+        assert ledger.events(run_id="run-a", evidence_end_seq=first.evidence_seq) == []
+    finally:
+        ledger.close()
+
+
+def test_every_continuity_event_field_has_a_column_to_land_in(tmp_path: Path) -> None:
+    """The module docstring's durability claim, made checkable.
+
+    ``RetainedContinuityEvent`` subclasses ``FeedContinuityEvent`` with
+    ``extra="forbid"``, which catches a *column* the model has no field for.
+    The other direction -- a field added to the model and forgotten in the
+    ``CREATE TABLE`` and the ``INSERT`` -- is what this pins.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        columns = {
+            str(row[1])
+            for row in ledger._conn.execute("PRAGMA table_info(source_stream_events)")
+        }
+    finally:
+        ledger.close()
+
+    assert set(FeedContinuityEvent.model_fields) <= columns
+
+
+def test_the_contribution_count_of_a_short_minute_survives_the_round_trip(tmp_path: Path) -> None:
+    """A refusal that says 'nine of twelve' is a different fact from one that does not."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        ledger.append_event(
+            _event(
+                kind="refused",
+                reason="SUBSTITUTION_NOT_AUTHORIZED",
+                window_start_ms=1_700_000_000_000,
+                window_end_ms=1_700_000_060_000,
+                contribution_count=9,
+            ),
+            run_id="run-a",
+        )
+        ledger.append_event(
+            _event(kind="gap", window_start_ms=1_700_000_060_000, window_end_ms=1_700_000_180_000),
+            run_id="run-a",
+        )
+        counts = [event.contribution_count for event in ledger.events(run_id="run-a")]
+    finally:
+        ledger.close()
+
+    assert counts == [9, None]
+
+
+def test_provenance_and_continuity_columns_persist(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        substitute = _bar(start_ms=1_700_000_000_000).model_copy(
+            update={
+                "provenance": "historical_substitute",
+                "authorization_id": "auth-1",
+                "continuity_event_ref": "run-a:7",
+            }
+        )
+        retained = ledger.append(substitute, run_id="run-a")
+        assert retained.provenance == "historical_substitute"
+        assert retained.authorization_id == "auth-1"
+        assert retained.continuity_event_ref == "run-a:7"
+        assert ledger.bars(provider="polygon-minute", symbol="SPY")[0].provenance == "historical_substitute"
+    finally:
+        ledger.close()
+
+
+_PRE_CHANNEL_SCHEMA_REWRITE = """
+DROP TABLE source_evidence_journal;
+DROP TABLE source_stream_events;
+CREATE TABLE source_bars_pre_channel (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    bar_identity TEXT NOT NULL UNIQUE,
+    bar_ref TEXT NOT NULL UNIQUE,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    open TEXT NOT NULL,
+    high TEXT NOT NULL,
+    low TEXT NOT NULL,
+    close TEXT NOT NULL,
+    volume INTEGER NOT NULL,
+    fetched_at_ms INTEGER NOT NULL,
+    session_phase TEXT NOT NULL,
+    UNIQUE(provider, symbol, start_ms, end_ms),
+    CHECK(end_ms > start_ms),
+    CHECK(volume >= 0),
+    CHECK(fetched_at_ms >= 0)
+);
+INSERT INTO source_bars_pre_channel
+    SELECT seq, account_id, provider, symbol, bar_identity, bar_ref, start_ms, end_ms,
+           open, high, low, close, volume, fetched_at_ms, session_phase
+    FROM source_bars;
+DROP TABLE source_bars;
+ALTER TABLE source_bars_pre_channel RENAME TO source_bars;
+"""
+"""The ``source_bars`` schema as shipped before #1921, rebuilt literally.
+
+Written out rather than produced with ``ALTER TABLE ... DROP COLUMN``, which
+needs SQLite 3.35 and CI does not pin ``libsqlite3``.
+"""
+
+
+def test_pre_channel_ledger_migrates_with_a_journal_row_per_bar(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+    ledger.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
+    path = ledger.path
+    ledger.close()
+    conn = sqlite3.connect(path)
+    conn.executescript(_PRE_CHANNEL_SCHEMA_REWRITE)
+    conn.close()
+
+    reopened = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        bars = reopened.bars(provider="polygon-minute", symbol="SPY")
+        assert [b.provenance for b in bars] == ["realtime", "realtime"]
+        assert [b.run_id for b in bars] == [None, None]
+        assert bars[0].evidence_seq is not None and bars[0].evidence_seq < bars[1].evidence_seq
+        assert reopened.evidence_end_seq() == bars[1].evidence_seq
+    finally:
+        reopened.close()
+
+
+def _row_count(path: Path, table: str) -> int:
+    """Count a table directly: an orphaned row is invisible to the joined readers."""
+    conn = sqlite3.connect(path)
+    try:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _refuse_journal(*_args: object, **_kwargs: object) -> int:
+    raise RuntimeError("journal unavailable")
+
+
+def test_append_event_refuses_an_unknown_continuity_kind(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        bogus = _event(kind="interruption").model_copy(update={"kind": "bogus"})
+        with pytest.raises(sqlite3.IntegrityError):
+            ledger.append_event(bogus, run_id="run-a")
+        assert ledger.events(run_id="run-a") == []
+        assert ledger.evidence_end_seq() is None
+    finally:
+        ledger.close()
+
+
+def test_append_event_rolls_back_the_event_when_its_journal_row_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A continuity fact with no journal position is evidence outside the run's
+    causal order -- and ``events`` inner-joins the journal, so it could not even
+    be read back. The event row must not survive its journal row failing."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        monkeypatch.setattr(SourceBarLedger, "_journal", _refuse_journal)
+
+        with pytest.raises(RuntimeError, match="journal unavailable"):
+            ledger.append_event(_event(cause="socket_down"), run_id="run-a")
+
+        assert _row_count(ledger.path, "source_stream_events") == 0
+        assert _row_count(ledger.path, "source_evidence_journal") == 0
+    finally:
+        ledger.close()
+
+
+def test_append_rolls_back_the_bar_when_its_journal_row_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same pairing for the other half: a retained bar with no journal
+    position could never be ordered against the run's continuity events."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        monkeypatch.setattr(SourceBarLedger, "_journal", _refuse_journal)
+
+        with pytest.raises(RuntimeError, match="journal unavailable"):
+            ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+
+        assert _row_count(ledger.path, "source_bars") == 0
+        assert _row_count(ledger.path, "source_evidence_journal") == 0
+        assert ledger.bars(provider="polygon-minute", symbol="SPY") == []
+    finally:
+        ledger.close()
+
+
+def test_journal_refuses_a_second_position_for_one_bar(tmp_path: Path) -> None:
+    """Every bar read LEFT JOINs the journal, so a duplicated journal row would
+    duplicate the bar itself -- and turn ``find_by_closed_end`` into a spurious
+    ``SOURCE_BAR_DECISION_AMBIGUITY``. The index makes that unrepresentable."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        retained = ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+        conn = sqlite3.connect(ledger.path)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO source_evidence_journal (run_id, kind, bar_seq, observed_at_ms) "
+                    "VALUES ('run-b', 'bar', ?, 1)",
+                    (retained.seq,),
+                )
+        finally:
+            conn.close()
+        assert len(ledger.bars(provider="polygon-minute", symbol="SPY")) == 1
+    finally:
+        ledger.close()
