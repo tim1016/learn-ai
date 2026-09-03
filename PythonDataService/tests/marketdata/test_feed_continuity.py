@@ -215,10 +215,11 @@ async def test_a_complete_open_minute_is_flushed_and_delivered_before_the_wait(
         (_MINUTE0, "realtime", ("interruption",)),
         (_MINUTE0 + 60_000, "realtime", ("interruption", "recovered")),
     ]
-    # The anchor is the open minute's start, and the deadline the run promises
-    # is derived from it once, before the flush moves the watermark on.
-    assert sink.events[0].last_delivered_end_ms == _MINUTE0
-    assert sink.events[0].deadline_ms == _MINUTE0 + 80_000
+    # The flushed minute is a delivered bar, so the deadline the run promises
+    # is derived from where it left the watermark, not from where the
+    # interruption found it (ruling P6).
+    assert sink.events[0].last_delivered_end_ms == _MINUTE0 + 60_000
+    assert sink.events[0].deadline_ms == _MINUTE0 + 980_000
 
 
 async def test_a_minute_stitched_by_the_real_assembler_crosses_the_reconnect(
@@ -243,15 +244,45 @@ async def test_a_minute_stitched_by_the_real_assembler_crosses_the_reconnect(
     assert [e.kind for e in sink.events] == ["interruption", "recovered"]
 
 
-async def test_the_wait_enforces_the_deadline_the_interruption_event_recorded(
+async def test_a_flushed_trigger_bar_earns_the_deadline_the_interruption_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A flush that crosses a decision trigger must not silently extend the wait.
+    """A reconnect still inside its window must not be refused (ruling P6).
 
-    The flushed minute moves ``last_delivered_end_ms`` past the fake clock's
-    15:01 trigger, so a deadline re-derived inside the wait would sit a whole
-    decision interval later than the one the ``interruption`` event promised.
+    The flushed minute closes exactly on the fake clock's 15:01 trigger, so the
+    consumer's next decision bar — and the deadline protecting it — moved a
+    whole interval out. A deadline anchored on the pre-flush watermark would
+    expire at 15:01:20 and kill a socket that returned with minutes to spare.
     """
+    assert _next_trigger(_MINUTE0 + 60_000 - 1) == _MINUTE0 + 60_000  # it is a trigger instant
+    sink = _RecordingSink()
+    source = _Source(
+        [*_rth_minute_raw(_MINUTE0, range(0, 60, 5)), IBKRBarInterrupted("x", cause="socket_down")],
+        [_ibkr_bar(_MINUTE0 + 60_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    client = _client()
+    client.is_connected.return_value = False
+    # Past the pre-flush deadline (15:01:20); far inside the post-flush one.
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: _MINUTE0 + 80_001)
+
+    async def _reconnect(_seconds: float) -> None:
+        client.is_connected.return_value = True
+
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.asyncio.sleep", _reconnect)
+    feed = IbkrMarketDataFeed(client)
+
+    bars = await _collect(feed, _policy(sink), 2)
+
+    assert [b.start_ms for b in bars] == [_MINUTE0, _MINUTE0 + 60_000]
+    assert [e.kind for e in sink.events] == ["interruption", "recovered"]
+    assert sink.events[0].deadline_ms == _MINUTE0 + 980_000
+
+
+async def test_the_wait_refuses_exactly_at_the_deadline_the_interruption_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other edge: the wait never outlives the deadline the journal promised."""
     sink = _RecordingSink()
     source = _Source(
         [*_rth_minute_raw(_MINUTE0, range(0, 60, 5)), IBKRBarInterrupted("x", cause="socket_down")],
@@ -260,7 +291,7 @@ async def test_the_wait_enforces_the_deadline_the_interruption_event_recorded(
     monkeypatch.setattr(feed_module, "stream_minute_bars", source)
     client = _client()
     client.is_connected.return_value = False
-    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: _MINUTE0 + 80_001)
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: _MINUTE0 + 980_001)
 
     async def _never_recovers(_seconds: float) -> None:
         raise AssertionError("the wait outlived the deadline the interruption event recorded")
@@ -273,8 +304,7 @@ async def test_the_wait_enforces_the_deadline_the_interruption_event_recorded(
 
     assert excinfo.value.reason == "DECISION_BAR_MISSED"
     assert [e.kind for e in sink.events] == ["interruption", "refused"]
-    assert sink.events[0].deadline_ms == sink.events[-1].deadline_ms == _MINUTE0 + 80_000
-    # The flush did move the watermark; the deadline just did not follow it.
+    assert sink.events[0].deadline_ms == sink.events[-1].deadline_ms == _MINUTE0 + 980_000
     assert sink.events[-1].last_delivered_end_ms == _MINUTE0 + 60_000
 
 
@@ -399,6 +429,33 @@ async def test_sink_failure_is_fatal_and_typed(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(MarketDataFeedError) as excinfo:
         await _collect(feed, _policy(sink), 2)
     assert excinfo.value.reason == "CONTINUITY_EVIDENCE_UNWRITABLE"
+
+
+async def test_sink_failure_withholds_the_bar_the_flush_had_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No delivered bar may precede the evidence explaining it (spec rule 9).
+
+    The flush now runs before the ``interruption`` event is written, so the bar
+    it produces is held until that write succeeds. When it cannot, the run dies
+    having delivered nothing.
+    """
+    sink = _RecordingSink()
+    sink.fail = True
+    source = _Source(
+        [*_rth_minute_raw(_MINUTE0, range(0, 60, 5)), IBKRBarInterrupted("x", cause="socket_down")],
+        [_ibkr_bar(_MINUTE0 + 60_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    delivered: list = []
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        async for bar in feed.stream_bars("SPY", continuity=_policy(sink)):
+            delivered.append(bar)
+
+    assert excinfo.value.reason == "CONTINUITY_EVIDENCE_UNWRITABLE"
+    assert delivered == []
 
 
 async def test_not_connected_on_reentry_keeps_waiting_rather_than_failing(

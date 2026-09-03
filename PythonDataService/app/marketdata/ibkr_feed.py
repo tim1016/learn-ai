@@ -280,11 +280,18 @@ class IbkrMarketDataFeed:
                         # so there is no continuity to preserve. Fail as today.
                         raise MarketDataFeedError(str(exc)) from exc
                     state.last_delivered_end_ms = assembler.open_minute_start_ms
-                # Anchor the deadline here, once, on the watermark the event is
-                # about to record. The flush below can advance that watermark
-                # past a decision trigger, and a deadline re-derived after it
-                # would let the run wait a whole decision interval longer than
-                # the journal says it did.
+                # Flush before anchoring (ruling P6). A minute already complete
+                # when the socket died is a delivered bar, and it moves the
+                # watermark the deadline derives from -- often onto a decision
+                # trigger. Anchoring first would hold the run to a deadline up
+                # to a whole decision interval too early and refuse a reconnect
+                # that was still safely inside its window.
+                complete = assembler.flush_if_complete()
+                held = (
+                    await self._resolve_emitted(state, liveness, complete)
+                    if complete is not None
+                    else None
+                )
                 deadline_ms = policy.deadline_ms(state.last_delivered_end_ms)
                 state.interruption_deadline_ms = deadline_ms
                 await state.record(
@@ -305,11 +312,10 @@ class IbkrMarketDataFeed:
                         "cause": cause,
                     },
                 )
-                complete = assembler.flush_if_complete()
-                if complete is not None:
-                    bar = await self._resolve_emitted(state, liveness, complete)
-                    if bar is not None:
-                        yield bar
+                # Only now: no delivered bar ever precedes the evidence that
+                # explains it, so a sink that cannot be written yields nothing.
+                if held is not None:
+                    yield held
                 liveness.first_bar_seen = False
                 await wait_for_healthy(self._client, state, deadline_ms=deadline_ms)
                 new_generation = int(getattr(self._client, "connection_generation", 0))
