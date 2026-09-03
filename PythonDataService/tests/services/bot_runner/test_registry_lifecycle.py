@@ -24,7 +24,7 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.desired_state import DesiredState
-from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.broker_bots import BotProcessFact
 from app.services import bot_runner as bot_runner_module
 from app.services.bot_runner import (
@@ -90,7 +90,14 @@ class _CancellationSuppressingFeed(_FakeFeed):
         super().__init__(bars, mode="hold")
         self.cancellation_suppressed = False
 
-    async def stream_bars(self, symbol: str, *, use_rth: bool = True):
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
+    ):
+        del continuity
         for bar in self._bars:
             self.bars_consumed += 1
             yield bar

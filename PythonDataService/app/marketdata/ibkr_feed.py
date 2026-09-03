@@ -44,7 +44,13 @@ from app.broker.ibkr.bars import (
     stream_minute_bars,
 )
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
-from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
+from app.marketdata.feed import (
+    BarProvenanceTag,
+    ContinuityPolicy,
+    FeedHealth,
+    MarketDataBar,
+    MarketDataFeedError,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -102,6 +108,7 @@ class IbkrMarketDataFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncGenerator[MarketDataBar, None]:
         """Yield closed 1-minute bars for ``symbol``.
 
@@ -114,7 +121,12 @@ class IbkrMarketDataFeed:
         transparently. Closed-minute output gaps are non-fatal; source-heartbeat
         silence is evaluated against IBKR's documented one-bar-per-five-seconds
         ``reqRealTimeBars`` contract.
+
+        ``continuity`` is accepted and not yet acted on: the reconnect
+        recovery loop it configures lands in a later slice of #1921. Passing
+        it today is exactly equivalent to passing ``None``.
         """
+        del continuity
         normalized_symbol = symbol.upper()
         state = self._state_for(normalized_symbol)
         if state.active_count == 0:
@@ -310,6 +322,12 @@ class IbkrMarketDataFeed:
     @staticmethod
     def _translate(ibkr_bar: IbkrMinuteBar) -> MarketDataBar:
         """Map an IbkrMinuteBar to the neutral MarketDataBar at the boundary."""
+        if ibkr_bar.provenance == "ibkr_historical":
+            provenance: BarProvenanceTag = "history"
+        elif getattr(ibkr_bar, "spans_interruption", False):
+            provenance = "realtime_across_reconnect"
+        else:
+            provenance = "realtime"
         return MarketDataBar(
             symbol=ibkr_bar.symbol,
             start_ms=ibkr_bar.start_ms,
@@ -322,6 +340,7 @@ class IbkrMarketDataFeed:
             fetched_at_ms=ibkr_bar.fetched_at_ms,
             feed_id="ibkr",
             session_phase=ibkr_bar.session_phase,
+            provenance=provenance,
         )
 
 

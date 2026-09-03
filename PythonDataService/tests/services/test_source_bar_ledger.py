@@ -13,7 +13,7 @@ import pytest
 
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBarBindingError, SyntheticBroker
 from app.broker.contract.models import BrokerOrderLeg
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, MarketDataBar
 from app.services import source_bar_ledger
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
 from app.services.source_bar_ledger import (
@@ -117,7 +117,14 @@ async def test_retained_feed_persists_unfiltered_stream_before_applying_rth_poli
         def __init__(self) -> None:
             self.use_rth_calls: list[bool] = []
 
-        async def stream_bars(self, _symbol: str, *, use_rth: bool = True):
+        async def stream_bars(
+            self,
+            _symbol: str,
+            *,
+            use_rth: bool = True,
+            continuity: ContinuityPolicy | None = None,
+        ):
+            del continuity
             self.use_rth_calls.append(use_rth)
             yield _bar().model_copy(update={"session_phase": "PRE"})
             yield _bar(start_ms=1_700_000_060_000).model_copy(update={"session_phase": "RTH"})

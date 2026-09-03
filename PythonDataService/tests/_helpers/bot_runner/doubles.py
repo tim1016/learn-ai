@@ -27,7 +27,7 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_sto
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.action_plan import ActionPlan
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import AlpacaLifecycleAuthoritySnapshot
@@ -60,8 +60,16 @@ class _FakeFeed:
         self._error = error
         self.bars_consumed = 0
         self._observed_at_ms = observed_at_ms
+        self.continuity_seen: ContinuityPolicy | None = None
 
-    async def stream_bars(self, symbol: str, *, use_rth: bool = True):
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
+    ):
+        self.continuity_seen = continuity
         for bar in self._bars:
             self.bars_consumed += 1
             yield bar

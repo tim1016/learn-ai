@@ -31,7 +31,7 @@ import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 import app.services.bot_trade_strategy as bot_trade_strategy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from tests._helpers.bot_runner.custody import _SID
 from tests._helpers.bot_runner.doubles import _FakeClerk
@@ -86,8 +86,9 @@ class _PhaseFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
-        del symbol, use_rth
+        del symbol, use_rth, continuity
         for bar in self._live_bars:
             yield bar
 

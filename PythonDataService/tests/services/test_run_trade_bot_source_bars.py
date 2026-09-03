@@ -12,7 +12,7 @@ import pytest
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import paper_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, MarketDataBar
 from app.services.bot_runtime import PauseAwareFeed, execute_bot_run
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed, run_trade_bot
 from app.services.source_bar_ledger import SourceBarLedger
@@ -36,8 +36,14 @@ class _MixedPhaseFeed:
     def __init__(self, bars: list[MarketDataBar]) -> None:
         self._bars = bars
 
-    async def stream_bars(self, symbol: str, *, use_rth: bool = True) -> AsyncIterator[MarketDataBar]:
-        del symbol, use_rth
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
+    ) -> AsyncIterator[MarketDataBar]:
+        del symbol, use_rth, continuity
         for bar in self._bars:
             yield bar
 

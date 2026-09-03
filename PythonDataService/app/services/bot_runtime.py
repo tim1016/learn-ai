@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.engine.strategy.signal_program import EvaluationMode
-from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeed
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_dry_run import DryRunActivityJournal
 from app.services.bot_runner_errors import RunAdmissionRefusedError, UnknownBotError
@@ -69,8 +69,9 @@ class PauseAwareFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
-        async for bar in self._source.stream_bars(symbol, use_rth=use_rth):
+        async for bar in self._source.stream_bars(symbol, use_rth=use_rth, continuity=continuity):
             mode = EvaluationMode.DECIDE if self._gate.is_set() else EvaluationMode.OBSERVE_ONLY
             self._captured_modes[(bar.symbol, bar.start_ms, bar.end_ms)] = mode
             yield bar

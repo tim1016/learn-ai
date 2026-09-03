@@ -16,11 +16,17 @@ Design constraints (from ADR 0022 + phase-3 design §4 + #1258 L2):
   underlying broker subscription; the last unsubscribe releases it.
 * Ordinary bar gaps are non-fatal. A bounded stalled broker request is
   replaced internally; connection death is fatal and typed.
+* A reconnect is survivable, not fatal (#1921). Every bar carries a
+  ``BarProvenanceTag`` saying how it was produced, and a caller that must
+  not miss a decision bar hands ``stream_bars`` a ``ContinuityPolicy``
+  describing its decision clock, its recovery authorization and where to
+  record ``FeedContinuityEvent``s.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal, Protocol
 
@@ -28,12 +34,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class MarketDataFeedError(Exception):
-    """Fatal feed error: connection death or unrecoverable broker failure.
+    """Fatal feed error: connection death, a refused continuity recovery, or an invariant violation.
 
     Raised by ``MarketDataFeed.stream_bars`` when the underlying connection
     dies or violates an unrecoverable data invariant. Ordinary bar gaps
     (expected during pre-market or after-hours silence) are not errors.
+
+    ``reason`` is an optional machine-readable code (e.g.
+    ``"DECISION_BAR_MISSED"``) that a receipt or a ledger can key on; it is
+    prefixed onto the message so a log line carries it without the reader
+    having to reach for the attribute.
     """
+
+    def __init__(self, message: str, *, reason: str | None = None) -> None:
+        super().__init__(f"{reason}: {message}" if reason else message)
+        self.reason = reason
 
 
 BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
@@ -44,6 +59,23 @@ imports this object instead of restating the six members —
 ``app.services.session_authority``, which aliases it as ``TradingSessionPhase``
 so session code reads in session vocabulary (``TradingSessionPhase is
 BarSessionPhase``)."""
+
+
+BarProvenanceTag = Literal["realtime", "realtime_across_reconnect", "historical_substitute", "history"]
+"""How a delivered bar was produced, in broker-neutral vocabulary (#1921).
+
+``realtime``                  — assembled wholly inside one live connection.
+``realtime_across_reconnect`` — assembled from live contributions that span a
+                                broker-socket interruption; every contribution
+                                is still a real print, so the bar is a decision
+                                input like any other.
+``historical_substitute``     — backfilled from the broker's history endpoint
+                                to replace a window the live stream missed.
+                                Only ever delivered under an explicit
+                                ``SubstitutionGrant``.
+``history``                   — served by ``recent_closed_bars`` for warmup;
+                                never itself a decision.
+"""
 
 
 class MarketDataBar(BaseModel):
@@ -70,6 +102,17 @@ class MarketDataBar(BaseModel):
     fetched_at_ms: int = Field(..., description="Wall-clock at which the bar was assembled, int64 ms UTC.")
     feed_id: str = Field(..., description="Provenance tag, e.g. 'ibkr'. NOT an execution identity.")
     session_phase: BarSessionPhase = "UNKNOWN"
+    provenance: BarProvenanceTag = Field(
+        default="realtime", description="How this bar was produced; see BarProvenanceTag."
+    )
+    authorization_id: str | None = Field(
+        default=None,
+        description="Substitution grant that authorized a 'historical_substitute' bar; None otherwise.",
+    )
+    continuity_event_ref: str | None = Field(
+        default=None,
+        description="'<run_id>:<evidence_seq>' of the continuity event explaining this bar; None otherwise.",
+    )
 
 
 class FeedHealth(BaseModel):
@@ -95,6 +138,119 @@ class FeedHealth(BaseModel):
     observed_at_ms: int = Field(..., description="Snapshot wall-clock, int64 ms UTC.")
 
 
+# ---------------------------------------------------------------------------
+# Reconnect continuity (#1921)
+# ---------------------------------------------------------------------------
+
+ContinuityEventKind = Literal["interruption", "recovered", "gap", "substituted", "refused"]
+"""What a ``FeedContinuityEvent`` records.
+
+``interruption`` — the source connection was lost or fenced.
+``recovered``    — live delivery resumed on a new connection generation.
+``gap``          — a window of minutes the live stream never delivered.
+``substituted``  — a gap window was backfilled under a ``SubstitutionGrant``.
+``refused``      — a substitution was asked for and denied; the bar stays missing.
+"""
+
+InterruptionCause = Literal["socket_down", "soft_loss_1100", "stall", "generation_changed"]
+"""Why delivery stopped, in the vocabulary the broker boundary can prove."""
+
+DecisionSession = Literal["rth", "all"]
+"""Which minutes the consumer's decision clock treats as decidable."""
+
+
+class FeedContinuityEvent(BaseModel):
+    """One recordable fact about the feed's continuity for a symbol.
+
+    Every temporal field is ``int64 ms UTC``. Fields not meaningful for a
+    given ``kind`` stay ``None`` rather than being filled with a placeholder:
+    an absent generation is a different fact from generation zero.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: ContinuityEventKind
+    feed_id: str
+    symbol: str
+    observed_at_ms: int = Field(..., description="Wall-clock at which the fact was observed, int64 ms UTC.")
+    cause: InterruptionCause | None = None
+    generation_from: int | None = None
+    generation_to: int | None = None
+    window_start_ms: int | None = None
+    window_end_ms: int | None = None
+    bar_identity: str | None = None
+    authorization_id: str | None = None
+    reason: str | None = None
+    last_delivered_end_ms: int | None = None
+    deadline_ms: int | None = None
+
+
+class ContinuityEventRef(BaseModel):
+    """Where a recorded ``FeedContinuityEvent`` landed in a run's evidence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    evidence_seq: int
+
+    def ref(self) -> str:
+        """Return the compact ``'<run_id>:<evidence_seq>'`` bar-stampable form."""
+        return f"{self.run_id}:{self.evidence_seq}"
+
+
+class SubstitutionGrant(BaseModel):
+    """Authorization to deliver historical bars for one missed window."""
+
+    model_config = ConfigDict(frozen=True)
+
+    authorization_id: str
+    window_start_ms: int
+    window_end_ms: int
+
+
+class SubstitutionRefusal(BaseModel):
+    """Refusal to authorize substitution, with the reason the caller must receipt."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reason: Literal[
+        "SUBSTITUTION_NOT_AUTHORIZED",
+        "SUBSTITUTION_SHAPE_UNPROVEN",
+        "SUBSTITUTION_WARMUP_TAINTED",
+    ]
+
+
+@dataclass(frozen=True)
+class ContinuityPolicy:
+    """What one consumer needs the feed to do when delivery is interrupted.
+
+    A ``dataclass`` rather than a Pydantic model because it carries the
+    consumer's callables — its decision clock, its substitution authority and
+    its evidence sink — which Pydantic would have to validate as opaque
+    objects anyway.
+
+    ``next_trigger_ms(last_end_ms)`` returns the ``end_ms`` of the next bar the
+    consumer would decide on, strictly after ``last_end_ms``.
+    ``substitution_grant(window_start_ms, window_end_ms)`` either authorizes
+    backfill of that window or refuses it. ``record_event`` persists a
+    continuity event and returns the reference to stamp on affected bars.
+    """
+
+    decision_session: DecisionSession
+    next_trigger_ms: Callable[[int], int]
+    substitution_grant: Callable[[int, int], SubstitutionGrant | SubstitutionRefusal]
+    record_event: Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]
+    delivery_allowance_ms: int = 20_000
+
+    def deadline_ms(self, last_delivered_end_ms: int) -> int:
+        """Wall-clock by which the next decision bar must have been delivered."""
+        return self.next_trigger_ms(last_delivered_end_ms) + self.delivery_allowance_ms
+
+    def is_trigger_ms(self, end_ms: int) -> bool:
+        """Whether a bar closing at ``end_ms`` is one the consumer decides on."""
+        return self.next_trigger_ms(end_ms - 1) == end_ms
+
+
 class MarketDataFeed(Protocol):
     """Broker-neutral market-data port.
 
@@ -110,6 +266,11 @@ class MarketDataFeed(Protocol):
     raises ``MarketDataFeedError`` when the underlying connection dies or an
     unrecoverable invariant fails. Implementations may replace a bounded
     stalled subscription transparently; ordinary bar gaps are silent.
+
+    ``continuity`` is how a caller that cannot miss a decision bar states its
+    decision clock, its substitution authority and its evidence sink.
+    ``None`` — the default — is the pre-#1921 behavior: the feed neither
+    recovers across a reconnect nor records continuity evidence.
 
     ``health`` is a synchronous point-in-time snapshot.  Callers may poll it
     on any cadence; it never blocks.
@@ -127,6 +288,7 @@ class MarketDataFeed(Protocol):
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]: ...
 
     async def recent_closed_bars(

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.marketdata.feed import ContinuityPolicy
 from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -26,8 +27,14 @@ class _StopOrderingFeed(_FakeFeed):
         self._clerk = clerk
         self.cancelled_after_stop = False
 
-    async def stream_bars(self, symbol: str, *, use_rth: bool = True):
-        del symbol, use_rth
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
+    ):
+        del symbol, use_rth, continuity
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:

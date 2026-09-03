@@ -36,7 +36,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import TRANSIENT_ADMISSION_REASO
 from app.broker.alpaca.paths import safe_path_component
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.signal_program import Settlement, trace_root
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
 from app.services.bot_trade_strategy import _includes_session_phase, strategy_evaluations
@@ -404,7 +404,14 @@ class _RunReplayFeed:
     def capability_account_id(self) -> None:
         return None
 
-    async def stream_bars(self, symbol: str, *, use_rth: bool = True) -> AsyncIterator[MarketDataBar]:
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
+    ) -> AsyncIterator[MarketDataBar]:
+        del continuity  # a retained-bar replay has no live connection to lose
         for bar in self._live_bars:
             if bar.symbol == symbol and _includes_session_phase(bar, use_rth=use_rth):
                 yield bar

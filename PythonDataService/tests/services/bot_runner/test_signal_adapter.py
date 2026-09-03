@@ -16,7 +16,7 @@ import pytest
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.engine.strategy.signal_program import EvaluationMode, Settlement
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, MarketDataBar
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
     alpaca_v1_action_plan,
@@ -275,7 +275,14 @@ async def test_pause_aware_feed_progresses_bars_in_observe_only_mode() -> None:
         def __init__(self) -> None:
             self.queue: asyncio.Queue[MarketDataBar] = asyncio.Queue()
 
-        async def stream_bars(self, _symbol: str, *, use_rth: bool = True):
+        async def stream_bars(
+            self,
+            _symbol: str,
+            *,
+            use_rth: bool = True,
+            continuity: ContinuityPolicy | None = None,
+        ):
+            del continuity
             while True:
                 yield await self.queue.get()
 
@@ -317,8 +324,14 @@ async def test_pause_mode_is_captured_at_the_decision_bar_not_sampled_after_cont
     gate.set()
 
     class _ModeBoundaryFeed(_FakeFeed):
-        async def stream_bars(self, symbol: str, *, use_rth: bool = True):
-            async for bar in super().stream_bars(symbol, use_rth=use_rth):
+        async def stream_bars(
+            self,
+            symbol: str,
+            *,
+            use_rth: bool = True,
+            continuity: ContinuityPolicy | None = None,
+        ):
+            async for bar in super().stream_bars(symbol, use_rth=use_rth, continuity=continuity):
                 if bar.end_ms == _EMA_FIRST_ENTER_MS:
                     gate.clear()
                 elif bar.end_ms > _EMA_FIRST_ENTER_MS:

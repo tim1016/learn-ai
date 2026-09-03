@@ -18,7 +18,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
 from app.engine.live.account_artifacts import RestartIntensityPolicy
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     MarketLivenessFact,
@@ -120,8 +120,9 @@ class _ResumeFeed:
         _symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
-        del use_rth
+        del use_rth, continuity
         for bar in self._bars:
             self.bars_consumed += 1
             yield bar

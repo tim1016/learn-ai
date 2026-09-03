@@ -42,7 +42,7 @@ from app.engine.strategy.signal_program import (
     trace_root,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeed
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_start_admission import market_data_capability_account_id
@@ -201,12 +201,13 @@ class _RetainedSourceBarFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
         # Capture first, then apply the sealed session policy locally. Asking
         # the provider for RTH-only data would make the authority ledger
         # depend on a lossy upstream filter and prevent a later program from
         # replaying its own session rule over the same observations.
-        async for bar in self._source.stream_bars(symbol, use_rth=False):
+        async for bar in self._source.stream_bars(symbol, use_rth=False, continuity=continuity):
             self._ledger.append(bar)
             if _includes_session_phase(bar, use_rth=use_rth):
                 yield bar

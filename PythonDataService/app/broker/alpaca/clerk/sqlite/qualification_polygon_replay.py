@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.engine.strategy.signal_program import Settlement
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.schemas.account_custody_synthetic_qualification import (
     SyntheticPolygonReplayEvidence,
@@ -96,8 +96,9 @@ class PolygonReplayMarketDataFeed:
         symbol: str,
         *,
         use_rth: bool = True,
+        continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
-        async for bar in self._delegate.stream_bars(symbol, use_rth=use_rth):
+        async for bar in self._delegate.stream_bars(symbol, use_rth=use_rth, continuity=continuity):
             yield bar.model_copy(update={"feed_id": self.feed_id})
 
     async def recent_closed_bars(
