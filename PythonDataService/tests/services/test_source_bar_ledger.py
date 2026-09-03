@@ -423,7 +423,20 @@ def test_pre_channel_ledger_migrates_with_a_journal_row_per_bar(tmp_path: Path) 
         reopened.close()
 
 
-def test_event_and_journal_rows_roll_back_together(tmp_path: Path) -> None:
+def _row_count(path: Path, table: str) -> int:
+    """Count a table directly: an orphaned row is invisible to the joined readers."""
+    conn = sqlite3.connect(path)
+    try:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _refuse_journal(*_args: object, **_kwargs: object) -> int:
+    raise RuntimeError("journal unavailable")
+
+
+def test_append_event_refuses_an_unknown_continuity_kind(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
         bogus = _event(kind="interruption").model_copy(update={"kind": "bogus"})
@@ -431,5 +444,65 @@ def test_event_and_journal_rows_roll_back_together(tmp_path: Path) -> None:
             ledger.append_event(bogus, run_id="run-a")
         assert ledger.events(run_id="run-a") == []
         assert ledger.evidence_end_seq() is None
+    finally:
+        ledger.close()
+
+
+def test_append_event_rolls_back_the_event_when_its_journal_row_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A continuity fact with no journal position is evidence outside the run's
+    causal order -- and ``events`` inner-joins the journal, so it could not even
+    be read back. The event row must not survive its journal row failing."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        monkeypatch.setattr(SourceBarLedger, "_journal", _refuse_journal)
+
+        with pytest.raises(RuntimeError, match="journal unavailable"):
+            ledger.append_event(_event(cause="socket_down"), run_id="run-a")
+
+        assert _row_count(ledger.path, "source_stream_events") == 0
+        assert _row_count(ledger.path, "source_evidence_journal") == 0
+    finally:
+        ledger.close()
+
+
+def test_append_rolls_back_the_bar_when_its_journal_row_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same pairing for the other half: a retained bar with no journal
+    position could never be ordered against the run's continuity events."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        monkeypatch.setattr(SourceBarLedger, "_journal", _refuse_journal)
+
+        with pytest.raises(RuntimeError, match="journal unavailable"):
+            ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+
+        assert _row_count(ledger.path, "source_bars") == 0
+        assert _row_count(ledger.path, "source_evidence_journal") == 0
+        assert ledger.bars(provider="polygon-minute", symbol="SPY") == []
+    finally:
+        ledger.close()
+
+
+def test_journal_refuses_a_second_position_for_one_bar(tmp_path: Path) -> None:
+    """Every bar read LEFT JOINs the journal, so a duplicated journal row would
+    duplicate the bar itself -- and turn ``find_by_closed_end`` into a spurious
+    ``SOURCE_BAR_DECISION_AMBIGUITY``. The index makes that unrepresentable."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        retained = ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+        conn = sqlite3.connect(ledger.path)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO source_evidence_journal (run_id, kind, bar_seq, observed_at_ms) "
+                    "VALUES ('run-b', 'bar', ?, 1)",
+                    (retained.seq,),
+                )
+        finally:
+            conn.close()
+        assert len(ledger.bars(provider="polygon-minute", symbol="SPY")) == 1
     finally:
         ledger.close()

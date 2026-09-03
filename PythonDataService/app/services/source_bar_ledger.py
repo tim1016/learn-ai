@@ -661,6 +661,10 @@ class SourceBarLedger:
             );
             CREATE INDEX IF NOT EXISTS source_evidence_journal_run
                 ON source_evidence_journal(run_id, evidence_seq);
+            CREATE UNIQUE INDEX IF NOT EXISTS source_evidence_journal_bar
+                ON source_evidence_journal(kind, bar_seq);
+            CREATE UNIQUE INDEX IF NOT EXISTS source_evidence_journal_event
+                ON source_evidence_journal(kind, event_seq);
             """
         )
 
@@ -694,8 +698,7 @@ class SourceBarLedger:
         """
         with self._lock:
             migrated = self._bar_columns().issuperset(_EVIDENCE_BAR_COLUMNS)
-            unjournaled = self._conn.execute(f"{_UNJOURNALED_BARS} LIMIT 1").fetchone()
-            if migrated and unjournaled is None:
+            if migrated and not self._has_unjournaled_bars():
                 return
             self._conn.execute("BEGIN IMMEDIATE")
             try:
@@ -721,6 +724,23 @@ class SourceBarLedger:
     def _bar_columns(self) -> set[str]:
         """The column names ``source_bars`` currently has on disk."""
         return {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(source_bars)")}
+
+    def _has_unjournaled_bars(self) -> bool:
+        """Whether any retained bar still lacks its journal position.
+
+        Counted, not searched. ``bar_seq``'s foreign key and the uniqueness of
+        ``source_evidence_journal_bar`` make the journal's bar rows inject into
+        ``source_bars``, so equal counts *is* "every bar has a journal row" --
+        and both counts are index-only walks. The equivalent anti-join probe
+        would scan every retained bar on a fully migrated file, at every open,
+        forever; this open-time check must stay cheap on a ledger holding
+        ``SOURCE_BAR_STREAM_CAPACITY`` bars.
+        """
+        bars = self._conn.execute("SELECT COUNT(*) AS count FROM source_bars").fetchone()
+        journaled = self._conn.execute(
+            "SELECT COUNT(*) AS count FROM source_evidence_journal WHERE kind = 'bar'"
+        ).fetchone()
+        return int(bars["count"]) != int(journaled["count"])
 
     def _migrate_legacy_jsonl_if_needed(self) -> None:
         """Import an old evidence WAL once without deleting the recoverable source."""
