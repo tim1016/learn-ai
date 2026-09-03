@@ -127,6 +127,7 @@ class _FakeBarSource:
         *,
         use_rth: bool = True,
         on_source_bar=None,
+        assembler=None,
     ):  # type: ignore[override]
         from app.broker.ibkr.bars import IBKRBarStreamError
 
@@ -364,6 +365,7 @@ async def test_stalled_subscription_is_replaced_without_ending_the_bot_feed(
         *,
         use_rth=True,
         on_source_bar=None,
+        assembler=None,
     ):
         nonlocal call_count
         call_count += 1
@@ -400,6 +402,7 @@ async def test_health_is_scoped_per_symbol_when_one_sibling_never_advances(
         *,
         use_rth=True,
         on_source_bar=None,
+        assembler=None,
     ):
         del use_rth
         if symbol == "SPY":

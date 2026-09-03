@@ -43,6 +43,7 @@ from typing import Literal
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import stream_minute_bars, stream_raw_5s_bars
 from app.broker.ibkr.client import IbkrClient, NotConnectedError, get_client
+from app.broker.ibkr.minute_assembler import MinuteAssembler
 from app.services.bar_persistence import (
     BarPersistence,
     BarPersistenceRegressionError,
@@ -319,7 +320,9 @@ class LiveBarAggregator:
         await self._pump(
             symbol,
             state,
-            stream_minute_bars,
+            # The chart pump does not survive an interruption: one assembler per
+            # stream call is the whole of its continuity story.
+            lambda client, sym: stream_minute_bars(client, sym, assembler=MinuteAssembler()),
             "1m",
             _EXPECTED_WINDOW_MS_1M,
             guard_partial_first_bar=True,

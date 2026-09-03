@@ -157,7 +157,7 @@ class IbkrMarketDataFeed:
             },
         )
         try:
-            if continuity is None or not getattr(self._client.settings, "feed_continuity_enabled", True):
+            if continuity is None or not self._client.settings.feed_continuity_enabled:
                 if continuity is not None:
                     logger.warning(
                         "Feed continuity disabled by IBKR_FEED_CONTINUITY_ENABLED; "
@@ -211,6 +211,9 @@ class IbkrMarketDataFeed:
                             symbol,
                             source_ms,
                         ),
+                        # Per attempt: this path does not carry a minute across a
+                        # replaced subscription, and never did.
+                        assembler=MinuteAssembler(),
                     ):
                         bar = self._translate(ibkr_bar)
                         liveness.last_bar_ms = bar.start_ms
@@ -256,7 +259,7 @@ class IbkrMarketDataFeed:
             feed_id=self.feed_id,
             symbol=symbol,
             policy=policy,
-            generation=int(getattr(self._client, "connection_generation", 0)),
+            generation=self._client.connection_generation,
         )
         assembler = MinuteAssembler()
         while True:
@@ -324,7 +327,7 @@ class IbkrMarketDataFeed:
                     yield held
                 liveness.first_bar_seen = False
                 await wait_for_healthy(self._client, state, deadline_ms=deadline_ms)
-                new_generation = int(getattr(self._client, "connection_generation", 0))
+                new_generation = self._client.connection_generation
                 state.last_recovered_ref = await state.record(
                     state.event(
                         "recovered",

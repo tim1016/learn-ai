@@ -74,6 +74,9 @@ class _PolygonReplayClient:
     def __init__(self, bars: list[SimpleNamespace]) -> None:
         self.ib = _PolygonReplayIb(bars)
         self.connection_lost = False
+        # The replay never reconnects, but the generation fence the live path
+        # runs on every loop iteration is unconditional, so it needs a value.
+        self.connection_generation = 1
 
     def require_connected(self) -> None:
         return

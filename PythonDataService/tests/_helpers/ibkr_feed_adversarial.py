@@ -95,6 +95,9 @@ class _AdversarialIbkrClient:
     def __init__(self, transport: _AdversarialRealtimeBarTransport) -> None:
         self.ib = transport
         self.connection_lost = False
+        # The real client's generation fence is unconditional; this fixture
+        # drives the production bar stream, so it carries one too.
+        self.connection_generation = 1
 
     def require_connected(self) -> None:
         return

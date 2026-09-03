@@ -14,13 +14,12 @@ from app.broker.ibkr.bars import (
     IBKRBarInterrupted,
     IBKRBarStreamError,
     IBKRBarSubscriptionStalled,
-    LiveBarCounters,
     MinuteAssembler,
-    aggregate_realtime_bar,
     fetch_historical_minute_bars,
     stream_minute_bars,
     stream_raw_5s_bars,
 )
+from app.broker.ibkr.minute_assembler import LiveBarCounters, aggregate_realtime_bar
 
 
 def _bar(second: int, open_: str, high: str, low: str, close: str, volume: int):
@@ -357,6 +356,9 @@ class _FakeClient:
         self.ib = _FakeIb()
         self._connected = connected
         self.connection_lost = connection_lost
+        # The generation fence is unconditional on the real client, so every
+        # fake that reaches it carries one too.
+        self.connection_generation = 1
 
     def require_connected(self) -> None:
         return
@@ -368,7 +370,7 @@ class _FakeClient:
 @pytest.mark.asyncio
 async def test_stream_minute_bars_yields_closed_bar_and_cancels() -> None:
     client = _FakeClient()
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     emitted = await stream.__anext__()
     await stream.aclose()
 
@@ -392,6 +394,7 @@ async def test_stream_minute_bars_reports_raw_source_activity() -> None:
         "SPY",
         use_rth=True,
         on_source_bar=source_ms.append,
+        assembler=MinuteAssembler(),
     )
 
     await stream.__anext__()
@@ -441,6 +444,7 @@ async def test_minute_stream_one_print_then_silence_invalidates_without_a_closed
         use_rth=True,
         on_source_bar=source_ms.append,
         stall_timeout_s=0.01,
+        assembler=MinuteAssembler(),
     )
 
     with pytest.raises(IBKRBarSubscriptionStalled, match="stalled"):
@@ -489,7 +493,7 @@ async def test_stream_minute_bars_halts_on_connection_lost() -> None:
     client = _FakeClient(connection_lost=True)
     client.ib.bars = []  # no bars ever arrive → loop reaches the liveness gate
 
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     with pytest.raises(IBKRBarStreamError, match="connectivity lost"):
         await stream.__anext__()
     # The cancel still ran in finally despite the raise.
@@ -509,7 +513,7 @@ async def test_stream_minute_bars_cancel_exception_does_not_mask_original() -> N
 
     client.ib.cancelRealTimeBars = _raising_cancel  # type: ignore[assignment]
 
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     # The connectivity-lost error survives; the cancel's ConnectionError is
     # swallowed (logged at debug) rather than masking it.
     with pytest.raises(IBKRBarStreamError, match="connectivity lost"):
@@ -564,7 +568,7 @@ async def test_same_symbol_5s_and_1m_consumers_share_one_broker_subscription(
     monkeypatch.setattr(bars_mod, "_REALTIME_BAR_SUBSCRIPTIONS", registry)
 
     raw_stream = stream_raw_5s_bars(client, "SPY", use_rth=True)
-    minute_stream = stream_minute_bars(client, "SPY", use_rth=True)
+    minute_stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     raw_next = asyncio.create_task(raw_stream.__anext__())
     minute_next = asyncio.create_task(minute_stream.__anext__())
 
@@ -807,11 +811,7 @@ def test_live_applied_correction_still_logs_at_warning(
 
 
 class _GenClient(_FakeClient):
-    """Fake client whose generation the test can bump."""
-
-    def __init__(self, *, connected: bool = True, connection_lost: bool = False) -> None:
-        super().__init__(connected=connected, connection_lost=connection_lost)
-        self.connection_generation = 1
+    """Fake client whose generation the test can bump; named for the tests below."""
 
 
 @pytest.fixture(autouse=True)
@@ -827,7 +827,7 @@ def _fresh_registry(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_stale_generation_lease_raises_interrupted_even_when_socket_is_back() -> None:
     client = _GenClient()
     client.ib.bars = []  # nothing to deliver: force the idle branch
-    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0, assembler=MinuteAssembler())
     first = asyncio.ensure_future(stream.__anext__())
     await asyncio.sleep(0.15)  # one idle iteration under generation 1
     client.connection_generation = 2  # reconnect happened; socket reports connected
@@ -841,7 +841,7 @@ async def test_stale_generation_lease_raises_interrupted_even_when_socket_is_bac
 async def test_socket_down_raises_interrupted_with_cause() -> None:
     client = _GenClient()
     client.ib.bars = []
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     first = asyncio.ensure_future(stream.__anext__())
     await asyncio.sleep(0.15)
     client._connected = False
@@ -856,7 +856,7 @@ async def test_socket_down_raises_interrupted_with_cause() -> None:
 async def test_soft_loss_1100_raises_interrupted_with_cause() -> None:
     client = _GenClient()
     client.ib.bars = []
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     first = asyncio.ensure_future(stream.__anext__())
     await asyncio.sleep(0.15)
     client.connection_lost = True  # TWS 1100: socket up, market data gone
@@ -915,7 +915,7 @@ async def test_queued_prints_are_drained_before_the_interruption_surfaces() -> N
     client = _GenClient()
     backlog = client.ib.bars  # two 5-second bars, spanning a minute boundary
     client.ib.bars = []
-    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0, assembler=MinuteAssembler())
     first = asyncio.ensure_future(stream.__anext__())
     await asyncio.sleep(0.15)
     client.ib.bars.extend(backlog)
@@ -974,7 +974,7 @@ async def test_the_liveness_gate_fires_on_a_stream_that_never_goes_idle() -> Non
 
     client = _GenClient()
     client.ib.bars = _AlwaysQueuedBars(_make)
-    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0, assembler=MinuteAssembler())
 
     first = await stream.__anext__()  # closes 14:30 without ever idling
     assert first.start_ms == int(base.timestamp() * 1000)
@@ -1024,7 +1024,7 @@ async def test_queued_prints_reach_the_shared_assembler_before_the_interruption(
 async def test_stale_lease_release_never_cancels_on_the_new_socket() -> None:
     client = _GenClient()
     client.ib.bars = []
-    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
     first = asyncio.ensure_future(stream.__anext__())
     await asyncio.sleep(0.15)
     client.connection_generation = 2

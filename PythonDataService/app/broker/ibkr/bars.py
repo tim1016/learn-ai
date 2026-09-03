@@ -21,7 +21,7 @@ The aggregation primitives — ``MinuteAssembler``, ``aggregate_realtime_bar``,
 ``LiveBarCounters``, ``IBKRBarStreamError``, and the ``DuplicatePolicy``
 contract they implement — live in ``app.broker.ibkr.minute_assembler`` (#1921)
 so an interruption that ends a stream call does not discard the open minute.
-They are re-exported here for existing importers.
+Import them from there; this module imports only the ones it uses itself.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from app.broker.ibkr.api_evidence import (
     evidence_request,
@@ -42,18 +42,12 @@ from app.broker.ibkr.api_evidence import (
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
-from app.broker.ibkr.minute_assembler import (  # noqa: F401 — DuplicatePolicy/LiveBarCounters/_MinuteAccumulator/_minute_start_ms/_to_utc_ms/aggregate_realtime_bar are re-exported for existing importers
-    DuplicatePolicy,
+from app.broker.ibkr.minute_assembler import (
     IBKRBarStreamError,
-    LiveBarCounters,
     MinuteAssembler,
     _bar_time_ms,
     _contribution,
-    _minute_start_ms,
-    _MinuteAccumulator,
     _session_phase_for_ms,
-    _to_utc_ms,
-    aggregate_realtime_bar,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -86,9 +80,9 @@ class IBKRBarInterrupted(IBKRBarStreamError):
         self.cause = cause
 
 
-def _client_generation(client: object) -> int:
-    """Read the client's connection generation, defaulting pre-Task-1 fakes to 0."""
-    return int(getattr(client, "connection_generation", 0))
+def _client_generation(client: IbkrClient) -> int:
+    """Read the connection generation every lease and registry key is fenced by."""
+    return client.connection_generation
 
 
 class _RealtimeBarRequestPacer:
@@ -147,8 +141,15 @@ class _RealtimeBarRequestPacer:
             await self._sleep(wait_s)
 
 
-# id(client), connection generation, conId, barSize, whatToShow, useRTH.
-_SubscriptionKey = tuple[int, int, int, int, str, bool]
+class _SubscriptionKey(NamedTuple):
+    """Identity of one shared ``reqRealTimeBars`` line, generation included."""
+
+    client_id: int
+    generation: int
+    con_id: int
+    bar_size: int
+    what_to_show: str
+    use_rth: bool
 
 
 @dataclass
@@ -240,7 +241,9 @@ class _RealtimeBarSubscriptionRegistry:
         while True:
             generation = _client_generation(client)
             self._evict_older_generations(client, generation)
-            key = (id(client), generation, con_id, bar_size, what_to_show, use_rth)
+            key = _SubscriptionKey(
+                id(client), generation, con_id, bar_size, what_to_show, use_rth
+            )
 
             existing = self._subscriptions.get(key)
             if existing is not None:
@@ -269,7 +272,7 @@ class _RealtimeBarSubscriptionRegistry:
             max_active = self._max_active_for_client(client)
             client_key = id(client)
             reserved = sum(
-                existing_key[0] == client_key and existing_key[1] == generation
+                existing_key.client_id == client_key and existing_key.generation == generation
                 for existing_key in (*self._subscriptions, *self._pending)
             )
             if reserved >= max_active:
@@ -327,7 +330,11 @@ class _RealtimeBarSubscriptionRegistry:
 
     def _evict_older_generations(self, client: IbkrClient, generation: int) -> None:
         """Drop registry entries whose socket is gone; never send a cancel for them."""
-        stale = [key for key in self._subscriptions if key[0] == id(client) and key[1] < generation]
+        stale = [
+            key
+            for key in self._subscriptions
+            if key.client_id == id(client) and key.generation < generation
+        ]
         for key in stale:
             subscription = self._subscriptions.pop(key)
             subscription.invalidated = True
@@ -335,8 +342,8 @@ class _RealtimeBarSubscriptionRegistry:
                 "Evicted real-time-bar subscription from a previous connection generation",
                 extra={
                     "action": "ibkr_realtime_bar_generation_evicted",
-                    "generation": key[1],
-                    "con_id": key[2],
+                    "generation": key.generation,
+                    "con_id": key.con_id,
                 },
             )
 
@@ -786,7 +793,7 @@ async def stream_minute_bars(
     use_rth: bool = True,
     on_source_bar: Callable[[int], None] | None = None,
     stall_timeout_s: float = REALTIME_BAR_STALL_TIMEOUT_S,
-    assembler: MinuteAssembler | None = None,
+    assembler: MinuteAssembler,
 ) -> AsyncIterator[IbkrMinuteBar]:
     """Yield closed 1-minute bars built from IBKR 5-second TRADES bars.
 
@@ -796,13 +803,13 @@ async def stream_minute_bars(
     different-valued redeliveries correct the still-open minute; both are
     counted on ``LiveBarCounters`` and logged.
 
-    Pass an ``assembler`` to keep the open minute across an interruption: it
-    outlives this call, so a caller that resubscribes after
-    ``IBKRBarInterrupted`` hands the same assembler to the next call and the
-    contributions from both sockets fold into one minute. Each contribution
-    is tagged with ``lease.generation``, so such a minute emits with
-    ``spans_interruption=True`` by construction. Omitting it gives this call
-    its own assembler and the pre-#1921 behaviour.
+    The ``assembler`` is the caller's, because it outlives this call: a caller
+    that resubscribes after ``IBKRBarInterrupted`` hands the same assembler to
+    the next call and the contributions from both sockets fold into one minute.
+    Each contribution is tagged with ``lease.generation``, so such a minute
+    emits with ``spans_interruption=True`` by construction. A caller that does
+    not want to survive an interruption places a fresh ``MinuteAssembler()``
+    per call, which is the pre-#1921 behaviour.
     """
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
@@ -847,7 +854,6 @@ async def stream_minute_bars(
         ),
     )
     index = lease.start_index
-    assembler = assembler or MinuteAssembler()
     last_progress_at = time.monotonic()
 
     def _fold(raw_bar) -> IbkrMinuteBar | None:
