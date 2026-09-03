@@ -4,6 +4,14 @@ The source-bar ledger is decision evidence, not a chart cache. It stores the
 unfiltered feed observation before a program can apply its own session policy.
 SQLite owns identity uniqueness, monotonic live delivery, and WAL bounding so
 the durable path stays indexed as an authority runs for months.
+
+A bar is not the only fact a run's evidence needs. A broker-socket reconnect
+(#1921) produces continuity facts -- an interruption, a recovery, a gap, a
+substitution, a refusal -- that only mean something *relative to the bars
+around them*. Both land in one append-only ``source_evidence_journal`` whose
+``evidence_seq`` is the single causal order a later replay reads, so "this bar
+arrived after that interruption" is a stored fact rather than a reconstruction
+from wall-clock timestamps.
 """
 
 from __future__ import annotations
@@ -19,7 +27,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import ContinuityEventRef, FeedContinuityEvent, MarketDataBar
 
 SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
 """Indexed durable authority store for retained source observations."""
@@ -36,7 +44,19 @@ every sealed program's declared warmup plus one open decision cycle.
 
 
 class RetainedSourceBar(BaseModel):
-    """One exact, closed feed observation with stable authority-scoped identity."""
+    """One exact, closed feed observation with stable authority-scoped identity.
+
+    ``provenance`` and its two companions say how the observation was produced
+    (#1921); ``run_id`` and ``evidence_seq`` say where it sits in the evidence
+    journal's causal order. Every one of them defaults, so a bar retained
+    before the continuity channel existed -- or one built by a caller that has
+    no run -- is still a complete, valid observation.
+
+    ``provenance`` is typed ``str`` rather than ``BarProvenanceTag`` on
+    purpose: this is a decode of a durable row, and a store must be able to
+    read back a value a newer writer wrote instead of failing to open the
+    file. The write path takes its value from a tagged ``MarketDataBar``.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -55,6 +75,11 @@ class RetainedSourceBar(BaseModel):
     volume: int = Field(ge=0)
     fetched_at_ms: int = Field(ge=0)
     session_phase: str
+    provenance: str = "realtime"
+    authorization_id: str | None = None
+    continuity_event_ref: str | None = None
+    run_id: str | None = None
+    evidence_seq: int | None = Field(default=None, ge=1)
 
     @classmethod
     def from_market_bar(
@@ -82,7 +107,26 @@ class RetainedSourceBar(BaseModel):
             volume=bar.volume,
             fetched_at_ms=bar.fetched_at_ms,
             session_phase=bar.session_phase,
+            provenance=bar.provenance,
+            authorization_id=bar.authorization_id,
+            continuity_event_ref=bar.continuity_event_ref,
         )
+
+
+class RetainedContinuityEvent(FeedContinuityEvent):
+    """One durable continuity fact, with its row identity and journal position.
+
+    Subclassing is the point: every field the feed boundary records is stored
+    and read back unchanged, and a field added to ``FeedContinuityEvent``
+    cannot silently stop being persisted -- ``extra="forbid"`` plus the
+    column-per-field decode in ``events`` turns that into a loud failure.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    seq: int = Field(ge=1)
+    run_id: str
+    evidence_seq: int = Field(ge=1)
 
 
 class SourceBarConflictError(RuntimeError):
@@ -103,6 +147,35 @@ class SourceBarCheckpointBusyError(RuntimeError):
 
 _BUSY_TIMEOUT_MS = 5_000
 """How long a write or truncating checkpoint waits on another connection before failing."""
+
+_BARS_WITH_JOURNAL = """
+    SELECT b.*, j.run_id AS run_id, j.evidence_seq AS evidence_seq
+    FROM source_bars b
+    LEFT JOIN source_evidence_journal j ON j.kind = 'bar' AND j.bar_seq = b.seq
+"""
+"""Every bar read carries its journal position; the join is LEFT because a bar
+retained before the journal existed and not yet back-filled still has none."""
+
+_EVENTS_WITH_JOURNAL = """
+    SELECT e.*, j.evidence_seq AS evidence_seq
+    FROM source_stream_events e
+    JOIN source_evidence_journal j ON j.kind = 'event' AND j.event_seq = e.seq
+"""
+
+_UNJOURNALED_BARS = """
+    SELECT b.seq, b.fetched_at_ms
+    FROM source_bars b
+    LEFT JOIN source_evidence_journal j ON j.kind = 'bar' AND j.bar_seq = b.seq
+    WHERE j.evidence_seq IS NULL
+    ORDER BY b.seq ASC
+"""
+
+_EVIDENCE_BAR_COLUMNS = {
+    "provenance": "provenance TEXT NOT NULL DEFAULT 'realtime'",
+    "authorization_id": "authorization_id TEXT",
+    "continuity_event_ref": "continuity_event_ref TEXT",
+}
+"""Provenance columns added to ``source_bars`` by #1921, as ``ALTER TABLE`` fragments."""
 
 
 def verify_ledger_file(path: Path, *, account_id: str) -> int:
@@ -170,6 +243,7 @@ class SourceBarLedger:
         self._configure()
         self._create_schema()
         self._refuse_foreign_account_rows()
+        self._migrate_evidence_schema_if_needed()
         self._migrate_legacy_jsonl_if_needed()
 
     @property
@@ -196,19 +270,104 @@ class SourceBarLedger:
                 self.checkpoint_wal()
             self._conn.close()
 
-    def append(self, bar: MarketDataBar) -> RetainedSourceBar:
-        """Persist one live observation, refusing a non-monotonic new identity."""
-        return self._append(bar, delivery="live")
+    def append(self, bar: MarketDataBar, *, run_id: str | None = None) -> RetainedSourceBar:
+        """Persist one live observation, refusing a non-monotonic new identity.
 
-    def append_history(self, bar: MarketDataBar) -> RetainedSourceBar:
+        ``run_id`` names the run this observation is evidence for, so the
+        journal can order it against that run's continuity events. It is
+        optional because a bar is evidence whether or not a run claimed it.
+        """
+        return self._append(bar, delivery="live", run_id=run_id)
+
+    def append_history(self, bar: MarketDataBar, *, run_id: str | None = None) -> RetainedSourceBar:
         """Persist one ordered warmup observation before live delivery begins."""
-        return self._append(bar, delivery="history")
+        return self._append(bar, delivery="history", run_id=run_id)
+
+    def append_event(self, event: FeedContinuityEvent, *, run_id: str) -> ContinuityEventRef:
+        """Persist one continuity fact and its journal position in one transaction.
+
+        A continuity fact that outlived its journal row (or the reverse) would
+        be evidence with no place in the run's causal order, so both rows
+        commit together or neither does.
+        """
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = self._conn.execute(
+                    """
+                    INSERT INTO source_stream_events (
+                        run_id, kind, feed_id, symbol, observed_at_ms, cause, generation_from, generation_to,
+                        window_start_ms, window_end_ms, bar_identity, authorization_id, reason,
+                        last_delivered_end_ms, deadline_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        event.kind,
+                        event.feed_id,
+                        event.symbol,
+                        event.observed_at_ms,
+                        event.cause,
+                        event.generation_from,
+                        event.generation_to,
+                        event.window_start_ms,
+                        event.window_end_ms,
+                        event.bar_identity,
+                        event.authorization_id,
+                        event.reason,
+                        event.last_delivered_end_ms,
+                        event.deadline_ms,
+                    ),
+                )
+                evidence_seq = self._journal(
+                    run_id=run_id,
+                    kind="event",
+                    row_seq=int(cursor.lastrowid),
+                    observed_at_ms=event.observed_at_ms,
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return ContinuityEventRef(run_id=run_id, evidence_seq=evidence_seq)
+
+    def events(
+        self,
+        *,
+        run_id: str,
+        evidence_end_seq: int | None = None,
+    ) -> list[RetainedContinuityEvent]:
+        """Return one run's continuity facts in journal order, up to a bound.
+
+        ``evidence_end_seq`` bounds the read at a journal position so a
+        receipt reports exactly the facts that preceded the evidence it
+        covers, rather than everything the ledger has learned since.
+        """
+        sql = f"{_EVENTS_WITH_JOURNAL} WHERE e.run_id = ?"
+        params: list[object] = [run_id]
+        if evidence_end_seq is not None:
+            sql += " AND j.evidence_seq <= ?"
+            params.append(evidence_end_seq)
+        sql += " ORDER BY j.evidence_seq ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(params)).fetchall()
+        # The selected columns are one-for-one with the model's fields;
+        # ``extra="forbid"`` makes a schema drift a loud decode failure.
+        return [RetainedContinuityEvent.model_validate(dict(row)) for row in rows]
+
+    def evidence_end_seq(self) -> int | None:
+        """Return the newest journal position in this ledger, or None when it holds none."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(evidence_seq) AS end_seq FROM source_evidence_journal"
+            ).fetchone()
+        return None if row is None or row["end_seq"] is None else int(row["end_seq"])
 
     def by_identity(self, bar_identity: str) -> RetainedSourceBar | None:
         """Return the exact durable observation for one stable source-bar identity."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM source_bars WHERE bar_identity = ?", (bar_identity,)
+                f"{_BARS_WITH_JOURNAL} WHERE b.bar_identity = ?", (bar_identity,)
             ).fetchone()
         return None if row is None else _retained_row(row)
 
@@ -226,10 +385,10 @@ class SourceBarLedger:
         """Return exactly one retained source observation for a decision close."""
         with self._lock:
             rows = self._conn.execute(
-                """
-                SELECT * FROM source_bars
-                WHERE provider = ? AND symbol = ? AND end_ms = ?
-                ORDER BY seq ASC LIMIT 2
+                f"""
+                {_BARS_WITH_JOURNAL}
+                WHERE b.provider = ? AND b.symbol = ? AND b.end_ms = ?
+                ORDER BY b.seq ASC LIMIT 2
                 """,
                 (provider, symbol, end_ms),
             ).fetchall()
@@ -244,7 +403,7 @@ class SourceBarLedger:
         """Return one provider/symbol's retained observations in durable order."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM source_bars WHERE provider = ? AND symbol = ? ORDER BY seq ASC",
+                f"{_BARS_WITH_JOURNAL} WHERE b.provider = ? AND b.symbol = ? ORDER BY b.seq ASC",
                 (provider, symbol),
             ).fetchall()
         return [_retained_row(row) for row in rows]
@@ -253,10 +412,10 @@ class SourceBarLedger:
         """Return the latest retained observation for one evidence stream."""
         with self._lock:
             row = self._conn.execute(
-                """
-                SELECT * FROM source_bars
-                WHERE provider = ? AND symbol = ?
-                ORDER BY end_ms DESC, seq DESC LIMIT 1
+                f"""
+                {_BARS_WITH_JOURNAL}
+                WHERE b.provider = ? AND b.symbol = ?
+                ORDER BY b.end_ms DESC, b.seq DESC LIMIT 1
                 """,
                 (provider, symbol),
             ).fetchone()
@@ -266,7 +425,7 @@ class SourceBarLedger:
         """Return the newest durable bar for a symbol across sealed providers."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM source_bars WHERE symbol = ? ORDER BY seq DESC LIMIT 1", (symbol,)
+                f"{_BARS_WITH_JOURNAL} WHERE b.symbol = ? ORDER BY b.seq DESC LIMIT 1", (symbol,)
             ).fetchone()
         return None if row is None else _retained_row(row)
 
@@ -295,16 +454,19 @@ class SourceBarLedger:
                 f"{self._path.name} still has a reader on its WAL after {_BUSY_TIMEOUT_MS}ms"
             )
 
-    def _append(self, bar: MarketDataBar, *, delivery: Literal["history", "live"]) -> RetainedSourceBar:
+    def _append(
+        self,
+        bar: MarketDataBar,
+        *,
+        delivery: Literal["history", "live"],
+        run_id: str | None,
+    ) -> RetainedSourceBar:
         candidate = RetainedSourceBar.from_market_bar(seq=1, account_id=self.account_id, bar=bar)
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                existing = self._conn.execute(
-                    "SELECT * FROM source_bars WHERE bar_identity = ?", (candidate.bar_identity,)
-                ).fetchone()
-                if existing is not None:
-                    retained = _retained_row(existing)
+                retained = self.by_identity(candidate.bar_identity)
+                if retained is not None:
                     if _same_market_payload(retained, candidate):
                         self._conn.execute("COMMIT")
                         return retained
@@ -354,8 +516,9 @@ class SourceBarLedger:
                     INSERT INTO source_bars (
                         account_id, provider, symbol, bar_identity, bar_ref,
                         start_ms, end_ms, open, high, low, close, volume,
-                        fetched_at_ms, session_phase
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        fetched_at_ms, session_phase,
+                        provenance, authorization_id, continuity_event_ref
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         candidate.account_id,
@@ -372,9 +535,18 @@ class SourceBarLedger:
                         candidate.volume,
                         candidate.fetched_at_ms,
                         candidate.session_phase,
+                        candidate.provenance,
+                        candidate.authorization_id,
+                        candidate.continuity_event_ref,
                     ),
                 )
                 seq = int(cursor.lastrowid)
+                evidence_seq = self._journal(
+                    run_id=run_id,
+                    kind="bar",
+                    row_seq=seq,
+                    observed_at_ms=candidate.fetched_at_ms,
+                )
                 if delivery == "live":
                     self._conn.execute(
                         """
@@ -388,7 +560,30 @@ class SourceBarLedger:
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
-        return candidate.model_copy(update={"seq": seq})
+        return candidate.model_copy(
+            update={"seq": seq, "run_id": run_id, "evidence_seq": evidence_seq}
+        )
+
+    def _journal(
+        self,
+        *,
+        run_id: str | None,
+        kind: Literal["bar", "event"],
+        row_seq: int,
+        observed_at_ms: int,
+    ) -> int:
+        """Append one evidence position and return it; the caller owns the transaction.
+
+        Bars and events share the journal precisely so their order is one
+        fact, so they share the insert too -- only which foreign key is
+        populated differs, and the table's CHECK enforces that pairing.
+        """
+        column = "bar_seq" if kind == "bar" else "event_seq"
+        cursor = self._conn.execute(
+            f"INSERT INTO source_evidence_journal (run_id, kind, {column}, observed_at_ms) VALUES (?, ?, ?, ?)",
+            (run_id, kind, row_seq, observed_at_ms),
+        )
+        return int(cursor.lastrowid)
 
     def _configure(self) -> None:
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -418,6 +613,9 @@ class SourceBarLedger:
                 volume INTEGER NOT NULL,
                 fetched_at_ms INTEGER NOT NULL,
                 session_phase TEXT NOT NULL,
+                provenance TEXT NOT NULL DEFAULT 'realtime',
+                authorization_id TEXT,
+                continuity_event_ref TEXT,
                 UNIQUE(provider, symbol, start_ms, end_ms),
                 CHECK(end_ms > start_ms),
                 CHECK(volume >= 0),
@@ -433,6 +631,36 @@ class SourceBarLedger:
                 live_started INTEGER NOT NULL CHECK(live_started IN (0, 1)),
                 PRIMARY KEY(provider, symbol)
             );
+            CREATE TABLE IF NOT EXISTS source_stream_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN ('interruption','recovered','gap','substituted','refused')),
+                feed_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                observed_at_ms INTEGER NOT NULL CHECK(observed_at_ms >= 0),
+                cause TEXT,
+                generation_from INTEGER,
+                generation_to INTEGER,
+                window_start_ms INTEGER,
+                window_end_ms INTEGER,
+                bar_identity TEXT,
+                authorization_id TEXT,
+                reason TEXT,
+                last_delivered_end_ms INTEGER,
+                deadline_ms INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS source_evidence_journal (
+                evidence_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT,
+                kind TEXT NOT NULL CHECK(kind IN ('bar','event')),
+                bar_seq INTEGER REFERENCES source_bars(seq),
+                event_seq INTEGER REFERENCES source_stream_events(seq),
+                observed_at_ms INTEGER NOT NULL CHECK(observed_at_ms >= 0),
+                CHECK((kind = 'bar' AND bar_seq IS NOT NULL AND event_seq IS NULL)
+                      OR (kind = 'event' AND event_seq IS NOT NULL AND bar_seq IS NULL))
+            );
+            CREATE INDEX IF NOT EXISTS source_evidence_journal_run
+                ON source_evidence_journal(run_id, evidence_seq);
             """
         )
 
@@ -450,6 +678,49 @@ class SourceBarLedger:
                 "SOURCE_BAR_ACCOUNT_MISMATCH: "
                 f"{self._path.name} retains evidence for account {foreign!r}, not {self.account_id!r}"
             )
+
+    def _migrate_evidence_schema_if_needed(self) -> None:
+        """Give a pre-#1921 ledger the continuity channel without losing evidence.
+
+        Ledgers were already retaining bars in production when the provenance
+        columns and the evidence journal arrived, so an existing file is
+        migrated in place: the columns take their documented defaults, and
+        every bar that predates the journal is given a journal position in
+        ``seq`` order, so a run replaying an old file still reads one causal
+        order over the whole of it. Both halves commit together.
+
+        Runs after the foreign-account refusal so a file that is not ours is
+        never rewritten, and takes no write lock at all once migrated.
+        """
+        with self._lock:
+            migrated = self._bar_columns().issuperset(_EVIDENCE_BAR_COLUMNS)
+            unjournaled = self._conn.execute(f"{_UNJOURNALED_BARS} LIMIT 1").fetchone()
+            if migrated and unjournaled is None:
+                return
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Both halves are re-read under the write lock: another handle
+                # on the same file may have migrated it while this one waited,
+                # and a repeated ADD COLUMN is an error, not a no-op.
+                columns = self._bar_columns()
+                for name, ddl in _EVIDENCE_BAR_COLUMNS.items():
+                    if name not in columns:
+                        self._conn.execute(f"ALTER TABLE source_bars ADD COLUMN {ddl}")
+                for row in self._conn.execute(_UNJOURNALED_BARS).fetchall():
+                    self._journal(
+                        run_id=None,
+                        kind="bar",
+                        row_seq=int(row["seq"]),
+                        observed_at_ms=int(row["fetched_at_ms"]),
+                    )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def _bar_columns(self) -> set[str]:
+        """The column names ``source_bars`` currently has on disk."""
+        return {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(source_bars)")}
 
     def _migrate_legacy_jsonl_if_needed(self) -> None:
         """Import an old evidence WAL once without deleting the recoverable source."""
@@ -489,6 +760,12 @@ class SourceBarLedger:
                             row.session_phase,
                         ),
                     )
+                    self._journal(
+                        run_id=None,
+                        kind="bar",
+                        row_seq=row.seq,
+                        observed_at_ms=row.fetched_at_ms,
+                    )
                     self._conn.execute(
                         """
                         INSERT INTO source_bar_stream_state (provider, symbol, live_started)
@@ -504,6 +781,7 @@ class SourceBarLedger:
 
 
 def _retained_row(row: sqlite3.Row) -> RetainedSourceBar:
+    """Decode one journal-joined ``source_bars`` row (see ``_BARS_WITH_JOURNAL``)."""
     return RetainedSourceBar(
         seq=int(row["seq"]),
         account_id=str(row["account_id"]),
@@ -520,13 +798,32 @@ def _retained_row(row: sqlite3.Row) -> RetainedSourceBar:
         volume=int(row["volume"]),
         fetched_at_ms=int(row["fetched_at_ms"]),
         session_phase=str(row["session_phase"]),
+        provenance=str(row["provenance"]),
+        authorization_id=_optional_str(row["authorization_id"]),
+        continuity_event_ref=_optional_str(row["continuity_event_ref"]),
+        run_id=_optional_str(row["run_id"]),
+        evidence_seq=None if row["evidence_seq"] is None else int(row["evidence_seq"]),
     )
 
 
+def _optional_str(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+_STORAGE_ONLY_FIELDS = {"seq", "fetched_at_ms", "run_id", "evidence_seq"}
+"""Where a row landed, not what the feed observed: excluded from redelivery equality.
+
+``provenance`` and its two companions are deliberately *not* here. The same
+identity re-observed with a different provenance is a different fact about how
+that bar came to exist, and overwriting it silently would falsify the run's
+evidence -- so it is refused as an identity conflict like any other revision.
+"""
+
+
 def _same_market_payload(existing: RetainedSourceBar, candidate: RetainedSourceBar) -> bool:
-    """Ignore only fetch time and database sequence for exact feed redelivery."""
-    return existing.model_dump(exclude={"seq", "fetched_at_ms"}) == candidate.model_dump(
-        exclude={"seq", "fetched_at_ms"}
+    """Ignore only fetch time and storage position for exact feed redelivery."""
+    return existing.model_dump(exclude=_STORAGE_ONLY_FIELDS) == candidate.model_dump(
+        exclude=_STORAGE_ONLY_FIELDS
     )
 
 
@@ -548,6 +845,7 @@ def _read_legacy_rows(path: Path) -> Iterable[RetainedSourceBar]:
 __all__ = [
     "SOURCE_BAR_LEDGER_FILENAME",
     "SOURCE_BAR_STREAM_CAPACITY",
+    "RetainedContinuityEvent",
     "RetainedSourceBar",
     "SourceBarConflictError",
     "SourceBarLedger",

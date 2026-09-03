@@ -13,7 +13,7 @@ import pytest
 
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBarBindingError, SyntheticBroker
 from app.broker.contract.models import BrokerOrderLeg
-from app.marketdata.feed import ContinuityPolicy, MarketDataBar
+from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, MarketDataBar
 from app.services import source_bar_ledger
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
 from app.services.source_bar_ledger import (
@@ -355,3 +355,81 @@ def test_ledger_refuses_another_accounts_evidence_on_open_and_in_verification(tm
     assert verify_ledger_file(empty.path, account_id="PA-MINE") == 0, (
         "an empty ledger carries no evidence and cannot be foreign"
     )
+
+
+def _event(kind: str = "interruption", observed_at_ms: int = 1_700_000_000_500, **extra) -> FeedContinuityEvent:
+    return FeedContinuityEvent(kind=kind, feed_id="ibkr", symbol="SPY", observed_at_ms=observed_at_ms, **extra)
+
+
+def test_bars_and_events_share_one_causal_order_per_run(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        first = ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
+        ref = ledger.append_event(_event(cause="socket_down", generation_from=1), run_id="run-a")
+        second = ledger.append(_bar(start_ms=1_700_000_060_000), run_id="run-a")
+        assert first.run_id == "run-a" and first.evidence_seq is not None
+        assert ref.run_id == "run-a" and ref.ref() == f"run-a:{ref.evidence_seq}"
+        assert first.evidence_seq < ref.evidence_seq < second.evidence_seq
+        events = ledger.events(run_id="run-a")
+        assert [e.kind for e in events] == ["interruption"]
+        assert events[0].cause == "socket_down" and events[0].generation_from == 1
+        assert ledger.evidence_end_seq() == second.evidence_seq
+        assert ledger.events(run_id="run-a", evidence_end_seq=first.evidence_seq) == []
+    finally:
+        ledger.close()
+
+
+def test_provenance_and_continuity_columns_persist(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        substitute = _bar(start_ms=1_700_000_000_000).model_copy(
+            update={
+                "provenance": "historical_substitute",
+                "authorization_id": "auth-1",
+                "continuity_event_ref": "run-a:7",
+            }
+        )
+        retained = ledger.append(substitute, run_id="run-a")
+        assert retained.provenance == "historical_substitute"
+        assert retained.authorization_id == "auth-1"
+        assert retained.continuity_event_ref == "run-a:7"
+        assert ledger.bars(provider="polygon-minute", symbol="SPY")[0].provenance == "historical_substitute"
+    finally:
+        ledger.close()
+
+
+def test_pre_channel_ledger_migrates_with_a_journal_row_per_bar(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    ledger.append(_bar(start_ms=1_700_000_000_000))
+    ledger.append(_bar(start_ms=1_700_000_060_000))
+    path = ledger.path
+    ledger.close()
+    conn = sqlite3.connect(path)
+    conn.executescript("DROP TABLE source_evidence_journal; DROP TABLE source_stream_events;")
+    conn.execute("ALTER TABLE source_bars DROP COLUMN provenance")
+    conn.execute("ALTER TABLE source_bars DROP COLUMN authorization_id")
+    conn.execute("ALTER TABLE source_bars DROP COLUMN continuity_event_ref")
+    conn.commit()
+    conn.close()
+
+    reopened = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        bars = reopened.bars(provider="polygon-minute", symbol="SPY")
+        assert [b.provenance for b in bars] == ["realtime", "realtime"]
+        assert [b.run_id for b in bars] == [None, None]
+        assert bars[0].evidence_seq is not None and bars[0].evidence_seq < bars[1].evidence_seq
+        assert reopened.evidence_end_seq() == bars[1].evidence_seq
+    finally:
+        reopened.close()
+
+
+def test_event_and_journal_rows_roll_back_together(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        bogus = _event(kind="interruption").model_copy(update={"kind": "bogus"})
+        with pytest.raises(sqlite3.IntegrityError):
+            ledger.append_event(bogus, run_id="run-a")
+        assert ledger.events(run_id="run-a") == []
+        assert ledger.evidence_end_seq() is None
+    finally:
+        ledger.close()
