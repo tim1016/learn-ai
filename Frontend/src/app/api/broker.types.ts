@@ -11583,6 +11583,11 @@ export interface components {
             /** Close */
             close: string;
             /**
+             * Contribution Count
+             * @description 5-second bars folded into this minute; None when unknown (historical).
+             */
+            contribution_count?: number | null;
+            /**
              * End Ms
              * @description UTC milliseconds since epoch, exclusive.
              */
@@ -11613,6 +11618,12 @@ export interface components {
              * @enum {string}
              */
             source?: "ibkr" | "polygon" | "mixed";
+            /**
+             * Spans Interruption
+             * @description Contributions arrived over more than one connection generation.
+             * @default false
+             */
+            spans_interruption?: boolean;
             /**
              * Start Ms
              * @description UTC milliseconds since epoch, inclusive.
@@ -16838,6 +16849,8 @@ export interface components {
         RunReplayReceipt: {
             /** Bar Set Digest */
             bar_set_digest: string;
+            /** Continuity Event Digest */
+            continuity_event_digest?: string | null;
             /** Digest Verified Count */
             digest_verified_count: number;
             /** Divergences */
@@ -16851,6 +16864,8 @@ export interface components {
             engine_parity_trace_root: string | null;
             /** Error */
             error?: string | null;
+            /** Evidence End Seq */
+            evidence_end_seq?: number | null;
             /** Expected Live Effect Count */
             expected_live_effect_count: number;
             /** Generated At Ms */

@@ -27324,6 +27324,17 @@
             "title": "Bar Set Digest",
             "type": "string"
           },
+          "continuity_event_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continuity Event Digest"
+          },
           "digest_verified_count": {
             "minimum": 0.0,
             "title": "Digest Verified Count",
@@ -27377,6 +27388,18 @@
               }
             ],
             "title": "Error"
+          },
+          "evidence_end_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence End Seq"
           },
           "expected_live_effect_count": {
             "minimum": 0.0,

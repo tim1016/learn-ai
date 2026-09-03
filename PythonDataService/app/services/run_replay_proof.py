@@ -43,6 +43,7 @@ from app.services.bot_trade_strategy import _includes_session_phase, strategy_ev
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
 from app.services.decision_clock import decision_timeframe_ms_for_binding
 from app.services.source_bar_ledger import (
+    RetainedContinuityEvent,
     RetainedSourceBar,
     SourceBarLedger,
     SourceBarLedgerCorruptError,
@@ -77,6 +78,12 @@ def bar_set_digest(bars: Sequence[RetainedSourceBar]) -> str:
     Mirrors ``signal_program._semantic_hash``'s canonical-JSON discipline;
     excludes ``seq``/``fetched_at_ms``/``account_id`` so the digest names the
     market payload, not the storage row.
+
+    A bar that was not delivered live carries its ``provenance`` into the
+    digest (#1921): a substituted minute is a different observation from the
+    realtime one it stands in for, and the receipt must say so. The key is
+    omitted for ``"realtime"`` so every digest computed before substitution
+    existed still names the same stream.
     """
     payload = [
         {
@@ -87,9 +94,44 @@ def bar_set_digest(bars: Sequence[RetainedSourceBar]) -> str:
             "close": str(bar.close),
             "volume": bar.volume,
             "session_phase": bar.session_phase,
+            **({} if bar.provenance == "realtime" else {"provenance": bar.provenance}),
         }
         for bar in bars
     ]
+    return _canonical_digest(payload)
+
+
+def continuity_event_digest(events: Sequence[RetainedContinuityEvent]) -> str:
+    """Stable content digest of one run's continuity facts, in journal order.
+
+    Excludes the storage identity (``seq``/``run_id``/``evidence_seq``) and
+    ``feed_id`` for the same reason ``bar_set_digest`` excludes its row
+    columns: the digest names what the feed said, not where the row landed.
+    Order is part of the fact -- an interruption followed by a recovery is not
+    the same evidence as the reverse.
+    """
+    payload = [
+        {
+            "kind": event.kind,
+            "symbol": event.symbol,
+            "observed_at_ms": event.observed_at_ms,
+            "cause": event.cause,
+            "generation_from": event.generation_from,
+            "generation_to": event.generation_to,
+            "window_start_ms": event.window_start_ms,
+            "window_end_ms": event.window_end_ms,
+            "bar_identity": event.bar_identity,
+            "authorization_id": event.authorization_id,
+            "reason": event.reason,
+            "last_delivered_end_ms": event.last_delivered_end_ms,
+            "deadline_ms": event.deadline_ms,
+        }
+        for event in events
+    ]
+    return _canonical_digest(payload)
+
+
+def _canonical_digest(payload: list[dict[str, Any]]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -719,6 +761,7 @@ def bounded_replay_bars(
     *,
     ledger_end_seq: int | None,
     terminal_recorded_at_ms: int | None,
+    evidence_end_seq: int | None = None,
 ) -> list[RetainedSourceBar]:
     """Bound one run's replay input at its durable end (PR #1751 finding 4).
 
@@ -726,7 +769,17 @@ def bounded_replay_bars(
     outcome instant is the wall-clock fallback for crashed/legacy runs. With
     neither, refuse: regenerating run N after run N+1 appended bars would
     otherwise change N's input, digest, and verdict.
+
+    ``evidence_end_seq`` bounds the same input at a journal position (#1921),
+    so the bars and the continuity events a receipt reports are read at one
+    causal cut. It only ever *narrows*: a bar must sit inside every bound the
+    run has, and a bar retained before the journal existed carries no
+    ``evidence_seq``, so it is judged by the rules above alone.
     """
+    if evidence_end_seq is not None:
+        bars = [
+            bar for bar in bars if bar.evidence_seq is None or bar.evidence_seq <= evidence_end_seq
+        ]
     if ledger_end_seq is not None:
         return [bar for bar in bars if bar.seq <= ledger_end_seq]
     if terminal_recorded_at_ms is not None:
@@ -796,11 +849,14 @@ class RunReplayProofService:
 
         Snapshots the retained stream's terminal ``seq`` as the run's end
         bound (PR #1751 finding 4) -- Stop time is the one moment "everything
-        retained so far" and "everything this run observed" coincide. Bound
-        resolution failures degrade to ``None`` (the terminal-outcome
+        retained so far" and "everything this run observed" coincide -- and
+        the evidence journal's end position beside it, so a later replay reads
+        this run's bars and its continuity events at one causal cut (#1921).
+        Bound resolution failures degrade to ``None`` (the terminal-outcome
         fallback still bounds generation); they must never fail Stop itself.
         """
         end_seq: int | None = None
+        evidence_end_seq: int | None = None
         try:
             ledger = SourceBarLedger(
                 artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
@@ -814,6 +870,8 @@ class RunReplayProofService:
                 # max seq.
                 latest = ledger.latest(provider=provider, symbol=binding.symbol)
                 end_seq = None if latest is None else latest.seq
+                # Also a bounded read: MAX() over the journal's rowid index.
+                evidence_end_seq = ledger.evidence_end_seq()
             finally:
                 ledger.close(checkpoint=False)
         except (RunReplayUnavailableError, SourceBarLedgerCorruptError, sqlite3.Error, OSError) as error:
@@ -832,7 +890,13 @@ class RunReplayProofService:
             )
         write_run_replay_receipt(
             self.instance_dir_for(binding.strategy_instance_id),
-            self._skeleton(binding, run_id, status="pending", ledger_end_seq=end_seq),
+            self._skeleton(
+                binding,
+                run_id,
+                status="pending",
+                ledger_end_seq=end_seq,
+                evidence_end_seq=evidence_end_seq,
+            ),
         )
 
     async def generate(self, broker: str, strategy_instance_id: str, run_id: str) -> RunReplayReceipt:
@@ -876,6 +940,7 @@ class RunReplayProofService:
                 status="replay_failed",
                 error=str(error),
                 ledger_end_seq=None if stored is None else stored.ledger_end_seq,
+                evidence_end_seq=None if stored is None else stored.evidence_end_seq,
             )
         write_run_replay_receipt(instance_dir, receipt)
         return receipt
@@ -896,23 +961,43 @@ class RunReplayProofService:
         # Run-bounded input (PR #1751 finding 4): stored seq snapshot first,
         # terminal-outcome wall clock second, refuse when neither exists.
         ledger_end_seq = None if stored is None else stored.ledger_end_seq
+        stored_evidence_end_seq = None if stored is None else stored.evidence_end_seq
         terminal_recorded_at_ms = None if outcome is None else outcome.recorded_at_ms
         first_decision_close_ms = evidence.records[0].bar_close_ms if evidence.records else None
         decision_timeframe_ms = decision_timeframe_ms_for_binding(binding)
 
-        def _compute_sync() -> tuple[str, list[RetainedSourceBar], EngineParityResult, RunFidelityResult]:
+        def _compute_sync() -> tuple[
+            str,
+            list[RetainedSourceBar],
+            list[RetainedContinuityEvent],
+            int | None,
+            EngineParityResult,
+            RunFidelityResult,
+        ]:
             ledger = SourceBarLedger(
                 artifacts_root=self.artifacts_root, account_id=ledger_account_id_for(binding)
             )
             try:
                 provider = replay_provider_for(ledger, binding.symbol)
                 all_bars = ledger.bars(provider=provider, symbol=binding.symbol)
+                # The Stop-time snapshot is this run's evidence cut; a run that
+                # never got one (crashed, or retained before the journal
+                # existed) is cut at the ledger's current end, which can only
+                # narrow the bounds above (#1921). Bars and events are read
+                # from the same open ledger so the cut is one read, not two.
+                evidence_end_seq = (
+                    ledger.evidence_end_seq()
+                    if stored_evidence_end_seq is None
+                    else stored_evidence_end_seq
+                )
+                events = ledger.events(run_id=run_record.run_id, evidence_end_seq=evidence_end_seq)
             finally:
                 ledger.close(checkpoint=False)
             bars = bounded_replay_bars(
                 all_bars,
                 ledger_end_seq=ledger_end_seq,
                 terminal_recorded_at_ms=terminal_recorded_at_ms,
+                evidence_end_seq=evidence_end_seq,
             )
             if not bars:
                 raise RunReplayUnavailableError(
@@ -944,10 +1029,20 @@ class RunReplayProofService:
                     crash_records=evidence.crash_records,
                 )
             )
-            return provider, bars, parity, fidelity
+            return provider, bars, events, evidence_end_seq, parity, fidelity
 
-        provider, bars, parity, fidelity = await asyncio.to_thread(_compute_sync)
-        return self._final_receipt(binding, run_record, provider, bars, evidence, parity, fidelity)
+        provider, bars, events, evidence_end_seq, parity, fidelity = await asyncio.to_thread(_compute_sync)
+        return self._final_receipt(
+            binding,
+            run_record,
+            provider,
+            bars,
+            evidence,
+            parity,
+            fidelity,
+            events=events,
+            evidence_end_seq=evidence_end_seq,
+        )
 
     async def _evidence(self, binding: BrokerBotBinding, run_id: str) -> LiveRunDecisionEvidence:
         if self.records_for_run is not None:
@@ -991,6 +1086,7 @@ class RunReplayProofService:
         status: str,
         error: str | None = None,
         ledger_end_seq: int | None = None,
+        evidence_end_seq: int | None = None,
     ) -> RunReplayReceipt:
         proof = binding.program_build
         seal = binding.sealed_program
@@ -1018,6 +1114,7 @@ class RunReplayProofService:
             sealed_program_hash=None if seal is None else seal.bot_configuration_hash,
             generated_at_ms=now_ms_utc(),
             error=error,
+            evidence_end_seq=evidence_end_seq,
         )
 
     def _final_receipt(
@@ -1029,6 +1126,9 @@ class RunReplayProofService:
         evidence: LiveRunDecisionEvidence,
         parity: EngineParityResult,
         fidelity: RunFidelityResult,
+        *,
+        events: Sequence[RetainedContinuityEvent],
+        evidence_end_seq: int | None,
     ) -> RunReplayReceipt:
         from app.schemas.run_replay import EngineParityDivergenceModel, RunReplayDivergenceModel
 
@@ -1067,6 +1167,11 @@ class RunReplayProofService:
                 # one that resolved the bound via the terminal outcome -- is
                 # seq-pinned from here on (stable under later appends).
                 "ledger_end_seq": bars[-1].seq,
+                # The continuity facts this input sits among, and the journal
+                # cut both were read at -- disclosed for the same reason, so a
+                # regeneration reads the same evidence (#1921).
+                "continuity_event_digest": continuity_event_digest(events),
+                "evidence_end_seq": evidence_end_seq,
                 "digest_verified_count": fidelity.digest_verified_count,
                 "engine_parity_trace_root": parity.trace_root,
                 "engine_parity_compared_count": parity.compared_count,

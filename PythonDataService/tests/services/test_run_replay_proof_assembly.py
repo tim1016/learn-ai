@@ -7,17 +7,24 @@ from pathlib import Path
 
 import pytest
 
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import ContinuityEventKind, MarketDataBar
+from app.schemas.run_replay import RunReplayReceipt
 from app.services.bot_binding_repository import BotBindingRepository, BotRunRecord
 from app.services.run_replay_proof import (
     RunReplayUnavailableError,
     bar_set_digest,
+    bounded_replay_bars,
+    continuity_event_digest,
     replay_provider_for,
     split_warmup_and_live,
     to_market_bar,
     to_trade_bar,
 )
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.services.source_bar_ledger import (
+    RetainedContinuityEvent,
+    RetainedSourceBar,
+    SourceBarLedger,
+)
 
 _T0 = 1_700_000_000_000
 
@@ -39,22 +46,71 @@ def _market_bar(index: int, *, feed_id: str = "feed-a", close: str = "400.5") ->
     )
 
 
-def _retained(index: int, *, close: str = "400.5") -> RetainedSourceBar:
-    return RetainedSourceBar.from_market_bar(
-        seq=index + 1, account_id="paper:bot-a", bar=_market_bar(index, close=close)
+def _retained(
+    seq: int,
+    *,
+    close: str = "400.5",
+    evidence_seq: int | None = None,
+    provenance: str = "realtime",
+) -> RetainedSourceBar:
+    retained = RetainedSourceBar.from_market_bar(
+        seq=seq, account_id="paper:bot-a", bar=_market_bar(seq - 1, close=close)
+    )
+    return retained.model_copy(update={"evidence_seq": evidence_seq, "provenance": provenance})
+
+
+def _event(seq: int, evidence_seq: int, kind: ContinuityEventKind) -> RetainedContinuityEvent:
+    return RetainedContinuityEvent(
+        seq=seq,
+        run_id="run-1",
+        evidence_seq=evidence_seq,
+        kind=kind,
+        feed_id="feed-a",
+        symbol="SPY",
+        observed_at_ms=_T0 + seq * 1_000,
     )
 
 
-def test_bar_set_digest_changes_when_a_payload_changes() -> None:
-    bars = [_retained(0), _retained(1)]
-    tampered = [_retained(0), _retained(1, close="401.5")]
+def _legacy_receipt_dict() -> dict[str, object]:
+    """One receipt exactly as written before the continuity fields existed."""
+    return {
+        "schema_version": 1,
+        "strategy_instance_id": "bot-a",
+        "run_id": "run-1",
+        "strategy_key": "ema_crossover_signal",
+        "symbol": "SPY",
+        "provider": "feed-a",
+        "status": "parity",
+        "bar_set_digest": "0" * 64,
+        "retained_bar_count": 0,
+        "ledger_end_seq": None,
+        "engine_parity_trace_root": None,
+        "engine_parity_compared_count": 0,
+        "engine_parity_divergence": None,
+        "live_compared_count": 0,
+        "match_count": 0,
+        "expected_live_effect_count": 0,
+        "drift_count": 0,
+        "digest_verified_count": 0,
+        "records_truncated": False,
+        "divergences": [],
+        "program_version": None,
+        "sealed_program_hash": None,
+        "generated_at_ms": _T0,
+        "error": None,
+    }
 
-    assert bar_set_digest(bars) == bar_set_digest([_retained(0), _retained(1)])
+
+def test_bar_set_digest_changes_when_a_payload_changes() -> None:
+    bars = [_retained(1), _retained(2)]
+    tampered = [_retained(1), _retained(2, close="401.5")]
+
+    assert bar_set_digest(bars) == bar_set_digest([_retained(1), _retained(2)])
     assert bar_set_digest(bars) != bar_set_digest(tampered)
 
 
 def test_split_warmup_and_live_uses_run_start_boundary() -> None:
-    bars = [_retained(0), _retained(1), _retained(2)]
+    bars = [_retained(1), _retained(2), _retained(3)]
     run_started_at_ms = bars[1].end_ms  # bar 1 closed exactly at start -> warmup
 
     warmup, live = split_warmup_and_live(bars, run_started_at_ms)
@@ -64,7 +120,7 @@ def test_split_warmup_and_live_uses_run_start_boundary() -> None:
 
 
 def test_to_trade_bar_and_to_market_bar_round_trip_the_payload() -> None:
-    retained = _retained(0)
+    retained = _retained(1)
 
     trade_bar = to_trade_bar(retained)
     market_bar = to_market_bar(retained)
@@ -113,3 +169,29 @@ def test_read_run_serves_the_replay_run_boundary_reader(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.started_at_ms == _T0
     assert repository.read_run("bot-a", "run-2") is None
+
+
+def test_bar_set_digest_is_unchanged_for_realtime_streams_and_changes_with_a_substitute() -> None:
+    bars = [_retained(seq=1), _retained(seq=2)]
+    before = bar_set_digest(bars)
+    assert bar_set_digest([b.model_copy(update={"provenance": "realtime"}) for b in bars]) == before
+    with_substitute = bar_set_digest([bars[0], bars[1].model_copy(update={"provenance": "historical_substitute"})])
+    assert with_substitute != before
+
+
+def test_continuity_event_digest_is_stable_and_order_sensitive() -> None:
+    events = [_event(seq=1, evidence_seq=3, kind="interruption"), _event(seq=2, evidence_seq=5, kind="recovered")]
+    assert continuity_event_digest(events) == continuity_event_digest(list(events))
+    assert continuity_event_digest(events) != continuity_event_digest(events[:1])
+    assert continuity_event_digest(events) != continuity_event_digest(list(reversed(events)))
+
+
+def test_bounded_replay_bars_prefers_the_evidence_bound() -> None:
+    bars = [_retained(seq=1, evidence_seq=1), _retained(seq=2, evidence_seq=4), _retained(seq=3, evidence_seq=6)]
+    kept = bounded_replay_bars(bars, ledger_end_seq=3, terminal_recorded_at_ms=None, evidence_end_seq=4)
+    assert [b.seq for b in kept] == [1, 2]
+
+
+def test_receipt_without_new_fields_still_parses() -> None:
+    receipt = RunReplayReceipt.model_validate(_legacy_receipt_dict())
+    assert receipt.continuity_event_digest is None and receipt.evidence_end_seq is None
