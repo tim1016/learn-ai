@@ -575,12 +575,13 @@ Every code in all three is defined in the [Glossary](#glossary).
 
 `FEED_DEATH` is the reason code a `CRASHED` duty outcome carries when the run's
 market-data stream ended. Since #1921 a broker-socket interruption is no longer
-automatically fatal — the feed waits the reconnect out under the run's own decision
-clock and stitches the interrupted minute back together — so a run that *did* report
-`FEED_DEATH` says which continuity rule refused it. That typed reason is the prefix of
-the crash diagnostic's message (`"<REASON>: …"`, shown on the terminal notice) and a
-column on the matching `refused` row in the run's continuity journal. The vocabulary is
-closed:
+automatically fatal for a run that carries a continuity policy — a sealed regular-session
+program with a decision clock, while the data plane's `IBKR_FEED_CONTINUITY_ENABLED`
+switch is on. Such a run waits the reconnect out under its own decision clock and
+stitches the interrupted minute back together, so when it *does* report `FEED_DEATH` it
+says which continuity rule refused it. That typed reason is the prefix of the crash
+diagnostic's message (`"<REASON>: …"`, shown on the terminal notice) and a column on the
+matching `refused` row in the run's continuity journal. The vocabulary is closed:
 
 - **`DECISION_BAR_MISSED`** — the socket did not come back before the deadline for the
   run's next decision bar (that bar's trigger instant plus a 20-second delivery
@@ -601,6 +602,11 @@ closed:
 - **`DECISION_LATE`** — a bar assembled across the reconnect *was* delivered, but past
   the allowance for the decision it would have driven. Deciding on it would price a
   trade against a market that had already moved.
+
+A run without a policy — an unsealed or compatibility-mode strategy, an all-session
+binding, a program with no decision clock, or any run while the switch is off — keeps
+the pre-#1921 behaviour: the first interruption ends it with a plain `FEED_DEATH`, no
+typed reason and no `refused` row. The notice's message tells the two apart.
 
 None of these is an operator action. Each is a completed, evidence-backed stop: read the
 notice, then redeploy through the panel's normal admitted action when the feed is

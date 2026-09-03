@@ -147,7 +147,7 @@ evidence and a run that dies has already said why.
 | Tag | Meaning |
 |---|---|
 | `realtime` | Assembled wholly inside one live connection. The default, and the only tag a pre-#1921 stream produced. |
-| `realtime_across_reconnect` | Assembled from live contributions spanning a socket interruption, proven complete by contribution count. Every contribution is still a real print, so the bar is a decision input like any other and needs no grant. |
+| `realtime_across_reconnect` | A minute an interruption touched — its contributions span connection generations, it was the open minute when delivery stopped (a same-generation 1100 → 1102 restore included), or the recovered line landed in it — proven complete by contribution count and stamped with the `recovered` event that explains it. Every contribution is still a real print, so the bar is a decision input like any other and needs no grant; `admit_on_delivery` checks only that it arrived within its allowance. |
 | `historical_substitute` | Backfilled from the broker's history endpoint to replace a window the live stream missed. Only ever delivered under an explicit `SubstitutionGrant`; **never produced in this build**. |
 | `history` | Served by `recent_closed_bars` for warmup. Never itself a decision. |
 
