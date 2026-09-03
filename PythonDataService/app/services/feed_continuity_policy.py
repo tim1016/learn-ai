@@ -28,14 +28,17 @@ from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
     FeedContinuityEvent,
+    MarketDataBar,
     MarketDataFeedError,
     SubstitutionGrant,
     SubstitutionRefusal,
+    record_continuity_event,
 )
 from app.services.decision_clock import (
     decision_timeframe_ms_for_binding,
     rth_next_trigger_function,
 )
+from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
     # Type-only for the same reason ``decision_clock`` guards this import:
@@ -58,6 +61,46 @@ class FeedContinuityRefused(MarketDataFeedError):
 
     def __init__(self, message: str, *, reason: str) -> None:
         super().__init__(message, reason=reason)
+
+
+async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar) -> None:
+    """Refuse a recovered decision bar that arrived after its allowance.
+
+    A bar assembled across an interruption is a real decision input, so it is
+    admitted on the same terms as any other -- except for *when* it arrived.
+    Delivery time is what a reconnect distorts: if the consumer's trigger for
+    this close is already past by more than the policy's allowance, deciding on
+    it now would be deciding against a market that has since moved. The refusal
+    is recorded before it is raised, so the run's own evidence explains the
+    outcome. Bars produced wholly inside one live connection are never late by
+    construction, and a bar the consumer does not decide on cannot be a late
+    decision.
+    """
+    if policy is None or bar.provenance == "realtime" or not policy.is_trigger_ms(bar.end_ms):
+        return
+    observed_at_ms = now_ms_utc()
+    if observed_at_ms <= bar.end_ms + policy.delivery_allowance_ms:
+        return
+    # Through the same typed wrapper the feed writes with: a sink that cannot
+    # take this refusal is CONTINUITY_EVIDENCE_UNWRITABLE, not a bare OSError
+    # escaping the port on the way to the run's outcome.
+    await record_continuity_event(
+        policy,
+        FeedContinuityEvent(
+            kind="refused",
+            feed_id=bar.feed_id,
+            symbol=bar.symbol,
+            observed_at_ms=observed_at_ms,
+            reason="DECISION_LATE",
+            window_start_ms=bar.start_ms,
+            window_end_ms=bar.end_ms,
+            bar_identity=f"{bar.feed_id}:{bar.symbol}:{bar.start_ms}:{bar.end_ms}",
+        ),
+    )
+    raise FeedContinuityRefused(
+        f"trigger bar {bar.start_ms}..{bar.end_ms} delivered after the allowance",
+        reason="DECISION_LATE",
+    )
 
 
 def _refuse_every_substitution(

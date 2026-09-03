@@ -793,6 +793,24 @@ def test_continuity_policy_deadline_and_trigger_detection() -> None:
     assert policy.is_trigger_ms(1_800_000) is False
 
 
+def test_continuity_policy_refuses_a_session_it_has_no_trigger_set_for() -> None:
+    """``DecisionSession`` reserves "all"; a policy may not be authored against it yet.
+
+    Refused where the policy is written, not mid-stream: the feed's
+    session check would fail open on "all" while the decision clock raised.
+    """
+    async def _sink(event: FeedContinuityEvent) -> ContinuityEventRef:  # pragma: no cover - never called
+        raise AssertionError("construction must fail before any event can be recorded")
+
+    with pytest.raises(ValueError, match="'all'"):
+        ContinuityPolicy(
+            decision_session="all",
+            next_trigger_ms=lambda last_end: last_end + 60_000,
+            substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+            record_event=_sink,
+        )
+
+
 def test_translate_maps_ibkr_provenance_to_port_provenance() -> None:
     assert IbkrMarketDataFeed._translate(_make_ibkr_bar()).provenance == "realtime"
 

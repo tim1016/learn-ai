@@ -192,7 +192,7 @@ async def test_pause_aware_feed_forwards_the_continuity_policy_to_its_source() -
 
 
 @pytest.mark.asyncio
-async def test_retained_feed_hands_its_own_continuity_policy_to_its_source(tmp_path: Path) -> None:
+async def test_retained_feed_refuses_a_continuity_policy_that_is_not_its_runs(tmp_path: Path) -> None:
     """#1921 (ruling P1): the run's policy is authored once, at construction.
 
     This wrapper already rewrites ``use_rth`` on the way through (capture
@@ -200,8 +200,9 @@ async def test_retained_feed_hands_its_own_continuity_policy_to_its_source(tmp_p
     run owns its decision clock and its evidence sink, so the policy the
     constructor was given -- never one a caller passes per stream -- is what
     reaches the source. The Protocol's ``continuity`` kwarg stays on
-    ``stream_bars`` for conformance and is deliberately ignored, which is what
-    passing a second, different policy below pins.
+    ``stream_bars`` for conformance; a *different* policy is refused rather
+    than dropped, because dropping one would retarget the run's evidence
+    without saying so.
     """
     source = _FakeFeed([_phase_bar(0, "RTH")], mode="finite")
     policy = _continuity_policy()
@@ -209,9 +210,13 @@ async def test_retained_feed_hands_its_own_continuity_policy_to_its_source(tmp_p
     try:
         retained = _RetainedSourceBarFeed(source, ledger, run_id="run-1", continuity=policy)
 
+        with pytest.raises(ValueError, match="may not substitute"):
+            async for _bar in retained.stream_bars("SPY", use_rth=True, continuity=_continuity_policy()):
+                pass
+        assert source.continuity_seen is None  # the source was never opened
+
         yielded = [
-            bar
-            async for bar in retained.stream_bars("SPY", use_rth=True, continuity=_continuity_policy())
+            bar async for bar in retained.stream_bars("SPY", use_rth=True, continuity=policy)
         ]
 
         assert [bar.session_phase for bar in yielded] == ["RTH"]

@@ -44,17 +44,15 @@ from app.engine.strategy.signal_program import (
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import (
     ContinuityPolicy,
-    FeedContinuityEvent,
     FeedHealth,
     MarketDataBar,
     MarketDataFeed,
-    record_continuity_event,
 )
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
-from app.services.feed_continuity_policy import FeedContinuityRefused, continuity_policy_for
+from app.services.feed_continuity_policy import admit_on_delivery, continuity_policy_for
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -225,17 +223,22 @@ class _RetainedSourceBarFeed:
         use_rth: bool = True,
         continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
-        # `continuity` satisfies the MarketDataFeed Protocol and is otherwise
-        # ignored: the run authors its own decision clock, substitution
-        # authority and evidence sink once, at construction (ruling P1), so a
-        # caller in the wrapper chain cannot substitute a different one.
-        del continuity
+        # The run authors its own decision clock, substitution authority and
+        # evidence sink once, at construction (ruling P1). Accepting the
+        # parameter satisfies the MarketDataFeed Protocol; honouring a
+        # *different* policy would silently retarget the run's evidence, so a
+        # caller in the wrapper chain may only pass the one it was built with.
+        if continuity is not None and continuity is not self._continuity:
+            raise ValueError(
+                "_RetainedSourceBarFeed streams under the continuity policy its run was "
+                "constructed with; a caller may not substitute a different one."
+            )
         # Capture first, then apply the sealed session policy locally. Asking
         # the provider for RTH-only data would make the authority ledger
         # depend on a lossy upstream filter and prevent a later program from
         # replaying its own session rule over the same observations.
         async for bar in self._source.stream_bars(symbol, use_rth=False, continuity=self._continuity):
-            await self._admit_on_delivery(bar)
+            await admit_on_delivery(self._continuity, bar)
             self._ledger.append(bar, run_id=self._run_id)
             if _includes_session_phase(bar, use_rth=use_rth):
                 yield bar
@@ -246,46 +249,6 @@ class _RetainedSourceBarFeed:
                 # PauseAwareFeed's captured-mode map cannot grow unbounded over
                 # a long-running paper session.
                 self.evaluation_mode_for(bar)
-
-    async def _admit_on_delivery(self, bar: MarketDataBar) -> None:
-        """Refuse a recovered decision bar that arrived after its allowance.
-
-        A bar assembled across an interruption is a real decision input, so it
-        is admitted on the same terms as any other -- except for *when* it
-        arrived. Delivery time is what a reconnect distorts: if the consumer's
-        trigger for this close is already past by more than the policy's
-        allowance, deciding on it now would be deciding against a market that
-        has since moved. The refusal is recorded before it is raised, so the
-        run's own evidence explains the outcome. Bars produced wholly inside
-        one live connection are never late by construction, and a bar the
-        consumer does not decide on cannot be a late decision.
-        """
-        policy = self._continuity
-        if policy is None or bar.provenance == "realtime" or not policy.is_trigger_ms(bar.end_ms):
-            return
-        observed_at_ms = now_ms_utc()
-        if observed_at_ms <= bar.end_ms + policy.delivery_allowance_ms:
-            return
-        # Through the same typed wrapper the feed writes with: a sink that
-        # cannot take this refusal is CONTINUITY_EVIDENCE_UNWRITABLE, not a
-        # bare OSError escaping the port on the way to the run's outcome.
-        await record_continuity_event(
-            policy,
-            FeedContinuityEvent(
-                kind="refused",
-                feed_id=bar.feed_id,
-                symbol=bar.symbol,
-                observed_at_ms=observed_at_ms,
-                reason="DECISION_LATE",
-                window_start_ms=bar.start_ms,
-                window_end_ms=bar.end_ms,
-                bar_identity=f"{bar.feed_id}:{bar.symbol}:{bar.start_ms}:{bar.end_ms}",
-            ),
-        )
-        raise FeedContinuityRefused(
-            f"trigger bar {bar.start_ms}..{bar.end_ms} delivered after the allowance",
-            reason="DECISION_LATE",
-        )
 
     async def recent_closed_bars(
         self,

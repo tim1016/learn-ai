@@ -256,12 +256,30 @@ class ContinuityPolicy:
     record_event: Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]
     delivery_allowance_ms: int = 20_000
 
+    def __post_init__(self) -> None:
+        # ``DecisionSession`` reserves "all" (spec §12) but no calendar-proven
+        # trigger set exists for it yet (ruling R1). Refusing it here, where the
+        # policy is authored, is the only place the consumer can be told; left
+        # to the stream, ``inside_decision_session`` would quietly fail open
+        # while ``next_trigger_ms`` raised ``NotImplementedError`` mid-run.
+        if self.decision_session != "rth":
+            raise ValueError(
+                f"decision_session {self.decision_session!r} has no calendar-proven "
+                "trigger set yet; only 'rth' can be scheduled against."
+            )
+
     def deadline_ms(self, last_delivered_end_ms: int) -> int:
         """Wall-clock by which the next decision bar must have been delivered."""
         return self.next_trigger_ms(last_delivered_end_ms) + self.delivery_allowance_ms
 
     def is_trigger_ms(self, end_ms: int) -> bool:
-        """Whether a bar closing at ``end_ms`` is one the consumer decides on."""
+        """Whether a bar closing at ``end_ms`` is one the consumer decides on.
+
+        ``next_trigger_ms`` answers "the smallest trigger strictly after this
+        instant", so asking it about ``end_ms - 1`` asks for the smallest
+        trigger at or after ``end_ms`` — which is ``end_ms`` itself exactly when
+        ``end_ms`` is a trigger.
+        """
         return self.next_trigger_ms(end_ms - 1) == end_ms
 
 
