@@ -12,12 +12,18 @@ import pytest
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import paper_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.marketdata.feed import ContinuityPolicy, MarketDataBar
+from app.marketdata.feed import (
+    ContinuityEventRef,
+    ContinuityPolicy,
+    FeedContinuityEvent,
+    MarketDataBar,
+    SubstitutionRefusal,
+)
 from app.services.bot_runtime import PauseAwareFeed, execute_bot_run
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed, run_trade_bot
 from app.services.source_bar_ledger import SourceBarLedger
 from tests._helpers.bot_runner.custody import _SID
-from tests._helpers.bot_runner.doubles import _FakeClerk
+from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
 from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
 from tests.services.test_candidate_uncaptured_at_crash import (  # noqa: F401 -- autouse fixture
     _binding,
@@ -92,6 +98,67 @@ async def test_retained_feed_consumes_modes_of_filtered_bars(tmp_path: Path) -> 
         }
         # And all three bars were still durably retained (capture-first).
         assert len(ledger.bars(provider="mixed-phase", symbol="SPY")) == 3
+    finally:
+        ledger.close(checkpoint=False)
+
+
+def _continuity_policy() -> ContinuityPolicy:
+    """A policy whose callables are never invoked -- its identity is the assertion.
+
+    Forwarding tests care only that the caller's exact object reaches the
+    source feed, so every callable here raises or returns a constant.
+    """
+
+    async def _record(event: FeedContinuityEvent) -> ContinuityEventRef:  # pragma: no cover - never called
+        raise AssertionError("forwarding a policy must not record a continuity event")
+
+    return ContinuityPolicy(
+        decision_session="rth",
+        next_trigger_ms=lambda last_end_ms: last_end_ms + 60_000,
+        substitution_grant=lambda start_ms, end_ms: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+        record_event=_record,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pause_aware_feed_forwards_the_continuity_policy_to_its_source() -> None:
+    """#1921: the pause wrapper is transparent to continuity.
+
+    Pause gating and reconnect continuity are independent concerns. If this
+    wrapper dropped the kwarg, a bot behind a run gate would silently lose the
+    continuity signal -- exactly the failure class #1921 exists to close, and
+    one a green suite would otherwise never notice.
+    """
+    gate = asyncio.Event()
+    gate.set()
+    source = _FakeFeed([_phase_bar(0, "RTH")], mode="finite")
+    policy = _continuity_policy()
+    feed = PauseAwareFeed(source, gate)
+
+    yielded = [bar async for bar in feed.stream_bars("SPY", continuity=policy)]
+
+    assert [bar.session_phase for bar in yielded] == ["RTH"]
+    assert source.continuity_seen is policy
+
+
+@pytest.mark.asyncio
+async def test_retained_feed_forwards_the_continuity_policy_to_its_source(tmp_path: Path) -> None:
+    """#1921: retaining source bars must not swallow the continuity policy.
+
+    This wrapper already rewrites ``use_rth`` on the way through (capture
+    first, filter locally), so it is the one most likely to drop a kwarg it
+    does not itself read.
+    """
+    source = _FakeFeed([_phase_bar(0, "RTH")], mode="finite")
+    policy = _continuity_policy()
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:continuity")
+    try:
+        retained = _RetainedSourceBarFeed(source, ledger)
+
+        yielded = [bar async for bar in retained.stream_bars("SPY", use_rth=True, continuity=policy)]
+
+        assert [bar.session_phase for bar in yielded] == ["RTH"]
+        assert source.continuity_seen is policy
     finally:
         ledger.close(checkpoint=False)
 

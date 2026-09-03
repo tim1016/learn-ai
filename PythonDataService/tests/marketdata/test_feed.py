@@ -799,6 +799,11 @@ def test_translate_maps_ibkr_provenance_to_port_provenance() -> None:
     historical = IbkrMarketDataFeed._translate(_make_ibkr_bar_with(provenance="ibkr_historical"))
     assert historical.provenance == "history"
 
+    # History wins over spanning: a backfilled bar is history however its
+    # contributions were stitched together upstream.
+    both = _make_ibkr_bar_with(provenance="ibkr_historical", spans_interruption=True)
+    assert IbkrMarketDataFeed._translate(both).provenance == "history"
+
 
 async def test_stream_bars_accepts_continuity_none_and_behaves_as_before(
     monkeypatch: pytest.MonkeyPatch,
