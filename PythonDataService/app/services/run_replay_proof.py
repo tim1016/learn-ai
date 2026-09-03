@@ -41,6 +41,7 @@ from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.run_replay import RunReplayReceipt
 from app.services.bot_trade_strategy import _includes_session_phase, strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
+from app.services.decision_clock import decision_timeframe_ms_for_binding
 from app.services.source_bar_ledger import (
     RetainedSourceBar,
     SourceBarLedger,
@@ -760,20 +761,6 @@ def refine_split_with_first_decision(
     )
 
 
-def _seal_decision_timeframe_ms(binding: BrokerBotBinding) -> int | None:
-    """The seal-attested decision clock width, when this instance carries one.
-
-    ``decision_timeframe_ms`` lives on the sealed program's inner
-    ``configured_signal.data`` contract (``app/schemas/signal_program_seal.py``);
-    fall back to ``None`` (wall-clock split) for a compatibility-mode strategy
-    with no seal.
-    """
-    seal = binding.sealed_program
-    if seal is None:
-        return None
-    return int(seal.configured_signal.data.decision_timeframe_ms)
-
-
 def ledger_account_id_for(binding: BrokerBotBinding) -> str:
     """Return the evidence namespace whose ledger retained this binding's bars."""
     if binding.mode == "dry_run":
@@ -911,7 +898,7 @@ class RunReplayProofService:
         ledger_end_seq = None if stored is None else stored.ledger_end_seq
         terminal_recorded_at_ms = None if outcome is None else outcome.recorded_at_ms
         first_decision_close_ms = evidence.records[0].bar_close_ms if evidence.records else None
-        decision_timeframe_ms = _seal_decision_timeframe_ms(binding)
+        decision_timeframe_ms = decision_timeframe_ms_for_binding(binding)
 
         def _compute_sync() -> tuple[str, list[RetainedSourceBar], EngineParityResult, RunFidelityResult]:
             ledger = SourceBarLedger(
