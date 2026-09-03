@@ -139,10 +139,10 @@ def test_replay_provider_for_requires_exactly_one_provider(tmp_path: Path) -> No
         with pytest.raises(RunReplayUnavailableError):
             replay_provider_for(ledger, "SPY")  # zero providers
 
-        ledger.append(_market_bar(0, feed_id="feed-a"))
+        ledger.append(_market_bar(0, feed_id="feed-a"), run_id="run-a")
         assert replay_provider_for(ledger, "SPY") == "feed-a"
 
-        ledger.append(_market_bar(5, feed_id="feed-b"))
+        ledger.append(_market_bar(5, feed_id="feed-b"), run_id="run-a")
         with pytest.raises(RunReplayUnavailableError):
             replay_provider_for(ledger, "SPY")  # ambiguous evidence
     finally:

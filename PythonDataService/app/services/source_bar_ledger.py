@@ -177,16 +177,6 @@ _EVIDENCE_BAR_COLUMNS = {
 }
 """Provenance columns added to ``source_bars`` by #1921, as ``ALTER TABLE`` fragments."""
 
-_EVIDENCE_EVENT_COLUMNS = {
-    "contribution_count": "contribution_count INTEGER",
-}
-"""Columns added to ``source_stream_events`` after the table first shipped.
-
-Ledgers created by an earlier commit of the continuity branch already have the
-table without this column, so it is added the same way the ``source_bars``
-provenance columns are: guarded by ``PRAGMA table_info``, defaulting to NULL,
-which is the value every pre-existing event legitimately has."""
-
 
 def verify_ledger_file(path: Path, *, account_id: str) -> int:
     """Integrity-check one ledger file read-only and return its retained-bar count.
@@ -280,16 +270,17 @@ class SourceBarLedger:
                 self.checkpoint_wal()
             self._conn.close()
 
-    def append(self, bar: MarketDataBar, *, run_id: str | None = None) -> RetainedSourceBar:
+    def append(self, bar: MarketDataBar, *, run_id: str) -> RetainedSourceBar:
         """Persist one live observation, refusing a non-monotonic new identity.
 
         ``run_id`` names the run this observation is evidence for, so the
-        journal can order it against that run's continuity events. It is
-        optional because a bar is evidence whether or not a run claimed it.
+        journal can order it against that run's continuity events. Every
+        appender knows its run, so it is required; the column stays nullable
+        for the rows a pre-journal ledger is migrated with.
         """
         return self._append(bar, delivery="live", run_id=run_id)
 
-    def append_history(self, bar: MarketDataBar, *, run_id: str | None = None) -> RetainedSourceBar:
+    def append_history(self, bar: MarketDataBar, *, run_id: str) -> RetainedSourceBar:
         """Persist one ordered warmup observation before live delivery begins."""
         return self._append(bar, delivery="history", run_id=run_id)
 
@@ -709,24 +700,18 @@ class SourceBarLedger:
         never rewritten, and takes no write lock at all once migrated.
         """
         with self._lock:
-            migrated = self._bar_columns().issuperset(
-                _EVIDENCE_BAR_COLUMNS
-            ) and self._table_columns("source_stream_events").issuperset(_EVIDENCE_EVENT_COLUMNS)
+            migrated = self._bar_columns().issuperset(_EVIDENCE_BAR_COLUMNS)
             if migrated and not self._has_unjournaled_bars():
                 return
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                # Both halves are re-read under the write lock: another handle
-                # on the same file may have migrated it while this one waited,
-                # and a repeated ADD COLUMN is an error, not a no-op.
+                # Re-read under the write lock: another handle on the same file
+                # may have migrated it while this one waited, and a repeated
+                # ADD COLUMN is an error, not a no-op.
                 columns = self._bar_columns()
                 for name, ddl in _EVIDENCE_BAR_COLUMNS.items():
                     if name not in columns:
                         self._conn.execute(f"ALTER TABLE source_bars ADD COLUMN {ddl}")
-                event_columns = self._table_columns("source_stream_events")
-                for name, ddl in _EVIDENCE_EVENT_COLUMNS.items():
-                    if name not in event_columns:
-                        self._conn.execute(f"ALTER TABLE source_stream_events ADD COLUMN {ddl}")
                 for row in self._conn.execute(_UNJOURNALED_BARS).fetchall():
                     self._journal(
                         run_id=None,
@@ -741,16 +726,7 @@ class SourceBarLedger:
 
     def _bar_columns(self) -> set[str]:
         """The column names ``source_bars`` currently has on disk."""
-        return self._table_columns("source_bars")
-
-    def _table_columns(self, table: str) -> set[str]:
-        """The column names ``table`` currently has on disk.
-
-        ``table`` is never caller-supplied: the two names come from this
-        module's own migration maps, which is why the interpolation is safe
-        (``PRAGMA`` takes no bound parameters).
-        """
-        return {str(row["name"]) for row in self._conn.execute(f"PRAGMA table_info({table})")}
+        return {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(source_bars)")}
 
     def _has_unjournaled_bars(self) -> bool:
         """Whether any retained bar still lacks its journal position.
