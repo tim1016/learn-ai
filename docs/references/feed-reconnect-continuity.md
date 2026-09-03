@@ -4,27 +4,30 @@
 **Decision:** `docs/architecture/adrs/0053-feed-continuity-same-run-recovery.md`
 **Status:** fail-closed floor shipped (spec slices 1–3). No substitution path exists in this build.
 
-Every number below carries the spec section it comes from. Nothing here is re-derived.
+Every number below carries the spec section it comes from, except the block explicitly labelled
+as investigation observations. Nothing here is re-derived.
 
 ## Retrieving the evidence
 
 Podman's log driver is journald inside the podman-machine VM, so container logs survive
-`./restart.sh` (spec §1). Retained since 2026-08-09.
+`./restart.sh`; `--since` is parsed in the VM's local time (CDT); retained since 2026-08-09
+(spec §1).
 
 ```
 podman machine ssh 'journalctl -o short-iso --utc CONTAINER_NAME=polygon-data-service --since "<VM-local CDT time>"'
 ```
 
-`--since` and `--until` are parsed in the **VM's local time** (CDT) even with `--utc`, which only
-changes the output format. Asking for a UTC window returns nothing, silently.
+`--utc` changes only the output format, so asking for a UTC window returns nothing, silently.
 
-Podman healthcheck failures are VM-level lines, not container lines, so drop the `CONTAINER_NAME`
-filter to see them: `podman[pid]: Error: healthcheck command exceeded timeout of 5s` followed by
-`<ctr-id>-<hex>.service: Main process exited, code=exited, status=125`. Counting those per hour is
-a process-stall detector independent of the app's own logging, because `/health` is a trivial dict
-return — a 5 s timeout on it means the event loop or the cgroup stalled. Log-silence gaps are not
-a stall signal: the frontend panel poll gives a ~4.6 s cadence and 10 s gaps occur in healthy
-baselines.
+**Observed during the #1921 investigation, not in the spec.** Podman healthcheck failures are
+VM-level lines, not container lines, so drop the `CONTAINER_NAME` filter to see them:
+`podman[pid]: Error: healthcheck command exceeded timeout of 5s` followed by
+`<ctr-id>-<hex>.service: Main process exited, code=exited, status=125`. Counting those per hour
+is a process-stall detector independent of the app's own logging — spec §1.1 is the reasoning
+(`/health` is a trivial dict return, so a 5 s timeout on it means the event loop or the cgroup
+stalled), and the line shapes above are how to find them. Log-silence gaps are not a stall
+signal: the frontend panel poll was measured at a ~4.6 s cadence during this investigation, and
+10 s gaps occur in healthy baselines.
 
 ## The 2026-09-02 15:00 ET event (spec §1.1)
 
@@ -77,7 +80,7 @@ Source: `artifacts/live_bars/<sym>/5s/2026-09-02.jsonl`.
 | TSLA | 340 | 338 | same two |
 | AAPL | 340 | 339 | 15:31 (7) |
 
-**1017 of 1020 RTH minutes were 12/12**, with no whole minute absent and zero duplicate
+**1015 of 1020 RTH minutes were 12/12** (338 + 338 + 339), with no whole minute absent and zero duplicate
 timestamps. This is the measurement the completeness rule rests on: an RTH minute's completeness
 is provable by contribution count, and four of the five blip minutes that day were complete from
 real-time data across two sockets.
