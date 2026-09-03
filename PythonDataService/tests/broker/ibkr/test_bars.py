@@ -867,6 +867,27 @@ async def test_soft_loss_1100_raises_interrupted_with_cause() -> None:
 
 
 @pytest.mark.asyncio
+async def test_raw_5s_stream_drains_queued_prints_before_the_interruption() -> None:
+    """The raw chart stream drains the same way: a queued print is still a print."""
+    client = _GenClient()
+    backlog = client.ib.bars
+    client.ib.bars = []
+    stream = stream_raw_5s_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.ib.bars.extend(backlog)
+    client.connection_generation = 2
+
+    drained = [await asyncio.wait_for(first, timeout=2.0)]
+    drained.append(await asyncio.wait_for(stream.__anext__(), timeout=2.0))
+
+    assert [bar.close for bar in drained] == [Decimal("100.5"), Decimal("101.5")]
+    with pytest.raises(IBKRBarInterrupted):
+        await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_raw_5s_stream_stale_generation_raises_interrupted() -> None:
     client = _GenClient()
     client.ib.bars = []
@@ -882,22 +903,63 @@ async def test_raw_5s_stream_stale_generation_raises_interrupted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_generation_is_caught_while_bars_are_still_draining() -> None:
-    """The check runs every iteration, not only when the bar list is idle."""
+async def test_queued_prints_are_drained_before_the_interruption_surfaces() -> None:
+    """The check runs every iteration, and the queue is emptied before it fires.
+
+    Ruling P10: ``Wrapper.reset()`` orphans this list on reconnect, so nothing
+    the new socket produces can ever land on it — every bar still queued is a
+    print the old socket really delivered. They are folded first, then the
+    interruption surfaces, so the interruption is neither deferred by a 60 s
+    stall nor paid for with observations the vendor did send.
+    """
     client = _GenClient()
-    backlog = client.ib.bars  # two 5-second bars: enough to close a minute
+    backlog = client.ib.bars  # two 5-second bars, spanning a minute boundary
     client.ib.bars = []
     stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
     first = asyncio.ensure_future(stream.__anext__())
     await asyncio.sleep(0.15)
-    # The reconnect lands with undelivered bars still queued on the orphaned
-    # list. A liveness check that only guarded the idle branch would drain
-    # them and yield a closed minute sourced from a socket that is gone.
     client.ib.bars.extend(backlog)
     client.connection_generation = 2
+
+    drained = await asyncio.wait_for(first, timeout=2.0)
+
+    assert drained.close == Decimal("100.5")  # the minute the queued prints closed
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_queued_prints_reach_the_shared_assembler_before_the_interruption() -> None:
+    """Two prints of one minute, a reconnect, and both contributions survive.
+
+    This is the case the drain exists for: the minute is still open, so nothing
+    is yielded, and discarding the queue would leave the caller's assembler
+    holding 0/12 when the reconnect could have completed 12/12.
+    """
+    client = _GenClient()
+    minute_start_ms = int(datetime(2026, 5, 4, 14, 30, tzinfo=UTC).timestamp() * 1000)
+    queued = [
+        _bar(0, "100", "101", "99", "100.5", 10),
+        _bar(5, "100.5", "102", "100", "101.5", 20),
+    ]
+    client.ib.bars = []
+    assembler = bars_mod.MinuteAssembler()
+    stream = stream_minute_bars(
+        client, "SPY", use_rth=True, stall_timeout_s=60.0, assembler=assembler
+    )
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.ib.bars.extend(queued)
+    client.connection_generation = 2
+
     with pytest.raises(IBKRBarInterrupted) as excinfo:
         await asyncio.wait_for(first, timeout=2.0)
+
     assert excinfo.value.cause == "generation_changed"
+    assert assembler.open_minute_start_ms == minute_start_ms
+    assert assembler.current is not None and len(assembler.current.contributions) == 2
     await stream.aclose()
 
 
