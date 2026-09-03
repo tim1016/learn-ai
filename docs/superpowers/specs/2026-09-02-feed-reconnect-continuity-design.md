@@ -419,7 +419,7 @@ is never made later than `A` after its trigger; refusal is `FEED_DEATH`.
 | Interruption (ET) | L | T | Without a grant | With a valid grant |
 |---|---|---|---|---|
 | 15:00:44.8 → 15:00:45.6 (measured; 15:00 minute 12/12) | 15:00 | 15:01 | emitted `realtime_across_reconnect` at rollover; 14:45–15:00 decision on time | same |
-| 15:01:33.6 → 15:01:34.4 (measured; 15:01 minute 11/12) | 15:01 | 15:16 | `SOURCE_MINUTE_UNRESOLVABLE` at the 15:02 rollover → `FEED_DEATH` | 1-minute episode substituted at 15:02; no decision affected |
+| 15:01:33.6 → 15:01:34.4 (measured; 15:01 minute 11/12) | 15:01 | 15:16 | unresolvable minute at the 15:02 rollover → refused with the grant's reason (`SUBSTITUTION_NOT_AUTHORIZED` when no artifact exists) → `FEED_DEATH` | 1-minute episode substituted at 15:02; no decision affected |
 | second lost 5-second bar later the same day | — | — | refused | **`SUBSTITUTION_SHAPE_UNPROVEN`** (second episode) → `FEED_DEATH` |
 | 15:10:00 → 15:16:30 (6 minutes unresolvable) | 15:09 | 15:16 | refused | **`SUBSTITUTION_SHAPE_UNPROVEN`** (window > 5) → `FEED_DEATH` |
 | 15:15:40 → 15:16:10 | 15:15 | 15:16 | refused (15:15 minute incomplete) | substitute fetched 15:16:10, delivered ~15:16:11 ≤ 15:16:20 → admitted |
@@ -504,7 +504,7 @@ instrument can be authorized sooner than ~20 trading days after slice 2 lands.
 
 Measured against today's storm: four of the five blips (12/12 minutes) would have been survived
 on the same run; the 15:01:33 blip lost one 5-second bar and would still have ended the three
-runs, at the 15:02 rollover, with reason `SOURCE_MINUTE_UNRESOLVABLE` instead of `FEED_DEATH` on
+runs, at the 15:02 rollover, refused with the grant's typed reason (`SUBSTITUTION_NOT_AUTHORIZED`; "source minute unresolvable" names the condition, not an emitted code — ruling P8) instead of `FEED_DEATH` on
 a healthy socket. Nightly 1100 resets and the gateway logoff outside the decision session no
 longer kill RTH runs. Every damaged minute is eliminated from the ledger from day one. With an
 authorization, a storm day is survived up to its first lost 5-second bar plus one more, and the
