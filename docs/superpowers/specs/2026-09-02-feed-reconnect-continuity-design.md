@@ -226,7 +226,7 @@ ever the shape that was replayed.
    re-reads the generation after every await and restarts if it moved. A generation change
    invalidates every registry entry of the old generation.
 2. **The minute assembler survives.** `_MinuteAccumulator` and `last_source_ms` move out of the
-   generator into a per-consumer `MinuteAssembler` owned by `IbkrMarketDataFeed.stream_bars`
+   generator into a per-consumer `MinuteAssembler` owned by the feed's `ContinuityLoop` for the life of one `stream_bars` call
    and handed to each `stream_minute_bars` generation. Contributions are keyed by source
    timestamp, so bars received before and after an interruption merge deterministically; the
    `live_idempotent` policy already covers a redelivered 5-second bar. On interruption, a
