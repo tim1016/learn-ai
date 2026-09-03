@@ -256,13 +256,18 @@ class IbkrMarketDataFeed:
         loop = ContinuityLoop(
             client=self._client, feed_id=self.feed_id, symbol=symbol, policy=policy
         )
+
+        def _on_source_bar(source_ms: int) -> None:
+            self._observe_source_bar(symbol, source_ms)
+            loop.observe_source_bar(source_ms)
+
         while True:
             try:
                 async for ibkr_bar in stream_minute_bars(
                     self._client,
                     symbol,
                     use_rth=use_rth,
-                    on_source_bar=lambda source_ms: self._observe_source_bar(symbol, source_ms),
+                    on_source_bar=_on_source_bar,
                     assembler=loop.assembler,
                 ):
                     resolved = await loop.resolve_emitted(ibkr_bar)

@@ -49,8 +49,16 @@ _BAR_TWO_START_MS = 1_788_375_720_000
 
 @pytest.fixture(autouse=True)
 def _no_reconnect_monitor(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The auto-reconnect monitor is a process singleton, not part of this chain."""
+    """The auto-reconnect monitor is a process singleton, not part of this chain.
+
+    The wait's clock is pinned inside the deadline the first bar anchors
+    (15:16:20 ET): the deadline is enforced whether or not the socket is
+    healthy, and this suite runs long after 2026-09-02.
+    """
     monkeypatch.setattr("app.marketdata.ibkr_continuity.get_monitor", lambda: None)
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_continuity.now_ms_utc", lambda: _BAR_TWO_START_MS + 30_000
+    )
 
 
 async def test_one_reconnect_lands_in_the_ledger_as_ordered_evidence(

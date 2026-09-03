@@ -103,15 +103,28 @@ def _fill_and_flush(assembler: MinuteAssembler) -> None:
 
 def test_exact_redelivery_after_a_flush_is_skipped_idempotently() -> None:
     # After ``flush_if_complete`` the resubscribed socket may redeliver the
-    # 5-second bars of the minute that was just emitted. An exact redelivery
-    # carries no new data, so it is absorbed rather than fatal.
+    # most recent 5-second bar of the minute that was just emitted. An exact
+    # redelivery of that one bar carries no new data, so it is absorbed rather
+    # than fatal -- the live relaxation temporal-rigor grants, and no more.
     assembler = MinuteAssembler()
     _fill_and_flush(assembler)
 
     assert assembler.feed(_raw(55), symbol="SPY", generation=2, venue=None, use_rth=True) is None
-    assert assembler.feed(_raw(20), symbol="SPY", generation=2, venue=None, use_rth=True) is None
 
-    assert assembler.counters.skipped_duplicate == 2
+    assert assembler.counters.skipped_duplicate == 1
+    assert assembler.open_minute_start_ms is None
+
+
+def test_an_older_print_of_a_flushed_minute_is_fatal_even_when_identical() -> None:
+    # ``.claude/rules/temporal-rigor.md``: only the most-recently-accepted
+    # element may be absorbed; any other timestamp belonging to an
+    # already-emitted aggregate is fatal, identical payload or not.
+    assembler = MinuteAssembler()
+    _fill_and_flush(assembler)
+
+    with pytest.raises(IBKRBarStreamError, match="already emitted"):
+        assembler.feed(_raw(20), symbol="SPY", generation=2, venue=None, use_rth=True)
+    assert assembler.counters.skipped_duplicate == 0
     assert assembler.open_minute_start_ms is None
 
 

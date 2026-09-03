@@ -390,9 +390,13 @@ class MinuteAssembler:
         """Resolve a 5-second bar arriving after its minute was flushed early.
 
         Returns ``True`` when the bar was absorbed and must not reach the
-        accumulator: an exact redelivery of a contribution the flushed minute
-        already held carries no new data. Any other bar inside that minute is
-        refused — an emitted minute can be neither corrected nor rebuilt. A bar
+        accumulator: an exact redelivery of the flushed minute's *most recent*
+        contribution carries no new data. That is the whole of the live
+        relaxation ``.claude/rules/temporal-rigor.md`` grants -- the same one
+        ``aggregate_realtime_bar`` applies to the open minute -- and every
+        other bar inside the flushed minute is refused, identical payload or
+        not: an earlier timestamp belongs to an already-emitted aggregate, and
+        a changed payload would correct a minute downstream has consumed. A bar
         belonging to a later minute clears the memory and proceeds normally;
         one belonging to an earlier minute proceeds too, and the ordinary
         non-monotonic guard fails it.
@@ -404,7 +408,7 @@ class MinuteAssembler:
         if _minute_start_ms(source_ms) != flushed.start_ms:
             self._flushed = None
             return False
-        if flushed.contributions.get(source_ms) == _contribution(raw_bar):
+        if source_ms == self.last_source_ms and flushed.contributions.get(source_ms) == _contribution(raw_bar):
             self.counters.skipped_duplicate += 1
             logger.info(
                 "Idempotent skip of a 5-second bar redelivered after its minute was flushed",

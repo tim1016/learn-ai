@@ -66,6 +66,17 @@ class _OpenInterruption:
     #: behind it. A gap no interruption explains is an ordinary gap, and
     #: ordinary gaps are non-fatal (ruling P11).
     recovered_ref: ContinuityEventRef | None = None
+    #: The minute the first post-recovery source bar landed in (spec §4.2
+    #: rule 4: that bar's timestamp decides which minute the live stream can
+    #: complete). Every print of that minute before the landing was lost to
+    #: the interruption, and nothing on the bar records it -- like the open
+    #: minute, it holds one generation's contributions and ``spans_interruption``
+    #: reads false. ``None`` until the resubscribed line delivers.
+    landing_minute_start_ms: int | None = None
+
+    def touches(self, minute_start_ms: int) -> bool:
+        """Whether this interruption cut ``minute_start_ms`` short at either end."""
+        return minute_start_ms in (self.touched_minute_start_ms, self.landing_minute_start_ms)
 
 
 @dataclass(frozen=True)
@@ -98,14 +109,21 @@ def _is_unresolvable(bar: IbkrMinuteBar, *, interruption_touched: bool) -> bool:
 
     A minute is *touched* when its contributions span connection generations
     (``spans_interruption``) or when the loop saw it open as delivery stopped
-    (``interruption_touched``, ruling P9). Untouched minutes -- including the
-    first minute of generation 1, which a mid-minute deploy leaves short
-    (ruling R2) -- keep today's behaviour.
+    or land after the recovery (``interruption_touched``, ruling P9 and spec
+    §4.2 rule 4). Untouched minutes -- including the first minute of
+    generation 1, which a mid-minute deploy leaves short (ruling R2) -- keep
+    today's behaviour.
+
+    The proof is the count alone, in every session phase: twelve 5-second
+    contributions is every print a minute can hold, so a minute holding them
+    is complete wherever it falls -- which is also why ``flush_if_complete``
+    may deliver one. Fewer is unprovable everywhere -- short in RTH, where
+    IBKR delivers 12/12, and undecidable outside it, where sparse bars are
+    normal. Whether an unprovable minute is a gap or a refusal is the
+    decision session's call, made in ``_resolve_unresolvable_window``.
     """
     if not (bar.spans_interruption or interruption_touched):
         return False
-    if bar.session_phase != "RTH":
-        return True
     return bar.contribution_count is None or bar.contribution_count < RTH_CONTRIBUTIONS_PER_MINUTE
 
 
@@ -149,10 +167,7 @@ class ContinuityLoop:
         interruption = self.interruption
         if interruption is not None and interruption.recovered_ref is not None:
             await self._resolve_missed_windows(ibkr_bar.start_ms)
-        touched = (
-            interruption is not None
-            and interruption.touched_minute_start_ms == ibkr_bar.start_ms
-        )
+        touched = interruption is not None and interruption.touches(ibkr_bar.start_ms)
         if _is_unresolvable(ibkr_bar, interruption_touched=touched):
             await self._resolve_unresolvable_window(
                 ibkr_bar.start_ms,
@@ -199,8 +214,7 @@ class ContinuityLoop:
             self.last_delivered_end_ms = self.assembler.open_minute_start_ms
         complete = self.assembler.flush_if_complete()
         held = await self.resolve_emitted(complete) if complete is not None else None
-        cause = _interruption_cause(exc)
-        self.interruption = _OpenInterruption(
+        self.interruption = interruption = _OpenInterruption(
             deadline_ms=self.policy.deadline_ms(self.last_delivered_end_ms),
             # Nothing to flush means the interruption outlived the open minute:
             # ruling P9's fact, which only this loop can see.
@@ -208,24 +222,7 @@ class ContinuityLoop:
                 self.assembler.open_minute_start_ms if complete is None else None
             ),
         )
-        await self._record(
-            self._event(
-                "interruption",
-                cause=cause,
-                generation_from=self.generation,
-                last_delivered_end_ms=self.last_delivered_end_ms,
-                deadline_ms=self.interruption.deadline_ms,
-            )
-        )
-        logger.warning(
-            "Feed interrupted; attempting same-run continuity",
-            extra={
-                "action": "marketdata_interruption_observed",
-                "feed_id": self.feed_id,
-                "symbol": self.symbol,
-                "cause": cause,
-            },
-        )
+        await self._record_interruption(interruption, _interruption_cause(exc))
         return held
 
     async def await_recovery(self) -> None:
@@ -259,19 +256,67 @@ class ContinuityLoop:
     async def await_recovery_after_race(self, exc: Exception) -> None:
         """Absorb a resubscribe that raced the reconnect.
 
-        Still the same interruption, so still the deadline that interruption
-        recorded. With none open this is an ordinary connection failure and
-        stays fatal, as today.
+        The socket the recovery just reported healthy was gone again by the
+        time the resubscribe reached it. To a reader following the journal's
+        generations that is a second interruption -- the generation the
+        ``recovered`` event named died without delivering -- so it is recorded
+        as one and waited out like one. It stays under the deadline the first
+        interruption anchored: nothing was delivered in between, so the
+        consumer's next decision has not moved. With no interruption open this
+        is an ordinary connection failure and stays fatal, as today.
         """
         interruption = self.interruption
         if interruption is None:
             raise MarketDataFeedError(str(exc)) from exc
-        await self._wait_for_healthy(deadline_ms=interruption.deadline_ms)
+        await self._record_interruption(interruption, "socket_down")
+        await self.await_recovery()
+
+    def observe_source_bar(self, source_ms: int) -> None:
+        """Note where the resubscribed line landed (spec §4.2 rule 4).
+
+        Called for every raw 5-second bar that advances the source watermark.
+        The first one after a recovery names the landing minute: every print
+        of that minute before ``source_ms`` was lost to the interruption, so
+        the minute is touched and must prove itself by count exactly like the
+        open minute the interruption found. Bars before any recovery, and
+        every bar after the first, carry no continuity fact.
+        """
+        interruption = self.interruption
+        if (
+            interruption is None
+            or interruption.recovered_ref is None
+            or interruption.landing_minute_start_ms is not None
+        ):
+            return
+        interruption.landing_minute_start_ms = source_ms - source_ms % SOURCE_BAR_MS
 
     # -- evidence -----------------------------------------------------------
 
     async def _record(self, event: FeedContinuityEvent) -> ContinuityEventRef:
         return await record_continuity_event(self.policy, event)
+
+    async def _record_interruption(
+        self, interruption: _OpenInterruption, cause: InterruptionCause
+    ) -> None:
+        """Record ``interruption`` under the deadline it anchored, then say so."""
+        await self._record(
+            self._event(
+                "interruption",
+                cause=cause,
+                generation_from=self.generation,
+                last_delivered_end_ms=self.last_delivered_end_ms,
+                deadline_ms=interruption.deadline_ms,
+            )
+        )
+        logger.warning(
+            "Feed interrupted; attempting same-run continuity",
+            extra={
+                "action": "marketdata_interruption_observed",
+                "feed_id": self.feed_id,
+                "symbol": self.symbol,
+                "cause": cause,
+            },
+        )
 
     def _event(self, kind: ContinuityEventKind, **fields: object) -> FeedContinuityEvent:
         return FeedContinuityEvent(
@@ -290,8 +335,14 @@ class ContinuityLoop:
         a whole decision interval whenever the minute flushed after that event
         crossed a decision trigger -- and the journal would still claim the
         shorter one.
+
+        The deadline is checked before the socket's health, not only while it
+        is unhealthy. A line that is healthy again by the time the wait begins
+        -- a stall took 60 s to detect, or the process stall behind #1921
+        delayed the detection -- has still missed the decision if the deadline
+        has passed; the deadline is the consumer's, not the socket's.
         """
-        while not _healthy(self.client):
+        while True:
             if now_ms_utc() >= deadline_ms:
                 await self._record(
                     self._event(
@@ -313,6 +364,8 @@ class ContinuityLoop:
                 raise MarketDataFeedError(
                     f"{self.symbol} was not recovered before {deadline_ms}", reason="DECISION_BAR_MISSED"
                 )
+            if _healthy(self.client):
+                return
             await asyncio.sleep(WAIT_POLL_S)
 
     # -- resolving what the interruption cost -------------------------------

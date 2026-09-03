@@ -104,6 +104,22 @@ def rth_trigger_instants(session_date: date, *, timeframe_ms: int) -> list[int]:
     close, and the last bucket is force-flushed there too. Callers that treat
     this as a schedule must tolerate the repeat (``next_trigger_ms`` does --
     it returns the first entry strictly greater than its argument).
+
+    Formula:
+        for each bucket ``[b, b + timeframe_ms)`` from ``floor_et(open)`` while
+        ``b < close``: ``close`` if ``b + timeframe_ms >= close`` else
+        ``b + timeframe_ms + 60_000``.
+    Reference:
+        Spec ``docs/superpowers/specs/2026-09-02-feed-reconnect-continuity-design.md``
+        §4.4 -- ``app/engine/consolidators/trade_bar_consolidator.py`` emits
+        bucket K on the first source minute of K+1, which closes 60 s after
+        K's end; the live runner force-flushes the session's last bucket at
+        the calendar close. Session bounds come from the canonical calendar.
+    Canonical implementation: this file.
+    Validated against:
+        ``tests/services/test_decision_clock.py::test_rth_trigger_instants_regular_session``,
+        ``::test_rth_trigger_instants_early_close``,
+        ``::test_rth_trigger_instants_repeats_the_close_at_a_one_minute_timeframe``
     """
     if timeframe_ms <= 0 or timeframe_ms % SOURCE_BAR_MS != 0:
         raise ValueError(
@@ -128,6 +144,17 @@ def next_trigger_ms(
 
     Rolls forward across holidays and weekends until a trading day supplies a
     later trigger. ``decision_session="all"`` is refused (ruling R1).
+
+    Formula:
+        ``min{t in rth_trigger_instants(d) : t > last_delivered_end_ms}`` over
+        trading days ``d`` from the ET date of ``last_delivered_end_ms`` forward.
+    Reference:
+        As ``rth_trigger_instants`` (spec §4.4); trading days from the canonical
+        calendar ``app/lean_sidecar/trading_calendar.py``.
+    Canonical implementation: this file.
+    Validated against:
+        ``tests/services/test_decision_clock.py::test_next_trigger_after_last_delivered_minute``,
+        ``::test_next_trigger_rolls_to_the_next_session``, ``::test_one_minute_timeframe``
     """
     if decision_session != "rth":
         raise NotImplementedError(

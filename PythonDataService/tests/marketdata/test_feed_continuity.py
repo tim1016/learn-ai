@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 
@@ -397,6 +397,8 @@ async def test_an_omitted_gap_does_not_spend_the_scan_the_next_bar_still_needs(
         ],
     )
     monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    # Inside the deadline the pre-market bar anchors (open_ms + 80_000).
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: open_ms + 30_000)
     feed = IbkrMarketDataFeed(_client())
 
     delivered: list = []
@@ -427,6 +429,8 @@ async def test_a_missed_window_straddling_the_session_open_is_split_at_the_bound
         [_ibkr_bar(open_ms + 120_000)],
     )
     monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    # Inside the deadline the pre-market bar anchors (open_ms + 80_000).
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: open_ms + 30_000)
     feed = IbkrMarketDataFeed(_client())
 
     with pytest.raises(MarketDataFeedError) as excinfo:
@@ -550,6 +554,34 @@ async def test_unresolvable_minute_outside_rth_is_a_gap_and_the_run_continues(mo
     assert sink.events[-1].window_start_ms == pre
 
 
+async def test_a_touched_pre_market_minute_holding_every_print_is_delivered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Twelve contributions is every print a minute can hold, in any session phase.
+
+    The count test is undefined outside RTH only for a *short* minute, where
+    sparse bars are normal; a stitched pre-market minute holding all twelve is
+    complete and is delivered, not omitted (implementation review, round 7).
+    """
+    sink = _RecordingSink()
+    pre = _MINUTE0 - 8 * 3_600_000  # 07:00 ET
+    source = _Source(
+        [_ibkr_bar(pre - 60_000, phase="PRE"), IBKRBarInterrupted("x", cause="socket_down")],
+        [_ibkr_bar(pre, contribution_count=12, spans_interruption=True, phase="PRE")],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: pre + 30_000)
+    feed = IbkrMarketDataFeed(_client())
+
+    bars = await _collect(feed, _policy(sink), 2)
+
+    assert [(b.start_ms, b.provenance) for b in bars] == [
+        (pre - 60_000, "realtime"),
+        (pre, "realtime_across_reconnect"),
+    ]
+    assert [e.kind for e in sink.events] == ["interruption", "recovered"]
+
+
 async def test_wholly_missed_minutes_are_resolved_before_the_next_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _RecordingSink()
     source = _Source(
@@ -652,10 +684,17 @@ async def test_sink_failure_withholds_the_bar_the_flush_had_ready(
     assert delivered == []
 
 
-async def test_not_connected_on_reentry_keeps_waiting_rather_than_failing(
+async def test_not_connected_on_reentry_is_a_second_episode_under_the_same_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The resubscribe can race the reconnect; that is still the interruption, not a new fault."""
+    """The resubscribe can race the reconnect (implementation review, finding 3).
+
+    The generation the first recovery named died before it delivered anything.
+    The journal must show that -- a second ``interruption``/``recovered`` pair,
+    from generation 2 to 3 -- under the deadline the first interruption
+    anchored, because no bar was delivered in between; and the bar that finally
+    arrives is explained by the recovery that actually delivered it.
+    """
     sink = _RecordingSink()
     source = _Source(
         [_ibkr_bar(_MINUTE0 - 60_000), IBKRBarInterrupted("x", cause="socket_down")],
@@ -663,13 +702,23 @@ async def test_not_connected_on_reentry_keeps_waiting_rather_than_failing(
         [_ibkr_bar(_MINUTE0, contribution_count=12, spans_interruption=True)],
     )
     monkeypatch.setattr(feed_module, "stream_minute_bars", source)
-    feed = IbkrMarketDataFeed(_client())
+    client = _client()
+    type(client).connection_generation = PropertyMock(side_effect=[1, 2, 3])
+    feed = IbkrMarketDataFeed(client)
 
     bars = await _collect(feed, _policy(sink), 2)
 
     assert source.invocations == 3
     assert bars[1].provenance == "realtime_across_reconnect"
-    assert [e.kind for e in sink.events] == ["interruption", "recovered"]
+    assert [(e.kind, e.generation_from, e.generation_to) for e in sink.events] == [
+        ("interruption", 1, None),
+        ("recovered", 1, 2),
+        ("interruption", 2, None),
+        ("recovered", 2, 3),
+    ]
+    assert sink.events[2].cause == "socket_down"
+    assert {e.deadline_ms for e in sink.events if e.kind == "interruption"} == {_MINUTE0 + 80_000}
+    assert bars[1].continuity_event_ref == ContinuityEventRef(run_id="run-1", evidence_seq=4).ref()
 
 
 async def test_not_connected_before_any_delivered_bar_is_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -721,6 +770,91 @@ async def test_a_recovering_monitor_holds_delivery_until_it_reports_healthy(
 
     assert monitor.recovery_state == "HEALTHY"
     assert bars[1].provenance == "realtime_across_reconnect"
+
+
+async def test_the_landing_minute_after_a_complete_flush_must_prove_itself_by_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reconnect landing at :10 loses two prints (implementation review, finding 1).
+
+    The open minute was complete and flushed, so nothing records it as touched;
+    the landing minute holds one generation's contributions, so
+    ``spans_interruption`` reads false. Only the loop can see where the
+    resubscribed line landed (spec §4.2 rule 4) -- without that fact a 10/12
+    minute was delivered as ``realtime`` inside the decision session.
+    """
+    sink = _RecordingSink()
+    source = _Source(
+        [*_rth_minute_raw(_MINUTE0, range(0, 60, 5)), IBKRBarInterrupted("x", cause="socket_down")],
+        [*_rth_minute_raw(_MINUTE0 + 60_000, range(10, 60, 5)), _raw_5s(_MINUTE0 + 120_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await _collect(feed, _policy(sink), 2)
+
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "refused"]
+    refused = sink.events[-1]
+    assert (refused.window_start_ms, refused.window_end_ms, refused.contribution_count) == (
+        _MINUTE0 + 60_000,
+        _MINUTE0 + 120_000,
+        10,
+    )
+
+
+async def test_a_landing_minute_that_holds_every_print_is_delivered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sibling edge: landing on the :00 print leaves nothing to prove short."""
+    sink = _RecordingSink()
+    source = _Source(
+        [*_rth_minute_raw(_MINUTE0, range(0, 60, 5)), IBKRBarInterrupted("x", cause="socket_down")],
+        [*_rth_minute_raw(_MINUTE0 + 60_000, range(0, 60, 5)), _raw_5s(_MINUTE0 + 120_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    bars = await _collect(feed, _policy(sink), 2)
+
+    assert [(b.start_ms, b.provenance) for b in bars] == [
+        (_MINUTE0, "realtime"),
+        (_MINUTE0 + 60_000, "realtime"),
+    ]
+    assert [e.kind for e in sink.events] == ["interruption", "recovered"]
+
+
+async def test_a_socket_already_healthy_past_the_deadline_is_still_a_missed_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The deadline is the consumer's, not the socket's (implementation review, finding 2).
+
+    A stall takes 60 s to detect, and the process stall behind #1921 can delay
+    that detection further; by the time the loop looks, the line may be healthy
+    again with the decision bar already gone. A wait that checked the deadline
+    only while the socket was unhealthy let that reconnect through.
+    """
+    sink = _RecordingSink()
+    source = _Source(
+        [_ibkr_bar(_MINUTE0 - 60_000), IBKRBarSubscriptionStalled("stalled")],
+        [_ibkr_bar(_MINUTE0, contribution_count=12)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: _MINUTE0 + 80_000)
+
+    async def _never_polls(_seconds: float) -> None:
+        raise AssertionError("a healthy socket past its deadline must be refused, not polled")
+
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.asyncio.sleep", _never_polls)
+    feed = IbkrMarketDataFeed(_client())  # connected, no soft loss: healthy at first glance
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await _collect(feed, _policy(sink), 2)
+
+    assert excinfo.value.reason == "DECISION_BAR_MISSED"
+    assert [e.kind for e in sink.events] == ["interruption", "refused"]
+    assert sink.events[0].deadline_ms == sink.events[-1].deadline_ms == _MINUTE0 + 80_000
 
 
 async def test_kill_switch_restores_todays_fail_fast(monkeypatch: pytest.MonkeyPatch) -> None:
