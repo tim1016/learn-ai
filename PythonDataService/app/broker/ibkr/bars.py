@@ -1,9 +1,12 @@
 """Real-time underlying minute bars from IBKR.
 
-IBKR's ``reqRealTimeBars`` emits 5-second TRADES bars. This module
-aggregates those into closed 1-minute bars for the live engine, enforcing
-the repo's timestamp policy at the ingestion boundary: every yielded model
-uses ``int64`` ms UTC.
+IBKR's ``reqRealTimeBars`` emits 5-second TRADES bars. This module owns the
+broker side of that feed — the shared-subscription registry, the liveness
+gate, the historical fetch, and the streams — and folds 5-second bars into
+closed 1-minute bars through
+:class:`~app.broker.ibkr.minute_assembler.MinuteAssembler`, enforcing the
+repo's timestamp policy at the ingestion boundary: every yielded model uses
+``int64`` ms UTC.
 
 All same-process consumers for the same ``(client, connection generation,
 contract, whatToShow, useRTH)`` tuple share one underlying
@@ -14,20 +17,11 @@ documented ceiling of 60 requests per 600 seconds. ``ib_async`` separately
 throttles ordinary socket messages at the 45-per-second rate pinned by
 ``IbkrClient``, below the default 50 requests/second connection limit.
 
-Two duplicate policies govern how a repeated source timestamp is treated
-(see ``DuplicatePolicy``):
-
-* ``"strict"`` (default) — any duplicate or non-monotonic source timestamp
-  fails fast. This is the finite-historical-ingestion contract from
-  ``.claude/rules/numerical-rigor.md`` and keeps the parity tests honest.
-* ``"live_idempotent"`` — used only by the live 5-second subscription.
-  IBKR's docs do not promise duplicate-free delivery for an active
-  ``reqRealTimeBars`` subscription, so a redelivery of the most recent
-  5-second bar is absorbed idempotently and surfaced (logged + counted)
-  rather than crashing the live run. A redelivery that carries *different*
-  OHLCV is treated as a correction to the still-open minute. Any timestamp
-  belonging to an already-emitted minute is strictly less than the current
-  minute's bars and therefore still fails fast as a regression.
+The aggregation primitives — ``MinuteAssembler``, ``aggregate_realtime_bar``,
+``LiveBarCounters``, ``IBKRBarStreamError``, and the ``DuplicatePolicy``
+contract they implement — live in ``app.broker.ibkr.minute_assembler`` (#1921)
+so an interruption that ends a stream call does not discard the open minute.
+They are re-exported here for existing importers.
 """
 
 from __future__ import annotations
@@ -38,38 +32,40 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Literal
-from zoneinfo import ZoneInfo
 
 from app.broker.ibkr.api_evidence import (
     evidence_request,
     evidence_response,
     get_ibkr_api_evidence_recorder,
 )
-from app.broker.ibkr.bar_models import BarProvenance, IbkrMinuteBar
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
-from app.marketdata.feed import BarSessionPhase
-from app.services.session_authority import session_state_at_ms
+from app.broker.ibkr.minute_assembler import (  # noqa: F401 — DuplicatePolicy/LiveBarCounters/_MinuteAccumulator/_minute_start_ms/_to_utc_ms/aggregate_realtime_bar are re-exported for existing importers
+    DuplicatePolicy,
+    IBKRBarStreamError,
+    LiveBarCounters,
+    MinuteAssembler,
+    _bar_time_ms,
+    _contribution,
+    _minute_start_ms,
+    _MinuteAccumulator,
+    _session_phase_for_ms,
+    _to_utc_ms,
+    aggregate_realtime_bar,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-DuplicatePolicy = Literal["strict", "live_idempotent"]
 NO_BAR_WARNING_INITIAL_INTERVAL_S = 30.0
 NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
 REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
-_NY_TZ = ZoneInfo("America/New_York")
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
 _REALTIME_BAR_REQUEST_WINDOW_S = 600.0
 _REALTIME_BAR_DEFAULT_MAX_ACTIVE = 100
-
-
-class IBKRBarStreamError(Exception):
-    """Raised when IBKR real-time bars violate timestamp invariants."""
 
 
 class IBKRBarSubscriptionStalled(IBKRBarStreamError):
@@ -411,19 +407,6 @@ _REALTIME_BAR_SUBSCRIPTIONS = _RealtimeBarSubscriptionRegistry()
 
 
 @dataclass
-class LiveBarCounters:
-    """Observable counters for idempotent live redelivery handling.
-
-    Owned by ``stream_minute_bars`` and threaded into
-    ``aggregate_realtime_bar`` so a live run can report how often IBKR
-    redelivered a 5-second bar without it being a fatal event.
-    """
-
-    skipped_duplicate: int = 0
-    applied_correction: int = 0
-
-
-@dataclass
 class _BarDeliveryLogger:
     """Shared subscription timing logs for IBKR real-time bar streams."""
 
@@ -505,38 +488,6 @@ class _BarDeliveryLogger:
         self.first_bar_logged = True
 
 
-def _to_utc_ms(value: datetime | int | float | str) -> int:
-    """Convert an IBKR bar timestamp to canonical int64 ms UTC."""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            raise IBKRBarStreamError("IBKR bar timestamp is naive; expected tz-aware UTC datetime.")
-        return int(value.astimezone(UTC).timestamp() * 1000)
-    if isinstance(value, str):
-        text = value.strip()
-        for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d"):
-            try:
-                parsed = datetime.strptime(text, fmt)
-            except ValueError:
-                continue
-            return int(parsed.replace(tzinfo=_NY_TZ).astimezone(UTC).timestamp() * 1000)
-        raise IBKRBarStreamError(f"IBKR bar timestamp string has unsupported format: {value!r}.")
-    numeric = float(value)
-    # ib_async/IB API bars commonly expose epoch seconds. Accept ms too for
-    # tests/future wrappers by checking magnitude.
-    if numeric > 10_000_000_000:
-        return int(numeric)
-    return int(numeric * 1000)
-
-
-def _minute_start_ms(ts_ms: int) -> int:
-    return ts_ms - (ts_ms % 60_000)
-
-
-def _session_phase_for_ms(ts_ms: int) -> BarSessionPhase:
-    """Classify one instant through the canonical session authority."""
-    return session_state_at_ms(now_ms=ts_ms).phase
-
-
 def _bars_expected_now(use_rth: bool) -> bool:
     """Return whether a real-time stock bar should be arriving now."""
     phase = _session_phase_for_ms(now_ms_utc())
@@ -597,241 +548,6 @@ def _contract_venue(contract: object) -> str | None:
     primary = getattr(contract, "primaryExchange", None)
     venue = str(primary or exchange or "").strip().upper()
     return venue or None
-
-
-@dataclass(frozen=True)
-class _Contribution:
-    """One 5-second bar's OHLCV contribution to a minute."""
-
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume: int
-
-
-@dataclass
-class _MinuteAccumulator:
-    """Accumulates 5-second contributions, keyed by source timestamp.
-
-    Contributions are stored per source ``ms`` rather than folded into a
-    running OHLCV so a same-timestamp correction can replace one
-    contribution and have ``high``/``low`` recomputed correctly. A minute
-    holds at most twelve 5-second bars, so the storage cost is trivial.
-    """
-
-    symbol: str
-    start_ms: int
-    venue: str | None = None
-    use_rth: bool | None = None
-    provenance: BarProvenance = "ibkr_realtime"
-    contributions: dict[int, _Contribution] = field(default_factory=dict)
-
-    @property
-    def open(self) -> Decimal:
-        return self.contributions[min(self.contributions)].open
-
-    @property
-    def high(self) -> Decimal:
-        return max(c.high for c in self.contributions.values())
-
-    @property
-    def low(self) -> Decimal:
-        return min(c.low for c in self.contributions.values())
-
-    @property
-    def close(self) -> Decimal:
-        return self.contributions[max(self.contributions)].close
-
-    @property
-    def volume(self) -> int:
-        return sum(c.volume for c in self.contributions.values())
-
-    def to_model(self) -> IbkrMinuteBar:
-        return IbkrMinuteBar(
-            symbol=self.symbol,
-            start_ms=self.start_ms,
-            end_ms=self.start_ms + 60_000,
-            open=self.open,
-            high=self.high,
-            low=self.low,
-            close=self.close,
-            volume=self.volume,
-            fetched_at_ms=now_ms_utc(),
-            provenance=self.provenance,
-            venue=self.venue,
-            session_phase=_session_phase_for_ms(self.start_ms),
-            use_rth=self.use_rth,
-        )
-
-
-def _decimal_attr(obj, *names: str) -> Decimal:
-    """Read the first present attribute from ``obj`` and coerce to ``Decimal``.
-
-    The bar protocol differs slightly between sources: ``ib_async``'s
-    ``RealTimeBar`` exposes the open as ``open_`` (trailing underscore to
-    avoid shadowing the ``open()`` builtin in dataclass code), while the
-    in-repo test fakes use plain ``open`` because the name is legal as
-    an attribute. Try each candidate in order; raise if none are present.
-    """
-    for name in names:
-        if hasattr(obj, name):
-            return Decimal(str(getattr(obj, name)))
-    raise IBKRBarStreamError(f"5-second bar missing all of: {names!r}")
-
-
-def _volume_attr(obj) -> int:
-    return int(getattr(obj, "volume", getattr(obj, "barCount", 0)) or 0)
-
-
-def _bar_time_ms(obj) -> int:
-    value = getattr(obj, "time", getattr(obj, "date", None))
-    if value is None:
-        raise IBKRBarStreamError("IBKR 5-second bar is missing a time/date field.")
-    return _to_utc_ms(value)
-
-
-def _contribution(bar) -> _Contribution:
-    # ib_async.RealTimeBar uses ``open_`` (trailing underscore to avoid
-    # shadowing the ``open()`` builtin); test fakes use plain ``open``.
-    # Accept either so this works against both wire types.
-    return _Contribution(
-        open=_decimal_attr(bar, "open", "open_"),
-        high=_decimal_attr(bar, "high"),
-        low=_decimal_attr(bar, "low"),
-        close=_decimal_attr(bar, "close"),
-        volume=_volume_attr(bar),
-    )
-
-
-def _handle_duplicate(
-    current: _MinuteAccumulator | None,
-    source_ms: int,
-    incoming: _Contribution,
-    *,
-    symbol: str,
-    policy: DuplicatePolicy,
-    counters: LiveBarCounters | None,
-) -> tuple[_MinuteAccumulator, IbkrMinuteBar | None, int]:
-    """Resolve a 5-second bar whose timestamp equals the last accepted one.
-
-    ``strict`` raises. ``live_idempotent`` absorbs an exact redelivery
-    (skip) or applies a correction in place. The duplicate always belongs
-    to the still-open minute: ``last_source_ms`` is, by construction, the
-    most recent contribution in ``current``.
-    """
-    if policy == "strict":
-        raise IBKRBarStreamError(f"Duplicate IBKR 5-second bar timestamp: {source_ms}.")
-    if policy != "live_idempotent":
-        raise IBKRBarStreamError(f"Unknown duplicate policy: {policy!r}.")
-
-    if current is None or source_ms not in current.contributions:
-        # Invariant violation: a duplicate of last_source_ms must live in
-        # the open minute. Surface rather than silently mis-handle.
-        raise IBKRBarStreamError(
-            f"Duplicate IBKR 5-second bar timestamp {source_ms} not found in open minute."
-        )
-
-    existing = current.contributions[source_ms]
-    if existing == incoming:
-        if counters is not None:
-            counters.skipped_duplicate += 1
-        # Logged at INFO, not WARNING — the live-idempotent ADR's
-        # "surface, never silence" intent is satisfied by the
-        # ``skipped_duplicate`` counter and the aggregate-stall
-        # SUBSCRIPTION_STALE WARNING. Per-bar visibility doesn't need
-        # to land in the Incidents panel. The "Applied correction"
-        # log below stays WARNING because it actually changes the
-        # bar's value.
-        logger.info(
-            "Idempotent skip of redelivered IBKR 5-second bar",
-            extra={"symbol": symbol, "source_ms": source_ms, "action": "skipped_duplicate"},
-        )
-        return current, None, source_ms
-
-    current.contributions[source_ms] = incoming
-    if counters is not None:
-        counters.applied_correction += 1
-    logger.warning(
-        "Applied correction to redelivered IBKR 5-second bar in open minute",
-        extra={"symbol": symbol, "source_ms": source_ms, "action": "applied_correction"},
-    )
-    return current, None, source_ms
-
-
-def aggregate_realtime_bar(
-    current: _MinuteAccumulator | None,
-    bar,
-    *,
-    symbol: str,
-    last_source_ms: int | None,
-    policy: DuplicatePolicy = "strict",
-    counters: LiveBarCounters | None = None,
-    venue: str | None = None,
-    use_rth: bool | None = None,
-    provenance: BarProvenance = "ibkr_realtime",
-) -> tuple[_MinuteAccumulator, IbkrMinuteBar | None, int]:
-    """Fold one IBKR 5-second bar into a minute accumulator.
-
-    Returns ``(accumulator, emitted_minute_or_None, source_ms)``. The
-    returned ``source_ms`` becomes the caller's ``last_source_ms`` — for an
-    absorbed duplicate it is unchanged so monotonicity stays anchored to the
-    last *distinct* timestamp.
-    """
-    source_ms = _bar_time_ms(bar)
-    incoming = _contribution(bar)
-
-    if last_source_ms is not None:
-        if source_ms == last_source_ms:
-            return _handle_duplicate(
-                current,
-                source_ms,
-                incoming,
-                symbol=symbol,
-                policy=policy,
-                counters=counters,
-            )
-        if source_ms < last_source_ms:
-            raise IBKRBarStreamError(
-                f"Non-monotonic IBKR 5-second bar timestamp: {source_ms} after {last_source_ms}."
-            )
-
-    start_ms = _minute_start_ms(source_ms)
-
-    if current is None:
-        return (
-            _MinuteAccumulator(
-                symbol=symbol,
-                start_ms=start_ms,
-                venue=venue,
-                use_rth=use_rth,
-                provenance=provenance,
-                contributions={source_ms: incoming},
-            ),
-            None,
-            source_ms,
-        )
-
-    if start_ms == current.start_ms:
-        current.contributions[source_ms] = incoming
-        return current, None, source_ms
-
-    if start_ms < current.start_ms:
-        raise IBKRBarStreamError(f"IBKR bar minute regressed from {current.start_ms} to {start_ms}.")
-
-    emitted = current.to_model()
-    return (
-        _MinuteAccumulator(
-            symbol=symbol,
-            start_ms=start_ms,
-            venue=venue,
-            use_rth=use_rth,
-            provenance=provenance,
-            contributions={source_ms: incoming},
-        ),
-        emitted,
-        source_ms,
-    )
 
 
 async def fetch_historical_minute_bars(
@@ -1054,6 +770,7 @@ async def stream_minute_bars(
     use_rth: bool = True,
     on_source_bar: Callable[[int], None] | None = None,
     stall_timeout_s: float = REALTIME_BAR_STALL_TIMEOUT_S,
+    assembler: MinuteAssembler | None = None,
 ) -> AsyncIterator[IbkrMinuteBar]:
     """Yield closed 1-minute bars built from IBKR 5-second TRADES bars.
 
@@ -1062,6 +779,14 @@ async def stream_minute_bars(
     crash a live trading run. Exact redeliveries are skipped and
     different-valued redeliveries correct the still-open minute; both are
     counted on ``LiveBarCounters`` and logged.
+
+    Pass an ``assembler`` to keep the open minute across an interruption: it
+    outlives this call, so a caller that resubscribes after
+    ``IBKRBarInterrupted`` hands the same assembler to the next call and the
+    contributions from both sockets fold into one minute. Each contribution
+    is tagged with ``lease.generation``, so such a minute emits with
+    ``spans_interruption=True`` by construction. Omitting it gives this call
+    its own assembler and the pre-#1921 behaviour.
     """
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
@@ -1106,9 +831,7 @@ async def stream_minute_bars(
         ),
     )
     index = lease.start_index
-    current: _MinuteAccumulator | None = None
-    last_source_ms: int | None = None
-    counters = LiveBarCounters()
+    assembler = assembler or MinuteAssembler()
     last_progress_at = time.monotonic()
     try:
         while True:
@@ -1148,22 +871,18 @@ async def stream_minute_bars(
                 request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
                 response=evidence_response("realTimeBar", objects=[raw_bar]),
             )
-            previous_source_ms = last_source_ms
-            current, emitted, last_source_ms = aggregate_realtime_bar(
-                current,
+            previous_source_ms = assembler.last_source_ms
+            emitted = assembler.feed(
                 raw_bar,
                 symbol=sym,
-                last_source_ms=last_source_ms,
-                policy="live_idempotent",
-                counters=counters,
+                generation=lease.generation,
                 venue=venue,
                 use_rth=use_rth,
-                provenance="ibkr_realtime",
             )
-            if last_source_ms != previous_source_ms:
+            if assembler.last_source_ms != previous_source_ms:
                 last_progress_at = time.monotonic()
                 if on_source_bar is not None:
-                    on_source_bar(last_source_ms)
+                    on_source_bar(assembler.last_source_ms)
             if emitted is not None:
                 yield emitted
     finally:
@@ -1173,6 +892,6 @@ async def stream_minute_bars(
             "skipped_duplicate=%d, applied_correction=%d)",
             symbol,
             cancelled,
-            counters.skipped_duplicate,
-            counters.applied_correction,
+            assembler.counters.skipped_duplicate,
+            assembler.counters.applied_correction,
         )

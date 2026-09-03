@@ -128,6 +128,14 @@ class _AdversarialFeedFixture:
             "app.broker.ibkr.bars.now_ms_utc",
             self.clock.now_ms,
         )
+        # The minute assembler stamps ``fetched_at_ms`` from its own module
+        # namespace (#1921 split it out of ``bars``), so the fake wall clock
+        # has to be installed there too or assembled minutes would claim a
+        # real-world assembly time inside a 2026-05-04 fixture.
+        monkeypatch.setattr(
+            "app.broker.ibkr.minute_assembler.now_ms_utc",
+            self.clock.now_ms,
+        )
         monkeypatch.setattr(
             "app.broker.ibkr.bars.time.monotonic",
             self.clock.monotonic,

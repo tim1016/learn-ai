@@ -743,7 +743,7 @@ def test_live_idempotent_skip_logs_at_info_not_warning(
     )
 
     caplog.clear()
-    with caplog.at_level("INFO", logger="app.broker.ibkr.bars"):
+    with caplog.at_level("INFO", logger="app.broker.ibkr.minute_assembler"):
         aggregate_realtime_bar(
             current,
             _bar(0, "100", "101", "99", "100.5", 10),
@@ -779,7 +779,7 @@ def test_live_applied_correction_still_logs_at_warning(
     )
 
     caplog.clear()
-    with caplog.at_level("INFO", logger="app.broker.ibkr.bars"):
+    with caplog.at_level("INFO", logger="app.broker.ibkr.minute_assembler"):
         aggregate_realtime_bar(
             current,
             _bar(0, "100", "101", "99", "100.5", 10),

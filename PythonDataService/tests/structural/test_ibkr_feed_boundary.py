@@ -56,6 +56,7 @@ RETAINED_FEED_MODULES = [
     "app.broker.ibkr.auto_reconnect_monitor",
     "app.broker.ibkr.contracts",
     "app.broker.ibkr.market_data",
+    "app.broker.ibkr.minute_assembler",
     "app.broker.ibkr.surface",
     "app.services.market_data_capability_service",
 ]

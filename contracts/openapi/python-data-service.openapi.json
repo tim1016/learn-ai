@@ -15722,6 +15722,19 @@
             "title": "Close",
             "type": "string"
           },
+          "contribution_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "5-second bars folded into this minute; None when unknown (historical).",
+            "title": "Contribution Count"
+          },
           "end_ms": {
             "description": "UTC milliseconds since epoch, exclusive.",
             "title": "End Ms",
@@ -15776,6 +15789,12 @@
             ],
             "title": "Source",
             "type": "string"
+          },
+          "spans_interruption": {
+            "default": false,
+            "description": "Contributions arrived over more than one connection generation.",
+            "title": "Spans Interruption",
+            "type": "boolean"
           },
           "start_ms": {
             "description": "UTC milliseconds since epoch, inclusive.",
