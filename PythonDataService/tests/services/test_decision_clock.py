@@ -13,12 +13,13 @@ from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.decision_clock import (
     decision_timeframe_ms_for_binding,
+    floor_to_period_ms_et,
     next_trigger_ms,
     rth_next_trigger_function,
     rth_trigger_instants,
 )
 from app.services.signal_program_admission import build_start_program_seal
-from app.utils.timestamps import floor_to_period_ms_et, to_ms_utc
+from app.utils.timestamps import to_ms_utc
 
 _ET = ZoneInfo("America/New_York")
 _TF = 15 * 60_000
@@ -31,10 +32,44 @@ def _et(d: date, hour: int, minute: int) -> int:
     return to_ms_utc(datetime(d.year, d.month, d.day, hour, minute, tzinfo=_ET))
 
 
-def test_shared_floor_matches_the_consolidators_floor_across_dst() -> None:
+def test_floor_to_period_ms_et_matches_the_consolidators_floor() -> None:
+    """Parity against the canonical sealed implementation (ruling P5 provenance).
+
+    ``decision_clock.floor_to_period_ms_et`` duplicates
+    ``trade_bar_consolidator._floor_to_period_ms`` because the latter is a sealed
+    artifact that cannot be edited without re-qualifying every program. This is
+    the test that keeps the two honest, so the grid has to discriminate:
+
+      * the **day-length period** is the regime where an ET-anchored floor and a
+        naive raw-UTC floor genuinely disagree (ET midnight is 04:00/05:00 UTC);
+      * the **21:00 ET** timestamps are already the *next* calendar date in UTC,
+        so a UTC-anchored day floor lands a whole day late;
+      * the two **DST transition dates** cover both the spring-forward and
+        fall-back offsets.
+
+    Hours 02:00-03:00 on the spring-forward date are deliberately excluded: that
+    wall clock does not exist, and the point here is drift, not gap semantics.
+    """
     for d in (date(2026, 3, 8), date(2026, 11, 1), _REGULAR):
-        ts = _et(d, 13, 7)
-        assert floor_to_period_ms_et(ts, _TF) == _floor_to_period_ms(ts, timedelta(minutes=15)) == _et(d, 13, 0)
+        for hour, minute in ((0, 30), (13, 7), (21, 0)):
+            ts = _et(d, hour, minute)
+            for period in (timedelta(minutes=1), timedelta(minutes=15), timedelta(days=1)):
+                period_ms = int(period.total_seconds() * 1000)
+                assert floor_to_period_ms_et(ts, period_ms) == _floor_to_period_ms(ts, period), (
+                    f"drift at {d} {hour:02d}:{minute:02d} ET, period {period}"
+                )
+
+
+def test_floor_to_period_ms_et_anchors_the_et_trading_date_not_utc_midnight() -> None:
+    """Absolute anchors, so parity alone cannot go green on two identically-wrong floors."""
+    assert floor_to_period_ms_et(_et(_REGULAR, 13, 7), _TF) == _et(_REGULAR, 13, 0)
+    # 21:00 ET is already 2026-09-03 in UTC; the day floor must stay on the ET date.
+    assert floor_to_period_ms_et(_et(_REGULAR, 21, 0), 86_400_000) == _et(_REGULAR, 0, 0)
+
+
+def test_floor_to_period_ms_et_rejects_a_non_positive_period() -> None:
+    with pytest.raises(ValueError, match="period_ms must be positive"):
+        floor_to_period_ms_et(_et(_REGULAR, 13, 7), 0)
 
 
 def test_rth_trigger_instants_regular_session() -> None:
@@ -48,6 +83,21 @@ def test_rth_trigger_instants_early_close() -> None:
     triggers = rth_trigger_instants(_EARLY, timeframe_ms=_TF)
     assert triggers[-1] == session_close_ms_utc(_EARLY) == _et(_EARLY, 13, 0)
     assert len(triggers) == 14
+
+
+def test_rth_trigger_instants_repeats_the_close_at_a_one_minute_timeframe() -> None:
+    """The documented duplicate: the last two one-minute buckets both fire at the close."""
+    triggers = rth_trigger_instants(_REGULAR, timeframe_ms=60_000)
+    close_ms = session_close_ms_utc(_REGULAR)
+    assert triggers[-2:] == [close_ms, close_ms]
+
+
+def test_rth_trigger_instants_rejects_a_timeframe_off_the_source_bar_grid() -> None:
+    for bad in (0, -60_000, 90_000):
+        with pytest.raises(ValueError, match="multiple of the 60000 ms source bar"):
+            rth_trigger_instants(_REGULAR, timeframe_ms=bad)
+    with pytest.raises(ValueError, match="multiple of the 60000 ms source bar"):
+        next_trigger_ms(_et(_REGULAR, 15, 0), timeframe_ms=90_000, decision_session="rth")
 
 
 def test_next_trigger_after_last_delivered_minute() -> None:

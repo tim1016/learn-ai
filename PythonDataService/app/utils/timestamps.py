@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, datetime, tzinfo
 from numbers import Real
 from zoneinfo import ZoneInfo
 
 type Clock = Callable[[], int]
 
 _NY = ZoneInfo("America/New_York")
-_EPOCH_NAIVE = datetime(1970, 1, 1)
 
 
 def now_ms_utc() -> int:
@@ -70,30 +69,6 @@ def ny_datetime(timestamp_ms: int) -> datetime:
     session/calendar logic or an operator-facing log line — never store the
     result; the canonical value stays ``int64 ms UTC``."""
     return datetime_at_ms(timestamp_ms, tz=_NY)
-
-
-def floor_to_period_ms_et(timestamp_ms: int, period_ms: int) -> int:
-    """Floor ``timestamp_ms`` to ``period_ms`` on the America/New_York wall clock.
-
-    The single decision-bucket floor for the repo — the consolidator
-    (``app/engine/consolidators/trade_bar_consolidator.py``) and the decision
-    clock (``app/services/decision_clock.py``) both delegate here so a bucket
-    boundary has exactly one definition.
-
-    Reading the ET wall clock, flooring it as if it were itself an epoch
-    offset, and converting the floored reading back to ``int64 ms UTC`` is
-    what LEAN's floor of a naive, already-exchange-local ``DateTime`` amounts
-    to. For any period under one day it is numerically identical to flooring
-    the raw UTC ms (the ET-UTC offset is always a whole number of hours). For
-    a period of one day or longer it is not: flooring raw UTC ms lands on UTC
-    midnight, mislabeling a session's bars with the previous ET trading date.
-    """
-    if period_ms <= 0:
-        raise ValueError("period_ms must be positive")
-    naive_et = ny_datetime(timestamp_ms).replace(tzinfo=None)
-    naive_et_ms = int((naive_et - _EPOCH_NAIVE).total_seconds() * 1000)
-    floored = _EPOCH_NAIVE + timedelta(milliseconds=(naive_et_ms // period_ms) * period_ms)
-    return to_ms_utc(floored.replace(tzinfo=_NY))
 
 
 def display_time(timestamp_ms: int) -> str:

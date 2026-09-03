@@ -26,21 +26,39 @@ Key behaviors reproduced from LEAN:
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
-from app.utils.timestamps import floor_to_period_ms_et
+from app.utils.timestamps import ny_datetime, to_ms_utc
+
+_EASTERN = ZoneInfo("America/New_York")
+_EPOCH_NAIVE = datetime(1970, 1, 1)
 
 
 def _floor_to_period_ms(timestamp_ms: int, period: timedelta) -> int:
-    """Floor-round a Unix-millisecond timestamp to a ``timedelta`` period on the
-    America/New_York wall clock — the ``timedelta``-shaped adapter over the
-    repo's single bucket floor, ``app.utils.timestamps.floor_to_period_ms_et``.
+    """Floor-round a Unix-millisecond timestamp to a whole-millisecond period,
+    aligned to the America/New_York wall clock rather than raw UTC ms.
+
+    Read the ET wall-clock reading for ``timestamp_ms``, floor it as if it
+    were itself an epoch offset, then convert the floored wall-clock
+    reading back to ``int64 ms UTC`` — this is what LEAN's floor of a
+    naive, already-exchange-local ``DateTime`` amounts to. For any period
+    under one day this is numerically identical to flooring the absolute
+    UTC ms directly (the ET-UTC offset is always a whole number of hours,
+    hence always a whole multiple of any period that evenly divides an
+    hour). For a period of one day or longer it is not: flooring raw UTC ms
+    lands on UTC midnight, mislabeling a session's bars with the previous
+    ET trading date.
     """
     period_ms = int(period.total_seconds() * 1000)
     if period_ms <= 0:
         raise ValueError("period must contain at least one millisecond")
-    return floor_to_period_ms_et(timestamp_ms, period_ms)
+    naive_et = ny_datetime(timestamp_ms).replace(tzinfo=None)
+    naive_et_ms = int((naive_et - _EPOCH_NAIVE).total_seconds() * 1000)
+    floored_naive_et_ms = (naive_et_ms // period_ms) * period_ms
+    floored_naive_et = _EPOCH_NAIVE + timedelta(milliseconds=floored_naive_et_ms)
+    return to_ms_utc(floored_naive_et.replace(tzinfo=_EASTERN))
 
 
 class TradeBarConsolidator:

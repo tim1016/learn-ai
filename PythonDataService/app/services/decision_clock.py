@@ -11,8 +11,9 @@ RTH; extended windows are broker-proven capabilities (session_authority), so
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from app.lean_sidecar.trading_calendar import (
     is_trading_day,
@@ -21,7 +22,7 @@ from app.lean_sidecar.trading_calendar import (
     session_open_ms_utc,
 )
 from app.marketdata.feed import DecisionSession
-from app.utils.timestamps import floor_to_period_ms_et, ny_datetime
+from app.utils.timestamps import ny_datetime, to_ms_utc
 
 if TYPE_CHECKING:
     # Type-only, matching ``run_replay_proof.py``'s existing guard on this same
@@ -31,6 +32,46 @@ if TYPE_CHECKING:
     from app.services.bot_binding_repository import BrokerBotBinding
 
 SOURCE_BAR_MS = 60_000
+
+_ET = ZoneInfo("America/New_York")
+_EPOCH_NAIVE = datetime(1970, 1, 1)
+
+
+def floor_to_period_ms_et(timestamp_ms: int, period_ms: int) -> int:
+    """Floor ``timestamp_ms`` to ``period_ms`` on the America/New_York wall clock.
+
+    Read the ET wall-clock reading for ``timestamp_ms``, floor it as if it were
+    itself an epoch offset, then convert back to ``int64 ms UTC`` -- what LEAN's
+    floor of a naive, already-exchange-local ``DateTime`` amounts to. For a
+    period under one day this equals flooring raw UTC ms (the ET-UTC offset is
+    always a whole number of hours); for a day or longer it does not, and
+    flooring raw UTC ms would land on UTC midnight, mislabeling a session's
+    bars with the previous ET trading date.
+
+    Formula: ``floor(et_wall_clock_ms / period_ms) * period_ms``, re-anchored in ET.
+    Canonical implementation:
+        ``app/engine/consolidators/trade_bar_consolidator.py::_floor_to_period_ms``
+    Validated against:
+        ``tests/services/test_decision_clock.py::test_floor_to_period_ms_et_matches_the_consolidators_floor``
+
+    **Why this duplicate exists** (CLAUDE.md guiding philosophy #5 permits a
+    duplicate only for a real reason, with a parity test naming the canonical
+    file). The canonical copy lives in a *sealed artifact*: both
+    ``trade_bar_consolidator.py`` and ``app/utils/timestamps.py`` are listed in
+    every program's ``artifact_paths`` in ``app/engine/strategy/registry.py``,
+    so editing either changes the running artifact digest and
+    ``prove_running_program_build`` then finds no compatible golden-qualification
+    receipt -- Start admission refuses every deploy until all programs are
+    re-qualified. Hosting the decision clock's floor here keeps the sealed
+    digests untouched; the parity test above is what keeps the two honest
+    (controller ruling P5).
+    """
+    if period_ms <= 0:
+        raise ValueError("period_ms must be positive")
+    naive_et = ny_datetime(timestamp_ms).replace(tzinfo=None)
+    naive_et_ms = int((naive_et - _EPOCH_NAIVE).total_seconds() * 1000)
+    floored = _EPOCH_NAIVE + timedelta(milliseconds=(naive_et_ms // period_ms) * period_ms)
+    return to_ms_utc(floored.replace(tzinfo=_ET))
 
 
 def decision_timeframe_ms_for_binding(binding: BrokerBotBinding) -> int | None:
@@ -52,7 +93,18 @@ def rth_trigger_instants(session_date: date, *, timeframe_ms: int) -> list[int]:
     One entry per decision bucket, in ascending order: the close of the first
     source minute of the following bucket, except the session's last bucket,
     which is force-flushed at the session close.
+
+    At a one-minute timeframe the session-close instant appears **twice**: the
+    second-to-last bucket's follow-on minute closes exactly at the session
+    close, and the last bucket is force-flushed there too. Callers that treat
+    this as a schedule must tolerate the repeat (``next_trigger_ms`` does --
+    it returns the first entry strictly greater than its argument).
     """
+    if timeframe_ms <= 0 or timeframe_ms % SOURCE_BAR_MS != 0:
+        raise ValueError(
+            f"timeframe_ms must be a positive multiple of the {SOURCE_BAR_MS} ms "
+            f"source bar; got {timeframe_ms}"
+        )
     open_ms = session_open_ms_utc(session_date)
     close_ms = session_close_ms_utc(session_date)
     triggers: list[int] = []
