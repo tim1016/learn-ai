@@ -15,6 +15,7 @@ from app.broker.ibkr.bars import (
     IBKRBarStreamError,
     IBKRBarSubscriptionStalled,
     LiveBarCounters,
+    MinuteAssembler,
     aggregate_realtime_bar,
     fetch_historical_minute_bars,
     stream_minute_bars,
@@ -1071,3 +1072,45 @@ async def test_waiter_woken_after_a_reconnect_does_not_spend_pacing_budget() -> 
     waiter_lease.release()
     leader_lease.release()
     assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_assembler_stitches_one_minute_across_two_stream_calls() -> None:
+    """The consumer-owned assembler is what makes a reconnect survivable.
+
+    The first call takes three 5-second bars on generation 1 and is
+    interrupted; the second call, on generation 2, delivers the rest of the
+    same minute. The minute must emit once, complete by count, and admit that
+    its contributions arrived over two connections.
+    """
+    assembler = MinuteAssembler()
+    client = _GenClient()
+    client.ib.bars = [_bar(second, "100", "100", "100", "100", 1) for second in (0, 5, 10)]
+
+    first = stream_minute_bars(client, "SPY", use_rth=True, assembler=assembler, stall_timeout_s=60.0)
+    pending = asyncio.ensure_future(first.__anext__())
+    await asyncio.sleep(0.15)  # drain the three bars, then idle
+    assert assembler.open_minute_start_ms == int(client.ib.bars[0].time.timestamp() * 1000)
+    client.connection_generation = 2
+    with pytest.raises(IBKRBarInterrupted):
+        await asyncio.wait_for(pending, timeout=2.0)
+    await first.aclose()
+
+    client.ib.bars = [_bar(second, "100", "100", "100", "100", 1) for second in range(15, 60, 5)]
+    client.ib.bars.append(
+        SimpleNamespace(
+            time=datetime(2026, 5, 4, 14, 31, 0, tzinfo=UTC),
+            open=Decimal("101"),
+            high=Decimal("101"),
+            low=Decimal("101"),
+            close=Decimal("101"),
+            volume=1,
+        )
+    )
+    second_stream = stream_minute_bars(client, "SPY", use_rth=True, assembler=assembler, stall_timeout_s=60.0)
+    emitted = await asyncio.wait_for(second_stream.__anext__(), timeout=2.0)
+    await second_stream.aclose()
+
+    assert emitted.start_ms == int(datetime(2026, 5, 4, 14, 30, 0, tzinfo=UTC).timestamp() * 1000)
+    assert emitted.contribution_count == 12
+    assert emitted.spans_interruption is True

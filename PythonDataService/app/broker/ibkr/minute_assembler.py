@@ -369,19 +369,58 @@ class MinuteAssembler:
     contributions are keyed by source timestamp, so bars from the old and the
     new socket merge deterministically and a redelivery is absorbed by the
     ``live_idempotent`` policy.
+
+    ``_flushed`` remembers the minute :meth:`flush_if_complete` emitted early,
+    until a later minute arrives. Without it, the resubscribed socket's first
+    5-second bars — which may still belong to that minute — would either crash
+    the run ("not found in open minute", because ``current`` is now ``None``)
+    or rebuild an accumulator for a minute the consumer has already decided on.
     """
 
     current: _MinuteAccumulator | None = None
     last_source_ms: int | None = None
     counters: LiveBarCounters = field(default_factory=LiveBarCounters)
+    _flushed: _MinuteAccumulator | None = field(default=None, init=False, repr=False)
 
     @property
     def open_minute_start_ms(self) -> int | None:
         return None if self.current is None else self.current.start_ms
 
+    def _absorb_after_flush(self, raw_bar: object, *, symbol: str) -> bool:
+        """Resolve a 5-second bar arriving after its minute was flushed early.
+
+        Returns ``True`` when the bar was absorbed and must not reach the
+        accumulator: an exact redelivery of a contribution the flushed minute
+        already held carries no new data. Any other bar inside that minute is
+        refused — an emitted minute can be neither corrected nor rebuilt. A bar
+        belonging to a later minute clears the memory and proceeds normally;
+        one belonging to an earlier minute proceeds too, and the ordinary
+        non-monotonic guard fails it.
+        """
+        flushed = self._flushed
+        if flushed is None:
+            return False
+        source_ms = _bar_time_ms(raw_bar)
+        if _minute_start_ms(source_ms) != flushed.start_ms:
+            self._flushed = None
+            return False
+        if flushed.contributions.get(source_ms) == _contribution(raw_bar):
+            self.counters.skipped_duplicate += 1
+            logger.info(
+                "Idempotent skip of a 5-second bar redelivered after its minute was flushed",
+                extra={"symbol": symbol, "source_ms": source_ms, "action": "skipped_duplicate"},
+            )
+            return True
+        raise IBKRBarStreamError(
+            f"IBKR 5-second bar {source_ms} belongs to minute {flushed.start_ms}, "
+            "which was already emitted; refusing to rebuild an emitted minute."
+        )
+
     def feed(
         self, raw_bar: object, *, symbol: str, generation: int, venue: str | None, use_rth: bool
     ) -> IbkrMinuteBar | None:
+        if self._absorb_after_flush(raw_bar, symbol=symbol):
+            return None
         self.current, emitted, self.last_source_ms = aggregate_realtime_bar(
             self.current,
             raw_bar,
@@ -401,5 +440,6 @@ class MinuteAssembler:
         if self.current is None or len(self.current.contributions) < RTH_CONTRIBUTIONS_PER_MINUTE:
             return None
         emitted = self.current.to_model()
+        self._flushed = self.current
         self.current = None
         return emitted

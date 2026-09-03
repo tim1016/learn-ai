@@ -6,7 +6,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.broker.ibkr.minute_assembler import RTH_CONTRIBUTIONS_PER_MINUTE, MinuteAssembler
+import pytest
+
+from app.broker.ibkr.minute_assembler import (
+    RTH_CONTRIBUTIONS_PER_MINUTE,
+    IBKRBarStreamError,
+    MinuteAssembler,
+)
 
 _MINUTE = datetime(2026, 9, 2, 19, 0, 0, tzinfo=UTC)  # 15:00 ET, RTH
 
@@ -85,6 +91,53 @@ def test_flush_if_complete_emits_only_a_full_open_minute() -> None:
     assert flushed is not None and flushed.contribution_count == 12
     assert assembler.open_minute_start_ms is None
     assert assembler.flush_if_complete() is None
+
+
+def _fill_and_flush(assembler: MinuteAssembler) -> None:
+    """Feed a full RTH minute and flush it, leaving the assembler with no open minute."""
+    for second in range(0, 60, 5):
+        assembler.feed(_raw(second), symbol="SPY", generation=1, venue=None, use_rth=True)
+    flushed = assembler.flush_if_complete()
+    assert flushed is not None and flushed.contribution_count == RTH_CONTRIBUTIONS_PER_MINUTE
+
+
+def test_exact_redelivery_after_a_flush_is_skipped_idempotently() -> None:
+    # After ``flush_if_complete`` the resubscribed socket may redeliver the
+    # 5-second bars of the minute that was just emitted. An exact redelivery
+    # carries no new data, so it is absorbed rather than fatal.
+    assembler = MinuteAssembler()
+    _fill_and_flush(assembler)
+
+    assert assembler.feed(_raw(55), symbol="SPY", generation=2, venue=None, use_rth=True) is None
+    assert assembler.feed(_raw(20), symbol="SPY", generation=2, venue=None, use_rth=True) is None
+
+    assert assembler.counters.skipped_duplicate == 2
+    assert assembler.open_minute_start_ms is None
+
+
+def test_contribution_of_a_flushed_minute_is_refused_rather_than_rebuilt() -> None:
+    # A corrected value for an already-emitted minute cannot be applied, and a
+    # new timestamp inside it must not silently rebuild an accumulator for a
+    # minute the consumer has already decided on.
+    assembler = MinuteAssembler()
+    _fill_and_flush(assembler)
+
+    with pytest.raises(IBKRBarStreamError, match="already emitted"):
+        assembler.feed(_raw(55, close="101"), symbol="SPY", generation=2, venue=None, use_rth=True)
+    assert assembler.open_minute_start_ms is None
+
+    with pytest.raises(IBKRBarStreamError, match="already emitted"):  # a timestamp it never held
+        assembler.feed(_raw(57), symbol="SPY", generation=2, venue=None, use_rth=True)
+    assert assembler.open_minute_start_ms is None
+
+
+def test_a_later_minute_after_a_flush_opens_a_fresh_accumulator() -> None:
+    assembler = MinuteAssembler()
+    _fill_and_flush(assembler)
+
+    assert assembler.feed(_next_minute_raw(), symbol="SPY", generation=2, venue=None, use_rth=True) is None
+    assert assembler.open_minute_start_ms is not None
+    assert assembler.counters.skipped_duplicate == 0
 
 
 def test_exact_redelivery_under_a_new_generation_leaves_the_minute_unflagged() -> None:
