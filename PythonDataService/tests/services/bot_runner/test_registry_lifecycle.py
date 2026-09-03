@@ -678,20 +678,33 @@ async def test_feed_death_records_feed_death_crash(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_count_complete_interruption_keeps_the_run_running(tmp_path: Path) -> None:
+async def test_count_complete_interruption_keeps_the_run_running(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """#1921: a reconnect the feed recovered from is not a duty outcome.
 
     The companion of ``test_feed_death_records_feed_death_crash`` above: a
     connection loss the feed survived -- every minute still accounted for --
     must leave the bot on duty, where before #1921 any interruption reached
     the runner as ``FEED_DEATH``.
+
+    The wait is on the runner's own decision for the recovered bar, not on
+    ``feed.bars_consumed``: the double increments that before it yields, so
+    waiting on it can pass while the runner is still upstream of the bar and
+    has had no chance to die on it.
     """
     feed = _FakeFeed([_bar(_T0), _bar(_T0 + 60_000)], mode="interrupt")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
-    await _wait_for(lambda: feed.bars_consumed == 2)
+    with caplog.at_level("INFO", logger="app.services.bot_runtime"):
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
+        await _wait_for(
+            lambda: len([r for r in caplog.records if getattr(r, "action", None) == "bot_decision"]) == 2
+        )
+
+    decided = [r for r in caplog.records if getattr(r, "action", None) == "bot_decision"]
+    assert [r.bar_start_ms for r in decided] == [_T0, _T0 + 60_000]
     view = registry.status("alpaca", _SID)
     assert view.running is True
     assert view.duty_outcome is None
