@@ -678,6 +678,26 @@ async def test_feed_death_records_feed_death_crash(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_count_complete_interruption_keeps_the_run_running(tmp_path: Path) -> None:
+    """#1921: a reconnect the feed recovered from is not a duty outcome.
+
+    The companion of ``test_feed_death_records_feed_death_crash`` above: a
+    connection loss the feed survived -- every minute still accounted for --
+    must leave the bot on duty, where before #1921 any interruption reached
+    the runner as ``FEED_DEATH``.
+    """
+    feed = _FakeFeed([_bar(_T0), _bar(_T0 + 60_000)], mode="interrupt")
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    await _wait_for(lambda: feed.bars_consumed == 2)
+
+    view = registry.status("alpaca", _SID)
+    assert view.running is True
+    assert view.duty_outcome is None
+
+
+@pytest.mark.asyncio
 async def test_kill_without_stop_intent_is_exited_unverified(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)

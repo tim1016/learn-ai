@@ -71,6 +71,23 @@ def _phase_bar(index: int, phase: str) -> MarketDataBar:
     )
 
 
+def _bar(start_ms: int) -> MarketDataBar:
+    """An RTH bar whose ``feed_id`` is ``_FakeFeed``'s own.
+
+    The ledger keys a retained row by the *bar's* provider, so a bar streamed
+    by the fake must say ``fake`` for ``ledger.bars(provider="fake", ...)`` to
+    find it again.
+    """
+    return _phase_bar(0, "RTH").model_copy(
+        update={
+            "start_ms": start_ms,
+            "end_ms": start_ms + 60_000,
+            "fetched_at_ms": start_ms + 60_500,
+            "feed_id": "fake",
+        }
+    )
+
+
 @pytest.mark.asyncio
 async def test_retained_feed_consumes_modes_of_filtered_bars(tmp_path: Path) -> None:
     """Filtered (non-RTH) bars must not leak captured evaluation modes.
@@ -86,7 +103,7 @@ async def test_retained_feed_consumes_modes_of_filtered_bars(tmp_path: Path) -> 
     pause_feed = PauseAwareFeed(_MixedPhaseFeed(bars), gate)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:leak")
     try:
-        retained = _RetainedSourceBarFeed(pause_feed, ledger)
+        retained = _RetainedSourceBarFeed(pause_feed, ledger, run_id="run-1")
 
         yielded = [bar async for bar in retained.stream_bars("SPY", use_rth=True)]
 
@@ -120,6 +137,28 @@ def _continuity_policy() -> ContinuityPolicy:
     )
 
 
+def _recording_policy(*, trigger_ms: int) -> tuple[ContinuityPolicy, list[FeedContinuityEvent]]:
+    """A policy with one fixed decision instant and a sink that just collects.
+
+    The admission tests below turn on exactly two things -- whether a bar's
+    close is the trigger, and what the feed recorded -- so the clock is a
+    constant and the sink keeps the events in memory rather than in SQLite.
+    """
+    events: list[FeedContinuityEvent] = []
+
+    async def _sink(event: FeedContinuityEvent) -> ContinuityEventRef:
+        events.append(event)
+        return ContinuityEventRef(run_id="run-x", evidence_seq=len(events))
+
+    policy = ContinuityPolicy(
+        decision_session="rth",
+        next_trigger_ms=lambda last_end_ms: trigger_ms,
+        substitution_grant=lambda start_ms, end_ms: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+        record_event=_sink,
+    )
+    return policy, events
+
+
 @pytest.mark.asyncio
 async def test_pause_aware_feed_forwards_the_continuity_policy_to_its_source() -> None:
     """#1921: the pause wrapper is transparent to continuity.
@@ -142,20 +181,27 @@ async def test_pause_aware_feed_forwards_the_continuity_policy_to_its_source() -
 
 
 @pytest.mark.asyncio
-async def test_retained_feed_forwards_the_continuity_policy_to_its_source(tmp_path: Path) -> None:
-    """#1921: retaining source bars must not swallow the continuity policy.
+async def test_retained_feed_hands_its_own_continuity_policy_to_its_source(tmp_path: Path) -> None:
+    """#1921 (ruling P1): the run's policy is authored once, at construction.
 
     This wrapper already rewrites ``use_rth`` on the way through (capture
-    first, filter locally), so it is the one most likely to drop a kwarg it
-    does not itself read.
+    first, filter locally), and continuity is the same shape of decision: the
+    run owns its decision clock and its evidence sink, so the policy the
+    constructor was given -- never one a caller passes per stream -- is what
+    reaches the source. The Protocol's ``continuity`` kwarg stays on
+    ``stream_bars`` for conformance and is deliberately ignored, which is what
+    passing a second, different policy below pins.
     """
     source = _FakeFeed([_phase_bar(0, "RTH")], mode="finite")
     policy = _continuity_policy()
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:continuity")
     try:
-        retained = _RetainedSourceBarFeed(source, ledger)
+        retained = _RetainedSourceBarFeed(source, ledger, run_id="run-1", continuity=policy)
 
-        yielded = [bar async for bar in retained.stream_bars("SPY", use_rth=True, continuity=policy)]
+        yielded = [
+            bar
+            async for bar in retained.stream_bars("SPY", use_rth=True, continuity=_continuity_policy())
+        ]
 
         assert [bar.session_phase for bar in yielded] == ["RTH"]
         assert source.continuity_seen is policy
@@ -187,9 +233,130 @@ async def test_run_trade_bot_retains_every_live_source_bar(tmp_path: Path) -> No
         retained = ledger.bars(provider=provider, symbol="SPY")
         assert [row.end_ms for row in retained] == [bar.end_ms for bar in bars]
         assert [str(row.close) for row in retained] == [str(bar.close) for bar in bars]
+        # The run's own identity reaches the rows, so its continuity events
+        # (journalled under the same run_id) can be ordered against them.
+        assert {row.run_id for row in retained} == {"run-1"}
     finally:
         ledger.close()
         set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
+async def test_retained_feed_appends_bars_with_the_run_id_and_provenance(tmp_path: Path) -> None:
+    """A retained observation must say which run it is evidence for (#1921).
+
+    Continuity events are journalled per run; a bar retained without the run's
+    identity could not be ordered against them.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        feed = _RetainedSourceBarFeed(_FakeFeed([_bar(_T0)], mode="finite"), ledger, run_id="run-x")
+
+        async for _ in feed.stream_bars("SPY", use_rth=True):
+            pass
+
+        retained = ledger.bars(provider="fake", symbol="SPY")
+        assert [row.run_id for row in retained] == ["run-x"]
+        assert retained[0].provenance == "realtime"
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_retained_warmup_bars_keep_their_continuity_provenance(tmp_path: Path) -> None:
+    """Resume must not launder a recovered bar into an ordinary one (ruling P4).
+
+    Warmup after a crash replays the retained rows, so the provenance a
+    reconnect wrote -- how the bar was produced, what authorized it, which
+    continuity event explains it -- has to survive the rebuild. Dropping it
+    would let a resumed run's evidence claim every warmup bar was ordinary.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        ledger.append(
+            _bar(_T0).model_copy(
+                update={
+                    "provenance": "realtime_across_reconnect",
+                    "authorization_id": "grant-1",
+                    "continuity_event_ref": "run-x:7",
+                }
+            ),
+            run_id="run-x",
+        )
+        feed = _RetainedSourceBarFeed(_FakeFeed([], mode="finite"), ledger, run_id="run-x")
+
+        warmup = await feed.recent_closed_bars("SPY", use_rth=True)
+
+        assert [bar.provenance for bar in warmup] == ["realtime_across_reconnect"]
+        assert warmup[0].authorization_id == "grant-1"
+        assert warmup[0].continuity_event_ref == "run-x:7"
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_late_non_realtime_trigger_bar_is_refused_as_decision_late(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recovered decision bar delivered past its allowance is not a decision.
+
+    Surviving a reconnect is worth nothing if the bot then acts on a trigger
+    bar whose decision instant has already gone by: the trade would be priced
+    against a market that has since moved. The refusal is recorded before it
+    is raised, so the run's evidence explains the crash.
+    """
+    from app.services import bot_trade_strategy as module
+    from app.services.feed_continuity_policy import FeedContinuityRefused
+
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    # The bar's own close is the trigger, so it is a decision bar.
+    policy, events = _recording_policy(trigger_ms=_T0 + 60_000)
+    late = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
+    monkeypatch.setattr(module, "now_ms_utc", lambda: _T0 + 60_000 + 20_001)
+    try:
+        feed = _RetainedSourceBarFeed(
+            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy
+        )
+
+        with pytest.raises(FeedContinuityRefused) as excinfo:
+            async for _ in feed.stream_bars("SPY", use_rth=True):
+                pass
+
+        assert excinfo.value.reason == "DECISION_LATE"
+        assert events[-1].kind == "refused" and events[-1].reason == "DECISION_LATE"
+        assert ledger.bars(provider="fake", symbol="SPY") == []
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_late_non_trigger_bar_is_admitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lateness only bites on a bar the consumer decides on.
+
+    Every other recovered minute is warmup and consolidator input; refusing it
+    for arriving late would turn a survivable reconnect back into a crash --
+    the exact failure #1921 exists to close.
+    """
+    from app.services import bot_trade_strategy as module
+
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    # The trigger is a full bucket away, so this bar's close (_T0 + 60_000) is
+    # an ordinary minute rather than a decision.
+    policy, events = _recording_policy(trigger_ms=_T0 + 15 * 60_000)
+    late = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
+    monkeypatch.setattr(module, "now_ms_utc", lambda: _T0 + 60_000 + 20_001)
+    try:
+        feed = _RetainedSourceBarFeed(
+            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy
+        )
+
+        async for _ in feed.stream_bars("SPY", use_rth=True):
+            pass
+
+        assert len(ledger.bars(provider="fake", symbol="SPY")) == 1
+        assert events == []
+    finally:
+        ledger.close()
 
 
 @pytest.mark.asyncio
