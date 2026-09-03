@@ -5,8 +5,9 @@ aggregates those into closed 1-minute bars for the live engine, enforcing
 the repo's timestamp policy at the ingestion boundary: every yielded model
 uses ``int64`` ms UTC.
 
-All same-process consumers for the same ``(client, contract, whatToShow,
-useRTH)`` tuple share one underlying ``reqRealTimeBars`` subscription. The
+All same-process consumers for the same ``(client, connection generation,
+contract, whatToShow, useRTH)`` tuple share one underlying
+``reqRealTimeBars`` subscription; a reconnect fences the old line off. The
 registry reference-counts consumers and cancels the broker subscription only
 when the last consumer leaves. New subscriptions are paced at IBKR's
 documented ceiling of 60 requests per 600 seconds. ``ib_async`` separately
@@ -75,6 +76,25 @@ class IBKRBarSubscriptionStalled(IBKRBarStreamError):
     """Raised when a connected real-time-bar request stops advancing."""
 
 
+class IBKRBarInterrupted(IBKRBarStreamError):
+    """A broker line stopped for a survivable reason: socket down, 1100 soft loss, or reconnect.
+
+    Consumers with a continuity policy recover from this; everyone else treats it
+    as the fatal ``IBKRBarStreamError`` it subclasses.
+    """
+
+    def __init__(
+        self, message: str, *, cause: Literal["socket_down", "soft_loss_1100", "generation_changed"]
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
+def _client_generation(client: object) -> int:
+    """Read the client's connection generation, defaulting pre-Task-1 fakes to 0."""
+    return int(getattr(client, "connection_generation", 0))
+
+
 class _RealtimeBarRequestPacer:
     """Sliding-window guard for *new* ``reqRealTimeBars`` requests.
 
@@ -131,13 +151,15 @@ class _RealtimeBarRequestPacer:
             await self._sleep(wait_s)
 
 
-_SubscriptionKey = tuple[int, int, int, str, bool]
+# id(client), connection generation, conId, barSize, whatToShow, useRTH.
+_SubscriptionKey = tuple[int, int, int, int, str, bool]
 
 
 @dataclass
 class _RealtimeBarSubscription:
     client: IbkrClient
     bars: list[object]
+    generation: int
     consumer_count: int = 1
     invalidated: bool = False
 
@@ -153,6 +175,7 @@ class _RealtimeBarLease:
     start_index: int
     multiplexed: bool
     consumer_count: int
+    generation: int
     _released: bool = False
 
     @property
@@ -212,66 +235,117 @@ class _RealtimeBarSubscriptionRegistry:
             raise IBKRBarStreamError(
                 "reqRealTimeBars requires a qualified contract with a positive conId."
             )
-        key = (id(client), con_id, bar_size, what_to_show, use_rth)
 
         while True:
-            existing = self._subscriptions.get(key)
-            if existing is not None:
-                start_index = len(existing.bars)
-                existing.consumer_count += 1
+            generation = _client_generation(client)
+            self._evict_older_generations(client, generation)
+            key = (id(client), generation, con_id, bar_size, what_to_show, use_rth)
+
+            while True:
+                existing = self._subscriptions.get(key)
+                if existing is not None:
+                    start_index = len(existing.bars)
+                    existing.consumer_count += 1
+                    return _RealtimeBarLease(
+                        registry=self,
+                        key=key,
+                        subscription=existing,
+                        bars=existing.bars,
+                        start_index=start_index,
+                        multiplexed=True,
+                        consumer_count=existing.consumer_count,
+                        generation=existing.generation,
+                    )
+
+                pending = self._pending.get(key)
+                if pending is None:
+                    max_active = self._max_active_for_client(client)
+                    client_key = id(client)
+                    reserved = sum(
+                        existing_key[0] == client_key and existing_key[1] == generation
+                        for existing_key in (*self._subscriptions, *self._pending)
+                    )
+                    if reserved >= max_active:
+                        raise IBKRBarStreamError(
+                            "IBKR real-time-bar local active-line cap reached: "
+                            f"{reserved}/{max_active}. Reuse or release a subscription, "
+                            "raise IBKR_REALTIME_BAR_MAX_ACTIVE only when the username's "
+                            "market-data allocation supports it, or use an external data provider."
+                        )
+                    pending = asyncio.get_running_loop().create_future()
+                    self._pending[key] = pending
+                    break
+                await asyncio.shield(pending)
+
+            try:
+                await self._pacer.acquire()
+                if _client_generation(client) != generation:
+                    # The socket was replaced while we waited on the pacer:
+                    # requesting bars now would file them under a dead key.
+                    logger.info(
+                        "Restarting real-time-bar acquisition on a newer connection generation",
+                        extra={
+                            "action": "ibkr_realtime_bar_generation_restart",
+                            "generation": generation,
+                            "con_id": con_id,
+                        },
+                    )
+                    continue
+                bars = client.ib.reqRealTimeBars(
+                    contract,
+                    bar_size,
+                    what_to_show,
+                    useRTH=use_rth,
+                )
+                subscription = _RealtimeBarSubscription(
+                    client=client, bars=bars, generation=generation
+                )
+                self._subscriptions[key] = subscription
                 return _RealtimeBarLease(
                     registry=self,
                     key=key,
-                    subscription=existing,
-                    bars=existing.bars,
-                    start_index=start_index,
-                    multiplexed=True,
-                    consumer_count=existing.consumer_count,
+                    subscription=subscription,
+                    bars=bars,
+                    start_index=0,
+                    multiplexed=False,
+                    consumer_count=1,
+                    generation=generation,
                 )
+            finally:
+                self._pending.pop(key, None)
+                if not pending.done():
+                    pending.set_result(None)
 
-            pending = self._pending.get(key)
-            if pending is None:
-                max_active = self._max_active_for_client(client)
-                client_key = id(client)
-                reserved = sum(
-                    existing_key[0] == client_key
-                    for existing_key in (*self._subscriptions, *self._pending)
-                )
-                if reserved >= max_active:
-                    raise IBKRBarStreamError(
-                        "IBKR real-time-bar local active-line cap reached: "
-                        f"{reserved}/{max_active}. Reuse or release a subscription, "
-                        "raise IBKR_REALTIME_BAR_MAX_ACTIVE only when the username's "
-                        "market-data allocation supports it, or use an external data provider."
-                    )
-                pending = asyncio.get_running_loop().create_future()
-                self._pending[key] = pending
-                break
-            await asyncio.shield(pending)
+    def _evict_older_generations(self, client: IbkrClient, generation: int) -> None:
+        """Drop registry entries whose socket is gone; never send a cancel for them."""
+        stale = [key for key in self._subscriptions if key[0] == id(client) and key[1] < generation]
+        for key in stale:
+            subscription = self._subscriptions.pop(key)
+            subscription.invalidated = True
+            logger.info(
+                "Evicted real-time-bar subscription from a previous connection generation",
+                extra={
+                    "action": "ibkr_realtime_bar_generation_evicted",
+                    "generation": key[1],
+                    "con_id": key[2],
+                },
+            )
 
-        try:
-            await self._pacer.acquire()
-            bars = client.ib.reqRealTimeBars(
-                contract,
-                bar_size,
-                what_to_show,
-                useRTH=use_rth,
-            )
-            subscription = _RealtimeBarSubscription(client=client, bars=bars)
-            self._subscriptions[key] = subscription
-            return _RealtimeBarLease(
-                registry=self,
-                key=key,
-                subscription=subscription,
-                bars=bars,
-                start_index=0,
-                multiplexed=False,
-                consumer_count=1,
-            )
-        finally:
-            self._pending.pop(key, None)
-            if not pending.done():
-                pending.set_result(None)
+    def _dropped_as_stale(
+        self,
+        key: _SubscriptionKey,
+        subscription: _RealtimeBarSubscription,
+    ) -> bool:
+        """Drop a subscription whose socket is gone; return whether it was dropped.
+
+        ``ib_async`` restarts request ids on reconnect, so the reqId this
+        subscription holds may already belong to a line on the new socket:
+        never send ``cancelRealTimeBars`` across generations.
+        """
+        if subscription.generation == _client_generation(subscription.client):
+            return False
+        self._subscriptions.pop(key, None)
+        return True
 
     def _max_active_for_client(self, client: IbkrClient) -> int:
         settings = getattr(client, "settings", None)
@@ -289,6 +363,8 @@ class _RealtimeBarSubscriptionRegistry:
         subscription.consumer_count -= 1
         if subscription.consumer_count > 0:
             return False
+        if self._dropped_as_stale(key, subscription):
+            return False
 
         self._subscriptions.pop(key, None)
         try:
@@ -305,6 +381,8 @@ class _RealtimeBarSubscriptionRegistry:
         """Cancel and evict exactly the stalled generation for ``key``."""
         subscription = self._subscriptions.get(key)
         if subscription is not expected:
+            return False
+        if self._dropped_as_stale(key, subscription):
             return False
 
         self._subscriptions.pop(key, None)
@@ -463,13 +541,26 @@ def _check_realtime_subscription_liveness(
     stall_timeout_s: float,
     last_progress_at: float,
 ) -> tuple[float, bool, bool]:
-    """Fail closed on a disconnected, invalidated, or bounded-stall line."""
+    """Fail closed on a stale-generation, disconnected, invalidated, or stalled line."""
+    if lease.generation != _client_generation(client):
+        raise IBKRBarInterrupted(
+            f"IBKR connection was re-established while streaming {symbol} 5-second bars; "
+            "this lease belongs to the previous socket.",
+            cause="generation_changed",
+        )
     connected = client.is_connected()
     connection_lost = client.connection_lost
-    if not connected or connection_lost:
-        raise IBKRBarStreamError(
-            f"IBKR connection lost while streaming {symbol} 5-second "
-            "bars; halting rather than hanging on a dead feed."
+    if not connected:
+        raise IBKRBarInterrupted(
+            f"IBKR connection lost while streaming {symbol} 5-second bars; "
+            "halting rather than hanging on a dead feed.",
+            cause="socket_down",
+        )
+    if connection_lost:
+        raise IBKRBarInterrupted(
+            f"IBKR connectivity lost (code 1100) while streaming {symbol} 5-second bars; "
+            "halting rather than streaming a dead feed.",
+            cause="soft_loss_1100",
         )
     if lease.invalidated:
         raise IBKRBarSubscriptionStalled(
@@ -881,17 +972,19 @@ async def stream_raw_5s_bars(
     last_source_ms: int | None = None
     try:
         while True:
+            # --- liveness gate: every iteration, before touching ``bars`` ---
+            # A reconnect can land while undelivered bars are still queued on
+            # the orphaned list, so this cannot live in the idle branch alone.
+            last_progress_at, connected, connection_lost = _check_realtime_subscription_liveness(
+                client=client,
+                lease=lease,
+                symbol=symbol,
+                use_rth=use_rth,
+                stall_timeout_s=stall_timeout_s,
+                last_progress_at=last_progress_at,
+            )
+            # --- end liveness gate ---
             if index >= len(bars):
-                last_progress_at, connected, connection_lost = (
-                    _check_realtime_subscription_liveness(
-                        client=client,
-                        lease=lease,
-                        symbol=symbol,
-                        use_rth=use_rth,
-                        stall_timeout_s=stall_timeout_s,
-                        last_progress_at=last_progress_at,
-                    )
-                )
                 delivery_logger.maybe_log_no_bar(
                     bar_count=len(bars),
                     connected=connected,
@@ -1006,22 +1099,22 @@ async def stream_minute_bars(
     last_progress_at = time.monotonic()
     try:
         while True:
+            # --- liveness gate: every iteration, before touching ``bars`` ---
+            # ib_async stops appending to ``bars`` on a Gateway disconnect and
+            # raises nothing, so without this check the loop would spin forever
+            # yielding no bars and the live engine would go silently blind. It
+            # runs on every iteration, not only when idle: a reconnect can land
+            # while undelivered bars are still queued on the orphaned list.
+            last_progress_at, connected, connection_lost = _check_realtime_subscription_liveness(
+                client=client,
+                lease=lease,
+                symbol=symbol,
+                use_rth=use_rth,
+                stall_timeout_s=stall_timeout_s,
+                last_progress_at=last_progress_at,
+            )
+            # --- end liveness gate ---
             if index >= len(bars):
-                # No new 5-second bar yet. Before sleeping, confirm the feed is
-                # still live: ib_async stops appending to ``bars`` on a Gateway
-                # disconnect and raises nothing, so without this check the loop
-                # would spin forever yielding no bars and the live engine would
-                # go silently blind. Surface a fatal error instead.
-                last_progress_at, connected, connection_lost = (
-                    _check_realtime_subscription_liveness(
-                        client=client,
-                        lease=lease,
-                        symbol=symbol,
-                        use_rth=use_rth,
-                        stall_timeout_s=stall_timeout_s,
-                        last_progress_at=last_progress_at,
-                    )
-                )
                 delivery_logger.maybe_log_no_bar(
                     bar_count=len(bars),
                     connected=connected,

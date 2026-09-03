@@ -11,6 +11,7 @@ import pytest
 
 from app.broker.ibkr import bars as bars_mod
 from app.broker.ibkr.bars import (
+    IBKRBarInterrupted,
     IBKRBarStreamError,
     IBKRBarSubscriptionStalled,
     LiveBarCounters,
@@ -480,12 +481,15 @@ async def test_stream_minute_bars_halts_on_connection_lost() -> None:
     Before the fix the loop only checked ``index >= len(bars)`` and slept,
     spinning indefinitely while the live engine went silently blind. Now an
     empty/stalled feed with a lost connection raises ``IBKRBarStreamError``.
+
+    ``connection_lost`` is the TWS-1100 soft loss (socket up, market data
+    gone); #1921 gave it its own message and ``cause``.
     """
     client = _FakeClient(connection_lost=True)
     client.ib.bars = []  # no bars ever arrive → loop reaches the liveness gate
 
     stream = stream_minute_bars(client, "SPY", use_rth=True)
-    with pytest.raises(IBKRBarStreamError, match="connection lost"):
+    with pytest.raises(IBKRBarStreamError, match="connectivity lost"):
         await stream.__anext__()
     # The cancel still ran in finally despite the raise.
     assert client.ib.cancelled is True
@@ -507,7 +511,7 @@ async def test_stream_minute_bars_cancel_exception_does_not_mask_original() -> N
     stream = stream_minute_bars(client, "SPY", use_rth=True)
     # The connectivity-lost error survives; the cancel's ConnectionError is
     # swallowed (logged at debug) rather than masking it.
-    with pytest.raises(IBKRBarStreamError, match="connection lost"):
+    with pytest.raises(IBKRBarStreamError, match="connectivity lost"):
         await stream.__anext__()
 
 
@@ -789,3 +793,214 @@ def test_live_applied_correction_still_logs_at_warning(
     assert len(corrections) == 1
     assert corrections[0].levelname == "WARNING"
     assert counters.applied_correction == 1
+
+
+# ---------------------------------------------------------------------------
+# Connection-generation fencing (#1921). ``ib_async`` reuses one ``IB()``
+# across reconnects: ``Wrapper.reset()`` orphans the old ``bars`` list and
+# ``Client.reset()`` restarts request ids. A lease taken on the previous
+# socket must therefore be detected as stale on every loop iteration, and
+# its release must never send ``cancelRealTimeBars`` — the reqId it holds
+# may already belong to a subscription on the new socket.
+# ---------------------------------------------------------------------------
+
+
+class _GenClient(_FakeClient):
+    """Fake client whose generation the test can bump."""
+
+    def __init__(self, *, connected: bool = True, connection_lost: bool = False) -> None:
+        super().__init__(connected=connected, connection_lost=connection_lost)
+        self.connection_generation = 1
+
+
+@pytest.fixture(autouse=True)
+def _fresh_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        bars_mod,
+        "_REALTIME_BAR_SUBSCRIPTIONS",
+        bars_mod._RealtimeBarSubscriptionRegistry(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_generation_lease_raises_interrupted_even_when_socket_is_back() -> None:
+    client = _GenClient()
+    client.ib.bars = []  # nothing to deliver: force the idle branch
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)  # one idle iteration under generation 1
+    client.connection_generation = 2  # reconnect happened; socket reports connected
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_socket_down_raises_interrupted_with_cause() -> None:
+    client = _GenClient()
+    client.ib.bars = []
+    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client._connected = False
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "socket_down"
+    assert "IBKR connection lost" in str(excinfo.value)
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_soft_loss_1100_raises_interrupted_with_cause() -> None:
+    client = _GenClient()
+    client.ib.bars = []
+    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.connection_lost = True  # TWS 1100: socket up, market data gone
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "soft_loss_1100"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_raw_5s_stream_stale_generation_raises_interrupted() -> None:
+    client = _GenClient()
+    client.ib.bars = []
+    stream = stream_raw_5s_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.connection_generation = 2
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+    assert client.ib.realtime_bar_cancel_count == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_generation_is_caught_while_bars_are_still_draining() -> None:
+    """The check runs every iteration, not only when the bar list is idle."""
+    client = _GenClient()
+    backlog = client.ib.bars  # two 5-second bars: enough to close a minute
+    client.ib.bars = []
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    # The reconnect lands with undelivered bars still queued on the orphaned
+    # list. A liveness check that only guarded the idle branch would drain
+    # them and yield a closed minute sourced from a socket that is gone.
+    client.ib.bars.extend(backlog)
+    client.connection_generation = 2
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(first, timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stale_lease_release_never_cancels_on_the_new_socket() -> None:
+    client = _GenClient()
+    client.ib.bars = []
+    stream = stream_minute_bars(client, "SPY", use_rth=True)
+    first = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.15)
+    client.connection_generation = 2
+    with pytest.raises(IBKRBarInterrupted):
+        await asyncio.wait_for(first, timeout=2.0)
+    await stream.aclose()  # releases the stale lease
+    assert client.ib.realtime_bar_cancel_count == 0
+
+
+@pytest.mark.asyncio
+async def test_acquire_after_generation_change_opens_a_new_line() -> None:
+    client = _GenClient()
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+    registry = bars_mod._REALTIME_BAR_SUBSCRIPTIONS
+    lease_old = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    client.connection_generation = 2
+    lease_new = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    assert lease_new.multiplexed is False
+    assert lease_new.generation == 2
+    assert lease_old.generation == 1
+    assert client.ib.realtime_bar_request_count == 2
+    lease_new.release()
+    lease_old.release()
+    assert client.ib.realtime_bar_cancel_count == 1  # only the live generation cancelled
+
+
+@pytest.mark.asyncio
+async def test_acquire_restarts_when_generation_moves_during_pacing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _GenClient()
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+    registry = bars_mod._REALTIME_BAR_SUBSCRIPTIONS
+
+    async def _bump_generation() -> None:
+        client.connection_generation = 2
+
+    monkeypatch.setattr(registry._pacer, "acquire", _bump_generation)
+    lease = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    assert lease.generation == 2
+    lease.release()
+
+
+@pytest.mark.asyncio
+async def test_active_line_cap_ignores_evicted_previous_generations() -> None:
+    """A reconnect must not exhaust the cap with lines the old socket owned."""
+    client = _GenClient()
+    registry = bars_mod._RealtimeBarSubscriptionRegistry(default_max_active=1)
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+
+    old = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    client.connection_generation = 2
+    new = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+
+    assert new.generation == 2
+    assert old.release() is False
+    assert new.release() is True
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_active_line_cap_ignores_a_pending_line_from_a_previous_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A line still waiting on the pacer when the socket flips must not hold a slot."""
+    client = _GenClient()
+    registry = bars_mod._RealtimeBarSubscriptionRegistry(default_max_active=1)
+    contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
+    reached_pacer = asyncio.Event()
+    unblock_pacer = asyncio.Event()
+
+    async def _gated_acquire() -> None:
+        if reached_pacer.is_set():
+            return
+        reached_pacer.set()
+        await unblock_pacer.wait()
+
+    monkeypatch.setattr(registry._pacer, "acquire", _gated_acquire)
+
+    pending = asyncio.ensure_future(
+        registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    )
+    await asyncio.wait_for(reached_pacer.wait(), timeout=1.0)
+    client.connection_generation = 2
+
+    live = await registry.acquire(client, contract, bar_size=5, what_to_show="TRADES", use_rth=True)
+    assert live.generation == 2
+
+    unblock_pacer.set()
+    restarted = await asyncio.wait_for(pending, timeout=1.0)
+    # The stalled acquisition restarted and multiplexed onto the live socket
+    # rather than filing a request under the generation it started in.
+    assert restarted.generation == 2
+    assert restarted.multiplexed is True
+    assert client.ib.realtime_bar_request_count == 1
+
+    assert restarted.release() is False
+    assert live.release() is True
+    assert client.ib.realtime_bar_cancel_count == 1
