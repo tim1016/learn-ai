@@ -362,14 +362,13 @@ class IbkrMarketDataFeed:
     ) -> MarketDataBar | None:
         """Return the deliverable form of one assembled minute, or ``None``.
 
-        For the first bar after a recovery, minutes the interruption swallowed
-        whole — everything between the last delivered bar and this one — are
-        resolved first and in order, then the bar itself. ``None`` means the
-        minute was omitted as a recorded gap; an unresolvable minute inside the
-        decision session raises instead.
+        Until the interruption is closed out by a bar that is actually
+        delivered, minutes it swallowed whole — everything between the last
+        delivered bar and this one — are resolved first and in order, then the
+        bar itself. ``None`` means the minute was omitted as a recorded gap; an
+        unresolvable minute inside the decision session raises instead.
         """
         if state.scan_missed_windows:
-            state.scan_missed_windows = False
             await resolve_missed_windows(state, ibkr_bar.start_ms)
         touched = ibkr_bar.start_ms in state.touched_minute_starts
         state.touched_minute_starts.discard(ibkr_bar.start_ms)
@@ -380,7 +379,17 @@ class IbkrMarketDataFeed:
                 ibkr_bar.end_ms,
                 contribution_count=ibkr_bar.contribution_count,
             )
+            # The scan stays armed: this bar was omitted, not delivered, so the
+            # interruption is still open and whatever it swallowed behind the
+            # *next* bar has yet to be resolved. Spending the flag here loses
+            # every minute between an omitted gap and the next real bar --
+            # reachable whenever an interruption straddles the session open,
+            # since the run streams with use_rth=False and sees pre-market
+            # minutes before its first RTH one.
             return None
+        # Delivered: the interruption is closed out and a later gap is an
+        # ordinary gap again.
+        state.scan_missed_windows = False
         bar = self._translate(ibkr_bar)
         if bar.provenance == "realtime_across_reconnect" and state.last_recovered_ref is not None:
             bar = bar.model_copy(

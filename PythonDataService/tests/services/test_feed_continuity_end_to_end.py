@@ -7,12 +7,18 @@ wrapper never forwards, an event the ledger writes out of order, a
 ``continuity_event_ref`` stamped from the wrong reference, a digest that does
 not survive SQLite -- would pass every one of them.
 
-This test uses the real seal builder, the real ``continuity_policy_for``, the
-real ``_RetainedSourceBarFeed``, the real ``IbkrMarketDataFeed`` loop with its
-real ``MinuteAssembler``, a real ``SourceBarLedger`` on disk, and the real
-digest. Only two things are doubles: the IBKR client (a socket) and
-``stream_minute_bars`` (the vendor's wire), which is the scripted source the
-feed-loop tests already use.
+What this joins is the chain from the binding to the digest: the real seal
+builder, the real ``continuity_policy_for``, the real ``_RetainedSourceBarFeed``,
+the real ``IbkrMarketDataFeed`` continuity loop, a real ``SourceBarLedger`` on
+disk, and the real digest. Only two things are doubles: the IBKR client (a
+socket) and ``stream_minute_bars`` (the vendor's wire), which is the scripted
+source the feed-loop tests already use.
+
+The scripted source yields pre-built minutes, so the ``MinuteAssembler`` folds
+nothing here — how a minute is *stitched* across a reconnect from raw 5-second
+contributions is covered in ``tests/marketdata/test_feed_continuity.py``, which
+drives the real assembler. This test is about what happens to a minute once the
+loop has one.
 """
 
 from __future__ import annotations

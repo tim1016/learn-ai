@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -924,6 +924,63 @@ async def test_queued_prints_are_drained_before_the_interruption_surfaces() -> N
     drained = await asyncio.wait_for(first, timeout=2.0)
 
     assert drained.close == Decimal("100.5")  # the minute the queued prints closed
+    with pytest.raises(IBKRBarInterrupted) as excinfo:
+        await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    assert excinfo.value.cause == "generation_changed"
+    await stream.aclose()
+
+
+class _AlwaysQueuedBars(list):
+    """A bar list that always has one more bar queued behind the reader.
+
+    Reading a bar appends the next, so ``index >= len(bars)`` never holds and
+    the loop's idle branch is never reached. A liveness gate that only guarded
+    that branch could therefore never fire against this list; the
+    every-iteration gate can. The cap keeps a gate that never fires
+    *terminating* — it eventually runs out of bars and reaches the idle branch
+    — rather than spinning the event loop forever.
+    """
+
+    def __init__(self, make_bar, *, cap: int = 200) -> None:
+        super().__init__([make_bar(0)])
+        self._make_bar = make_bar
+        self._cap = cap
+
+    def __getitem__(self, item):
+        if len(self) < self._cap:
+            self.append(self._make_bar(len(self)))
+        return super().__getitem__(item)
+
+
+@pytest.mark.asyncio
+async def test_the_liveness_gate_fires_on_a_stream_that_never_goes_idle() -> None:
+    """The gate runs every iteration, not only when the bar list is empty.
+
+    The drain tests above cannot show this: their queues run dry, so an
+    idle-branch-only gate would still fire, just later. Here the queue never
+    runs dry. ``ib_async`` stops appending on a Gateway disconnect, but a
+    reconnect can land while a backlog is still being worked through, and a
+    consumer blind until the backlog clears is exactly the silent-blindness
+    failure this gate exists to prevent.
+    """
+    base = datetime(2026, 5, 4, 14, 30, tzinfo=UTC)
+
+    def _make(index: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            time=base + timedelta(seconds=5 * index),
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+            close=Decimal("100.5"), volume=1,
+        )
+
+    client = _GenClient()
+    client.ib.bars = _AlwaysQueuedBars(_make)
+    stream = stream_minute_bars(client, "SPY", use_rth=True, stall_timeout_s=60.0)
+
+    first = await stream.__anext__()  # closes 14:30 without ever idling
+    assert first.start_ms == int(base.timestamp() * 1000)
+
+    client.connection_generation = 2  # a reconnect, with the backlog still flowing
+
     with pytest.raises(IBKRBarInterrupted) as excinfo:
         await asyncio.wait_for(stream.__anext__(), timeout=2.0)
     assert excinfo.value.cause == "generation_changed"

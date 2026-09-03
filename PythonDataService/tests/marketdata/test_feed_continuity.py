@@ -372,6 +372,50 @@ async def test_a_missed_window_outside_the_session_is_one_gap_and_the_run_contin
     assert (gaps[0].window_start_ms, gaps[0].window_end_ms) == (pre, pre + 180_000)
 
 
+async def test_an_omitted_gap_does_not_spend_the_scan_the_next_bar_still_needs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An interruption straddling the session open must not swallow RTH minutes.
+
+    The run streams with ``use_rth=False``, so an RTH-sealed binding's loop sees
+    pre-market minutes too. When the first bar after a recovery is a touched
+    pre-market minute it resolves as a non-fatal ``gap`` and is never delivered
+    — the interruption is still open. If that omitted bar spent the
+    missed-window scan, the RTH minutes behind the *next* bar would vanish with
+    no ``refused`` event and no journal entry at all, and the run would carry on
+    deciding as though nothing had been lost.
+    """
+    sink = _RecordingSink()
+    open_ms = _MINUTE0 - 3_600_000  # the fake session boundary this module uses
+    source = _Source(
+        [_ibkr_bar(open_ms - 120_000, phase="PRE"), IBKRBarInterrupted("x", cause="socket_down")],
+        [
+            # Touched, short, and outside the decision session: omitted as a gap.
+            _ibkr_bar(open_ms - 60_000, phase="PRE", contribution_count=9, spans_interruption=True),
+            # Three RTH minutes later — 09:30, 09:31 and 09:32 never assembled.
+            _ibkr_bar(open_ms + 180_000),
+        ],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    delivered: list = []
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        async for bar in feed.stream_bars("SPY", continuity=_policy(sink)):
+            delivered.append(bar)
+
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert [b.start_ms for b in delivered] == [open_ms - 120_000]
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "gap", "refused"]
+    assert (sink.events[2].window_start_ms, sink.events[2].window_end_ms) == (
+        open_ms - 60_000,
+        open_ms,
+    )
+    refused = sink.events[3]
+    assert (refused.window_start_ms, refused.window_end_ms) == (open_ms, open_ms + 180_000)
+    assert refused.contribution_count is None
+
+
 async def test_a_missed_window_straddling_the_session_open_is_split_at_the_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

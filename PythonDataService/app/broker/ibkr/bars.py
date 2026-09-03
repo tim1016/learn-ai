@@ -752,9 +752,9 @@ async def stream_raw_5s_bars(
                 # ``Wrapper.reset()`` orphans the old list, so nothing the new
                 # socket produces can ever land on it — draining loses nothing
                 # and discarding loses observations the vendor did deliver.
-                while index < len(bars):
-                    raw_bar = bars[index]
-                    index += 1
+                queued = list(bars[index:])
+                index += len(queued)
+                for raw_bar in queued:
                     yield _to_model(raw_bar)
                 raise interruption
             # --- end liveness gate ---
@@ -900,9 +900,9 @@ async def stream_minute_bars(
                 # into the assembler before surfacing the interruption is the
                 # difference between a minute the reconnect can complete and a
                 # minute the run must refuse.
-                while index < len(bars):
-                    raw_bar = bars[index]
-                    index += 1
+                queued = list(bars[index:])
+                index += len(queued)
+                for raw_bar in queued:
                     emitted = _fold(raw_bar)
                     if emitted is not None:
                         yield emitted
