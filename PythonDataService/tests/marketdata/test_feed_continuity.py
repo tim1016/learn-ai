@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -37,6 +38,24 @@ def _ibkr_bar(start_ms: int, *, contribution_count: int = 12, spans_interruption
         session_phase=phase, use_rth=True, contribution_count=contribution_count,
         spans_interruption=spans_interruption,
     )
+
+
+def _raw_5s(source_ms: int, close: str = "1") -> SimpleNamespace:
+    """One raw IBKR 5-second bar, in the shape ``MinuteAssembler.feed`` consumes.
+
+    Scripting these instead of pre-built minutes makes the feed's own assembler
+    do the real work: the open minute, its contribution count, its generation
+    set and ``flush_if_complete`` are then facts, not fixtures.
+    """
+    return SimpleNamespace(
+        time=datetime.fromtimestamp(source_ms / 1000, tz=UTC),
+        open=Decimal(close), high=Decimal(close), low=Decimal(close), close=Decimal(close),
+        volume=1,
+    )
+
+
+def _rth_minute_raw(minute_start_ms: int, seconds: range | tuple[int, ...]) -> list[SimpleNamespace]:
+    return [_raw_5s(minute_start_ms + second * 1_000) for second in seconds]
 
 
 class _RecordingSink:
@@ -76,7 +95,17 @@ def _client(*, generation: int = 1) -> MagicMock:
 
 
 class _Source:
-    """Scripted stream_minute_bars: each call yields its scripted items; an exception item is raised."""
+    """Scripted stream_minute_bars: each call yields its scripted items; an exception item is raised.
+
+    Three item shapes, matching what the real stream can produce:
+
+    * an exception — raised, ending that call;
+    * a raw 5-second bar (has ``time``) — folded into the caller's shared
+      ``assembler`` under this call's connection generation, exactly as
+      ``stream_minute_bars`` does, and the minute it closes (if any) is yielded;
+    * a pre-built minute (has ``start_ms``) — yielded as is, for the cases where
+      the assembler's internals are not what is under test.
+    """
 
     def __init__(self, *calls: list) -> None:
         self.calls = list(calls)
@@ -87,11 +116,25 @@ class _Source:
         self.assemblers.append(assembler)
         script = self.calls[self.invocations] if self.invocations < len(self.calls) else []
         self.invocations += 1
+        generation = self.invocations
 
         async def _gen():
             for item in script:
                 if isinstance(item, BaseException):
                     raise item
+                if hasattr(item, "time"):
+                    emitted = assembler.feed(
+                        item,
+                        symbol=_symbol,
+                        generation=generation,
+                        venue="ARCA",
+                        use_rth=use_rth,
+                    )
+                    if on_source_bar is not None and assembler.last_source_ms is not None:
+                        on_source_bar(assembler.last_source_ms)
+                    if emitted is not None:
+                        yield emitted
+                    continue
                 if on_source_bar is not None:
                     on_source_bar(item.start_ms)
                 yield item
@@ -143,6 +186,96 @@ async def test_interruption_before_any_delivered_bar_is_fatal_as_today(monkeypat
         await _collect(feed, _policy(sink), 1)
     assert excinfo.value.reason is None
     assert sink.events == []
+
+
+async def test_a_complete_open_minute_is_flushed_and_delivered_before_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing was delivered yet, but the assembler holds a whole minute.
+
+    The interruption adopts the open minute as the continuity anchor instead of
+    failing, and the minute is flushed and delivered *between* the interruption
+    and the recovery — the evidence a consumer replays must show it that way.
+    """
+    sink = _RecordingSink()
+    source = _Source(
+        [*_rth_minute_raw(_MINUTE0, range(0, 60, 5)), IBKRBarInterrupted("x", cause="socket_down")],
+        [_ibkr_bar(_MINUTE0 + 60_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    observed: list[tuple[int, str, tuple[str, ...]]] = []
+    async for bar in feed.stream_bars("SPY", continuity=_policy(sink)):
+        observed.append((bar.start_ms, bar.provenance, tuple(e.kind for e in sink.events)))
+        if len(observed) == 2:
+            break
+
+    assert observed == [
+        (_MINUTE0, "realtime", ("interruption",)),
+        (_MINUTE0 + 60_000, "realtime", ("interruption", "recovered")),
+    ]
+    # The anchor is the open minute's start, and the deadline the run promises
+    # is derived from it once, before the flush moves the watermark on.
+    assert sink.events[0].last_delivered_end_ms == _MINUTE0
+    assert sink.events[0].deadline_ms == _MINUTE0 + 80_000
+
+
+async def test_a_minute_stitched_by_the_real_assembler_crosses_the_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nine 5-second bars on one socket, three on the next, one delivered minute."""
+    sink = _RecordingSink()
+    source = _Source(
+        [*_rth_minute_raw(_MINUTE0, range(0, 45, 5)), IBKRBarInterrupted("x", cause="socket_down")],
+        [*_rth_minute_raw(_MINUTE0, range(45, 60, 5)), _raw_5s(_MINUTE0 + 60_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    bars = await _collect(feed, _policy(sink), 1)
+
+    assert source.assemblers[0] is source.assemblers[1]
+    assert [b.start_ms for b in bars] == [_MINUTE0]
+    assert bars[0].provenance == "realtime_across_reconnect"
+    assert bars[0].continuity_event_ref == "run-1:2"
+    assert bars[0].volume == 12  # every contribution from both sockets survived
+    assert [e.kind for e in sink.events] == ["interruption", "recovered"]
+
+
+async def test_the_wait_enforces_the_deadline_the_interruption_event_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A flush that crosses a decision trigger must not silently extend the wait.
+
+    The flushed minute moves ``last_delivered_end_ms`` past the fake clock's
+    15:01 trigger, so a deadline re-derived inside the wait would sit a whole
+    decision interval later than the one the ``interruption`` event promised.
+    """
+    sink = _RecordingSink()
+    source = _Source(
+        [*_rth_minute_raw(_MINUTE0, range(0, 60, 5)), IBKRBarInterrupted("x", cause="socket_down")],
+        [],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    client = _client()
+    client.is_connected.return_value = False
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: _MINUTE0 + 80_001)
+
+    async def _never_recovers(_seconds: float) -> None:
+        raise AssertionError("the wait outlived the deadline the interruption event recorded")
+
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.asyncio.sleep", _never_recovers)
+    feed = IbkrMarketDataFeed(client)
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await _collect(feed, _policy(sink), 2)
+
+    assert excinfo.value.reason == "DECISION_BAR_MISSED"
+    assert [e.kind for e in sink.events] == ["interruption", "refused"]
+    assert sink.events[0].deadline_ms == sink.events[-1].deadline_ms == _MINUTE0 + 80_000
+    # The flush did move the watermark; the deadline just did not follow it.
+    assert sink.events[-1].last_delivered_end_ms == _MINUTE0 + 60_000
 
 
 async def test_incomplete_minute_inside_rth_is_refused_with_the_grant_reason(monkeypatch: pytest.MonkeyPatch) -> None:

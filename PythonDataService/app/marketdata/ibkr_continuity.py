@@ -46,6 +46,9 @@ class ContinuityState:
     last_delivered_end_ms: int | None = None
     generation: int = 0
     last_recovered_ref: ContinuityEventRef | None = None
+    #: Deadline the in-flight interruption recorded, and the only one any wait
+    #: for that interruption may enforce. ``None`` until one is observed.
+    interruption_deadline_ms: int | None = None
 
     async def record(self, event: FeedContinuityEvent) -> ContinuityEventRef:
         try:
@@ -69,21 +72,23 @@ def _healthy(client: IbkrClient) -> bool:
     return monitor is None or monitor.recovery_state == "HEALTHY"
 
 
-async def wait_for_healthy(client: IbkrClient, state: ContinuityState) -> None:
-    """Block until the socket is healthy again or the consumer's deadline passes."""
-    last_delivered_end_ms = state.last_delivered_end_ms
-    if last_delivered_end_ms is None:
-        raise MarketDataFeedError(
-            f"continuity wait for {state.symbol} has no delivered bar to anchor a deadline on"
-        )
-    deadline_ms = state.policy.deadline_ms(last_delivered_end_ms)
+async def wait_for_healthy(client: IbkrClient, state: ContinuityState, *, deadline_ms: int) -> None:
+    """Block until the socket is healthy again or ``deadline_ms`` passes.
+
+    The deadline is the caller's, computed once when the interruption was
+    observed and recorded on that ``interruption`` event, so the wait the
+    journal describes is the wait that is actually enforced. Re-deriving it here
+    from the live ``last_delivered_end_ms`` would silently extend it by a whole
+    decision interval whenever the minute flushed after that event crossed a
+    decision trigger — and the journal would still claim the shorter one.
+    """
     while not _healthy(client):
         if now_ms_utc() >= deadline_ms:
             await state.record(
                 state.event(
                     "refused",
                     reason="DECISION_BAR_MISSED",
-                    last_delivered_end_ms=last_delivered_end_ms,
+                    last_delivered_end_ms=state.last_delivered_end_ms,
                     deadline_ms=deadline_ms,
                 )
             )

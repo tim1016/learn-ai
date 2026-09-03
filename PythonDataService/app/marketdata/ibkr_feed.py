@@ -280,13 +280,20 @@ class IbkrMarketDataFeed:
                         # so there is no continuity to preserve. Fail as today.
                         raise MarketDataFeedError(str(exc)) from exc
                     state.last_delivered_end_ms = assembler.open_minute_start_ms
+                # Anchor the deadline here, once, on the watermark the event is
+                # about to record. The flush below can advance that watermark
+                # past a decision trigger, and a deadline re-derived after it
+                # would let the run wait a whole decision interval longer than
+                # the journal says it did.
+                deadline_ms = policy.deadline_ms(state.last_delivered_end_ms)
+                state.interruption_deadline_ms = deadline_ms
                 await state.record(
                     state.event(
                         "interruption",
                         cause=cause,
                         generation_from=state.generation,
                         last_delivered_end_ms=state.last_delivered_end_ms,
-                        deadline_ms=policy.deadline_ms(state.last_delivered_end_ms),
+                        deadline_ms=deadline_ms,
                     )
                 )
                 logger.warning(
@@ -304,7 +311,7 @@ class IbkrMarketDataFeed:
                     if bar is not None:
                         yield bar
                 liveness.first_bar_seen = False
-                await wait_for_healthy(self._client, state)
+                await wait_for_healthy(self._client, state, deadline_ms=deadline_ms)
                 new_generation = int(getattr(self._client, "connection_generation", 0))
                 state.last_recovered_ref = await state.record(
                     state.event(
@@ -325,10 +332,12 @@ class IbkrMarketDataFeed:
                 )
                 state.generation = new_generation
             except NotConnectedError as exc:
-                if state.last_delivered_end_ms is None:
+                deadline_ms = state.interruption_deadline_ms
+                if state.last_delivered_end_ms is None or deadline_ms is None:
                     raise MarketDataFeedError(str(exc)) from exc
-                # The resubscribe raced the reconnect: still interrupted.
-                await wait_for_healthy(self._client, state)
+                # The resubscribe raced the reconnect: still the same
+                # interruption, so still the deadline that interruption recorded.
+                await wait_for_healthy(self._client, state, deadline_ms=deadline_ms)
             except IBKRBarStreamError as exc:
                 raise MarketDataFeedError(str(exc)) from exc
 
