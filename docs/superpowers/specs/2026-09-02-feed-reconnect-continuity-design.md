@@ -236,20 +236,34 @@ ever the shape that was replayed.
      minute spanning an interruption is emitted from real-time data with provenance
      `realtime_across_reconnect`; it needs no grant — it is the same vendor real-time record,
      received over two sockets.
-   - A minute that is incomplete, or wholly missed (the first post-reconnect source bar lands
-     more than one minute after `last_source_ms`), is **unresolvable from real-time data**.
-     Outside RTH the count test is undefined (sparse bars are normal), so every minute that
-     spans an interruption is unresolvable.
-   - An unresolvable minute **outside the consumer's decision session** (pre-market for an RTH
+   - A minute is **touched by an interruption** when any of these holds: its stored
+     contributions span connection generations (`spans_interruption`); it was the open minute
+     when the interruption began (the feed records that minute's start, because an interruption
+     that outlives it leaves it holding one generation's contributions and the flag then reads
+     false); or it lies wholly inside the interruption window (the first post-reconnect source
+     bar lands more than one minute after `last_source_ms`). A minute nothing interrupted — a
+     mid-minute deploy's first minute included — is not touched and keeps today's behaviour.
+   - A touched minute that cannot be proven complete by count in RTH is **unresolvable from
+     real-time data**. Outside RTH the count test is undefined (sparse bars are normal), so
+     every touched minute there is unresolvable.
+   - The wholly-missed scan runs **after a recovery only**, for the first emitted bar following
+     a recorded interruption, and is then cleared. A gap no interruption explains is an ordinary
+     gap and stays non-fatal (§6). Contiguous unresolvable minutes are **coalesced into one
+     window** `[start, end)`: one grant offer, one `gap`/`refused` event covering the episode.
+     A window is split only where the decision-session verdict changes across it — one straddling
+     the RTH open is a `gap` for its pre-market part and a refusal for its RTH part.
+   - An unresolvable window **outside the consumer's decision session** (pre-market for an RTH
      program) is **omitted** and surfaced as a `gap` event. No grant is requested; authorization
-     is never consulted for a minute it could not prove anything about. An omitted minute is a
+     is never consulted for a window it could not prove anything about. An omitted window is a
      hole the ledger shows, not a repair.
-   - An unresolvable minute **inside the decision session** is offered to the consumer as a
-     window `[start, end)`; the feed asks `policy.substitution_grant(start, end)`. On a grant it
+   - An unresolvable window **inside the decision session** is offered to the consumer; the feed
+     asks `policy.substitution_grant(start, end)`. On a grant it
      substitutes the vendor's historical 1-minute bar(s) for exactly that window, provenance
      `historical_substitute`, delivered in order before any later live minute, and writes the
      grant's `authorization_id` into the evidence. On a refusal it raises
      `MarketDataFeedError(<refusal reason>)` and the run finalizes `FEED_DEATH`.
+   - Every `gap` and `refused` event about a single emitted-but-incomplete minute carries that
+     minute's `contribution_count`; a window nothing was ever assembled for carries `None`.
    - If the vendor has no historical bar for a granted window there was nothing to deliver:
      an ordinary gap, non-fatal. Nothing is interpolated, forward-filled or reordered.
 4. **Cutover from raw progress, not from emissions.** After resubscribe, the first source bar's
