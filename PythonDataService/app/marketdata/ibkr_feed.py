@@ -54,13 +54,7 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeedError,
 )
-from app.marketdata.ibkr_continuity import (
-    ContinuityState,
-    is_unresolvable,
-    resolve_missed_windows,
-    resolve_unresolvable_window,
-    wait_for_healthy,
-)
+from app.marketdata.ibkr_continuity import ContinuityLoop, ResolvedBar
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -157,26 +151,15 @@ class IbkrMarketDataFeed:
             },
         )
         try:
-            if continuity is None or not self._client.settings.feed_continuity_enabled:
-                if continuity is not None:
-                    logger.warning(
-                        "Feed continuity disabled by IBKR_FEED_CONTINUITY_ENABLED; "
-                        "failing fast on interruptions",
-                        extra={
-                            "action": "marketdata_continuity_disabled",
-                            "feed_id": self.feed_id,
-                            "symbol": normalized_symbol,
-                        },
-                    )
-                async for bar in self._stream_bars_legacy(
-                    normalized_symbol, liveness, use_rth=use_rth
-                ):
-                    yield bar
-            else:
-                async for bar in self._stream_bars_with_continuity(
+            stream = (
+                self._stream_bars_legacy(normalized_symbol, liveness, use_rth=use_rth)
+                if continuity is None or self._continuity_disabled(normalized_symbol)
+                else self._stream_bars_with_continuity(
                     normalized_symbol, liveness, use_rth=use_rth, policy=continuity
-                ):
-                    yield bar
+                )
+            )
+            async for bar in stream:
+                yield bar
         finally:
             liveness.active_count = max(0, liveness.active_count - 1)
             if liveness.active_count == 0:
@@ -190,6 +173,21 @@ class IbkrMarketDataFeed:
                     "active_count": liveness.active_count,
                 },
             )
+
+    def _continuity_disabled(self, symbol: str) -> bool:
+        """Whether the kill switch refuses the policy this caller authored."""
+        if self._client.settings.feed_continuity_enabled:
+            return False
+        logger.warning(
+            "Feed continuity disabled by IBKR_FEED_CONTINUITY_ENABLED; "
+            "failing fast on interruptions",
+            extra={
+                "action": "marketdata_continuity_disabled",
+                "feed_id": self.feed_id,
+                "symbol": symbol,
+            },
+        )
+        return True
 
     async def _stream_bars_legacy(
         self,
@@ -248,20 +246,16 @@ class IbkrMarketDataFeed:
     ) -> AsyncGenerator[MarketDataBar, None]:
         """Deliver under a ``ContinuityPolicy``: survive an interruption, or fail closed.
 
-        One ``MinuteAssembler`` outlives every resubscribe, so the minute open
-        when the socket died is finished by the new one. An interruption is
-        recorded, waited out under the caller's deadline, and recorded again on
-        recovery; a minute the merge cannot prove complete is resolved by
-        ``resolve_unresolvable_window`` — omitted as a ``gap`` outside the
-        decision session, refused (fatally) inside it.
+        The retry loop is all this method is. ``ContinuityLoop`` owns the rest:
+        the one ``MinuteAssembler`` that outlives every resubscribe, so the
+        minute open when the socket died is finished by the new one; the
+        deadline the wait is held to; and the resolution of every minute the
+        merge cannot prove complete — omitted as a ``gap`` outside the decision
+        session, refused (fatally) inside it.
         """
-        state = ContinuityState(
-            feed_id=self.feed_id,
-            symbol=symbol,
-            policy=policy,
-            generation=self._client.connection_generation,
+        loop = ContinuityLoop(
+            client=self._client, feed_id=self.feed_id, symbol=symbol, policy=policy
         )
-        assembler = MinuteAssembler()
         while True:
             try:
                 async for ibkr_bar in stream_minute_bars(
@@ -269,139 +263,31 @@ class IbkrMarketDataFeed:
                     symbol,
                     use_rth=use_rth,
                     on_source_bar=lambda source_ms: self._observe_source_bar(symbol, source_ms),
-                    assembler=assembler,
+                    assembler=loop.assembler,
                 ):
-                    bar = await self._resolve_emitted(state, liveness, ibkr_bar)
-                    if bar is not None:
-                        yield bar
+                    resolved = await loop.resolve_emitted(ibkr_bar)
+                    if resolved is not None:
+                        yield self._deliver(resolved, liveness)
                 return
             except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as exc:
-                cause = "stall" if isinstance(exc, IBKRBarSubscriptionStalled) else exc.cause
-                if state.last_delivered_end_ms is None:
-                    if assembler.open_minute_start_ms is None:
-                        # Rule 6: nothing delivered and nothing part-assembled,
-                        # so there is no continuity to preserve. Fail as today.
-                        raise MarketDataFeedError(str(exc)) from exc
-                    state.last_delivered_end_ms = assembler.open_minute_start_ms
-                # Flush before anchoring (ruling P6). A minute already complete
-                # when the socket died is a delivered bar, and it moves the
-                # watermark the deadline derives from -- often onto a decision
-                # trigger. Anchoring first would hold the run to a deadline up
-                # to a whole decision interval too early and refuse a reconnect
-                # that was still safely inside its window.
-                complete = assembler.flush_if_complete()
-                held = (
-                    await self._resolve_emitted(state, liveness, complete)
-                    if complete is not None
-                    else None
-                )
-                if complete is None and assembler.open_minute_start_ms is not None:
-                    # The interruption outlived the open minute. When the first
-                    # post-reconnect source bar lands in a later minute, this one
-                    # emits from a single generation and nothing on the bar says
-                    # it was cut short -- so the loop remembers (ruling P9).
-                    state.touched_minute_starts.add(assembler.open_minute_start_ms)
-                deadline_ms = policy.deadline_ms(state.last_delivered_end_ms)
-                state.interruption_deadline_ms = deadline_ms
-                await state.record(
-                    state.event(
-                        "interruption",
-                        cause=cause,
-                        generation_from=state.generation,
-                        last_delivered_end_ms=state.last_delivered_end_ms,
-                        deadline_ms=deadline_ms,
-                    )
-                )
-                logger.warning(
-                    "Feed interrupted; attempting same-run continuity",
-                    extra={
-                        "action": "marketdata_interruption_observed",
-                        "feed_id": self.feed_id,
-                        "symbol": symbol,
-                        "cause": cause,
-                    },
-                )
-                # Only now: no delivered bar ever precedes the evidence that
-                # explains it, so a sink that cannot be written yields nothing.
+                held = await loop.open_interruption(exc)
                 if held is not None:
-                    yield held
+                    yield self._deliver(held, liveness)
                 liveness.first_bar_seen = False
-                await wait_for_healthy(self._client, state, deadline_ms=deadline_ms)
-                new_generation = self._client.connection_generation
-                state.last_recovered_ref = await state.record(
-                    state.event(
-                        "recovered",
-                        generation_from=state.generation,
-                        generation_to=new_generation,
-                        last_delivered_end_ms=state.last_delivered_end_ms,
-                    )
-                )
-                logger.info(
-                    "Feed continuity recovered",
-                    extra={
-                        "action": "marketdata_interruption_recovered",
-                        "feed_id": self.feed_id,
-                        "symbol": symbol,
-                        "generation_to": new_generation,
-                    },
-                )
-                state.generation = new_generation
-                state.scan_missed_windows = True
+                await loop.await_recovery()
             except NotConnectedError as exc:
-                deadline_ms = state.interruption_deadline_ms
-                if state.last_delivered_end_ms is None or deadline_ms is None:
-                    raise MarketDataFeedError(str(exc)) from exc
-                # The resubscribe raced the reconnect: still the same
-                # interruption, so still the deadline that interruption recorded.
-                await wait_for_healthy(self._client, state, deadline_ms=deadline_ms)
+                await loop.await_recovery_after_race(exc)
             except IBKRBarStreamError as exc:
                 raise MarketDataFeedError(str(exc)) from exc
 
-    async def _resolve_emitted(
-        self,
-        state: ContinuityState,
-        liveness: _SymbolLiveness,
-        ibkr_bar: IbkrMinuteBar,
-    ) -> MarketDataBar | None:
-        """Return the deliverable form of one assembled minute, or ``None``.
-
-        Until the interruption is closed out by a bar that is actually
-        delivered, minutes it swallowed whole — everything between the last
-        delivered bar and this one — are resolved first and in order, then the
-        bar itself. ``None`` means the minute was omitted as a recorded gap; an
-        unresolvable minute inside the decision session raises instead.
-        """
-        if state.scan_missed_windows:
-            await resolve_missed_windows(state, ibkr_bar.start_ms)
-        touched = ibkr_bar.start_ms in state.touched_minute_starts
-        state.touched_minute_starts.discard(ibkr_bar.start_ms)
-        if is_unresolvable(ibkr_bar, interruption_touched=touched):
-            await resolve_unresolvable_window(
-                state,
-                ibkr_bar.start_ms,
-                ibkr_bar.end_ms,
-                contribution_count=ibkr_bar.contribution_count,
-            )
-            # The scan stays armed: this bar was omitted, not delivered, so the
-            # interruption is still open and whatever it swallowed behind the
-            # *next* bar has yet to be resolved. Spending the flag here loses
-            # every minute between an omitted gap and the next real bar --
-            # reachable whenever an interruption straddles the session open,
-            # since the run streams with use_rth=False and sees pre-market
-            # minutes before its first RTH one.
-            return None
-        # Delivered: the interruption is closed out and a later gap is an
-        # ordinary gap again.
-        state.scan_missed_windows = False
-        bar = self._translate(ibkr_bar)
-        if bar.provenance == "realtime_across_reconnect" and state.last_recovered_ref is not None:
-            bar = bar.model_copy(
-                update={"continuity_event_ref": state.last_recovered_ref.ref()}
-            )
+    def _deliver(self, resolved: ResolvedBar, liveness: _SymbolLiveness) -> MarketDataBar:
+        """Translate one resolved minute at the port boundary and mark the feed live."""
+        bar = self._translate(resolved.bar)
+        if resolved.continuity_event_ref is not None:
+            bar = bar.model_copy(update={"continuity_event_ref": resolved.continuity_event_ref})
         liveness.last_bar_ms = bar.start_ms
         liveness.last_bar_wall_ms = now_ms_utc()
         liveness.first_bar_seen = True
-        state.last_delivered_end_ms = bar.end_ms
         return bar
 
     async def recent_closed_bars(
