@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass
 
 from app.broker.ibkr.bar_models import IbkrMinuteBar
@@ -158,8 +159,11 @@ class IbkrMarketDataFeed:
                     normalized_symbol, liveness, use_rth=use_rth, policy=continuity
                 )
             )
-            async for bar in stream:
-                yield bar
+            # Closed explicitly, so a consumer that stops early releases the
+            # broker line now rather than when the generator finalizer runs.
+            async with aclosing(stream) as bars:
+                async for bar in bars:
+                    yield bar
         finally:
             liveness.active_count = max(0, liveness.active_count - 1)
             if liveness.active_count == 0:
@@ -201,23 +205,26 @@ class IbkrMarketDataFeed:
             replacements = 0
             while True:
                 try:
-                    async for ibkr_bar in stream_minute_bars(
-                        self._client,
-                        symbol,
-                        use_rth=use_rth,
-                        on_source_bar=lambda source_ms: self._observe_source_bar(
+                    async with aclosing(
+                        stream_minute_bars(
+                            self._client,
                             symbol,
-                            source_ms,
-                        ),
-                        # Per attempt: this path does not carry a minute across a
-                        # replaced subscription, and never did.
-                        assembler=MinuteAssembler(),
-                    ):
-                        bar = self._translate(ibkr_bar)
-                        liveness.last_bar_ms = bar.start_ms
-                        liveness.last_bar_wall_ms = now_ms_utc()
-                        liveness.first_bar_seen = True
-                        yield bar
+                            use_rth=use_rth,
+                            on_source_bar=lambda source_ms: self._observe_source_bar(
+                                symbol,
+                                source_ms,
+                            ),
+                            # Per attempt: this path does not carry a minute across a
+                            # replaced subscription, and never did.
+                            assembler=MinuteAssembler(),
+                        )
+                    ) as minute_bars:
+                        async for ibkr_bar in minute_bars:
+                            bar = self._translate(ibkr_bar)
+                            liveness.last_bar_ms = bar.start_ms
+                            liveness.last_bar_wall_ms = now_ms_utc()
+                            liveness.first_bar_seen = True
+                            yield bar
                     break
                 except IBKRBarSubscriptionStalled as exc:
                     liveness.first_bar_seen = False
@@ -263,16 +270,19 @@ class IbkrMarketDataFeed:
 
         while True:
             try:
-                async for ibkr_bar in stream_minute_bars(
-                    self._client,
-                    symbol,
-                    use_rth=use_rth,
-                    on_source_bar=_on_source_bar,
-                    assembler=loop.assembler,
-                ):
-                    resolved = await loop.resolve_emitted(ibkr_bar)
-                    if resolved is not None:
-                        yield self._deliver(resolved, liveness)
+                async with aclosing(
+                    stream_minute_bars(
+                        self._client,
+                        symbol,
+                        use_rth=use_rth,
+                        on_source_bar=_on_source_bar,
+                        assembler=loop.assembler,
+                    )
+                ) as minute_bars:
+                    async for ibkr_bar in minute_bars:
+                        resolved = await loop.resolve_emitted(ibkr_bar)
+                        if resolved is not None:
+                            yield self._deliver(resolved, liveness)
                 return
             except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as exc:
                 held = await loop.open_interruption(exc)
@@ -289,7 +299,15 @@ class IbkrMarketDataFeed:
         """Translate one resolved minute at the port boundary and mark the feed live."""
         bar = self._translate(resolved.bar)
         if resolved.continuity_event_ref is not None:
-            bar = bar.model_copy(update={"continuity_event_ref": resolved.continuity_event_ref})
+            # The loop decided this minute was assembled across the
+            # interruption; the generation set alone cannot see a
+            # same-generation restore, so the port takes the loop's word.
+            bar = bar.model_copy(
+                update={
+                    "provenance": "realtime_across_reconnect",
+                    "continuity_event_ref": resolved.continuity_event_ref,
+                }
+            )
         liveness.last_bar_ms = bar.start_ms
         liveness.last_bar_wall_ms = now_ms_utc()
         liveness.first_bar_seen = True

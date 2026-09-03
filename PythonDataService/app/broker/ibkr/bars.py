@@ -30,7 +30,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Literal, NamedTuple
@@ -645,6 +645,24 @@ class _LeasedBar(NamedTuple):
     generation: int
 
 
+def _resume_index(bars: Sequence[object], start_index: int, last_source_ms: int | None) -> int:
+    """Where a consumer's delivery begins on a leased list.
+
+    A consumer resuming after an interruption picks up where its assembler
+    left off, not at the list's tail: prints another consumer of this line --
+    or a same-generation 1100 -> 1102 restore -- already appended past its
+    watermark are still its prints, and skipping them leaves its landing
+    minute short for no reason (#1923). A consumer with no watermark is new
+    and keeps the lease's tail semantics: the mutable list is not a replay.
+    """
+    if last_source_ms is None:
+        return start_index
+    index = start_index
+    while index > 0 and _bar_time_ms(bars[index - 1]) > last_source_ms:
+        index -= 1
+    return index
+
+
 async def _iter_leased_raw_bars(
     client: IbkrClient,
     symbol: str,
@@ -683,6 +701,7 @@ async def _iter_leased_raw_bars(
         use_rth=use_rth,
     )
     bars = lease.bars
+    index = _resume_index(bars, lease.start_index, last_source_ms)
     sym = symbol.upper()
     venue = _contract_venue(contract)
     delivery_logger = _BarDeliveryLogger(
@@ -712,10 +731,13 @@ async def _iter_leased_raw_bars(
         ),
         response=evidence_response(
             "realTimeBarList",
-            fields={"bar_count": len(bars), "start_index": lease.start_index},
+            fields={
+                "bar_count": len(bars),
+                "start_index": index,
+                "lease_start_index": lease.start_index,
+            },
         ),
     )
-    index = lease.start_index
     last_progress_at = time.monotonic()
 
     def _observe(raw_bar) -> _LeasedBar:

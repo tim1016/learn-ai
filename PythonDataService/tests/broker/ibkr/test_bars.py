@@ -634,6 +634,41 @@ async def test_late_shared_consumer_starts_after_existing_list_tail() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconnecting_consumer_resumes_after_its_watermark_not_at_the_tail() -> None:
+    """#1923: a print appended past a consumer's watermark before it re-acquired is still its print.
+
+    The first consumer opens the line and both queued prints fall behind its
+    tail. A consumer whose assembler already holds the :55 print re-acquires
+    the same line: tail semantics would skip the :00 print that closes its
+    minute, and the landing minute would then be refused short for no reason.
+    """
+    client = _FakeClient()
+    first = stream_minute_bars(client, "SPY", use_rth=True, assembler=MinuteAssembler())
+    await first.__anext__()
+
+    assembler = MinuteAssembler()
+    assembler.feed(client.ib.bars[0], symbol="SPY", generation=1, venue=None, use_rth=True)
+    seen: list[int] = []
+    second = stream_minute_bars(
+        client,
+        "SPY",
+        use_rth=True,
+        on_source_bar=seen.append,
+        assembler=assembler,
+        stall_timeout_s=1.0,  # without the resume this waits for a print that never comes
+    )
+    try:
+        emitted = await second.__anext__()
+    finally:
+        await second.aclose()
+        await first.aclose()
+
+    assert seen == [int(client.ib.bars[1].time.timestamp() * 1000)]
+    assert emitted.start_ms == int(client.ib.bars[0].time.replace(second=0).timestamp() * 1000)
+    assert client.ib.realtime_bar_request_count == 1
+
+
+@pytest.mark.asyncio
 async def test_invalidated_generation_cannot_release_its_replacement() -> None:
     """#1411: late cleanup from the dead line must not cancel the new line."""
     client = _FakeClient()

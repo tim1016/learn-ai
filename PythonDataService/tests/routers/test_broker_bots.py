@@ -7,6 +7,7 @@ deploy → running roster row → stop → OFF_DUTY roster row.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
 
@@ -54,7 +55,7 @@ class _HoldFeed:
         *,
         use_rth: bool = True,
         continuity: ContinuityPolicy | None = None,
-    ):
+    ) -> AsyncIterator[MarketDataBar]:
         del continuity
         yield MarketDataBar(
             symbol=symbol,

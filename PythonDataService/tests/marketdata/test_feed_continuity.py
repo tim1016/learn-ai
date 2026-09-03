@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -107,37 +108,45 @@ class _Source:
       the assembler's internals are not what is under test.
     """
 
-    def __init__(self, *calls: list) -> None:
+    def __init__(self, *calls: list, same_generation: bool = False) -> None:
         self.calls = list(calls)
         self.assemblers: list = []
         self.invocations = 0
+        #: Calls whose generator has finished or been closed.
+        self.closed = 0
+        #: A 1100 -> 1102 soft restore keeps the socket and its generation, so
+        #: every call folds under generation 1 instead of a fresh one.
+        self.same_generation = same_generation
 
     def __call__(self, _client, _symbol, *, use_rth=True, on_source_bar=None, assembler=None, **_kw):
         self.assemblers.append(assembler)
         script = self.calls[self.invocations] if self.invocations < len(self.calls) else []
         self.invocations += 1
-        generation = self.invocations
+        generation = 1 if self.same_generation else self.invocations
 
         async def _gen():
-            for item in script:
-                if isinstance(item, BaseException):
-                    raise item
-                if hasattr(item, "time"):
-                    emitted = assembler.feed(
-                        item,
-                        symbol=_symbol,
-                        generation=generation,
-                        venue="ARCA",
-                        use_rth=use_rth,
-                    )
-                    if on_source_bar is not None and assembler.last_source_ms is not None:
-                        on_source_bar(assembler.last_source_ms)
-                    if emitted is not None:
-                        yield emitted
-                    continue
-                if on_source_bar is not None:
-                    on_source_bar(item.start_ms)
-                yield item
+            try:
+                for item in script:
+                    if isinstance(item, BaseException):
+                        raise item
+                    if hasattr(item, "time"):
+                        emitted = assembler.feed(
+                            item,
+                            symbol=_symbol,
+                            generation=generation,
+                            venue="ARCA",
+                            use_rth=use_rth,
+                        )
+                        if on_source_bar is not None and assembler.last_source_ms is not None:
+                            on_source_bar(assembler.last_source_ms)
+                        if emitted is not None:
+                            yield emitted
+                        continue
+                    if on_source_bar is not None:
+                        on_source_bar(item.start_ms)
+                    yield item
+            finally:
+                self.closed += 1
 
         return _gen()
 
@@ -211,9 +220,11 @@ async def test_a_complete_open_minute_is_flushed_and_delivered_before_the_wait(
         if len(observed) == 2:
             break
 
+    # The bar after the recovery is the minute the resubscribed line landed
+    # in, so it carries the recovery that explains it.
     assert observed == [
         (_MINUTE0, "realtime", ("interruption",)),
-        (_MINUTE0 + 60_000, "realtime", ("interruption", "recovered")),
+        (_MINUTE0 + 60_000, "realtime_across_reconnect", ("interruption", "recovered")),
     ]
     # The flushed minute is a delivered bar, so the deadline the run promises
     # is derived from where it left the watermark, not from where the
@@ -807,7 +818,13 @@ async def test_the_landing_minute_after_a_complete_flush_must_prove_itself_by_co
 async def test_a_landing_minute_that_holds_every_print_is_delivered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The sibling edge: landing on the :00 print leaves nothing to prove short."""
+    """The sibling edge: landing on the :00 print leaves nothing to prove short.
+
+    It is still the minute the run resumed on, so it is delivered as
+    ``realtime_across_reconnect`` carrying the recovery -- the evidence a
+    replay needs to see where the stream picked up, and the tag
+    ``admit_on_delivery`` keys its lateness check on.
+    """
     sink = _RecordingSink()
     source = _Source(
         [*_rth_minute_raw(_MINUTE0, range(0, 60, 5)), IBKRBarInterrupted("x", cause="socket_down")],
@@ -818,9 +835,9 @@ async def test_a_landing_minute_that_holds_every_print_is_delivered(
 
     bars = await _collect(feed, _policy(sink), 2)
 
-    assert [(b.start_ms, b.provenance) for b in bars] == [
-        (_MINUTE0, "realtime"),
-        (_MINUTE0 + 60_000, "realtime"),
+    assert [(b.start_ms, b.provenance, b.continuity_event_ref) for b in bars] == [
+        (_MINUTE0, "realtime", None),
+        (_MINUTE0 + 60_000, "realtime_across_reconnect", ContinuityEventRef(run_id="run-1", evidence_seq=2).ref()),
     ]
     assert [e.kind for e in sink.events] == ["interruption", "recovered"]
 
@@ -855,6 +872,133 @@ async def test_a_socket_already_healthy_past_the_deadline_is_still_a_missed_deci
     assert excinfo.value.reason == "DECISION_BAR_MISSED"
     assert [e.kind for e in sink.events] == ["interruption", "refused"]
     assert sink.events[0].deadline_ms == sink.events[-1].deadline_ms == _MINUTE0 + 80_000
+
+
+async def test_a_minute_cut_by_a_same_generation_restore_is_delivered_across_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 1100 -> 1102 soft restore keeps the socket generation (GitHub review, Codex).
+
+    Every print of the open minute then comes over generation 1, so the
+    assembler's ``spans_interruption`` reads false -- but the loop saw the
+    minute cut open. The port must say so: provenance
+    ``realtime_across_reconnect`` and the recovery that explains it, or
+    ``admit_on_delivery`` would wave the bar through as an ordinary
+    ``realtime`` minute.
+    """
+    sink = _RecordingSink()
+    source = _Source(
+        [
+            _ibkr_bar(_MINUTE0 - 60_000),
+            *_rth_minute_raw(_MINUTE0, range(0, 30, 5)),
+            IBKRBarInterrupted("x", cause="soft_loss_1100"),
+        ],
+        [*_rth_minute_raw(_MINUTE0, range(30, 60, 5)), _raw_5s(_MINUTE0 + 60_000)],
+        same_generation=True,
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    bars = await _collect(feed, _policy(sink), 2)
+
+    assert bars[1].start_ms == _MINUTE0
+    assert bars[1].provenance == "realtime_across_reconnect"
+    assert bars[1].continuity_event_ref == ContinuityEventRef(run_id="run-1", evidence_seq=2).ref()
+    assert [(e.kind, e.generation_from, e.generation_to) for e in sink.events] == [
+        ("interruption", 1, None),
+        ("recovered", 1, 1),
+    ]
+
+
+async def test_a_short_minute_and_the_minutes_missed_behind_it_are_one_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One fact per episode (P11), even when the episode starts mid-minute.
+
+    The assembler emits the cut-short minute only when the first post-recovery
+    print lands in a later minute -- here three minutes on. The two wholly
+    missed minutes in between are the same outage, so the refusal names the
+    whole window; a coalesced window carries no single count (P12).
+    """
+    sink = _RecordingSink()
+    source = _Source(
+        [
+            _ibkr_bar(_MINUTE0 - 60_000),
+            *_rth_minute_raw(_MINUTE0, range(0, 30, 5)),
+            IBKRBarInterrupted("x", cause="socket_down"),
+        ],
+        [_raw_5s(_MINUTE0 + 180_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await _collect(feed, _policy(sink), 2)
+
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "refused"]
+    refused = sink.events[-1]
+    assert (refused.window_start_ms, refused.window_end_ms, refused.contribution_count) == (
+        _MINUTE0,
+        _MINUTE0 + 180_000,
+        None,
+    )
+
+
+async def test_a_short_minute_and_the_minutes_missed_behind_it_are_one_gap_outside_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same episode outside the decision session is one recorded gap, then life goes on."""
+    sink = _RecordingSink()
+    pre = _MINUTE0 - 8 * 3_600_000  # 07:00 ET
+    source = _Source(
+        [
+            _ibkr_bar(pre - 60_000, phase="PRE"),
+            *_rth_minute_raw(pre, range(0, 30, 5)),
+            IBKRBarInterrupted("x", cause="socket_down"),
+        ],
+        [*_rth_minute_raw(pre + 180_000, range(0, 60, 5)), _raw_5s(pre + 240_000)],
+    )
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: pre + 30_000)
+    feed = IbkrMarketDataFeed(_client())
+
+    bars = await _collect(feed, _policy(sink), 2)
+
+    assert [(b.start_ms, b.provenance) for b in bars] == [
+        (pre - 60_000, "realtime"),
+        (pre + 180_000, "realtime_across_reconnect"),
+    ]
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "gap"]
+    gap = sink.events[-1]
+    assert (gap.window_start_ms, gap.window_end_ms, gap.contribution_count) == (
+        pre,
+        pre + 180_000,
+        None,
+    )
+
+
+@pytest.mark.parametrize("with_policy", [False, True])
+async def test_closing_the_consumer_stream_closes_the_broker_stream_at_once(
+    monkeypatch: pytest.MonkeyPatch, with_policy: bool
+) -> None:
+    """A consumer that stops early releases the line now, not when the GC gets to it.
+
+    ``stream_bars`` delegates through two generators; each is closed with
+    ``aclosing`` so the outer ``aclose()`` reaches ``stream_minute_bars`` --
+    and the lease release in its ``finally`` -- before it returns.
+    """
+    sink = _RecordingSink()
+    source = _Source([_ibkr_bar(_MINUTE0 - 60_000), _ibkr_bar(_MINUTE0)])
+    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    feed = IbkrMarketDataFeed(_client())
+    policy = _policy(sink) if with_policy else None
+
+    async with aclosing(feed.stream_bars("SPY", continuity=policy)) as stream:
+        async for _bar in stream:
+            break
+
+    assert source.closed == 1
 
 
 async def test_kill_switch_restores_todays_fail_fast(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from decimal import Decimal
 from pathlib import Path
 
@@ -160,14 +160,35 @@ def _recording_policy(*, trigger_ms: int) -> tuple[ContinuityPolicy, list[FeedCo
     return policy, events
 
 
-def _serving_warmup(bars: list[MarketDataBar]):
+def _serving_warmup(bars: list[MarketDataBar]) -> Callable[..., Awaitable[list[MarketDataBar]]]:
     """Replace ``_FakeFeed.recent_closed_bars``, which serves no warmup by default."""
 
-    async def _recent(symbol: str, *, use_rth: bool = True, lookback_days: int = 5):
+    async def _recent(symbol: str, *, use_rth: bool = True, lookback_days: int = 5) -> list[MarketDataBar]:
         del symbol, use_rth, lookback_days
         return list(bars)
 
     return _recent
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_decision_bar_exactly_at_its_allowance_is_admitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The allowance is inclusive: 20 000 ms after the close is still on time."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    policy, events = _recording_policy(trigger_ms=_T0 + 60_000)
+    on_time = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
+    monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_000)
+    try:
+        feed = _RetainedSourceBarFeed(
+            _FakeFeed([on_time], mode="finite"), ledger, run_id="run-x", continuity=policy
+        )
+        delivered = [bar async for bar in feed.stream_bars("SPY", use_rth=True)]
+    finally:
+        ledger.close()
+
+    assert [bar.start_ms for bar in delivered] == [_T0]
+    assert events == []
 
 
 @pytest.mark.asyncio
@@ -321,14 +342,14 @@ async def test_late_non_realtime_trigger_bar_is_refused_as_decision_late(
     against a market that has since moved. The refusal is recorded before it
     is raised, so the run's evidence explains the crash.
     """
-    from app.services import bot_trade_strategy as module
     from app.services.feed_continuity_policy import FeedContinuityRefused
 
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     # The bar's own close is the trigger, so it is a decision bar.
     policy, events = _recording_policy(trigger_ms=_T0 + 60_000)
     late = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
-    monkeypatch.setattr(module, "now_ms_utc", lambda: _T0 + 60_000 + 20_001)
+    # The clock ``admit_on_delivery`` actually reads lives in the policy module.
+    monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_001)
     try:
         feed = _RetainedSourceBarFeed(
             _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy
@@ -356,7 +377,6 @@ async def test_a_refusal_the_sink_cannot_take_is_typed_unwritable(
     ``CONTINUITY_EVIDENCE_UNWRITABLE``, not leak the sink's own exception past
     the port on the way to the run outcome.
     """
-    from app.services import bot_trade_strategy as module
 
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     policy, _ = _recording_policy(trigger_ms=_T0 + 60_000)
@@ -371,7 +391,8 @@ async def test_a_refusal_the_sink_cannot_take_is_typed_unwritable(
         record_event=_unwritable,
     )
     late = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
-    monkeypatch.setattr(module, "now_ms_utc", lambda: _T0 + 60_000 + 20_001)
+    # The clock ``admit_on_delivery`` actually reads lives in the policy module.
+    monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_001)
     try:
         feed = _RetainedSourceBarFeed(
             _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy
@@ -417,14 +438,14 @@ async def test_late_non_trigger_bar_is_admitted(tmp_path: Path, monkeypatch: pyt
     for arriving late would turn a survivable reconnect back into a crash --
     the exact failure #1921 exists to close.
     """
-    from app.services import bot_trade_strategy as module
 
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     # The trigger is a full bucket away, so this bar's close (_T0 + 60_000) is
     # an ordinary minute rather than a decision.
     policy, events = _recording_policy(trigger_ms=_T0 + 15 * 60_000)
     late = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
-    monkeypatch.setattr(module, "now_ms_utc", lambda: _T0 + 60_000 + 20_001)
+    # The clock ``admit_on_delivery`` actually reads lives in the policy module.
+    monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_001)
     try:
         feed = _RetainedSourceBarFeed(
             _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy

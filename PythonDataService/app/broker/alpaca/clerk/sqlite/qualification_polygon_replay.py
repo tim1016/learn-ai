@@ -101,7 +101,12 @@ class PolygonReplayMarketDataFeed:
         use_rth: bool = True,
         continuity: ContinuityPolicy | None = None,
     ) -> AsyncIterator[MarketDataBar]:
-        async for bar in self._delegate.stream_bars(symbol, use_rth=use_rth, continuity=continuity):
+        if continuity is not None:
+            # The replay never reconnects, and its client carries no settings
+            # for the delegate's kill switch to read: a policy here is a
+            # harness bug, not a run to keep alive.
+            raise ValueError("Polygon replay carries no continuity policy")
+        async for bar in self._delegate.stream_bars(symbol, use_rth=use_rth):
             yield bar.model_copy(update={"feed_id": self.feed_id})
 
     async def recent_closed_bars(

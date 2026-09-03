@@ -83,9 +83,11 @@ class _OpenInterruption:
 class ResolvedBar:
     """One assembled minute the loop will let through, and what explains it.
 
-    ``continuity_event_ref`` is the ``recovered`` event a bar stitched across
-    the interruption is evidence of; ``None`` for a bar no interruption
-    touched.
+    ``continuity_event_ref`` is the ``recovered`` event a bar assembled across
+    the interruption is evidence of -- its contributions span connection
+    generations, or the loop saw the interruption cut it open or land in it --
+    and it is what makes the bar ``realtime_across_reconnect`` at the port.
+    ``None`` for a bar no interruption touched.
     """
 
     bar: IbkrMinuteBar
@@ -169,11 +171,7 @@ class ContinuityLoop:
             await self._resolve_missed_windows(ibkr_bar.start_ms)
         touched = interruption is not None and interruption.touches(ibkr_bar.start_ms)
         if _is_unresolvable(ibkr_bar, interruption_touched=touched):
-            await self._resolve_unresolvable_window(
-                ibkr_bar.start_ms,
-                ibkr_bar.end_ms,
-                contribution_count=ibkr_bar.contribution_count,
-            )
+            await self._resolve_unresolvable_episode(ibkr_bar)
             # The interruption stays open: this bar was omitted, not delivered,
             # so whatever it swallowed behind the *next* bar has yet to be
             # resolved (ruling P14). Closing it here would lose every minute
@@ -183,9 +181,12 @@ class ContinuityLoop:
             # its first RTH one.
             return None
         recovered_ref = interruption.recovered_ref if interruption is not None else None
+        # The loop's fact, not only the generation set: a minute the
+        # interruption cut open or landed in was assembled across it even when
+        # every print came over one socket generation (a 1100 -> 1102 restore).
         explained_by = (
             recovered_ref.ref()
-            if ibkr_bar.spans_interruption and recovered_ref is not None
+            if recovered_ref is not None and (touched or ibkr_bar.spans_interruption)
             else None
         )
         # Delivered: the interruption is closed out and a later gap is an
@@ -400,6 +401,30 @@ class ContinuityLoop:
         if run_start is not None:
             windows.append((run_start, end_ms))
         return windows
+
+    async def _resolve_unresolvable_episode(self, ibkr_bar: IbkrMinuteBar) -> None:
+        """Resolve a short emitted minute together with every minute missed behind it.
+
+        The assembler emits the minute an interruption cut short only when the
+        first post-recovery print lands in a later minute -- possibly several
+        minutes on. The wholly-missed minutes in between are the same episode
+        as the short one, and the coalescing rule (P11) wants one fact per
+        episode, so the window runs from this bar's start to the minute the
+        assembler now holds open, split only at the decision-session boundary.
+        The count travels only with a window that is exactly this emitted
+        minute; a coalesced window has no single count (P12).
+        """
+        open_minute_start_ms = self.assembler.open_minute_start_ms
+        episode_end_ms = max(ibkr_bar.end_ms, open_minute_start_ms or ibkr_bar.end_ms)
+        for window_start_ms, window_end_ms in self._session_uniform_windows(
+            ibkr_bar.start_ms, episode_end_ms
+        ):
+            is_this_minute = (window_start_ms, window_end_ms) == (ibkr_bar.start_ms, ibkr_bar.end_ms)
+            await self._resolve_unresolvable_window(
+                window_start_ms,
+                window_end_ms,
+                contribution_count=ibkr_bar.contribution_count if is_this_minute else None,
+            )
 
     async def _resolve_missed_windows(self, until_start_ms: int) -> None:
         """Resolve every minute an interruption swallowed whole, coalesced by session verdict.

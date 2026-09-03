@@ -443,6 +443,44 @@ def test_provenance_and_continuity_columns_persist(tmp_path: Path) -> None:
         ledger.close()
 
 
+_PRE_CHANNEL_SCHEMA_REWRITE = """
+DROP TABLE source_evidence_journal;
+DROP TABLE source_stream_events;
+CREATE TABLE source_bars_pre_channel (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    bar_identity TEXT NOT NULL UNIQUE,
+    bar_ref TEXT NOT NULL UNIQUE,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    open TEXT NOT NULL,
+    high TEXT NOT NULL,
+    low TEXT NOT NULL,
+    close TEXT NOT NULL,
+    volume INTEGER NOT NULL,
+    fetched_at_ms INTEGER NOT NULL,
+    session_phase TEXT NOT NULL,
+    UNIQUE(provider, symbol, start_ms, end_ms),
+    CHECK(end_ms > start_ms),
+    CHECK(volume >= 0),
+    CHECK(fetched_at_ms >= 0)
+);
+INSERT INTO source_bars_pre_channel
+    SELECT seq, account_id, provider, symbol, bar_identity, bar_ref, start_ms, end_ms,
+           open, high, low, close, volume, fetched_at_ms, session_phase
+    FROM source_bars;
+DROP TABLE source_bars;
+ALTER TABLE source_bars_pre_channel RENAME TO source_bars;
+"""
+"""The ``source_bars`` schema as shipped before #1921, rebuilt literally.
+
+Written out rather than produced with ``ALTER TABLE ... DROP COLUMN``, which
+needs SQLite 3.35 and CI does not pin ``libsqlite3``.
+"""
+
+
 def test_pre_channel_ledger_migrates_with_a_journal_row_per_bar(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
@@ -450,11 +488,7 @@ def test_pre_channel_ledger_migrates_with_a_journal_row_per_bar(tmp_path: Path) 
     path = ledger.path
     ledger.close()
     conn = sqlite3.connect(path)
-    conn.executescript("DROP TABLE source_evidence_journal; DROP TABLE source_stream_events;")
-    conn.execute("ALTER TABLE source_bars DROP COLUMN provenance")
-    conn.execute("ALTER TABLE source_bars DROP COLUMN authorization_id")
-    conn.execute("ALTER TABLE source_bars DROP COLUMN continuity_event_ref")
-    conn.commit()
+    conn.executescript(_PRE_CHANNEL_SCHEMA_REWRITE)
     conn.close()
 
     reopened = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")

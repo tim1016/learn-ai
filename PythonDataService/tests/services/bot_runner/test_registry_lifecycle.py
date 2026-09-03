@@ -708,6 +708,7 @@ async def test_count_complete_interruption_keeps_the_run_running(
     view = registry.status("alpaca", _SID)
     assert view.running is True
     assert view.duty_outcome is None
+    await registry.stop("alpaca", _SID)
 
 
 @pytest.mark.asyncio

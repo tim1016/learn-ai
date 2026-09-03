@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from app.broker.alpaca.clerk.models import (
@@ -72,7 +73,7 @@ class _FakeFeed:
         *,
         use_rth: bool = True,
         continuity: ContinuityPolicy | None = None,
-    ):
+    ) -> AsyncIterator[MarketDataBar]:
         self.continuity_seen = continuity
         reconnected = False
         for index, bar in enumerate(self._bars):
