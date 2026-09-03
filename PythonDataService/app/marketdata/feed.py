@@ -265,6 +265,26 @@ class ContinuityPolicy:
         return self.next_trigger_ms(end_ms - 1) == end_ms
 
 
+async def record_continuity_event(
+    policy: ContinuityPolicy, event: FeedContinuityEvent
+) -> ContinuityEventRef:
+    """Write one continuity fact through the consumer's sink, or fail closed.
+
+    Spec §4.2 rule 9: continuing without the evidence that was promised is
+    forbidden. Every writer goes through this one function so a sink failure
+    surfaces as the same typed ``CONTINUITY_EVIDENCE_UNWRITABLE`` wherever it
+    happens, rather than escaping as whatever the sink's own failure was --
+    the bot layer's own refusals write to the same journal the feed does.
+    """
+    try:
+        return await policy.record_event(event)
+    except Exception as exc:
+        raise MarketDataFeedError(
+            f"continuity evidence for {event.symbol} could not be written: {exc}",
+            reason="CONTINUITY_EVIDENCE_UNWRITABLE",
+        ) from exc
+
+
 class MarketDataFeed(Protocol):
     """Broker-neutral market-data port.
 

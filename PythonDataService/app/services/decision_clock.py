@@ -49,6 +49,11 @@ def floor_to_period_ms_et(timestamp_ms: int, period_ms: int) -> int:
     bars with the previous ET trading date.
 
     Formula: ``floor(et_wall_clock_ms / period_ms) * period_ms``, re-anchored in ET.
+    Reference:
+        LEAN ``Common/Data/Consolidators/PeriodCountConsolidatorBase`` — the
+        floor of a naive, already-exchange-local ``DateTime``
+        (``dateTime.Ticks % interval.Ticks``), as transcribed in the module
+        docstring of ``app/engine/consolidators/trade_bar_consolidator.py``.
     Canonical implementation:
         ``app/engine/consolidators/trade_bar_consolidator.py::_floor_to_period_ms``
     Validated against:

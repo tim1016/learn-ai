@@ -17,6 +17,7 @@ from app.marketdata.feed import (
     ContinuityPolicy,
     FeedContinuityEvent,
     MarketDataBar,
+    MarketDataFeedError,
     SubstitutionRefusal,
 )
 from app.services.bot_runtime import PauseAwareFeed, execute_bot_run
@@ -157,6 +158,16 @@ def _recording_policy(*, trigger_ms: int) -> tuple[ContinuityPolicy, list[FeedCo
         record_event=_sink,
     )
     return policy, events
+
+
+def _serving_warmup(bars: list[MarketDataBar]):
+    """Replace ``_FakeFeed.recent_closed_bars``, which serves no warmup by default."""
+
+    async def _recent(symbol: str, *, use_rth: bool = True, lookback_days: int = 5):
+        del symbol, use_rth, lookback_days
+        return list(bars)
+
+    return _recent
 
 
 @pytest.mark.asyncio
@@ -325,6 +336,70 @@ async def test_late_non_realtime_trigger_bar_is_refused_as_decision_late(
         assert excinfo.value.reason == "DECISION_LATE"
         assert events[-1].kind == "refused" and events[-1].reason == "DECISION_LATE"
         assert ledger.bars(provider="fake", symbol="SPY") == []
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_the_sink_cannot_take_is_typed_unwritable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bot layer's own refusal writes through the feed's typed wrapper.
+
+    Spec §4.2 rule 9 is about the evidence, not about who writes it: a sink
+    that cannot take this refusal must end the run as
+    ``CONTINUITY_EVIDENCE_UNWRITABLE``, not leak the sink's own exception past
+    the port on the way to the run outcome.
+    """
+    from app.services import bot_trade_strategy as module
+
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    policy, _ = _recording_policy(trigger_ms=_T0 + 60_000)
+
+    async def _unwritable(event: FeedContinuityEvent) -> ContinuityEventRef:
+        raise OSError("journal unwritable")
+
+    policy = ContinuityPolicy(
+        decision_session=policy.decision_session,
+        next_trigger_ms=policy.next_trigger_ms,
+        substitution_grant=policy.substitution_grant,
+        record_event=_unwritable,
+    )
+    late = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
+    monkeypatch.setattr(module, "now_ms_utc", lambda: _T0 + 60_000 + 20_001)
+    try:
+        feed = _RetainedSourceBarFeed(
+            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", continuity=policy
+        )
+
+        with pytest.raises(MarketDataFeedError) as excinfo:
+            async for _ in feed.stream_bars("SPY", use_rth=True):
+                pass
+
+        assert excinfo.value.reason == "CONTINUITY_EVIDENCE_UNWRITABLE"
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_warmup_bars_fetched_from_the_source_are_journalled_to_this_run(
+    tmp_path: Path,
+) -> None:
+    """A warmup row with no run is a row no receipt's evidence bound can reach.
+
+    The ledger's journal is per-run, and the receipt bounds a run's evidence by
+    ``evidence_seq``; a warmup bar appended without ``run_id`` lands in the
+    journal anonymously, so the run that actually consumed it cannot claim it.
+    """
+    source = _FakeFeed([], mode="finite")
+    source.recent_closed_bars = _serving_warmup([_bar(_T0)])  # type: ignore[method-assign]
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        feed = _RetainedSourceBarFeed(source, ledger, run_id="run-x")
+
+        await feed.recent_closed_bars("SPY", use_rth=True)
+
+        assert [row.run_id for row in ledger.bars(provider="fake", symbol="SPY")] == ["run-x"]
     finally:
         ledger.close()
 

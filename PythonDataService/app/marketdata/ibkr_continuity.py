@@ -26,6 +26,7 @@ from app.marketdata.feed import (
     MarketDataFeedError,
     SubstitutionGrant,
     SubstitutionRefusal,
+    record_continuity_event,
 )
 from app.services.session_authority import session_state_at_ms
 from app.utils.timestamps import now_ms_utc
@@ -63,13 +64,7 @@ class ContinuityState:
     scan_missed_windows: bool = False
 
     async def record(self, event: FeedContinuityEvent) -> ContinuityEventRef:
-        try:
-            return await self.policy.record_event(event)
-        except Exception as exc:
-            raise MarketDataFeedError(
-                f"continuity evidence for {self.symbol} could not be written: {exc}",
-                reason="CONTINUITY_EVIDENCE_UNWRITABLE",
-            ) from exc
+        return await record_continuity_event(self.policy, event)
 
     def event(self, kind: ContinuityEventKind, **fields: object) -> FeedContinuityEvent:
         return FeedContinuityEvent(

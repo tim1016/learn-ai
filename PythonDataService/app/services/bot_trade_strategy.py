@@ -48,6 +48,7 @@ from app.marketdata.feed import (
     FeedHealth,
     MarketDataBar,
     MarketDataFeed,
+    record_continuity_event,
 )
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
@@ -265,7 +266,11 @@ class _RetainedSourceBarFeed:
         observed_at_ms = now_ms_utc()
         if observed_at_ms <= bar.end_ms + policy.delivery_allowance_ms:
             return
-        await policy.record_event(
+        # Through the same typed wrapper the feed writes with: a sink that
+        # cannot take this refusal is CONTINUITY_EVIDENCE_UNWRITABLE, not a
+        # bare OSError escaping the port on the way to the run's outcome.
+        await record_continuity_event(
+            policy,
             FeedContinuityEvent(
                 kind="refused",
                 feed_id=bar.feed_id,
@@ -275,7 +280,7 @@ class _RetainedSourceBarFeed:
                 window_start_ms=bar.start_ms,
                 window_end_ms=bar.end_ms,
                 bar_identity=f"{bar.feed_id}:{bar.symbol}:{bar.start_ms}:{bar.end_ms}",
-            )
+            ),
         )
         raise FeedContinuityRefused(
             f"trigger bar {bar.start_ms}..{bar.end_ms} delivered after the allowance",
@@ -321,7 +326,7 @@ class _RetainedSourceBarFeed:
             symbol, use_rth=False, lookback_days=lookback_days
         )
         for bar in bars:
-            self._ledger.append_history(bar)
+            self._ledger.append_history(bar, run_id=self._run_id)
         return [bar for bar in bars if _includes_session_phase(bar, use_rth=use_rth)]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
