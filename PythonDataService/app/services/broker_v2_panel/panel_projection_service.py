@@ -63,7 +63,10 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
-from app.services.signal_program_admission import WIRING_DRIFT_NEXT_STEP
+from app.services.signal_program_admission import (
+    proven_build_explanation,
+    proven_build_next_step,
+)
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -431,36 +434,37 @@ def program_build_view_from_run_evidence(
         running_artifact_digest=evidence.running_artifact_digest,
         qualification_receipt_hash=evidence.qualification_receipt_hash,
         verified_at_ms=evidence.verified_at_ms,
-        # The verdict this run actually started under (#1828). Evidence
-        # written before it was recorded carries `NOT_CHECKED`, which is a
-        # true statement about that run rather than a claim about its wiring
-        # -- a frozen replay silently reporting MATCHED would be the exact
-        # false assurance the #1735 split was added to prevent.
+        # The verdicts this run actually started under (#1828, ADR 0054).
+        # Evidence written before either was recorded carries `NOT_CHECKED`,
+        # which is a true statement about that run rather than a claim about
+        # it -- a frozen replay silently reporting MATCHED or COVERED would be
+        # the exact false assurance the #1735 split was added to prevent.
         wiring=evidence.wiring,
+        corpus_coverage=evidence.corpus_coverage,
         evidence_refs=(
             f"signal-program-seal:{evidence.sealed_program_hash}",
             f"program-build-receipt:{evidence.qualification_receipt_hash}",
             f"program-build-digest:{evidence.running_artifact_digest}",
         ),
-        explanation=(
-            "The Signal Program build proven and recorded when this run started "
-            "matches its golden qualification receipt."
-            if evidence.wiring != "DRIFTED"
-            else (
-                "The Signal Program math proven and recorded when this run started "
-                "matches its golden qualification receipt, but its strategy wiring "
-                "had already changed since that receipt was minted."
-            )
+        explanation=proven_build_explanation(
+            (
+                "The Signal Program build proven and recorded when this run started "
+                "matches its golden qualification receipt."
+                if evidence.wiring != "DRIFTED"
+                else (
+                    "The Signal Program math proven and recorded when this run started "
+                    "matches its golden qualification receipt, but its strategy wiring "
+                    "had already changed since that receipt was minted."
+                )
+            ),
+            corpus_coverage=evidence.corpus_coverage,
         ),
-        # `ProgramBuildAdmissionFact` refuses a PROVEN fact that reports drift
-        # without a next step, and rightly: a replay that shows drift and no
-        # remedy is a worse artifact than one that shows nothing. The live
-        # proof's own remedy still applies to a frozen run -- re-qualifying is
-        # what makes the *next* start clean.
-        next_step=(
-            None
-            if evidence.wiring != "DRIFTED"
-            else WIRING_DRIFT_NEXT_STEP
+        # `ProgramBuildAdmissionFact` refuses a PROVEN fact that reports a
+        # warning without a next step, and rightly: a replay that shows one
+        # and no remedy is a worse artifact than one that shows nothing. The
+        # live proof's own remedies still apply to a frozen run.
+        next_step=proven_build_next_step(
+            wiring=evidence.wiring, corpus_coverage=evidence.corpus_coverage
         ),
         verification="frozen_run_evidence",
     )

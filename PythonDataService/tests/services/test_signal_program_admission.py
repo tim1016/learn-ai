@@ -11,7 +11,11 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.schemas.run_admission import StrategyValidationAdmissionFact
+from app.schemas.run_admission import (
+    CORPUS_UNCOVERED_EXPLANATION,
+    CORPUS_UNCOVERED_NEXT_STEP,
+    StrategyValidationAdmissionFact,
+)
 from app.schemas.signal_program_seal import semantic_payload_hash
 from app.services.bot_binding_repository import (
     BotBindingRepository,
@@ -435,14 +439,12 @@ def test_legacy_migration_seal_appends_to_same_instance_preserving_v1_bytes(tmp_
     proof = prove_running_program_build(resumed, verified_at_ms=_NOW + 1)
     # Since 2026-09-01 the registry's validated point (gap=0.0, rsi_min=30)
     # deliberately differs from the Params defaults (the LEAN-parity point a
-    # no-params legacy binding resolves to), so an exact reconstruction now
-    # fails the parameters gate — and ONLY that gate. Pinning the exact
-    # explanation keeps every other regression (root, digest, reconstruction
-    # bytes) distinguishable: any of those produces a different message.
-    assert proof.state == "UNPROVEN"
-    assert proof.explanation == (
-        "This instance resolved parameters the golden qualification corpus does not cover."
-    )
+    # no-params legacy binding resolves to), so an exact reconstruction is
+    # PROVEN with its corpus coverage stamped UNCOVERED — and ONLY that stamp.
+    # Pinning the stamp keeps every other regression (root, digest,
+    # reconstruction bytes) distinguishable: any of those refuses the proof.
+    assert proof.state == "PROVEN"
+    assert proof.corpus_coverage == "UNCOVERED"
     resumed = resumed.model_copy(update={"program_build": proof})
 
     repository.record_launch(resumed, launch_reason="resume")
@@ -570,14 +572,17 @@ def test_seal_records_the_cadence_the_program_will_actually_run() -> None:
     assert seal.configured_signal.parameters_match_validated_settings is False
 
 
-def test_overridden_cadence_cannot_prove_its_running_build() -> None:
-    """A cadence the golden corpus never covered must not read as PROVEN.
+def test_overridden_cadence_is_proven_but_stamped_uncovered() -> None:
+    """A cadence the golden corpus never covered must not read as covered.
 
     ``golden_trace_root`` pins one decision *stream*. A program clocked at a
     different resolution reads different bars and reaches different
     decisions, so the qualification evidence does not describe it. Before the
     seal recorded the running cadence, both sides of this comparison came
-    from the same contract constant and it could never fail.
+    from the same contract constant and it could never fail. Since ADR 0054
+    that is a coverage stamp on a PROVEN build, exactly like any other
+    resolved value outside ``validated_settings``: the bytes match their
+    receipt, the corpus does not describe this clock.
     """
     binding = _sma_binding(5)
     seal = build_start_program_seal(
@@ -588,7 +593,8 @@ def test_overridden_cadence_cannot_prove_its_running_build() -> None:
 
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
 
-    assert proof.state == "UNPROVEN"
+    assert proof.state == "PROVEN"
+    assert proof.corpus_coverage == "UNCOVERED"
 
 
 def test_qualified_cadence_still_proves_its_running_build() -> None:
@@ -630,15 +636,17 @@ def _rsi_validation() -> StrategyValidationAdmissionFact:
     )
 
 
-def test_overridden_non_cadence_parameter_cannot_prove_its_running_build() -> None:
-    """Any resolved value the corpus does not cover must fail build proof.
+def test_overridden_parameter_proves_its_build_but_stamps_the_corpus_uncovered() -> None:
+    """Coverage is a stamp on the proof, not a reason to withhold it.
 
-    Gating the decision cadence alone produced a policy that could not be
-    explained: overriding ``resolution_minutes`` was UNPROVEN while
-    overriding ``oversold`` stayed PROVEN against a ``golden_trace_root``
-    qualified at the registered value. Both equally invalidate the corpus.
-    The gate is the whole validated-settings match, which subsumes cadence
-    because ``resolution_minutes`` is itself a validated setting.
+    Any resolved value the corpus does not cover -- ``oversold`` here, but
+    equally ``resolution_minutes`` or the symbol -- means the golden trace
+    root does not describe this configuration. That is a fact about the
+    *evidence*, not about the *bytes*: the artifact digest still matches its
+    receipt, so the build is PROVEN and the fact says, separately, that the
+    corpus does not cover it. Whether an uncovered point may start is the
+    pure admission policy's decision (paper yes, anything else no), never
+    this proof's.
     """
     binding = _rsi_binding(oversold=25.0)
     seal = build_start_program_seal(
@@ -650,13 +658,15 @@ def test_overridden_non_cadence_parameter_cannot_prove_its_running_build() -> No
 
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
 
-    assert proof.state == "UNPROVEN"
-    assert proof.explanation is not None
-    assert "golden qualification corpus does not cover" in proof.explanation
+    assert proof.state == "PROVEN"
+    assert proof.corpus_coverage == "UNCOVERED"
+    assert proof.next_step == CORPUS_UNCOVERED_NEXT_STEP
+    assert CORPUS_UNCOVERED_EXPLANATION in proof.explanation
+    assert "program-corpus-coverage:UNCOVERED" in proof.evidence_refs
 
 
 def test_registered_defaults_still_prove_their_running_build() -> None:
-    """The gate above must not refuse a deploy that resolved every default."""
+    """A deploy that resolved every validated value is covered, and says so."""
     binding = _rsi_binding()
     seal = build_start_program_seal(
         binding, _rsi_validation(), parameter_origins=binding.strategy_param_origins
@@ -667,6 +677,10 @@ def test_registered_defaults_still_prove_their_running_build() -> None:
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
 
     assert proof.state == "PROVEN"
+    assert proof.corpus_coverage == "COVERED"
+    assert proof.next_step is None
+    assert CORPUS_UNCOVERED_EXPLANATION not in proof.explanation
+    assert "program-corpus-coverage:COVERED" in proof.evidence_refs
 
 
 def test_build_proof_names_which_agreement_broke() -> None:

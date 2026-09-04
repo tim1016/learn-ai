@@ -194,6 +194,7 @@ class SqliteAlpacaClerkFacade:
         stream_health: StreamHealthGate | None = None,
         intake: ReentrantAsyncLock | None = None,
         authority_kind: Literal["sqlite", "synthetic"] = "sqlite",
+        account_mode: Literal["paper", "live"] | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -204,6 +205,13 @@ class SqliteAlpacaClerkFacade:
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._stream_health = stream_health
         self.authority_kind = authority_kind
+        # The environment every custody answer names (ADR 0054). A synthetic
+        # authority is a simulator and cannot be live; a real one states only
+        # what its caller positively learned from the broker at activation,
+        # never a guess from the account-id shape.
+        self._account_mode: Literal["paper", "live"] | None = (
+            "paper" if authority_kind == "synthetic" else account_mode
+        )
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -1039,6 +1047,7 @@ class SqliteAlpacaClerkFacade:
             return ClerkCustodySnapshot(
                 broker=self.broker_id,
                 account_id=self.account_id,
+                account_mode=self._account_mode,
                 strategy_instance_id=strategy_instance_id,
                 clerk_generation=(f"sqlite:{meta.authority_generation}:{meta.db_identity_token}"),
                 journal_sequence=meta.control_revision,

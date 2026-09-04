@@ -7549,6 +7549,8 @@ export interface components {
         ClerkCustodySnapshot: {
             /** Account Id */
             account_id: string;
+            /** Account Mode */
+            account_mode?: ("paper" | "live") | null;
             /** Broker */
             broker: string;
             /** Clerk Generation */
@@ -15116,6 +15118,12 @@ export interface components {
          * @description Admission-time proof that loaded program bytes match qualification.
          */
         ProgramBuildAdmissionFact: {
+            /**
+             * Corpus Coverage
+             * @default NOT_CHECKED
+             * @enum {string}
+             */
+            corpus_coverage?: "COVERED" | "UNCOVERED" | "NOT_CHECKED";
             /**
              * Evidence Refs
              * @default []

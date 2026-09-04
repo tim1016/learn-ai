@@ -93,16 +93,19 @@ def admit_lean_parity_settings_for_start_admission(monkeypatch: pytest.MonkeyPat
     admission, but it means a bot deployed at ``EmaCrossoverSignalParams``'s
     own defaults (the LEAN-parity point ``gap=0.20``/``rsi_min=50.0`` that
     ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
-    and ``_ema_parity_bars_through_first_exit`` are pinned to) now fails
-    Start admission on exactly the parameters gate, even though that point
-    is -- if anything -- the *most* rigorously proven one of all.
+    and ``_ema_parity_bars_through_first_exit`` are pinned to) is stamped
+    ``corpus_coverage="UNCOVERED"`` rather than covered (ADR 0054) -- and,
+    outside a proven paper environment, refused ``PROGRAM_CORPUS_UNCOVERED``
+    -- even though that point is, if anything, the *most* rigorously proven
+    one of all.
 
     Tests using this bypass aren't exercising deploy admission; they're
     proving bot-runner mechanics or LEAN-parity math against the pinned
     fixture, which only reconciles at the LEAN-parity point. Re-registering
     it as "validated" for the process lifetime of one test is the same
-    move ``admit_canary_pairing`` makes for the canary allowlist: get past
-    one unrelated gate so the rest of the test can run.
+    move ``admit_canary_pairing`` makes for the canary allowlist: keep one
+    unrelated stamp off the run so the rest of the test runs as covered
+    evidence.
     """
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     assert registration.signal_program_contract is not None

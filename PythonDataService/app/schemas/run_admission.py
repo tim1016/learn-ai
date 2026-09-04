@@ -104,6 +104,22 @@ PROGRAM_BUILD_PROOF_FIELDS: tuple[str, ...] = (
     "qualification_receipt_hash",
 )
 
+#: Corpus-coverage copy, stated once (ADR 0054). The live proof, the frozen-run
+#: replay, and the pure admission policy all hand these to an operator; two
+#: copies of one sentence are two sentences that can disagree.
+CORPUS_UNCOVERED_EXPLANATION = (
+    "Its resolved parameters lie outside the golden qualification corpus, so this run "
+    "is exploratory and not citable as qualification evidence."
+)
+CORPUS_UNCOVERED_NEXT_STEP = (
+    "Deploy at the registered validated settings, or run golden qualification for these "
+    "parameters, before citing this run as evidence."
+)
+CORPUS_UNCOVERED_ADMITTED_NOTE = (
+    "Corpus coverage is UNCOVERED: the paper environment admits this exploratory run, "
+    "which is not citable as qualification evidence."
+)
+
 
 class ProgramBuildAdmissionFact(BaseModel):
     """Admission-time proof that loaded program bytes match qualification."""
@@ -132,6 +148,13 @@ class ProgramBuildAdmissionFact(BaseModel):
     # reported rather than blocking. A drift in the already-covered artifacts
     # is not representable here -- it fails closed as UNPROVEN, unchanged.
     wiring: Literal["MATCHED", "DRIFTED", "NOT_CHECKED"] = "NOT_CHECKED"
+    # ADR 0054. Whether the golden corpus behind ``golden_trace_root`` covers
+    # the resolved parameter point and symbol. ``UNCOVERED`` alongside
+    # ``state="PROVEN"`` is the paper-testing posture: the bytes are proven
+    # against their receipt, a proven paper account admits the run carrying
+    # this stamp, and anywhere else refuses it (``PROGRAM_CORPUS_UNCOVERED``).
+    # Whether to admit is the pure policy's decision, never this fact's.
+    corpus_coverage: Literal["COVERED", "UNCOVERED", "NOT_CHECKED"] = "NOT_CHECKED"
 
     @model_validator(mode="after")
     def _proven_carries_its_full_proof(self) -> ProgramBuildAdmissionFact:
@@ -156,6 +179,8 @@ class ProgramBuildAdmissionFact(BaseModel):
             # A warning an operator cannot act on is worse than no warning: it
             # reports a drift and leaves them to guess the remedy.
             raise ValueError("a PROVEN fact reporting wiring drift requires a next_step")
+        if self.corpus_coverage == "UNCOVERED" and self.next_step is None:
+            raise ValueError("a PROVEN fact reporting an uncovered corpus requires a next_step")
         return self
 
 

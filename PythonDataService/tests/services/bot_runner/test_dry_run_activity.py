@@ -170,3 +170,48 @@ def test_dry_run_activity_journal_lifts_legacy_authority_fields(tmp_path: Path) 
 
     assert rows[0].authority_account_id == f"sim:{_SID}"
     assert rows[0].authority_kind == "synthetic"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_deploy_at_an_uncovered_parameter_point_is_admitted_and_stamped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolated_synthetic_authority: None,
+) -> None:
+    """ADR 0054 end to end: no bypass helper, no validated-point edit.
+
+    ``EmaCrossoverSignalParams``'s own defaults are the LEAN-parity point,
+    which the registry's validated point deliberately left on 2026-09-01, so
+    a deploy naming no parameters resolves to a point the corpus does not
+    cover. That used to refuse ``PROGRAM_BUILD_UNPROVEN`` and every mechanics
+    test needed ``admit_lean_parity_settings_for_start_admission``. Dry Run's
+    synthetic authority is a paper environment, so the run is admitted,
+    stamped on the decision, and its per-run evidence keeps the stamp.
+    """
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    started = await registry.deploy_with_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="ema_crossover_signal",
+        symbol="SPY",
+        mode="dry_run",
+        quantity=1,
+    )
+    try:
+        assert started.admission.allowed is True
+        assert "Corpus coverage is UNCOVERED" in started.admission.explanation
+        assert "program-corpus-coverage:UNCOVERED" in started.admission.evidence_refs
+        run_id = started.bot.active_run_id
+        assert run_id is not None
+        evidence = json.loads(
+            (tmp_path / "live_state" / _SID / "program_build_evidence" / f"{run_id}.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert evidence["corpus_coverage"] == "UNCOVERED"
+        assert evidence["schema_version"] == 3
+    finally:
+        await registry.stop("alpaca", _SID)

@@ -308,6 +308,8 @@ async def select_active_clerk_runtime(
             trade=guarded_trade,
             stream_health=stream_health_gate,
             intake=intake,
+            # Proven above from the broker's own account read, not inferred.
+            account_mode=account.account_mode,
         )
         # Keep the execution lease alive across the (possibly slow) startup
         # recovery passes. The reconcile loop still starts after boot recovery

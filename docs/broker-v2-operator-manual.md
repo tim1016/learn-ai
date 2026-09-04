@@ -143,6 +143,38 @@ This toggle governs *only* the wiring half. Drift in the artifact half is the
 admission control this proof was built around and keeps refusing runs in both
 toggle positions.
 
+### Corpus coverage: a stamp on paper, a blocker anywhere else
+
+The proof reports one more thing beside `wiring`: `corpus_coverage`, whether
+the golden corpus behind the program's trace root actually covers the symbol
+and the exact parameter values this bot resolved. The registry qualifies one
+`validated_settings` point per program over its `validated_symbols`; any
+other symbol, or any parameter value that differs from that point, is
+`UNCOVERED`. That is a fact about the *evidence* a run can later claim, not
+about the bytes it runs — the artifact and wiring digests still match their
+receipt — so since ADR 0054 it no longer refuses the build proof.
+
+Whether an uncovered point may start depends on the account's environment,
+as the Clerk positively learned it from the broker when it activated. On a
+proven **paper** account (and in Dry Run, whose synthetic authority is paper
+by construction) the run starts, and every surface says so: the Start or
+Resume decision's `explanation` carries *"Corpus coverage is UNCOVERED: the
+paper environment admits this exploratory run, which is not citable as
+qualification evidence"*, the build fact reads `corpus_coverage: UNCOVERED`
+with a `next_step` naming the two ways to make a covered run (deploy at the
+registered validated settings, or run golden qualification for these
+parameters), and the run's frozen evidence keeps the stamp so the panel never
+replays an exploratory run as citable proof. Anywhere the environment is not
+positively paper — a live account, or a custody answer that does not state
+its environment at all — the run refuses with `PROGRAM_CORPUS_UNCOVERED`.
+There is no toggle: the environment is the only switch, and a paper run that
+must be corpus-covered simply deploys at the validated point and reads
+`COVERED`.
+
+Every other cause that used to share the `PROGRAM_BUILD_UNPROVEN` label is
+unchanged, including edited strategy bytes with no receipt, a seal issued for
+a different instance, account or mode, and a moved trace root.
+
 ### Recorded lineage: were the qualified bytes ever committed?
 
 Each receipt also records where its qualified bytes live in version control:

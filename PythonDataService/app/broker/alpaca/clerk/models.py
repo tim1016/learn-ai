@@ -557,6 +557,13 @@ class ClerkCustodySnapshot(BaseModel):
 
     broker: str
     account_id: str
+    # The environment of the account this custody answer describes, as the
+    # Clerk positively learned it from the broker at activation (the synthetic
+    # Dry Run authority is paper by construction). ``None`` means no producer
+    # proved it; admission treats that exactly like ``"live"`` and fails
+    # closed, so an unproven environment can never unlock a paper-only
+    # relaxation (ADR 0054).
+    account_mode: Literal["paper", "live"] | None = None
     strategy_instance_id: str
     clerk_generation: str
     journal_sequence: int = Field(ge=0)

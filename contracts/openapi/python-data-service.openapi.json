@@ -6759,6 +6759,21 @@
             "title": "Account Id",
             "type": "string"
           },
+          "account_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "paper",
+                  "live"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Mode"
+          },
           "broker": {
             "title": "Broker",
             "type": "string"
@@ -23123,6 +23138,16 @@
         "additionalProperties": false,
         "description": "Admission-time proof that loaded program bytes match qualification.",
         "properties": {
+          "corpus_coverage": {
+            "default": "NOT_CHECKED",
+            "enum": [
+              "COVERED",
+              "UNCOVERED",
+              "NOT_CHECKED"
+            ],
+            "title": "Corpus Coverage",
+            "type": "string"
+          },
           "evidence_refs": {
             "default": [],
             "items": {

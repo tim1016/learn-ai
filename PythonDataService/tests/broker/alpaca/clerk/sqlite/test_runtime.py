@@ -1102,3 +1102,48 @@ async def test_recovery_evaluation_observation_tracks_the_published_sweep(
     assert after.last_pass_completed_at_ms >= before.evaluation_started_at_ms
 
     repo.close()
+
+
+# --- The account environment a custody answer describes -----------------------
+
+
+@pytest.mark.asyncio
+async def test_custody_snapshot_carries_the_environment_the_clerk_activated_against(
+    tmp_path: Path,
+) -> None:
+    """Admission keys the corpus-coverage relaxation off this field, so the
+    Clerk states the environment it positively learned from the broker at
+    activation rather than leaving policy to guess from an account id."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+
+    projection = await facade.custody_snapshot_projection("sid-1")
+
+    assert projection.account_mode == "paper"
+
+
+@pytest.mark.asyncio
+async def test_custody_snapshot_reports_no_environment_when_none_was_proven(tmp_path: Path) -> None:
+    """A facade built without a proven environment says so; admission then
+    fails closed rather than inferring paper from the account-id shape."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+
+    projection = await facade.custody_snapshot_projection("sid-1")
+
+    assert projection.account_mode is None
+
+
+@pytest.mark.asyncio
+async def test_synthetic_authority_is_a_paper_environment_by_construction(tmp_path: Path) -> None:
+    """Dry Run's isolated simulator can never be live, so its custody answer
+    names paper without any caller having to say so."""
+    repo = ClerkSqliteRepository.initialize(account_id="sim:sid-1", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, authority_kind="synthetic")
+
+    projection = await facade.custody_snapshot_projection("sid-1")
+
+    assert projection.account_mode == "paper"

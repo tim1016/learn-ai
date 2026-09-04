@@ -179,7 +179,9 @@ class BotRunRecord(BaseModel):
 
 # Fields of `ProgramBuildRunEvidence` that describe the record rather than
 # identify the run whose proof it is. See `run_identity`.
-NON_IDENTITY_EVIDENCE_FIELDS: frozenset[str] = frozenset({"schema_version", "wiring"})
+NON_IDENTITY_EVIDENCE_FIELDS: frozenset[str] = frozenset(
+    {"schema_version", "wiring", "corpus_coverage"}
+)
 
 
 class ProgramBuildRunEvidence(BaseModel):
@@ -187,12 +189,12 @@ class ProgramBuildRunEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # Accepts both shapes on read, writes the current one (#1828). A durable
-    # per-run file is written once and never rewritten, so an old record can
-    # only ever be read, never migrated -- pinning this to the newest version
-    # would make every pre-#1828 run's evidence unreadable, which is the
-    # opposite of what recording more evidence is for.
-    schema_version: Literal[1, 2] = 2
+    # Accepts every prior shape on read, writes the current one (#1828, then
+    # ADR 0054). A durable per-run file is written once and never rewritten,
+    # so an old record can only ever be read, never migrated -- pinning this
+    # to the newest version would make every older run's evidence unreadable,
+    # which is the opposite of what recording more evidence is for.
+    schema_version: Literal[1, 2, 3] = 3
     strategy_instance_id: str
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     sealed_program_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -208,6 +210,11 @@ class ProgramBuildRunEvidence(BaseModel):
     # `schema_version` is what distinguishes it from a run genuinely admitted
     # without a wiring check.
     wiring: Literal["MATCHED", "DRIFTED", "NOT_CHECKED"] = "NOT_CHECKED"
+    # Whether the golden corpus covered the resolved parameter point this run
+    # started under (ADR 0054), recorded for the same reason as `wiring`: a
+    # paper run admitted at an uncovered point must stay stamped "not citable"
+    # once frozen. Records before schema_version 3 have none and default here.
+    corpus_coverage: Literal["COVERED", "UNCOVERED", "NOT_CHECKED"] = "NOT_CHECKED"
 
     def run_identity(self) -> dict[str, object]:
         """Everything about this record except what is not this run's identity.
@@ -678,6 +685,7 @@ class BotBindingRepository:
             qualification_receipt_hash=proof.qualification_receipt_hash,
             verified_at_ms=proof.verified_at_ms,
             wiring=proof.wiring,
+            corpus_coverage=proof.corpus_coverage,
         )
         evidence_dir = instance_dir / RUN_BUILD_EVIDENCE_DIRECTORY
         evidence_dir.mkdir(parents=True, exist_ok=True)
