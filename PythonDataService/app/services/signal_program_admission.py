@@ -24,11 +24,9 @@ from app.config import settings
 from app.engine.strategy.params import decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.schemas.run_admission import (
-    CORPUS_UNCOVERED_EXPLANATION,
-    CORPUS_UNCOVERED_NEXT_STEP,
-    WIRING_DRIFT_NEXT_STEP,
     ProgramBuildAdmissionFact,
     StrategyValidationAdmissionFact,
+    proven_build_copy,
 )
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
@@ -369,38 +367,6 @@ def _legacy_parameter_origins(
             "reconstructed from today's registered default."
         )
     return origins
-
-
-def proven_build_copy(
-    *,
-    wiring: str,
-    corpus_coverage: str,
-    matched: str,
-    drifted: str,
-) -> tuple[str, str | None]:
-    """The explanation and next step a PROVEN build owes its operator.
-
-    ``matched`` / ``drifted`` are the caller's own sentence for the wiring
-    verdict (the live proof and the frozen-run replay speak in different
-    tenses); the corpus-coverage stamp and every remedy are composed here so
-    a Start decision and that run's panel afterwards say the same thing.
-    Both warnings can hold at once, and an operator told about only one of
-    them would fix it and still be surprised by the other.
-    """
-    drift = wiring == "DRIFTED"
-    uncovered = corpus_coverage == "UNCOVERED"
-    explanation = drifted if drift else matched
-    if uncovered:
-        explanation = f"{explanation} {CORPUS_UNCOVERED_EXPLANATION}"
-    remedies = [
-        remedy
-        for remedy, applies in (
-            (WIRING_DRIFT_NEXT_STEP, drift),
-            (CORPUS_UNCOVERED_NEXT_STEP, uncovered),
-        )
-        if applies
-    ]
-    return explanation, " ".join(remedies) or None
 
 
 def prove_running_program_build(

@@ -1135,7 +1135,7 @@ def test_synthetic_authority_refuses_to_call_itself_live(tmp_path: Path) -> None
     repo = ClerkSqliteRepository.initialize(account_id="sim:sid-1", artifacts_root=tmp_path)
     broker = _CountingBroker()
 
-    with pytest.raises(AccountAuthorityIdentityError):
+    with pytest.raises(AccountAuthorityIdentityError, match="paper environment"):
         SqliteAlpacaClerkFacade(
             repo=repo, read=broker, trade=broker, authority_kind="synthetic", account_mode="live"
         )

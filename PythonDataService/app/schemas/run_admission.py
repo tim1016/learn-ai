@@ -122,6 +122,38 @@ CORPUS_UNCOVERED_NEXT_STEP = (
 )
 
 
+def proven_build_copy(
+    *,
+    wiring: str,
+    corpus_coverage: str,
+    matched: str,
+    drifted: str,
+) -> tuple[str, str | None]:
+    """The explanation and next step a PROVEN build owes its operator.
+
+    ``matched`` / ``drifted`` are the caller's own sentence for the wiring
+    verdict (the live proof and the frozen-run replay speak in different
+    tenses); the corpus-coverage stamp and every remedy are composed here so
+    a Start decision and that run's panel afterwards say the same thing.
+    Both warnings can hold at once, and an operator told about only one of
+    them would fix it and still be surprised by the other.
+    """
+    drift = wiring == "DRIFTED"
+    uncovered = corpus_coverage == "UNCOVERED"
+    explanation = drifted if drift else matched
+    if uncovered:
+        explanation = f"{explanation} {CORPUS_UNCOVERED_EXPLANATION}"
+    remedies = [
+        remedy
+        for remedy, applies in (
+            (WIRING_DRIFT_NEXT_STEP, drift),
+            (CORPUS_UNCOVERED_NEXT_STEP, uncovered),
+        )
+        if applies
+    ]
+    return explanation, " ".join(remedies) or None
+
+
 class ProgramBuildAdmissionFact(BaseModel):
     """Admission-time proof that loaded program bytes match qualification."""
 
@@ -161,13 +193,14 @@ class ProgramBuildAdmissionFact(BaseModel):
     def _proven_carries_its_full_proof(self) -> ProgramBuildAdmissionFact:
         """``state == "PROVEN"`` must carry the full proof, not a partial one.
 
-        UNPROVEN and NOT_APPLICABLE are deliberately left unconstrained here:
-        both producers (``prove_running_program_build`` and
-        ``program_build_view_from_run_evidence``) only ever leave the proof
-        fields absent for those states today, but nothing about "not proven"
-        requires that — a future diagnostic case that attaches a partial,
+        UNPROVEN and NOT_APPLICABLE are deliberately left unconstrained in
+        their *proof fields*: both producers (``prove_running_program_build``
+        and ``program_build_view_from_run_evidence``) only ever leave those
+        absent for such states today, but nothing about "not proven" requires
+        that — a future diagnostic case that attaches a partial,
         non-authoritative proof to an UNPROVEN fact would be legitimate, and
-        must not be refused by this validator.
+        must not be refused here. A *stamp* on them is refused: it qualifies a
+        proof, and without one it would read as a verdict about nothing.
         """
         if self.state != "PROVEN":
             if self.wiring != "NOT_CHECKED" or self.corpus_coverage != "NOT_CHECKED":

@@ -44,7 +44,11 @@ from app.schemas.broker_v2_panel import (
     TransactionRail,
     WorkingOrderView,
 )
-from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
+from app.schemas.run_admission import (
+    ProgramBuildAdmissionFact,
+    RunAdmissionDecision,
+    proven_build_copy,
+)
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
@@ -63,7 +67,6 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
-from app.services.signal_program_admission import proven_build_copy
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
