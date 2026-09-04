@@ -26,6 +26,7 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContra
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_EXPLANATION,
     CORPUS_UNCOVERED_NEXT_STEP,
+    WIRING_DRIFT_NEXT_STEP,
     ProgramBuildAdmissionFact,
     StrategyValidationAdmissionFact,
 )
@@ -370,40 +371,36 @@ def _legacy_parameter_origins(
     return origins
 
 
-# The remedy for wiring drift, stated once. Both the live proof and the
-# frozen-run replay in `panel_projection_service` hand this to an operator;
-# two copies of one instruction is two instructions that can disagree.
-WIRING_DRIFT_NEXT_STEP = (
-    "Re-run golden qualification for this program so its receipt covers the current wiring."
-)
+def proven_build_copy(
+    *,
+    wiring: str,
+    corpus_coverage: str,
+    matched: str,
+    drifted: str,
+) -> tuple[str, str | None]:
+    """The explanation and next step a PROVEN build owes its operator.
 
-
-def proven_build_explanation(build_sentence: str, *, corpus_coverage: str) -> str:
-    """A PROVEN build's own sentence, stamped when the corpus does not cover it.
-
-    Shared by the live proof and the frozen-run replay so the stamp reads the
-    same on a Start decision and on that run's panel afterwards (ADR 0054).
+    ``matched`` / ``drifted`` are the caller's own sentence for the wiring
+    verdict (the live proof and the frozen-run replay speak in different
+    tenses); the corpus-coverage stamp and every remedy are composed here so
+    a Start decision and that run's panel afterwards say the same thing.
+    Both warnings can hold at once, and an operator told about only one of
+    them would fix it and still be surprised by the other.
     """
-    if corpus_coverage != "UNCOVERED":
-        return build_sentence
-    return f"{build_sentence} {CORPUS_UNCOVERED_EXPLANATION}"
-
-
-def proven_build_next_step(*, wiring: str, corpus_coverage: str) -> str | None:
-    """Every remedy a PROVEN-with-warnings build owes its operator, as one step.
-
-    Both warnings can hold at once; an operator told only about one of them
-    would fix it and still be surprised by the other.
-    """
+    drift = wiring == "DRIFTED"
+    uncovered = corpus_coverage == "UNCOVERED"
+    explanation = drifted if drift else matched
+    if uncovered:
+        explanation = f"{explanation} {CORPUS_UNCOVERED_EXPLANATION}"
     remedies = [
         remedy
         for remedy, applies in (
-            (WIRING_DRIFT_NEXT_STEP, wiring == "DRIFTED"),
-            (CORPUS_UNCOVERED_NEXT_STEP, corpus_coverage == "UNCOVERED"),
+            (WIRING_DRIFT_NEXT_STEP, drift),
+            (CORPUS_UNCOVERED_NEXT_STEP, uncovered),
         )
         if applies
     ]
-    return " ".join(remedies) or None
+    return explanation, " ".join(remedies) or None
 
 
 def prove_running_program_build(
@@ -491,6 +488,15 @@ def prove_running_program_build(
     coverage: Literal["COVERED", "UNCOVERED"] = (
         "COVERED" if configured.parameters_match_validated_settings else "UNCOVERED"
     )
+    explanation, next_step = proven_build_copy(
+        wiring=wiring,
+        corpus_coverage=coverage,
+        matched="The running Signal Program build matches its golden qualification receipt.",
+        drifted=(
+            "The running Signal Program math matches its golden qualification receipt, but "
+            "the strategy wiring has changed since that receipt was minted."
+        ),
+    )
     return ProgramBuildAdmissionFact(
         state="PROVEN",
         program_key=binding.strategy_key,
@@ -508,18 +514,8 @@ def prove_running_program_build(
             f"program-wiring-digest:{running_wiring}",
             f"program-corpus-coverage:{coverage}",
         ),
-        explanation=proven_build_explanation(
-            (
-                "The running Signal Program build matches its golden qualification receipt."
-                if wiring_matches
-                else (
-                    "The running Signal Program math matches its golden qualification receipt, but "
-                    "the strategy wiring has changed since that receipt was minted."
-                )
-            ),
-            corpus_coverage=coverage,
-        ),
-        next_step=proven_build_next_step(wiring=wiring, corpus_coverage=coverage),
+        explanation=explanation,
+        next_step=next_step,
     )
 
 

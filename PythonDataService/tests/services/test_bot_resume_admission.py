@@ -37,6 +37,7 @@ def _clerk(observed_at_ms: int) -> ClerkCustodySnapshot:
     return ClerkCustodySnapshot(
         broker="alpaca",
         account_id="paper-account",
+        account_mode="paper",
         strategy_instance_id=_SID,
         clerk_generation="clerk-1",
         journal_sequence=7,

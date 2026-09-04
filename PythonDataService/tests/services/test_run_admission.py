@@ -18,7 +18,6 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.schemas.run_admission import (
-    CORPUS_UNCOVERED_ADMITTED_NOTE,
     CORPUS_UNCOVERED_NEXT_STEP,
     MarketDataAdmissionFact,
     ProgramBuildAdmissionFact,
@@ -32,7 +31,7 @@ from app.schemas.run_admission import (
 )
 from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.market_liveness import compose_market_liveness
-from app.services.run_admission import evaluate_run_admission
+from app.services.run_admission import CORPUS_UNCOVERED_ADMITTED_NOTE, evaluate_run_admission
 
 _NOW = 1_700_000_010_000
 _SID = "alpaca-start-1"
@@ -135,7 +134,7 @@ def _clerk(
     reconciliation_state: str = "clean",
     reconciliation_fresh: bool = True,
     observed_at_ms: int = _NOW - 500,
-    account_mode: str | None = "paper",
+    account_mode: str = "paper",
 ) -> ClerkCustodySnapshot:
     return ClerkCustodySnapshot(
         broker="alpaca",
@@ -1068,12 +1067,9 @@ def test_uncovered_corpus_is_admitted_on_a_proven_paper_account_and_stamped() ->
     assert CORPUS_UNCOVERED_ADMITTED_NOTE in decision.explanation
 
 
-@pytest.mark.parametrize("account_mode", [None, "live"])
-def test_uncovered_corpus_is_refused_unless_the_account_is_proven_paper(account_mode: str | None) -> None:
-    """Fail closed: an unproven environment is treated exactly like live."""
-    decision = evaluate_run_admission(
-        _uncovered_bot(), _clerk(account_mode=account_mode), evaluated_at_ms=_NOW
-    )
+def test_uncovered_corpus_is_refused_on_a_live_account() -> None:
+    """Outside paper the stamp is a blocker, with the same remedy the fact names."""
+    decision = evaluate_run_admission(_uncovered_bot(), _clerk(account_mode="live"), evaluated_at_ms=_NOW)
 
     assert decision.allowed is False
     assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
@@ -1086,7 +1082,7 @@ def test_covered_corpus_never_consults_the_account_environment() -> None:
         update={"program_build": _canary_program_build(corpus_coverage="COVERED")}
     )
 
-    decision = evaluate_run_admission(bot, _clerk(account_mode=None), evaluated_at_ms=_NOW)
+    decision = evaluate_run_admission(bot, _clerk(account_mode="live"), evaluated_at_ms=_NOW)
 
     assert decision.allowed is True
     assert CORPUS_UNCOVERED_ADMITTED_NOTE not in decision.explanation

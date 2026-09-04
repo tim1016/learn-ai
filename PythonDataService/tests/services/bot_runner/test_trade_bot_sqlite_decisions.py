@@ -40,7 +40,7 @@ async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
         artifacts_root=tmp_path / "clerk",
     )
     broker = _SqliteRuntimeBroker()
-    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     base = _WIN_START_MS + 60_000
     feed = _FakeFeed(
         [
@@ -273,7 +273,7 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
     all)."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     broker = _SqliteRuntimeBroker()
-    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
 
     def raise_atomic_receipt_failure(*_args: Any, **_kwargs: Any) -> Any:

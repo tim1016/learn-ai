@@ -546,6 +546,8 @@ async def select_synthetic_clerk_runtime(
             trade=guarded_trade,
             intake=intake,
             authority_kind="synthetic",
+            # A simulator is a paper environment by construction (ADR 0054).
+            account_mode="paper",
         )
         sweep = ReconciliationSweep(
             repo=repository,

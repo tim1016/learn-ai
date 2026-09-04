@@ -20,7 +20,6 @@ from tests._helpers.bot_runner.ema_parity import (
     _EMA_FIRST_EXIT_MS,
     _ema_parity_bars_through_first_exit,
     _ema_signal_evaluation_id,
-    admit_lean_parity_settings_for_start_admission,
 )
 from tests._helpers.canary_admission import admit_canary_pairing
 
@@ -47,8 +46,8 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
     _install_fake_clerk(monkeypatch, clerk)
     admit_canary_pairing(monkeypatch, "ema_crossover_signal", "paper-account")
     # This test proves LEAN parity at the ENG-007 pinned point (Params
-    # defaults), not deploy admission -- see the helper's docstring.
-    admit_lean_parity_settings_for_start_admission(monkeypatch)
+    # defaults); the deploy runs stamped corpus_coverage=UNCOVERED (ADR 0054),
+    # which is irrelevant to the math it proves.
     bars = _ema_parity_bars_through_first_exit()
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
@@ -90,9 +89,8 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
     admit_canary_pairing(monkeypatch, "ema_crossover_signal", "paper-account")
-    # Mechanics-only test reusing the LEAN-parity bars fixture -- not
-    # exercising deploy admission, see the helper's docstring.
-    admit_lean_parity_settings_for_start_admission(monkeypatch)
+    # Mechanics-only test reusing the LEAN-parity bars fixture, not
+    # exercising deploy admission.
     contexts: list[StrategyContext] = []
     context_factory = bot_trade_strategy.StrategyContext
 

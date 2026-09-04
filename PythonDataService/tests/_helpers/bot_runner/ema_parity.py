@@ -10,19 +10,13 @@ the other extracted themes.
 from __future__ import annotations
 
 import csv
-import dataclasses
 import hashlib
 import json
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from app.engine.strategy.programs.ema_crossover_signal import EmaCrossoverSignalParams
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.marketdata.feed import MarketDataBar
-
-if TYPE_CHECKING:
-    import pytest
 
 _EMA_FIRST_EXIT_MS = 1_770_393_600_000
 
@@ -80,44 +74,3 @@ def _ema_signal_evaluation_id(bar_close_ms: int, *, symbol: str = "SPY") -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-def admit_lean_parity_settings_for_start_admission(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Temporarily register the ENG-007 LEAN-parity point as this process's
-    golden-qualification ``validated_settings`` for ``ema_crossover_signal``.
-
-    Since the 2026-09-01 move (registry.py's ``validated_settings`` /
-    ``tests/fixtures/golden/ema-signal-session/v1/attribution.md``'s
-    "Regeneration 2026-09-01"), the registry's deploy-admission point is the
-    relaxed one (gap=0.0, rsi_min=30.0) -- correct for real deploy
-    admission, but it means a bot deployed at ``EmaCrossoverSignalParams``'s
-    own defaults (the LEAN-parity point ``gap=0.20``/``rsi_min=50.0`` that
-    ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
-    and ``_ema_parity_bars_through_first_exit`` are pinned to) is stamped
-    ``corpus_coverage="UNCOVERED"`` rather than covered (ADR 0054) -- and,
-    outside a proven paper environment, refused ``PROGRAM_CORPUS_UNCOVERED``
-    -- even though that point is, if anything, the *most* rigorously proven
-    one of all.
-
-    Tests using this bypass aren't exercising deploy admission; they're
-    proving bot-runner mechanics or LEAN-parity math against the pinned
-    fixture, which only reconciles at the LEAN-parity point. Re-registering
-    it as "validated" for the process lifetime of one test is the same
-    move ``admit_canary_pairing`` makes for the canary allowlist: keep one
-    unrelated stamp off the run so the rest of the test runs as covered
-    evidence.
-    """
-    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
-    assert registration.signal_program_contract is not None
-    lean_parity_settings = {
-        name: EmaCrossoverSignalParams.model_fields[name].default
-        for name in ("gap", "gap_bps", "rsi_min", "rsi_max")
-    }
-    monkeypatch.setattr(
-        registration,
-        "signal_program_contract",
-        dataclasses.replace(
-            registration.signal_program_contract,
-            validated_settings=lean_parity_settings,
-        ),
-    )

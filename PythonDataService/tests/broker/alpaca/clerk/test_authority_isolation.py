@@ -121,6 +121,7 @@ async def test_killed_sqlite_read_surfaces_as_projection_unavailable(
             return []
 
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=_UnreachableBroker(),  # type: ignore[arg-type]
         trade=_UnreachableBroker(),  # type: ignore[arg-type]

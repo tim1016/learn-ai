@@ -10,7 +10,7 @@ import pytest
 import app.engine.live.durable_append_log as durable_append_log
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
-from app.schemas.run_admission import ProgramBuildAdmissionFact
+from app.schemas.run_admission import WIRING_DRIFT_NEXT_STEP, ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
     ExitEligibilityContract,
@@ -41,7 +41,6 @@ from app.services.bot_carryover import configuration_hash, immutable_configurati
 from app.services.broker_v2_panel.panel_projection_service import (
     program_build_view_from_run_evidence,
 )
-from app.services.signal_program_admission import WIRING_DRIFT_NEXT_STEP
 
 _SID = "alpaca-spy-ema-01"
 

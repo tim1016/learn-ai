@@ -104,9 +104,14 @@ PROGRAM_BUILD_PROOF_FIELDS: tuple[str, ...] = (
     "qualification_receipt_hash",
 )
 
-#: Corpus-coverage copy, stated once (ADR 0054). The live proof, the frozen-run
-#: replay, and the pure admission policy all hand these to an operator; two
-#: copies of one sentence are two sentences that can disagree.
+#: Operator copy for the two warnings a PROVEN build can carry, stated once.
+#: The live proof, the frozen-run replay, and the pure admission policy all
+#: hand these to an operator; two copies of one sentence are two sentences
+#: that can disagree. They live here, not in the service that mints the proof,
+#: because the pure policy must not import a module that reads files.
+WIRING_DRIFT_NEXT_STEP = (
+    "Re-run golden qualification for this program so its receipt covers the current wiring."
+)
 CORPUS_UNCOVERED_EXPLANATION = (
     "Its resolved parameters lie outside the golden qualification corpus, so this run "
     "is exploratory and not citable as qualification evidence."
@@ -114,10 +119,6 @@ CORPUS_UNCOVERED_EXPLANATION = (
 CORPUS_UNCOVERED_NEXT_STEP = (
     "Deploy at the registered validated settings, or run golden qualification for these "
     "parameters, before citing this run as evidence."
-)
-CORPUS_UNCOVERED_ADMITTED_NOTE = (
-    "Corpus coverage is UNCOVERED: the paper environment admits this exploratory run, "
-    "which is not citable as qualification evidence."
 )
 
 
@@ -169,6 +170,10 @@ class ProgramBuildAdmissionFact(BaseModel):
         must not be refused by this validator.
         """
         if self.state != "PROVEN":
+            if self.wiring != "NOT_CHECKED" or self.corpus_coverage != "NOT_CHECKED":
+                # A stamp qualifies a proof; without one it would be read as a
+                # verdict about bytes that were never proven at all.
+                raise ValueError("only a PROVEN fact may carry a wiring or corpus-coverage stamp")
             return self
         missing = [name for name in PROGRAM_BUILD_PROOF_FIELDS if getattr(self, name) is None]
         if missing:

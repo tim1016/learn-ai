@@ -69,7 +69,7 @@ async def test_crashed_exposure_walks_to_flat_and_readmits_resume(tmp_path: Path
     # 3. Operator reconciles; the panel presents execute_safe_flatten.
     broker_read = _FakeReadPort(positions=[_broker_position_fixture("SPY", quantity=10.0)])
     flatten_trade = _FakeTradePort()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker_read, trade=flatten_trade)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker_read, trade=flatten_trade, account_mode="paper")
     await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
 
     async def current_context():

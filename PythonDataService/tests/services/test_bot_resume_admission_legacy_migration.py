@@ -44,7 +44,7 @@ def _count(state: str = "zero") -> CustodyCountFact:
     return CustodyCountFact(state=state, count=0 if state == "zero" else None)
 
 
-def _clerk(observed_at_ms: int, *, account_mode: str | None = "paper") -> ClerkCustodySnapshot:
+def _clerk(observed_at_ms: int, *, account_mode: str = "paper") -> ClerkCustodySnapshot:
     return ClerkCustodySnapshot(
         broker="alpaca",
         account_id=f"sim:{_SID}",
@@ -107,7 +107,7 @@ def _admission(
     repository: BotBindingRepository | None,
     *,
     now_values: list[int],
-    account_mode: str | None = "paper",
+    account_mode: str = "paper",
 ) -> BotResumeAdmission:
     clock = iter(now_values)
 
@@ -219,12 +219,12 @@ async def test_resume_preview_appends_a_reconstructible_seal_but_parameters_gate
 
 
 @pytest.mark.asyncio
-async def test_resume_preview_refuses_an_uncovered_point_when_the_environment_is_unproven() -> None:
-    """Fail closed: the same reconstruction on a custody answer that does not
-    positively name a paper environment is refused on the coverage gate."""
+async def test_resume_preview_refuses_an_uncovered_point_on_a_live_account() -> None:
+    """The same reconstruction on a custody answer naming a live environment
+    is refused on the coverage gate, through the real orchestration."""
     prior = _prior(strategy_params=None)
     admission = _admission(
-        repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3], account_mode=None
+        repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3], account_mode="live"
     )
 
     decision = await admission.preview(prior, _status())

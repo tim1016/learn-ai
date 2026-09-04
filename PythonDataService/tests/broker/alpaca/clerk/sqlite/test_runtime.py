@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityError
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
@@ -165,7 +166,7 @@ async def test_custody_projection_answers_from_the_last_sweep_without_broker_con
     """
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _CountingBroker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
 
     # Stands in for a completed sweep to establish a published verdict. The
     # real sweep path is covered by
@@ -194,7 +195,7 @@ async def test_custody_projection_is_unproven_before_the_first_sweep(tmp_path: P
     """
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _CountingBroker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
 
     projection = await facade.custody_snapshot_projection("sid-1")
 
@@ -209,7 +210,7 @@ async def test_custody_projection_is_unproven_before_the_first_sweep(tmp_path: P
 async def test_direct_facade_construction_guards_raw_broker_ports(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _Broker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
 
     assert isinstance(facade._read, GuardedBrokerReadPort)
     assert isinstance(facade._trade, GuardedBrokerTradePort)
@@ -222,7 +223,7 @@ async def test_direct_facade_construction_guards_raw_broker_ports(tmp_path: Path
 
 async def test_reconciliation_rejects_intake_first_lock_order(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker())
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker(), account_mode="paper")
 
     async with facade.intake:
         with pytest.raises(ReconciliationLockOrderError, match="reconciliation lock before intake"):
@@ -235,7 +236,7 @@ async def test_registration_refuses_an_admission_snapshot_after_a_competing_tran
     tmp_path: Path,
 ) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker())
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker(), account_mode="paper")
     binding = _binding()
     snapshot = await facade.custody_snapshot(binding.strategy_instance_id)
     repo.register_strategy_instance(
@@ -259,7 +260,7 @@ async def test_registration_precedes_live_enter_and_caller_cancellation_keeps_cu
         artifacts_root=tmp_path,
     )
     broker = _Broker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
 
     await facade.register_strategy_run(binding)
@@ -313,7 +314,7 @@ async def test_registration_precedes_live_enter_and_caller_cancellation_keeps_cu
 async def test_execute_for_instance_rejects_exit_without_owned_entry(tmp_path: Path) -> None:
     """A stale strategy EXIT cannot crash its run while custody is uncertain."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker())
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker(), account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
 
@@ -339,7 +340,7 @@ async def test_parked_enter_submit_does_not_block_trade_update_fold(tmp_path: Pa
         artifacts_root=tmp_path,
     )
     broker = _Broker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
     sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=facade.intake, reconciler=facade)
@@ -383,7 +384,7 @@ async def test_runtime_close_drains_shielded_effect_before_closing_repository(
         artifacts_root=tmp_path,
     )
     broker = _Broker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
     caller = asyncio.create_task(
@@ -432,7 +433,7 @@ async def test_competing_exit_captures_the_losing_decision_receipt(tmp_path: Pat
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _Broker()
     broker.release_submit.set()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
 
@@ -494,7 +495,7 @@ async def test_cancel_verified_working_entry_records_intent_before_broker_contac
     )
     broker = _Broker()
     broker.release_submit.set()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
     receipt = await facade.execute_for_instance(
@@ -533,7 +534,7 @@ async def test_parked_cancellation_does_not_block_trade_update_fold(tmp_path: Pa
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _Broker()
     broker.release_submit.set()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
     receipt = await facade.execute_for_instance(
@@ -576,7 +577,7 @@ async def test_start_admission_snapshot_does_not_hold_intake_across_the_yield(tm
         artifacts_root=tmp_path,
     )
     broker = _Broker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
 
@@ -644,6 +645,7 @@ async def test_execute_for_instance_enter_refuses_a_connected_but_unusable_chann
     broker = _Broker()
     broker.release_submit.set()
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=broker,
         trade=broker,
@@ -682,6 +684,7 @@ async def test_execute_for_instance_enter_fails_closed_when_execution_stream_unh
     broker = _Broker()
     broker.release_submit.set()
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=broker,
         trade=broker,
@@ -746,6 +749,7 @@ async def test_execute_for_instance_uses_its_symbols_market_data_health(
         ),
     )
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=broker,
         trade=broker,
@@ -817,6 +821,7 @@ async def test_execute_for_instance_enter_resumes_once_streams_recover(
     broker = _Broker()
     broker.release_submit.set()
     unhealthy_facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=broker,
         trade=broker,
@@ -834,6 +839,7 @@ async def test_execute_for_instance_enter_resumes_once_streams_recover(
     )
 
     recovered_facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=broker,
         trade=broker,
@@ -897,7 +903,7 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     assert reducing_order.broker_state == "accepted"
 
     broker = _Broker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
 
     assert result.reducing_order_ref not in facade._working_order_refs(SID)
     assert result.reducing_order_ref in facade._working_order_refs_for_proof(SID)
@@ -913,7 +919,7 @@ async def test_custody_snapshot_uses_folds_without_full_transition_replay(
         artifacts_root=tmp_path,
     )
     broker = _Broker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
 
@@ -938,7 +944,7 @@ async def test_instance_custody_proof_omits_zero_quantity_position_rows(
         artifacts_root=tmp_path,
     )
     broker = _Broker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
     repo._conn.execute(
@@ -964,7 +970,7 @@ async def test_sqlite_trade_update_redelivery_and_regression_are_idempotent(
     )
     broker = _Broker()
     broker.release_submit.set()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = _binding()
     await facade.register_strategy_run(binding)
     receipt = await facade.execute_for_instance(
@@ -1045,7 +1051,7 @@ async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _CountingBroker()
     intake = ReentrantAsyncLock()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, intake=intake)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, intake=intake, account_mode="paper")
 
     await ReconciliationSweep(
         repo=repo,
@@ -1075,7 +1081,7 @@ async def test_recovery_evaluation_observation_tracks_the_published_sweep(
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _CountingBroker()
     intake = ReentrantAsyncLock()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, intake=intake)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, intake=intake, account_mode="paper")
 
     before = facade.recovery_evaluation_observation()
     assert before.last_pass_completed_at_ms is None
@@ -1108,12 +1114,13 @@ async def test_recovery_evaluation_observation_tracks_the_published_sweep(
 
 
 @pytest.mark.asyncio
-async def test_custody_snapshot_carries_the_environment_the_clerk_activated_against(
+async def test_custody_snapshot_carries_the_environment_the_clerk_was_built_with(
     tmp_path: Path,
 ) -> None:
     """Admission keys the corpus-coverage relaxation off this field, so the
-    Clerk states the environment it positively learned from the broker at
-    activation rather than leaving policy to guess from an account id."""
+    Clerk states the environment its caller positively learned from the broker
+    at activation. The type admits no "unknown": a facade cannot be built
+    without saying, and the snapshot cannot be built without carrying it."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _CountingBroker()
     facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
@@ -1123,27 +1130,12 @@ async def test_custody_snapshot_carries_the_environment_the_clerk_activated_agai
     assert projection.account_mode == "paper"
 
 
-@pytest.mark.asyncio
-async def test_custody_snapshot_reports_no_environment_when_none_was_proven(tmp_path: Path) -> None:
-    """A facade built without a proven environment says so; admission then
-    fails closed rather than inferring paper from the account-id shape."""
-    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
-    broker = _CountingBroker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
-
-    projection = await facade.custody_snapshot_projection("sid-1")
-
-    assert projection.account_mode is None
-
-
-@pytest.mark.asyncio
-async def test_synthetic_authority_is_a_paper_environment_by_construction(tmp_path: Path) -> None:
-    """Dry Run's isolated simulator can never be live, so its custody answer
-    names paper without any caller having to say so."""
+def test_synthetic_authority_refuses_to_call_itself_live(tmp_path: Path) -> None:
+    """Dry Run's isolated simulator can never be a live environment."""
     repo = ClerkSqliteRepository.initialize(account_id="sim:sid-1", artifacts_root=tmp_path)
     broker = _CountingBroker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, authority_kind="synthetic")
 
-    projection = await facade.custody_snapshot_projection("sid-1")
-
-    assert projection.account_mode == "paper"
+    with pytest.raises(AccountAuthorityIdentityError):
+        SqliteAlpacaClerkFacade(
+            repo=repo, read=broker, trade=broker, authority_kind="synthetic", account_mode="live"
+        )

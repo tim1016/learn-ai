@@ -7549,8 +7549,11 @@ export interface components {
         ClerkCustodySnapshot: {
             /** Account Id */
             account_id: string;
-            /** Account Mode */
-            account_mode?: ("paper" | "live") | null;
+            /**
+             * Account Mode
+             * @enum {string}
+             */
+            account_mode: "paper" | "live";
             /** Broker */
             broker: string;
             /** Clerk Generation */

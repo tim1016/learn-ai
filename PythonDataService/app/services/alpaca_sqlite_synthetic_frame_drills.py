@@ -109,7 +109,7 @@ async def _run_injected_frames(
                         frame_broker_order_ids.append(broker_order_id)
             yield frame
 
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo,
         intake=facade.intake,
@@ -512,7 +512,7 @@ async def gap_reconcile(artifacts_root: Path) -> SyntheticScenarioObservation:
         seam_permitted = fault_seam_permitted(registry)
         if seam_permitted:
             registry.arm(FrameFaultKind.DISCONNECT.value)
-        facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+        facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
         sink = SqliteTradeUpdateEvidenceSink(
             repo=repo,
             intake=facade.intake,

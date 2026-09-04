@@ -63,10 +63,7 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
-from app.services.signal_program_admission import (
-    proven_build_explanation,
-    proven_build_next_step,
-)
+from app.services.signal_program_admission import proven_build_copy
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -426,6 +423,23 @@ def program_build_view_from_run_evidence(
     before it replays ``NOT_CHECKED``, which is a true statement about a run
     whose wiring was never written down rather than a claim about the wiring.
     """
+    # `ProgramBuildAdmissionFact` refuses a PROVEN fact that reports a warning
+    # without a next step, and rightly: a replay that shows one and no remedy
+    # is a worse artifact than one that shows nothing. The live proof's own
+    # remedies still apply to a frozen run.
+    explanation, next_step = proven_build_copy(
+        wiring=evidence.wiring,
+        corpus_coverage=evidence.corpus_coverage,
+        matched=(
+            "The Signal Program build proven and recorded when this run started "
+            "matches its golden qualification receipt."
+        ),
+        drifted=(
+            "The Signal Program math proven and recorded when this run started "
+            "matches its golden qualification receipt, but its strategy wiring "
+            "had already changed since that receipt was minted."
+        ),
+    )
     return ProgramBuildAdmissionFact(
         state="PROVEN",
         program_key=strategy_key,
@@ -446,26 +460,8 @@ def program_build_view_from_run_evidence(
             f"program-build-receipt:{evidence.qualification_receipt_hash}",
             f"program-build-digest:{evidence.running_artifact_digest}",
         ),
-        explanation=proven_build_explanation(
-            (
-                "The Signal Program build proven and recorded when this run started "
-                "matches its golden qualification receipt."
-                if evidence.wiring != "DRIFTED"
-                else (
-                    "The Signal Program math proven and recorded when this run started "
-                    "matches its golden qualification receipt, but its strategy wiring "
-                    "had already changed since that receipt was minted."
-                )
-            ),
-            corpus_coverage=evidence.corpus_coverage,
-        ),
-        # `ProgramBuildAdmissionFact` refuses a PROVEN fact that reports a
-        # warning without a next step, and rightly: a replay that shows one
-        # and no remedy is a worse artifact than one that shows nothing. The
-        # live proof's own remedies still apply to a frozen run.
-        next_step=proven_build_next_step(
-            wiring=evidence.wiring, corpus_coverage=evidence.corpus_coverage
-        ),
+        explanation=explanation,
+        next_step=next_step,
         verification="frozen_run_evidence",
     )
 

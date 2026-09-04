@@ -6760,19 +6760,12 @@
             "type": "string"
           },
           "account_mode": {
-            "anyOf": [
-              {
-                "enum": [
-                  "paper",
-                  "live"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "enum": [
+              "paper",
+              "live"
             ],
-            "title": "Account Mode"
+            "title": "Account Mode",
+            "type": "string"
           },
           "broker": {
             "title": "Broker",
@@ -6867,6 +6860,7 @@
         "required": [
           "broker",
           "account_id",
+          "account_mode",
           "strategy_instance_id",
           "clerk_generation",
           "journal_sequence",

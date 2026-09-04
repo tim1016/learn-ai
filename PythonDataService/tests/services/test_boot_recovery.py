@@ -391,7 +391,7 @@ async def test_boot_reconstructs_sqlite_start_committed_before_binding(
         lifecycle_run_id="run-committed-before-binding",
     )
     broker = _SqliteRuntimeBroker()
-    set_alpaca_clerk(SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker))
+    set_alpaca_clerk(SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper"))
     registry = BotTaskRegistry(
         _artifacts_root(tmp_path),
         feed_resolver=lambda: _FakeFeed([], mode="hold"),

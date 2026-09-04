@@ -164,9 +164,9 @@ qualification evidence"*, the build fact reads `corpus_coverage: UNCOVERED`
 with a `next_step` naming the two ways to make a covered run (deploy at the
 registered validated settings, or run golden qualification for these
 parameters), and the run's frozen evidence keeps the stamp so the panel never
-replays an exploratory run as citable proof. Anywhere the environment is not
-positively paper — a live account, or a custody answer that does not state
-its environment at all — the run refuses with `PROGRAM_CORPUS_UNCOVERED`.
+replays an exploratory run as citable proof. On a live account the run
+refuses with `PROGRAM_CORPUS_UNCOVERED`; a custody answer cannot omit its
+environment, so there is no third case to reason about.
 There is no toggle: the environment is the only switch, and a paper run that
 must be corpus-covered simply deploys at the validated point and reads
 `COVERED`.

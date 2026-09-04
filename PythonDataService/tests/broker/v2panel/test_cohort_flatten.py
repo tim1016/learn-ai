@@ -282,6 +282,7 @@ async def cohort_api(tmp_path):
     # The facade's broker ports see exactly the attributed position, so the
     # reconciliation below lands clean and the ladder's flatten arms.
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=_FakeReadPort(positions=[_broker_position_fixture("SPY", quantity=10.0)]),  # type: ignore[arg-type]
         trade=_FakeTradePort(),  # type: ignore[arg-type]

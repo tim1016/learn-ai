@@ -122,7 +122,7 @@ def api(tmp_path: Path):
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     port = FakeAlpacaPort()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=port, trade=port)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=port, trade=port, account_mode="paper")
     set_active_clerk_runtime(
         ActiveClerkRuntime(authority_kind="sqlite", clerk=facade)
     )

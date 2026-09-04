@@ -28,7 +28,6 @@ from app.services.bot_runner import BotTaskRegistry
 from app.services.bot_runner_errors import RunAdmissionRefusedError
 from app.services.market_liveness import compose_market_liveness
 from app.utils.timestamps import now_ms_utc
-from tests._helpers.bot_runner.ema_parity import admit_lean_parity_settings_for_start_admission
 
 _STRATEGY_INSTANCE_ID = "alpaca-skeleton-1"
 
@@ -194,7 +193,7 @@ def _registry_with_sqlite_clerk(
         artifacts_root=tmp_path / "clerk",
     )
     broker = _FlatBroker()
-    clerk = SqliteAlpacaClerkFacade(repo=repository, read=broker, trade=broker)
+    clerk = SqliteAlpacaClerkFacade(repo=repository, read=broker, trade=broker, account_mode="paper")
     registry = BotTaskRegistry(
         tmp_path / "runner",
         feed_resolver=lambda: feed,
@@ -211,9 +210,7 @@ async def test_unhandled_error_is_preserved_only_on_immutable_run_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # This test proves crash-diagnostic plumbing, not deploy admission --
-    # see the helper's docstring.
-    admit_lean_parity_settings_for_start_admission(monkeypatch)
+    # This test proves crash-diagnostic plumbing, not deploy admission.
     crash_message = "TradeBar.__init__() got an unexpected keyword argument 'start_ms'"
     feed = _ResumeFeed()
     feed.install((_first_resumed_bar(),), error=TypeError(crash_message))
@@ -288,9 +285,7 @@ async def test_ema_resume_does_not_decide_on_an_incomplete_signal_bucket(
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         frozenset({("ema_crossover_signal", "PA-TEST")}),
     )
-    # This test proves signal-bucket resume behavior, not deploy admission --
-    # see the helper's docstring.
-    admit_lean_parity_settings_for_start_admission(monkeypatch)
+    # This test proves signal-bucket resume behavior, not deploy admission.
     feed = _ResumeFeed()
     repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
     set_alpaca_clerk(clerk)
@@ -334,9 +329,7 @@ async def test_resume_after_diagnostic_crash_reuses_the_existing_receipt(
 ) -> None:
     """PRD #1716 AC-1: a diagnostic-bearing crash can Resume into a new run,
     with the previous receipt left byte-for-byte unchanged."""
-    # This test proves crash/resume receipt plumbing, not deploy admission --
-    # see the helper's docstring.
-    admit_lean_parity_settings_for_start_admission(monkeypatch)
+    # This test proves crash/resume receipt plumbing, not deploy admission.
     crash_message = "TradeBar.__init__() got an unexpected keyword argument 'start_ms'"
     feed = _ResumeFeed()
     feed.install((_first_resumed_bar(),), error=TypeError(crash_message))
@@ -393,8 +386,7 @@ async def test_resume_with_an_unreadable_receipt_is_denied_before_clerk_registra
     TERMINAL_EVIDENCE_UNREADABLE before any Clerk registration, process
     activity, or current_run.json advancement is attempted."""
     # This test proves the unreadable-receipt admission path, not deploy
-    # admission -- see the helper's docstring.
-    admit_lean_parity_settings_for_start_admission(monkeypatch)
+    # admission.
     feed = _ResumeFeed()
     feed.install((_first_resumed_bar(),), error=TypeError("boom"))
     repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)

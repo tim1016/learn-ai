@@ -20,7 +20,6 @@ from tests._helpers.bot_runner.custody import _SID, _T0, _registry
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
 from tests._helpers.bot_runner.ema_parity import (
     _ema_parity_bars_through_first_exit,
-    admit_lean_parity_settings_for_start_admission,
 )
 
 from ._support import _install_fake_clerk, _wait_for
@@ -83,9 +82,9 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
 ) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
-    # Dry-run mechanics test reusing the LEAN-parity bars fixture -- not
-    # exercising deploy admission, see the helper's docstring.
-    admit_lean_parity_settings_for_start_admission(monkeypatch)
+    # Dry-run mechanics test reusing the LEAN-parity bars fixture; the
+    # deploy runs stamped corpus_coverage=UNCOVERED (ADR 0054), which is
+    # irrelevant to what it proves.
     bars = _ema_parity_bars_through_first_exit()
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
@@ -184,7 +183,7 @@ async def test_dry_run_deploy_at_an_uncovered_parameter_point_is_admitted_and_st
     which the registry's validated point deliberately left on 2026-09-01, so
     a deploy naming no parameters resolves to a point the corpus does not
     cover. That used to refuse ``PROGRAM_BUILD_UNPROVEN`` and every mechanics
-    test needed ``admit_lean_parity_settings_for_start_admission``. Dry Run's
+    test needed a registry bypass helper (since deleted). Dry Run's
     synthetic authority is a paper environment, so the run is admitted,
     stamped on the decision, and its per-run evidence keeps the stamp.
     """
