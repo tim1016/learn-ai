@@ -203,6 +203,7 @@ async def archive_api(tmp_path: Path) -> AsyncIterator[FastAPI]:
             operator_reason="finished",
         )
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=_FakeReadPort(positions=[]),  # type: ignore[arg-type]
         trade=_FakeTradePort(),  # type: ignore[arg-type]

@@ -131,6 +131,7 @@ def test_account_desk_reads_operation_first_sqlite_projection(tmp_path: Path) ->
         ActiveClerkRuntime(
             authority_kind="sqlite",
             clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=repo,
                 read=broker,  # type: ignore[arg-type]
                 trade=broker,  # type: ignore[arg-type]
@@ -220,6 +221,7 @@ def test_account_transaction_projection_includes_manual_ticket_without_bot_run(t
         ActiveClerkRuntime(
             authority_kind="sqlite",
             clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=repo,
                 read=broker,  # type: ignore[arg-type]
                 trade=broker,  # type: ignore[arg-type]
@@ -291,6 +293,7 @@ def test_manual_cancellation_transaction_keeps_its_target_order_reference(tmp_pa
         ActiveClerkRuntime(
             authority_kind="sqlite",
             clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=repo,
                 read=broker,  # type: ignore[arg-type]
                 trade=broker,  # type: ignore[arg-type]
@@ -391,6 +394,7 @@ def test_transaction_projection_preserves_each_effective_execution_economics(
         ActiveClerkRuntime(
             authority_kind="sqlite",
             clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=repo,
                 read=broker,  # type: ignore[arg-type]
                 trade=broker,  # type: ignore[arg-type]
@@ -480,6 +484,7 @@ def test_transaction_projection_surfaces_single_slice_economics_on_summary(tmp_p
         ActiveClerkRuntime(
             authority_kind="sqlite",
             clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=repo,
                 read=broker,  # type: ignore[arg-type]
                 trade=broker,  # type: ignore[arg-type]
@@ -646,6 +651,7 @@ def test_external_transaction_history_and_detail_stay_outside_bot_economics(tmp_
         ActiveClerkRuntime(
             authority_kind="sqlite",
             clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=repo,
                 read=broker,  # type: ignore[arg-type]
                 trade=broker,  # type: ignore[arg-type]
@@ -733,6 +739,7 @@ def test_external_history_applies_window_before_keyset_limit(tmp_path: Path) -> 
         ActiveClerkRuntime(
             authority_kind="sqlite",
             clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=repo,
                 read=broker,  # type: ignore[arg-type]
                 trade=broker,  # type: ignore[arg-type]
@@ -819,6 +826,7 @@ def test_all_transaction_history_keyset_merges_strategy_and_external_without_dup
         ActiveClerkRuntime(
             authority_kind="sqlite",
             clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=repo,
                 read=broker,  # type: ignore[arg-type]
                 trade=broker,  # type: ignore[arg-type]

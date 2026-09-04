@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
+    AccountAuthorityIdentityError,
     require_real_paper_account_id,
     require_synthetic_account_id,
 )
@@ -194,9 +195,12 @@ class SqliteAlpacaClerkFacade:
         stream_health: StreamHealthGate | None = None,
         intake: ReentrantAsyncLock | None = None,
         authority_kind: Literal["sqlite", "synthetic"] = "sqlite",
+        account_mode: Literal["paper", "live"],
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
+            if account_mode != "paper":
+                raise AccountAuthorityIdentityError("a synthetic authority is a paper environment")
         else:
             require_real_paper_account_id(repo.account_id)
         self._repo = repo
@@ -204,6 +208,10 @@ class SqliteAlpacaClerkFacade:
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._stream_health = stream_health
         self.authority_kind = authority_kind
+        # The environment every custody answer names (ADR 0054): what the
+        # caller positively learned from the broker at activation, never a
+        # guess from the account-id shape.
+        self._account_mode = account_mode
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -1039,6 +1047,7 @@ class SqliteAlpacaClerkFacade:
             return ClerkCustodySnapshot(
                 broker=self.broker_id,
                 account_id=self.account_id,
+                account_mode=self._account_mode,
                 strategy_instance_id=strategy_instance_id,
                 clerk_generation=(f"sqlite:{meta.authority_generation}:{meta.db_identity_token}"),
                 journal_sequence=meta.control_revision,

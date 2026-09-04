@@ -229,7 +229,7 @@ async def test_external_order_acknowledgement_endpoint_durably_releases_only_ext
     set_active_clerk_runtime(
         ActiveClerkRuntime(
             authority_kind="sqlite",
-            clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker),  # type: ignore[arg-type]
+            clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper"),  # type: ignore[arg-type]
         )
     )
     app = FastAPI()

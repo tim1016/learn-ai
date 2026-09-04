@@ -168,6 +168,7 @@ def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     port = FakeAlpacaPort(repo=repo)
     health = {"market_data": True, "execution": True}
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=port,
         trade=port,

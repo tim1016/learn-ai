@@ -418,6 +418,7 @@ def test_synthetic_authority_construction_refuses_a_real_account_repo(tmp_path: 
     try:
         with pytest.raises(AccountAuthorityIdentityError):
             SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=real_repo,
                 read=dummy_broker,
                 trade=dummy_broker,
@@ -434,6 +435,7 @@ def test_synthetic_authority_construction_refuses_a_real_account_repo(tmp_path: 
     try:
         with pytest.raises(AccountAuthorityIdentityError):
             SqliteAlpacaClerkFacade(
+                account_mode="paper",
                 repo=synthetic_repo,
                 read=dummy_broker,
                 trade=dummy_broker,

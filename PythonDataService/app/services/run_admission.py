@@ -13,6 +13,7 @@ import math
 
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.run_admission import (
+    CORPUS_UNCOVERED_NEXT_STEP,
     ResumeRunFacts,
     RunAdmissionDecision,
     RunAdmissionFactAges,
@@ -22,6 +23,13 @@ from app.services.canary_admission import canary_gate_applies, canary_pairing_ad
 
 AUTHORITY_FACT_MAX_AGE_MS = 5_000
 _QTY_TOLERANCE_ULPS = 4
+# Rides an admitted Start/Resume decision at an uncovered parameter point
+# (ADR 0054); the deploy page renders that decision as the latest backend
+# Start check, so the stamp is said where an operator reads it.
+CORPUS_UNCOVERED_ADMITTED_NOTE = (
+    "Corpus coverage is UNCOVERED: the paper environment admits this exploratory run, "
+    "which is not citable as qualification evidence."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +212,19 @@ def evaluate_run_admission(
             explanation=bot.program_build.explanation,
             next_step=bot.program_build.next_step
             or "Re-run the program qualification job and deploy a new sealed instance.",
+        )
+    # ADR 0054: corpus coverage is a stamp on a paper account and a blocker
+    # anywhere else. `account_mode` is the Clerk's positive answer, learned
+    # from the broker at activation; nothing here infers it.
+    if bot.program_build.corpus_coverage == "UNCOVERED" and clerk.account_mode != "paper":
+        return decide(
+            allowed=False,
+            reason_code="PROGRAM_CORPUS_UNCOVERED",
+            explanation=(
+                "This instance resolved parameters the golden qualification corpus does not "
+                "cover, and only a proven paper account may run an uncovered parameter point."
+            ),
+            next_step=CORPUS_UNCOVERED_NEXT_STEP,
         )
     if bot.validation.state != "VERIFIED":
         return decide(
@@ -426,10 +447,18 @@ def evaluate_run_admission(
     return decide(
         allowed=True,
         reason_code=f"{bot.operation}_ADMITTED",
-        explanation=(
-            "The process slot is absent, market data is ready, and the Clerk proves flat custody."
-            if bot.operation == "START"
-            else "The prior run is terminal, market data is ready, and the Clerk proves resumable custody."
-        ),
+        explanation=_admitted_explanation(bot),
         next_step=None,
     )
+
+
+def _admitted_explanation(bot: RunAdmissionFacts) -> str:
+    """The admitted sentence, carrying the corpus-coverage stamp when one applies."""
+    admitted = (
+        "The process slot is absent, market data is ready, and the Clerk proves flat custody."
+        if bot.operation == "START"
+        else "The prior run is terminal, market data is ready, and the Clerk proves resumable custody."
+    )
+    if bot.program_build.corpus_coverage != "UNCOVERED":
+        return admitted
+    return f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"

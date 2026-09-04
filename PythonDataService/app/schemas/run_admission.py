@@ -104,6 +104,55 @@ PROGRAM_BUILD_PROOF_FIELDS: tuple[str, ...] = (
     "qualification_receipt_hash",
 )
 
+#: Operator copy for the two warnings a PROVEN build can carry, stated once.
+#: The live proof, the frozen-run replay, and the pure admission policy all
+#: hand these to an operator; two copies of one sentence are two sentences
+#: that can disagree. They live here, not in the service that mints the proof,
+#: because the pure policy must not import a module that reads files.
+WIRING_DRIFT_NEXT_STEP = (
+    "Re-run golden qualification for this program so its receipt covers the current wiring."
+)
+CORPUS_UNCOVERED_EXPLANATION = (
+    "Its resolved parameters lie outside the golden qualification corpus, so this run "
+    "is exploratory and not citable as qualification evidence."
+)
+CORPUS_UNCOVERED_NEXT_STEP = (
+    "Deploy at the registered validated settings, or run golden qualification for these "
+    "parameters, before citing this run as evidence."
+)
+
+
+def proven_build_copy(
+    *,
+    wiring: str,
+    corpus_coverage: str,
+    matched: str,
+    drifted: str,
+) -> tuple[str, str | None]:
+    """The explanation and next step a PROVEN build owes its operator.
+
+    ``matched`` / ``drifted`` are the caller's own sentence for the wiring
+    verdict (the live proof and the frozen-run replay speak in different
+    tenses); the corpus-coverage stamp and every remedy are composed here so
+    a Start decision and that run's panel afterwards say the same thing.
+    Both warnings can hold at once, and an operator told about only one of
+    them would fix it and still be surprised by the other.
+    """
+    drift = wiring == "DRIFTED"
+    uncovered = corpus_coverage == "UNCOVERED"
+    explanation = drifted if drift else matched
+    if uncovered:
+        explanation = f"{explanation} {CORPUS_UNCOVERED_EXPLANATION}"
+    remedies = [
+        remedy
+        for remedy, applies in (
+            (WIRING_DRIFT_NEXT_STEP, drift),
+            (CORPUS_UNCOVERED_NEXT_STEP, uncovered),
+        )
+        if applies
+    ]
+    return explanation, " ".join(remedies) or None
+
 
 class ProgramBuildAdmissionFact(BaseModel):
     """Admission-time proof that loaded program bytes match qualification."""
@@ -132,20 +181,32 @@ class ProgramBuildAdmissionFact(BaseModel):
     # reported rather than blocking. A drift in the already-covered artifacts
     # is not representable here -- it fails closed as UNPROVEN, unchanged.
     wiring: Literal["MATCHED", "DRIFTED", "NOT_CHECKED"] = "NOT_CHECKED"
+    # ADR 0054. Whether the golden corpus behind ``golden_trace_root`` covers
+    # the resolved parameter point and symbol. ``UNCOVERED`` alongside
+    # ``state="PROVEN"`` is the paper-testing posture: the bytes are proven
+    # against their receipt, a proven paper account admits the run carrying
+    # this stamp, and anywhere else refuses it (``PROGRAM_CORPUS_UNCOVERED``).
+    # Whether to admit is the pure policy's decision, never this fact's.
+    corpus_coverage: Literal["COVERED", "UNCOVERED", "NOT_CHECKED"] = "NOT_CHECKED"
 
     @model_validator(mode="after")
     def _proven_carries_its_full_proof(self) -> ProgramBuildAdmissionFact:
         """``state == "PROVEN"`` must carry the full proof, not a partial one.
 
-        UNPROVEN and NOT_APPLICABLE are deliberately left unconstrained here:
-        both producers (``prove_running_program_build`` and
-        ``program_build_view_from_run_evidence``) only ever leave the proof
-        fields absent for those states today, but nothing about "not proven"
-        requires that — a future diagnostic case that attaches a partial,
+        UNPROVEN and NOT_APPLICABLE are deliberately left unconstrained in
+        their *proof fields*: both producers (``prove_running_program_build``
+        and ``program_build_view_from_run_evidence``) only ever leave those
+        absent for such states today, but nothing about "not proven" requires
+        that — a future diagnostic case that attaches a partial,
         non-authoritative proof to an UNPROVEN fact would be legitimate, and
-        must not be refused by this validator.
+        must not be refused here. A *stamp* on them is refused: it qualifies a
+        proof, and without one it would read as a verdict about nothing.
         """
         if self.state != "PROVEN":
+            if self.wiring != "NOT_CHECKED" or self.corpus_coverage != "NOT_CHECKED":
+                # A stamp qualifies a proof; without one it would be read as a
+                # verdict about bytes that were never proven at all.
+                raise ValueError("only a PROVEN fact may carry a wiring or corpus-coverage stamp")
             return self
         missing = [name for name in PROGRAM_BUILD_PROOF_FIELDS if getattr(self, name) is None]
         if missing:
@@ -156,6 +217,8 @@ class ProgramBuildAdmissionFact(BaseModel):
             # A warning an operator cannot act on is worse than no warning: it
             # reports a drift and leaves them to guess the remedy.
             raise ValueError("a PROVEN fact reporting wiring drift requires a next_step")
+        if self.corpus_coverage == "UNCOVERED" and self.next_step is None:
+            raise ValueError("a PROVEN fact reporting an uncovered corpus requires a next_step")
         return self
 
 

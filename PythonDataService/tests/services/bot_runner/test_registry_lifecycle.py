@@ -50,7 +50,6 @@ from tests._helpers.bot_runner.custody import (
     _registry,
 )
 from tests._helpers.bot_runner.doubles import _FakeFeed
-from tests._helpers.bot_runner.ema_parity import admit_lean_parity_settings_for_start_admission
 
 from ._support import _RTH_MS, _bar, _current_run_json, _strategy_instance_json, _wait_for
 
@@ -518,9 +517,7 @@ async def test_deploy_after_stop_with_changed_configuration_is_refused(
 ) -> None:
     # The second deploy below intentionally switches to "ema_crossover_signal"
     # with a changed symbol, to prove it's refused on the SID conflict --
-    # not on this signal program's own (unrelated) parameters gate. See the
-    # helper's docstring.
-    admit_lean_parity_settings_for_start_admission(monkeypatch)
+    # not on anything about this signal program's own parameters.
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.deploy_with_admission(

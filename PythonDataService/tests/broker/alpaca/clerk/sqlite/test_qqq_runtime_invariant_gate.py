@@ -196,6 +196,7 @@ async def _open_qqq_runtime(tmp_path: Path) -> _QqqRuntime:
     intake = ReentrantAsyncLock()
     guarded_read, guarded_trade = guard_broker_ports(read=broker, trade=broker, intake=intake)
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=guarded_read,
         trade=guarded_trade,

@@ -218,6 +218,7 @@ def api(tmp_path: Path, fleet_size: int):
             lifecycle_run_id=_run_id(sid),
         )
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=port,  # type: ignore[arg-type]
         trade=port,  # type: ignore[arg-type]

@@ -73,7 +73,7 @@ async def test_authority_registry_resolves_simultaneous_authorities_by_exact_acc
 ) -> None:
     real_repo = ClerkSqliteRepository.initialize(account_id="PA-REAL", artifacts_root=tmp_path)
     real_broker = SyntheticBroker(account_id="sim:unused")
-    real_facade = SqliteAlpacaClerkFacade(repo=real_repo, read=real_broker, trade=real_broker)
+    real_facade = SqliteAlpacaClerkFacade(repo=real_repo, read=real_broker, trade=real_broker, account_mode="paper")
     real = ActiveClerkRuntime(
         authority_kind="sqlite",
         clerk=real_facade,
@@ -105,7 +105,7 @@ async def test_authority_registry_resolves_simultaneous_authorities_by_exact_acc
 async def test_sealed_account_mismatch_happens_before_any_run_is_created(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-REAL", artifacts_root=tmp_path)
     broker = SyntheticBroker(account_id="sim:unused")
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = BrokerBotBinding(
         strategy_instance_id="ema-1",
         broker="alpaca",
@@ -129,7 +129,7 @@ async def test_sealed_account_mismatch_happens_before_any_run_is_created(tmp_pat
 async def test_missing_account_seal_happens_before_any_run_is_created(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-REAL", artifacts_root=tmp_path)
     broker = SyntheticBroker(account_id="sim:unused")
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     binding = BrokerBotBinding(
         strategy_instance_id="ema-unsealed",
         broker="alpaca",

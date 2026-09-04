@@ -116,6 +116,7 @@ def _activate_sqlite(tmp_path: Path) -> ClerkSqliteRepository:
         lifecycle_run_id="run-1",
     )
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=_FakeReadPort(),  # type: ignore[arg-type]
         trade=_FakeReadPort(),  # type: ignore[arg-type]

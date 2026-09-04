@@ -18,6 +18,7 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.schemas.run_admission import (
+    CORPUS_UNCOVERED_NEXT_STEP,
     MarketDataAdmissionFact,
     ProgramBuildAdmissionFact,
     ResumeCheckpointAdmissionFact,
@@ -30,7 +31,7 @@ from app.schemas.run_admission import (
 )
 from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.market_liveness import compose_market_liveness
-from app.services.run_admission import evaluate_run_admission
+from app.services.run_admission import CORPUS_UNCOVERED_ADMITTED_NOTE, evaluate_run_admission
 
 _NOW = 1_700_000_010_000
 _SID = "alpaca-start-1"
@@ -133,10 +134,12 @@ def _clerk(
     reconciliation_state: str = "clean",
     reconciliation_fresh: bool = True,
     observed_at_ms: int = _NOW - 500,
+    account_mode: str = "paper",
 ) -> ClerkCustodySnapshot:
     return ClerkCustodySnapshot(
         broker="alpaca",
         account_id="paper-account",
+        account_mode=account_mode,
         strategy_instance_id=_SID,
         clerk_generation="clerk-1",
         journal_sequence=7,
@@ -797,6 +800,7 @@ def _canary_program_build(
     state: str = "PROVEN",
     program_key: str = "ema_crossover_signal",
     observed_at_ms: int = _NOW - 1_000,
+    corpus_coverage: str = "NOT_CHECKED",
 ) -> ProgramBuildAdmissionFact:
     proven_only: dict[str, object] = (
         {
@@ -818,6 +822,8 @@ def _canary_program_build(
             if state == "PROVEN"
             else "The running program is unproven."
         ),
+        corpus_coverage=corpus_coverage,
+        next_step=CORPUS_UNCOVERED_NEXT_STEP if corpus_coverage == "UNCOVERED" else None,
         **proven_only,
     )
 
@@ -1035,3 +1041,69 @@ def test_canary_resume_after_rollback_mints_a_genuinely_new_admitted_run(
     assert decision.reason_code == "RESUME_ADMITTED"
     assert decision.proposed_run_id == "run-resumed"
     assert decision.proposed_run_id != "run-prior"
+
+
+# --- Corpus coverage: a stamp on a proven paper account, a blocker elsewhere --
+
+
+def _uncovered_bot(*, mode: str = "dry_run") -> StartRunFacts:
+    """A PROVEN build whose resolved parameters lie outside the golden corpus."""
+    return _bot(mode=mode).model_copy(
+        update={"program_build": _canary_program_build(corpus_coverage="UNCOVERED")}
+    )
+
+
+def test_uncovered_corpus_is_admitted_on_a_proven_paper_account_and_stamped() -> None:
+    """Paper is for testing: an uncovered parameter point starts, and says so.
+
+    The code-identity half of the proof is untouched (state stays PROVEN);
+    only the corpus-coverage half is relaxed, and the admitted decision
+    carries the stamp so the run is never mistaken for qualification evidence.
+    """
+    decision = evaluate_run_admission(_uncovered_bot(), _clerk(account_mode="paper"), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is True
+    assert decision.reason_code == "START_ADMITTED"
+    assert CORPUS_UNCOVERED_ADMITTED_NOTE in decision.explanation
+
+
+def test_uncovered_corpus_is_refused_on_a_live_account() -> None:
+    """Outside paper the stamp is a blocker, with the same remedy the fact names."""
+    decision = evaluate_run_admission(_uncovered_bot(), _clerk(account_mode="live"), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
+    assert decision.next_step == CORPUS_UNCOVERED_NEXT_STEP
+
+
+def test_covered_corpus_never_consults_the_account_environment() -> None:
+    """The environment only matters once coverage is actually missing."""
+    bot = _bot(mode="dry_run").model_copy(
+        update={"program_build": _canary_program_build(corpus_coverage="COVERED")}
+    )
+
+    decision = evaluate_run_admission(bot, _clerk(account_mode="live"), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is True
+    assert CORPUS_UNCOVERED_ADMITTED_NOTE not in decision.explanation
+
+
+def test_uncovered_corpus_on_paper_trade_still_requires_the_canary_pairing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The relaxation never pre-empts the closed canary allowlist."""
+    refused = evaluate_run_admission(
+        _uncovered_bot(mode="trade"), _clerk(account_mode="paper"), evaluated_at_ms=_NOW
+    )
+    assert refused.reason_code == "CANARY_PAIRING_NOT_ALLOWLISTED"
+
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
+    admitted = evaluate_run_admission(
+        _uncovered_bot(mode="trade"), _clerk(account_mode="paper"), evaluated_at_ms=_NOW
+    )
+
+    assert admitted.allowed is True
+    assert CORPUS_UNCOVERED_ADMITTED_NOTE in admitted.explanation

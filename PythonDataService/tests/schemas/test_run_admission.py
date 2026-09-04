@@ -78,3 +78,20 @@ def test_unproven_and_not_applicable_facts_construct_without_any_proof(state: st
     assert fact.state == state
     assert all(getattr(fact, field) is None for field in PROGRAM_BUILD_PROOF_FIELDS)
     assert fact.evidence_refs == ()
+
+
+@pytest.mark.parametrize("stamp", [{"wiring": "DRIFTED"}, {"corpus_coverage": "UNCOVERED"}])
+@pytest.mark.parametrize("state", ["UNPROVEN", "NOT_APPLICABLE"])
+def test_only_a_proven_fact_may_carry_a_stamp(state: str, stamp: dict[str, str]) -> None:
+    """A stamp qualifies a proof; on bytes never proven it would read as a
+    verdict about nothing, and the admission gate keyed off it (ADR 0054)
+    must never be reachable from a non-PROVEN fact."""
+    with pytest.raises(ValidationError, match="only a PROVEN fact"):
+        ProgramBuildAdmissionFact(
+            state=state,
+            program_key="ema_crossover_signal",
+            verified_at_ms=1_000,
+            explanation="unproven",
+            next_step="anything",
+            **stamp,
+        )

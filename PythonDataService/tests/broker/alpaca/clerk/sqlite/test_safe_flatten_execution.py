@@ -357,6 +357,7 @@ async def test_execute_recovery_action_dispatches_safe_flatten(
         lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
     )
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),

@@ -735,6 +735,7 @@ async def test_facade_refuses_unexpected_account_evidence_failure_without_unbloc
     repo, _ = _seed_historical_conflict(tmp_path)
     try:
         facade = SqliteAlpacaClerkFacade(
+            account_mode="paper",
             repo=repo,
             read=_Read(activities=[], error=RuntimeError("unexpected broker failure")),
             trade=_Read(activities=[]),

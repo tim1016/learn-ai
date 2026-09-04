@@ -71,6 +71,7 @@ def sqlite_desk(tmp_path: Path):
     )
     broker = _UnusedBroker()
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=broker,  # type: ignore[arg-type]
         trade=broker,  # type: ignore[arg-type]
@@ -238,6 +239,7 @@ def sqlite_desk_clean(tmp_path: Path) -> Iterator[FastAPI]:
     )
     broker = _UnusedBroker()
     facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
         repo=repo,
         read=broker,  # type: ignore[arg-type]
         trade=broker,  # type: ignore[arg-type]

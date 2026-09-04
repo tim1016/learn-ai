@@ -10,7 +10,7 @@ import pytest
 import app.engine.live.durable_append_log as durable_append_log
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
-from app.schemas.run_admission import ProgramBuildAdmissionFact
+from app.schemas.run_admission import WIRING_DRIFT_NEXT_STEP, ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
     ExitEligibilityContract,
@@ -41,7 +41,6 @@ from app.services.bot_carryover import configuration_hash, immutable_configurati
 from app.services.broker_v2_panel.panel_projection_service import (
     program_build_view_from_run_evidence,
 )
-from app.services.signal_program_admission import WIRING_DRIFT_NEXT_STEP
 
 _SID = "alpaca-spy-ema-01"
 
@@ -608,7 +607,50 @@ def test_the_wiring_verdict_a_run_started_under_is_recorded(tmp_path: Path) -> N
     evidence = repository.read_program_build_evidence(_SID, "run-001")
     assert evidence is not None
     assert evidence.wiring == "DRIFTED"
+    assert evidence.schema_version == 3
+
+
+def test_the_corpus_coverage_a_run_started_under_is_recorded(tmp_path: Path) -> None:
+    """A paper run admitted at an uncovered parameter point must stay stamped.
+
+    The stamp is what keeps an exploratory run from being cited as
+    qualification evidence later; if the frozen record loses it, the panel
+    can only replay NOT_CHECKED and the distinction vanishes exactly where
+    it matters.
+    """
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    proof = _proven_program_build(seal).model_copy(
+        update={"corpus_coverage": "UNCOVERED", "next_step": "Deploy at the validated point."}
+    )
+
+    repository.record_launch(_binding(sealed_program=seal, program_build=proof), launch_reason="deploy")
+
+    evidence = repository.read_program_build_evidence(_SID, "run-001")
+    assert evidence is not None
+    assert evidence.corpus_coverage == "UNCOVERED"
+    assert evidence.schema_version == 3
+
+
+def test_evidence_written_before_the_coverage_field_is_still_readable(tmp_path: Path) -> None:
+    """A schema-2 record predates the stamp; absence replays as NOT_CHECKED."""
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    repository.record_launch(
+        _binding(sealed_program=seal, program_build=_proven_program_build(seal)),
+        launch_reason="deploy",
+    )
+    path = _evidence_path(tmp_path)
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    legacy["schema_version"] = 2
+    del legacy["corpus_coverage"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    evidence = repository.read_program_build_evidence(_SID, "run-001")
+
+    assert evidence is not None
     assert evidence.schema_version == 2
+    assert evidence.corpus_coverage == "NOT_CHECKED"
 
 
 def test_evidence_written_before_the_wiring_field_is_still_readable(tmp_path: Path) -> None:
@@ -624,6 +666,7 @@ def test_evidence_written_before_the_wiring_field_is_still_readable(tmp_path: Pa
     legacy = json.loads(path.read_text(encoding="utf-8"))
     legacy["schema_version"] = 1
     del legacy["wiring"]
+    del legacy["corpus_coverage"]
     path.write_text(json.dumps(legacy), encoding="utf-8")
 
     evidence = repository.read_program_build_evidence(_SID, "run-001")
@@ -632,6 +675,7 @@ def test_evidence_written_before_the_wiring_field_is_still_readable(tmp_path: Pa
     assert evidence.schema_version == 1
     # Absence is reported as absence, never inferred as a passing check.
     assert evidence.wiring == "NOT_CHECKED"
+    assert evidence.corpus_coverage == "NOT_CHECKED"
 
 
 def test_relaunching_a_run_whose_evidence_predates_wiring_is_not_a_conflict(
@@ -711,7 +755,7 @@ def test_every_evidence_field_is_classified_as_identity_or_not() -> None:
         "qualification_receipt_hash",
         "verified_at_ms",
     }
-    assert {"schema_version", "wiring"} == NON_IDENTITY_EVIDENCE_FIELDS
+    assert {"schema_version", "wiring", "corpus_coverage"} == NON_IDENTITY_EVIDENCE_FIELDS
 
 
 def test_the_frozen_replay_and_the_live_proof_offer_the_same_drift_remedy() -> None:

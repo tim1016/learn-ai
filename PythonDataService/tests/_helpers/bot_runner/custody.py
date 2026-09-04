@@ -65,6 +65,7 @@ def _flat_custody_snapshot(
     return ClerkCustodySnapshot(
         broker="alpaca",
         account_id="paper-account",
+        account_mode="paper",
         strategy_instance_id=sid,
         clerk_generation="test-clerk",
         journal_sequence=0,

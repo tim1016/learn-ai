@@ -54,6 +54,9 @@ from app.schemas.broker_v2_panel import (
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import (
+    CORPUS_UNCOVERED_EXPLANATION,
+    CORPUS_UNCOVERED_NEXT_STEP,
+    WIRING_DRIFT_NEXT_STEP,
     ProgramBuildAdmissionFact,
     RunAdmissionDecision,
     RunAdmissionFactAges,
@@ -1325,6 +1328,57 @@ def test_program_build_view_from_run_evidence_replays_the_proven_verdict() -> No
     )
     # Evidence that records no verdict replays as absence, not as a pass.
     assert fact.wiring == "NOT_CHECKED"
+    assert fact.corpus_coverage == "NOT_CHECKED"
+
+
+def test_program_build_view_replays_the_corpus_coverage_the_run_started_under() -> None:
+    """A paper run admitted at an uncovered parameter point stays stamped once
+    frozen: the replay must carry the stamp, the explanation, and the remedy,
+    not quietly replay a clean-looking proof."""
+    seal = _sealed_bot_program()
+    evidence = ProgramBuildRunEvidence(
+        strategy_instance_id=SID,
+        run_id="run-1",
+        sealed_program_hash=seal.bot_configuration_hash,
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=1_000,
+        corpus_coverage="UNCOVERED",
+    )
+
+    fact = program_build_view_from_run_evidence("ema_crossover_signal", evidence)
+
+    assert fact.state == "PROVEN"
+    assert fact.corpus_coverage == "UNCOVERED"
+    assert CORPUS_UNCOVERED_EXPLANATION in fact.explanation
+    assert fact.next_step == CORPUS_UNCOVERED_NEXT_STEP
+
+
+def test_program_build_view_replays_both_warnings_when_both_held() -> None:
+    """A run that started drifted *and* uncovered owes its operator both
+    remedies; telling them about one would have them fix it and still be
+    surprised by the other."""
+    seal = _sealed_bot_program()
+    evidence = ProgramBuildRunEvidence(
+        strategy_instance_id=SID,
+        run_id="run-1",
+        sealed_program_hash=seal.bot_configuration_hash,
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=1_000,
+        wiring="DRIFTED",
+        corpus_coverage="UNCOVERED",
+    )
+
+    fact = program_build_view_from_run_evidence("ema_crossover_signal", evidence)
+
+    assert "strategy wiring" in fact.explanation
+    assert CORPUS_UNCOVERED_EXPLANATION in fact.explanation
+    assert fact.next_step == f"{WIRING_DRIFT_NEXT_STEP} {CORPUS_UNCOVERED_NEXT_STEP}"
 
 
 def test_program_build_view_replays_the_wiring_verdict_the_run_started_under() -> None:

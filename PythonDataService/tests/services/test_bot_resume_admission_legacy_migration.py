@@ -44,10 +44,11 @@ def _count(state: str = "zero") -> CustodyCountFact:
     return CustodyCountFact(state=state, count=0 if state == "zero" else None)
 
 
-def _clerk(observed_at_ms: int) -> ClerkCustodySnapshot:
+def _clerk(observed_at_ms: int, *, account_mode: str = "paper") -> ClerkCustodySnapshot:
     return ClerkCustodySnapshot(
         broker="alpaca",
         account_id=f"sim:{_SID}",
+        account_mode=account_mode,
         strategy_instance_id=_SID,
         clerk_generation="clerk-1",
         journal_sequence=1,
@@ -102,7 +103,12 @@ def _status() -> BotStatusView:
     )
 
 
-def _admission(repository: BotBindingRepository | None, *, now_values: list[int]) -> BotResumeAdmission:
+def _admission(
+    repository: BotBindingRepository | None,
+    *,
+    now_values: list[int],
+    account_mode: str = "paper",
+) -> BotResumeAdmission:
     clock = iter(now_values)
 
     def now_ms() -> int:
@@ -124,7 +130,7 @@ def _admission(repository: BotBindingRepository | None, *, now_values: list[int]
 
     @asynccontextmanager
     async def custody_guard(binding: BrokerBotBinding):
-        yield _clerk(observed_at_ms=binding.created_at_ms)
+        yield _clerk(observed_at_ms=binding.created_at_ms, account_mode=account_mode)
 
     def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
         return StrategyValidationAdmissionFact(
@@ -195,22 +201,36 @@ async def test_resume_preview_appends_a_reconstructible_seal_but_parameters_gate
     Since 2026-09-01 the registry's validated point (gap=0.0, rsi_min=30)
     deliberately differs from the Params defaults (the LEAN-parity point a
     no-params legacy binding resolves to and reconstructs exactly), so this
-    exact reconstruction now fails Start admission on exactly the
-    parameters gate -- the same consequence
+    exact reconstruction is PROVEN with its corpus coverage stamped
+    UNCOVERED -- the same consequence
     ``test_legacy_migration_seal_appends_to_same_instance_preserving_v1_bytes``
     (``test_signal_program_admission.py``) encodes for
     ``prove_running_program_build`` directly; this test proves the same
-    thing through the real ``BotResumeAdmission.preview`` orchestration.
+    thing through the real ``BotResumeAdmission.preview`` orchestration,
+    against the synthetic Dry Run authority, which is a paper environment.
     """
     prior = _prior(strategy_params=None)
     admission = _admission(repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3])
 
     decision = await admission.preview(prior, _status())
 
-    assert decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
-    assert decision.explanation == (
-        "This instance resolved parameters the golden qualification corpus does not cover."
+    assert decision.reason_code not in {"PROGRAM_BUILD_UNPROVEN", "PROGRAM_CORPUS_UNCOVERED"}
+    assert "program-corpus-coverage:UNCOVERED" in decision.evidence_refs
+
+
+@pytest.mark.asyncio
+async def test_resume_preview_refuses_an_uncovered_point_on_a_live_account() -> None:
+    """The same reconstruction on a custody answer naming a live environment
+    is refused on the coverage gate, through the real orchestration."""
+    prior = _prior(strategy_params=None)
+    admission = _admission(
+        repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3], account_mode="live"
     )
+
+    decision = await admission.preview(prior, _status())
+
+    assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
+    assert "program-corpus-coverage:UNCOVERED" in decision.evidence_refs
 
 
 @pytest.mark.asyncio

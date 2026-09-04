@@ -259,7 +259,7 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
         artifacts_root=tmp_path / "clerk",
     )
     broker = _SqliteRuntimeBroker()
-    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     set_alpaca_clerk(clerk)
     registry = BotTaskRegistry(
         tmp_path / "artifacts",
@@ -404,7 +404,7 @@ async def test_archive_takes_a_finished_bot_off_the_roster(
         artifacts_root=tmp_path / "clerk",
     )
     broker = _SqliteRuntimeBroker()
-    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     set_alpaca_clerk(clerk)
     registry = BotTaskRegistry(
         tmp_path / "artifacts",

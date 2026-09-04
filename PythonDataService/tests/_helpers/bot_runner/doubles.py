@@ -318,6 +318,7 @@ class _CustodyClerk:
         yield ClerkCustodySnapshot(
             broker="alpaca",
             account_id=self.proof.account_id,
+            account_mode="paper",
             strategy_instance_id=sid,
             clerk_generation="test-clerk",
             journal_sequence=1,

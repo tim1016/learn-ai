@@ -1608,6 +1608,7 @@ async def test_indeterminate_blocker_survives_restart_and_boot_recovery_stays_bl
 
         # Boot recovery: still fenced while the mismatch remains indeterminate.
         facade = SqliteAlpacaClerkFacade(
+            account_mode="paper",
             repo=after_restart,
             read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=3.0)]),
             trade=_FakeTrade(),

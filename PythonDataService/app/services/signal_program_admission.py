@@ -23,7 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.config import settings
 from app.engine.strategy.params import decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
-from app.schemas.run_admission import ProgramBuildAdmissionFact, StrategyValidationAdmissionFact
+from app.schemas.run_admission import (
+    ProgramBuildAdmissionFact,
+    StrategyValidationAdmissionFact,
+    proven_build_copy,
+)
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
     ParameterOrigin,
@@ -365,14 +369,6 @@ def _legacy_parameter_origins(
     return origins
 
 
-# The remedy for wiring drift, stated once. Both the live proof and the
-# frozen-run replay in `panel_projection_service` hand this to an operator;
-# two copies of one instruction is two instructions that can disagree.
-WIRING_DRIFT_NEXT_STEP = (
-    "Re-run golden qualification for this program so its receipt covers the current wiring."
-)
-
-
 def prove_running_program_build(
     binding: BrokerBotBinding,
     *,
@@ -448,6 +444,25 @@ def prove_running_program_build(
             verified_at_ms,
             explanation="The running strategy wiring does not match its golden-qualification receipt.",
         )
+    wiring: Literal["MATCHED", "DRIFTED"] = "MATCHED" if wiring_matches else "DRIFTED"
+    # `golden_trace_root` pins one decision *stream*, produced by specific
+    # math at a specific cadence over specific symbols. A resolved value
+    # outside `validated_settings`/`validated_symbols` means the corpus does
+    # not describe this configuration -- a fact about the *evidence*, not the
+    # *bytes*, so it is stamped here rather than refusing the proof; the pure
+    # admission policy decides whether an uncovered point may start (ADR 0054).
+    coverage: Literal["COVERED", "UNCOVERED"] = (
+        "COVERED" if configured.parameters_match_validated_settings else "UNCOVERED"
+    )
+    explanation, next_step = proven_build_copy(
+        wiring=wiring,
+        corpus_coverage=coverage,
+        matched="The running Signal Program build matches its golden qualification receipt.",
+        drifted=(
+            "The running Signal Program math matches its golden qualification receipt, but "
+            "the strategy wiring has changed since that receipt was minted."
+        ),
+    )
     return ProgramBuildAdmissionFact(
         state="PROVEN",
         program_key=binding.strategy_key,
@@ -456,26 +471,17 @@ def prove_running_program_build(
         running_artifact_digest=running_digest,
         qualification_receipt_hash=receipt.receipt_hash,
         verified_at_ms=verified_at_ms,
-        wiring="MATCHED" if wiring_matches else "DRIFTED",
+        wiring=wiring,
+        corpus_coverage=coverage,
         evidence_refs=(
             f"signal-program-seal:{seal.bot_configuration_hash}",
             f"program-build-receipt:{receipt.receipt_hash}",
             f"program-build-digest:{running_digest}",
             f"program-wiring-digest:{running_wiring}",
+            f"program-corpus-coverage:{coverage}",
         ),
-        explanation=(
-            "The running Signal Program build matches its golden qualification receipt."
-            if wiring_matches
-            else (
-                "The running Signal Program math matches its golden qualification receipt, but "
-                "the strategy wiring has changed since that receipt was minted."
-            )
-        ),
-        next_step=(
-            None
-            if wiring_matches
-            else WIRING_DRIFT_NEXT_STEP
-        ),
+        explanation=explanation,
+        next_step=next_step,
     )
 
 
@@ -651,19 +657,11 @@ def _seal_checks(
             configured.clock.warmup_lookback_days == contract.warmup_lookback_days,
             "The sealed warmup requirement no longer matches the registered contract.",
         ),
-        # `golden_trace_root` pins one decision *stream*, produced by specific
-        # math at a specific cadence over specific symbols. Any resolved value
-        # outside `validated_settings`/`validated_symbols` means the corpus
-        # does not describe the running program, so it cannot prove its build.
-        # This subsumes the decision cadence: `resolution_minutes` is itself a
-        # validated setting on every tunable program, so gating cadence alone
-        # refused a 30-minute override while admitting an overridden RSI
-        # threshold against evidence gathered at another one.
-        _SealCheck(
-            "parameters_match_validated_settings",
-            configured.parameters_match_validated_settings,
-            "This instance resolved parameters the golden qualification corpus does not cover.",
-        ),
+        # `parameters_match_validated_settings` is deliberately not a row here.
+        # It says whether the corpus *covers* this configuration, not whether
+        # the sealed program still *is* the registered one, and since ADR 0054
+        # it is reported as `corpus_coverage` on the proof rather than
+        # refusing it -- see `prove_running_program_build`.
     )
 
 
