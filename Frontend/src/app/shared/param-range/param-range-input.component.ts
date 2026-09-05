@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input, model } from "@angular/core";
 import { ButtonModule } from "primeng/button";
 import { InputText } from "primeng/inputtext";
-import type { LowHighStepRange, ParamRange, ValueListRange } from "./recency-param-range";
+import type { LowHighStepRange, ParamRange, ValueListRange } from "./param-range";
 
 function parseValuesList(raw: string): number[] {
   return raw
@@ -17,13 +17,13 @@ function parseValuesList(raw: string): number[] {
  * validation surface beyond what the two modes' inputs already enforce.
  */
 @Component({
-  selector: "app-recency-param-range-input",
+  selector: "app-param-range-input",
   imports: [ButtonModule, InputText],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: "./recency-param-range-input.component.html",
-  styleUrl: "./recency-param-range-input.component.scss",
+  templateUrl: "./param-range-input.component.html",
+  styleUrl: "./param-range-input.component.scss",
 })
-export class RecencyParamRangeInputComponent {
+export class ParamRangeInputComponent {
   readonly paramName = input.required<string>();
   readonly title = input<string>("");
   readonly defaultValue = input<number>(0);

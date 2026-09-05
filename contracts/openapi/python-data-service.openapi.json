@@ -48810,6 +48810,24 @@
             }
           },
           {
+            "description": "The launch's job id, so a client can find the search it just started",
+            "in": "query",
+            "name": "job_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The launch's job id, so a client can find the search it just started",
+              "title": "Job Id"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,

@@ -2753,6 +2753,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/grid-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Grid Search Job
+         * @description Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable.
+         */
+        post: operations["start_grid_search_job_api_jobs_internal_grid_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/lean-engine-run": {
         parameters: {
             query?: never;
@@ -3611,6 +3631,84 @@ export interface paths {
          * @description List all available research features with metadata.
          */
         get: operations["list_features_api_research_features_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/grid-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Grid Searches
+         * @description History: user-launched searches only, newest first. Walk-forward-owned sweeps never appear.
+         */
+        get: operations["list_grid_searches_api_research_grid_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/grid-search/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preflight Grid Search
+         * @description Validate, size, and plan a search without launching it.
+         */
+        post: operations["preflight_grid_search_api_research_grid_search_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/grid-search/{search_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Grid Search */
+        get: operations["get_grid_search_api_research_grid_search__search_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Grid Search
+         * @description Cancel a running search first and wait for the worker's acknowledgement, then remove it.
+         */
+        delete: operations["delete_grid_search_api_research_grid_search__search_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/grid-search/{search_id}/cells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Grid Search Cells */
+        get: operations["list_grid_search_cells_api_research_grid_search__search_id__cells_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9727,6 +9825,12 @@ export interface components {
              */
             resolution?: "minute" | "daily";
             /**
+             * Save Study
+             * @description Persist this run as a Strategy Lab study and dispatch its parity companion. False keeps the engine result only — for callers such as Grid Search that record their own summary rows.
+             * @default true
+             */
+            save_study?: boolean;
+            /**
              * Session Entry Cutoff
              * @description After this time-of-day, entry orders (those that would grow |position|) are dropped. Exits still fill. Interpreted in the timezone of the bar data. Example: '15:55:00' for ET data.
              */
@@ -9747,6 +9851,11 @@ export interface components {
              * @description YYYY-MM-DD override (legacy: end_date)
              */
             to_date?: string | null;
+            /**
+             * Warmup From Date
+             * @description YYYY-MM-DD. Optional earlier data boundary used only to prime indicators; must precede from_date, which then marks where scoring starts. Every reported figure is scoped to the evaluation window [from_date, to_date].
+             */
+            warmup_from_date?: string | null;
         };
         /** EngineBacktestResponse */
         EngineBacktestResponse: {
@@ -9757,6 +9866,7 @@ export interface components {
             equity_curve?: Record<string, never>[];
             /** Error */
             error?: string | null;
+            evaluation_window?: components["schemas"]["EngineEvaluationWindowResponse"] | null;
             /** Fill Mode */
             fill_mode: string;
             /** Final Equity */
@@ -9915,6 +10025,25 @@ export interface components {
             policy_key: string;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * EngineEvaluationWindowResponse
+         * @description The interval table a primed run actually executed (PRD #1926 F11).
+         *
+         *     ``data_start`` is the first date the engine read; ``evaluation_start``
+         *     is where scoring began and execution state was reset; every figure on
+         *     the response describes ``[evaluation_start, evaluation_end]``. For an
+         *     ordinary run the two starts coincide and ``warmup_primed`` is false.
+         */
+        EngineEvaluationWindowResponse: {
+            /** Data Start */
+            data_start: string;
+            /** Evaluation End */
+            evaluation_end: string;
+            /** Evaluation Start */
+            evaluation_start: string;
+            /** Warmup Primed */
+            warmup_primed: boolean;
         };
         /**
          * EngineParityDivergenceModel
@@ -11123,6 +11252,316 @@ export interface components {
              * @description Spot price
              */
             spot: number;
+        };
+        /** GridSearchCellPageResponse */
+        GridSearchCellPageResponse: {
+            /** Cells */
+            cells: components["schemas"]["GridSearchCellResponse"][];
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "asc" | "desc";
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Sort By */
+            sort_by: string;
+            /** Total */
+            total: number;
+        };
+        /** GridSearchCellResponse */
+        GridSearchCellResponse: {
+            /** Attempt */
+            attempt: number;
+            /** Bars Consumed */
+            bars_consumed: number | null;
+            /** Completed At Ms */
+            completed_at_ms: number;
+            /** Eligible */
+            eligible: boolean;
+            /** Error */
+            error: string | null;
+            /** Exploratory */
+            exploratory: boolean;
+            /** Is Leader */
+            is_leader: boolean;
+            /** Max Drawdown Pct */
+            max_drawdown_pct: number | null;
+            /** Net Profit */
+            net_profit: number | null;
+            /** Params */
+            params: Record<string, never>;
+            /** Params Hash */
+            params_hash: string;
+            /** Sharpe Ratio */
+            sharpe_ratio: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed";
+            /** Total Return Pct */
+            total_return_pct: number | null;
+            /** Total Trades */
+            total_trades: number;
+            /** Win Rate */
+            win_rate: number | null;
+        };
+        /** GridSearchDetailResponse */
+        GridSearchDetailResponse: {
+            /** Completed Cells */
+            completed_cells: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Expected Cells */
+            expected_cells: number;
+            /** Failed Cells */
+            failed_cells: number;
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Finished At Ms */
+            finished_at_ms: number | null;
+            /** Id */
+            id: string;
+            /** Incomplete */
+            incomplete: boolean;
+            /** Job Id */
+            job_id: string | null;
+            /** Leader Params */
+            leader_params: Record<string, never> | null;
+            /** Leader Params Hash */
+            leader_params_hash: string | null;
+            /**
+             * Measure
+             * @enum {string}
+             */
+            measure: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /** Min Trades */
+            min_trades: number;
+            owner: components["schemas"]["SearchOwnerResponse"];
+            /** Receipt */
+            receipt: Record<string, never>;
+            /** Request */
+            request: Record<string, never>;
+            /** Resumable */
+            resumable: boolean;
+            /** Resume Refusal */
+            resume_refusal: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Uncommitted Changes */
+            uncommitted_changes: boolean;
+            /** Window End Ms */
+            window_end_ms: number;
+            /** Window Start Ms */
+            window_start_ms: number;
+        };
+        /**
+         * GridSearchJobRequest
+         * @description Body of POST /api/jobs-internal/grid-search — the spec plus the minted job id.
+         *
+         *     ``resume_search_id`` names an incomplete search to Finish instead: the
+         *     spec fields are ignored and the stored request governs.
+         */
+        GridSearchJobRequest: {
+            /**
+             * Commissionperorder
+             * @default 1
+             */
+            commissionPerOrder?: number;
+            /**
+             * Endms
+             * @description Half-open window end, int64 ms UTC
+             */
+            endMs: number;
+            /**
+             * Fillmode
+             * @default signal_bar_close
+             */
+            fillMode?: string;
+            /**
+             * Initialcash
+             * @default 100000
+             */
+            initialCash?: number;
+            /** Jobid */
+            jobId: string;
+            /**
+             * Measure
+             * @default sharpe_ratio
+             * @enum {string}
+             */
+            measure?: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /**
+             * Mintrades
+             * @default 5
+             */
+            minTrades?: number;
+            /** Paramranges */
+            paramRanges?: {
+                [key: string]: components["schemas"]["app__schemas__grid_search__ValueListRangeRequest"] | components["schemas"]["app__schemas__grid_search__LowHighStepRangeRequest"];
+            };
+            /**
+             * Resolution
+             * @default minute
+             * @enum {string}
+             */
+            resolution?: "minute" | "daily";
+            /** Resumesearchid */
+            resumeSearchId?: string | null;
+            /**
+             * Slippagepershare
+             * @default 0
+             */
+            slippagePerShare?: number;
+            /**
+             * Startms
+             * @description Half-open window start, int64 ms UTC
+             */
+            startMs: number;
+            /** Strategykey */
+            strategyKey: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /** GridSearchPreflightResponse */
+        GridSearchPreflightResponse: {
+            /** Backtest Limit */
+            backtest_limit: number;
+            /** Combinations */
+            combinations: number;
+            /** Estimated Seconds */
+            estimated_seconds: number;
+            /** Expected Sessions */
+            expected_sessions: number;
+            run_up: components["schemas"]["RunUpPlanResponse"];
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Total Backtests */
+            total_backtests: number;
+        };
+        /**
+         * GridSearchSpecRequest
+         * @description What the researcher asks for — the same body for preflight and launch.
+         */
+        GridSearchSpecRequest: {
+            /**
+             * Commissionperorder
+             * @default 1
+             */
+            commissionPerOrder?: number;
+            /**
+             * Endms
+             * @description Half-open window end, int64 ms UTC
+             */
+            endMs: number;
+            /**
+             * Fillmode
+             * @default signal_bar_close
+             */
+            fillMode?: string;
+            /**
+             * Initialcash
+             * @default 100000
+             */
+            initialCash?: number;
+            /**
+             * Measure
+             * @default sharpe_ratio
+             * @enum {string}
+             */
+            measure?: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /**
+             * Mintrades
+             * @default 5
+             */
+            minTrades?: number;
+            /** Paramranges */
+            paramRanges?: {
+                [key: string]: components["schemas"]["app__schemas__grid_search__ValueListRangeRequest"] | components["schemas"]["app__schemas__grid_search__LowHighStepRangeRequest"];
+            };
+            /**
+             * Resolution
+             * @default minute
+             * @enum {string}
+             */
+            resolution?: "minute" | "daily";
+            /**
+             * Slippagepershare
+             * @default 0
+             */
+            slippagePerShare?: number;
+            /**
+             * Startms
+             * @description Half-open window start, int64 ms UTC
+             */
+            startMs: number;
+            /** Strategykey */
+            strategyKey: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * GridSearchSummaryResponse
+         * @description The history row: enough to judge a search without opening it.
+         */
+        GridSearchSummaryResponse: {
+            /** Completed Cells */
+            completed_cells: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Expected Cells */
+            expected_cells: number;
+            /** Failed Cells */
+            failed_cells: number;
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Finished At Ms */
+            finished_at_ms: number | null;
+            /** Id */
+            id: string;
+            /** Incomplete */
+            incomplete: boolean;
+            /** Job Id */
+            job_id: string | null;
+            /** Leader Params */
+            leader_params: Record<string, never> | null;
+            /** Leader Params Hash */
+            leader_params_hash: string | null;
+            /**
+             * Measure
+             * @enum {string}
+             */
+            measure: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /** Min Trades */
+            min_trades: number;
+            owner: components["schemas"]["SearchOwnerResponse"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Uncommitted Changes */
+            uncommitted_changes: boolean;
+            /** Window End Ms */
+            window_end_ms: number;
+            /** Window Start Ms */
+            window_start_ms: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -13069,20 +13508,6 @@ export interface components {
              * @enum {string}
              */
             logic: "AND" | "OR";
-        };
-        /** LowHighStepRangeRequest */
-        LowHighStepRangeRequest: {
-            /** High */
-            high: number;
-            /** Low */
-            low: number;
-            /** Step */
-            step: number;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "low_high_step";
         };
         /** ManualOrderBrokerOrderResponse */
         ManualOrderBrokerOrderResponse: {
@@ -17119,6 +17544,23 @@ export interface components {
             /** Trade Number */
             trade_number: number;
         };
+        /** RunUpPlanResponse */
+        RunUpPlanResponse: {
+            /** Bar Span Ms */
+            bar_span_ms: number;
+            /** Carved From Range */
+            carved_from_range: boolean;
+            /** Data Start Ms */
+            data_start_ms: number;
+            /** Evaluation End Ms */
+            evaluation_end_ms: number;
+            /** Evaluation Start Ms */
+            evaluation_start_ms: number;
+            /** Required Samples */
+            required_samples: number;
+            /** Run Up Sessions */
+            run_up_sessions: number;
+        };
         /** RunVerdict */
         RunVerdict: {
             /** Available Required Metrics */
@@ -17509,6 +17951,20 @@ export interface components {
             validation_event_id: string;
             /** Validation Snapshot Sha256 */
             validation_snapshot_sha256: string;
+        };
+        /** SearchOwnerResponse */
+        SearchOwnerResponse: {
+            /** Fold Index */
+            fold_index: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "user" | "walk_forward";
+            /** Owner Id */
+            owner_id: string | null;
+            /** Phase */
+            phase: string | null;
         };
         /** SeasonalityMonthResponse */
         SeasonalityMonthResponse: {
@@ -18849,7 +19305,7 @@ export interface components {
         StrategyGridConfigRequest: {
             /** Paramranges */
             paramRanges?: {
-                [key: string]: components["schemas"]["ValueListRangeRequest"] | components["schemas"]["LowHighStepRangeRequest"];
+                [key: string]: components["schemas"]["app__routers__jobs__ValueListRangeRequest"] | components["schemas"]["app__routers__jobs__LowHighStepRangeRequest"];
             };
             /** Strategykey */
             strategyKey: string;
@@ -18890,8 +19346,14 @@ export interface components {
              */
             sizing_surface?: "policy" | "explicit";
             strategy_bars: components["schemas"]["StrategyBarCadenceInfo"];
+            /**
+             * Strategy Category
+             * @default production_candidate
+             */
+            strategy_category?: string;
             /** Supported Resolutions */
             supported_resolutions?: string[];
+            sweep_eligibility?: components["schemas"]["SweepEligibilityInfo"];
         };
         /**
          * StrategyLeanSourceResponse
@@ -19635,6 +20097,15 @@ export interface components {
             /** Name */
             name: string;
             when: components["schemas"]["LogicNodeOrConditions-Output"];
+        };
+        /** SweepEligibilityInfo */
+        SweepEligibilityInfo: {
+            /** Eligible */
+            eligible: boolean;
+            /** Offending Parameters */
+            offending_parameters?: string[];
+            /** Reason Codes */
+            reason_codes?: string[];
         };
         /** SymbolCoverageSpan */
         SymbolCoverageSpan: {
@@ -20432,16 +20903,6 @@ export interface components {
             /** Status */
             status: string;
         };
-        /** ValueListRangeRequest */
-        ValueListRangeRequest: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            type: "value_list";
-            /** Values */
-            values: number[];
-        };
         /**
          * VerdictModel
          * @description Top-line verdict card summarizing the best-horizon analysis.
@@ -21113,6 +21574,54 @@ export interface components {
             signal_reason: string;
             /** Trade Number */
             trade_number: number;
+        };
+        /** LowHighStepRangeRequest */
+        app__routers__jobs__LowHighStepRangeRequest: {
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Step */
+            step: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "low_high_step";
+        };
+        /** ValueListRangeRequest */
+        app__routers__jobs__ValueListRangeRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "value_list";
+            /** Values */
+            values: number[];
+        };
+        /** LowHighStepRangeRequest */
+        app__schemas__grid_search__LowHighStepRangeRequest: {
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Step */
+            step: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "low_high_step";
+        };
+        /** ValueListRangeRequest */
+        app__schemas__grid_search__ValueListRangeRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "value_list";
+            /** Values */
+            values: number[];
         };
     };
     responses: never;
@@ -25982,6 +26491,39 @@ export interface operations {
             };
         };
     };
+    start_grid_search_job_api_jobs_internal_grid_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GridSearchJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_lean_engine_run_job_api_jobs_internal_lean_engine_run_post: {
         parameters: {
             query?: never;
@@ -27042,6 +27584,171 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeatureInfoResponse"][];
+                };
+            };
+        };
+    };
+    list_grid_searches_api_research_grid_search_get: {
+        parameters: {
+            query?: {
+                strategy_key?: string | null;
+                symbol?: string | null;
+                status?: string | null;
+                /** @description The launch's job id, so a client can find the search it just started */
+                job_id?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GridSearchSummaryResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preflight_grid_search_api_research_grid_search_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GridSearchSpecRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GridSearchPreflightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_grid_search_api_research_grid_search__search_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                search_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GridSearchDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_grid_search_api_research_grid_search__search_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                search_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_grid_search_cells_api_research_grid_search__search_id__cells_get: {
+        parameters: {
+            query?: {
+                sort_by?: string;
+                direction?: "asc" | "desc";
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                search_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GridSearchCellPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

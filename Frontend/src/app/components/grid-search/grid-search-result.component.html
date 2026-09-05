@@ -1,0 +1,101 @@
+<section class="result" aria-labelledby="grid-search-result-title">
+  <header class="result__header">
+    <div>
+      <button pButton type="button" severity="secondary" [text]="true" size="small" (click)="closed.emit()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>History</span></button>
+      @if (detail(); as d) {
+        <h2 id="grid-search-result-title">{{ d.strategy_key | receiptLabel }} · {{ d.symbol }}</h2>
+        <p class="muted">
+          <app-timestamp-display [value]="d.window_start_ms" mode="date-et" /> → <app-timestamp-display [value]="d.window_end_ms - 1" mode="date-et" />
+          · ranked by {{ d.measure | receiptLabel }} · min {{ d.min_trades }} trades
+          · launched <app-timestamp-display [value]="d.created_at_ms" mode="local" />
+        </p>
+      } @else { <h2 id="grid-search-result-title">Search</h2> }
+    </div>
+    @if (detail(); as d) {
+      <div class="status" [attr.data-status]="d.status">
+        <span class="tag">{{ d.status | receiptLabel }}</span>
+        @if (d.uncommitted_changes) { <span class="tag tag--warn">Uncommitted changes</span> }
+        @if (d.incomplete) { <span class="tag tag--warn">Incomplete</span> }
+        <span class="muted">{{ d.completed_cells + d.failed_cells }} / {{ d.expected_cells }} cells</span>
+      </div>
+    }
+  </header>
+
+  <p class="in-sample" role="note">
+    <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+    Every number on this page is <strong>in-sample</strong>: it was measured on the same data these settings were chosen from. A grid search says which settings fit the past; it says nothing about whether they will keep working.
+    @if (detail(); as d) { <a [routerLink]="['/walk-forward']" [queryParams]="{ search: d.id }">Test this grid out of sample in Walk-Forward →</a> }
+  </p>
+
+  @if (error(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+
+  @if (detail(); as d) {
+    <div class="actions">
+      @if (leaderSummary(); as leader) {
+        <p class="leader"><strong>Leader{{ d.incomplete ? ' (provisional)' : '' }}:</strong> {{ leader }}</p>
+      } @else if (!running()) {
+        <p class="muted">No combination is eligible to lead.</p>
+      }
+      @if (d.failure_reason) { <p class="refusal">{{ d.failure_reason }}</p> }
+      <span class="spacer"></span>
+      @if (d.resumable) {
+        <button pButton type="button" size="small" [disabled]="busy()" (click)="finish()"><i class="pi pi-forward" aria-hidden="true"></i><span>Finish</span></button>
+      } @else if (d.resume_refusal && d.incomplete) {
+        <span class="muted" title="{{ d.resume_refusal }}">Finish unavailable — {{ d.resume_refusal }}</span>
+      }
+      @if (!confirmingDelete()) {
+        <button pButton type="button" size="small" severity="danger" [outlined]="true" [disabled]="busy()" (click)="requestDelete()">Delete</button>
+      } @else {
+        <span class="confirm" role="group" aria-label="Confirm deletion">
+          <span>{{ running() ? 'Cancel and delete this search?' : 'Delete this search?' }}</span>
+          <button pButton type="button" size="small" severity="danger" [disabled]="busy()" (click)="confirmDelete()">Confirm delete</button>
+          <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="cancelDelete()">Keep</button>
+        </span>
+      }
+    </div>
+  }
+
+  @if (page(); as p) {
+    <div class="table-wrap">
+      <table class="cells">
+        <thead>
+          <tr>
+            <th scope="col">Settings</th>
+            @for (column of sortable; track column) {
+              <th scope="col" [attr.aria-sort]="query().sort_by === column ? (query().direction === 'asc' ? 'ascending' : 'descending') : 'none'">
+                <button type="button" class="sort" (click)="sortBy(column)">{{ column | receiptLabel }} @if (query().sort_by === column) { <span aria-hidden="true">{{ query().direction === 'asc' ? '▲' : '▼' }}</span> }</button>
+              </th>
+            }
+            <th scope="col">State</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (cell of p.cells; track cell.params_hash) {
+            <tr [class.leader-row]="cell.is_leader" [class.failed-row]="cell.status === 'failed'" [class.zero-row]="cell.status === 'completed' && cell.total_trades === 0">
+              <td class="mono">@for (entry of cell.params | keyvalue; track entry.key) { <span>{{ entry.key }}={{ entry.value }}</span> }</td>
+              <td class="num">{{ cell.sharpe_ratio === null ? '—' : (cell.sharpe_ratio | number: '1.2-2') }}</td>
+              <td class="num">{{ cell.total_return_pct === null ? '—' : (cell.total_return_pct | number: '1.2-2') }}</td>
+              <td class="num">{{ cell.net_profit === null ? '—' : (cell.net_profit | number: '1.0-2') }}</td>
+              <td class="num">{{ cell.total_trades }}</td>
+              <td class="num">{{ cell.max_drawdown_pct === null ? '—' : (cell.max_drawdown_pct | number: '1.2-2') }}</td>
+              <td class="num">{{ cell.win_rate === null ? '—' : (cell.win_rate | number: '1.2-2') }}</td>
+              <td>
+                @if (cell.is_leader) { <span class="tag tag--leader">Leader</span> }
+                @if (cell.status === 'failed') { <span class="tag tag--warn" [title]="cell.error ?? ''">Failed</span> }
+                @else if (cell.total_trades === 0) { <span class="tag tag--warn">Zero trades</span> }
+                @else if (!cell.eligible) { <span class="tag">Not eligible</span> }
+              </td>
+            </tr>
+          } @empty {
+            <tr><td colspan="8" class="muted">{{ running() ? 'Waiting for the first cells…' : 'No cells recorded.' }}</td></tr>
+          }
+        </tbody>
+      </table>
+    </div>
+    <nav class="pager" aria-label="Cell pages">
+      <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="p.page <= 1" (click)="goToPage(p.page - 1)">Previous</button>
+      <span class="muted">Page {{ p.page }} of {{ pageCount() }} · {{ p.total }} cells</span>
+      <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="p.page >= pageCount()" (click)="goToPage(p.page + 1)">Next</button>
+    </nav>
+  }
+</section>

@@ -1,0 +1,40 @@
+# Parameter Grid Search
+
+**Concept**: Sweep one registered strategy's numeric settings over one window and rank every combination on one measure. Every number a search produces is **in-sample** — measured on the data the settings were chosen from — and the results page says so on its face and routes into Walk-Forward (#1925) for the out-of-sample question. PRD: https://github.com/tim1016/learn-ai/issues/1926 (revision 4).
+
+**Canonical implementation**: `PythonDataService/app/research/grid_search/` (service, runner, repository, schema) over the shared sweep machinery in `PythonDataService/app/research/sweep/`; HTTP boundary `app/routers/grid_search.py`; frontend `Frontend/src/app/components/grid-search/`. Registry rows: `docs/architecture/engine-authority-map.md` § "Parameter Grid Search" and "Engine evaluation-window gate"; `docs/math-sources-of-truth.md` § "Sweep ranking contract" and "Sweep warmup requirement". Storage decision: ADR 0055.
+
+**Validated against**: `tests/research/sweep/test_{grid,eligibility,validation,ranking,warmup,identity,snapshot}.py`; `tests/research/grid_search/test_{repository,runner,service}.py` (repository and service against an ephemeral Postgres); `tests/routers/test_grid_search_endpoints.py`; `app/engine/tests/test_evaluation_boundary.py`; `tests/routers/test_engine_warmup_gate.py`; Angular specs beside each component.
+
+## Decisions made while building (for review)
+
+The PRD left implementation choices open; these are the ones taken. Each is reversible.
+
+| Decision | Choice | Why |
+|---|---|---|
+| Where the warmup requirement comes from | **Measured**, not declared: `probe_warmup_samples` builds the registered program and feeds a deterministic synthetic price path through its own `evaluate_signal_bar` until the decision reports `ready`, plus one prior-state bar. | Every sealed indicator and strategy file is hashed into a bot's qualification seal (`artifact_paths`), so adding a "required samples" property to indicators or a declaration to strategies would re-fingerprint every deployed program. Measuring through the program's own decision seam needs no sealed edit and reproduces the review's readiness table exactly (RSI 26 → 27, ADX 200 → 400, MACD 12/500/200 → 699). |
+| Readiness at the boundary | The engine reads the program's last `EvaluationTrace.ready` (a public field) and **fails the run** if it is false. | "Readiness is asserted, not assumed" without touching `signal_program.py`, which is sealed. |
+| Flush order at the boundary | `consolidator.scan(evaluation_start_ms)` before the reset, for every consolidator. | A consolidated bar that closed before the boundary is otherwise emitted on the first evaluation input, after the reset, and a warmup-era decision becomes a scored entry (review F10). `scan` at ET midnight closes any working bar up to a one-day cadence. |
+| Study-save suppression | A request field `save_study` (default true) on `EngineBacktestRequest`, honoured by `execute_engine_backtest`, which then also skips the parity companion. | One flag, one boundary, both side effects. |
+| Parity promise vs. Strategy Lab | Structural (same function, same request) and **qualified in the UI**: Strategy Lab has no warmup boundary, so a primed cell is reproduced from the receipt's `interval_table`, not by typing the same dates into Strategy Lab. | Review F11. |
+| Binding reads to the snapshot | `ManifestBoundMinuteReader` / `ManifestBoundDailyReader` hash the bytes they parse and refuse a digest not in the launch manifest; periodic `verify_data_snapshot` is a diagnostic only. | Review F05: an A→B→A refresh between checks passes every check; binding the read closes it. |
+| Executable identity | sha256 over the loaded `.py` bytes under `app/engine`, `app/research/sweep`, `app/research/grid_search`, `app/routers/engine.py`, `trading_calendar.py`, `timestamps.py`, plus interpreter version and the pinned requirement files; git HEAD and a `clean/dirty/unknown` tree state for the label. | Review F16. The service container ships no `git`, so `unknown` is a real state: it claims nothing, and Finish then relies on the digests, which are the check that actually protects it. `dirty` labels the search "uncommitted changes" and makes it non-resumable, as decided in revision 4. |
+| Attempt fencing | `claim_attempt` increments a generation; every chunk write, terminal transition and delete checks it inside its transaction. | Review F06. |
+| Cancellation | Poll before every batch and once more after the final batch drains; on cancel, finished cells stay, the search is `cancelled` + `incomplete`, and a **provisional** leader is recorded over what finished. | Review F12 / issue #1928. |
+| Interrupted | Never stored. A `queued`/`running` row whose Redis job record is gone or terminal reads back as `interrupted`; a Redis error reads back as the stored status (reconcile, do not declare death). | PRD "Lifecycle and persistence". |
+| Finding the launched search | The .NET jobs boundary returns only the job id, so the page lists history filtered by `job_id` until the row appears. | No new .NET surface. |
+| Window translation | `[start_ms, end_ms)` → ET calendar date of `start_ms` and ET calendar date of `end_ms − 1`. | One rule, pinned by test; the client anchors dates at ET midnight through `Intl`. |
+| Estimate | `cells × (1.4 s + 0.3 s × months of data read) / 8`, labelled an estimate. | The PRD's measured basis; it errs long because the measurement included the now-suppressed study save. |
+| Unticked parameters | Filled server-side from the public schema default as a single-value range, so `params_hash` is always an identity over the full assignment. | A cell's identity must not depend on which parameters the form happened to send. |
+| Table names | `research_grid_searches`, `research_grid_search_cells`, `research_schema_migrations` — snake_case, unquoted. | Distinguishes Python-owned tables from quoted PascalCase EF-owned ones (ADR 0055). |
+
+## Cell identity and the receipt
+
+Cell identity is `(search_id, params_hash)`, where `params_hash` is the shared grid language's stable, key-order-independent hash over the **complete** parameter assignment. The immutable receipt stored with every search records: the resolved execution contract (strategy, symbol, resolution, fill mode, costs, starting cash, data policy, `save_study=False`), the interval table (`requested_*`, `data_start_ms`, `evaluation_start_ms`, `evaluation_end_ms`, warmup policy `uniform_run_up`, required samples, bar span, run-up sessions, whether it was carved from the range), the public parameter schema at launch, the executable identity, the data snapshot (every session artifact's sha256, the calendar package version and identity) and its digest, and the estimate.
+
+## Known limits
+
+- The runtime figure is an estimate; there is no wall-clock guarantee and no cross-job admission.
+- Grid Search reads the lake as it is: a missing session is a refusal that names the sessions, never an on-demand fetch.
+- Daily-resolution strategies are supported by the machinery but no registered production strategy declares `daily` today.
+- `tree_state` is `unknown` inside the service container (no `git` binary); the source digest still governs Finish.

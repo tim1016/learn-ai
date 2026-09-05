@@ -142,6 +142,7 @@ async def list_grid_searches(
     strategy_key: str | None = Query(None),
     symbol: str | None = Query(None),
     status_filter: str | None = Query(None, alias="status"),
+    job_id: str | None = Query(None, description="The launch's job id, so a client can find the search it just started"),
     limit: int = Query(200, ge=1, le=1000),
 ) -> list[GridSearchSummaryResponse]:
     """History: user-launched searches only, newest first. Walk-forward-owned sweeps never appear."""
@@ -151,6 +152,7 @@ async def list_grid_searches(
             strategy_key=strategy_key,
             symbol=symbol.strip().upper() if symbol else None,
             status=None if status_filter in (None, "interrupted") else status_filter,
+            job_id=job_id,
             limit=limit,
         )
         summaries = []

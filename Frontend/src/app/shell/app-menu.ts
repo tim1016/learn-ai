@@ -105,6 +105,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Strategy Validation', route: '/strategy-validation' },
       { title: 'Strategy Spec', route: '/spec-strategy' },
       { title: 'Strategy Lab', route: '/strategy-lab' },
+      { title: 'Grid Search', route: '/grid-search' },
     ],
   },
   {

@@ -192,6 +192,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "grid-search",
+    loadComponent: () =>
+      import("./components/grid-search/grid-search-page.component").then(
+        (m) => m.GridSearchPageComponent
+      ),
+  },
+  {
     path: "strategy-validation",
     loadComponent: () =>
       import(

@@ -1,0 +1,67 @@
+<section class="history" aria-labelledby="grid-search-history-title">
+  <header class="history__header">
+    <h2 id="grid-search-history-title">History</h2>
+    <div class="filters">
+      <label><span>Strategy</span>
+        <select (change)="setFilter('strategy_key', $any($event.target).value)" aria-label="Filter by strategy">
+          <option value="">All</option>
+          @for (strategy of strategies(); track strategy.name) { <option [value]="strategy.name">{{ strategy.display_name }}</option> }
+        </select>
+      </label>
+      <label><span>Symbol</span><input #symbolFilter pInputText type="text" placeholder="Any" (input)="setFilter('symbol', symbolFilter.value)" /></label>
+      <label><span>Status</span>
+        <select (change)="setFilter('status', $any($event.target).value)" aria-label="Filter by status">
+          <option value="">All</option>
+          @for (status of statuses; track status) { <option [value]="status">{{ status | receiptLabel }}</option> }
+        </select>
+      </label>
+      <button pButton type="button" size="small" severity="secondary" [outlined]="true" (click)="refresh()"><i class="pi pi-refresh" aria-hidden="true"></i><span>Refresh</span></button>
+    </div>
+  </header>
+
+  @if (error(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+
+  @if (loading() && rows().length === 0) {
+    <p class="muted" role="status">Loading…</p>
+  } @else if (rows().length === 0) {
+    <p class="muted" role="status">No searches yet. Launch one from the New Search tab.</p>
+  } @else {
+    <div class="table-wrap">
+      <table class="rows">
+        <thead>
+          <tr>
+            <th scope="col">Launched</th><th scope="col">Strategy</th><th scope="col">Symbol</th><th scope="col">Window</th>
+            <th scope="col">Cells</th><th scope="col">Status</th><th scope="col">Leader</th><th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track row.id) {
+            <tr>
+              <td><app-timestamp-display [value]="row.created_at_ms" mode="local" /></td>
+              <td>{{ displayName(row.strategy_key) ?? (row.strategy_key | receiptLabel) }}</td>
+              <td>{{ row.symbol }}</td>
+              <td><app-timestamp-display [value]="row.window_start_ms" mode="date-et" /> → <app-timestamp-display [value]="row.window_end_ms - 1" mode="date-et" /></td>
+              <td class="num">{{ row.completed_cells + row.failed_cells }} / {{ row.expected_cells }}</td>
+              <td>
+                <span class="tag" [attr.data-status]="row.status">{{ row.status | receiptLabel }}</span>
+                @if (row.uncommitted_changes) { <span class="tag tag--warn">Uncommitted changes</span> }
+              </td>
+              <td class="mono">{{ leaderText(row) }}</td>
+              <td class="actions">
+                <button pButton type="button" size="small" [text]="true" (click)="opened.emit(row.id)" [attr.aria-label]="'Open search ' + row.id">Open</button>
+                @if (confirming() === row.id) {
+                  <span class="confirm" role="group" aria-label="Confirm deletion">
+                    <button pButton type="button" size="small" severity="danger" (click)="confirmDelete(row.id)">Confirm delete</button>
+                    <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="cancelDelete()">Keep</button>
+                  </span>
+                } @else {
+                  <button pButton type="button" size="small" severity="danger" [text]="true" (click)="requestDelete(row.id)" [attr.aria-label]="'Delete search ' + row.id">Delete</button>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

@@ -154,6 +154,7 @@ async def list_searches(
     strategy_key: str | None = None,
     symbol: str | None = None,
     status: str | None = None,
+    job_id: str | None = None,
     limit: int = 200,
 ) -> list[SearchRow]:
     """Newest first. ``owner_kind='user'`` is the Grid Search history: walk-forward-owned sweeps never appear."""
@@ -165,14 +166,16 @@ async def list_searches(
           AND ($3::text IS NULL OR strategy_key = $3)
           AND ($4::text IS NULL OR symbol = $4)
           AND ($5::text IS NULL OR status = $5)
+          AND ($6::text IS NULL OR job_id = $6)
         ORDER BY created_at_ms DESC, id DESC
-        LIMIT $6
+        LIMIT $7
         """,
         owner_kind,
         owner_id,
         strategy_key,
         symbol,
         status,
+        job_id,
         limit,
     )
     return [_row_to_search(row) for row in rows]

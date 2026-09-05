@@ -1,16 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/angular";
 import { describe, expect, it } from "vitest";
 
-import { RecencyParamRangeInputComponent } from "./recency-param-range-input.component";
-import type { ParamRange } from "./recency-param-range";
+import { ParamRangeInputComponent } from "./param-range-input.component";
+import type { ParamRange } from "./param-range";
 
 async function renderInput(range: ParamRange) {
-  return render(RecencyParamRangeInputComponent, {
+  return render(ParamRangeInputComponent, {
     inputs: { paramName: "gap_bps", title: "Crossover gap (bps)", defaultValue: 2, range },
   });
 }
 
-describe("RecencyParamRangeInputComponent", () => {
+describe("ParamRangeInputComponent", () => {
   it("renders the field title", async () => {
     await renderInput({ type: "value_list", values: [2] });
     expect(screen.getByText("Crossover gap (bps)")).not.toBeNull();
