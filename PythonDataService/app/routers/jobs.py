@@ -51,7 +51,7 @@ from app.research.sweep.grid import (
     ValueListRange,
 )
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
-from app.routers.research_records import claim_redelivery
+from app.routers.research_records import require_live_redelivery
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
@@ -519,9 +519,7 @@ def _range_request_to_grid_range(req: ValueListRangeRequest | LowHighStepRangeRe
     "/recency-chart",
     status_code=status.HTTP_202_ACCEPTED,
     responses={
-        status.HTTP_409_CONFLICT: {
-            "description": "A redelivered job_id whose configuration differs, whose job was cancelled, or whose job record has expired."
-        },
+        status.HTTP_409_CONFLICT: {"description": "A redelivered job_id whose configuration differs or whose job is no longer running."},
         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "The job store cannot say whether a redelivered job is still running."},
     },
 )
@@ -530,10 +528,9 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
 
     A malformed or oversized grid (D11) is refused before anything is written;
     the launch row exists before the worker starts (D20); a redelivered
-    ``job_id`` is acknowledged without a second worker while its job record
-    is live, restarted once that record is finished, and refused (409) if
-    the job was cancelled, the record has expired, or the configuration
-    differs.
+    ``job_id`` is acknowledged without a second worker while the first still
+    holds the job, and refused (409) once that job is closed or if the
+    configuration differs.
     Everything after the HTTP boundary is ``app.research.recency.service``.
     """
     strategies = [
@@ -557,9 +554,10 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
         created = await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
     except recency_service.RecencyLaunchConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    if not created and not claim_redelivery(req.job_id, noun="Recency launch"):
-        # A redelivery while the first worker still holds the job record; once that record is
-        # finished the same dispatch restarts the worker and every cell already held is a no-op.
+    if not created:
+        # A redelivery: never a second thread beside the first worker, and never a replay of a closed
+        # job through its old transport record (that is a resume, tracked in #1938).
+        require_live_redelivery(req.job_id, noun="Recency launch")
         return {"job_id": req.job_id, "status": "queued"}
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:

@@ -84,18 +84,14 @@ async def test_soft_delete_and_restore_verbs_replace_the_graphql_mutations(clien
         assert missing.status_code == 404 and missing.json()["detail"]["code"] == "RECENCY_RUN_NOT_FOUND"
 
 
-async def test_a_redelivered_job_id_restarts_the_worker_only_once_its_job_record_is_finished(client, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The durable launch keeps its first configuration (D20). While the job record is live a redelivery is
-    acknowledged without a second thread; once the record is finished the same dispatch restarts the worker
-    (and reclaims the job record); a cancelled job, an expired record and a changed grid are refused; an
-    unknown answer is a 503."""
+async def test_a_redelivered_job_id_is_acknowledged_only_while_its_worker_still_holds_the_job(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The durable launch keeps its first configuration (D20). While the job is live a redelivery is acknowledged
+    without a second thread; a closed job and a changed grid are refused; an unknown answer is a 503."""
     _requires_ephemeral_db()
     dispatched: list[str] = []
-    reactivated: list[str] = []
     monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: dispatched.append(job_id))
-    monkeypatch.setattr(lifecycle, "reclaim_job", reactivated.append)
-    state: list[str | None] = ["live"]
-    monkeypatch.setattr(lifecycle, "job_state", lambda job_id: state[0])
+    live: list[bool | None] = [True]
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: live[0])
     body = {
         "jobId": f"job-{uuid.uuid4().hex[:10]}",
         "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0]}}}],
@@ -109,21 +105,14 @@ async def test_a_redelivered_job_id_restarts_the_worker_only_once_its_job_record
         assert first.status_code == 202, first.text
         while_live = await c.post("/api/jobs-internal/recency-chart", json=body)
         assert while_live.status_code == 202, while_live.text
-        state[0] = None
+        live[0] = None
         unknown = await c.post("/api/jobs-internal/recency-chart", json=body)
         assert unknown.status_code == 503, unknown.text
-        state[0] = "finished"
-        after_finished = await c.post("/api/jobs-internal/recency-chart", json=body)
-        assert after_finished.status_code == 202, after_finished.text
-        state[0] = "cancelled"
-        cancelled = await c.post("/api/jobs-internal/recency-chart", json=body)
-        assert cancelled.status_code == 409 and "cancelled" in cancelled.json()["detail"], cancelled.text
-        state[0] = "absent"
-        expired = await c.post("/api/jobs-internal/recency-chart", json=body)
-        assert expired.status_code == 409 and "expired" in expired.json()["detail"], expired.text
+        live[0] = False
+        closed = await c.post("/api/jobs-internal/recency-chart", json=body)
+        assert closed.status_code == 409 and "no longer running" in closed.json()["detail"], closed.text
         changed = await c.post("/api/jobs-internal/recency-chart", json={**body, "windowEndMs": 2})
 
     assert changed.status_code == 409, changed.text
     assert "different configuration" in changed.json()["detail"]
-    assert dispatched == [body["jobId"], body["jobId"]]  # the creation and the restart; never the redelivery while live
-    assert reactivated == [body["jobId"]]
+    assert dispatched == [body["jobId"]]  # one worker; a redelivery never starts another

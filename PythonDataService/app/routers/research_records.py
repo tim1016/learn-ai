@@ -49,27 +49,22 @@ def liveness_or_503(row: FencedRecord, *, noun: str) -> bool:
     return live
 
 
-def claim_redelivery(job_id: str, *, noun: str) -> bool:
-    """Whether a redelivered dispatch now owns starting the worker.
+def require_live_redelivery(job_id: str, *, noun: str) -> None:
+    """A redelivered dispatch is acknowledged only while the first worker still holds the job.
 
-    ``False`` while the job record is live (a worker holds it; a second thread would only
-    race the first). ``True`` once the record is finished: the transport record still exists,
-    is reclaimed (active set, TTL), and the same dispatch restarts the worker. A cancelled job
-    stays cancelled (an operator decided; 409), a record that has expired cannot carry a job
-    again (409), and an unknown answer is a 503, as for delete.
+    A job that is no longer live cannot be redelivered under its id (409): replaying a closed
+    job through the same transport record is not a resume (its event stream, result key,
+    cancel flag and run accounting all still describe the first execution). An unknown answer
+    is a 503, as for delete.
     """
-    state = lifecycle.job_state(job_id)
-    if state is None:
+    live = lifecycle.job_is_live(job_id)
+    if live is None:
         raise _job_store_unreachable(noun)
-    if state in ("cancelled", "absent"):
-        reason = "was cancelled" if state == "cancelled" else "job record has expired"
+    if not live:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"the {noun} {reason}; it cannot be redelivered under this job id",
+            detail=f"the {noun}'s job is no longer running; it cannot be redelivered under this job id",
         )
-    if state == "finished":
-        lifecycle.reclaim_job(job_id)
-    return state == "finished"
 
 
 def _job_store_unreachable(noun: str) -> HTTPException:
