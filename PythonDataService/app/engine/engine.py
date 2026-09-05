@@ -11,6 +11,7 @@ for the reproducibility details this engine guarantees.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -124,16 +125,6 @@ class BacktestEngine:
         retained_bars: list[TradeBar] = []
         equity_curve: list[EquitySnapshot] = []
 
-        def _snapshot(timestamp_ms: int) -> EquitySnapshot:
-            """Portfolio state at ``timestamp_ms``, as one curve point."""
-            total = portfolio.total_value()
-            return EquitySnapshot(
-                timestamp_ms=timestamp_ms,
-                equity=total,
-                cash=portfolio.cash,
-                holdings_value=total - portfolio.cash,
-            )
-
         active_brackets: list[_ActiveBracket] = []
         resting_limit_orders: list[Order] = []
 
@@ -222,40 +213,6 @@ class BacktestEngine:
         # barrier fires at most once per session.
         last_force_flat_date: date | None = None
 
-        def _is_entry_order(order: Order) -> bool:
-            """True when ``order`` would grow |position| (vs reduce/flip)."""
-            pos = portfolio.get_position(order.symbol)
-            return abs(pos.quantity + order.quantity) > abs(pos.quantity)
-
-        def _force_flat_close(
-            pos_qty: int,
-            symbol: str,
-            bar: TradeBar,
-            *,
-            tag: str = "ForceFlat",
-        ) -> OrderEvent:
-            """Synthesize a market-close fill at the current minute's
-            close. Bypasses ``fill_model.fill_market_order`` so force-
-            flat works identically under any configured fill mode
-            (NEXT_BAR_OPEN's deferred semantics don't apply — a session
-            close is immediate, not signal-driven)."""
-            close_qty = -pos_qty  # opposite sign closes the position
-            direction = Direction.SHORT if pos_qty > 0 else Direction.LONG
-            fill_price = bar.close
-            if direction is Direction.LONG:
-                fill_price = fill_price + self.fill_model.slippage_per_share
-            else:
-                fill_price = fill_price - self.fill_model.slippage_per_share
-            return OrderEvent(
-                order_id=portfolio._next_id(),
-                symbol=symbol,
-                filled_at_ms=bar.end_ms,
-                fill_price=fill_price,
-                fill_quantity=close_qty,
-                direction=direction,
-                fee=self.fill_model.compute_fee(quantity=int(close_qty), fill_price=fill_price),
-                tag=tag,
-            )
 
         previous_minute_bar: TradeBar | None = None
         for minute_bar in self.data_source.iter_bars(symbol, start_date, end_date):
@@ -284,7 +241,7 @@ class BacktestEngine:
                 for sym, pos in list(portfolio.positions.items()):
                     if pos.quantity == 0:
                         continue
-                    event = _force_flat_close(pos.quantity, sym, minute_bar)
+                    event = self._force_flat_close(portfolio, pos.quantity, sym, minute_bar)
                     portfolio.apply_fill(event)
                     order_events.append(event)
                     strategy.on_order_event(event)
@@ -343,7 +300,7 @@ class BacktestEngine:
                 if ny_datetime(minute_bar.start_ms).time() >= cutoff:
                     kept: list[Order] = []
                     for order in portfolio.pending_orders:
-                        if _is_entry_order(order):
+                        if self._is_entry_order(portfolio, order):
                             ctx.log(
                                 f"[SESSION CUTOFF] Dropped entry order "
                                 f"{order.order_id} for {order.symbol} qty={order.quantity} "
@@ -448,13 +405,78 @@ class BacktestEngine:
             current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
             ctx.insight_manager.step(minute_bar.end_ms, current_prices)
 
-            equity_curve.append(_snapshot(minute_bar.end_ms))
+            equity_curve.append(self._snapshot(portfolio, minute_bar.end_ms))
             retained_bars.append(minute_bar)
             previous_minute_bar = minute_bar
 
         # ------------------------------------------------------------------
         # 3. Finalize.
         # ------------------------------------------------------------------
+        self._finalize(
+            ctx=ctx,
+            strategy=strategy,
+            portfolio=portfolio,
+            symbol=symbol,
+            previous_minute_bar=previous_minute_bar,
+            pending_fills=pending_fills,
+            equity_curve=equity_curve,
+            order_events=order_events,
+            register_bracket=_register_bracket_if_needed,
+        )
+
+        insight_summary = ctx.insight_manager.get_summary()
+        final_equity = portfolio.total_value()
+
+
+        return BacktestResult(
+            initial_cash=portfolio.initial_cash,
+            final_equity=final_equity,
+            net_profit=final_equity - portfolio.initial_cash,
+            total_fees=portfolio.total_fees,
+            order_events=order_events,
+            log_lines=list(ctx.log_lines),
+            bars=retained_bars,
+            equity_curve=equity_curve,
+            insights=ctx.insight_manager.all_insights,
+            insight_summary=insight_summary.to_dict(),
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _finalize(
+        self,
+        *,
+        ctx: StrategyContext,
+        strategy: Strategy,
+        portfolio: Portfolio,
+        symbol: str,
+        previous_minute_bar: TradeBar | None,
+        pending_fills: list[tuple[Order, TradeBar]],
+        equity_curve: list[EquitySnapshot],
+        order_events: list[OrderEvent],
+        register_bracket: Callable[[Order, OrderEvent], None],
+    ) -> None:
+        """Close out the run once the bar stream is exhausted.
+
+        Four things happen here and they are ordered: flush the final complete
+        consolidated bar, fire the end hook, settle any exit intent that has no
+        bar left to fill against, then score the leftover insights and restate
+        the curve's final point. ``order_events`` and ``equity_curve`` are
+        mutated in place.
+
+        All of it is predicated on having seen at least one bar — without one
+        there is nothing to flush, no instant to price a terminal fill at, and
+        no curve point to restate. That single precondition used to be re-tested
+        by three separate guards inside ``run``, which is how the terminal
+        accounting drifted apart in the first place (issue #1928).
+        """
+        if previous_minute_bar is None:
+            # The end hook still fires: a strategy may log or assert on a run
+            # that never received data.
+            strategy.on_end_of_algorithm()
+            return
+
         # End-of-data consolidator flush. LEAN scans consolidators as the
         # data feed ends, firing the final *complete* consolidated bar — a
         # 15-min bar is complete once its window closes (e.g. 15:45–16:00),
@@ -463,30 +485,29 @@ class BacktestEngine:
         # off-by-one vs LEAN's per-bar state/decision stream. scan() only
         # flushes a full period, so a genuinely partial trailing bar is
         # still dropped — matching LEAN, which does not emit partial bars.
-        if previous_minute_bar is not None:
-            for consolidator in ctx.get_consolidators(symbol):
-                consolidator.scan(previous_minute_bar.end_ms)
-            self._commit_staged_signal_program(strategy)
-            # A market order submitted from the final consolidated bar's
-            # handler fills immediately against that bar in SIGNAL_BAR_CLOSE
-            # mode — the same as any in-loop bar, mirroring LEAN's
-            # ImmediateFillModel. Deferred fill modes cannot fill (no next
-            # bar exists), which is the correct outcome.
-            if portfolio.pending_orders and self.fill_model.mode == FillMode.SIGNAL_BAR_CLOSE:
-                final_consolidators = ctx.get_consolidators(symbol)
-                final_signal_bar = self._last_fired(final_consolidators[0]) if final_consolidators else None
-                for order in portfolio.drain_pending():
-                    if order.order_type is not OrderType.MARKET:
-                        continue
-                    assert final_signal_bar is not None, (
-                        "market order from the final consolidated bar but no fired bar to fill against"
-                    )
-                    event = self.fill_model.fill_market_order(order, final_signal_bar, next_bar=None)
-                    assert event is not None
-                    portfolio.apply_fill(event)
-                    order_events.append(event)
-                    strategy.on_order_event(event)
-                    _register_bracket_if_needed(order, event)
+        for consolidator in ctx.get_consolidators(symbol):
+            consolidator.scan(previous_minute_bar.end_ms)
+        self._commit_staged_signal_program(strategy)
+        # A market order submitted from the final consolidated bar's
+        # handler fills immediately against that bar in SIGNAL_BAR_CLOSE
+        # mode — the same as any in-loop bar, mirroring LEAN's
+        # ImmediateFillModel. Deferred fill modes cannot fill (no next
+        # bar exists), which is the correct outcome.
+        if portfolio.pending_orders and self.fill_model.mode == FillMode.SIGNAL_BAR_CLOSE:
+            final_consolidators = ctx.get_consolidators(symbol)
+            final_signal_bar = self._last_fired(final_consolidators[0]) if final_consolidators else None
+            for order in portfolio.drain_pending():
+                if order.order_type is not OrderType.MARKET:
+                    continue
+                assert final_signal_bar is not None, (
+                    "market order from the final consolidated bar but no fired bar to fill against"
+                )
+                event = self.fill_model.fill_market_order(order, final_signal_bar, next_bar=None)
+                assert event is not None
+                portfolio.apply_fill(event)
+                order_events.append(event)
+                strategy.on_order_event(event)
+                register_bracket(order, event)
 
         strategy.on_end_of_algorithm()
 
@@ -505,49 +526,43 @@ class BacktestEngine:
         # queue-order-sensitive (several stale intents can coexist under
         # NEXT_SESSION_OPEN) and evaluated ``_is_entry_order`` against a
         # position that earlier iterations had already flattened.
-        if previous_minute_bar is not None:
-            outstanding = [*portfolio.drain_pending(), *(order for order, _signal_bar in pending_fills)]
-            exit_symbols = {
-                order.symbol
-                for order in outstanding
-                if order.order_type is OrderType.MARKET and not _is_entry_order(order)
-            }
-            for exit_symbol in sorted(exit_symbols):
-                position = portfolio.get_position(exit_symbol)
-                if position.quantity == 0:
-                    continue
-                prior_trade_count = len(getattr(strategy, "trade_log", []))
-                event = _force_flat_close(
-                    position.quantity,
-                    exit_symbol,
-                    previous_minute_bar,
-                    tag="EndOfAlgorithm",
-                )
-                portfolio.apply_fill(event)
-                order_events.append(event)
-                strategy.on_order_event(event)
-                trade_log = getattr(strategy, "trade_log", [])
-                if len(trade_log) > prior_trade_count:
-                    completed_trade = trade_log[-1]
-                    completed_trade.signal_reason = "EndOfAlgorithm (synthetic exit)"
-                    completed_trade.is_synthetic_exit = True
+        outstanding = [*portfolio.drain_pending(), *(order for order, _signal_bar in pending_fills)]
+        exit_symbols = {
+            order.symbol
+            for order in outstanding
+            if order.order_type is OrderType.MARKET and not self._is_entry_order(portfolio, order)
+        }
+        for exit_symbol in sorted(exit_symbols):
+            position = portfolio.get_position(exit_symbol)
+            if position.quantity == 0:
+                continue
+            prior_trade_count = len(getattr(strategy, "trade_log", []))
+            event = self._force_flat_close(
+                portfolio,
+                position.quantity,
+                exit_symbol,
+                previous_minute_bar,
+                tag="EndOfAlgorithm",
+            )
+            portfolio.apply_fill(event)
+            order_events.append(event)
+            strategy.on_order_event(event)
+            trade_log = getattr(strategy, "trade_log", [])
+            if len(trade_log) > prior_trade_count:
+                completed_trade = trade_log[-1]
+                completed_trade.signal_reason = "EndOfAlgorithm (synthetic exit)"
+                completed_trade.is_synthetic_exit = True
 
         # Score any remaining active insights with the final prices.
-        if previous_minute_bar is not None:
-            final_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
-            # Force-expire active insights so they all get scored.
-            for insight in ctx.insight_manager.get_active_insights(previous_minute_bar.end_ms):
-                if not insight.score.is_final_score:
-                    insight.reference_value_final = final_prices.get(insight.symbol, Decimal(0))
-                    from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
+        final_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
+        # Force-expire active insights so they all get scored.
+        for insight in ctx.insight_manager.get_active_insights(previous_minute_bar.end_ms):
+            if not insight.score.is_final_score:
+                insight.reference_value_final = final_prices.get(insight.symbol, Decimal(0))
+                from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 
-                    DefaultInsightScoreFunction().score(insight)
-                    insight.score.finalize(previous_minute_bar.end_ms)
-
-        # Build insight summary.
-        insight_summary = ctx.insight_manager.get_summary()
-
-        final_equity = portfolio.total_value()
+                DefaultInsightScoreFunction().score(insight)
+                insight.score.finalize(previous_minute_bar.end_ms)
 
         # The last in-loop snapshot is appended before terminal liquidation, so
         # with non-zero closing costs the curve ended above the true final
@@ -561,25 +576,62 @@ class BacktestEngine:
         # realized transaction cost where every other point is a mark. That is
         # deliberate: the curve feeds ``results.statistics.summarize``, whose
         # drawdown and Sharpe should see the cost the run actually paid.
-        if equity_curve:
-            equity_curve[-1] = _snapshot(equity_curve[-1].timestamp_ms)
+        #
+        # No emptiness guard: the early return above means at least one bar was
+        # processed, and every processed bar appends a point.
+        equity_curve[-1] = self._snapshot(portfolio, equity_curve[-1].timestamp_ms)
 
-        return BacktestResult(
-            initial_cash=portfolio.initial_cash,
-            final_equity=final_equity,
-            net_profit=final_equity - portfolio.initial_cash,
-            total_fees=portfolio.total_fees,
-            order_events=order_events,
-            log_lines=list(ctx.log_lines),
-            bars=retained_bars,
-            equity_curve=equity_curve,
-            insights=ctx.insight_manager.all_insights,
-            insight_summary=insight_summary.to_dict(),
+    @staticmethod
+    def _snapshot(portfolio: Portfolio, timestamp_ms: int) -> EquitySnapshot:
+        """Portfolio state at ``timestamp_ms``, as one curve point."""
+        total = portfolio.total_value()
+        return EquitySnapshot(
+            timestamp_ms=timestamp_ms,
+            equity=total,
+            cash=portfolio.cash,
+            holdings_value=total - portfolio.cash,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_entry_order(portfolio: Portfolio, order: Order) -> bool:
+        """True when ``order`` would grow |position| (vs reduce/flip)."""
+        pos = portfolio.get_position(order.symbol)
+        return abs(pos.quantity + order.quantity) > abs(pos.quantity)
+
+    def _force_flat_close(
+        self,
+        portfolio: Portfolio,
+        pos_qty: int,
+        symbol: str,
+        bar: TradeBar,
+        *,
+        tag: str = "ForceFlat",
+    ) -> OrderEvent:
+        """Synthesize a market-close fill at the current minute's close.
+
+        Bypasses ``fill_model.fill_market_order`` so force-flat works
+        identically under any configured fill mode (NEXT_BAR_OPEN's deferred
+        semantics don't apply — a session close is immediate, not
+        signal-driven).
+        """
+        close_qty = -pos_qty  # opposite sign closes the position
+        direction = Direction.SHORT if pos_qty > 0 else Direction.LONG
+        fill_price = bar.close
+        if direction is Direction.LONG:
+            fill_price = fill_price + self.fill_model.slippage_per_share
+        else:
+            fill_price = fill_price - self.fill_model.slippage_per_share
+        return OrderEvent(
+            order_id=portfolio._next_id(),
+            symbol=symbol,
+            filled_at_ms=bar.end_ms,
+            fill_price=fill_price,
+            fill_quantity=close_qty,
+            direction=direction,
+            fee=self.fill_model.compute_fee(quantity=int(close_qty), fill_price=fill_price),
+            tag=tag,
+        )
+
     @staticmethod
     def _last_fired(consolidator) -> TradeBar | None:
         """Return the most recently-emitted consolidated bar.
