@@ -517,3 +517,42 @@ def test_final_equity_curve_point_matches_final_equity():
     result = engine.run(strategy)
 
     assert result.equity_curve[-1].equity == result.final_equity
+    # Restated, not appended. ``exposure_pct`` and ``trading_days`` in
+    # app/research/runs/runner.py are derived from the curve's length and its
+    # distinct dates, so a duplicate trailing timestamp would corrupt both.
+    assert len(result.equity_curve) == len(bars)
+    assert result.equity_curve[-1].timestamp_ms == bars[-1].end_ms
+    assert len({point.timestamp_ms for point in result.equity_curve}) == len(result.equity_curve)
+
+
+def test_terminal_close_cost_reaches_the_summarized_statistics():
+    """The curve feeds ``results.statistics.summarize``. Restating its final
+    point moves drawdown and Sharpe for every run ending in a synthetic exit,
+    so pin that the summarized series sees the cost the run actually paid
+    rather than the pre-liquidation mark."""
+    from app.engine.results.statistics import EquityPoint, summarize
+
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32)]
+    strategy = _EndHookLiquidatingStrategy()
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(
+            commission_per_order=Decimal("10"),
+            slippage_per_share=Decimal("0.10"),
+        ),
+    )
+    result = engine.run(strategy)
+
+    points = [EquityPoint(timestamp_ms=p.timestamp_ms, equity=p.equity) for p in result.equity_curve]
+    stats = summarize(
+        initial_cash=result.initial_cash,
+        final_equity=result.final_equity,
+        trades=[],
+        equity_curve=points,
+    )
+    # Curve is [100000, 99980, 99960]: peak 100000, trough the post-cost close,
+    # so drawdown is 40/100000. Before the fix the curve ended at the
+    # pre-liquidation mark of 99980 and this same statistic read 0.0002 — a
+    # bare ``> 0`` assertion passes either way and pins nothing.
+    assert abs(stats["max_drawdown_pct"] - 0.0004) < 1e-9

@@ -208,12 +208,18 @@ def run_recency(
 ) -> RecencyRunSummary:
     """Execute one launch's grid with bounded concurrency and per-run isolation.
 
-    ``cancel_check`` mirrors app/research/walk_forward/runner.py's
-    CancelCheck contract: it is called once per batch and its return value
-    is IGNORED — cancellation works only by raising, and the exception
-    propagates out of this function uncaught (the caller, e.g. jobs.py,
-    wires a wrapper that raises JobCancelled so run_in_thread produces a
-    real ``job.cancelled`` terminal state instead of ``job.completed``).
+    ``cancel_check`` follows app/research/walk_forward/runner.py's CancelCheck
+    contract in every respect but one: its return value is IGNORED —
+    cancellation works only by raising, and the exception propagates out of
+    this function uncaught (the caller, e.g. jobs.py, wires a wrapper that
+    raises JobCancelled so run_in_thread produces a real ``job.cancelled``
+    terminal state instead of ``job.completed``).
+
+    The difference: it is called once per batch **and once more after the pool
+    drains**, before any completion is announced. A batch-head check alone
+    cannot observe a cancellation that arrives while the final batch is
+    executing (issue #1928). The walk-forward, batch, and signal runners still
+    have only the batch-head check and carry the same gap.
     """
     on_phase("expand")
     expected = grid_size(config.strategies, config.symbols)

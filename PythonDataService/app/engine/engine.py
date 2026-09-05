@@ -123,6 +123,17 @@ class BacktestEngine:
         order_events: list[OrderEvent] = []
         retained_bars: list[TradeBar] = []
         equity_curve: list[EquitySnapshot] = []
+
+        def _snapshot(timestamp_ms: int) -> EquitySnapshot:
+            """Portfolio state at ``timestamp_ms``, as one curve point."""
+            total = portfolio.total_value()
+            return EquitySnapshot(
+                timestamp_ms=timestamp_ms,
+                equity=total,
+                cash=portfolio.cash,
+                holdings_value=total - portfolio.cash,
+            )
+
         active_brackets: list[_ActiveBracket] = []
         resting_limit_orders: list[Order] = []
 
@@ -206,7 +217,7 @@ class BacktestEngine:
 
         # Keep a "previous minute bar" so that a NEXT_BAR_OPEN fill can use
         # the bar immediately after the signal bar.
-        pending_fills: list[tuple[object, TradeBar]] = []  # (order, signal_bar)
+        pending_fills: list[tuple[Order, TradeBar]] = []  # (order, signal_bar)
         # Track which calendar date has already been force-flatted so the
         # barrier fires at most once per session.
         last_force_flat_date: date | None = None
@@ -293,7 +304,7 @@ class BacktestEngine:
                         portfolio.apply_fill(event)
                         order_events.append(event)
                         strategy.on_order_event(event)
-                        _register_bracket_if_needed(order, event)  # type: ignore[arg-type]
+                        _register_bracket_if_needed(order, event)
                 pending_fills = still_pending
 
             # ----- Per-minute hook — fires before consolidator dispatch so the
@@ -437,14 +448,7 @@ class BacktestEngine:
             current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
             ctx.insight_manager.step(minute_bar.end_ms, current_prices)
 
-            equity_curve.append(
-                EquitySnapshot(
-                    timestamp_ms=minute_bar.end_ms,
-                    equity=portfolio.total_value(),
-                    cash=portfolio.cash,
-                    holdings_value=portfolio.total_value() - portfolio.cash,
-                )
-            )
+            equity_curve.append(_snapshot(minute_bar.end_ms))
             retained_bars.append(minute_bar)
             previous_minute_bar = minute_bar
 
@@ -486,32 +490,36 @@ class BacktestEngine:
 
         strategy.on_end_of_algorithm()
 
-        # A strategy can request ``liquidate`` in its end hook, but there is
-        # no next market bar on which the normal fill loop can execute it.
-        # Materialize only a reducing terminal order at the final observed
-        # close so final equity and the closed-trade ledger reconcile. The
-        # explicit tag lets the persisted report disclose this synthetic exit.
-        # An exit deferred by NEXT_BAR_OPEN / NEXT_SESSION_OPEN never fills when
-        # the data ends before its next bar arrives: it is stranded in the local
-        # ``pending_fills`` queue, not in ``portfolio.pending_orders``. Draining
-        # only the latter left the run holding a position the strategy believed
-        # it had exited, with no closing trade recorded (issue #1928). Both
-        # queues are terminal-order sources; holdings without any exit intent
-        # are still left open, matching LEAN's no-forced-liquidation semantics.
+        # A reducing market order still outstanding at end of data is an exit
+        # intent with no bar left to fill against — queued by the end hook, or
+        # stranded in ``pending_fills`` because no next bar arrived under a
+        # deferred fill mode. Either way, flatten the symbol it names at the
+        # final observed close so final equity and the closed-trade ledger
+        # reconcile; the explicit tag lets the persisted report disclose the
+        # synthetic exit. A holding with no exit intent is left open, matching
+        # LEAN's no-forced-liquidation semantics.
+        #
+        # Collapsed to the set of symbols named, because the order is only ever
+        # a predicate here: the close is sized from the live position, never
+        # from ``order.quantity``. Iterating orders instead made the outcome
+        # queue-order-sensitive (several stale intents can coexist under
+        # NEXT_SESSION_OPEN) and evaluated ``_is_entry_order`` against a
+        # position that earlier iterations had already flattened.
         if previous_minute_bar is not None:
-            terminal_orders = list(portfolio.drain_pending())
-            terminal_orders.extend(order for order, _signal_bar in pending_fills)
-            pending_fills.clear()
-            for order in terminal_orders:
-                if order.order_type is not OrderType.MARKET or _is_entry_order(order):
-                    continue
-                position = portfolio.get_position(order.symbol)
+            outstanding = [*portfolio.drain_pending(), *(order for order, _signal_bar in pending_fills)]
+            exit_symbols = {
+                order.symbol
+                for order in outstanding
+                if order.order_type is OrderType.MARKET and not _is_entry_order(order)
+            }
+            for exit_symbol in sorted(exit_symbols):
+                position = portfolio.get_position(exit_symbol)
                 if position.quantity == 0:
                     continue
                 prior_trade_count = len(getattr(strategy, "trade_log", []))
                 event = _force_flat_close(
                     position.quantity,
-                    order.symbol,
+                    exit_symbol,
                     previous_minute_bar,
                     tag="EndOfAlgorithm",
                 )
@@ -543,17 +551,18 @@ class BacktestEngine:
 
         # The last in-loop snapshot is appended before terminal liquidation, so
         # with non-zero closing costs the curve ended above the true final
-        # equity — and any consumer compounding curve endpoints across folds
-        # inherited the gap (issue #1928). Restate that final point at the same
-        # instant the terminal close was priced at, rather than appending a
-        # second snapshot and breaking timestamp uniqueness.
+        # equity, and consumers compounding curve endpoints across folds
+        # inherited the gap (issue #1928). Restate that point rather than
+        # appending a second one: ``exposure_pct`` and ``trading_days`` in
+        # app/research/runs/runner.py are derived from the curve's length and
+        # distinct dates, so a duplicate timestamp would corrupt both.
+        #
+        # Note this makes the final point post-liquidation — it embeds a
+        # realized transaction cost where every other point is a mark. That is
+        # deliberate: the curve feeds ``results.statistics.summarize``, whose
+        # drawdown and Sharpe should see the cost the run actually paid.
         if equity_curve:
-            equity_curve[-1] = EquitySnapshot(
-                timestamp_ms=equity_curve[-1].timestamp_ms,
-                equity=final_equity,
-                cash=portfolio.cash,
-                holdings_value=final_equity - portfolio.cash,
-            )
+            equity_curve[-1] = _snapshot(equity_curve[-1].timestamp_ms)
 
         return BacktestResult(
             initial_cash=portfolio.initial_cash,
