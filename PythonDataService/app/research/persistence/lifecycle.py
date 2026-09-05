@@ -16,7 +16,7 @@ from typing import Any, Literal, Protocol
 import redis
 
 from app.engine.data.policy_store import resolve_data_roots
-from app.jobs.progress import _active_set_key, _state_key, get_redis
+from app.jobs.progress import JOB_TTL_SECONDS, _active_set_key, _state_key, get_redis
 from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.research.sweep.snapshot import DataSnapshot, verify_data_snapshot
 
@@ -32,11 +32,12 @@ class FencedRecord(Protocol):
     def receipt(self) -> Mapping[str, Any]: ...
 
 
-JobState = Literal["live", "finished", "absent"]
+JobState = Literal["live", "finished", "cancelled", "absent"]
 
 
 def job_state(job_id: str | None) -> JobState | None:
-    """What the Redis job record says: queued/running is ``live``, any other status ``finished``, no record ``absent``.
+    """What the Redis job record says: queued/running is ``live``, ``cancelled`` stays distinct (an operator's
+    decision, with ``cancel_requested`` still set), any other terminal status is ``finished``, no record ``absent``.
 
     ``None`` when Redis cannot answer. The record is transport state (.NET writes it before
     dispatch and it expires with the job TTL), so ``live`` means the record has not been
@@ -50,7 +51,9 @@ def job_state(job_id: str | None) -> JobState | None:
         return None
     if status is None:
         return "absent"
-    return "live" if status in ("queued", "running") else "finished"
+    if status in ("queued", "running"):
+        return "live"
+    return "cancelled" if status == "cancelled" else "finished"
 
 
 def job_is_live(job_id: str | None) -> bool | None:
@@ -59,9 +62,13 @@ def job_is_live(job_id: str | None) -> bool | None:
     return None if state is None else state == "live"
 
 
-def mark_job_active(job_id: str) -> None:
-    """Return a finished job to the transport's active set before its worker is restarted (the emitter removed it when the first worker closed the record)."""
-    get_redis().sadd(_active_set_key(), job_id)
+def reclaim_job(job_id: str) -> None:
+    """Make a finished job's record carry a restarted worker: back in the active set (the emitter removed it
+    when the first worker closed the record) and with its TTL renewed, so the record cannot expire mid-replay."""
+    pipe = get_redis().pipeline()
+    pipe.sadd(_active_set_key(), job_id)
+    pipe.expire(_state_key(job_id), JOB_TTL_SECONDS)
+    pipe.execute()
 
 
 def request_cancel(job_id: str) -> None:

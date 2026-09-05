@@ -515,15 +515,25 @@ def _range_request_to_grid_range(req: ValueListRangeRequest | LowHighStepRangeRe
     return LowHighStepRange(low=req.low, high=req.high, step=req.step)
 
 
-@router.post("/recency-chart", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/recency-chart",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "description": "A redelivered job_id whose configuration differs, whose job was cancelled, or whose job record has expired."
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "The job store cannot say whether a redelivered job is still running."},
+    },
+)
 async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     """Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
 
     A malformed or oversized grid (D11) is refused before anything is written;
     the launch row exists before the worker starts (D20); a redelivered
     ``job_id`` is acknowledged without a second worker while its job record
-    is live, restarted once that record is finished, and refused (409) if the
-    record has expired or the configuration differs.
+    is live, restarted once that record is finished, and refused (409) if
+    the job was cancelled, the record has expired, or the configuration
+    differs.
     Everything after the HTTP boundary is ``app.research.recency.service``.
     """
     strategies = [

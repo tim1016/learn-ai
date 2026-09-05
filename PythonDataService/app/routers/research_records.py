@@ -54,19 +54,21 @@ def claim_redelivery(job_id: str, *, noun: str) -> bool:
 
     ``False`` while the job record is live (a worker holds it; a second thread would only
     race the first). ``True`` once the record is finished: the transport record still exists,
-    is put back in the active set, and the same dispatch restarts the worker. A record that
-    has expired cannot carry a job again (409), and an unknown answer is a 503, as for delete.
+    is reclaimed (active set, TTL), and the same dispatch restarts the worker. A cancelled job
+    stays cancelled (an operator decided; 409), a record that has expired cannot carry a job
+    again (409), and an unknown answer is a 503, as for delete.
     """
     state = lifecycle.job_state(job_id)
     if state is None:
         raise _job_store_unreachable(noun)
-    if state == "absent":
+    if state in ("cancelled", "absent"):
+        reason = "was cancelled" if state == "cancelled" else "job record has expired"
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"the {noun}'s job record has expired; it cannot be redelivered under this job id",
+            detail=f"the {noun} {reason}; it cannot be redelivered under this job id",
         )
     if state == "finished":
-        lifecycle.mark_job_active(job_id)
+        lifecycle.reclaim_job(job_id)
     return state == "finished"
 
 

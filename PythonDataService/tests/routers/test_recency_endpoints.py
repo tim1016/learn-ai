@@ -87,13 +87,13 @@ async def test_soft_delete_and_restore_verbs_replace_the_graphql_mutations(clien
 async def test_a_redelivered_job_id_restarts_the_worker_only_once_its_job_record_is_finished(client, monkeypatch: pytest.MonkeyPatch) -> None:
     """The durable launch keeps its first configuration (D20). While the job record is live a redelivery is
     acknowledged without a second thread; once the record is finished the same dispatch restarts the worker
-    (and puts the job back in the active set); an expired record and a changed grid are refused; an unknown
-    answer is a 503."""
+    (and reclaims the job record); a cancelled job, an expired record and a changed grid are refused; an
+    unknown answer is a 503."""
     _requires_ephemeral_db()
     dispatched: list[str] = []
     reactivated: list[str] = []
     monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: dispatched.append(job_id))
-    monkeypatch.setattr(lifecycle, "mark_job_active", reactivated.append)
+    monkeypatch.setattr(lifecycle, "reclaim_job", reactivated.append)
     state: list[str | None] = ["live"]
     monkeypatch.setattr(lifecycle, "job_state", lambda job_id: state[0])
     body = {
@@ -115,6 +115,9 @@ async def test_a_redelivered_job_id_restarts_the_worker_only_once_its_job_record
         state[0] = "finished"
         after_finished = await c.post("/api/jobs-internal/recency-chart", json=body)
         assert after_finished.status_code == 202, after_finished.text
+        state[0] = "cancelled"
+        cancelled = await c.post("/api/jobs-internal/recency-chart", json=body)
+        assert cancelled.status_code == 409 and "cancelled" in cancelled.json()["detail"], cancelled.text
         state[0] = "absent"
         expired = await c.post("/api/jobs-internal/recency-chart", json=body)
         assert expired.status_code == 409 and "expired" in expired.json()["detail"], expired.text

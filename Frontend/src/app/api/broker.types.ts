@@ -2821,8 +2821,9 @@ export interface paths {
          *     A malformed or oversized grid (D11) is refused before anything is written;
          *     the launch row exists before the worker starts (D20); a redelivered
          *     ``job_id`` is acknowledged without a second worker while its job record
-         *     is live, restarted once that record is finished, and refused (409) if the
-         *     record has expired or the configuration differs.
+         *     is live, restarted once that record is finished, and refused (409) if
+         *     the job was cancelled, the record has expired, or the configuration
+         *     differs.
          *     Everything after the HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
@@ -26780,6 +26781,13 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            /** @description A redelivered job_id whose configuration differs, whose job was cancelled, or whose job record has expired. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -26788,6 +26796,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description The job store cannot say whether a redelivered job is still running. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

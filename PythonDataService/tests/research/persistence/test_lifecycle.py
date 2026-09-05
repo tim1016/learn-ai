@@ -19,13 +19,24 @@ class _FakeRedis:
             raise redis.RedisError("down")
         return self._status
 
+        self.expires: list[tuple[str, int]] = []
+
     def sadd(self, key: str, member: str) -> None:
         self.active.append(member)
+
+    def expire(self, key: str, seconds: int) -> None:
+        self.expires.append((key, seconds))
+
+    def pipeline(self) -> _FakeRedis:
+        return self
+
+    def execute(self) -> None:
+        return None
 
 
 @pytest.mark.parametrize(
     ("status", "expected"),
-    [("queued", "live"), ("running", "live"), ("completed", "finished"), ("failed", "finished"), ("cancelled", "finished"), (None, "absent")],
+    [("queued", "live"), ("running", "live"), ("completed", "finished"), ("failed", "finished"), ("cancelled", "cancelled"), (None, "absent")],
 )
 def test_job_state_maps_the_record_status(monkeypatch: pytest.MonkeyPatch, status: str | None, expected: str) -> None:
     monkeypatch.setattr(lifecycle, "get_redis", lambda: _FakeRedis(status))
@@ -48,8 +59,9 @@ def test_a_missing_job_id_is_absent_without_asking_redis(monkeypatch: pytest.Mon
     assert lifecycle.job_is_live(None) is False
 
 
-def test_mark_job_active_returns_the_job_to_the_active_set(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reclaim_job_returns_the_job_to_the_active_set_and_renews_its_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeRedis("completed")
     monkeypatch.setattr(lifecycle, "get_redis", lambda: fake)
-    lifecycle.mark_job_active("job-1")
+    lifecycle.reclaim_job("job-1")
     assert fake.active == ["job-1"]
+    assert fake.expires == [(lifecycle._state_key("job-1"), lifecycle.JOB_TTL_SECONDS)]
