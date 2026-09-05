@@ -20,6 +20,11 @@ from app.utils.timestamps import to_ms_utc
 _NY = ZoneInfo("America/New_York")
 
 
+# The largest value an ``int64 ms UTC`` column or wire field can hold; request boundaries bound to it
+# so an oversized integer is a 422 at the edge, not an asyncpg encoding error deep inside a read.
+INT64_MS_MAX = 2**63 - 1
+
+
 def et_midnight_ms(day: date) -> int:
     """ET midnight beginning ``day``, resolved through the NY zone (DST-safe)."""
     return to_ms_utc(datetime(day.year, day.month, day.day, tzinfo=_NY))

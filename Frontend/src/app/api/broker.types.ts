@@ -2816,37 +2816,13 @@ export interface paths {
         put?: never;
         /**
          * Start Recency Chart Job
-         * @description Kick off a Recency Chart launch in a worker thread. Returns 202.
+         * @description Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
          *
-         *     The grid is validated (and rejected past the sanity ceiling — D11)
-         *     eagerly, before the 202 is returned, so a malformed sweep never even
-         *     reaches the worker thread. Once running, ``run_recency`` does the
-         *     actual expansion, bounded-concurrency execution, and per-run
-         *     persistence; per-run failures surface as ``log`` events so "N of M
-         *     failed" is visible on the job's SSE stream, not just the final
-         *     summary the completed event carries.
+         *     A malformed or oversized grid (D11) is refused before anything is written;
+         *     the launch row exists before the worker starts (D20). Everything after the
+         *     HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs-internal/recency-chart/validate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Validate Recency Chart Job
-         * @description Preflight a launch before .NET creates its durable launch row.
-         */
-        post: operations["validate_recency_chart_job_api_jobs_internal_recency_chart_validate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3737,13 +3713,101 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * Recency Heroes
+         * @description The highest net-PnL combination per symbol/strategy among trades that entered inside the window.
+         */
+        get: operations["recency_heroes_api_research_recency_hero_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/recency/launches/{launch_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
         get?: never;
         put?: never;
+        /** Restore Recency Launch */
+        post: operations["restore_recency_launch_api_research_recency_launches__launch_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/recency/launches/{launch_id}/soft-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Soft Delete Recency Launch */
+        post: operations["soft_delete_recency_launch_api_research_recency_launches__launch_id__soft_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/recency/runs/{run_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Recency Run */
+        post: operations["restore_recency_run_api_research_recency_runs__run_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/recency/runs/{run_id}/soft-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Soft Delete Recency Run */
+        post: operations["soft_delete_recency_run_api_research_recency_runs__run_id__soft_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/recency/trades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
         /**
-         * Compute Recency Hero
-         * @description Return Python-authored visible-window winners for each symbol/strategy.
+         * List Recency Trades
+         * @description Trades overlapping the window that at least one live run still vouches for.
          */
-        post: operations["compute_recency_hero_api_research_recency_hero_post"];
+        get: operations["list_recency_trades_api_research_recency_trades_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -15971,28 +16035,6 @@ export interface components {
             /** Windowstartms */
             windowStartMs: number;
         };
-        /** RecencyHeroCandidateRequest */
-        RecencyHeroCandidateRequest: {
-            /** Params Hash */
-            params_hash: string;
-            /** Recency Run Id */
-            recency_run_id: number;
-            /** Strategy Key */
-            strategy_key: string;
-            /** Symbol */
-            symbol: string;
-            /** Trades */
-            trades: components["schemas"]["RecencyHeroTradeRequest"][];
-        };
-        /** RecencyHeroRequest */
-        RecencyHeroRequest: {
-            /** Candidates */
-            candidates: components["schemas"]["RecencyHeroCandidateRequest"][];
-            /** From Ms */
-            from_ms: number;
-            /** To Ms */
-            to_ms: number;
-        };
         /** RecencyHeroResponse */
         RecencyHeroResponse: {
             /** Heroes */
@@ -16011,12 +16053,66 @@ export interface components {
             /** Total Pnl */
             total_pnl: number;
         };
-        /** RecencyHeroTradeRequest */
-        RecencyHeroTradeRequest: {
+        /** RecencyLaunchMutationResponse */
+        RecencyLaunchMutationResponse: {
+            /** Launch Id */
+            launch_id: string;
+        };
+        /** RecencyRunMutationResponse */
+        RecencyRunMutationResponse: {
+            /** Recency Run Id */
+            recency_run_id: number;
+        };
+        /** RecencyTradeMembershipResponse */
+        RecencyTradeMembershipResponse: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Recency Run Id */
+            recency_run_id: number;
+            /** Study Id */
+            study_id: number | null;
+        };
+        /**
+         * RecencyTradeResponse
+         * @description Validated straight from the repository's ``TradeView`` (``from_attributes``).
+         */
+        RecencyTradeResponse: {
             /** Entry Ms */
             entry_ms: number;
+            /** Exit Ms */
+            exit_ms: number;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Holding Sessions */
+            holding_sessions: number;
+            /** Is Synthetic Exit */
+            is_synthetic_exit: boolean;
+            /** Memberships */
+            memberships: components["schemas"]["RecencyTradeMembershipResponse"][];
+            /** Params Hash */
+            params_hash: string;
+            /** Params Json */
+            params_json: string;
             /** Pnl */
             pnl: number;
+            /** Pnl Pct */
+            pnl_pct: number;
+            /** Pnl Pts */
+            pnl_pts: number;
+            /** Quantity */
+            quantity: number;
+            /** Recency Run Id */
+            recency_run_id: number;
+            /** Sharpe */
+            sharpe: number | null;
+            /** Signal Reason */
+            signal_reason: string;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Study Id */
+            study_id: number | null;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * RecentDecisionView
@@ -26692,41 +26788,6 @@ export interface operations {
             };
         };
     };
-    validate_recency_chart_job_api_jobs_internal_recency_chart_validate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RecencyChartJobRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: number;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     start_signal_engine_job_api_jobs_internal_signal_engine_post: {
         parameters: {
             query?: never;
@@ -27848,18 +27909,19 @@ export interface operations {
             };
         };
     };
-    compute_recency_hero_api_research_recency_hero_post: {
+    recency_heroes_api_research_recency_hero_get: {
         parameters: {
-            query?: never;
+            query: {
+                from_ms: number;
+                to_ms: number;
+                symbols?: string[] | null;
+                strategies?: string[] | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RecencyHeroRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -27868,6 +27930,164 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecencyHeroResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_recency_launch_api_research_recency_launches__launch_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                launch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecencyLaunchMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    soft_delete_recency_launch_api_research_recency_launches__launch_id__soft_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                launch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecencyLaunchMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_recency_run_api_research_recency_runs__run_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecencyRunMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    soft_delete_recency_run_api_research_recency_runs__run_id__soft_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecencyRunMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_recency_trades_api_research_recency_trades_get: {
+        parameters: {
+            query: {
+                from_ms: number;
+                to_ms: number;
+                symbols?: string[] | null;
+                strategies?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecencyTradeResponse"][];
                 };
             };
             /** @description Validation Error */

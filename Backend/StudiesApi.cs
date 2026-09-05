@@ -363,8 +363,17 @@ public static class StudiesApi
     /// RecencyRun. Internal (not private) so the guard is independently
     /// testable — see StudiesApiRecencyGuardTests.
     /// </summary>
-    internal static Task<bool> IsRecencyMemberAsync(AppDbContext db, int studyId, CancellationToken ct) =>
-        db.RecencyRuns.AnyAsync(r => r.StudyId == studyId && r.DeletedAtMs == null, ct);
+    internal static async Task<bool> IsRecencyMemberAsync(AppDbContext db, int studyId, CancellationToken ct)
+    {
+        // The Recency tables are owned by the Python service (ADR 0057): no
+        // entity here, so this is the one permitted cross-owner read — a raw
+        // SELECT against the table by name. EF's scalar SqlQuery maps the
+        // single column to "Value".
+        var live = await db.Database
+            .SqlQuery<long>($"SELECT COUNT(*) AS \"Value\" FROM \"RecencyRuns\" WHERE \"StudyId\" = {studyId} AND \"DeletedAtMs\" IS NULL")
+            .SingleAsync(ct);
+        return live > 0;
+    }
 
     // PR B (2026-05-19) — one-cycle backwards-compat for pre-PR-B callers
     // that POST without ``DataPolicyJson``. Records the engines' actual

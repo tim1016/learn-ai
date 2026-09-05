@@ -17,17 +17,17 @@ import pytest
 from httpx import ASGITransport
 
 from app.main import app
-from app.routers.jobs import _ms_to_date_str, record_recency_abort_state
+from app.research.recency import service as recency_service
 
 
-def test_ms_to_date_str_resolves_the_et_calendar_date_not_utc() -> None:
+def test_window_date_resolves_the_et_calendar_date_not_utc() -> None:
     """Window bounds feed EngineBacktestRequest.from_date/to_date, an ET-anchored
     trading date (.claude/rules/temporal-rigor.md) — must not drift a day off UTC.
     """
     # 2026-06-11 02:30 UTC is 2026-06-10 22:30 EDT (UTC-4): the ET calendar
     # date trails the UTC one across this boundary.
     ms = int(datetime(2026, 6, 11, 2, 30, tzinfo=UTC).timestamp() * 1000)
-    assert _ms_to_date_str(ms) == "2026-06-10"
+    assert recency_service.window_date(ms) == "2026-06-10"
 
 
 @pytest.mark.asyncio
@@ -76,6 +76,24 @@ async def test_rejects_an_inverted_low_high_range() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejects_a_repeated_parameter_value_instead_of_scheduling_a_duplicate_cell() -> None:
+    """``2, 2`` is a malformed request: two identical cells would run and the second would read as a redelivery."""
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/jobs-internal/recency-chart",
+            json={
+                "jobId": "job-dup",
+                "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0, 2.0]}}}],
+                "symbols": ["SPY"],
+                "windowStartMs": 0,
+                "windowEndMs": 1,
+            },
+        )
+    assert response.status_code == 400
+    assert "repeats a value" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_rejects_empty_symbols() -> None:
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -102,26 +120,6 @@ class TestValidateBeforeDispatch:
     async def _post(self, body: dict) -> httpx.Response:
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             return await client.post("/api/jobs-internal/recency-chart", json=body)
-
-    @pytest.mark.asyncio
-    async def test_preflight_returns_expected_run_count_without_queuing(self) -> None:
-        body = {
-            "jobId": "job-preflight",
-            "strategies": [
-                {
-                    "strategyKey": "ema_crossover_signal",
-                    "paramRanges": {"gap_bps": {"type": "value_list", "values": [1.0, 2.0]}},
-                }
-            ],
-            "symbols": ["SPY", "QQQ"],
-            "windowStartMs": 0,
-            "windowEndMs": 1,
-        }
-        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/api/jobs-internal/recency-chart/validate", json=body)
-
-        assert response.status_code == 200
-        assert response.json() == {"expected_runs": 4}
 
     @pytest.mark.asyncio
     async def test_rejects_an_unknown_strategy_key(self) -> None:
@@ -198,31 +196,29 @@ class TestRecordRecencyAbortState:
     A launch that dies mid-flight has no summary, so the terminal-state write
     carries no run counts. If that write fails — the backend is down, or it
     rejects the body — the exception that actually ended the launch is what
-    the operator needs to see, so the failure is logged, not raised.
+    the operator needs to see, so the failure is logged, not raised. The write
+    itself goes straight to the Python-owned table (PRD #1927).
     """
 
-    def test_returns_normally_so_the_original_exception_survives(self, monkeypatch, caplog) -> None:
-        async def boom(*args: object, **kwargs: object) -> None:
-            raise httpx.ConnectError("backend unreachable")
+    def test_returns_normally_so_the_original_exception_survives(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        def boom(*args: object, **kwargs: object) -> None:
+            raise ConnectionError("database unreachable")
 
-        monkeypatch.setattr("app.routers.jobs.update_recency_launch", boom)
+        monkeypatch.setattr(recency_service, "record_terminal_status", boom)
 
-        with caplog.at_level(logging.ERROR, logger="app.routers.jobs"):
-            record_recency_abort_state("launch-1", "FAILED", backend_url="http://backend")
+        with caplog.at_level(logging.ERROR, logger="app.research.recency.service"):
+            recency_service.record_abort_state("launch-1", "FAILED")
 
         assert "failed to record recency launch terminal state" in caplog.text
 
-    def test_forwards_the_terminal_status_when_the_write_succeeds(self, monkeypatch) -> None:
+    def test_forwards_the_terminal_status_when_the_write_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen: dict[str, object] = {}
 
-        async def capture(launch_id: str, **kwargs: object) -> None:
-            seen["launch_id"] = launch_id
-            seen.update(kwargs)
+        def capture(launch_id: str, status: str, **kwargs: object) -> None:
+            seen.update({"launch_id": launch_id, "status": status, **kwargs})
 
-        monkeypatch.setattr("app.routers.jobs.update_recency_launch", capture)
+        monkeypatch.setattr(recency_service, "record_terminal_status", capture)
 
-        record_recency_abort_state("launch-2", "CANCELLED", backend_url="http://backend")
+        recency_service.record_abort_state("launch-2", "CANCELLED")
 
-        assert seen["launch_id"] == "launch-2"
-        assert seen["status"] == "CANCELLED"
-        assert seen["base_url"] == "http://backend"
+        assert seen == {"launch_id": "launch-2", "status": "CANCELLED"}

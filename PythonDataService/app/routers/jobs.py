@@ -33,7 +33,7 @@ from pydantic.alias_generators import to_camel
 
 from app.jobs import cache as result_cache
 from app.jobs.phases import friendly as friendly_phase
-from app.jobs.progress import JobCancelled, ProgressEmitter
+from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.models.requests import DatasetGenerationRequest
 from app.research.batch_runner import (
@@ -41,27 +41,20 @@ from app.research.batch_runner import (
     run_cross_sectional_study,
 )
 from app.research.config import ResearchConfig
-from app.research.recency.persist_client import persist_recency_snapshot, update_recency_launch
-from app.research.recency.runner import RecencyLaunchConfig, run_recency
-from app.research.recency.stats import ms_to_et_date_string
-from app.research.recency.validation import RecencyRequestInvalidError, validate_recency_request
+from app.research.recency import service as recency_service
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
 from app.research.sweep.grid import (
     LowHighStepRange,
-    RecencyGridTooLargeError,
     StrategyGridConfig,
     ValueListRange,
-    expand_grid,
-    grid_size,
 )
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
 )
-from app.services.data_plane_health import resolved_code_revision
 from app.services.dataset_service import RunCancelledError
 from app.services.polygon_client import PolygonClientService
 from app.services.rule_based_backtest import (
@@ -521,152 +514,35 @@ def _range_request_to_grid_range(req: ValueListRangeRequest | LowHighStepRangeRe
     return LowHighStepRange(low=req.low, high=req.high, step=req.step)
 
 
-def _ms_to_date_str(ms: int) -> str:
-    """Trading-date string for EngineBacktestRequest.from_date/to_date.
+@router.post("/recency-chart", status_code=status.HTTP_202_ACCEPTED)
+async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
+    """Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
 
-    Delegates to the canonical ET-anchored converter (temporal-rigor.md) —
-    a bare UTC ``strftime`` would drift a calendar day off ET evenings.
+    A malformed or oversized grid (D11) is refused before anything is written;
+    the launch row exists before the worker starts (D20). Everything after the
+    HTTP boundary is ``app.research.recency.service``.
     """
-    return ms_to_et_date_string(ms)
-
-
-def _validated_recency_config(req: RecencyChartJobRequest) -> tuple[list[StrategyGridConfig], int]:
-    """Validate a launch and return its canonical grid plus exact run count."""
     strategies = [
-        StrategyGridConfig(
-            strategy_key=s.strategy_key,
-            param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()},
-        )
+        StrategyGridConfig(strategy_key=s.strategy_key, param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()})
         for s in req.strategies
     ]
     try:
-        expand_grid(strategies, req.symbols)
-    except RecencyGridTooLargeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid parameter range: {exc}") from exc
-
-    try:
-        validate_recency_request(
+        launch = recency_service.validate_launch(
+            launch_id=req.job_id,
             strategies=strategies,
             symbols=req.symbols,
             window_start_ms=req.window_start_ms,
             window_end_ms=req.window_end_ms,
             data_policy=req.data_policy,
+            fill_mode=req.fill_mode,
+            commission_per_order=req.commission_per_order,
         )
-    except RecencyRequestInvalidError as exc:
+    except recency_service.RecencyLaunchRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return strategies, grid_size(strategies, req.symbols)
+    await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
 
-
-@router.post("/recency-chart/validate")
-async def validate_recency_chart_job(req: RecencyChartJobRequest) -> dict[str, int]:
-    """Preflight a launch before .NET creates its durable launch row."""
-    _, expected_runs = _validated_recency_config(req)
-    return {"expected_runs": expected_runs}
-
-
-def record_recency_abort_state(launch_id: str, terminal_status: str, *, backend_url: str) -> None:
-    """Move an aborted launch off RUNNING without masking why it aborted.
-
-    The exception that ended the launch is what the operator needs; a failure
-    to record the terminal state must not replace it in the traceback. Logged
-    rather than raised — never swallowed silently.
-    """
-    try:
-        asyncio.run(update_recency_launch(launch_id, status=terminal_status, base_url=backend_url))
-    except Exception:
-        logger.exception(
-            "failed to record recency launch terminal state",
-            extra={"launch_id": launch_id, "terminal_status": terminal_status},
-        )
-
-
-@router.post("/recency-chart", status_code=status.HTTP_202_ACCEPTED)
-async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
-    """Kick off a Recency Chart launch in a worker thread. Returns 202.
-
-    The grid is validated (and rejected past the sanity ceiling — D11)
-    eagerly, before the 202 is returned, so a malformed sweep never even
-    reaches the worker thread. Once running, ``run_recency`` does the
-    actual expansion, bounded-concurrency execution, and per-run
-    persistence; per-run failures surface as ``log`` events so "N of M
-    failed" is visible on the job's SSE stream, not just the final
-    summary the completed event carries.
-    """
-    strategies, _ = _validated_recency_config(req)
-
-    config = RecencyLaunchConfig(
-        launch_id=req.job_id,
-        strategies=strategies,
-        symbols=req.symbols,
-        window_start_ms=req.window_start_ms,
-        window_end_ms=req.window_end_ms,
-        data_policy=req.data_policy,
-        fill_mode=req.fill_mode,
-        commission_per_order=req.commission_per_order,
-    )
-
-    from app.config import settings
-
-    backend_url = getattr(settings, "BACKEND_URL", "http://localhost:5000")
-
-    def work(emit: ProgressEmitter, cancel) -> dict:
-        def execute_backtest_fn(run_spec, cfg: RecencyLaunchConfig) -> Any:
-            params = dict(run_spec.params)
-            params["symbol"] = run_spec.symbol
-            backtest_req = EngineBacktestRequest(
-                strategy_name=run_spec.strategy_key,
-                params=params,
-                from_date=_ms_to_date_str(cfg.window_start_ms),
-                to_date=_ms_to_date_str(cfg.window_end_ms),
-                fill_mode=cfg.fill_mode,
-                commission_per_order=cfg.commission_per_order,
-            )
-            return execute_engine_backtest(request=backtest_req, on_phase=lambda phase: None, on_log=lambda message: None)
-
-        def persist(snapshot) -> None:
-            asyncio.run(persist_recency_snapshot(snapshot, base_url=backend_url))
-
-        try:
-            summary = run_recency(
-                config,
-                execute_backtest_fn=execute_backtest_fn,
-                persist_fn=persist,
-                strategy_code_version_fn=lambda strategy_key: resolved_code_revision(),
-                on_phase=emit.phase,
-                on_progress=lambda done, total: emit.progress(done, total, unit="runs"),
-                on_run_failed=lambda run_spec, message: emit.log(
-                    f"run failed: {run_spec.symbol}/{run_spec.strategy_key} ({run_spec.params_hash[:8]}): {message}",
-                    level="warning",
-                ),
-                # Raises JobCancelled (its return value is ignored, matching
-                # walk_forward/runner.py's CancelCheck contract) so run_in_thread
-                # emits job.cancelled instead of job.completed on a DELETE.
-                cancel_check=cancel.raise_if_cancelled,
-            )
-        except JobCancelled:
-            record_recency_abort_state(config.launch_id, "CANCELLED", backend_url=backend_url)
-            raise
-        except Exception:
-            record_recency_abort_state(config.launch_id, "FAILED", backend_url=backend_url)
-            raise
-
-        asyncio.run(
-            update_recency_launch(
-                summary.launch_id,
-                status="COMPLETED" if summary.failed_runs == 0 else "FAILED",
-                succeeded_runs=summary.succeeded_runs,
-                failed_runs=summary.failed_runs,
-                base_url=backend_url,
-            )
-        )
-        return {
-            "launch_id": summary.launch_id,
-            "expected_runs": summary.expected_runs,
-            "succeeded_runs": summary.succeeded_runs,
-            "failed_runs": summary.failed_runs,
-        }
+    def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
+        return recency_service.run_launch(launch.config, emit=emit, cancel=cancel)
 
     run_in_thread(req.job_id, work, thread_name=f"recency-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "status": "queued"}
