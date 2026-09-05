@@ -17,17 +17,17 @@ import pytest
 from httpx import ASGITransport
 
 from app.main import app
-from app.routers.jobs import _ms_to_date_str, record_recency_abort_state
+from app.research.recency import service as recency_service
 
 
-def test_ms_to_date_str_resolves_the_et_calendar_date_not_utc() -> None:
+def test_window_date_resolves_the_et_calendar_date_not_utc() -> None:
     """Window bounds feed EngineBacktestRequest.from_date/to_date, an ET-anchored
     trading date (.claude/rules/temporal-rigor.md) — must not drift a day off UTC.
     """
     # 2026-06-11 02:30 UTC is 2026-06-10 22:30 EDT (UTC-4): the ET calendar
     # date trails the UTC one across this boundary.
     ms = int(datetime(2026, 6, 11, 2, 30, tzinfo=UTC).timestamp() * 1000)
-    assert _ms_to_date_str(ms) == "2026-06-10"
+    assert recency_service.window_date(ms) == "2026-06-10"
 
 
 @pytest.mark.asyncio
@@ -102,26 +102,6 @@ class TestValidateBeforeDispatch:
     async def _post(self, body: dict) -> httpx.Response:
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             return await client.post("/api/jobs-internal/recency-chart", json=body)
-
-    @pytest.mark.asyncio
-    async def test_preflight_returns_expected_run_count_without_queuing(self) -> None:
-        body = {
-            "jobId": "job-preflight",
-            "strategies": [
-                {
-                    "strategyKey": "ema_crossover_signal",
-                    "paramRanges": {"gap_bps": {"type": "value_list", "values": [1.0, 2.0]}},
-                }
-            ],
-            "symbols": ["SPY", "QQQ"],
-            "windowStartMs": 0,
-            "windowEndMs": 1,
-        }
-        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/api/jobs-internal/recency-chart/validate", json=body)
-
-        assert response.status_code == 200
-        assert response.json() == {"expected_runs": 4}
 
     @pytest.mark.asyncio
     async def test_rejects_an_unknown_strategy_key(self) -> None:
@@ -206,10 +186,10 @@ class TestRecordRecencyAbortState:
         def boom(*args: object, **kwargs: object) -> None:
             raise ConnectionError("database unreachable")
 
-        monkeypatch.setattr("app.routers.jobs._record_recency_terminal_status", boom)
+        monkeypatch.setattr(recency_service, "record_terminal_status", boom)
 
-        with caplog.at_level(logging.ERROR, logger="app.routers.jobs"):
-            record_recency_abort_state("launch-1", "FAILED")
+        with caplog.at_level(logging.ERROR, logger="app.research.recency.service"):
+            recency_service.record_abort_state("launch-1", "FAILED")
 
         assert "failed to record recency launch terminal state" in caplog.text
 
@@ -219,8 +199,8 @@ class TestRecordRecencyAbortState:
         def capture(launch_id: str, status: str, **kwargs: object) -> None:
             seen.update({"launch_id": launch_id, "status": status, **kwargs})
 
-        monkeypatch.setattr("app.routers.jobs._record_recency_terminal_status", capture)
+        monkeypatch.setattr(recency_service, "record_terminal_status", capture)
 
-        record_recency_abort_state("launch-2", "CANCELLED")
+        recency_service.record_abort_state("launch-2", "CANCELLED")
 
         assert seen == {"launch_id": "launch-2", "status": "CANCELLED"}

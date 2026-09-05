@@ -2816,37 +2816,13 @@ export interface paths {
         put?: never;
         /**
          * Start Recency Chart Job
-         * @description Kick off a Recency Chart launch in a worker thread. Returns 202.
+         * @description Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
          *
-         *     The grid is validated (and rejected past the sanity ceiling — D11)
-         *     eagerly, before the 202 is returned, so a malformed sweep never even
-         *     reaches the worker thread. Once running, ``run_recency`` does the
-         *     actual expansion, bounded-concurrency execution, and per-run
-         *     persistence; per-run failures surface as ``log`` events so "N of M
-         *     failed" is visible on the job's SSE stream, not just the final
-         *     summary the completed event carries.
+         *     A malformed or oversized grid (D11) is refused before anything is written;
+         *     the launch row exists before the worker starts (D20). Everything after the
+         *     HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs-internal/recency-chart/validate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Validate Recency Chart Job
-         * @description Preflight a launch before .NET creates its durable launch row.
-         */
-        post: operations["validate_recency_chart_job_api_jobs_internal_recency_chart_validate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16096,7 +16072,10 @@ export interface components {
             /** Study Id */
             study_id: number | null;
         };
-        /** RecencyTradeResponse */
+        /**
+         * RecencyTradeResponse
+         * @description Validated straight from the repository's ``TradeView`` (``from_attributes``).
+         */
         RecencyTradeResponse: {
             /** Entry Ms */
             entry_ms: number;
@@ -26796,41 +26775,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    validate_recency_chart_job_api_jobs_internal_recency_chart_validate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RecencyChartJobRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: number;
-                    };
                 };
             };
             /** @description Validation Error */

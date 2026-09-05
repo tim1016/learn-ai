@@ -40,7 +40,7 @@ async def list_recency_trades(
     """Trades overlapping the window that at least one live run still vouches for."""
     _window(from_ms, to_ms)
     views = await with_connection(repo.list_trades, from_ms=from_ms, to_ms=to_ms, symbols=symbols, strategies=strategies)
-    return [RecencyTradeResponse.from_view(view) for view in views]
+    return [RecencyTradeResponse.model_validate(view) for view in views]
 
 
 @router.get("/hero", response_model=RecencyHeroResponse)

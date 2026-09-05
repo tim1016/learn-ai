@@ -1,7 +1,7 @@
 using Backend.Tests.Helpers;
 using Npgsql;
 
-namespace Backend.Tests.Unit;
+namespace Backend.Tests.Integration;
 
 /// <summary>
 /// Hard-delete guard (design spec D22, P0-4): a study backing a live

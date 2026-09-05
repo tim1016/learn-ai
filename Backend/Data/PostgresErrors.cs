@@ -3,11 +3,10 @@ using Microsoft.EntityFrameworkCore;
 namespace Backend.Data;
 
 /// <summary>
-/// Classifies <see cref="DbUpdateException"/>s by Postgres SQL state.
-/// Extracted from <c>BacktestRunPersistenceService</c>'s original private
-/// helper so every service that races a unique constraint under
-/// concurrent writers (e.g. <c>BacktestRunPersistenceService</c>) shares one
-/// classifier instead of re-implementing it.
+/// Classifies <see cref="DbUpdateException"/>s by Postgres SQL state, for
+/// any service that races a unique constraint under concurrent writers
+/// (today <c>BacktestRunPersistenceService</c>; the Recency writer moved to
+/// the Python service, ADR 0057).
 /// </summary>
 public static class PostgresErrors
 {

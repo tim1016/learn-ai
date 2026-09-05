@@ -4,7 +4,6 @@
 
 namespace Backend.Migrations
 {
-    /// <inheritdoc />
     /// <summary>
     /// Ownership of the Recency Chart tables ("RecencyLaunches", "RecencyRuns",
     /// "RecencyTrades", "RecencyTradeMemberships") moves to the Python service

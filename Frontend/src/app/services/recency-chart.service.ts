@@ -1,7 +1,6 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
-import { map, type Observable } from 'rxjs';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, map, type Observable } from 'rxjs';
 
 import { environment } from '../../environments/environment';
 
@@ -109,6 +108,8 @@ function windowParams(query: RecencyWindowQuery): HttpParams {
  * Recency Chart reads and mutations over FastAPI (PRD #1927): the trades the
  * chart draws, the visible-window heroes, and soft-delete of a run. Python
  * owns the rows; this service owns the wire-to-model adapter and nothing else.
+ * The reads are Observables because the page feeds them to `rxResource`; the
+ * verb is a Promise like the sibling services' one-shot calls.
  */
 @Injectable({ providedIn: 'root' })
 export class RecencyChartService {

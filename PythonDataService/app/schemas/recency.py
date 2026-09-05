@@ -8,19 +8,24 @@ the browser DTO is a float — review F14).
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from app.research.recency.repository import MembershipView, TradeView
 from app.research.recency.stats import HeroSelection
 
 
 class RecencyTradeMembershipResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     recency_run_id: int
     study_id: int | None
     created_at_ms: int
 
 
 class RecencyTradeResponse(BaseModel):
+    """Validated straight from the repository's ``TradeView`` (``from_attributes``)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
     symbol: str
     strategy_key: str
     params_hash: str
@@ -39,17 +44,6 @@ class RecencyTradeResponse(BaseModel):
     is_synthetic_exit: bool
     signal_reason: str
     memberships: list[RecencyTradeMembershipResponse]
-
-    @classmethod
-    def from_view(cls, view: TradeView) -> RecencyTradeResponse:
-        return cls(
-            **{name: getattr(view, name) for name in cls.model_fields if name != "memberships"},
-            memberships=[RecencyTradeMembershipResponse(**_membership_fields(m)) for m in view.memberships],
-        )
-
-
-def _membership_fields(membership: MembershipView) -> dict[str, int | None]:
-    return {"recency_run_id": membership.recency_run_id, "study_id": membership.study_id, "created_at_ms": membership.created_at_ms}
 
 
 class RecencyHeroResponseItem(BaseModel):
