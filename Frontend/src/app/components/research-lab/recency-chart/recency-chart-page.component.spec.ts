@@ -1,23 +1,16 @@
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
-import { Apollo } from "apollo-angular";
 import { MessageService } from "primeng/api";
-import { from, of, throwError } from "rxjs";
+import { of } from "rxjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen } from "@testing-library/angular";
 
 import { RecencyChartPageComponent } from "./recency-chart-page.component";
 import { JobsService } from "../../../services/jobs.service";
-import {
-  RECENCY_HERO_QUERY,
-  RECENCY_TRADES_QUERY,
-  SOFT_DELETE_RECENCY_RUN_MUTATION,
-  type RecencyHeroQueryResultItem,
-  type RecencyTradeQueryResultItem,
-} from "../../../graphql/recency-chart.query";
+import { RecencyChartService, type RecencyHero, type RecencyTrade, type RecencyWindowQuery } from "../../../services/recency-chart.service";
 
-function makeTrade(overrides: Partial<RecencyTradeQueryResultItem> = {}): RecencyTradeQueryResultItem {
+function makeTrade(overrides: Partial<RecencyTrade> = {}): RecencyTrade {
   // Default entry/exit are "now"-relative, not epoch-relative: the page
   // computes a real Date.now()-anchored display window (design spec
   // D18-D19), so a trade near the Unix epoch would always be virtualized
@@ -47,7 +40,7 @@ function makeTrade(overrides: Partial<RecencyTradeQueryResultItem> = {}): Recenc
   };
 }
 
-function makeHero(overrides: Partial<RecencyHeroQueryResultItem> = {}): RecencyHeroQueryResultItem {
+function makeHero(overrides: Partial<RecencyHero> = {}): RecencyHero {
   return {
     symbol: "SPY",
     strategyKey: "ema_crossover_2_bps",
@@ -58,16 +51,15 @@ function makeHero(overrides: Partial<RecencyHeroQueryResultItem> = {}): RecencyH
   };
 }
 
-let watchQueryMock: ReturnType<typeof vi.fn>;
-let mutateMock: ReturnType<typeof vi.fn>;
+let tradesMock: ReturnType<typeof vi.fn>;
+let heroesMock: ReturnType<typeof vi.fn>;
+let softDeleteMock: ReturnType<typeof vi.fn>;
 let messageServiceMock: { add: ReturnType<typeof vi.fn> };
 
 async function renderPage(
-  trades: RecencyTradeQueryResultItem[] = [makeTrade()],
-  heroes: RecencyHeroQueryResultItem[] | null = null,
-  mutateImpl: ReturnType<typeof vi.fn> = vi.fn(() =>
-    of({ data: { softDeleteRecencyRun: { recencyRunId: 1 } } }),
-  ),
+  trades: RecencyTrade[] = [makeTrade()],
+  heroes: RecencyHero[] | null = null,
+  softDeleteImpl: ReturnType<typeof vi.fn> = vi.fn(async (_id: number) => undefined),
 ): Promise<ComponentFixture<RecencyChartPageComponent>> {
   // heroes defaults to "one hero per distinct (symbol, strategyKey, paramsHash)
   // seen in trades" so tests that don't care about fold/unfold don't need to
@@ -78,21 +70,16 @@ async function renderPage(
       (t) => makeHero({ symbol: t.symbol, strategyKey: t.strategyKey, paramsHash: t.paramsHash, totalPnl: t.pnl }),
     );
 
-  watchQueryMock = vi.fn((options: { query: unknown }) => {
-    if (options.query === RECENCY_HERO_QUERY) {
-      return { valueChanges: from([{ data: { recencyHero: effectiveHeroes }, loading: false }]), stopPolling: vi.fn() };
-    }
-    return { valueChanges: from([{ data: { recencyTrades: trades }, loading: false }]), stopPolling: vi.fn() };
-  });
-
-  mutateMock = mutateImpl;
+  tradesMock = vi.fn((_query: RecencyWindowQuery) => of(trades));
+  heroesMock = vi.fn((_query: RecencyWindowQuery) => of(effectiveHeroes));
+  softDeleteMock = softDeleteImpl;
   messageServiceMock = { add: vi.fn() };
 
   await TestBed.configureTestingModule({
     imports: [RecencyChartPageComponent],
     providers: [
       provideZonelessChangeDetection(),
-      { provide: Apollo, useValue: { watchQuery: watchQueryMock, mutate: mutateMock } },
+      { provide: RecencyChartService, useValue: { trades: tradesMock, heroes: heroesMock, softDeleteRun: softDeleteMock } },
       { provide: HttpClient, useValue: { get: () => of([]) } },
       { provide: JobsService, useValue: { startJob: vi.fn(async () => "job-1") } },
       { provide: MessageService, useValue: messageServiceMock },
@@ -122,15 +109,11 @@ describe("RecencyChartPageComponent", () => {
   it("queries with a numeric fromMs strictly before toMs", async () => {
     await renderPage();
 
-    const tradesCall = watchQueryMock.mock.calls.find(
-      (call) => call[0].query === RECENCY_TRADES_QUERY,
-    ) as [{ variables: { fromMs: number; toMs: number } }];
-    expect(tradesCall[0].variables.fromMs).toBeLessThan(tradesCall[0].variables.toMs);
+    const tradesQuery = tradesMock.mock.calls[0][0] as RecencyWindowQuery;
+    expect(tradesQuery.fromMs).toBeLessThan(tradesQuery.toMs);
 
-    const heroCall = watchQueryMock.mock.calls.find(
-      (call) => call[0].query === RECENCY_HERO_QUERY,
-    ) as [{ variables: { fromMs: number; toMs: number } }];
-    expect(heroCall[0].variables.fromMs).toBeLessThan(heroCall[0].variables.toMs);
+    const heroQuery = heroesMock.mock.calls[0][0] as RecencyWindowQuery;
+    expect(heroQuery.fromMs).toBeLessThan(heroQuery.toMs);
   });
 
   it("fetches the full accumulation range, not just the ~6-month all-symbols display cap", async () => {
@@ -140,10 +123,8 @@ describe("RecencyChartPageComponent", () => {
     // re-filter an already-too-small result set.
     await renderPage();
 
-    const tradesCall = watchQueryMock.mock.calls.find(
-      (call) => call[0].query === RECENCY_TRADES_QUERY,
-    ) as [{ variables: { fromMs: number; toMs: number } }];
-    const spanMs = tradesCall[0].variables.toMs - tradesCall[0].variables.fromMs;
+    const tradesQuery = tradesMock.mock.calls[0][0] as RecencyWindowQuery;
+    const spanMs = tradesQuery.toMs - tradesQuery.fromMs;
     const thirteenMonthsMs = 1000 * 60 * 60 * 24 * 30 * 13;
     expect(spanMs).toBeGreaterThan(thirteenMonthsMs);
   });
@@ -224,12 +205,7 @@ describe("RecencyChartPageComponent", () => {
     fireEvent.click(screen.getByRole("button", { name: /delete run/i }));
     await fixture.whenStable();
 
-    expect(mutateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mutation: SOFT_DELETE_RECENCY_RUN_MUTATION,
-        variables: { runId: 7 },
-      }),
-    );
+    expect(softDeleteMock).toHaveBeenCalledWith(7);
     // The static test response still includes SPY, modeling a surviving
     // membership on the same canonical trade. The client must not hide it
     // merely because the deleted run was its previous representative.
@@ -238,12 +214,14 @@ describe("RecencyChartPageComponent", () => {
     expect(screen.getByText(/click a bar/i)).not.toBeNull();
   });
 
-  it("shows an error toast and keeps the trade visible when the delete mutation fails", async () => {
-    const failingMutate = vi.fn(() => throwError(() => new Error("boom")));
+  it("shows an error toast and keeps the trade visible when the delete fails", async () => {
+    const failingDelete = vi.fn(async (_id: number) => {
+      throw new Error("boom");
+    });
     const fixture = await renderPage(
       [makeTrade({ fingerprint: "a", symbol: "SPY", pnl: 30, recencyRunId: 7 })],
       null,
-      failingMutate,
+      failingDelete,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /\+30\.00 PnL/i }));
@@ -261,12 +239,8 @@ describe("RecencyChartPageComponent", () => {
     // before persistence finishes. Without a reload-on-complete, a fresh
     // launch's trades stay invisible until a manual page reload.
     const jobState = signal<{ status: string } | undefined>(undefined);
-    watchQueryMock = vi.fn((options: { query: unknown }) => {
-      if (options.query === RECENCY_HERO_QUERY) {
-        return { valueChanges: from([{ data: { recencyHero: [] }, loading: false }]), stopPolling: vi.fn() };
-      }
-      return { valueChanges: from([{ data: { recencyTrades: [] }, loading: false }]), stopPolling: vi.fn() };
-    });
+    tradesMock = vi.fn((_query: RecencyWindowQuery) => of([]));
+    heroesMock = vi.fn((_query: RecencyWindowQuery) => of([]));
     messageServiceMock = { add: vi.fn() };
 
     const strategies = [
@@ -285,7 +259,7 @@ describe("RecencyChartPageComponent", () => {
       imports: [RecencyChartPageComponent],
       providers: [
         provideZonelessChangeDetection(),
-        { provide: Apollo, useValue: { watchQuery: watchQueryMock, mutate: vi.fn() } },
+        { provide: RecencyChartService, useValue: { trades: tradesMock, heroes: heroesMock, softDeleteRun: vi.fn() } },
         { provide: HttpClient, useValue: { get: () => of(strategies) } },
         {
           provide: JobsService,
@@ -312,11 +286,11 @@ describe("RecencyChartPageComponent", () => {
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
     await fixture.whenStable();
 
-    const callsBeforeCompletion = watchQueryMock.mock.calls.length;
+    const callsBeforeCompletion = tradesMock.mock.calls.length;
 
     jobState.set({ status: "completed" });
     await fixture.whenStable();
 
-    expect(watchQueryMock.mock.calls.length).toBeGreaterThan(callsBeforeCompletion);
+    expect(tradesMock.mock.calls.length).toBeGreaterThan(callsBeforeCompletion);
   });
 });

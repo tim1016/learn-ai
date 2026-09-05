@@ -1,5 +1,5 @@
-using Backend.Models.MarketData;
 using Backend.Tests.Helpers;
+using Npgsql;
 
 namespace Backend.Tests.Unit;
 
@@ -8,27 +8,20 @@ namespace Backend.Tests.Unit;
 /// (non-tombstoned) RecencyRun must not be deletable via
 /// DELETE /api/studies/{id} — deleting it out from under the Recency
 /// Chart would break "forever until you soft-delete it" (D17).
+///
+/// The Recency tables are owned by the Python service (ADR 0057) and the
+/// guard reads them by name, so this is a PostgreSQL test: the migrated
+/// schema still holds the tables (the handover migration is a no-op) and the
+/// rows are seeded with the SQL the Python writer uses.
 /// </summary>
 public class StudiesApiRecencyGuardTests
 {
     [Fact]
     public async Task IsRecencyMemberAsync_StudyBackingALiveRecencyRun_ReturnsTrue()
     {
-        var db = TestDbContextFactory.Create();
-        db.RecencyLaunches.Add(new RecencyLaunch { Id = "l1", ConfigJson = "{}", Status = "RUNNING", CreatedAtMs = 1 });
-        await db.SaveChangesAsync();
-        db.RecencyRuns.Add(new RecencyRun
-        {
-            RecencyLaunchId = "l1",
-            Symbol = "SPY",
-            StrategyKey = "ema_crossover_2_bps",
-            ParamsJson = "{}",
-            ParamsHash = "h1",
-            TotalPnl = 10m,
-            CreatedAtMs = 1,
-            StudyId = 42,
-        });
-        await db.SaveChangesAsync();
+        await using var database = await PostgresIntegrationTestDatabase.CreateMigratedAsync();
+        await SeedRunAsync(database.ConnectionString, studyId: 42, deletedAtMs: null);
+        await using var db = database.CreateContext("recency-guard-live");
 
         var result = await StudiesApi.IsRecencyMemberAsync(db, 42, CancellationToken.None);
 
@@ -38,7 +31,8 @@ public class StudiesApiRecencyGuardTests
     [Fact]
     public async Task IsRecencyMemberAsync_StudyNotReferencedByAnyRecencyRun_ReturnsFalse()
     {
-        var db = TestDbContextFactory.Create();
+        await using var database = await PostgresIntegrationTestDatabase.CreateMigratedAsync();
+        await using var db = database.CreateContext("recency-guard-none");
 
         var result = await StudiesApi.IsRecencyMemberAsync(db, 99, CancellationToken.None);
 
@@ -48,27 +42,36 @@ public class StudiesApiRecencyGuardTests
     [Fact]
     public async Task IsRecencyMemberAsync_OnlyReferencedBySoftDeletedRun_ReturnsFalse()
     {
-        var db = TestDbContextFactory.Create();
-        db.RecencyLaunches.Add(new RecencyLaunch { Id = "l1", ConfigJson = "{}", Status = "RUNNING", CreatedAtMs = 1 });
-        await db.SaveChangesAsync();
-        db.RecencyRuns.Add(new RecencyRun
-        {
-            RecencyLaunchId = "l1",
-            Symbol = "SPY",
-            StrategyKey = "ema_crossover_2_bps",
-            ParamsJson = "{}",
-            ParamsHash = "h1",
-            TotalPnl = 10m,
-            CreatedAtMs = 1,
-            StudyId = 42,
-            DeletedAtMs = 500,
-        });
-        await db.SaveChangesAsync();
+        await using var database = await PostgresIntegrationTestDatabase.CreateMigratedAsync();
+        await SeedRunAsync(database.ConnectionString, studyId: 42, deletedAtMs: 500);
+        await using var db = database.CreateContext("recency-guard-tombstoned");
 
         // A study whose ONLY recency membership was already soft-deleted is
         // no longer "live" — its hard-delete guard does not need to block.
         var result = await StudiesApi.IsRecencyMemberAsync(db, 42, CancellationToken.None);
 
         Assert.False(result);
+    }
+
+    private static async Task SeedRunAsync(string connectionString, int studyId, long? deletedAtMs)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var launch = new NpgsqlCommand(
+            """
+            INSERT INTO "RecencyLaunches" ("Id", "ConfigJson", "ExpectedRuns", "SucceededRuns", "FailedRuns", "Status", "CreatedAtMs")
+            VALUES ('l1', '{}'::jsonb, 1, 1, 0, 'RUNNING', 1)
+            """,
+            connection);
+        await launch.ExecuteNonQueryAsync();
+        await using var run = new NpgsqlCommand(
+            """
+            INSERT INTO "RecencyRuns" ("RecencyLaunchId", "Symbol", "StrategyKey", "ParamsJson", "ParamsHash", "StudyId", "TotalPnl", "CreatedAtMs", "DeletedAtMs")
+            VALUES ('l1', 'SPY', 'ema_crossover_2_bps', '{}'::jsonb, 'h1', @studyId, 10, 1, @deletedAtMs)
+            """,
+            connection);
+        run.Parameters.AddWithValue("studyId", studyId);
+        run.Parameters.AddWithValue("deletedAtMs", (object?)deletedAtMs ?? DBNull.Value);
+        await run.ExecuteNonQueryAsync();
     }
 }

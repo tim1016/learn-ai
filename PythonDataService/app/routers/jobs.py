@@ -22,6 +22,7 @@ tests using snake_case kwargs.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import asdict
 from typing import Annotated, Any, Literal
@@ -33,7 +34,7 @@ from pydantic.alias_generators import to_camel
 
 from app.jobs import cache as result_cache
 from app.jobs.phases import friendly as friendly_phase
-from app.jobs.progress import JobCancelled, ProgressEmitter
+from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.models.requests import DatasetGenerationRequest
 from app.research.batch_runner import (
@@ -41,8 +42,9 @@ from app.research.batch_runner import (
     run_cross_sectional_study,
 )
 from app.research.config import ResearchConfig
-from app.research.recency.persist_client import persist_recency_snapshot, update_recency_launch
-from app.research.recency.runner import RecencyLaunchConfig, run_recency
+from app.research.persistence.db import run_sync, with_connection
+from app.research.recency import repository as recency_repo
+from app.research.recency.runner import RecencyLaunchConfig, RecencyRunSnapshot, run_recency
 from app.research.recency.stats import ms_to_et_date_string
 from app.research.recency.validation import RecencyRequestInvalidError, validate_recency_request
 from app.research.runner import run_feature_research
@@ -566,7 +568,12 @@ async def validate_recency_chart_job(req: RecencyChartJobRequest) -> dict[str, i
     return {"expected_runs": expected_runs}
 
 
-def record_recency_abort_state(launch_id: str, terminal_status: str, *, backend_url: str) -> None:
+def _record_recency_terminal_status(launch_id: str, status: str, *, succeeded_runs: int | None = None, failed_runs: int | None = None) -> None:
+    """Write a launch's terminal state from the worker thread, on the shared writer loop."""
+    run_sync(with_connection(recency_repo.set_terminal_status, launch_id, status=status, succeeded_runs=succeeded_runs, failed_runs=failed_runs))
+
+
+def record_recency_abort_state(launch_id: str, terminal_status: str) -> None:
     """Move an aborted launch off RUNNING without masking why it aborted.
 
     The exception that ended the launch is what the operator needs; a failure
@@ -574,7 +581,7 @@ def record_recency_abort_state(launch_id: str, terminal_status: str, *, backend_
     rather than raised — never swallowed silently.
     """
     try:
-        asyncio.run(update_recency_launch(launch_id, status=terminal_status, base_url=backend_url))
+        _record_recency_terminal_status(launch_id, terminal_status)
     except Exception:
         logger.exception(
             "failed to record recency launch terminal state",
@@ -594,7 +601,15 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     failed" is visible on the job's SSE stream, not just the final
     summary the completed event carries.
     """
-    strategies, _ = _validated_recency_config(req)
+    strategies, expected_runs = _validated_recency_config(req)
+    # Design spec D20: the durable launch exists before dispatch, so zero-success,
+    # cancellation and Redis expiry all remain accountable. Python owns the row (ADR 0057).
+    await with_connection(
+        recency_repo.create_launch,
+        launch_id=req.job_id,
+        config_json=json.dumps(req.model_dump(mode="json", exclude={"job_id"}), sort_keys=True),
+        expected_runs=expected_runs,
+    )
 
     config = RecencyLaunchConfig(
         launch_id=req.job_id,
@@ -607,11 +622,7 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
         commission_per_order=req.commission_per_order,
     )
 
-    from app.config import settings
-
-    backend_url = getattr(settings, "BACKEND_URL", "http://localhost:5000")
-
-    def work(emit: ProgressEmitter, cancel) -> dict:
+    def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
         def execute_backtest_fn(run_spec, cfg: RecencyLaunchConfig) -> Any:
             params = dict(run_spec.params)
             params["symbol"] = run_spec.symbol
@@ -625,8 +636,10 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
             )
             return execute_engine_backtest(request=backtest_req, on_phase=lambda phase: None, on_log=lambda message: None)
 
-        def persist(snapshot) -> None:
-            asyncio.run(persist_recency_snapshot(snapshot, base_url=backend_url))
+        def persist(snapshot: RecencyRunSnapshot) -> None:
+            # Direct write on the shared writer loop; a tombstoned launch or a
+            # redelivered cell is a successful no-op, not a failure.
+            run_sync(with_connection(recency_repo.persist_snapshot, snapshot))
 
         try:
             summary = run_recency(
@@ -646,20 +659,17 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
                 cancel_check=cancel.raise_if_cancelled,
             )
         except JobCancelled:
-            record_recency_abort_state(config.launch_id, "CANCELLED", backend_url=backend_url)
+            record_recency_abort_state(config.launch_id, "CANCELLED")
             raise
         except Exception:
-            record_recency_abort_state(config.launch_id, "FAILED", backend_url=backend_url)
+            record_recency_abort_state(config.launch_id, "FAILED")
             raise
 
-        asyncio.run(
-            update_recency_launch(
-                summary.launch_id,
-                status="COMPLETED" if summary.failed_runs == 0 else "FAILED",
-                succeeded_runs=summary.succeeded_runs,
-                failed_runs=summary.failed_runs,
-                base_url=backend_url,
-            )
+        _record_recency_terminal_status(
+            summary.launch_id,
+            "COMPLETED" if summary.failed_runs == 0 else "FAILED",
+            succeeded_runs=summary.succeeded_runs,
+            failed_runs=summary.failed_runs,
         )
         return {
             "launch_id": summary.launch_id,

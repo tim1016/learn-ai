@@ -25183,78 +25183,6 @@
         "title": "RecencyChartJobRequest",
         "type": "object"
       },
-      "RecencyHeroCandidateRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "params_hash": {
-            "minLength": 1,
-            "title": "Params Hash",
-            "type": "string"
-          },
-          "recency_run_id": {
-            "exclusiveMinimum": 0.0,
-            "title": "Recency Run Id",
-            "type": "integer"
-          },
-          "strategy_key": {
-            "minLength": 1,
-            "title": "Strategy Key",
-            "type": "string"
-          },
-          "symbol": {
-            "maxLength": 20,
-            "minLength": 1,
-            "title": "Symbol",
-            "type": "string"
-          },
-          "trades": {
-            "items": {
-              "$ref": "#/components/schemas/RecencyHeroTradeRequest"
-            },
-            "minItems": 1,
-            "title": "Trades",
-            "type": "array"
-          }
-        },
-        "required": [
-          "recency_run_id",
-          "symbol",
-          "strategy_key",
-          "params_hash",
-          "trades"
-        ],
-        "title": "RecencyHeroCandidateRequest",
-        "type": "object"
-      },
-      "RecencyHeroRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "candidates": {
-            "items": {
-              "$ref": "#/components/schemas/RecencyHeroCandidateRequest"
-            },
-            "title": "Candidates",
-            "type": "array"
-          },
-          "from_ms": {
-            "minimum": 0.0,
-            "title": "From Ms",
-            "type": "integer"
-          },
-          "to_ms": {
-            "minimum": 0.0,
-            "title": "To Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "from_ms",
-          "to_ms",
-          "candidates"
-        ],
-        "title": "RecencyHeroRequest",
-        "type": "object"
-      },
       "RecencyHeroResponse": {
         "properties": {
           "heroes": {
@@ -25304,24 +25232,175 @@
         "title": "RecencyHeroResponseItem",
         "type": "object"
       },
-      "RecencyHeroTradeRequest": {
-        "additionalProperties": false,
+      "RecencyLaunchMutationResponse": {
+        "properties": {
+          "launch_id": {
+            "title": "Launch Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "launch_id"
+        ],
+        "title": "RecencyLaunchMutationResponse",
+        "type": "object"
+      },
+      "RecencyRunMutationResponse": {
+        "properties": {
+          "recency_run_id": {
+            "title": "Recency Run Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "recency_run_id"
+        ],
+        "title": "RecencyRunMutationResponse",
+        "type": "object"
+      },
+      "RecencyTradeMembershipResponse": {
+        "properties": {
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "recency_run_id": {
+            "title": "Recency Run Id",
+            "type": "integer"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          }
+        },
+        "required": [
+          "recency_run_id",
+          "study_id",
+          "created_at_ms"
+        ],
+        "title": "RecencyTradeMembershipResponse",
+        "type": "object"
+      },
+      "RecencyTradeResponse": {
         "properties": {
           "entry_ms": {
-            "minimum": 0.0,
             "title": "Entry Ms",
             "type": "integer"
+          },
+          "exit_ms": {
+            "title": "Exit Ms",
+            "type": "integer"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "holding_sessions": {
+            "title": "Holding Sessions",
+            "type": "integer"
+          },
+          "is_synthetic_exit": {
+            "title": "Is Synthetic Exit",
+            "type": "boolean"
+          },
+          "memberships": {
+            "items": {
+              "$ref": "#/components/schemas/RecencyTradeMembershipResponse"
+            },
+            "title": "Memberships",
+            "type": "array"
+          },
+          "params_hash": {
+            "title": "Params Hash",
+            "type": "string"
+          },
+          "params_json": {
+            "title": "Params Json",
+            "type": "string"
           },
           "pnl": {
             "title": "Pnl",
             "type": "number"
+          },
+          "pnl_pct": {
+            "title": "Pnl Pct",
+            "type": "number"
+          },
+          "pnl_pts": {
+            "title": "Pnl Pts",
+            "type": "number"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "recency_run_id": {
+            "title": "Recency Run Id",
+            "type": "integer"
+          },
+          "sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe"
+          },
+          "signal_reason": {
+            "title": "Signal Reason",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
           }
         },
         "required": [
+          "symbol",
+          "strategy_key",
+          "params_hash",
+          "params_json",
+          "fingerprint",
           "entry_ms",
-          "pnl"
+          "exit_ms",
+          "pnl_pts",
+          "pnl_pct",
+          "quantity",
+          "pnl",
+          "holding_sessions",
+          "sharpe",
+          "study_id",
+          "recency_run_id",
+          "is_synthetic_exit",
+          "signal_reason",
+          "memberships"
         ],
-        "title": "RecencyHeroTradeRequest",
+        "title": "RecencyTradeResponse",
         "type": "object"
       },
       "RecentDecisionView": {
@@ -49338,19 +49417,69 @@
       }
     },
     "/api/research/recency/hero": {
-      "post": {
-        "description": "Return Python-authored visible-window winners for each symbol/strategy.",
-        "operationId": "compute_recency_hero_api_research_recency_hero_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RecencyHeroRequest"
-              }
+      "get": {
+        "description": "The highest net-PnL combination per symbol/strategy among trades that entered inside the window.",
+        "operationId": "recency_heroes_api_research_recency_hero_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from_ms",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "From Ms",
+              "type": "integer"
             }
           },
-          "required": true
-        },
+          {
+            "in": "query",
+            "name": "to_ms",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "To Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbols",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbols"
+            }
+          },
+          {
+            "in": "query",
+            "name": "strategies",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategies"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49373,7 +49502,271 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Compute Recency Hero",
+        "summary": "Recency Heroes",
+        "tags": [
+          "research-recency"
+        ]
+      }
+    },
+    "/api/research/recency/launches/{launch_id}/restore": {
+      "post": {
+        "operationId": "restore_recency_launch_api_research_recency_launches__launch_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "launch_id",
+            "required": true,
+            "schema": {
+              "title": "Launch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecencyLaunchMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Recency Launch",
+        "tags": [
+          "research-recency"
+        ]
+      }
+    },
+    "/api/research/recency/launches/{launch_id}/soft-delete": {
+      "post": {
+        "operationId": "soft_delete_recency_launch_api_research_recency_launches__launch_id__soft_delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "launch_id",
+            "required": true,
+            "schema": {
+              "title": "Launch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecencyLaunchMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft Delete Recency Launch",
+        "tags": [
+          "research-recency"
+        ]
+      }
+    },
+    "/api/research/recency/runs/{run_id}/restore": {
+      "post": {
+        "operationId": "restore_recency_run_api_research_recency_runs__run_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecencyRunMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Recency Run",
+        "tags": [
+          "research-recency"
+        ]
+      }
+    },
+    "/api/research/recency/runs/{run_id}/soft-delete": {
+      "post": {
+        "operationId": "soft_delete_recency_run_api_research_recency_runs__run_id__soft_delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecencyRunMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft Delete Recency Run",
+        "tags": [
+          "research-recency"
+        ]
+      }
+    },
+    "/api/research/recency/trades": {
+      "get": {
+        "description": "Trades overlapping the window that at least one live run still vouches for.",
+        "operationId": "list_recency_trades_api_research_recency_trades_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from_ms",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "From Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_ms",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "To Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbols",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbols"
+            }
+          },
+          {
+            "in": "query",
+            "name": "strategies",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategies"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RecencyTradeResponse"
+                  },
+                  "title": "Response List Recency Trades Api Research Recency Trades Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Recency Trades",
         "tags": [
           "research-recency"
         ]

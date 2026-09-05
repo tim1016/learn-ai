@@ -1,41 +1,55 @@
-"""HTTP contracts for Python-owned Recency Chart computations."""
+"""HTTP contracts for the Python-owned Recency Chart reads and mutations (PRD #1927).
+
+The shapes are the ones the retired GraphQL ``recencyTrades`` / ``recencyHero``
+queries served, in snake_case; every temporal value is ``int64 ms UTC`` and
+every monetary value is a JSON number (storage precision is ``numeric(18,8)``,
+the browser DTO is a float — review F14).
+"""
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel
 
+from app.research.recency.repository import MembershipView, TradeView
 from app.research.recency.stats import HeroSelection
 
 
-class RecencyHeroTradeRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class RecencyTradeMembershipResponse(BaseModel):
+    recency_run_id: int
+    study_id: int | None
+    created_at_ms: int
 
-    entry_ms: int = Field(ge=0)
+
+class RecencyTradeResponse(BaseModel):
+    symbol: str
+    strategy_key: str
+    params_hash: str
+    params_json: str
+    fingerprint: str
+    entry_ms: int
+    exit_ms: int
+    pnl_pts: float
+    pnl_pct: float
+    quantity: float
     pnl: float
+    holding_sessions: int
+    sharpe: float | None
+    study_id: int | None
+    recency_run_id: int
+    is_synthetic_exit: bool
+    signal_reason: str
+    memberships: list[RecencyTradeMembershipResponse]
+
+    @classmethod
+    def from_view(cls, view: TradeView) -> RecencyTradeResponse:
+        return cls(
+            **{name: getattr(view, name) for name in cls.model_fields if name != "memberships"},
+            memberships=[RecencyTradeMembershipResponse(**_membership_fields(m)) for m in view.memberships],
+        )
 
 
-class RecencyHeroCandidateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    recency_run_id: int = Field(gt=0)
-    symbol: str = Field(min_length=1, max_length=20)
-    strategy_key: str = Field(min_length=1)
-    params_hash: str = Field(min_length=1)
-    trades: list[RecencyHeroTradeRequest] = Field(min_length=1)
-
-
-class RecencyHeroRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    from_ms: int = Field(ge=0)
-    to_ms: int = Field(ge=0)
-    candidates: list[RecencyHeroCandidateRequest]
-
-    @model_validator(mode="after")
-    def validate_window(self) -> RecencyHeroRequest:
-        if self.from_ms > self.to_ms:
-            raise ValueError("from_ms must be less than or equal to to_ms")
-        return self
+def _membership_fields(membership: MembershipView) -> dict[str, int | None]:
+    return {"recency_run_id": membership.recency_run_id, "study_id": membership.study_id, "created_at_ms": membership.created_at_ms}
 
 
 class RecencyHeroResponseItem(BaseModel):
@@ -58,3 +72,11 @@ class RecencyHeroResponseItem(BaseModel):
 
 class RecencyHeroResponse(BaseModel):
     heroes: list[RecencyHeroResponseItem]
+
+
+class RecencyRunMutationResponse(BaseModel):
+    recency_run_id: int
+
+
+class RecencyLaunchMutationResponse(BaseModel):
+    launch_id: str

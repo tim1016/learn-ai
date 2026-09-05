@@ -1,19 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
 import { rxResource } from "@angular/core/rxjs-interop";
-import { Apollo } from "apollo-angular";
 import { MessageService } from "primeng/api";
-import { filter, firstValueFrom, map } from "rxjs";
 
-import {
-  RECENCY_HERO_QUERY,
-  RECENCY_TRADES_QUERY,
-  SOFT_DELETE_RECENCY_RUN_MUTATION,
-  type SoftDeleteRecencyRunMutationResult,
-  type RecencyHeroQueryResultItem,
-  type RecencyHeroQueryResult,
-  type RecencyTradeQueryResultItem,
-  type RecencyTradesQueryResult,
-} from "../../../graphql/recency-chart.query";
+import { RecencyChartService, type RecencyHero, type RecencyTrade } from "../../../services/recency-chart.service";
 import { RecencySwimlaneComponent } from "./recency-swimlane/recency-swimlane.component";
 import type { RecencySwimlaneTrade } from "./recency-swimlane/recency-swimlane-layout";
 import { RecencyLaunchConfigComponent } from "./recency-launch-config/recency-launch-config.component";
@@ -46,31 +35,15 @@ const MAX_FETCH_WINDOW_MS = 1000 * 60 * 60 * 24 * 30 * 24;
   styleUrls: ["./recency-chart-page.component.scss"],
 })
 export class RecencyChartPageComponent {
-  private readonly apollo = inject(Apollo);
+  private readonly recency = inject(RecencyChartService);
   private readonly messageService = inject(MessageService);
 
   private readonly fetchWindowEndMs = Date.now();
   private readonly fetchWindowStartMs = this.fetchWindowEndMs - MAX_FETCH_WINDOW_MS;
 
-  private readonly tradesResource = rxResource<RecencyTradeQueryResultItem[], { from: number; to: number }>({
+  private readonly tradesResource = rxResource<RecencyTrade[], { from: number; to: number }>({
     params: () => ({ from: this.fetchWindowStartMs, to: this.fetchWindowEndMs }),
-    stream: ({ params }) =>
-      this.apollo
-        .watchQuery<RecencyTradesQueryResult>({
-          query: RECENCY_TRADES_QUERY,
-          variables: { fromMs: params.from, toMs: params.to, symbols: null, strategies: null },
-          fetchPolicy: "network-only",
-        })
-        .valueChanges.pipe(
-          filter((result) => !result.loading),
-          map((result): RecencyTradeQueryResultItem[] => {
-            // Apollo types partial/cache data as DeepPartialObject<T>; the
-            // GraphQL schema guarantees these fields (see
-            // recency-chart.query.ts), so this narrows back to the actual
-            // contract — same idiom as run-report.component.ts.
-            return (result.data?.recencyTrades as RecencyTradeQueryResultItem[] | undefined) ?? [];
-          }),
-        ),
+    stream: ({ params }) => this.recency.trades({ fromMs: params.from, toMs: params.to }),
   });
 
   readonly trades = computed<RecencySwimlaneTrade[]>(() => this.tradesResource.value() ?? []);
@@ -143,34 +116,14 @@ export class RecencyChartPageComponent {
     return computeDisplayWindow(this.displayMode(), Date.now(), { earliestEntryMs });
   });
 
-  private readonly heroResource = rxResource<
-    RecencyHeroQueryResultItem[],
-    { from: number; to: number; symbols: string[]; strategies: string[] }
-  >({
+  private readonly heroResource = rxResource<RecencyHero[], { from: number; to: number; symbols: string[]; strategies: string[] }>({
     params: () => ({
       from: this.displayWindow().start,
       to: this.displayWindow().end,
       symbols: this.visibleSymbols(),
       strategies: this.visibleStrategies(),
     }),
-    stream: ({ params }) =>
-      this.apollo
-        .watchQuery<RecencyHeroQueryResult>({
-          query: RECENCY_HERO_QUERY,
-          variables: {
-            fromMs: params.from,
-            toMs: params.to,
-            symbols: params.symbols.length > 0 ? params.symbols : null,
-            strategies: params.strategies.length > 0 ? params.strategies : null,
-          },
-          fetchPolicy: "network-only",
-        })
-        .valueChanges.pipe(
-          filter((result) => !result.loading),
-          map((result): RecencyHeroQueryResultItem[] => {
-            return (result.data?.recencyHero as RecencyHeroQueryResultItem[] | undefined) ?? [];
-          }),
-        ),
+    stream: ({ params }) => this.recency.heroes({ fromMs: params.from, toMs: params.to, symbols: params.symbols, strategies: params.strategies }),
   });
   readonly heroes = computed<HeroKey[]>(() => this.heroResource.value() ?? []);
 
@@ -187,15 +140,7 @@ export class RecencyChartPageComponent {
 
   async onDeleteRequested(recencyRunId: number): Promise<void> {
     try {
-      const result = await firstValueFrom(
-        this.apollo.mutate<SoftDeleteRecencyRunMutationResult>({
-          mutation: SOFT_DELETE_RECENCY_RUN_MUTATION,
-          variables: { runId: recencyRunId },
-        }),
-      );
-      if (result.data?.softDeleteRecencyRun.code) {
-        throw new Error(result.data.softDeleteRecencyRun.message);
-      }
+      await this.recency.softDeleteRun(recencyRunId);
     } catch {
       this.messageService.add({
         severity: "error",

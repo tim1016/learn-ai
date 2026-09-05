@@ -25,5 +25,5 @@ PRD #1926 needs cell rows that arrive from eight worker threads at once, are key
 
 - No GraphQL layer comes for free; the Grid Search and Walk-Forward pages read from FastAPI, as the other research surfaces do.
 - The data-lake schema drift test does not cover these tables; the DDL in `schema.py` is their authority and the repository tests run against a database attested ephemeral (`POSTGRES_URL_IS_EPHEMERAL=1`), as the catalog tests do.
-- A future move of the Recency Chart tables (#1927) has a pattern to follow, and must additionally solve the handover of tables EF currently owns without letting its next migration drop them; that protocol is #1927's, not this ADR's.
+- The Recency Chart tables followed this pattern in ADR 0057 (#1927), which also records the non-dropping handover of tables EF had created.
 - Backups and operational tooling that enumerate EF-managed tables must be taught about `research_*` tables.

@@ -43,6 +43,8 @@ public static class JobsApi
         ["cross_sectional"] = "/api/jobs-internal/cross-sectional",
         ["feature_research"] = "/api/jobs-internal/feature-research",
         ["signal_engine"] = "/api/jobs-internal/signal-engine",
+        // Recency Chart: Python owns the launch, run, trade and membership
+        // rows and their reads (ADR 0057); this row is transport only.
         ["recency_chart"] = "/api/jobs-internal/recency-chart",
         // Parameter Grid Search (PRD #1926). Python owns the durable record and
         // its Postgres tables; this row is transport only.
@@ -84,7 +86,6 @@ public static class JobsApi
         IHttpClientFactory httpFactory,
         IConfiguration config,
         ILoggerFactory loggerFactory,
-        IRecencyLaunchService recencyLaunches,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("JobsApi");
@@ -144,35 +145,8 @@ public static class JobsApi
         }
         bodyObj["job_id"] = jobId;
         var mergedJson = bodyObj.ToJsonString();
-        var expectedRecencyRuns = 0;
-        var recencyLaunchCreated = false;
         try
         {
-            // Python owns Recency grid validation and cardinality. Preflight
-            // before creating the durable launch so an invalid request cannot
-            // strand a permanent RUNNING row.
-            if (type == "recency_chart")
-            {
-                using var validationContent = new StringContent(mergedJson, Encoding.UTF8, "application/json");
-                var validationResponse = await http.PostAsync($"{pythonUrl}/validate", validationContent, ct);
-                if (!validationResponse.IsSuccessStatusCode)
-                {
-                    var validationMessage = await validationResponse.Content.ReadAsStringAsync(ct);
-                    await MarkRedisFailedAsync(db, stateKey, jobId, "PythonValidationRejected", validationMessage);
-                    return Results.Problem(detail: validationMessage, statusCode: (int)validationResponse.StatusCode);
-                }
-
-                var validationBody = await validationResponse.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: ct);
-                expectedRecencyRuns = validationBody?["expected_runs"]?.GetValue<int>() ?? 0;
-                if (expectedRecencyRuns <= 0)
-                    throw new InvalidOperationException("Python recency preflight returned no runnable grid cells.");
-
-                // Design spec D20: after validation but before dispatch, so
-                // zero-success, cancellation, and Redis expiry remain durable.
-                await recencyLaunches.CreateLaunchAsync(jobId, paramsJson, expectedRecencyRuns, ct);
-                recencyLaunchCreated = true;
-            }
-
             using var content = new StringContent(mergedJson, Encoding.UTF8, "application/json");
             var resp = await http.PostAsync(pythonUrl, content, ct);
             if (!resp.IsSuccessStatusCode)
@@ -180,8 +154,6 @@ public static class JobsApi
                 var msg = await resp.Content.ReadAsStringAsync(ct);
                 logger.LogError("[Jobs] Python rejected start: {Status} {Body}", resp.StatusCode, msg);
                 await MarkRedisFailedAsync(db, stateKey, jobId, "PythonRejected", msg);
-                if (recencyLaunchCreated)
-                    await recencyLaunches.SetTerminalStatusAsync(jobId, "FAILED", 0, expectedRecencyRuns, ct);
                 return Results.Problem(detail: msg, statusCode: (int)resp.StatusCode);
             }
         }
@@ -189,8 +161,6 @@ public static class JobsApi
         {
             logger.LogError(ex, "[Jobs] Failed to dispatch job {JobId} to Python", jobId);
             await MarkRedisFailedAsync(db, stateKey, jobId, ex.GetType().Name, ex.Message);
-            if (recencyLaunchCreated)
-                await recencyLaunches.SetTerminalStatusAsync(jobId, "FAILED", 0, expectedRecencyRuns, ct);
             return Results.Problem(detail: ex.Message, statusCode: 502);
         }
 
@@ -345,9 +315,7 @@ public static class JobsApi
 
     private static async Task<IResult> CancelJobAsync(
         string id,
-        IConnectionMultiplexer redis,
-        IRecencyLaunchService recencyLaunches,
-        CancellationToken ct)
+        IConnectionMultiplexer redis)
     {
         var db = redis.GetDatabase();
         var stateKey = StateKey(id);
@@ -355,10 +323,9 @@ public static class JobsApi
         {
             return Results.NotFound(new { error = "job not found" });
         }
+        // Cooperative: the worker polls this flag and writes its own record's
+        // terminal state (a Recency launch's CANCELLED is Python's to write).
         await db.HashSetAsync(stateKey, "cancel_requested", "1");
-        var jobType = await db.HashGetAsync(stateKey, "type");
-        if (jobType == "recency_chart")
-            await recencyLaunches.SetTerminalStatusAsync(id, "CANCELLED", null, null, ct);
         return Results.Ok(new { id, cancel_requested = true });
     }
 

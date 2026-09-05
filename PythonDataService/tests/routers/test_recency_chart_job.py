@@ -198,31 +198,29 @@ class TestRecordRecencyAbortState:
     A launch that dies mid-flight has no summary, so the terminal-state write
     carries no run counts. If that write fails — the backend is down, or it
     rejects the body — the exception that actually ended the launch is what
-    the operator needs to see, so the failure is logged, not raised.
+    the operator needs to see, so the failure is logged, not raised. The write
+    itself goes straight to the Python-owned table (PRD #1927).
     """
 
-    def test_returns_normally_so_the_original_exception_survives(self, monkeypatch, caplog) -> None:
-        async def boom(*args: object, **kwargs: object) -> None:
-            raise httpx.ConnectError("backend unreachable")
+    def test_returns_normally_so_the_original_exception_survives(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        def boom(*args: object, **kwargs: object) -> None:
+            raise ConnectionError("database unreachable")
 
-        monkeypatch.setattr("app.routers.jobs.update_recency_launch", boom)
+        monkeypatch.setattr("app.routers.jobs._record_recency_terminal_status", boom)
 
         with caplog.at_level(logging.ERROR, logger="app.routers.jobs"):
-            record_recency_abort_state("launch-1", "FAILED", backend_url="http://backend")
+            record_recency_abort_state("launch-1", "FAILED")
 
         assert "failed to record recency launch terminal state" in caplog.text
 
-    def test_forwards_the_terminal_status_when_the_write_succeeds(self, monkeypatch) -> None:
+    def test_forwards_the_terminal_status_when_the_write_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen: dict[str, object] = {}
 
-        async def capture(launch_id: str, **kwargs: object) -> None:
-            seen["launch_id"] = launch_id
-            seen.update(kwargs)
+        def capture(launch_id: str, status: str, **kwargs: object) -> None:
+            seen.update({"launch_id": launch_id, "status": status, **kwargs})
 
-        monkeypatch.setattr("app.routers.jobs.update_recency_launch", capture)
+        monkeypatch.setattr("app.routers.jobs._record_recency_terminal_status", capture)
 
-        record_recency_abort_state("launch-2", "CANCELLED", backend_url="http://backend")
+        record_recency_abort_state("launch-2", "CANCELLED")
 
-        assert seen["launch_id"] == "launch-2"
-        assert seen["status"] == "CANCELLED"
-        assert seen["base_url"] == "http://backend"
+        assert seen == {"launch_id": "launch-2", "status": "CANCELLED"}
