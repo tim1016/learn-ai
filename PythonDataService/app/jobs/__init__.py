@@ -14,6 +14,12 @@ The contract:
 Terminal events (completed, failed, cancelled) close the stream from the
 producer side; consumers detect terminal status via the ``status`` field
 on the state hash.
+
+Every job runs on a thread of the service process. At startup, before the
+listener opens, the service fails whatever the active set still calls
+queued or running (:func:`app.jobs.progress.fail_jobs_without_a_worker`):
+those jobs lost their worker with the previous process, and nothing else
+would ever close their records.
 """
 
 from app.jobs.progress import (

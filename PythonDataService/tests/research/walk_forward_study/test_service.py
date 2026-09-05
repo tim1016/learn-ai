@@ -231,8 +231,8 @@ async def test_cancellation_keeps_completed_folds_and_finish_runs_only_the_rest(
     assert row is not None and row.status == "cancelled" and row.incomplete and row.verdict is None
     assert row.folds[0].status == "completed" and row.folds[1].status == "running"
     assert row.folds[1].train_search_id is not None and row.folds[1].test_search_id is None
-    # The interrupted fold's training cells were recorded and the study's count says so.
-    assert row.folds[1].recorded_backtests == 2 and row.completed_backtests == 6
+    # The one training cell in flight when the cancel landed was recorded and the study's count says so.
+    assert row.folds[1].recorded_backtests == 1 and row.completed_backtests == 5
 
     resumed_seen: list[tuple] = []
     outcome = await asyncio.to_thread(service.execute, study_id, job_id="job-b", cell_executor=_fake_factory(seen=resumed_seen), roots=[lake])

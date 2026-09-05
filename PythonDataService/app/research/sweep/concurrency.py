@@ -7,10 +7,19 @@ poll before every batch and once more after the final batch drains, so a
 cancellation that arrives while the last batch executes is never lost
 (issue #1928, review F12) — and per-item isolation, so a failing item is
 returned as its own result rather than aborting its batch. The Recency
-Chart runner established the figure and the batching (PRD #1577, design
-spec D11); Grid Search (PRD #1926) and Walk-Forward (PRD #1925) share this
-module rather than each transcribing the loop. Raise the figure from a
-measurement, not a guess.
+Chart runner established the batching (PRD #1577, design spec D11); Grid
+Search (PRD #1926) and Walk-Forward (PRD #1925) share this module rather
+than each transcribing the loop.
+
+The figure is measured, not guessed. On the data-service container (2 CPUs,
+2 GiB) with SPY minute bars over two years (~194k bars per cell), one engine
+run peaks near 480 MB of resident memory above the idle service, and the
+engine's per-bar loop holds the GIL: a second thread added ~415 MB and no
+throughput (four cells took 24.5 s on one thread, 27.9 s on two, 38 s on
+four). At the previous figure of eight the kernel's memory cgroup killed the
+service mid-search, and the record it left behind read as ``running`` for a
+day (2026-09-05). Raise the figure only from a new measurement on a larger
+container or a lighter resolution, and record it here.
 """
 
 from __future__ import annotations
@@ -19,7 +28,7 @@ from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 
-MAX_CONCURRENT_RUNS = 8
+MAX_CONCURRENT_RUNS = 1
 
 
 def batches[T](items: Iterator[T], size: int) -> Iterator[list[T]]:

@@ -20,6 +20,7 @@ from app.broker.ibkr.client import (
 )
 from app.config import settings
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
+from app.jobs.progress import fail_jobs_without_a_worker
 from app.routers import (
     account_pnl_attribution,
     aggregates,
@@ -149,6 +150,19 @@ async def lifespan(app: FastAPI):
     # _validate_data_root_identity's docstring for why this is not
     # best-effort like the IBKR connect below).
     _validate_data_root_identity()
+
+    # Every job runs on a thread of this process, so whatever the active set
+    # still calls queued or running belonged to the previous process and has
+    # no worker (a crash, an out-of-memory kill, a restart). Close those records
+    # before the listener opens, so nothing reads as live for a day and the
+    # research record behind each can be Finished.
+    orphaned_jobs = fail_jobs_without_a_worker()
+    if orphaned_jobs:
+        logger.warning(
+            "Failed %d job(s) whose worker died with the previous process: %s",
+            len(orphaned_jobs),
+            ", ".join(orphaned_jobs),
+        )
 
     # Broker System v2 — register the phase-1 read brokers (Alpaca only) so
     # /api/brokers/{broker}/... can resolve them. Cheap and keyless: the client

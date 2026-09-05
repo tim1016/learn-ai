@@ -49,6 +49,7 @@ from app.research.grid_search.runner import GridRunSummary, run_grid
 from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
 from app.research.persistence.fence import StaleAttemptError
+from app.research.sweep.concurrency import MAX_CONCURRENT_RUNS
 from app.research.sweep.eligibility import sweep_eligibility
 from app.research.sweep.grid import (
     ParamRange,
@@ -176,7 +177,7 @@ class Preflight:
         return self.run_up.evaluation_end
 
 
-def _estimate_seconds(cells: int, data_start: date, data_end: date, workers: int = 8) -> float:
+def _estimate_seconds(cells: int, data_start: date, data_end: date, workers: int = MAX_CONCURRENT_RUNS) -> float:
     months = max(1.0, (data_end - data_start).days / 30.4)
     per_cell = ESTIMATE_FIXED_SECONDS + ESTIMATE_SECONDS_PER_MONTH * months
     return round(cells * per_cell / workers, 1)
