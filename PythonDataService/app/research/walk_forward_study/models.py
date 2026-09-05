@@ -3,77 +3,33 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any, Literal
 
-from app.research.grid_search.service import GridSearchSpec
-from app.research.sweep.grid import ParamRange
-from app.research.sweep.ranking import RankingMeasure
+from app.research.grid_search.models import GridSearchSpec
 
 StudyStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 FoldStatus = Literal["pending", "running", "completed", "failed"]
-FoldPhase = Literal["train", "test"]
 
 
 @dataclass(frozen=True)
 class StudySpec:
-    """The researcher's request: a grid-search spec plus the two window lengths."""
+    """The researcher's request: one grid-search spec (grid, range, costs, ranking) plus the two window lengths."""
 
-    strategy_key: str
-    symbol: str
-    param_ranges: Mapping[str, ParamRange]
-    start_ms: int
-    end_ms: int
+    grid: GridSearchSpec
     training_months: int
     test_months: int
-    resolution: Literal["minute", "daily"] = "minute"
-    fill_mode: str = "signal_bar_close"
-    commission_per_order: float = 1.0
-    slippage_per_share: float = 0.0
-    initial_cash: float = 100_000.0
-    measure: RankingMeasure = "sharpe_ratio"
-    min_trades: int = 5
 
     def sweep_spec(self, start_ms: int, end_ms: int) -> GridSearchSpec:
-        """The grid-search spec for one window of this study — same grid, costs and ranking."""
-        return GridSearchSpec(
-            strategy_key=self.strategy_key,
-            symbol=self.symbol,
-            param_ranges=dict(self.param_ranges),
-            start_ms=start_ms,
-            end_ms=end_ms,
-            resolution=self.resolution,
-            fill_mode=self.fill_mode,
-            commission_per_order=self.commission_per_order,
-            slippage_per_share=self.slippage_per_share,
-            initial_cash=self.initial_cash,
-            measure=self.measure,
-            min_trades=self.min_trades,
-        )
+        """The same grid, costs and ranking over one fold window."""
+        return replace(self.grid, start_ms=start_ms, end_ms=end_ms)
 
     def as_request_dict(self) -> dict[str, Any]:
-        base = self.sweep_spec(self.start_ms, self.end_ms).as_request_dict()
-        return {**base, "training_months": self.training_months, "test_months": self.test_months}
+        return {**self.grid.as_request_dict(), "training_months": self.training_months, "test_months": self.test_months}
 
     @classmethod
     def from_request_dict(cls, payload: Mapping[str, Any]) -> StudySpec:
-        sweep = GridSearchSpec.from_request_dict(payload)
-        return cls(
-            strategy_key=sweep.strategy_key,
-            symbol=sweep.symbol,
-            param_ranges=sweep.param_ranges,
-            start_ms=sweep.start_ms,
-            end_ms=sweep.end_ms,
-            training_months=int(payload["training_months"]),
-            test_months=int(payload["test_months"]),
-            resolution=sweep.resolution,
-            fill_mode=sweep.fill_mode,
-            commission_per_order=sweep.commission_per_order,
-            slippage_per_share=sweep.slippage_per_share,
-            initial_cash=sweep.initial_cash,
-            measure=sweep.measure,
-            min_trades=sweep.min_trades,
-        )
+        return cls(grid=GridSearchSpec.from_request_dict(payload), training_months=int(payload["training_months"]), test_months=int(payload["test_months"]))
 
 
 @dataclass(frozen=True)
@@ -94,6 +50,8 @@ class FoldRecord:
     test_sharpe: float | None = None
     test_trades: int = 0
     retention: float | None = None
+    # Cells the fold's sweeps have recorded (completed or failed); the study's progress is their sum.
+    recorded_backtests: int = 0
     failure_reason: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -101,7 +59,11 @@ class FoldRecord:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> FoldRecord:
-        return cls(**payload)
+        # Tolerate a field this version no longer has: the folds JSON outlives code revisions.
+        return cls(**{name: payload[name] for name in _FOLD_FIELDS if name in payload})
+
+
+_FOLD_FIELDS = tuple(f.name for f in fields(FoldRecord))
 
 
 @dataclass(frozen=True)

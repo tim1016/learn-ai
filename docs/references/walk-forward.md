@@ -98,8 +98,6 @@ This is the same "failed runs are first-class research records" contract Phase A
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/research/strategy-runs/walk-forward` | Run + persist + return `(config, result)` |
-| `POST` | `/api/jobs/spy_ema_walk_forward` | Public asynchronous start for the immutable V1 SPY EMA protocol; request body must be empty |
-| `POST` | `/api/jobs-internal/spy-ema-walk-forward` | .NET-to-Python dispatch carrying only the minted `job_id` |
 | `GET` | `/api/research/strategy-runs/walk-forward/{wf_id}` | Load persisted WF |
 | `GET` | `/api/research/strategy-runs/walk-forward` | List, filtered by parent/spec/protocol identity/creation time, newest-first |
 

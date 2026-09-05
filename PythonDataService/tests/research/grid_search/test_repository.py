@@ -9,6 +9,7 @@ import pytest
 
 from app.research.grid_search import repository as repo
 from app.research.grid_search.models import CellResult, NewSearch, SearchOwner
+from app.research.persistence import fence
 from app.research.persistence.schema import SCHEMA_VERSION, ensure_schema
 
 pytestmark = pytest.mark.asyncio
@@ -98,9 +99,9 @@ async def test_writes_carry_the_attempt_and_a_stale_attempt_cannot_write(conn: a
     await repo.write_cells(conn, sid, second, [_cell("b")])
 
     assert (first, second) == (1, 2)
-    with pytest.raises(repo.StaleAttemptError):
+    with pytest.raises(fence.StaleAttemptError):
         await repo.write_cells(conn, sid, first, [_cell("a", sharpe=99.0)])
-    with pytest.raises(repo.StaleAttemptError):
+    with pytest.raises(fence.StaleAttemptError):
         await _finish(conn, sid, first)
 
     cells = {cell.params_hash: cell for cell in await repo.list_all_cells(conn, sid)}
@@ -120,7 +121,7 @@ async def test_the_fence_holds_across_two_sessions(conn: asyncpg.Connection, sec
     attempt_b = await repo.claim_attempt(second_conn, sid, job_id="job-b")
     assert attempt_b == attempt_a + 1
 
-    with pytest.raises(repo.StaleAttemptError):
+    with pytest.raises(fence.StaleAttemptError):
         await repo.write_cells(conn, sid, attempt_a, [_cell("c")])
     await repo.write_cells(second_conn, sid, attempt_b, [_cell("c")])
     assert {cell.params_hash: cell.attempt for cell in await repo.list_all_cells(conn, sid)} == {"a": attempt_a, "c": attempt_b}
@@ -167,11 +168,11 @@ async def test_a_completed_search_is_immutable_to_claims_and_writes(conn: asyncp
 
     row = await repo.get_search(conn, sid)
     assert row is not None and row.leader_params_hash == "w" and row.leader_params == {"short_window": 5}
-    with pytest.raises(repo.SearchNotClaimableError):
+    with pytest.raises(fence.RecordNotClaimableError):
         await repo.claim_attempt(conn, sid, job_id=None)
-    with pytest.raises(repo.StaleAttemptError, match="immutable"):
+    with pytest.raises(fence.StaleAttemptError, match="immutable"):
         await repo.write_cells(conn, sid, attempt, [_cell("late")])
-    with pytest.raises(repo.StaleAttemptError, match="immutable"):
+    with pytest.raises(fence.StaleAttemptError, match="immutable"):
         await _finish(conn, sid, attempt, status="failed")
 
 
@@ -201,7 +202,7 @@ async def test_delete_cascades_and_fences_a_stale_writer(conn: asyncpg.Connectio
     assert await repo.delete_search(conn, sid) is True
     assert await repo.get_search(conn, sid) is None
     assert await conn.fetchval("SELECT COUNT(*) FROM research_grid_search_cells WHERE search_id = $1", sid) == 0
-    with pytest.raises(repo.StaleAttemptError):
+    with pytest.raises(fence.StaleAttemptError):
         await repo.write_cells(conn, sid, attempt, [_cell("b")])
     assert await repo.delete_search(conn, sid) is False
 

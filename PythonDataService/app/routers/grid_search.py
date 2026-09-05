@@ -10,7 +10,6 @@ wire is ``int64 ms UTC``.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from functools import partial
 from typing import Any, Literal
@@ -24,9 +23,10 @@ from app.research.grid_search import repository as repo
 from app.research.grid_search import service
 from app.research.grid_search.engine_adapter import default_execute_cell
 from app.research.grid_search.models import CellRow, SearchRow
-from app.research.persistence.db import connection
-from app.research.sweep.grid import LowHighStepRange, ParamRange, ValueListRange
+from app.research.persistence import lifecycle
+from app.research.persistence.db import with_connection
 from app.research.sweep.ranking import is_eligible
+from app.routers import research_records as records
 from app.schemas.grid_search import (
     GridSearchCellPageResponse,
     GridSearchCellResponse,
@@ -35,54 +35,16 @@ from app.schemas.grid_search import (
     GridSearchPreflightResponse,
     GridSearchSpecRequest,
     GridSearchSummaryResponse,
-    LowHighStepRangeRequest,
     RunUpPlanResponse,
     SearchOwnerResponse,
-    ValueListRangeRequest,
+    to_grid_spec,
 )
 from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
 
 router = APIRouter()
 jobs_router = APIRouter()
 logger = logging.getLogger(__name__)
-
-CANCEL_ACK_TIMEOUT_SECONDS = 30.0
-STORED_LIVE_STATUSES: tuple[str, ...] = ("queued", "running")
-LIVE_DERIVED_STATUSES: frozenset[str] = frozenset({"queued", "running", "interrupted"})
-# Live rows are few (a handful of concurrent searches); scan them all before presenting.
-LIVE_SCAN_LIMIT = 1000
-
-
-def range_from_request(spec: ValueListRangeRequest | LowHighStepRangeRequest) -> ParamRange:
-    if isinstance(spec, ValueListRangeRequest):
-        return ValueListRange(tuple(spec.values))
-    return LowHighStepRange(low=spec.low, high=spec.high, step=spec.step)
-
-
-def spec_from_request(body: GridSearchSpecRequest) -> service.GridSearchSpec:
-    return service.GridSearchSpec(
-        strategy_key=body.strategy_key,
-        symbol=body.symbol.strip().upper(),
-        param_ranges={name: range_from_request(spec) for name, spec in body.param_ranges.items()},
-        start_ms=body.start_ms,
-        end_ms=body.end_ms,
-        resolution=body.resolution,
-        fill_mode=body.fill_mode,
-        commission_per_order=body.commission_per_order,
-        slippage_per_share=body.slippage_per_share,
-        initial_cash=body.initial_cash,
-        measure=body.measure,
-        min_trades=body.min_trades,
-    )
-
-
-def _refused(exc: service.GridSearchRefusal) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": exc.code, "message": str(exc)})
-
-
-def _live(row: SearchRow) -> bool | None:
-    """Ask Redis only when the answer can change what the row reads back as."""
-    return service.job_is_live(row.job_id) if row.status in ("queued", "running") else False
+NOUN = "search"
 
 
 def _summary(row: SearchRow, *, live: bool | None) -> dict[str, Any]:
@@ -91,7 +53,7 @@ def _summary(row: SearchRow, *, live: bool | None) -> dict[str, Any]:
         "owner": SearchOwnerResponse(kind=row.owner.kind, owner_id=row.owner.owner_id, fold_index=row.owner.fold_index, phase=row.owner.phase),
         "strategy_key": row.strategy_key,
         "symbol": row.symbol,
-        "status": service.presented_status(row, live=live),
+        "status": lifecycle.presented_status(row, live=live),
         "job_id": row.job_id,
         "created_at_ms": row.created_at_ms,
         "finished_at_ms": row.finished_at_ms,
@@ -105,7 +67,7 @@ def _summary(row: SearchRow, *, live: bool | None) -> dict[str, Any]:
         "leader_params_hash": row.leader_params_hash,
         "leader_params": row.leader_params,
         "incomplete": row.incomplete,
-        "uncommitted_changes": service.uncommitted_changes(row),
+        "uncommitted_changes": lifecycle.uncommitted_changes(row),
         "failure_reason": row.failure_reason,
     }
 
@@ -114,8 +76,12 @@ def _cell_response(cell: CellRow, *, leader_hash: str | None, measure: str, min_
     return GridSearchCellResponse(
         **{k: v for k, v in cell.as_dict().items() if k not in ("search_id",)},
         is_leader=cell.params_hash == leader_hash,
-        eligible=is_eligible(cell, measure, min_trades=min_trades),  # type: ignore[arg-type]
+        eligible=is_eligible(cell, measure, min_trades=min_trades),
     )
+
+
+def _resume_refusal(row: SearchRow, *, live: bool | None, verify_data: bool = False) -> str | None:
+    return lifecycle.resume_refusal(row, noun=NOUN, unit="cell", live=live, verify_data=verify_data)
 
 
 # ── Research surface ─────────────────────────────────────────────────────
@@ -125,9 +91,9 @@ def _cell_response(cell: CellRow, *, leader_hash: str | None, measure: str, min_
 async def preflight_grid_search(body: GridSearchSpecRequest) -> GridSearchPreflightResponse:
     """Validate, size, and plan a search without launching it."""
     try:
-        pre = await to_thread.run_sync(partial(service.preflight, spec_from_request(body)))
+        pre = await to_thread.run_sync(partial(service.preflight, to_grid_spec(body)))
     except service.GridSearchRefusal as exc:
-        raise _refused(exc) from exc
+        raise records.refused(exc) from exc
     return GridSearchPreflightResponse(
         strategy_key=pre.spec.strategy_key,
         symbol=pre.spec.symbol,
@@ -157,28 +123,21 @@ async def list_grid_searches(
     limit: int = Query(200, ge=1, le=1000),
 ) -> list[GridSearchSummaryResponse]:
     """History: user-launched searches only, newest first. Walk-forward-owned sweeps never appear."""
-    # ``interrupted`` is never stored: it is a queued/running row whose job is gone. So a
-    # filter on any of the three live-derived statuses reads the stored live rows, presents
-    # them, and only then filters and cuts to the limit.
-    live_derived = status_filter in LIVE_DERIVED_STATUSES
-    async with connection() as conn:
-        rows = await repo.list_searches(
-            conn,
-            strategy_key=strategy_key,
-            symbol=symbol.strip().upper() if symbol else None,
-            statuses=None if status_filter is None else (STORED_LIVE_STATUSES if live_derived else (status_filter,)),
-            job_id=job_id,
-            limit=LIVE_SCAN_LIMIT if live_derived else limit,
-        )
-    summaries = [GridSearchSummaryResponse(**_summary(row, live=_live(row))) for row in rows]
-    if live_derived:
-        return [summary for summary in summaries if summary.status == status_filter][:limit]
-    return summaries
+    statuses, fetch_limit = records.stored_status_query(status_filter, limit)
+    rows = await with_connection(
+        repo.list_searches,
+        strategy_key=strategy_key,
+        symbol=symbol.strip().upper() if symbol else None,
+        statuses=statuses,
+        job_id=job_id,
+        limit=fetch_limit,
+    )
+    summaries = [GridSearchSummaryResponse(**_summary(row, live=records.liveness(row))) for row in rows]
+    return records.cut_to_presented(summaries, status_filter, limit)
 
 
 async def _load(search_id: str) -> SearchRow:
-    async with connection() as conn:
-        row = await repo.get_search(conn, search_id)
+    row = await with_connection(repo.get_search, search_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"grid search {search_id} not found")
     return row
@@ -187,10 +146,10 @@ async def _load(search_id: str) -> SearchRow:
 @router.get("/{search_id}", response_model=GridSearchDetailResponse)
 async def get_grid_search(search_id: str) -> GridSearchDetailResponse:
     row = await _load(search_id)
-    live = _live(row)
+    live = records.liveness(row)
     # Status, tree state and code identity only; the data-snapshot re-hash is
     # reserved for the Finish request, where it decides something.
-    refusal = service.resume_refusal(row, live=live)
+    refusal = _resume_refusal(row, live=live)
     return GridSearchDetailResponse(
         **_summary(row, live=live),
         request=row.request,
@@ -208,14 +167,11 @@ async def list_grid_search_cells(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
 ) -> GridSearchCellPageResponse:
-    async with connection() as conn:
-        row = await repo.get_search(conn, search_id)
-        if row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"grid search {search_id} not found")
-        try:
-            page_result = await repo.list_cells(conn, search_id, sort_by=sort_by, direction=direction, page=page, page_size=page_size)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    row = await _load(search_id)
+    try:
+        page_result = await with_connection(repo.list_cells, search_id, sort_by=sort_by, direction=direction, page=page, page_size=page_size)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return GridSearchCellPageResponse(
         total=page_result.total,
         page=page_result.page,
@@ -232,32 +188,15 @@ async def list_grid_search_cells(
 @router.delete("/{search_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_grid_search(search_id: str) -> Response:
     """Cancel a running search first and wait for the worker's acknowledgement, then remove it."""
-    async with connection() as conn:
-        row = await repo.get_search(conn, search_id)
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"grid search {search_id} not found")
-    live = _live(row)
-    if live is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="whether the search is still running cannot be established (job store unreachable); try again shortly",
-        )
-    if row.job_id and live:
-        service.request_cancel(row.job_id)
-        deadline = asyncio.get_running_loop().time() + CANCEL_ACK_TIMEOUT_SECONDS
-        while asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.25)
-            async with connection() as conn:
-                current = await repo.get_search(conn, search_id)
-            if current is None or current.status not in ("queued", "running"):
-                break
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="the running search has not acknowledged cancellation yet; try again shortly",
-            )
-    async with connection() as conn:
-        await repo.delete_search(conn, search_id)
+    row = await _load(search_id)
+    if row.job_id and records.liveness_or_503(row, noun=NOUN):
+
+        async def current_status() -> str | None:
+            current = await with_connection(repo.get_search, search_id)
+            return current.status if current else None
+
+        await records.cancel_and_await_ack(row.job_id, current_status, noun=NOUN)
+    await with_connection(repo.delete_search, search_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -268,19 +207,16 @@ async def delete_grid_search(search_id: str) -> Response:
 async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
     """Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable."""
     if req.resume_search_id:
-        async with connection() as conn:
-            row = await repo.get_search(conn, req.resume_search_id)
-        if row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"grid search {req.resume_search_id} not found")
-        refusal = await to_thread.run_sync(partial(service.resume_refusal, row, live=_live(row), verify_data=True))
+        row = await _load(req.resume_search_id)
+        refusal = await to_thread.run_sync(partial(_resume_refusal, row, live=records.liveness(row), verify_data=True))
         if refusal is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})
         search_id = row.id
     else:
         try:
-            record = await to_thread.run_sync(partial(service.prepare_launch, spec_from_request(req), job_id=req.job_id))
+            record = await to_thread.run_sync(partial(service.prepare_launch, to_grid_spec(req), job_id=req.job_id))
         except service.GridSearchRefusal as exc:
-            raise _refused(exc) from exc
+            raise records.refused(exc) from exc
         created = await service.create(record)
         search_id = created.id
 

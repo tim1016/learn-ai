@@ -5,37 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { GridSearchResultComponent } from './grid-search-result.component';
 import { JobsService } from '../../services/jobs.service';
 import { GridSearchService } from './grid-search.service';
-import type { CellPageQuery, GridSearchCell, GridSearchCellPage, GridSearchDetail } from './grid-search.types';
-
-function detail(overrides: Partial<GridSearchDetail> = {}): GridSearchDetail {
-  return {
-    id: 'abc',
-    owner: { kind: 'user', owner_id: null, fold_index: null, phase: null },
-    strategy_key: 'sma_crossover',
-    symbol: 'SPY',
-    status: 'completed',
-    job_id: 'job-1',
-    created_at_ms: 1704171600000,
-    finished_at_ms: 1704172600000,
-    window_start_ms: 1704171600000,
-    window_end_ms: 1735621200000,
-    measure: 'sharpe_ratio',
-    min_trades: 5,
-    expected_cells: 2,
-    completed_cells: 2,
-    failed_cells: 0,
-    leader_params_hash: 'h2',
-    leader_params: { short_window: 5, long_window: 30 },
-    incomplete: false,
-    uncommitted_changes: false,
-    failure_reason: null,
-    request: {} as never,
-    receipt: {},
-    resumable: false,
-    resume_refusal: 'the search is complete',
-    ...overrides,
-  };
-}
+import { gridSearchDetail as detail } from './testing/fixtures';
+import type { CellPageQuery, GridSearchCell, GridSearchCellPage } from './grid-search.types';
 
 function cell(overrides: Partial<GridSearchCell> = {}): GridSearchCell {
   return {

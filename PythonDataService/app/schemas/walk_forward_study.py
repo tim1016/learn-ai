@@ -8,14 +8,19 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
-from app.schemas.grid_search import GridSearchSpecRequest
+from app.research.walk_forward_study.models import StudySpec
+from app.schemas.grid_search import GridSearchSpecRequest, to_grid_spec
 
 
 class WalkForwardStudySpecRequest(GridSearchSpecRequest):
     training_months: int = Field(ge=1, le=120)
     test_months: int = Field(ge=1, le=60)
+
+
+def to_study_spec(body: WalkForwardStudySpecRequest) -> StudySpec:
+    return StudySpec(grid=to_grid_spec(body), training_months=body.training_months, test_months=body.test_months)
 
 
 class WalkForwardStudyJobRequest(WalkForwardStudySpecRequest):
@@ -27,13 +32,6 @@ class WalkForwardStudyJobRequest(WalkForwardStudySpecRequest):
 
     job_id: str = Field(min_length=1)
     resume_study_id: str | None = None
-
-    @model_validator(mode="after")
-    def _window_is_ordered(self) -> WalkForwardStudyJobRequest:
-        # Finish requests carry placeholder spec fields; only a fresh launch needs an ordered window.
-        if self.resume_study_id is None and self.start_ms >= self.end_ms:
-            raise ValueError("start_ms must be before end_ms")
-        return self
 
 
 class FoldPlanResponse(BaseModel):

@@ -19,6 +19,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.grid_search import engine_adapter, service
 from app.research.grid_search import repository as repo
 from app.research.grid_search.models import CellResult
+from app.research.persistence import lifecycle
 from app.research.sweep.grid import RunSpec, ValueListRange
 from app.research.sweep.identity import CodeIdentity
 from tests._helpers.lean_store import seed_store_day
@@ -222,31 +223,32 @@ async def test_a_running_record_with_no_live_job_reads_back_as_interrupted(conn,
     row = await repo.get_search(conn, created.id)
     assert row is not None
 
-    assert service.presented_status(row, live=False) == "interrupted"
-    assert service.presented_status(row, live=True) == "running"
-    assert service.presented_status(row, live=None) == "running"  # Redis unreachable: reconcile, do not declare death
+    assert lifecycle.presented_status(row, live=False) == "interrupted"
+    assert lifecycle.presented_status(row, live=True) == "running"
+    assert lifecycle.presented_status(row, live=None) == "running"  # Redis unreachable: reconcile, do not declare death
 
 
 async def test_resume_refusals(conn, lake: Path, monkeypatch) -> None:
     clean = CodeIdentity(git_revision="h", tree_state="clean", source_digest="s" * 64, environment_digest="e" * 64)
-    monkeypatch.setattr(service, "resolve_code_identity", lambda: clean)
+    monkeypatch.setattr(service, "resolve_code_identity", lambda: clean)  # what the receipt records
+    monkeypatch.setattr(lifecycle, "resolve_code_identity", lambda: clean)  # what Finish compares against
     created = await service.create(service.prepare_launch(_spec(), job_id="job-1", roots=[lake]))
     await repo.claim_attempt(conn, created.id, job_id="job-1")
     row = await repo.get_search(conn, created.id)
     assert row is not None
-    monkeypatch.setattr(service, "_roots_for", lambda row_: [lake])
+    monkeypatch.setattr(lifecycle, "roots_for", lambda row_: [lake])
     identity = CodeIdentity(**row.receipt["code_identity"])
 
-    assert service.resume_refusal(row, live=True, identity=identity) == "the search is still running"
-    assert service.resume_refusal(row, live=False, identity=identity) is None
-    assert service.resume_refusal(row, live=False, identity=identity, verify_data=True) is None
+    assert lifecycle.resume_refusal(row, noun="search", unit="cell", live=True, identity=identity) == "the search is still running"
+    assert lifecycle.resume_refusal(row, noun="search", unit="cell", live=False, identity=identity) is None
+    assert lifecycle.resume_refusal(row, noun="search", unit="cell", live=False, identity=identity, verify_data=True) is None
 
     moved = CodeIdentity(git_revision=identity.git_revision, tree_state=identity.tree_state, source_digest="0" * 64, environment_digest=identity.environment_digest)
-    assert "code changed" in (service.resume_refusal(row, live=False, identity=moved) or "")
+    assert "code changed" in (lifecycle.resume_refusal(row, noun="search", unit="cell", live=False, identity=moved) or "")
 
     seed_store_day(lake, "SPY", SESSIONS[3], count=100)
-    assert service.resume_refusal(row, live=False, identity=identity) is None  # detail view: cheap checks only
-    assert "data artifact" in (service.resume_refusal(row, live=False, identity=identity, verify_data=True) or "")
+    assert lifecycle.resume_refusal(row, noun="search", unit="cell", live=False, identity=identity) is None  # detail view: cheap checks only
+    assert "data artifact" in (lifecycle.resume_refusal(row, noun="search", unit="cell", live=False, identity=identity, verify_data=True) or "")
 
 
 async def test_a_search_from_a_dirty_tree_is_labelled_and_not_resumable(conn, lake: Path, monkeypatch) -> None:
@@ -256,5 +258,5 @@ async def test_a_search_from_a_dirty_tree_is_labelled_and_not_resumable(conn, la
     row = await repo.get_search(conn, created.id)
     assert row is not None
 
-    assert service.uncommitted_changes(row) is True
-    assert "uncommitted changes" in (service.resume_refusal(row, live=False) or "")
+    assert lifecycle.uncommitted_changes(row) is True
+    assert "uncommitted changes" in (lifecycle.resume_refusal(row, noun="search", unit="cell", live=False) or "")

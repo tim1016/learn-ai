@@ -16,6 +16,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.main import app
 from app.research.grid_search import service as sweeps
 from app.research.grid_search.models import CellResult
+from app.research.persistence import lifecycle
 from app.research.walk_forward_study import service
 from app.routers import walk_forward_study as study_router
 from app.utils.session_anchors import et_midnight_ms
@@ -56,6 +57,7 @@ def lake_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture
 def lake(lake_root: Path, monkeypatch) -> Path:
     monkeypatch.setattr(sweeps, "resolve_data_roots", lambda **kwargs: [lake_root])
+    monkeypatch.setattr(lifecycle, "resolve_data_roots", lambda **kwargs: [lake_root])
     return lake_root
 
 
@@ -113,7 +115,7 @@ async def test_launch_lists_by_job_id_and_the_detail_carries_folds_and_the_verdi
     job_id = f"job-wf-{uuid.uuid4().hex[:8]}"
     captured: dict[str, object] = {}
     monkeypatch.setattr(study_router, "run_in_thread", lambda jid, work, **kwargs: captured.setdefault("job_id", jid))
-    monkeypatch.setattr(service, "job_is_live", lambda jid: True)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda jid: True)
 
     async with client as c:
         launched = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": job_id})

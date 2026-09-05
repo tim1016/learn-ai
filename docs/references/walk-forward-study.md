@@ -10,8 +10,8 @@
 
 1. **Plan the folds.** Month arithmetic is anchored on the requested start date; each boundary snaps forward to the next trading session. Folds step by the test length, so every month after the first training window is scored exactly once. A range that does not divide into whole folds is refused with the nearest valid end dates (`FOLDS_INVALID`).
 2. **Admit on the whole workload.** `combinations × folds × 2 ≤ 5,000` backtests, the same limit Grid Search applies to one sweep.
-3. **Freeze once.** The study captures one data snapshot over the whole range and one code identity at launch. Every fold sweep captures its own window's snapshot and it must agree byte-for-byte with the study's, or that fold fails (`DATA_SNAPSHOT_MISMATCH`) rather than running on other bytes.
-4. **Per fold:** launch the training sweep (owned, `phase = 'train'`), persist its id, run it; take the leader from the ranking contract (no leader → `NO_ELIGIBLE_CANDIDATE`); launch and run the test sweep (`phase = 'test'`), mark every cell but the winner's exploratory; a failed winner test cell fails the fold (`WINNER_TEST_FAILED`). Every window — training and test, winner and exploratory — gets the same uniform run-up because Grid Search sizes one for every sweep.
+3. **Freeze once.** The study captures one data snapshot over the whole range *including the run-up sessions before the requested start* and one code identity at launch. Every fold sweep is launched with that snapshot (`prepare_launch(..., snapshot=)`): its receipt carries the study's `data_snapshot_digest` verbatim and its reads are bound to the study's bytes; a sweep whose window the snapshot does not cover is refused (`SNAPSHOT_COVERAGE`).
+4. **Per fold:** launch the training sweep (owned, `phase = 'train'`), persist its id, run it; take the leader from the ranking contract (no leader → `NO_ELIGIBLE_CANDIDATE`); launch and run the test sweep (`phase = 'test'`), mark every cell but the winner's exploratory; a failed winner test cell fails the fold (`WINNER_TEST_FAILED`). Progress counts the cells the fold's sweeps actually recorded. Every window — training and test, winner and exploratory — gets the same uniform run-up because Grid Search sizes one for every sweep.
 5. **Verdict** over the fold winners, then `completed`; only a study whose every fold failed is `failed`.
 
 ## The frozen verdict (`verdict.py`)
@@ -22,7 +22,7 @@
 | No fold has a defined retention (every training Sharpe non-positive or null) | `could not be judged` |
 | Defined retentions `D < ceil(S / 2)` of `S` successful folds | `could not be judged` — fewer than half can be judged |
 | Out-of-sample trades across fold winners `< min_trades` | `too few trades` |
-| Median test Sharpe `≤ 0` | `stopped working` |
+| Median test Sharpe `≤ 0` | `stopped working` (a defined retention implies a finite test Sharpe, so the median always exists here) |
 | Median fold retention `≥ 0.5` | `still worked` |
 | otherwise | `got worse` |
 
@@ -32,7 +32,7 @@ Retention per fold is `test_sharpe / train_sharpe`, defined only when both are f
 
 | Decision | Choice | Why |
 |---|---|---|
-| Study as a procedure over Grid Search | The study calls Grid Search's `prepare_launch` / `create` / `execute` per fold; fold sweeps are real `research_grid_searches` rows owned by the study. | One sweep implementation, one receipt shape, one attempt fence, one Finish semantics; the study adds folds, selection and the verdict only. |
+| Study as a procedure over Grid Search | The study calls Grid Search's `prepare_launch` / `create` / `execute` per fold; fold sweeps are real `research_grid_searches` rows owned by the study. The attempt fence, the presented-status and Finish rules, and the router behaviour (refusals, liveness, cancel-and-await, presented-status filtering) are shared modules both features use; `StudySpec` composes a `GridSearchSpec`. | One sweep implementation, one receipt shape, one attempt fence, one Finish semantics; the study adds folds, selection and the verdict only. |
 | Sweep ids persisted before a cell runs | The fold record stores the training (then test) sweep id before executing it. | A cancel inside a sweep otherwise leaves an orphan sweep and a Finish would launch a second one. |
 | Exploratory marking | After the test sweep completes, `mark_exploratory` sets every test cell but the winner's. | The label is a fact about selection, known only once the training leader exists. |
 | Fold failure is local | A fold's refusal is recorded on the fold with its code; the study continues; the verdict then reads `could not be judged`. | PRD: a failed fold breaks continuity but the record of the others is still worth keeping. |

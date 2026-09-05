@@ -27,12 +27,20 @@ RANKING_MEASURES: tuple[RankingMeasure, ...] = ("sharpe_ratio", "total_return_pc
 
 
 class RankableCell(Protocol):
-    params_hash: str
-    status: str
-    total_trades: int
-    sharpe_ratio: float | None
-    total_return_pct: float | None
-    net_profit: float | None
+    """Read-only view of a cell; frozen dataclasses with narrower field types satisfy it."""
+
+    @property
+    def params_hash(self) -> str: ...
+    @property
+    def status(self) -> str: ...
+    @property
+    def total_trades(self) -> int: ...
+    @property
+    def sharpe_ratio(self) -> float | None: ...
+    @property
+    def total_return_pct(self) -> float | None: ...
+    @property
+    def net_profit(self) -> float | None: ...
 
 
 

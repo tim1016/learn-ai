@@ -8,7 +8,7 @@
     </p>
   </header>
 
-  <app-grid-search-form [strategies]="strategies()" [embedded]="true" [initial]="prefill()" [preflightDebounceMs]="preflightDebounceMs()" (specChanged)="onGridSpec($event)" />
+  <app-grid-search-spec-editor [strategies]="strategies()" [initial]="prefill()" [debounceMs]="preflightDebounceMs()" (specChanged)="onGridEdit($event)" />
 
   <div class="form__grid months">
     <label class="field">

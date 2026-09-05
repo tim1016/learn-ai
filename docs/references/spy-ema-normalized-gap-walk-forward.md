@@ -61,7 +61,7 @@ The declaration grid is ascending, so a complete metric tie selects the lower th
 
 - Canonical implementation: `PythonDataService/app/research/walk_forward/selection.py::select_candidate_index`.
 - Validating test: `PythonDataService/tests/research/walk_forward/test_selection.py`.
-- Orchestration/lineage tests: `PythonDataService/tests/research/walk_forward/test_runner.py` and `test_spy_ema.py`.
+- Orchestration/lineage tests: `PythonDataService/tests/research/walk_forward/test_runner.py` (`test_spy_ema.py` was retired with the protocol, PRD #1925).
 
 ## Retention formula
 

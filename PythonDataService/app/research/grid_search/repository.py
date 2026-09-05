@@ -35,23 +35,11 @@ from app.research.grid_search.models import (
     SearchRow,
     SearchStatus,
 )
+from app.research.persistence import fence
 from app.utils.timestamps import now_ms_utc
 
+SEARCHES = "research_grid_searches"
 TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
-# A completed search is immutable evidence; everything else may be (re)claimed.
-CLAIMABLE_STATUSES: frozenset[str] = frozenset({"queued", "running", "failed", "cancelled"})
-
-
-class StaleAttemptError(RuntimeError):
-    """The writer's attempt generation is no longer the search's current one."""
-
-
-class SearchNotFoundError(LookupError):
-    pass
-
-
-class SearchNotClaimableError(RuntimeError):
-    pass
 
 
 def _row_to_search(row: asyncpg.Record) -> SearchRow:
@@ -188,42 +176,11 @@ async def list_searches(
 
 async def claim_attempt(conn: asyncpg.Connection, search_id: str, *, job_id: str | None) -> int:
     """Atomically take the next attempt generation and mark the search running."""
-    async with conn.transaction():
-        row = await conn.fetchrow(
-            "SELECT status FROM research_grid_searches WHERE id = $1 FOR UPDATE",
-            search_id,
-        )
-        if row is None:
-            raise SearchNotFoundError(search_id)
-        if row["status"] not in CLAIMABLE_STATUSES:
-            raise SearchNotClaimableError(f"search {search_id} is {row['status']} and cannot be claimed")
-        attempt = await conn.fetchval(
-            """
-            UPDATE research_grid_searches
-               SET attempt = attempt + 1, status = 'running', job_id = $2, updated_at_ms = $3,
-                   finished_at_ms = NULL, failure_reason = NULL, incomplete = FALSE
-             WHERE id = $1
-            RETURNING attempt
-            """,
-            search_id,
-            job_id,
-            now_ms_utc(),
-        )
-        return int(attempt)
+    return await fence.claim_attempt(conn, table=SEARCHES, record_id=search_id, job_id=job_id)
 
 
 async def _lock_current_attempt(conn: asyncpg.Connection, search_id: str, attempt: int) -> None:
-    """Row-lock the search and refuse a writer that is stale, or a search that is complete."""
-    row = await conn.fetchrow(
-        "SELECT attempt, status FROM research_grid_searches WHERE id = $1 FOR UPDATE",
-        search_id,
-    )
-    if row is None:
-        raise StaleAttemptError(f"search {search_id} no longer exists; attempt {attempt} may not write")
-    if int(row["attempt"]) != attempt:
-        raise StaleAttemptError(f"search {search_id} is on attempt {row['attempt']}; attempt {attempt} may not write")
-    if row["status"] == "completed":
-        raise StaleAttemptError(f"search {search_id} is complete and immutable; attempt {attempt} may not write")
+    await fence.lock_current_attempt(conn, table=SEARCHES, record_id=search_id, attempt=attempt)
 
 
 async def write_cells(conn: asyncpg.Connection, search_id: str, attempt: int, cells: Sequence[CellResult]) -> None:
@@ -327,6 +284,11 @@ async def mark_exploratory(conn: asyncpg.Connection, search_id: str, *, evidence
 async def delete_search(conn: asyncpg.Connection, search_id: str) -> bool:
     result = await conn.execute("DELETE FROM research_grid_searches WHERE id = $1", search_id)
     return result.endswith(" 1")
+
+
+async def delete_owned_searches(conn: asyncpg.Connection, *, owner_kind: str, owner_id: str) -> None:
+    """Remove every sweep an owner (a walk-forward study) launched; cells cascade."""
+    await conn.execute("DELETE FROM research_grid_searches WHERE owner_kind = $1 AND owner_id = $2", owner_kind, owner_id)
 
 
 async def existing_params_hashes(conn: asyncpg.Connection, search_id: str) -> set[str]:

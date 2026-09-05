@@ -78,7 +78,7 @@ def test_both_sides_of_the_threshold_including_exactly_half(retention: float, la
 def test_no_defined_test_sharpe_after_coverage_is_could_not_be_judged() -> None:
     # Coverage passes on retention? Retention needs test Sharpe too, so build the
     # gap the rule closes: defined retentions exist but a later filter is empty
-    # cannot happen; rule 5 is reached when every defined test Sharpe is None,
+    # cannot happen; the median test Sharpe is asserted present once a retention is defined,
     # which implies D == 0 first. Pin the ordering by asserting rule 2 fires.
     verdict = compute_verdict(_study([1, 1], [None, None]), min_trades=1)
 

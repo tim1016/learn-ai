@@ -15,6 +15,8 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
+from app.research.grid_search.models import GridSearchSpec
+from app.research.sweep.grid import LowHighStepRange, ParamRange, ValueListRange
 from app.research.sweep.ranking import RankingMeasure
 
 SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,11}$"
@@ -70,6 +72,30 @@ class GridSearchSpecRequest(_CamelTolerantModel):
         if self.start_ms >= self.end_ms:
             raise ValueError("start_ms must be before end_ms")
         return self
+
+
+def to_param_range(spec: ValueListRangeRequest | LowHighStepRangeRequest) -> ParamRange:
+    if isinstance(spec, ValueListRangeRequest):
+        return ValueListRange(tuple(spec.values))
+    return LowHighStepRange(low=spec.low, high=spec.high, step=spec.step)
+
+
+def to_grid_spec(body: GridSearchSpecRequest) -> GridSearchSpec:
+    """The parsed request as the service's spec; the symbol is already normalized by validation."""
+    return GridSearchSpec(
+        strategy_key=body.strategy_key,
+        symbol=body.symbol,
+        param_ranges={name: to_param_range(spec) for name, spec in body.param_ranges.items()},
+        start_ms=body.start_ms,
+        end_ms=body.end_ms,
+        resolution=body.resolution,
+        fill_mode=body.fill_mode,
+        commission_per_order=body.commission_per_order,
+        slippage_per_share=body.slippage_per_share,
+        initial_cash=body.initial_cash,
+        measure=body.measure,
+        min_trades=body.min_trades,
+    )
 
 
 class GridSearchJobRequest(GridSearchSpecRequest):

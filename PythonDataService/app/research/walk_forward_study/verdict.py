@@ -123,8 +123,8 @@ def compute_verdict(folds: Sequence[FoldEvidence], *, min_trades: int) -> Verdic
         return _verdict("could not be judged", f"only {d} of {s} folds have a defined retention; fewer than half can be judged")
     if oos_trades < min_trades:
         return _verdict("too few trades", f"{oos_trades} out-of-sample trades across fold winners, below the minimum of {min_trades}")
-    if median_test_sharpe is None:
-        return _verdict("could not be judged", "no successful fold has a defined test Sharpe")
+    # A defined retention needs a finite test Sharpe, so d >= 1 guarantees one exists.
+    assert median_test_sharpe is not None
     if median_test_sharpe <= 0:
         return _verdict("stopped working", f"median out-of-sample Sharpe {median_test_sharpe:.3f} is not positive")
     assert study_retention is not None

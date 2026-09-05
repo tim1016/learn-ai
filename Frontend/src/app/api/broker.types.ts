@@ -21083,8 +21083,9 @@ export interface components {
             /**
              * Fillmode
              * @default signal_bar_close
+             * @enum {string}
              */
-            fillMode?: string;
+            fillMode?: "signal_bar_close" | "next_bar_open";
             /**
              * Initialcash
              * @default 100000
@@ -21172,8 +21173,9 @@ export interface components {
             /**
              * Fillmode
              * @default signal_bar_close
+             * @enum {string}
              */
-            fillMode?: string;
+            fillMode?: "signal_bar_close" | "next_bar_open";
             /**
              * Initialcash
              * @default 100000

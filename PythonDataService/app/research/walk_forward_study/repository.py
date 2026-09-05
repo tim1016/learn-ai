@@ -14,20 +14,12 @@ from collections.abc import Sequence
 
 import asyncpg
 
-from app.research.grid_search.repository import StaleAttemptError
+from app.research.grid_search import repository as sweeps
+from app.research.persistence import fence
 from app.research.walk_forward_study.models import FoldRecord, NewStudy, StudyRow, StudyStatus
 from app.utils.timestamps import now_ms_utc
 
-CLAIMABLE_STATUSES: frozenset[str] = frozenset({"queued", "running", "failed", "cancelled"})
-
-
-class StudyNotFoundError(LookupError):
-    pass
-
-
-class StudyNotClaimableError(RuntimeError):
-    pass
-
+STUDIES = "research_walk_forward_studies"
 
 _COLUMNS = """
     id, strategy_key, symbol, status, attempt, job_id, created_at_ms, updated_at_ms, finished_at_ms,
@@ -92,7 +84,7 @@ async def list_studies(
     *,
     strategy_key: str | None = None,
     symbol: str | None = None,
-    status: str | None = None,
+    statuses: Sequence[str] | None = None,
     job_id: str | None = None,
     limit: int = 200,
 ) -> list[StudyRow]:
@@ -101,14 +93,14 @@ async def list_studies(
         SELECT {_COLUMNS} FROM research_walk_forward_studies
         WHERE ($1::text IS NULL OR strategy_key = $1)
           AND ($2::text IS NULL OR symbol = $2)
-          AND ($3::text IS NULL OR status = $3)
+          AND ($3::text[] IS NULL OR status = ANY($3::text[]))
           AND ($4::text IS NULL OR job_id = $4)
         ORDER BY created_at_ms DESC, id DESC
         LIMIT $5
         """,
         strategy_key,
         symbol,
-        status,
+        list(statuses) if statuses is not None else None,
         job_id,
         limit,
     )
@@ -116,35 +108,12 @@ async def list_studies(
 
 
 async def claim_attempt(conn: asyncpg.Connection, study_id: str, *, job_id: str | None) -> int:
-    async with conn.transaction():
-        row = await conn.fetchrow("SELECT status FROM research_walk_forward_studies WHERE id = $1 FOR UPDATE", study_id)
-        if row is None:
-            raise StudyNotFoundError(study_id)
-        if row["status"] not in CLAIMABLE_STATUSES:
-            raise StudyNotClaimableError(f"study {study_id} is {row['status']} and cannot be claimed")
-        attempt = await conn.fetchval(
-            """
-            UPDATE research_walk_forward_studies
-               SET attempt = attempt + 1, status = 'running', job_id = $2, updated_at_ms = $3,
-                   finished_at_ms = NULL, failure_reason = NULL, incomplete = FALSE, verdict_json = NULL
-             WHERE id = $1
-            RETURNING attempt
-            """,
-            study_id,
-            job_id,
-            now_ms_utc(),
-        )
-        return int(attempt)
+    """Atomically take the next attempt generation; a re-run starts with no verdict."""
+    return await fence.claim_attempt(conn, table=STUDIES, record_id=study_id, job_id=job_id, also_reset=", verdict_json = NULL")
 
 
 async def _lock(conn: asyncpg.Connection, study_id: str, attempt: int) -> None:
-    row = await conn.fetchrow("SELECT attempt, status FROM research_walk_forward_studies WHERE id = $1 FOR UPDATE", study_id)
-    if row is None:
-        raise StaleAttemptError(f"study {study_id} no longer exists; attempt {attempt} may not write")
-    if int(row["attempt"]) != attempt:
-        raise StaleAttemptError(f"study {study_id} is on attempt {row['attempt']}; attempt {attempt} may not write")
-    if row["status"] == "completed":
-        raise StaleAttemptError(f"study {study_id} is complete and immutable; attempt {attempt} may not write")
+    await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
 
 
 async def update_folds(conn: asyncpg.Connection, study_id: str, attempt: int, folds: Sequence[FoldRecord], *, completed_backtests: int) -> None:
@@ -194,9 +163,6 @@ async def finish_study(
 async def delete_study(conn: asyncpg.Connection, study_id: str) -> bool:
     """Remove the study and every sweep it owns."""
     async with conn.transaction():
-        await conn.execute(
-            "DELETE FROM research_grid_searches WHERE owner_kind = 'walk_forward' AND owner_id = $1",
-            study_id,
-        )
+        await sweeps.delete_owned_searches(conn, owner_kind="walk_forward", owner_id=study_id)
         result = await conn.execute("DELETE FROM research_walk_forward_studies WHERE id = $1", study_id)
     return result.endswith(" 1")

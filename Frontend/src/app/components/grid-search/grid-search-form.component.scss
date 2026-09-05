@@ -3,18 +3,7 @@
 .form__header h2 { margin: 0; }
 .eyebrow { margin: 0; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); }
 .muted { color: var(--text-secondary); font-size: var(--fs-xs); }
-.form__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
-.field { display: grid; gap: var(--space-1); font-size: var(--fs-xs); }
-.field select, .field input { min-width: 0; }
-.ineligible { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-1); font-size: var(--fs-xs); }
-.tag { margin-inline-start: var(--space-2); border: 1px solid var(--border-light); border-radius: 999px; padding: 0 var(--space-2); }
-.params { display: grid; gap: var(--space-3); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-3); }
-.param { display: grid; gap: var(--space-2); }
-.param__toggle { display: flex; gap: var(--space-2); align-items: baseline; }
-.param__fixed input { max-width: 200px; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .form__footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-3); border-top: 1px solid var(--border-light); padding-top: var(--space-3); }
 .preflight p { margin: 0; }
 .count { font-size: var(--fs-sm); }
 .refusal { color: var(--danger); font-size: var(--fs-sm); }
-.form--embedded { border: 0; padding: 0; background: transparent; }

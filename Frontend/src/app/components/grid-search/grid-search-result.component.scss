@@ -12,7 +12,6 @@
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .actions p { margin: 0; }
 .spacer { flex: 1; }
-.confirm { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); }
 .table-wrap { overflow-x: auto; }
 .cells { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
 .cells th, .cells td { padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--border-light); text-align: left; white-space: nowrap; }

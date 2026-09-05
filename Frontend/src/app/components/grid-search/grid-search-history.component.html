@@ -1,22 +1,7 @@
 <section class="history" aria-labelledby="grid-search-history-title">
   <header class="history__header">
     <h2 id="grid-search-history-title">History</h2>
-    <div class="filters">
-      <label><span>Strategy</span>
-        <select (change)="onFilterEvent('strategy_key', $event)" aria-label="Filter by strategy">
-          <option value="">All</option>
-          @for (strategy of filterableStrategies(); track strategy.name) { <option [value]="strategy.name">{{ strategy.display_name }}</option> }
-        </select>
-      </label>
-      <label><span>Symbol</span><input #symbolFilter pInputText type="text" placeholder="Any" (input)="setFilter('symbol', symbolFilter.value)" /></label>
-      <label><span>Status</span>
-        <select (change)="onFilterEvent('status', $event)" aria-label="Filter by status">
-          <option value="">All</option>
-          @for (status of statuses; track status) { <option [value]="status">{{ status | receiptLabel }}</option> }
-        </select>
-      </label>
-      <button pButton type="button" size="small" severity="secondary" [outlined]="true" (click)="refresh()"><i class="pi pi-refresh" aria-hidden="true"></i><span>Refresh</span></button>
-    </div>
+    <app-research-history-filters [strategies]="strategies()" [statuses]="statuses" (filterChange)="onFilters($event)" (refresh)="refresh()" />
   </header>
 
   @if (error(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
@@ -49,14 +34,7 @@
               <td class="mono">{{ leaderText(row) }}</td>
               <td class="actions">
                 <button pButton type="button" size="small" [text]="true" (click)="opened.emit(row.id)" [attr.aria-label]="'Open search ' + row.id">Open</button>
-                @if (confirming() === row.id) {
-                  <span class="confirm" role="group" aria-label="Confirm deletion">
-                    <button pButton type="button" size="small" severity="danger" (click)="confirmDelete(row.id)">Confirm delete</button>
-                    <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="cancelDelete()">Keep</button>
-                  </span>
-                } @else {
-                  <button pButton type="button" size="small" severity="danger" [text]="true" (click)="requestDelete(row.id)" [attr.aria-label]="'Delete search ' + row.id">Delete</button>
-                }
+                <app-confirm-delete [ariaLabel]="'Delete search ' + row.id" (confirmed)="delete(row.id)" />
               </td>
             </tr>
           }

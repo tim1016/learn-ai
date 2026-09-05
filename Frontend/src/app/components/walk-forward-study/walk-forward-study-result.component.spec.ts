@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService } from '../../services/jobs.service';
 import { GridSearchService } from '../grid-search/grid-search.service';
+import { gridSearchDetail } from '../grid-search/testing/fixtures';
 import { WalkForwardStudyResultComponent } from './walk-forward-study-result.component';
 import { WalkForwardStudyService } from './walk-forward-study.service';
 import type { Fold, WalkForwardStudyDetail } from './walk-forward-study.types';
@@ -64,7 +65,7 @@ function detail(overrides: Partial<WalkForwardStudyDetail> = {}): WalkForwardStu
 }
 
 async function renderResult(row: WalkForwardStudyDetail, overrides: Partial<WalkForwardStudyService> = {}) {
-  const gridGet = vi.fn(async (id: string) => ({ id, owner: { kind: 'walk_forward', owner_id: 'study-1', fold_index: 0, phase: 'test' }, strategy_key: 'sma_crossover', symbol: 'SPY', status: 'completed', job_id: null, created_at_ms: 0, finished_at_ms: 0, window_start_ms: 0, window_end_ms: 1, measure: 'sharpe_ratio', min_trades: 5, expected_cells: 1, completed_cells: 1, failed_cells: 0, leader_params_hash: 'h1', leader_params: { short_window: 5 }, incomplete: false, uncommitted_changes: false, failure_reason: null, request: {}, receipt: {}, resumable: false, resume_refusal: null }));
+  const gridGet = vi.fn(async (id: string) => gridSearchDetail({ id, owner: { kind: 'walk_forward', owner_id: 'study-1', fold_index: 0, phase: 'test' }, leader_params: { short_window: 5 }, resume_refusal: null }));
   const view = await render(WalkForwardStudyResultComponent, {
     inputs: { studyId: row.id, pollMs: 0 },
     providers: [

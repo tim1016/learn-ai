@@ -38,23 +38,7 @@
       }
       @if (d.failure_reason) { <p class="refusal">{{ d.failure_reason }}</p> }
       <span class="spacer"></span>
-      @if (running()) {
-        <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="busy()" (click)="cancel()"><i class="pi pi-stop" aria-hidden="true"></i><span>Cancel</span></button>
-      }
-      @if (d.resumable) {
-        <button pButton type="button" size="small" [disabled]="busy()" (click)="finish()"><i class="pi pi-forward" aria-hidden="true"></i><span>Finish</span></button>
-      } @else if (d.resume_refusal && d.incomplete) {
-        <span class="muted" title="{{ d.resume_refusal }}">Finish unavailable — {{ d.resume_refusal }}</span>
-      }
-      @if (!confirmingDelete()) {
-        <button pButton type="button" size="small" severity="danger" [outlined]="true" [disabled]="busy()" (click)="requestDelete()">Delete</button>
-      } @else {
-        <span class="confirm" role="group" aria-label="Confirm deletion">
-          <span>{{ running() ? 'Cancel and delete this search?' : 'Delete this search?' }}</span>
-          <button pButton type="button" size="small" severity="danger" [disabled]="busy()" (click)="confirmDelete()">Confirm delete</button>
-          <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="cancelDelete()">Keep</button>
-        </span>
-      }
+      <app-record-controls [running]="running()" [resumable]="d.resumable" [resumeRefusal]="d.resume_refusal" [incomplete]="d.incomplete" [busy]="busy()" deletePrompt="Delete this search?" cancelAndDeletePrompt="Cancel and delete this search?" (cancelRequested)="cancel()" (finishRequested)="finish()" (deleteConfirmed)="delete()" />
     </div>
   }
 

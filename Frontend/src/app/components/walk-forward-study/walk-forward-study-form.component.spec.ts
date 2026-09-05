@@ -1,31 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import { GridSearchRefusedError, GridSearchService } from '../grid-search/grid-search.service';
+import { GridSearchRefusedError } from '../grid-search/grid-search.service';
+import { sweepableStrategy as strategy } from '../grid-search/testing/fixtures';
 import type { GridSearchSpecRequest } from '../grid-search/grid-search.types';
-import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { WalkForwardStudyFormComponent } from './walk-forward-study-form.component';
 import { WalkForwardStudyService } from './walk-forward-study.service';
 import type { WalkForwardStudyPreflight, WalkForwardStudySpecRequest } from './walk-forward-study.types';
-
-function strategy(): StrategyInfo {
-  return {
-    name: 'sma_crossover',
-    display_name: 'SMA Crossover',
-    description: '',
-    params_schema: {
-      properties: {
-        symbol: { type: 'string', default: 'SPY' },
-        short_window: { type: 'integer', default: 10, minimum: 2, maximum: 500, title: 'Short window' },
-        long_window: { type: 'integer', default: 30, minimum: 3, maximum: 1000, title: 'Long window' },
-      },
-    },
-    supported_resolutions: ['minute'],
-    strategy_bars: { timespan: 'minute', multiplier: 15 },
-    recency_supported: true,
-    sweep_eligibility: { eligible: true, reason_codes: [], offending_parameters: [] },
-  };
-}
 
 const PLAN: WalkForwardStudyPreflight = {
   strategy_key: 'sma_crossover',
@@ -64,7 +45,6 @@ async function renderForm(service: Partial<WalkForwardStudyService>, inputs: Rec
     inputs: { strategies: [strategy()], preflightDebounceMs: 0, ...inputs },
     providers: [
       { provide: WalkForwardStudyService, useValue: { preflight: vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN), launch: vi.fn(async (_spec: WalkForwardStudySpecRequest) => 'job-1'), ...service } },
-      { provide: GridSearchService, useValue: { preflight: vi.fn(), launch: vi.fn() } },
     ],
   });
 }

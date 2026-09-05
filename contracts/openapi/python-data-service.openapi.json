@@ -36757,6 +36757,10 @@
           },
           "fillMode": {
             "default": "signal_bar_close",
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open"
+            ],
             "title": "Fillmode",
             "type": "string"
           },
@@ -36846,8 +36850,7 @@
             "type": "string"
           },
           "symbol": {
-            "maxLength": 20,
-            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9.\\-]{0,11}$",
             "title": "Symbol",
             "type": "string"
           },
@@ -36954,6 +36957,10 @@
           },
           "fillMode": {
             "default": "signal_bar_close",
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open"
+            ],
             "title": "Fillmode",
             "type": "string"
           },
@@ -37027,8 +37034,7 @@
             "type": "string"
           },
           "symbol": {
-            "maxLength": 20,
-            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9.\\-]{0,11}$",
             "title": "Symbol",
             "type": "string"
           },

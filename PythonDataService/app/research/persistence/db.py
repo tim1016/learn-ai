@@ -1,4 +1,4 @@
-"""Connection access for Grid Search persistence, on either loop.
+"""Connection access for the Python-owned research records, on either loop.
 
 The asyncpg pool is ``app.data_lake.catalog_client``'s per-loop pool, so a
 FastAPI handler and a worker thread never share a connection: the handler
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -38,6 +38,12 @@ async def connection() -> AsyncIterator[asyncpg.Connection]:
             await ensure_schema(conn)
             _schema_ready_loops[loop] = True
         yield conn
+
+
+async def with_connection[T](fn: Callable[..., Awaitable[T]], /, *args: Any, **kwargs: Any) -> T:
+    """``await fn(conn, *args, **kwargs)`` under a pooled connection — the only bridge services need."""
+    async with connection() as conn:
+        return await fn(conn, *args, **kwargs)
 
 
 def run_sync[T](coroutine: Coroutine[Any, Any, T]) -> T:

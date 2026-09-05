@@ -4,6 +4,8 @@ import { ButtonModule } from 'primeng/button';
 
 import { JobsService } from '../../services/jobs.service';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { RecordControlsComponent } from '../../shared/research-record/record-controls.component';
+import { RecordPoller } from '../../shared/research-record/record-poller';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { GridSearchResultComponent } from '../grid-search/grid-search-result.component';
 import { isTerminal } from '../grid-search/grid-search.types';
@@ -25,7 +27,7 @@ export interface OpenSweep {
  */
 @Component({
   selector: 'app-walk-forward-study-result',
-  imports: [ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './walk-forward-study-result.component.html',
   styleUrl: './walk-forward-study-result.component.scss',
@@ -44,7 +46,6 @@ export class WalkForwardStudyResultComponent {
 
   readonly detail = signal<WalkForwardStudyDetail | null>(null);
   readonly error = signal<string | null>(null);
-  readonly confirmingDelete = signal(false);
   readonly busy = signal(false);
   readonly openSweep = signal<OpenSweep | null>(null);
 
@@ -57,14 +58,15 @@ export class WalkForwardStudyResultComponent {
     return status !== undefined && !isTerminal(status);
   });
 
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly poller = new RecordPoller(this.destroyRef);
+  /** Set by Finish: keep polling until the row shows the new attempt running (the worker's claim races the 202). */
+  private awaitingAttempt = false;
 
   constructor() {
     effect(() => {
       const id = this.studyId();
       untracked(() => void this.reload(id));
     });
-    this.destroyRef.onDestroy(() => this.stopPolling());
   }
 
   async reload(id: string = this.studyId()): Promise<void> {
@@ -73,6 +75,7 @@ export class WalkForwardStudyResultComponent {
       if (id !== this.studyId()) return;
       this.detail.set(detail);
       this.error.set(null);
+      if (!isTerminal(detail.status)) this.awaitingAttempt = false;
       this.schedulePoll();
     } catch {
       this.error.set('This study could not be loaded.');
@@ -98,6 +101,7 @@ export class WalkForwardStudyResultComponent {
     this.busy.set(true);
     try {
       await this.service.finish(detail);
+      this.awaitingAttempt = true;
       await this.reload();
     } catch {
       this.error.set('Finish was not accepted. Reload and check the refusal reason.');
@@ -120,37 +124,22 @@ export class WalkForwardStudyResultComponent {
     }
   }
 
-  requestDelete(): void {
-    this.confirmingDelete.set(true);
-  }
-
-  cancelDelete(): void {
-    this.confirmingDelete.set(false);
-  }
-
-  async confirmDelete(): Promise<void> {
+  async delete(): Promise<void> {
     const id = this.studyId();
     this.busy.set(true);
     try {
       await this.service.delete(id);
-      this.stopPolling();
+      this.poller.stop();
       this.deleted.emit(id);
     } catch {
       this.error.set('The study could not be deleted. If it is running, cancellation is being acknowledged; try again shortly.');
     } finally {
       this.busy.set(false);
-      this.confirmingDelete.set(false);
     }
   }
 
   private schedulePoll(): void {
-    this.stopPolling();
-    if (!this.running() || this.pollMs() <= 0) return;
-    this.timer = setTimeout(() => void this.reload(), this.pollMs());
-  }
-
-  private stopPolling(): void {
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
+    if (this.running() || this.awaitingAttempt) this.poller.schedule(this.pollMs(), () => void this.reload());
+    else this.poller.stop();
   }
 }

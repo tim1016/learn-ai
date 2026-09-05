@@ -1,8 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, output, signal } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
-import { InputText } from 'primeng/inputtext';
 
+import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { ConfirmDeleteComponent } from '../../shared/research-record/confirm-delete.component';
+import { ResearchHistoryFiltersComponent, type ResearchHistoryFilters } from '../../shared/research-record/research-history-filters.component';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { WalkForwardStudyService } from './walk-forward-study.service';
@@ -17,7 +19,7 @@ const STATUSES: readonly WalkForwardStudyStatus[] = ['queued', 'running', 'compl
  */
 @Component({
   selector: 'app-walk-forward-study-history',
-  imports: [ButtonModule, InputText, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, ButtonModule, ConfirmDeleteComponent, ReceiptLabelPipe, ResearchHistoryFiltersComponent, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './walk-forward-study-history.component.html',
   styleUrl: './walk-forward-study-history.component.scss',
@@ -32,11 +34,9 @@ export class WalkForwardStudyHistoryComponent {
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
   readonly filters = signal<WalkForwardStudyHistoryFilters>({});
-  readonly confirming = signal<string | null>(null);
 
   protected readonly statuses = STATUSES;
   protected readonly displayNames = computed(() => new Map(this.strategies().map((s) => [s.name, s.display_name])));
-  protected readonly filterableStrategies = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible === true));
 
   constructor() {
     void this.refresh();
@@ -54,16 +54,8 @@ export class WalkForwardStudyHistoryComponent {
     }
   }
 
-  onFilterEvent(key: keyof WalkForwardStudyHistoryFilters, event: Event): void {
-    const target = event.target;
-    if (target instanceof HTMLSelectElement || target instanceof HTMLInputElement) this.setFilter(key, target.value);
-  }
-
-  setFilter(key: keyof WalkForwardStudyHistoryFilters, raw: string): void {
-    this.filters.update((current) => {
-      const kept = Object.fromEntries(Object.entries(current).filter(([name]) => name !== key)) as WalkForwardStudyHistoryFilters;
-      return raw ? { ...kept, [key]: raw } : kept;
-    });
+  onFilters(filters: ResearchHistoryFilters): void {
+    this.filters.set(filters as WalkForwardStudyHistoryFilters);
     void this.refresh();
   }
 
@@ -71,22 +63,12 @@ export class WalkForwardStudyHistoryComponent {
     return this.displayNames().get(strategyKey) ?? null;
   }
 
-  requestDelete(id: string): void {
-    this.confirming.set(id);
-  }
-
-  cancelDelete(): void {
-    this.confirming.set(null);
-  }
-
-  async confirmDelete(id: string): Promise<void> {
+  async delete(id: string): Promise<void> {
     try {
       await this.service.delete(id);
       this.rows.update((rows) => rows.filter((row) => row.id !== id));
     } catch {
       this.error.set('The study could not be deleted. If it is running, try again once cancellation is acknowledged.');
-    } finally {
-      this.confirming.set(null);
     }
   }
 }
