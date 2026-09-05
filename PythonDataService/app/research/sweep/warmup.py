@@ -138,7 +138,8 @@ class SlowestProbe:
 
     probe: WarmupProbe
     probed_candidates: int
-    # True when the readiness-relevant grid exceeded PROBE_BUDGET and only its extreme was probed.
+    # False: every candidate was probed. True: the grid exceeded PROBE_BUDGET and the relevance shortcut
+    # (monotone, independent readiness) chose which candidates to probe.
     bounded: bool
 
 
@@ -148,16 +149,19 @@ def _span_key(probe: WarmupProbe) -> tuple[int, int]:
 
 
 def slowest_warmup_probe(strategy_key: str, symbol: str, param_ranges: Mapping[str, ParamRange]) -> SlowestProbe:
-    """The slowest candidate's readiness without probing every candidate.
+    """The slowest candidate's readiness, exactly when the grid is small and bounded when it is not.
 
-    Most settings (thresholds, sizes) never move readiness; lookbacks and the
-    decision cadence do. So: probe the baseline (every parameter at its
-    smallest value), then each swept parameter alone at its largest value to
-    learn which ones change the answer, then every combination of those with
-    the rest at baseline. Past ``PROBE_BUDGET`` combinations only the extreme
-    assignment (every relevant parameter at its largest value) is probed:
-    readiness is monotone in a lookback, so the extreme is the slowest. The
-    result says which path was taken.
+    Up to ``PROBE_BUDGET`` candidates every assignment is probed: no
+    assumption about which parameters move readiness, or about how they
+    interact, is made. Past the budget the work is bounded: the baseline
+    (every parameter at its smallest value) and each swept parameter alone
+    at its largest value identify the parameters that move readiness; every
+    combination of those is probed with the rest at baseline, or — past the
+    budget again — only the extreme assignment. That path assumes readiness
+    is monotone in each relevant parameter and that relevance does not depend
+    on another parameter's value; it is true of lookbacks and the decision
+    cadence, the settings that move readiness today, and the receipt records
+    that the bounded path was taken (``bounded``).
     """
     values = {name: sorted(expand_param(spec)) for name, spec in param_ranges.items()}
     baseline = {name: vals[0] for name, vals in values.items()}
@@ -165,18 +169,20 @@ def slowest_warmup_probe(strategy_key: str, symbol: str, param_ranges: Mapping[s
     def _probe(assignment: Mapping[str, float]) -> WarmupProbe:
         return probe_warmup_samples(strategy_key, {**assignment, "symbol": symbol})
 
-    base = _probe(baseline)
     swept = [name for name, vals in values.items() if len(vals) > 1]
+    if math.prod(len(values[name]) for name in swept) <= PROBE_BUDGET:
+        assignments = [dict(zip(swept, combo, strict=True)) for combo in product(*(values[name] for name in swept))]
+        probes = [_probe({**baseline, **assignment}) for assignment in assignments]
+        return SlowestProbe(probe=max(probes, key=_span_key), probed_candidates=len(probes), bounded=False)
+
+    base = _probe(baseline)
     relevant = [name for name in swept if _span_key(_probe({**baseline, name: values[name][-1]})) != _span_key(base)]
-    combinations = math.prod(len(values[name]) for name in relevant)
-    if combinations <= PROBE_BUDGET:
+    if math.prod(len(values[name]) for name in relevant) <= PROBE_BUDGET:
         assignments = [dict(zip(relevant, combo, strict=True)) for combo in product(*(values[name] for name in relevant))]
-        bounded = False
     else:
         assignments = [{name: values[name][-1] for name in relevant}]
-        bounded = True
     probes = [base, *(_probe({**baseline, **assignment}) for assignment in assignments)]
-    return SlowestProbe(probe=max(probes, key=_span_key), probed_candidates=1 + len(swept) + len(assignments), bounded=bounded)
+    return SlowestProbe(probe=max(probes, key=_span_key), probed_candidates=1 + len(swept) + len(assignments), bounded=True)
 
 
 def _hashable(value: object) -> object:

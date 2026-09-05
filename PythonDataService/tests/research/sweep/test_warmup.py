@@ -155,15 +155,35 @@ def test_a_run_up_that_would_consume_the_whole_range_is_refused(tmp_path: Path) 
 # ── Slowest-candidate probe (bounded) ────────────────────────────────────
 
 
-def test_slowest_probe_multiplies_only_over_parameters_that_move_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Thresholds never change readiness, so a 5 × 5 threshold grid costs two probes, not twenty-five."""
+def test_slowest_probe_probes_every_candidate_while_the_grid_fits_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under the budget nothing is assumed: every assignment is measured, interactions included."""
     from app.research.sweep import warmup
     from app.research.sweep.grid import ValueListRange
 
     seen: list[dict] = []
     real = warmup.probe_warmup_samples
     monkeypatch.setattr(warmup, "probe_warmup_samples", lambda key, params: (seen.append(dict(params)), real(key, params))[1])
+    ranges = {
+        "window": ValueListRange((14.0, 20.0, 26.0)),
+        "oversold": ValueListRange((20.0, 30.0)),
+        "overbought": ValueListRange((70.0, 80.0)),
+        "resolution_minutes": ValueListRange((15.0,)),
+    }
+    result = warmup.slowest_warmup_probe("rsi_mean_reversion", "SPY", ranges)
 
+    assert result.bounded is False and result.probed_candidates == 12 == len(seen)
+    assert result.probe == real("rsi_mean_reversion", {"window": 26.0, "oversold": 20.0, "overbought": 70.0, "resolution_minutes": 15.0, "symbol": "SPY"})
+
+
+def test_slowest_probe_uses_the_relevance_shortcut_only_past_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Thresholds never change readiness, so past the budget a 3 × 5 × 5 grid costs seven probes, not seventy-five."""
+    from app.research.sweep import warmup
+    from app.research.sweep.grid import ValueListRange
+
+    monkeypatch.setattr(warmup, "PROBE_BUDGET", 10)
+    seen: list[dict] = []
+    real = warmup.probe_warmup_samples
+    monkeypatch.setattr(warmup, "probe_warmup_samples", lambda key, params: (seen.append(dict(params)), real(key, params))[1])
     ranges = {
         "window": ValueListRange((14.0, 20.0, 26.0)),
         "oversold": ValueListRange((20.0, 25.0, 30.0, 35.0, 40.0)),
@@ -173,7 +193,7 @@ def test_slowest_probe_multiplies_only_over_parameters_that_move_readiness(monke
     result = warmup.slowest_warmup_probe("rsi_mean_reversion", "SPY", ranges)
 
     assert result.probe == real("rsi_mean_reversion", {"window": 26.0, "oversold": 20.0, "overbought": 60.0, "resolution_minutes": 15.0, "symbol": "SPY"})
-    assert result.bounded is False
+    assert result.bounded is True
     # baseline + one relevance probe per swept parameter (3) + the relevant grid (window alone: 3 values)
     assert result.probed_candidates == 1 + 3 + 3 == len(seen)
     assert {p["window"] for p in seen} == {14.0, 20.0, 26.0}
