@@ -9,7 +9,7 @@ import inspect
 
 import pytest
 
-from app.research.recency.grid import (
+from app.research.sweep.grid import (
     LowHighStepRange,
     RecencyGridTooLargeError,
     StrategyGridConfig,

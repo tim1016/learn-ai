@@ -43,14 +43,6 @@ from app.research.batch_runner import (
 )
 from app.research.config import ResearchConfig
 from app.research.exhaustive_run.runner import run_exhaustive_analysis
-from app.research.recency.grid import (
-    LowHighStepRange,
-    RecencyGridTooLargeError,
-    StrategyGridConfig,
-    ValueListRange,
-    expand_grid,
-    grid_size,
-)
 from app.research.recency.persist_client import persist_recency_snapshot, update_recency_launch
 from app.research.recency.runner import RecencyLaunchConfig, run_recency
 from app.research.recency.stats import ms_to_et_date_string
@@ -58,6 +50,14 @@ from app.research.recency.validation import RecencyRequestInvalidError, validate
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
+from app.research.sweep.grid import (
+    LowHighStepRange,
+    RecencyGridTooLargeError,
+    StrategyGridConfig,
+    ValueListRange,
+    expand_grid,
+    grid_size,
+)
 from app.research.walk_forward.spy_ema import (
     SPY_EMA_PROTOCOL_ID,
     SPY_EMA_PROTOCOL_VERSION,

@@ -1,7 +1,7 @@
-"""Recency Chart grid expansion.
+"""Parameter-grid language shared by every sweep in the research service.
 
-Formula: the launch grid is the cartesian product of symbols x strategies x
-each strategy's per-parameter range, where a range is a single value, an
+Formula: a grid is the cartesian product of symbols x strategies x each
+strategy's per-parameter range, where a range is a single value, an
 explicit value-list, or an inclusive low/high/step sequence. Expansion is
 lazy (a generator) so a large-but-legitimate sweep never fully materializes
 in memory; a cheap size computation runs eagerly before any expansion so a
@@ -9,11 +9,14 @@ pathological/malformed grid is rejected immediately rather than after it
 starts exhausting the service (D11 — no product cap, but engineering rails).
 ``params_hash`` is a stable, key-order-independent identity for one
 strategy's parameter assignment — the first component of the Recency
-Chart's canonical evidence fingerprint (design spec §3, D16).
+Chart's canonical evidence fingerprint (design spec §3, D16) and the cell
+identity of a Grid Search (PRD #1926) and a Walk-Forward study (PRD #1925).
 Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; design spec
-docs/superpowers/specs/2026-08-16-recency-chart-design.md §5.3, D11, D16.
-Canonical implementation: this file.
-Validated against: tests/research/recency/test_grid.py.
+docs/superpowers/specs/2026-08-16-recency-chart-design.md §5.3, D11, D16;
+PRD https://github.com/tim1016/learn-ai/issues/1926 "Grid and workload".
+Canonical implementation: this file (moved from app/research/recency/grid.py
+when #1926 generalized it; the vocabulary is unchanged).
+Validated against: tests/research/sweep/test_grid.py.
 """
 
 from __future__ import annotations

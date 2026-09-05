@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.recency.eligibility import is_recency_supported
-from app.research.recency.grid import ParamRange, StrategyGridConfig, ValueListRange
+from app.research.sweep.grid import ParamRange, StrategyGridConfig, ValueListRange
 
 # The only DataPolicy this launch path can actually honor today: recency
 # never threads a caller-supplied policy through to the engine — it relies

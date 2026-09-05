@@ -19,14 +19,12 @@ Validated against: tests/research/recency/test_runner.py.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from itertools import islice
 from typing import Literal, Protocol
 
 from app.research.recency.fingerprint import RunFingerprintBase, trade_fingerprint
-from app.research.recency.grid import RunSpec, StrategyGridConfig, expand_grid, grid_size
 from app.research.recency.stats import (
     TradeForStats,
     holding_sessions,
@@ -34,8 +32,8 @@ from app.research.recency.stats import (
     total_pnl,
     trade_dollar_pnl,
 )
-
-MAX_CONCURRENT_RUNS = 8
+from app.research.sweep.concurrency import MAX_CONCURRENT_RUNS, batches
+from app.research.sweep.grid import RunSpec, StrategyGridConfig, expand_grid, grid_size
 
 
 class TradeLike(Protocol):
@@ -185,15 +183,6 @@ def _snapshot_for_run(
     )
 
 
-def _batches(run_specs: Iterator[RunSpec], size: int) -> Iterator[list[RunSpec]]:
-    it = iter(run_specs)
-    while True:
-        batch = list(islice(it, size))
-        if not batch:
-            return
-        yield batch
-
-
 def run_recency(
     config: RecencyLaunchConfig,
     *,
@@ -249,7 +238,7 @@ def run_recency(
     # needed beyond letting the pool finish the batch already dispatched
     # when cancel_check raises.
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for batch in _batches(run_specs, max_workers):
+        for batch in batches(run_specs, max_workers):
             cancel_check()
             futures = {pool.submit(_execute_and_persist, run_spec): run_spec for run_spec in batch}
 
