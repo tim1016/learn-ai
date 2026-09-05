@@ -14085,6 +14085,184 @@
         "title": "FoldCandidateSelection",
         "type": "object"
       },
+      "FoldPlanResponse": {
+        "properties": {
+          "fold_index": {
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "test_end_ms": {
+            "title": "Test End Ms",
+            "type": "integer"
+          },
+          "test_start_ms": {
+            "title": "Test Start Ms",
+            "type": "integer"
+          },
+          "train_end_ms": {
+            "title": "Train End Ms",
+            "type": "integer"
+          },
+          "train_start_ms": {
+            "title": "Train Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fold_index",
+          "train_start_ms",
+          "train_end_ms",
+          "test_start_ms",
+          "test_end_ms"
+        ],
+        "title": "FoldPlanResponse",
+        "type": "object"
+      },
+      "FoldResponse": {
+        "properties": {
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "fold_index": {
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "test_end_ms": {
+            "title": "Test End Ms",
+            "type": "integer"
+          },
+          "test_search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Search Id"
+          },
+          "test_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Sharpe"
+          },
+          "test_start_ms": {
+            "title": "Test Start Ms",
+            "type": "integer"
+          },
+          "test_trades": {
+            "title": "Test Trades",
+            "type": "integer"
+          },
+          "train_end_ms": {
+            "title": "Train End Ms",
+            "type": "integer"
+          },
+          "train_search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Search Id"
+          },
+          "train_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Sharpe"
+          },
+          "train_start_ms": {
+            "title": "Train Start Ms",
+            "type": "integer"
+          },
+          "winner_params": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner Params"
+          },
+          "winner_params_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner Params Hash"
+          }
+        },
+        "required": [
+          "fold_index",
+          "train_start_ms",
+          "train_end_ms",
+          "test_start_ms",
+          "test_end_ms",
+          "status",
+          "train_search_id",
+          "test_search_id",
+          "winner_params_hash",
+          "winner_params",
+          "train_sharpe",
+          "test_sharpe",
+          "test_trades",
+          "retention",
+          "failure_reason"
+        ],
+        "title": "FoldResponse",
+        "type": "object"
+      },
       "FoldResult": {
         "additionalProperties": false,
         "description": "One fold's contribution to a walk-forward run.\n\n``test_run_id`` points at the persisted child run under\n``artifacts/runs/<test_run_id>/`` \u2014 clients can fetch the full\n``BacktestRunResult`` (equity curve, trades, log) via the existing\n``GET /api/research/strategy-runs/{run_id}`` endpoint.\n\n``status`` mirrors the underlying ``RunLedger.status`` for this\nfold's test run. Aggregation metrics (``pct_profitable_folds``,\n``mean_oos_sharpe``) use this field to exclude failed folds from\nthe OOS scoreboard \u2014 a fold that crashed at the engine boundary\nis an infrastructure problem, not a strategy story.",
@@ -36418,6 +36596,68 @@
         "title": "VerdictModel",
         "type": "object"
       },
+      "VerdictResponse": {
+        "properties": {
+          "based_on": {
+            "title": "Based On",
+            "type": "string"
+          },
+          "defined_folds": {
+            "title": "Defined Folds",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "median_test_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Test Sharpe"
+          },
+          "oos_trade_count": {
+            "title": "Oos Trade Count",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "study_retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Retention"
+          },
+          "successful_folds": {
+            "title": "Successful Folds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "reason",
+          "successful_folds",
+          "defined_folds",
+          "study_retention",
+          "median_test_sharpe",
+          "oos_trade_count",
+          "based_on"
+        ],
+        "title": "VerdictResponse",
+        "type": "object"
+      },
       "WalkForwardConfig": {
         "additionalProperties": false,
         "description": "Persistable record of the *inputs* that produced a walk-forward\nresult. Lets the storage layer round-trip the request without\nconsulting the result (e.g., to re-run with different cost\nassumptions while keeping the split fixed).",
@@ -36965,6 +37205,674 @@
           }
         },
         "title": "WalkForwardResultResponse",
+        "type": "object"
+      },
+      "WalkForwardStudyDetailResponse": {
+        "properties": {
+          "completed_backtests": {
+            "title": "Completed Backtests",
+            "type": "integer"
+          },
+          "completed_folds": {
+            "title": "Completed Folds",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "expected_backtests": {
+            "title": "Expected Backtests",
+            "type": "integer"
+          },
+          "failed_folds": {
+            "title": "Failed Folds",
+            "type": "integer"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "finished_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At Ms"
+          },
+          "fold_count": {
+            "title": "Fold Count",
+            "type": "integer"
+          },
+          "folds": {
+            "items": {
+              "$ref": "#/components/schemas/FoldResponse"
+            },
+            "title": "Folds",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "measure": {
+            "title": "Measure",
+            "type": "string"
+          },
+          "min_trades": {
+            "title": "Min Trades",
+            "type": "integer"
+          },
+          "receipt": {
+            "title": "Receipt",
+            "type": "object"
+          },
+          "request": {
+            "title": "Request",
+            "type": "object"
+          },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "resume_refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Refusal"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "test_months": {
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "training_months": {
+            "title": "Training Months",
+            "type": "integer"
+          },
+          "uncommitted_changes": {
+            "title": "Uncommitted Changes",
+            "type": "boolean"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VerdictResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window_end_ms": {
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "title": "Window Start Ms",
+            "type": "integer"
+          },
+          "winner_changes": {
+            "title": "Winner Changes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "strategy_key",
+          "symbol",
+          "status",
+          "job_id",
+          "created_at_ms",
+          "finished_at_ms",
+          "window_start_ms",
+          "window_end_ms",
+          "training_months",
+          "test_months",
+          "measure",
+          "min_trades",
+          "fold_count",
+          "completed_folds",
+          "failed_folds",
+          "expected_backtests",
+          "completed_backtests",
+          "verdict",
+          "winner_changes",
+          "incomplete",
+          "uncommitted_changes",
+          "failure_reason",
+          "request",
+          "receipt",
+          "folds",
+          "resumable",
+          "resume_refusal"
+        ],
+        "title": "WalkForwardStudyDetailResponse",
+        "type": "object"
+      },
+      "WalkForwardStudyJobRequest": {
+        "additionalProperties": false,
+        "description": "Body of POST /api/jobs-internal/walk-forward-study \u2014 the spec plus the minted job id.\n\n``resume_study_id`` names an incomplete study to Finish instead: the spec\nfields are ignored and the stored request governs.",
+        "properties": {
+          "commissionPerOrder": {
+            "default": 1.0,
+            "minimum": 0.0,
+            "title": "Commissionperorder",
+            "type": "number"
+          },
+          "endMs": {
+            "description": "Half-open window end, int64 ms UTC",
+            "minimum": 0.0,
+            "title": "Endms",
+            "type": "integer"
+          },
+          "fillMode": {
+            "default": "signal_bar_close",
+            "title": "Fillmode",
+            "type": "string"
+          },
+          "initialCash": {
+            "default": 100000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Initialcash",
+            "type": "number"
+          },
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
+            "type": "string"
+          },
+          "measure": {
+            "default": "sharpe_ratio",
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "minTrades": {
+            "default": 5,
+            "minimum": 1.0,
+            "title": "Mintrades",
+            "type": "integer"
+          },
+          "paramRanges": {
+            "additionalProperties": {
+              "discriminator": {
+                "mapping": {
+                  "low_high_step": "#/components/schemas/app__schemas__grid_search__LowHighStepRangeRequest",
+                  "value_list": "#/components/schemas/app__schemas__grid_search__ValueListRangeRequest"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/app__schemas__grid_search__ValueListRangeRequest"
+                },
+                {
+                  "$ref": "#/components/schemas/app__schemas__grid_search__LowHighStepRangeRequest"
+                }
+              ]
+            },
+            "title": "Paramranges",
+            "type": "object"
+          },
+          "resolution": {
+            "default": "minute",
+            "enum": [
+              "minute",
+              "daily"
+            ],
+            "title": "Resolution",
+            "type": "string"
+          },
+          "resumeStudyId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumestudyid"
+          },
+          "slippagePerShare": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Slippagepershare",
+            "type": "number"
+          },
+          "startMs": {
+            "description": "Half-open window start, int64 ms UTC",
+            "minimum": 0.0,
+            "title": "Startms",
+            "type": "integer"
+          },
+          "strategyKey": {
+            "minLength": 1,
+            "title": "Strategykey",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "testMonths": {
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Testmonths",
+            "type": "integer"
+          },
+          "trainingMonths": {
+            "maximum": 120.0,
+            "minimum": 1.0,
+            "title": "Trainingmonths",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strategyKey",
+          "symbol",
+          "startMs",
+          "endMs",
+          "trainingMonths",
+          "testMonths",
+          "jobId"
+        ],
+        "title": "WalkForwardStudyJobRequest",
+        "type": "object"
+      },
+      "WalkForwardStudyPreflightResponse": {
+        "properties": {
+          "backtest_limit": {
+            "title": "Backtest Limit",
+            "type": "integer"
+          },
+          "combinations": {
+            "title": "Combinations",
+            "type": "integer"
+          },
+          "estimated_seconds": {
+            "title": "Estimated Seconds",
+            "type": "number"
+          },
+          "fold_count": {
+            "title": "Fold Count",
+            "type": "integer"
+          },
+          "folds": {
+            "items": {
+              "$ref": "#/components/schemas/FoldPlanResponse"
+            },
+            "title": "Folds",
+            "type": "array"
+          },
+          "required_samples": {
+            "title": "Required Samples",
+            "type": "integer"
+          },
+          "run_up_sessions": {
+            "title": "Run Up Sessions",
+            "type": "integer"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "total_backtests": {
+            "title": "Total Backtests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "symbol",
+          "combinations",
+          "fold_count",
+          "total_backtests",
+          "backtest_limit",
+          "estimated_seconds",
+          "required_samples",
+          "run_up_sessions",
+          "folds"
+        ],
+        "title": "WalkForwardStudyPreflightResponse",
+        "type": "object"
+      },
+      "WalkForwardStudySpecRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "commissionPerOrder": {
+            "default": 1.0,
+            "minimum": 0.0,
+            "title": "Commissionperorder",
+            "type": "number"
+          },
+          "endMs": {
+            "description": "Half-open window end, int64 ms UTC",
+            "minimum": 0.0,
+            "title": "Endms",
+            "type": "integer"
+          },
+          "fillMode": {
+            "default": "signal_bar_close",
+            "title": "Fillmode",
+            "type": "string"
+          },
+          "initialCash": {
+            "default": 100000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Initialcash",
+            "type": "number"
+          },
+          "measure": {
+            "default": "sharpe_ratio",
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "minTrades": {
+            "default": 5,
+            "minimum": 1.0,
+            "title": "Mintrades",
+            "type": "integer"
+          },
+          "paramRanges": {
+            "additionalProperties": {
+              "discriminator": {
+                "mapping": {
+                  "low_high_step": "#/components/schemas/app__schemas__grid_search__LowHighStepRangeRequest",
+                  "value_list": "#/components/schemas/app__schemas__grid_search__ValueListRangeRequest"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/app__schemas__grid_search__ValueListRangeRequest"
+                },
+                {
+                  "$ref": "#/components/schemas/app__schemas__grid_search__LowHighStepRangeRequest"
+                }
+              ]
+            },
+            "title": "Paramranges",
+            "type": "object"
+          },
+          "resolution": {
+            "default": "minute",
+            "enum": [
+              "minute",
+              "daily"
+            ],
+            "title": "Resolution",
+            "type": "string"
+          },
+          "slippagePerShare": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Slippagepershare",
+            "type": "number"
+          },
+          "startMs": {
+            "description": "Half-open window start, int64 ms UTC",
+            "minimum": 0.0,
+            "title": "Startms",
+            "type": "integer"
+          },
+          "strategyKey": {
+            "minLength": 1,
+            "title": "Strategykey",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "testMonths": {
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Testmonths",
+            "type": "integer"
+          },
+          "trainingMonths": {
+            "maximum": 120.0,
+            "minimum": 1.0,
+            "title": "Trainingmonths",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strategyKey",
+          "symbol",
+          "startMs",
+          "endMs",
+          "trainingMonths",
+          "testMonths"
+        ],
+        "title": "WalkForwardStudySpecRequest",
+        "type": "object"
+      },
+      "WalkForwardStudySummaryResponse": {
+        "properties": {
+          "completed_backtests": {
+            "title": "Completed Backtests",
+            "type": "integer"
+          },
+          "completed_folds": {
+            "title": "Completed Folds",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "expected_backtests": {
+            "title": "Expected Backtests",
+            "type": "integer"
+          },
+          "failed_folds": {
+            "title": "Failed Folds",
+            "type": "integer"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "finished_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At Ms"
+          },
+          "fold_count": {
+            "title": "Fold Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "measure": {
+            "title": "Measure",
+            "type": "string"
+          },
+          "min_trades": {
+            "title": "Min Trades",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "test_months": {
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "training_months": {
+            "title": "Training Months",
+            "type": "integer"
+          },
+          "uncommitted_changes": {
+            "title": "Uncommitted Changes",
+            "type": "boolean"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VerdictResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window_end_ms": {
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "title": "Window Start Ms",
+            "type": "integer"
+          },
+          "winner_changes": {
+            "title": "Winner Changes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "strategy_key",
+          "symbol",
+          "status",
+          "job_id",
+          "created_at_ms",
+          "finished_at_ms",
+          "window_start_ms",
+          "window_end_ms",
+          "training_months",
+          "test_months",
+          "measure",
+          "min_trades",
+          "fold_count",
+          "completed_folds",
+          "failed_folds",
+          "expected_backtests",
+          "completed_backtests",
+          "verdict",
+          "winner_changes",
+          "incomplete",
+          "uncommitted_changes",
+          "failure_reason"
+        ],
+        "title": "WalkForwardStudySummaryResponse",
         "type": "object"
       },
       "WalkForwardWindowResponse": {
@@ -47622,6 +48530,49 @@
         ]
       }
     },
+    "/api/jobs-internal/walk-forward-study": {
+      "post": {
+        "description": "Launch (or Finish) a study on a worker thread. Returns 202 once the record is durable.",
+        "operationId": "start_walk_forward_study_job_api_jobs_internal_walk_forward_study_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalkForwardStudyJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Walk Forward Study Job Api Jobs Internal Walk Forward Study Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Walk Forward Study Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/lean-sidecar/calendar/blocked-dates": {
       "get": {
         "description": "Return weekends and holidays in ``[from_, to]``.\n\nPer P2.5 the UI date picker consumes this to disable + label each\nblocked date \u2014 single backend source of truth for the NYSE\ncalendar so the picker and the validator cannot drift.\n\nEarly-close half-days are tradeable sessions and are NOT returned\nhere. Weekends and holidays return ``\"weekend\"`` and ``\"holiday\"``\nrespectively. Trading days are NOT in the payload.",
@@ -50328,6 +51279,239 @@
         "summary": "Get Trading Calendar",
         "tags": [
           "research-trading-calendar"
+        ]
+      }
+    },
+    "/api/research/walk-forward-studies": {
+      "get": {
+        "operationId": "list_walk_forward_studies_api_research_walk_forward_studies_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "strategy_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "description": "The launch's job id, so a client can find the study it just started",
+            "in": "query",
+            "name": "job_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The launch's job id, so a client can find the study it just started",
+              "title": "Job Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WalkForwardStudySummaryResponse"
+                  },
+                  "title": "Response List Walk Forward Studies Api Research Walk Forward Studies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Walk Forward Studies",
+        "tags": [
+          "research-walk-forward-study"
+        ]
+      }
+    },
+    "/api/research/walk-forward-studies/preflight": {
+      "post": {
+        "description": "Validate the folds and the grid, size the workload, and plan the run-up without launching.",
+        "operationId": "preflight_walk_forward_study_api_research_walk_forward_studies_preflight_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalkForwardStudySpecRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalkForwardStudyPreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preflight Walk Forward Study",
+        "tags": [
+          "research-walk-forward-study"
+        ]
+      }
+    },
+    "/api/research/walk-forward-studies/{study_id}": {
+      "delete": {
+        "description": "Cancel a running study first and wait for the worker's acknowledgement, then remove it and its sweeps.",
+        "operationId": "delete_walk_forward_study_api_research_walk_forward_studies__study_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "title": "Study Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Walk Forward Study",
+        "tags": [
+          "research-walk-forward-study"
+        ]
+      },
+      "get": {
+        "operationId": "get_walk_forward_study_api_research_walk_forward_studies__study_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "title": "Study Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalkForwardStudyDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Walk Forward Study",
+        "tags": [
+          "research-walk-forward-study"
         ]
       }
     },

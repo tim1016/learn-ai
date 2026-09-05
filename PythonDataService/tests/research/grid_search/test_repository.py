@@ -9,7 +9,7 @@ import pytest
 
 from app.research.grid_search import repository as repo
 from app.research.grid_search.models import CellResult, NewSearch, SearchOwner
-from app.research.grid_search.schema import SCHEMA_VERSION, ensure_schema
+from app.research.persistence.schema import SCHEMA_VERSION, ensure_schema
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,7 +65,7 @@ async def test_ensure_schema_is_idempotent_and_records_its_version(conn: asyncpg
     await ensure_schema(conn)
 
     versions = await conn.fetch("SELECT version FROM research_schema_migrations ORDER BY version")
-    assert [row["version"] for row in versions] == [SCHEMA_VERSION]
+    assert [row["version"] for row in versions] == list(range(1, SCHEMA_VERSION + 1))
 
 
 async def test_a_search_is_listable_the_moment_it_is_created(conn: asyncpg.Connection, unique: str) -> None:

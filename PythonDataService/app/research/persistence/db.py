@@ -19,7 +19,7 @@ from typing import Any
 import asyncpg
 
 from app.data_lake import catalog_client
-from app.research.grid_search.schema import ensure_schema
+from app.research.persistence.schema import ensure_schema
 from app.utils.background_loop import run_on_background_loop
 
 # Weak-keyed like catalog_client's pools: a loop that is garbage collected must

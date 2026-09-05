@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 import asyncpg
 import pytest
 
-from app.research.grid_search.schema import ensure_schema
+from app.research.persistence.schema import ensure_schema
 
 
 def _ephemeral_url() -> str:

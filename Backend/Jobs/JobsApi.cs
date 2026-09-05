@@ -49,6 +49,8 @@ public static class JobsApi
         // Parameter Grid Search (PRD #1926). Python owns the durable record and
         // its Postgres tables; this row is transport only.
         ["grid_search"] = "/api/jobs-internal/grid-search",
+        // Walk-Forward Study (PRD #1925): folds of grid_search sweeps; Python owns the record.
+        ["walk_forward_study"] = "/api/jobs-internal/walk-forward-study",
         // The data-lake backfill worker lives on the data-lake router rather
         // than /api/jobs-internal/*; it accepts the same caller-minted job_id
         // this method injects below, so the framework (state, events, cancel,

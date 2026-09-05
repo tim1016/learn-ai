@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from itertools import pairwise
 
 import pytest
 
@@ -18,7 +19,7 @@ def test_a_clean_two_year_range_with_six_and_three_months_gives_six_contiguous_f
     assert folds[0].test_start == folds[0].train_end == date(2024, 7, 1)
     assert folds[-1].test_end == date(2026, 1, 2)  # the study end, snapped like every other boundary
     # Every month after the training window is scored exactly once: test windows tile with no gap or overlap.
-    for previous, following in zip(folds, folds[1:], strict=False):
+    for previous, following in pairwise(folds):
         assert following.test_start == previous.test_end
     covered = set()
     for fold in folds:

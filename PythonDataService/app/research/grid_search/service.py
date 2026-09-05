@@ -37,7 +37,7 @@ from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration, public_params_schema
 from app.jobs.progress import JobCancelled, _state_key, get_redis
 from app.research.grid_search import repository as repo
-from app.research.grid_search.db import connection, run_sync
+from app.research.persistence.db import connection, run_sync
 from app.research.grid_search.models import CellResult, CellRow, NewSearch, SearchOwner, SearchRow, SearchStatus
 from app.research.grid_search.runner import GridRunSummary, run_grid
 from app.research.sweep.eligibility import sweep_eligibility

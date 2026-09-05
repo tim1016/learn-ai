@@ -22,7 +22,7 @@ from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.research.grid_search import repository as repo
 from app.research.grid_search import service
-from app.research.grid_search.db import connection
+from app.research.persistence.db import connection
 from app.research.grid_search.engine_adapter import default_execute_cell
 from app.research.grid_search.models import CellRow, SearchRow
 from app.research.sweep.grid import LowHighStepRange, ParamRange, ValueListRange

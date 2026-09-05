@@ -315,6 +315,15 @@ async def finish_search(
         )
 
 
+async def mark_exploratory(conn: asyncpg.Connection, search_id: str, *, evidence_params_hash: str) -> None:
+    """Label every cell but the fold winner's as exploratory (PRD #1925: not selection evidence)."""
+    await conn.execute(
+        "UPDATE research_grid_search_cells SET exploratory = (params_hash <> $2) WHERE search_id = $1",
+        search_id,
+        evidence_params_hash,
+    )
+
+
 async def delete_search(conn: asyncpg.Connection, search_id: str) -> bool:
     result = await conn.execute("DELETE FROM research_grid_searches WHERE id = $1", search_id)
     return result.endswith(" 1")
