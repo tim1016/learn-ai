@@ -10192,6 +10192,14 @@ export interface components {
              */
             kind: "EQUITY_LONG";
         };
+        /** ErrorDetailResponse */
+        ErrorDetailResponse: {
+            /**
+             * Detail
+             * @description Why the request was refused, in the words the route chose.
+             */
+            detail: string;
+        };
         /**
          * EvidenceEntry
          * @description One redacted, size-capped journal entry exposed to the operator lens.
@@ -26785,7 +26793,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorDetailResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -26801,7 +26811,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorDetailResponse"];
+                };
             };
         };
     };

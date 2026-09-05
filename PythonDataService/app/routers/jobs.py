@@ -52,6 +52,7 @@ from app.research.sweep.grid import (
 )
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from app.routers.research_records import require_live_redelivery
+from app.schemas.http_errors import ErrorDetailResponse
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
@@ -519,8 +520,14 @@ def _range_request_to_grid_range(req: ValueListRangeRequest | LowHighStepRangeRe
     "/recency-chart",
     status_code=status.HTTP_202_ACCEPTED,
     responses={
-        status.HTTP_409_CONFLICT: {"description": "A redelivered job_id whose configuration differs or whose job is no longer running."},
-        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "The job store cannot say whether a redelivered job is still running."},
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorDetailResponse,
+            "description": "A redelivered job_id whose configuration differs or whose job is no longer running.",
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorDetailResponse,
+            "description": "The job store cannot say whether a redelivered job is still running.",
+        },
     },
 )
 async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:

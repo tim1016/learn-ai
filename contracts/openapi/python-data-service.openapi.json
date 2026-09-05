@@ -12243,6 +12243,20 @@
         "title": "EquityLongPosition",
         "type": "object"
       },
+      "ErrorDetailResponse": {
+        "properties": {
+          "detail": {
+            "description": "Why the request was refused, in the words the route chose.",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorDetailResponse",
+        "type": "object"
+      },
       "EvidenceEntry": {
         "description": "One redacted, size-capped journal entry exposed to the operator lens.",
         "properties": {
@@ -47772,6 +47786,13 @@
             "description": "Successful Response"
           },
           "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetailResponse"
+                }
+              }
+            },
             "description": "A redelivered job_id whose configuration differs or whose job is no longer running."
           },
           "422": {
@@ -47785,6 +47806,13 @@
             "description": "Validation Error"
           },
           "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetailResponse"
+                }
+              }
+            },
             "description": "The job store cannot say whether a redelivered job is still running."
           }
         },
