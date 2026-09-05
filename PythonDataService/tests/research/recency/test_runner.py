@@ -319,6 +319,35 @@ class TestRunRecencyCancellation:
         )
         assert summary.succeeded_runs == summary.expected_runs == 2
 
+    def test_cancellation_raised_during_the_final_batch_is_not_lost(self) -> None:
+        """The loop polls cancel_check only *before* each batch, so a
+        cancellation arriving while the last batch executes was never
+        observed: its cells finished, persisted, and the run reported
+        completion (issue #1928). Draining an already-dispatched batch is
+        correct; reporting success afterwards is not."""
+        state = {"cancelled": False}
+
+        class _Cancelled(Exception):
+            pass
+
+        def cancel_check() -> None:
+            if state["cancelled"]:
+                raise _Cancelled("cancelled")
+
+        def execute(run_spec, config):
+            state["cancelled"] = True
+            return _one_trade_result()
+
+        persisted: list[object] = []
+        with pytest.raises(_Cancelled):
+            run_recency(
+                _config(symbols=["SPY"]),
+                execute_backtest_fn=execute,
+                persist_fn=persisted.append,
+                strategy_code_version_fn=lambda strategy_key: "v1",
+                cancel_check=cancel_check,
+            )
+
 
 class TestRunRecencyLazyGridExecution:
     def test_does_not_materialize_the_full_grid_before_execution_starts(self, monkeypatch: pytest.MonkeyPatch) -> None:

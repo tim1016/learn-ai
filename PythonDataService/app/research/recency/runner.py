@@ -260,6 +260,13 @@ def run_recency(
                 done += 1
                 on_progress(done, expected)
 
+    # Poll once more now that every dispatched child has drained. The in-loop
+    # check runs only *before* each batch, so a cancellation arriving while the
+    # final batch executed was never observed and the run reported success
+    # (issue #1928). Letting an already-dispatched batch finish is deliberate;
+    # discarding an acknowledged cancellation afterwards is not.
+    cancel_check()
+
     succeeded = sum(1 for outcome in outcomes if outcome.status == "succeeded")
     failed = sum(1 for outcome in outcomes if outcome.status == "failed")
     on_phase("completed")

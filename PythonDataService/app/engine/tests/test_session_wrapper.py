@@ -473,3 +473,47 @@ def test_defaults_preserve_existing_behavior_with_no_session_rules():
 
     assert len(strategy.order_events) == 1
     assert strategy.order_events[0].tag == "entry"
+
+
+# ===========================================================================
+# End-of-data terminal accounting (issue #1928)
+# ===========================================================================
+
+
+def test_end_of_data_closes_a_position_left_by_a_deferred_exit():
+    """A NEXT_BAR_OPEN exit submitted on the final bar has no next bar to
+    fill against, so it is orphaned in the engine's *local* deferred-fill
+    queue. Terminal cleanup drains ``portfolio.pending_orders`` — a
+    different queue — so without a holdings-based check the run ends still
+    holding the position while reporting no closing trade."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32), _bar(15, 33)]
+    strategy = _EntryThenExitStrategy(exit_on_bar_index=2)
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(fill_mode=FillMode.NEXT_BAR_OPEN),
+    )
+    engine.run(strategy)
+
+    assert strategy.ctx is not None
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 0
+
+
+def test_final_equity_curve_point_matches_final_equity():
+    """The last equity snapshot is appended inside the bar loop, before
+    terminal liquidation runs. With non-zero costs on the closing trade the
+    curve therefore ends above the real final equity, and any consumer that
+    compounds curve endpoints across folds propagates the gap."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32)]
+    strategy = _EndHookLiquidatingStrategy()
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(
+            commission_per_order=Decimal("10"),
+            slippage_per_share=Decimal("0.10"),
+        ),
+    )
+    result = engine.run(strategy)
+
+    assert result.equity_curve[-1].equity == result.final_equity

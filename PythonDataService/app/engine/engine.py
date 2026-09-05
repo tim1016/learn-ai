@@ -491,8 +491,18 @@ class BacktestEngine:
         # Materialize only a reducing terminal order at the final observed
         # close so final equity and the closed-trade ledger reconcile. The
         # explicit tag lets the persisted report disclose this synthetic exit.
+        # An exit deferred by NEXT_BAR_OPEN / NEXT_SESSION_OPEN never fills when
+        # the data ends before its next bar arrives: it is stranded in the local
+        # ``pending_fills`` queue, not in ``portfolio.pending_orders``. Draining
+        # only the latter left the run holding a position the strategy believed
+        # it had exited, with no closing trade recorded (issue #1928). Both
+        # queues are terminal-order sources; holdings without any exit intent
+        # are still left open, matching LEAN's no-forced-liquidation semantics.
         if previous_minute_bar is not None:
-            for order in portfolio.drain_pending():
+            terminal_orders = list(portfolio.drain_pending())
+            terminal_orders.extend(order for order, _signal_bar in pending_fills)
+            pending_fills.clear()
+            for order in terminal_orders:
                 if order.order_type is not OrderType.MARKET or _is_entry_order(order):
                     continue
                 position = portfolio.get_position(order.symbol)
@@ -530,6 +540,21 @@ class BacktestEngine:
         insight_summary = ctx.insight_manager.get_summary()
 
         final_equity = portfolio.total_value()
+
+        # The last in-loop snapshot is appended before terminal liquidation, so
+        # with non-zero closing costs the curve ended above the true final
+        # equity — and any consumer compounding curve endpoints across folds
+        # inherited the gap (issue #1928). Restate that final point at the same
+        # instant the terminal close was priced at, rather than appending a
+        # second snapshot and breaking timestamp uniqueness.
+        if equity_curve:
+            equity_curve[-1] = EquitySnapshot(
+                timestamp_ms=equity_curve[-1].timestamp_ms,
+                equity=final_equity,
+                cash=portfolio.cash,
+                holdings_value=final_equity - portfolio.cash,
+            )
+
         return BacktestResult(
             initial_cash=portfolio.initial_cash,
             final_equity=final_equity,
