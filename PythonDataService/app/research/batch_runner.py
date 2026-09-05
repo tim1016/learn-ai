@@ -11,6 +11,19 @@ data-lab-style run-dock can show per-ticker phase events as they happen.
 The callbacks are no-ops by default — direct synchronous callers (tests,
 GraphQL one-shot) get the same behaviour as before.
 
+``cancel_check`` follows the same contract as every other research runner
+(``app/research/recency/runner.py``, ``app/research/walk_forward/runner.py``):
+**cancellation works only by raising, and the return value is ignored.** The
+exception propagates out of this function uncaught so ``run_in_thread``
+produces a real ``job.cancelled`` terminal state instead of ``job.completed``.
+
+This runner previously branched on the boolean instead (``if cancel_check():
+break``), which meant the same callback did two different things depending on
+which runner received it. It was also unreachable: every production caller
+injects ``cancel.raise_if_cancelled(); return False``, which never returns
+True. Unified in issue #1931 — behaviour in production is unchanged, and the
+contract is now pinned by ``tests/test_batch_runner.py::TestCancellationContract``.
+
 Inferential machinery (added 2026-05-01 after methodology review):
 
 * **Per-ticker validity classification.** Each ticker gets a
@@ -283,9 +296,9 @@ def run_cross_sectional_study(
     on_log(f"Date range: {start_date} → {end_date}")
 
     for i, ticker in enumerate(tickers):
-        if cancel_check():
-            on_log(f"Cancelled before {ticker}")
-            break
+        # Raise-only: the return value is ignored, matching every other
+        # research runner. See the module docstring (issue #1931).
+        cancel_check()
 
         logger.info("[Batch] Processing ticker %d/%d: %s", i + 1, n, ticker)
 
@@ -315,10 +328,7 @@ def run_cross_sectional_study(
             result["data_points"] = len(iv_df)
             on_log(f"[{i + 1}/{n}] {ticker}: {len(iv_df)} IV days; fetching daily bars...")
 
-            if cancel_check():
-                on_log(f"Cancelled mid-{ticker}")
-                ticker_results.append(result)
-                break
+            cancel_check()
 
             stock_bars = polygon_client.fetch_aggregates(
                 ticker=ticker,

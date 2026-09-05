@@ -36,6 +36,7 @@ from app.research.batch_runner import (
     _compute_stage_info,
     _compute_weighted_aggregate_ic,
     _summarize_validity,
+    run_cross_sectional_study,
 )
 from app.research.validation.ic import _select_hac_lag
 
@@ -474,3 +475,52 @@ def test_weighted_aggregate_ic_carries_se_approximation_disclaimer():
     assert result.valid is True
     assert "approximation" in result.se_approximation_note.lower()
     assert "Lo (2002)" in result.se_approximation_note
+
+
+class TestCancellationContract:
+    """``cancel_check`` means one thing across every research runner: raise to
+    cancel, return value ignored. ``run_recency`` and the walk-forward runner
+    both document it and ``test_cancel_check_return_value_is_ignored`` pins it
+    there. This runner used to branch on the boolean instead, so the same
+    callback meant two different things depending on where it was passed
+    (issue #1931). Every production caller injects
+    ``raise_if_cancelled(); return False``, so the boolean branch was
+    unreachable — and untested.
+    """
+
+    @staticmethod
+    def _run(monkeypatch: pytest.MonkeyPatch, cancel_check):
+        def _boom(*args, **kwargs):
+            raise RuntimeError("ticker work reached")
+
+        monkeypatch.setattr("app.research.batch_runner.build_iv_history", _boom)
+        return run_cross_sectional_study(
+            feature_name="iv_rank",
+            tickers=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-02-01",
+            polygon_client=object(),  # never reached: build_iv_history raises first
+            cancel_check=cancel_check,
+        )
+
+    def test_returning_true_does_not_cancel_the_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        report = self._run(monkeypatch, lambda: True)
+
+        # The ticker was processed (and errored on the stubbed IV build) rather
+        # than the loop breaking before it. A runner that honoured the boolean
+        # would return zero ticker results here.
+        assert len(report.ticker_results) == 1
+        assert report.ticker_results[0]["validity"] == "error"
+
+    def test_raising_cancels_the_run_and_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Cancelled(Exception):
+            pass
+
+        def cancel_check() -> bool:
+            raise _Cancelled("cancelled")
+
+        # Raised at the top of the ticker loop, before any data work, so the
+        # exception reaches the caller uncaught — which is what lets jobs.py
+        # emit ``job.cancelled`` instead of ``job.completed``.
+        with pytest.raises(_Cancelled):
+            self._run(monkeypatch, cancel_check)
