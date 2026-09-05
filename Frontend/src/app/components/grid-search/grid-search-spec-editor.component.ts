@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
-import { etDayEndMs, etIsoDate, etMidnightMs } from '../../shared/date/et-midnight';
+import { etDayEndMs, etIsoDate, etMidnightMs, isoDateAfter, shiftIsoDateByMonths } from '../../shared/date/et-midnight';
 import { ParamRangeInputComponent } from '../../shared/param-range/param-range-input.component';
 import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange } from '../../shared/param-range/param-range';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
@@ -9,7 +9,7 @@ import type { ParamProperty, StrategyInfo } from '../strategy-lab/strategy-lab.m
 import { RANKING_MEASURES, type GridSearchSpecRequest, type RankingMeasure } from './grid-search.types';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const DEFAULT_WINDOW_DAYS = 2 * 365;
+const DEFAULT_WINDOW_MONTHS = 24;
 
 /** What the editor reports after every edit: the wire spec, or why one cannot be built yet. */
 export interface GridSpecEdit {
@@ -29,8 +29,14 @@ function selectValue(event: Event): string | null {
   return event.target instanceof HTMLSelectElement ? event.target.value : null;
 }
 
+/**
+ * Yesterday back to exactly 24 calendar months before the day after it, so the
+ * half-open range `[from, to + 1 day)` is a whole number of months — what
+ * Walk-Forward's fold planner requires of the default it opens with.
+ */
 function defaultWindow(now: number): { from: string; to: string } {
-  return { from: etIsoDate(now - DEFAULT_WINDOW_DAYS * MS_PER_DAY), to: etIsoDate(now - MS_PER_DAY) };
+  const to = etIsoDate(now - MS_PER_DAY);
+  return { from: shiftIsoDateByMonths(isoDateAfter(to), -DEFAULT_WINDOW_MONTHS), to };
 }
 
 /**
@@ -56,6 +62,8 @@ export class GridSearchSpecEditorComponent {
   readonly initial = input<GridSearchSpecRequest | null>(null);
   /** Debounce between an edit and its `specChanged`; tests set 0. */
   readonly debounceMs = input(300);
+  /** Fires synchronously on every edit, before the debounce: the host must drop what it preflighted. */
+  readonly edited = output();
   readonly specChanged = output<GridSpecEdit>();
 
   readonly symbol = signal('SPY');
@@ -208,6 +216,7 @@ export class GridSearchSpecEditorComponent {
   }
 
   private scheduleEmit(): void {
+    this.edited.emit();
     if (this.debounce !== null) clearTimeout(this.debounce);
     this.debounce = setTimeout(() => this.specChanged.emit(this.edit()), this.debounceMs());
   }

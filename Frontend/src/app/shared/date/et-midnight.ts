@@ -54,7 +54,16 @@ export function etIsoDate(ms: number): string {
   return wall.toISOString().slice(0, 10);
 }
 
-function isoDateAfter(isoDate: string): string {
+/** The calendar date after ``isoDate`` (``YYYY-MM-DD`` arithmetic, no zone involved). */
+export function isoDateAfter(isoDate: string): string {
   const [y, m, d] = isoDate.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d) + MS_PER_DAY).toISOString().slice(0, 10);
+}
+
+/** ``isoDate`` moved by whole calendar months, the day clamped to the target month's length (as the fold planner does). */
+export function shiftIsoDateByMonths(isoDate: string, months: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const first = new Date(Date.UTC(y, m - 1 + months, 1));
+  const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d, lastDay))).toISOString().slice(0, 10);
 }

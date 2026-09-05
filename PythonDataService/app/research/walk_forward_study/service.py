@@ -34,7 +34,7 @@ from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
 from app.research.persistence.fence import StaleAttemptError
 from app.research.sweep.grid import RunSpec
-from app.research.sweep.identity import resolve_code_identity
+from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.research.sweep.snapshot import DataSnapshot, DataSnapshotIncompleteError, capture_data_snapshot
 from app.research.walk_forward_study import repository as repo
 from app.research.walk_forward_study.folds import FoldPlan, FoldPlanError, plan_folds
@@ -150,6 +150,7 @@ class _StudyRun:
     job_id: str | None
     roots: list[Path]
     snapshot: DataSnapshot
+    identity: CodeIdentity
     combinations: int
     cell_executor: CellExecutorFactory
     cancel_check: Callable[[], object]
@@ -158,7 +159,7 @@ class _StudyRun:
 
 
 def _ensure_sweep(run: _StudyRun, fold: FoldRecord, phase: str, window: tuple[int, int], existing_id: str | None) -> SearchRow:
-    """Launch (or reuse) one owned sweep, bound to the study's frozen snapshot."""
+    """Launch (or reuse) one owned sweep, bound to the study's frozen snapshot and code identity."""
     if existing_id is not None:
         return sweeps.load_search(existing_id)[0]
     record = sweeps.prepare_launch(
@@ -167,6 +168,7 @@ def _ensure_sweep(run: _StudyRun, fold: FoldRecord, phase: str, window: tuple[in
         owner=SearchOwner(kind=OWNER_KIND, owner_id=run.study.id, fold_index=fold.fold_index, phase=phase),
         roots=run.roots,
         snapshot=run.snapshot,
+        identity=run.identity,
     )
     return run_sync(sweeps.create(record))
 
@@ -273,6 +275,7 @@ def execute(
         job_id=job_id,
         roots=list(roots) if roots is not None else lifecycle.roots_for(study),
         snapshot=DataSnapshot.from_dict(study.receipt["data_snapshot"]),
+        identity=CodeIdentity(**study.receipt["code_identity"]),
         combinations=int(study.receipt["walk_forward"]["combinations"]),
         cell_executor=cell_executor,
         cancel_check=cancel_check,

@@ -74,6 +74,11 @@ def snap_to_session(day: date) -> date:
     return sessions[0]
 
 
+def _inclusive(end_exclusive: date) -> str:
+    """A boundary as the form shows it: the last included calendar date, not the exclusive end."""
+    return (end_exclusive - timedelta(days=1)).isoformat()
+
+
 def plan_folds(*, start: date, end_exclusive: date, training_months: int, test_months: int) -> list[FoldPlan]:
     """Whole folds over ``[start, end_exclusive)``; refuses anything else, naming the nearest valid ends."""
     if training_months < 1 or test_months < 1:
@@ -83,8 +88,8 @@ def plan_folds(*, start: date, end_exclusive: date, training_months: int, test_m
         below = max((m for m in range(1, 600) if add_months(start, m) <= end_exclusive), default=None)
         nearest = tuple(add_months(start, m) for m in ((below, below + 1) if below else (1,)))
         raise FoldPlanError(
-            f"the range must be a whole number of months from {start.isoformat()}; nearest valid end dates: "
-            + ", ".join(day.isoformat() for day in nearest),
+            f"the range must be a whole number of months from {start.isoformat()}; nearest valid end dates (inclusive): "
+            + ", ".join(_inclusive(day) for day in nearest),
             nearest_valid_ends=nearest,
         )
     remaining = total - training_months
@@ -92,7 +97,7 @@ def plan_folds(*, start: date, end_exclusive: date, training_months: int, test_m
         needed = add_months(start, training_months + test_months)
         raise FoldPlanError(
             f"{total} months leave no room for a single fold after {training_months} months of training and "
-            f"{test_months} months of test; the earliest valid end date is {needed.isoformat()}",
+            f"{test_months} months of test; the earliest valid end date (inclusive) is {_inclusive(needed)}",
             nearest_valid_ends=(needed,),
         )
     folds_below = remaining // test_months
@@ -103,7 +108,7 @@ def plan_folds(*, start: date, end_exclusive: date, training_months: int, test_m
         )
         raise FoldPlanError(
             f"{total} months do not divide into whole folds of {test_months} months after {training_months} "
-            f"months of training; nearest valid end dates: {nearest[0].isoformat()}, {nearest[1].isoformat()}",
+            f"months of training; nearest valid end dates (inclusive): {_inclusive(nearest[0])}, {_inclusive(nearest[1])}",
             nearest_valid_ends=nearest,
         )
     plans: list[FoldPlan] = []

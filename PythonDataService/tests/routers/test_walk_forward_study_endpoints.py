@@ -101,7 +101,7 @@ async def test_a_range_that_does_not_make_whole_folds_is_refused_with_the_neares
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "FOLDS_INVALID"
-    assert "2025-03-01" in response.json()["detail"]["message"]
+    assert "2025-02-28" in response.json()["detail"]["message"]  # inclusive, as the form takes it
 
 
 async def test_month_lengths_are_validated_by_the_schema(client, lake) -> None:

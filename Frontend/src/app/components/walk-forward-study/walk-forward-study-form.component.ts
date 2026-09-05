@@ -67,9 +67,16 @@ export class WalkForwardStudyFormComponent {
     return grid === null ? null : { ...grid, training_months: this.trainingMonths(), test_months: this.testMonths() };
   }
 
+  /** An edit is in progress in the grid editor: the shown plan is stale until the debounced spec arrives. */
+  onGridEditing(): void {
+    this.invalidate(null);
+    this.checking.set(true);
+  }
+
   onGridEdit(edit: GridSpecEdit): void {
     this.gridSpec.set(edit.spec);
     this.invalidate(edit.problem);
+    this.checking.set(false);
     if (edit.spec !== null) void this.refreshPreflight();
   }
 

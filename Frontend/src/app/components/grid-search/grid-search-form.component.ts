@@ -46,11 +46,19 @@ export class GridSearchFormComponent {
   /** Generation of the latest edit; a preflight that returns for an older generation is ignored. */
   private generation = 0;
 
+  /** An edit is in progress: whatever was preflighted no longer describes the form, so Launch waits. */
+  onEditing(): void {
+    this.generation += 1;
+    this.preflight.set(null);
+    this.checking.set(true);
+  }
+
   onEdit(edit: GridSpecEdit): void {
     this.spec.set(edit.spec);
     this.generation += 1;
     this.preflight.set(null);
     this.preflightError.set(edit.problem);
+    this.checking.set(false);
     if (edit.spec !== null) void this.refreshPreflight(edit.spec);
   }
 

@@ -175,10 +175,19 @@ async def list_grid_search_cells(
     direction: Literal["asc", "desc"] = Query("desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
+    pin_leader: bool = Query(False, description="Put the leader's cell first whatever the sort (a study-owned sweep's evidence row)"),
 ) -> GridSearchCellPageResponse:
     row = await _load(search_id)
     try:
-        page_result = await with_connection(repo.list_cells, search_id, sort_by=sort_by, direction=direction, page=page, page_size=page_size)
+        page_result = await with_connection(
+            repo.list_cells,
+            search_id,
+            sort_by=sort_by,
+            direction=direction,
+            page=page,
+            page_size=page_size,
+            pin_params_hash=row.leader_params_hash if pin_leader else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return GridSearchCellPageResponse(

@@ -114,7 +114,8 @@ export class GridSearchResultComponent {
       if (revision !== this.revision) return;
       // The first page of a search sorts by its own ranking measure, so the leader is on it.
       if (this.page() === null) this.query.update((q) => ({ ...q, sort_by: detail.measure }));
-      const page = await this.service.cells(id, this.query());
+      // A study-owned sweep's evidence row is its winner; keep it on the first page whatever the sort says.
+      const page = await this.service.cells(id, { ...this.query(), pin_leader: this.readonly() });
       if (revision !== this.revision) return;
       this.detail.set(detail);
       this.page.set(page);

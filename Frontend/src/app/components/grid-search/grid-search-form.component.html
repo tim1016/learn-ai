@@ -5,7 +5,7 @@
     <p class="muted">Sweep one strategy's settings over one window. Every number a search produces is in-sample.</p>
   </header>
 
-  <app-grid-search-spec-editor [strategies]="strategies()" [debounceMs]="preflightDebounceMs()" (specChanged)="onEdit($event)" />
+  <app-grid-search-spec-editor [strategies]="strategies()" [debounceMs]="preflightDebounceMs()" (edited)="onEditing()" (specChanged)="onEdit($event)" />
 
   <footer class="form__footer">
     <div class="preflight" aria-live="polite">

@@ -298,14 +298,17 @@ def prepare_launch(
     search_id: str | None = None,
     backtests_per_combination: int = 1,
     snapshot: DataSnapshot | None = None,
+    identity: CodeIdentity | None = None,
 ) -> NewSearch:
     """Preflight and freeze the receipt — blocking disk and CPU work, no database.
 
     A FastAPI handler runs this off its loop and then awaits :func:`create`;
     a worker thread calls :func:`launch`, which does both. An owner that has
-    already frozen a wider ``snapshot`` (a walk-forward study) passes it in:
-    the sweep then binds its reads to that manifest instead of hashing its
-    own, so every fold provably ran on the study's bytes.
+    already frozen a wider ``snapshot`` (a walk-forward study) passes it in,
+    together with the ``identity`` it recorded: the sweep then binds its reads
+    to that manifest instead of hashing its own and carries the owner's code
+    identity, so every fold provably ran on the study's bytes under the
+    study's code.
     """
     pre = preflight(spec, roots=roots, backtests_per_combination=backtests_per_combination)
     if snapshot is None:
@@ -321,7 +324,8 @@ def prepare_launch(
             raise GridSearchRefusal(str(exc), code="DATA_MISSING") from exc
     else:
         _assert_snapshot_covers(snapshot, pre)
-    identity = resolve_code_identity()
+    if identity is None:
+        identity = resolve_code_identity()
     return NewSearch(
         id=search_id or uuid.uuid4().hex,
         strategy_key=spec.strategy_key,

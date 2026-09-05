@@ -52,7 +52,8 @@ def test_a_trailing_tail_is_refused_and_the_nearest_valid_ends_are_named() -> No
         plan_folds(start=date(2024, 1, 1), end_exclusive=date(2025, 12, 1), training_months=6, test_months=3)  # 23 months
 
     assert excinfo.value.nearest_valid_ends == (date(2025, 10, 1), date(2026, 1, 1))
-    assert "2025-10-01" in str(excinfo.value) and "2026-01-01" in str(excinfo.value)
+    # The message speaks the form's language: inclusive end dates, one day before each exclusive boundary.
+    assert "2025-09-30" in str(excinfo.value) and "2025-12-31" in str(excinfo.value)
 
 
 def test_a_range_that_is_not_whole_months_is_refused_naming_the_neighbours() -> None:

@@ -327,8 +327,14 @@ async def list_cells(
     direction: Literal["asc", "desc"] = "desc",
     page: int = 1,
     page_size: int = 50,
+    pin_params_hash: str | None = None,
 ) -> CellPage:
-    """Server-side sorted, paged cells. Nulls (failed / zero-trade measures) always sort last."""
+    """Server-side sorted, paged cells. Nulls (failed / zero-trade measures) always sort last.
+
+    ``pin_params_hash`` puts that one cell first whatever the sort — a
+    walk-forward test sweep's evidence row must be on the first page even when
+    its test-window rank is not.
+    """
     column = _CELL_SORT_SQL.get(sort_by)
     if column is None:
         raise ValueError(f"unknown sort column {sort_by!r}; allowed: {CELL_SORT_COLUMNS}")
@@ -342,12 +348,13 @@ async def list_cells(
         f"""
         SELECT {_CELL_COLUMNS} FROM research_grid_search_cells
          WHERE search_id = $1
-         ORDER BY {column} {order}, params_hash ASC
+         ORDER BY (params_hash = $4) DESC, {column} {order}, params_hash ASC
          LIMIT $2 OFFSET $3
         """,
         search_id,
         page_size,
         (page - 1) * page_size,
+        pin_params_hash,
     )
     return CellPage(total=int(total or 0), page=page, page_size=page_size, cells=[_row_to_cell(row) for row in rows])
 
