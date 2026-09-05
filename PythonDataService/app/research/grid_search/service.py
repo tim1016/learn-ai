@@ -569,6 +569,8 @@ def resume_refusal(
     """
     if row.status == "completed":
         return "the search is complete"
+    if row.status == "failed" and not row.incomplete:
+        return "every cell is recorded and failed; there is nothing to finish — launch a fresh search"
     if row.status in ("queued", "running") and live is not False:
         return "the search is still running"
     if uncommitted_changes(row):

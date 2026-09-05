@@ -91,6 +91,8 @@ export class GridSearchFormComponent {
   protected readonly canLaunch = computed(() => this.preflight() !== null && this.refusal() === null && !this.launching() && !this.checking());
 
   private debounce: ReturnType<typeof setTimeout> | null = null;
+  /** Generation of the latest edit; a preflight that returns for an older generation is ignored. */
+  private preflightGeneration = 0;
 
   constructor() {
     effect(() => {
@@ -208,19 +210,26 @@ export class GridSearchFormComponent {
 
   scheduleRefresh(): void {
     if (this.debounce !== null) clearTimeout(this.debounce);
+    // An edit invalidates whatever preflight is showing or in flight; Launch waits for the next answer.
+    this.preflightGeneration += 1;
+    this.preflight.set(null);
     this.debounce = setTimeout(() => void this.refreshPreflight(), this.preflightDebounceMs());
   }
 
   async refreshPreflight(): Promise<void> {
     const spec = this.safeSpec();
     if (spec === null) return;
+    const generation = ++this.preflightGeneration;
     this.checking.set(true);
+    this.preflight.set(null);
     try {
-      this.preflight.set(await this.service.preflight(spec));
+      const plan = await this.service.preflight(spec);
+      if (generation !== this.preflightGeneration) return;
+      this.preflight.set(plan);
       this.refusal.set(null);
       this.preflightError.set(null);
     } catch (error) {
-      this.preflight.set(null);
+      if (generation !== this.preflightGeneration) return;
       if (error instanceof GridSearchRefusedError) {
         this.refusal.set(error.refusal);
         this.preflightError.set(null);
@@ -229,7 +238,7 @@ export class GridSearchFormComponent {
         this.preflightError.set('The preflight could not be completed. Check the service and try again.');
       }
     } finally {
-      this.checking.set(false);
+      if (generation === this.preflightGeneration) this.checking.set(false);
     }
   }
 

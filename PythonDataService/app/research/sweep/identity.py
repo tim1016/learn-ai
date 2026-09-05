@@ -45,6 +45,7 @@ IDENTITY_SOURCE_PATHS: tuple[str, ...] = (
     "app/routers/engine.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
+    "app/utils/session_anchors.py",
 )
 ENVIRONMENT_FILES: tuple[str, ...] = ("requirements-heavy.txt", "requirements-light.txt")
 

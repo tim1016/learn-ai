@@ -17,6 +17,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as time_of_day
 from decimal import Decimal
@@ -94,7 +95,7 @@ from app.services.strategy_lean_source_service import (
     StrategyLeanSourceNotFoundError,
     resolve_strategy_lean_source,
 )
-from app.utils.session_anchors import et_midnight_ms
+from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
@@ -487,15 +488,17 @@ class EngineTradeResponse(BaseModel):
 class EngineEvaluationWindowResponse(BaseModel):
     """The interval table a primed run actually executed (PRD #1926 F11).
 
-    ``data_start`` is the first date the engine read; ``evaluation_start``
-    is where scoring began and execution state was reset; every figure on
-    the response describes ``[evaluation_start, evaluation_end]``. For an
-    ordinary run the two starts coincide and ``warmup_primed`` is false.
+    ``data_start_ms`` is the ET-midnight anchor of the first date the engine
+    read; ``evaluation_start_ms`` is where scoring began and execution state
+    was reset; ``evaluation_end_ms`` is the half-open end (ET midnight after
+    the last evaluated date). Every figure on the response describes
+    ``[evaluation_start_ms, evaluation_end_ms)``. For an ordinary run the two
+    starts coincide and ``warmup_primed`` is false. All ``int64 ms UTC``.
     """
 
-    data_start: str
-    evaluation_start: str
-    evaluation_end: str
+    data_start_ms: int
+    evaluation_start_ms: int
+    evaluation_end_ms: int
     warmup_primed: bool
 
 
@@ -679,32 +682,45 @@ def _resolved_run_configuration(
     if strategy.start_date is None or strategy.end_date is None:
         raise RuntimeError("initialized strategy did not resolve an execution date window")
     parameters = validated_params.model_dump(mode="json", exclude=registration.hidden_params)
-    window = _evaluation_window(request, strategy)
+    window = _evaluation_dates(request, strategy)
     return ResolvedRunConfiguration(
-        start_date=window.evaluation_start,
-        end_date=window.evaluation_end,
+        start_date=window.evaluation_start.isoformat(),
+        end_date=window.evaluation_end.isoformat(),
         resolution=request.resolution,
         parameters=parameters,
-        warmup_start_date=window.data_start if window.warmup_primed else None,
+        warmup_start_date=window.data_start.isoformat() if window.primed else None,
     )
 
 
-def _evaluation_window(request: EngineBacktestRequest, strategy: Strategy) -> EngineEvaluationWindowResponse:
+@dataclass(frozen=True)
+class _EvaluationDates:
+    """The interval table as inclusive ET trading dates, for the router's own arithmetic."""
+
+    data_start: date
+    evaluation_start: date
+    evaluation_end: date
+    primed: bool
+
+    def response(self) -> EngineEvaluationWindowResponse:
+        return EngineEvaluationWindowResponse(
+            data_start_ms=et_midnight_ms(self.data_start),
+            evaluation_start_ms=et_midnight_ms(self.evaluation_start),
+            evaluation_end_ms=et_day_end_ms(self.evaluation_end),
+            warmup_primed=self.primed,
+        )
+
+
+def _evaluation_dates(request: EngineBacktestRequest, strategy: Strategy) -> _EvaluationDates:
     """The interval table for an initialized strategy under ``request``."""
     if strategy.start_date is None or strategy.end_date is None:
         raise RuntimeError("initialized strategy did not resolve an execution date window")
-    data_start = strategy.start_date.date().isoformat()
+    data_start = strategy.start_date.date()
     primed = request.warmup_from_date is not None
     # ``_apply_overrides`` pointed the strategy at the warmup boundary, so the
     # evaluation start is the request's own ``from_date`` — validated to be
     # present and later than the warmup start whenever one was supplied.
-    evaluation_start = request.from_date if primed and request.from_date else data_start
-    return EngineEvaluationWindowResponse(
-        data_start=data_start,
-        evaluation_start=evaluation_start,
-        evaluation_end=strategy.end_date.date().isoformat(),
-        warmup_primed=primed,
-    )
+    evaluation_start = date.fromisoformat(request.from_date) if primed and request.from_date else data_start
+    return _EvaluationDates(data_start=data_start, evaluation_start=evaluation_start, evaluation_end=strategy.end_date.date(), primed=primed)
 
 
 def _evaluation_start_ms(request: EngineBacktestRequest) -> int | None:
@@ -1399,9 +1415,9 @@ def execute_engine_backtest(
     # Approximate calendar span (in trading days) for annualized metrics,
     # over the evaluation window — a primed run's warmup days are read but
     # never scored, so they must not dilute the annualization either.
-    evaluation_window = _evaluation_window(request, strategy)
+    evaluation_window = _evaluation_dates(request, strategy)
     trading_days: int | None = None
-    delta = (date.fromisoformat(evaluation_window.evaluation_end) - date.fromisoformat(evaluation_window.evaluation_start)).days
+    delta = (evaluation_window.evaluation_end - evaluation_window.evaluation_start).days
     if delta > 0:
         # Rough: 252 trading days per 365 calendar days.
         trading_days = max(1, round(delta * 252 / 365))
@@ -1579,7 +1595,7 @@ def execute_engine_backtest(
         run_verdict=run_verdict,
         validation_analytics=validation_analytics,
         lake_data_availability_hash=lake_manifest,
-        evaluation_window=evaluation_window,
+        evaluation_window=evaluation_window.response(),
     )
 
     # ── Auto-save to .NET backend (synchronous so we can return the id) ──

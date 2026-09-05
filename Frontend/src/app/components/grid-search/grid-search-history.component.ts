@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, output, si
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
 
+import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
@@ -17,7 +18,7 @@ const STATUSES: readonly GridSearchStatus[] = ['queued', 'running', 'completed',
  */
 @Component({
   selector: 'app-grid-search-history',
-  imports: [ButtonModule, InputText, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, ButtonModule, InputText, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './grid-search-history.component.html',
   styleUrl: './grid-search-history.component.scss',

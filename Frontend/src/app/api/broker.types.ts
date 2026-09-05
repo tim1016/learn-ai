@@ -10030,18 +10030,20 @@ export interface components {
          * EngineEvaluationWindowResponse
          * @description The interval table a primed run actually executed (PRD #1926 F11).
          *
-         *     ``data_start`` is the first date the engine read; ``evaluation_start``
-         *     is where scoring began and execution state was reset; every figure on
-         *     the response describes ``[evaluation_start, evaluation_end]``. For an
-         *     ordinary run the two starts coincide and ``warmup_primed`` is false.
+         *     ``data_start_ms`` is the ET-midnight anchor of the first date the engine
+         *     read; ``evaluation_start_ms`` is where scoring began and execution state
+         *     was reset; ``evaluation_end_ms`` is the half-open end (ET midnight after
+         *     the last evaluated date). Every figure on the response describes
+         *     ``[evaluation_start_ms, evaluation_end_ms)``. For an ordinary run the two
+         *     starts coincide and ``warmup_primed`` is false. All ``int64 ms UTC``.
          */
         EngineEvaluationWindowResponse: {
-            /** Data Start */
-            data_start: string;
-            /** Evaluation End */
-            evaluation_end: string;
-            /** Evaluation Start */
-            evaluation_start: string;
+            /** Data Start Ms */
+            data_start_ms: number;
+            /** Evaluation End Ms */
+            evaluation_end_ms: number;
+            /** Evaluation Start Ms */
+            evaluation_start_ms: number;
             /** Warmup Primed */
             warmup_primed: boolean;
         };
@@ -11386,8 +11388,9 @@ export interface components {
             /**
              * Fillmode
              * @default signal_bar_close
+             * @enum {string}
              */
-            fillMode?: string;
+            fillMode?: "signal_bar_close" | "next_bar_open";
             /**
              * Initialcash
              * @default 100000
@@ -11469,8 +11472,9 @@ export interface components {
             /**
              * Fillmode
              * @default signal_bar_close
+             * @enum {string}
              */
-            fillMode?: string;
+            fillMode?: "signal_bar_close" | "next_bar_open";
             /**
              * Initialcash
              * @default 100000

@@ -103,6 +103,9 @@ def _row_to_cell(row: asyncpg.Record) -> CellRow:
     )
 
 
+# The ORDER BY column is always one of these literals, never the caller's string.
+_CELL_SORT_SQL: dict[str, str] = {name: name for name in CELL_SORT_COLUMNS}
+
 _SEARCH_COLUMNS = """
     id, owner_kind, owner_id, fold_index, phase, strategy_key, symbol, status, attempt, job_id,
     created_at_ms, updated_at_ms, finished_at_ms, request_json::text AS request_json,
@@ -155,7 +158,7 @@ async def list_searches(
     owner_id: str | None = None,
     strategy_key: str | None = None,
     symbol: str | None = None,
-    status: str | None = None,
+    statuses: Sequence[str] | None = None,
     job_id: str | None = None,
     limit: int = 200,
 ) -> list[SearchRow]:
@@ -167,7 +170,7 @@ async def list_searches(
           AND ($2::text IS NULL OR owner_id = $2)
           AND ($3::text IS NULL OR strategy_key = $3)
           AND ($4::text IS NULL OR symbol = $4)
-          AND ($5::text IS NULL OR status = $5)
+          AND ($5::text[] IS NULL OR status = ANY($5::text[]))
           AND ($6::text IS NULL OR job_id = $6)
         ORDER BY created_at_ms DESC, id DESC
         LIMIT $7
@@ -176,7 +179,7 @@ async def list_searches(
         owner_id,
         strategy_key,
         symbol,
-        status,
+        list(statuses) if statuses is not None else None,
         job_id,
         limit,
     )
@@ -340,7 +343,8 @@ async def list_cells(
     page_size: int = 50,
 ) -> CellPage:
     """Server-side sorted, paged cells. Nulls (failed / zero-trade measures) always sort last."""
-    if sort_by not in CELL_SORT_COLUMNS:
+    column = _CELL_SORT_SQL.get(sort_by)
+    if column is None:
         raise ValueError(f"unknown sort column {sort_by!r}; allowed: {CELL_SORT_COLUMNS}")
     if direction not in ("asc", "desc"):
         raise ValueError("direction must be 'asc' or 'desc'")
@@ -352,7 +356,7 @@ async def list_cells(
         f"""
         SELECT {_CELL_COLUMNS} FROM research_grid_search_cells
          WHERE search_id = $1
-         ORDER BY {sort_by} {order}, params_hash ASC
+         ORDER BY {column} {order}, params_hash ASC
          LIMIT $2 OFFSET $3
         """,
         search_id,

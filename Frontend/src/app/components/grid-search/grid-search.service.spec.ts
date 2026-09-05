@@ -1,4 +1,4 @@
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,6 +48,14 @@ describe('GridSearchService', () => {
     req.flush({ strategy_key: 'sma_crossover', symbol: 'SPY', combinations: 2, total_backtests: 2, backtest_limit: 5000, estimated_seconds: 4, expected_sessions: 250, run_up: {} });
 
     await expect(pending).resolves.toMatchObject({ combinations: 2 });
+  });
+
+  it('decodes a refusal the .NET jobs boundary forwarded as a ProblemDetails detail string', async () => {
+    startJob.mockRejectedValueOnce(
+      new HttpErrorResponse({ status: 400, error: { detail: JSON.stringify({ detail: { code: 'WORKLOAD_LIMIT', message: '6000 backtests exceed the limit of 5000' } }) } }),
+    );
+
+    await expect(service.launch(SPEC)).rejects.toMatchObject({ refusal: { code: 'WORKLOAD_LIMIT' } });
   });
 
   it('turns a 400 with a code into a GridSearchRefusedError', async () => {

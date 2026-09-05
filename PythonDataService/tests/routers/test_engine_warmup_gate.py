@@ -19,6 +19,7 @@ from app.config import settings
 from app.data_lake.path_policy import lake_subpath
 from app.routers import engine as engine_router
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
+from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
 from tests._helpers.lean_store import seed_store_day
 
 _ET = ZoneInfo("America/New_York")
@@ -100,9 +101,9 @@ def test_an_unprimed_run_reports_one_window_and_saves_its_study(seeded_lake, rec
     assert response.success, response.error
     assert response.evaluation_window is not None
     assert response.evaluation_window.model_dump() == {
-        "data_start": DAYS[1].isoformat(),
-        "evaluation_start": DAYS[1].isoformat(),
-        "evaluation_end": DAYS[3].isoformat(),
+        "data_start_ms": et_midnight_ms(DAYS[1]),
+        "evaluation_start_ms": et_midnight_ms(DAYS[1]),
+        "evaluation_end_ms": et_day_end_ms(DAYS[3]),
         "warmup_primed": False,
     }
     assert response.study_id == 42
@@ -118,8 +119,8 @@ def test_a_primed_run_scopes_every_reported_figure_to_the_evaluation_window(seed
     boundary = _ny_midnight_ms(DAYS[1])
     assert primed.evaluation_window is not None
     assert primed.evaluation_window.warmup_primed is True
-    assert primed.evaluation_window.data_start == DAYS[0].isoformat()
-    assert primed.evaluation_window.evaluation_start == DAYS[1].isoformat()
+    assert primed.evaluation_window.data_start_ms == et_midnight_ms(DAYS[0])
+    assert primed.evaluation_window.evaluation_start_ms == boundary
     # Nothing from the warmup day reaches the record.
     assert all(trade.entry_time >= boundary for trade in primed.trades)
     assert all(point["timestamp"] >= boundary for point in primed.equity_curve)

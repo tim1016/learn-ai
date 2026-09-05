@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
 import { JobsService } from '../../services/jobs.service';
+import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
@@ -36,7 +37,7 @@ const COLUMN_LABELS: Readonly<Record<CellSortColumn, string>> = {
  */
 @Component({
   selector: 'app-grid-search-result',
-  imports: [ButtonModule, DecimalPipe, KeyValuePipe, PercentPipe, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, KeyValuePipe, PercentPipe, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './grid-search-result.component.html',
   styleUrl: './grid-search-result.component.scss',
@@ -85,22 +86,32 @@ export class GridSearchResultComponent {
   });
 
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Set by Finish: keep polling until the row shows the new attempt running (the worker's claim races the 202). */
+  private awaitingAttempt = false;
 
   constructor() {
     effect(() => {
       const id = this.searchId();
-      untracked(() => void this.reload(id));
+      untracked(() => {
+        this.page.set(null);
+        void this.reload(id);
+      });
     });
     this.destroyRef.onDestroy(() => this.stopPolling());
   }
 
   async reload(id: string = this.searchId()): Promise<void> {
     try {
-      const [detail, page] = await Promise.all([this.service.get(id), this.service.cells(id, this.query())]);
+      const detail = await this.service.get(id);
+      if (id !== this.searchId()) return;
+      // The first page of a search sorts by its own ranking measure, so the leader is on it.
+      if (this.page() === null) this.query.update((q) => ({ ...q, sort_by: detail.measure }));
+      const page = await this.service.cells(id, this.query());
       if (id !== this.searchId()) return;
       this.detail.set(detail);
       this.page.set(page);
       this.error.set(null);
+      if (!isTerminal(detail.status)) this.awaitingAttempt = false;
       this.schedulePoll();
     } catch {
       this.error.set('This search could not be loaded.');
@@ -125,6 +136,7 @@ export class GridSearchResultComponent {
     this.busy.set(true);
     try {
       await this.service.finish(detail);
+      this.awaitingAttempt = true;
       await this.reload();
     } catch {
       this.error.set('Finish was not accepted. Reload and check the refusal reason.');
@@ -172,7 +184,7 @@ export class GridSearchResultComponent {
 
   private schedulePoll(): void {
     this.stopPolling();
-    if (!this.running() || this.pollMs() <= 0) return;
+    if ((!this.running() && !this.awaitingAttempt) || this.pollMs() <= 0) return;
     this.timer = setTimeout(() => void this.reload(), this.pollMs());
   }
 

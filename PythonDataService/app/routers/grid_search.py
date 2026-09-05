@@ -47,6 +47,10 @@ jobs_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 CANCEL_ACK_TIMEOUT_SECONDS = 30.0
+STORED_LIVE_STATUSES: tuple[str, ...] = ("queued", "running")
+LIVE_DERIVED_STATUSES: frozenset[str] = frozenset({"queued", "running", "interrupted"})
+# Live rows are few (a handful of concurrent searches); scan them all before presenting.
+LIVE_SCAN_LIMIT = 1000
 
 
 def range_from_request(spec: ValueListRangeRequest | LowHighStepRangeRequest) -> ParamRange:
@@ -153,18 +157,22 @@ async def list_grid_searches(
     limit: int = Query(200, ge=1, le=1000),
 ) -> list[GridSearchSummaryResponse]:
     """History: user-launched searches only, newest first. Walk-forward-owned sweeps never appear."""
+    # ``interrupted`` is never stored: it is a queued/running row whose job is gone. So a
+    # filter on any of the three live-derived statuses reads the stored live rows, presents
+    # them, and only then filters and cuts to the limit.
+    live_derived = status_filter in LIVE_DERIVED_STATUSES
     async with connection() as conn:
         rows = await repo.list_searches(
             conn,
             strategy_key=strategy_key,
             symbol=symbol.strip().upper() if symbol else None,
-            status=None if status_filter in (None, "interrupted") else status_filter,
+            statuses=None if status_filter is None else (STORED_LIVE_STATUSES if live_derived else (status_filter,)),
             job_id=job_id,
-            limit=limit,
+            limit=LIVE_SCAN_LIMIT if live_derived else limit,
         )
     summaries = [GridSearchSummaryResponse(**_summary(row, live=_live(row))) for row in rows]
-    if status_filter == "interrupted":
-        return [summary for summary in summaries if summary.status == "interrupted"]
+    if live_derived:
+        return [summary for summary in summaries if summary.status == status_filter][:limit]
     return summaries
 
 
@@ -228,7 +236,13 @@ async def delete_grid_search(search_id: str) -> Response:
         row = await repo.get_search(conn, search_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"grid search {search_id} not found")
-    if row.job_id and _live(row):
+    live = _live(row)
+    if live is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="whether the search is still running cannot be established (job store unreachable); try again shortly",
+        )
+    if row.job_id and live:
         service.request_cancel(row.job_id)
         deadline = asyncio.get_running_loop().time() + CANCEL_ACK_TIMEOUT_SECONDS
         while asyncio.get_running_loop().time() < deadline:

@@ -12,10 +12,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from app.research.sweep.ranking import RankingMeasure
+
+SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,11}$"
+FillModeName = Literal["signal_bar_close", "next_bar_open"]
 
 
 class _CamelTolerantModel(BaseModel):
@@ -43,17 +46,24 @@ class GridSearchSpecRequest(_CamelTolerantModel):
     """What the researcher asks for — the same body for preflight and launch."""
 
     strategy_key: str = Field(min_length=1)
-    symbol: str = Field(min_length=1, max_length=20)
+    # Upper-cased before the pattern runs; a letter first and no separators keeps the
+    # symbol a single lake path component (no ``/``, no ``..``).
+    symbol: str = Field(pattern=SYMBOL_PATTERN)
     param_ranges: dict[str, ParamRangeRequest] = Field(default_factory=dict)
     start_ms: int = Field(ge=0, description="Half-open window start, int64 ms UTC")
     end_ms: int = Field(ge=0, description="Half-open window end, int64 ms UTC")
     resolution: Literal["minute", "daily"] = "minute"
-    fill_mode: str = "signal_bar_close"
+    fill_mode: FillModeName = "signal_bar_close"
     commission_per_order: float = Field(1.0, ge=0)
     slippage_per_share: float = Field(0.0, ge=0)
     initial_cash: float = Field(100_000.0, gt=0)
     measure: RankingMeasure = "sharpe_ratio"
     min_trades: int = Field(5, ge=1)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def _normalize_symbol(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _window_is_ordered(self) -> GridSearchSpecRequest:

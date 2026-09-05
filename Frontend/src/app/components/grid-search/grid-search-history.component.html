@@ -39,7 +39,7 @@
             <tr>
               <td><app-timestamp-display [value]="row.created_at_ms" mode="local" /></td>
               <td>{{ displayName(row.strategy_key) ?? (row.strategy_key | receiptLabel) }}</td>
-              <td>{{ row.symbol }}</td>
+              <td><app-asset-identity [symbol]="row.symbol" size="sm" /></td>
               <td><app-timestamp-display [value]="row.window_start_ms" mode="date-et" /> → <app-timestamp-display [value]="row.window_end_ms - 1" mode="date-et" /></td>
               <td class="num">{{ row.completed_cells + row.failed_cells }} / {{ row.expected_cells }}</td>
               <td>

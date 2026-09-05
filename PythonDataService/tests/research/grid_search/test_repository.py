@@ -238,5 +238,5 @@ async def test_history_filters_narrow_by_strategy_symbol_status_and_job(conn: as
     await _finish(conn, f"b-{unique}", attempt)
 
     assert [row.id for row in await repo.list_searches(conn, symbol=unique, strategy_key="rsi_mean_reversion")] == [f"b-{unique}"]
-    assert [row.id for row in await repo.list_searches(conn, symbol=unique, status="completed")] == [f"b-{unique}"]
+    assert [row.id for row in await repo.list_searches(conn, symbol=unique, statuses=("completed",))] == [f"b-{unique}"]
     assert [row.id for row in await repo.list_searches(conn, job_id=f"job-a-{unique}")] == [f"a-{unique}"]

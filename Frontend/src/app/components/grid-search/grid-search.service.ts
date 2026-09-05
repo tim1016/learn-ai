@@ -23,13 +23,26 @@ export class GridSearchRefusedError extends Error {
   }
 }
 
-function toRefusal(error: unknown): GridSearchRefusedError | null {
+function isRefusal(value: unknown): value is GridSearchRefusal {
+  return typeof value === 'object' && value !== null && typeof (value as GridSearchRefusal).code === 'string' && typeof (value as GridSearchRefusal).message === 'string';
+}
+
+/**
+ * Translates a 400 with a `{code, message}` detail into a typed refusal; anything else stays as it was.
+ * A direct FastAPI call carries the object; the .NET jobs boundary forwards Python's JSON body as the
+ * `detail` string of a ProblemDetails, so that shape is parsed too.
+ */
+export function toRefusal(error: unknown): GridSearchRefusedError | null {
   if (!(error instanceof HttpErrorResponse) || error.status !== 400) return null;
-  const detail: unknown = error.error?.detail;
-  if (detail && typeof detail === 'object' && 'code' in detail && 'message' in detail) {
-    return new GridSearchRefusedError(detail as GridSearchRefusal);
+  let detail: unknown = error.error?.detail;
+  if (typeof detail === 'string') {
+    try {
+      detail = (JSON.parse(detail) as { detail?: unknown }).detail;
+    } catch {
+      return null;
+    }
   }
-  return null;
+  return isRefusal(detail) ? new GridSearchRefusedError(detail) : null;
 }
 
 /**

@@ -11963,19 +11963,19 @@
         "type": "object"
       },
       "EngineEvaluationWindowResponse": {
-        "description": "The interval table a primed run actually executed (PRD #1926 F11).\n\n``data_start`` is the first date the engine read; ``evaluation_start``\nis where scoring began and execution state was reset; every figure on\nthe response describes ``[evaluation_start, evaluation_end]``. For an\nordinary run the two starts coincide and ``warmup_primed`` is false.",
+        "description": "The interval table a primed run actually executed (PRD #1926 F11).\n\n``data_start_ms`` is the ET-midnight anchor of the first date the engine\nread; ``evaluation_start_ms`` is where scoring began and execution state\nwas reset; ``evaluation_end_ms`` is the half-open end (ET midnight after\nthe last evaluated date). Every figure on the response describes\n``[evaluation_start_ms, evaluation_end_ms)``. For an ordinary run the two\nstarts coincide and ``warmup_primed`` is false. All ``int64 ms UTC``.",
         "properties": {
-          "data_start": {
-            "title": "Data Start",
-            "type": "string"
+          "data_start_ms": {
+            "title": "Data Start Ms",
+            "type": "integer"
           },
-          "evaluation_end": {
-            "title": "Evaluation End",
-            "type": "string"
+          "evaluation_end_ms": {
+            "title": "Evaluation End Ms",
+            "type": "integer"
           },
-          "evaluation_start": {
-            "title": "Evaluation Start",
-            "type": "string"
+          "evaluation_start_ms": {
+            "title": "Evaluation Start Ms",
+            "type": "integer"
           },
           "warmup_primed": {
             "title": "Warmup Primed",
@@ -11983,9 +11983,9 @@
           }
         },
         "required": [
-          "data_start",
-          "evaluation_start",
-          "evaluation_end",
+          "data_start_ms",
+          "evaluation_start_ms",
+          "evaluation_end_ms",
           "warmup_primed"
         ],
         "title": "EngineEvaluationWindowResponse",
@@ -15178,6 +15178,10 @@
           },
           "fillMode": {
             "default": "signal_bar_close",
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open"
+            ],
             "title": "Fillmode",
             "type": "string"
           },
@@ -15267,8 +15271,7 @@
             "type": "string"
           },
           "symbol": {
-            "maxLength": 20,
-            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9.\\-]{0,11}$",
             "title": "Symbol",
             "type": "string"
           }
@@ -15348,6 +15351,10 @@
           },
           "fillMode": {
             "default": "signal_bar_close",
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open"
+            ],
             "title": "Fillmode",
             "type": "string"
           },
@@ -15421,8 +15428,7 @@
             "type": "string"
           },
           "symbol": {
-            "maxLength": 20,
-            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9.\\-]{0,11}$",
             "title": "Symbol",
             "type": "string"
           }

@@ -32,6 +32,7 @@ from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReade
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.runs.hashing import hash_payload
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 CALENDAR_IDENTITY = "NYSE"
 # The package version is part of the snapshot because it decides which sessions
@@ -72,12 +73,13 @@ class DataSnapshot:
         return hash_payload(self.as_dict())
 
     def as_dict(self) -> dict[str, Any]:
+        """Receipt / wire form: every date is its ET-midnight ``int64 ms UTC`` anchor (temporal-rigor.md)."""
         return {
             "symbol": self.symbol,
             "resolution": self.resolution,
-            "data_start": self.data_start.isoformat(),
-            "data_end": self.data_end.isoformat(),
-            "sessions": [day.isoformat() for day in self.sessions],
+            "data_start_ms": et_midnight_ms(self.data_start),
+            "data_end_ms": et_midnight_ms(self.data_end),
+            "sessions_ms": [et_midnight_ms(day) for day in self.sessions],
             "artifacts": dict(sorted(self.artifacts.items())),
             "calendar_identity": self.calendar_identity,
             "calendar_version": self.calendar_version,
@@ -88,9 +90,9 @@ class DataSnapshot:
         return cls(
             symbol=str(payload["symbol"]),
             resolution=payload["resolution"],
-            data_start=date.fromisoformat(payload["data_start"]),
-            data_end=date.fromisoformat(payload["data_end"]),
-            sessions=tuple(date.fromisoformat(day) for day in payload["sessions"]),
+            data_start=et_date_at_ms(int(payload["data_start_ms"])),
+            data_end=et_date_at_ms(int(payload["data_end_ms"])),
+            sessions=tuple(et_date_at_ms(int(ms)) for ms in payload["sessions_ms"]),
             artifacts=dict(payload["artifacts"]),
             calendar_identity=str(payload["calendar_identity"]),
             calendar_version=str(payload["calendar_version"]),
