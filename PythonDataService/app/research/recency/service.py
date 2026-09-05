@@ -19,7 +19,14 @@ from app.research.recency import repository as repo
 from app.research.recency.runner import RecencyLaunchConfig, RecencyRunSnapshot, run_recency
 from app.research.recency.stats import ms_to_et_date_string
 from app.research.recency.validation import RecencyRequestInvalidError, validate_recency_request
-from app.research.sweep.grid import RecencyGridTooLargeError, RunSpec, StrategyGridConfig, expand_grid, grid_size
+from app.research.sweep.grid import (
+    RecencyGridTooLargeError,
+    RunSpec,
+    StrategyGridConfig,
+    ValueListRange,
+    expand_grid,
+    grid_size,
+)
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from app.services.data_plane_health import resolved_code_revision
 
@@ -54,6 +61,12 @@ def validate_launch(
         raise RecencyLaunchRejected(str(exc)) from exc
     except ValueError as exc:
         raise RecencyLaunchRejected(f"invalid parameter range: {exc}") from exc
+    # A repeated value in a list is a malformed request: it would schedule two identical cells and the
+    # second would read as a redelivery. (A low/high/step range cannot repeat; no expansion is needed.)
+    for strategy in strategies:
+        for name, spec in strategy.param_ranges.items():
+            if isinstance(spec, ValueListRange) and len(set(spec.values)) != len(spec.values):
+                raise RecencyLaunchRejected(f"{strategy.strategy_key}.{name} repeats a value; each parameter value may appear once")
     try:
         validate_recency_request(strategies=strategies, symbols=symbols, window_start_ms=window_start_ms, window_end_ms=window_end_ms, data_policy=data_policy)
     except RecencyRequestInvalidError as exc:

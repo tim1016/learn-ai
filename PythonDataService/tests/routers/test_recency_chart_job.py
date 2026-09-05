@@ -76,6 +76,24 @@ async def test_rejects_an_inverted_low_high_range() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejects_a_repeated_parameter_value_instead_of_scheduling_a_duplicate_cell() -> None:
+    """``2, 2`` is a malformed request: two identical cells would run and the second would read as a redelivery."""
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/jobs-internal/recency-chart",
+            json={
+                "jobId": "job-dup",
+                "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0, 2.0]}}}],
+                "symbols": ["SPY"],
+                "windowStartMs": 0,
+                "windowEndMs": 1,
+            },
+        )
+    assert response.status_code == 400
+    assert "repeats a value" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_rejects_empty_symbols() -> None:
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(

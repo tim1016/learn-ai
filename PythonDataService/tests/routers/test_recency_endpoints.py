@@ -57,6 +57,8 @@ async def test_trades_and_hero_read_back_as_json_numbers_and_the_hero_honours_en
 
         inverted = await c.get("/api/research/recency/hero", params={"from_ms": 10, "to_ms": 5})
         assert inverted.status_code == 400
+        oversized = await c.get("/api/research/recency/trades", params={"from_ms": 0, "to_ms": 2**63})
+        assert oversized.status_code == 422  # beyond int64: refused at the edge, not an asyncpg error inside the read
 
 
 async def test_soft_delete_and_restore_verbs_replace_the_graphql_mutations(client) -> None:

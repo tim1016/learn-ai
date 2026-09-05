@@ -14804,6 +14804,7 @@
           },
           "endMs": {
             "description": "Half-open window end, int64 ms UTC",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Endms",
             "type": "integer"
@@ -14893,6 +14894,7 @@
           },
           "startMs": {
             "description": "Half-open window start, int64 ms UTC",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Startms",
             "type": "integer"
@@ -14977,6 +14979,7 @@
           },
           "endMs": {
             "description": "Half-open window end, int64 ms UTC",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Endms",
             "type": "integer"
@@ -15050,6 +15053,7 @@
           },
           "startMs": {
             "description": "Half-open window start, int64 ms UTC",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Startms",
             "type": "integer"
@@ -36831,6 +36835,7 @@
           },
           "endMs": {
             "description": "Half-open window end, int64 ms UTC",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Endms",
             "type": "integer"
@@ -36920,6 +36925,7 @@
           },
           "startMs": {
             "description": "Half-open window start, int64 ms UTC",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Startms",
             "type": "integer"
@@ -37031,6 +37037,7 @@
           },
           "endMs": {
             "description": "Half-open window end, int64 ms UTC",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Endms",
             "type": "integer"
@@ -37104,6 +37111,7 @@
           },
           "startMs": {
             "description": "Half-open window start, int64 ms UTC",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Startms",
             "type": "integer"
@@ -49381,6 +49389,7 @@
             "name": "from_ms",
             "required": true,
             "schema": {
+              "maximum": 9223372036854775807,
               "minimum": 0,
               "title": "From Ms",
               "type": "integer"
@@ -49391,6 +49400,7 @@
             "name": "to_ms",
             "required": true,
             "schema": {
+              "maximum": 9223372036854775807,
               "minimum": 0,
               "title": "To Ms",
               "type": "integer"
@@ -49641,6 +49651,7 @@
             "name": "from_ms",
             "required": true,
             "schema": {
+              "maximum": 9223372036854775807,
               "minimum": 0,
               "title": "From Ms",
               "type": "integer"
@@ -49651,6 +49662,7 @@
             "name": "to_ms",
             "required": true,
             "schema": {
+              "maximum": 9223372036854775807,
               "minimum": 0,
               "title": "To Ms",
               "type": "integer"
