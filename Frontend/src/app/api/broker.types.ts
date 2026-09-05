@@ -2877,7 +2877,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jobs-internal/spy-ema-exhaustive": {
+    "/api/jobs-internal/walk-forward-study": {
         parameters: {
             query?: never;
             header?: never;
@@ -2887,30 +2887,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start Spy Ema Exhaustive Job
-         * @description Run the frozen full-data plus fixed-gap stability protocol.
+         * Start Walk Forward Study Job
+         * @description Launch (or Finish) a study on a worker thread. Returns 202 once the record is durable.
          */
-        post: operations["start_spy_ema_exhaustive_job_api_jobs_internal_spy_ema_exhaustive_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs-internal/spy-ema-walk-forward": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Spy Ema Walk Forward Job
-         * @description Run the immutable SPY EMA V1 protocol behind the jobs boundary.
-         */
-        post: operations["start_spy_ema_walk_forward_job_api_jobs_internal_spy_ema_walk_forward_post"];
+        post: operations["start_walk_forward_study_job_api_jobs_internal_walk_forward_study_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3579,46 +3559,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/exhaustive-runs/by-walk-forward/{walk_forward_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Latest Exhaustive Run For Walk Forward
-         * @description Load the newest Exhaustive Run derived from one walk-forward receipt.
-         */
-        get: operations["get_latest_exhaustive_run_for_walk_forward_api_research_exhaustive_runs_by_walk_forward__walk_forward_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/exhaustive-runs/{exhaustive_run_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Exhaustive Run
-         * @description Load one Exhaustive Run by its immutable artifact id.
-         */
-        get: operations["get_exhaustive_run_api_research_exhaustive_runs__exhaustive_run_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/features": {
         parameters: {
             query?: never;
@@ -4110,6 +4050,64 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/walk-forward-studies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Walk Forward Studies */
+        get: operations["list_walk_forward_studies_api_research_walk_forward_studies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/walk-forward-studies/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preflight Walk Forward Study
+         * @description Validate the folds and the grid, size the workload, and plan the run-up without launching.
+         */
+        post: operations["preflight_walk_forward_study_api_research_walk_forward_studies_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/walk-forward-studies/{study_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Walk Forward Study */
+        get: operations["get_walk_forward_study_api_research_walk_forward_studies__study_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Walk Forward Study
+         * @description Cancel a running study first and wait for the worker's acknowledgement, then remove it and its sweeps.
+         */
+        delete: operations["delete_walk_forward_study_api_research_walk_forward_studies__study_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -7178,57 +7176,6 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
-         * CandidateFoldEvidence
-         * @description One fixed-gap forward fold plus its matching training evidence.
-         */
-        CandidateFoldEvidence: {
-            /** Failure Reason */
-            failure_reason?: string | null;
-            /** Fold Index */
-            fold_index: number;
-            /** Retention */
-            retention?: number | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "completed" | "failed";
-            /** Test End Ms */
-            test_end_ms: number;
-            test_metrics: components["schemas"]["RunMetrics"];
-            /** Test Run Id */
-            test_run_id: string | null;
-            /** Test Start Ms */
-            test_start_ms: number;
-            /** Train End Ms */
-            train_end_ms: number;
-            train_metrics: components["schemas"]["RunMetrics"];
-            /** Train Run Id */
-            train_run_id: string;
-            /** Train Start Ms */
-            train_start_ms: number;
-        };
-        /**
-         * CandidateForwardStability
-         * @description Fixed-gap evidence across every canonical forward test fold.
-         */
-        CandidateForwardStability: {
-            /** Alpha Decay */
-            alpha_decay?: number | null;
-            /** Folds */
-            folds: components["schemas"]["CandidateFoldEvidence"][];
-            /** Mean Fold Retention */
-            mean_fold_retention?: number | null;
-            /** Mean Oos Sharpe */
-            mean_oos_sharpe?: number | null;
-            /** Median Oos Sharpe */
-            median_oos_sharpe?: number | null;
-            /** Pct Profitable Folds */
-            pct_profitable_folds?: number | null;
-            /** Walk Forward Id */
-            walk_forward_id: string;
-        };
-        /**
          * ChannelHealth
          * @description One submission-affecting stream's health fact, with its age (P7).
          *
@@ -10289,133 +10236,6 @@ export interface components {
              */
             reason: "weekend" | "holiday";
         };
-        /**
-         * ExhaustiveCandidateResult
-         * @description Full-data and forward-stability evidence for one unique specification.
-         */
-        ExhaustiveCandidateResult: {
-            /** Appearance Count */
-            appearance_count: number;
-            /** Appearance Fold Indices */
-            appearance_fold_indices: number[];
-            /** Best Fold Rank */
-            best_fold_rank: number;
-            /** Failure Reason */
-            failure_reason?: string | null;
-            forward_stability?: components["schemas"]["CandidateForwardStability"] | null;
-            full_period_metrics?: components["schemas"]["RunMetrics"] | null;
-            /** Full Period Run Id */
-            full_period_run_id?: string | null;
-            /** Latest Selected Fold Index */
-            latest_selected_fold_index: number;
-            /** Mean Selection Score */
-            mean_selection_score: number;
-            /** Parameters */
-            parameters: {
-                [key: string]: number;
-            };
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "completed" | "failed";
-            /** Strategy Spec Hash */
-            strategy_spec_hash: string;
-            trade_recency?: components["schemas"]["TradeRecencySummary"] | null;
-        };
-        /**
-         * ExhaustiveRunConfig
-         * @description Frozen inputs and lineage for an Exhaustive Run artifact.
-         */
-        ExhaustiveRunConfig: {
-            /** Commission Per Order */
-            commission_per_order: number;
-            /** Created At Ms */
-            created_at_ms: number;
-            /** Data Root Revision */
-            data_root_revision: string;
-            /** End Ms */
-            end_ms: number;
-            /** Exhaustive Run Id */
-            exhaustive_run_id: string;
-            /** Fill Mode */
-            fill_mode: string;
-            /** Initial Cash */
-            initial_cash: number;
-            /**
-             * Max Candidates Per Fold
-             * @default 5
-             * @constant
-             */
-            max_candidates_per_fold?: 5;
-            /**
-             * Protocol Id
-             * @default spy-ema-exhaustive-run
-             * @constant
-             */
-            protocol_id?: "spy-ema-exhaustive-run";
-            /**
-             * Protocol Version
-             * @default 1.0
-             * @constant
-             */
-            protocol_version?: "1.0";
-            /** Random Seed */
-            random_seed: number;
-            /**
-             * Ranking Method
-             * @default equal_weight_train_sharpe_return_percentile
-             * @constant
-             */
-            ranking_method?: "equal_weight_train_sharpe_return_percentile";
-            /** Recent Window Start Ms */
-            recent_window_start_ms: number;
-            /** Slippage Per Share */
-            slippage_per_share: number;
-            /** Source Protocol Id */
-            source_protocol_id: string;
-            /** Source Protocol Version */
-            source_protocol_version: string;
-            /** Source Walk Forward Id */
-            source_walk_forward_id: string;
-            /** Start Ms */
-            start_ms: number;
-        };
-        /**
-         * ExhaustiveRunResponse
-         * @description One persisted Exhaustive Run config/result pair.
-         */
-        ExhaustiveRunResponse: {
-            config: components["schemas"]["ExhaustiveRunConfig"];
-            result: components["schemas"]["ExhaustiveRunResult"];
-        };
-        /**
-         * ExhaustiveRunResult
-         * @description Sortable result set plus every fold-level selection receipt.
-         */
-        ExhaustiveRunResult: {
-            /** Candidates */
-            candidates: components["schemas"]["ExhaustiveCandidateResult"][];
-            /** Completed At Ms */
-            completed_at_ms: number;
-            /** Created At Ms */
-            created_at_ms: number;
-            /** Exhaustive Run Id */
-            exhaustive_run_id: string;
-            /** Failure Reason */
-            failure_reason?: string | null;
-            /** Selections */
-            selections: components["schemas"]["FoldCandidateSelection"][];
-            /** Source Walk Forward Id */
-            source_walk_forward_id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "completed" | "failed";
-            /** Warnings */
-            warnings?: string[];
-        };
         /** ExitBlock */
         "ExitBlock-Input": {
             /** Conditions */
@@ -10886,26 +10706,54 @@ export interface components {
             status: string;
             tolerance: components["schemas"]["ToleranceResponse"];
         };
-        /**
-         * FoldCandidateSelection
-         * @description One candidate retained from one fold's training-only leaderboard.
-         */
-        FoldCandidateSelection: {
+        /** FoldPlanResponse */
+        FoldPlanResponse: {
             /** Fold Index */
             fold_index: number;
-            /** Fold Rank */
-            fold_rank: number;
-            /** Parameters */
-            parameters: {
-                [key: string]: number;
-            };
-            /** Selection Score */
-            selection_score: number;
-            /** Strategy Spec Hash */
-            strategy_spec_hash: string;
-            train_metrics: components["schemas"]["RunMetrics"];
-            /** Train Run Id */
-            train_run_id: string;
+            /** Test End Ms */
+            test_end_ms: number;
+            /** Test Start Ms */
+            test_start_ms: number;
+            /** Train End Ms */
+            train_end_ms: number;
+            /** Train Start Ms */
+            train_start_ms: number;
+        };
+        /** FoldResponse */
+        FoldResponse: {
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Fold Index */
+            fold_index: number;
+            /** Retention */
+            retention: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "completed" | "failed";
+            /** Test End Ms */
+            test_end_ms: number;
+            /** Test Search Id */
+            test_search_id: string | null;
+            /** Test Sharpe */
+            test_sharpe: number | null;
+            /** Test Start Ms */
+            test_start_ms: number;
+            /** Test Trades */
+            test_trades: number;
+            /** Train End Ms */
+            train_end_ms: number;
+            /** Train Search Id */
+            train_search_id: string | null;
+            /** Train Sharpe */
+            train_sharpe: number | null;
+            /** Train Start Ms */
+            train_start_ms: number;
+            /** Winner Params */
+            winner_params: Record<string, never> | null;
+            /** Winner Params Hash */
+            winner_params_hash: string | null;
         };
         /**
          * FoldResult
@@ -18749,24 +18597,6 @@ export interface components {
             trade_number: number;
         };
         /**
-         * SpyEmaExhaustiveJobRequest
-         * @description Frozen Exhaustive Run request linked to canonical SPY EMA V1 evidence.
-         */
-        SpyEmaExhaustiveJobRequest: {
-            /** Jobid */
-            jobId: string;
-            /** Walkforwardid */
-            walkForwardId: string;
-        };
-        /**
-         * SpyEmaWalkForwardJobRequest
-         * @description Frozen V1 protocol job; clients may provide no research overrides.
-         */
-        SpyEmaWalkForwardJobRequest: {
-            /** Jobid */
-            jobId: string;
-        };
-        /**
          * Stage0FailureResponse
          * @description A single Stage 0 kill criterion that the signal failed.
          */
@@ -20468,28 +20298,6 @@ export interface components {
             /** Rtol */
             rtol: number;
         };
-        /**
-         * TradeRecencySummary
-         * @description Completed-trade concentration in the final six study months.
-         */
-        TradeRecencySummary: {
-            /** Last Trade Exit Ms */
-            last_trade_exit_ms?: number | null;
-            /** Prior Trade Count */
-            prior_trade_count: number;
-            /** Recent Trade Count */
-            recent_trade_count: number;
-            /** Recent Trade Share */
-            recent_trade_share?: number | null;
-            /** Recent Vs Prior Rate Ratio */
-            recent_vs_prior_rate_ratio?: number | null;
-            /** Recent Window End Ms */
-            recent_window_end_ms: number;
-            /** Recent Window Start Ms */
-            recent_window_start_ms: number;
-            /** Total Trade Count */
-            total_trade_count: number;
-        };
         /** TradeSimRunBody */
         TradeSimRunBody: {
             /** Bars */
@@ -20944,6 +20752,25 @@ export interface components {
              */
             tradeability_caveat?: string | null;
         };
+        /** VerdictResponse */
+        VerdictResponse: {
+            /** Based On */
+            based_on: string;
+            /** Defined Folds */
+            defined_folds: number;
+            /** Label */
+            label: string;
+            /** Median Test Sharpe */
+            median_test_sharpe: number | null;
+            /** Oos Trade Count */
+            oos_trade_count: number;
+            /** Reason */
+            reason: string;
+            /** Study Retention */
+            study_retention: number | null;
+            /** Successful Folds */
+            successful_folds: number;
+        };
         /**
          * WalkForwardConfig
          * @description Persistable record of the *inputs* that produced a walk-forward
@@ -21173,6 +21000,275 @@ export interface components {
              * @default 0
              */
             worst_window_sharpe?: number;
+        };
+        /** WalkForwardStudyDetailResponse */
+        WalkForwardStudyDetailResponse: {
+            /** Completed Backtests */
+            completed_backtests: number;
+            /** Completed Folds */
+            completed_folds: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Expected Backtests */
+            expected_backtests: number;
+            /** Failed Folds */
+            failed_folds: number;
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Finished At Ms */
+            finished_at_ms: number | null;
+            /** Fold Count */
+            fold_count: number;
+            /** Folds */
+            folds: components["schemas"]["FoldResponse"][];
+            /** Id */
+            id: string;
+            /** Incomplete */
+            incomplete: boolean;
+            /** Job Id */
+            job_id: string | null;
+            /** Measure */
+            measure: string;
+            /** Min Trades */
+            min_trades: number;
+            /** Receipt */
+            receipt: Record<string, never>;
+            /** Request */
+            request: Record<string, never>;
+            /** Resumable */
+            resumable: boolean;
+            /** Resume Refusal */
+            resume_refusal: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Test Months */
+            test_months: number;
+            /** Training Months */
+            training_months: number;
+            /** Uncommitted Changes */
+            uncommitted_changes: boolean;
+            verdict: components["schemas"]["VerdictResponse"] | null;
+            /** Window End Ms */
+            window_end_ms: number;
+            /** Window Start Ms */
+            window_start_ms: number;
+            /** Winner Changes */
+            winner_changes: number;
+        };
+        /**
+         * WalkForwardStudyJobRequest
+         * @description Body of POST /api/jobs-internal/walk-forward-study — the spec plus the minted job id.
+         *
+         *     ``resume_study_id`` names an incomplete study to Finish instead: the spec
+         *     fields are ignored and the stored request governs.
+         */
+        WalkForwardStudyJobRequest: {
+            /**
+             * Commissionperorder
+             * @default 1
+             */
+            commissionPerOrder?: number;
+            /**
+             * Endms
+             * @description Half-open window end, int64 ms UTC
+             */
+            endMs: number;
+            /**
+             * Fillmode
+             * @default signal_bar_close
+             */
+            fillMode?: string;
+            /**
+             * Initialcash
+             * @default 100000
+             */
+            initialCash?: number;
+            /** Jobid */
+            jobId: string;
+            /**
+             * Measure
+             * @default sharpe_ratio
+             * @enum {string}
+             */
+            measure?: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /**
+             * Mintrades
+             * @default 5
+             */
+            minTrades?: number;
+            /** Paramranges */
+            paramRanges?: {
+                [key: string]: components["schemas"]["app__schemas__grid_search__ValueListRangeRequest"] | components["schemas"]["app__schemas__grid_search__LowHighStepRangeRequest"];
+            };
+            /**
+             * Resolution
+             * @default minute
+             * @enum {string}
+             */
+            resolution?: "minute" | "daily";
+            /** Resumestudyid */
+            resumeStudyId?: string | null;
+            /**
+             * Slippagepershare
+             * @default 0
+             */
+            slippagePerShare?: number;
+            /**
+             * Startms
+             * @description Half-open window start, int64 ms UTC
+             */
+            startMs: number;
+            /** Strategykey */
+            strategyKey: string;
+            /** Symbol */
+            symbol: string;
+            /** Testmonths */
+            testMonths: number;
+            /** Trainingmonths */
+            trainingMonths: number;
+        };
+        /** WalkForwardStudyPreflightResponse */
+        WalkForwardStudyPreflightResponse: {
+            /** Backtest Limit */
+            backtest_limit: number;
+            /** Combinations */
+            combinations: number;
+            /** Estimated Seconds */
+            estimated_seconds: number;
+            /** Fold Count */
+            fold_count: number;
+            /** Folds */
+            folds: components["schemas"]["FoldPlanResponse"][];
+            /** Required Samples */
+            required_samples: number;
+            /** Run Up Sessions */
+            run_up_sessions: number;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Total Backtests */
+            total_backtests: number;
+        };
+        /** WalkForwardStudySpecRequest */
+        WalkForwardStudySpecRequest: {
+            /**
+             * Commissionperorder
+             * @default 1
+             */
+            commissionPerOrder?: number;
+            /**
+             * Endms
+             * @description Half-open window end, int64 ms UTC
+             */
+            endMs: number;
+            /**
+             * Fillmode
+             * @default signal_bar_close
+             */
+            fillMode?: string;
+            /**
+             * Initialcash
+             * @default 100000
+             */
+            initialCash?: number;
+            /**
+             * Measure
+             * @default sharpe_ratio
+             * @enum {string}
+             */
+            measure?: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /**
+             * Mintrades
+             * @default 5
+             */
+            minTrades?: number;
+            /** Paramranges */
+            paramRanges?: {
+                [key: string]: components["schemas"]["app__schemas__grid_search__ValueListRangeRequest"] | components["schemas"]["app__schemas__grid_search__LowHighStepRangeRequest"];
+            };
+            /**
+             * Resolution
+             * @default minute
+             * @enum {string}
+             */
+            resolution?: "minute" | "daily";
+            /**
+             * Slippagepershare
+             * @default 0
+             */
+            slippagePerShare?: number;
+            /**
+             * Startms
+             * @description Half-open window start, int64 ms UTC
+             */
+            startMs: number;
+            /** Strategykey */
+            strategyKey: string;
+            /** Symbol */
+            symbol: string;
+            /** Testmonths */
+            testMonths: number;
+            /** Trainingmonths */
+            trainingMonths: number;
+        };
+        /** WalkForwardStudySummaryResponse */
+        WalkForwardStudySummaryResponse: {
+            /** Completed Backtests */
+            completed_backtests: number;
+            /** Completed Folds */
+            completed_folds: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Expected Backtests */
+            expected_backtests: number;
+            /** Failed Folds */
+            failed_folds: number;
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Finished At Ms */
+            finished_at_ms: number | null;
+            /** Fold Count */
+            fold_count: number;
+            /** Id */
+            id: string;
+            /** Incomplete */
+            incomplete: boolean;
+            /** Job Id */
+            job_id: string | null;
+            /** Measure */
+            measure: string;
+            /** Min Trades */
+            min_trades: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Test Months */
+            test_months: number;
+            /** Training Months */
+            training_months: number;
+            /** Uncommitted Changes */
+            uncommitted_changes: boolean;
+            verdict: components["schemas"]["VerdictResponse"] | null;
+            /** Window End Ms */
+            window_end_ms: number;
+            /** Window Start Ms */
+            window_start_ms: number;
+            /** Winner Changes */
+            winner_changes: number;
         };
         /**
          * WalkForwardWindowResponse
@@ -26662,7 +26758,7 @@ export interface operations {
             };
         };
     };
-    start_spy_ema_exhaustive_job_api_jobs_internal_spy_ema_exhaustive_post: {
+    start_walk_forward_study_job_api_jobs_internal_walk_forward_study_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -26671,40 +26767,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SpyEmaExhaustiveJobRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_spy_ema_walk_forward_job_api_jobs_internal_spy_ema_walk_forward_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SpyEmaWalkForwardJobRequest"];
+                "application/json": components["schemas"]["WalkForwardStudyJobRequest"];
             };
         };
         responses: {
@@ -27506,68 +27569,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
-                };
-            };
-        };
-    };
-    get_latest_exhaustive_run_for_walk_forward_api_research_exhaustive_runs_by_walk_forward__walk_forward_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                walk_forward_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExhaustiveRunResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_exhaustive_run_api_research_exhaustive_runs__exhaustive_run_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                exhaustive_run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExhaustiveRunResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -28448,6 +28449,135 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["WindowSummary"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_walk_forward_studies_api_research_walk_forward_studies_get: {
+        parameters: {
+            query?: {
+                strategy_key?: string | null;
+                symbol?: string | null;
+                status?: string | null;
+                /** @description The launch's job id, so a client can find the study it just started */
+                job_id?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalkForwardStudySummaryResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preflight_walk_forward_study_api_research_walk_forward_studies_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WalkForwardStudySpecRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalkForwardStudyPreflightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_walk_forward_study_api_research_walk_forward_studies__study_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalkForwardStudyDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_walk_forward_study_api_research_walk_forward_studies__study_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

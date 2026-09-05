@@ -51,6 +51,8 @@ export class GridSearchResultComponent {
   readonly strategies = input<readonly StrategyInfo[]>([]);
   /** Poll interval while the search runs; tests set 0 to disable. */
   readonly pollMs = input(2000);
+  /** Where the back button returns to: Grid Search history, or the walk-forward study that owns this sweep. */
+  readonly backLabel = input('History');
   readonly deleted = output<string>();
   readonly closed = output();
 

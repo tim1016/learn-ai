@@ -38,7 +38,6 @@ from app.routers import (
     dataset,
     edge,
     engine,
-    exhaustive_runs,
     golden_fixtures,
     grid_search,
     indicator_reliability,
@@ -554,11 +553,6 @@ app.include_router(
     walk_forward.router,
     prefix="/api/research/strategy-runs/walk-forward",
     tags=["research-walk-forward"],
-)
-app.include_router(
-    exhaustive_runs.router,
-    prefix="/api/research/exhaustive-runs",
-    tags=["research-exhaustive-runs"],
 )
 # Research-pipeline Monte Carlo (Phase D). Same pre-research_runs
 # placement so the literal ``/monte-carlo`` segment wins.

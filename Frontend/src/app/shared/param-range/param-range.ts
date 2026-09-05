@@ -40,6 +40,11 @@ export function defaultRangeForParameter(property: ParamProperty): ParamRange {
   return { type: "value_list", values: [defaultNumericValue(property)] };
 }
 
+/** Whether a stored range sweeps more than one value (a single-value list is a fixed setting). */
+export function rangeVaries(range: ParamRange): boolean {
+  return range.type === "low_high_step" || range.values.length > 1;
+}
+
 export interface StrategyRangeConfig {
   strategyKey: string;
   paramRanges: Record<string, ParamRange>;

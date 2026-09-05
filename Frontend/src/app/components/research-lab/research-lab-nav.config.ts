@@ -31,7 +31,6 @@ export const RESEARCH_LAB_NAV: readonly NavGroup[] = [
     items: [
       { path: 'backtests/reliability', label: 'Reliability' },
       { path: 'backtests/strategy-runs', label: 'Strategy Runs' },
-      { path: 'backtests/spy-ema-walk-forward', label: 'EMA Walk-Forward' },
       { path: 'backtests/recency-chart', label: 'Recency Chart' },
     ],
   },

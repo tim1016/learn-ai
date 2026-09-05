@@ -105,19 +105,6 @@ LEAN_ENGINE_RUN_PHASES: tuple[Phase, ...] = (
 )
 
 
-SPY_EMA_WALK_FORWARD_PHASES: tuple[Phase, ...] = (
-    Phase("running_control", "Running the canonical control", 1),
-    Phase("walking_forward", "Selecting and testing each fold", 8),
-    Phase("persisting_evidence", "Persisting research evidence", 1),
-)
-
-SPY_EMA_EXHAUSTIVE_PHASES: tuple[Phase, ...] = (
-    Phase("selecting_candidates", "Selecting each fold's strongest candidates", 1),
-    Phase("running_candidates", "Running full-data and forward evidence", 9),
-    Phase("finalizing_evidence", "Finalizing the sortable evidence table", 1),
-)
-
-
 # ── Grid Search (PRD #1926) ─────────────────────────────────────────────
 GRID_SEARCH_PHASES: tuple[Phase, ...] = (
     Phase("preflight", "Validating the grid and freezing the data snapshot", 1),
@@ -143,8 +130,6 @@ JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "signal_engine": SIGNAL_ENGINE_PHASES,
     "engine_backtest": ENGINE_BACKTEST_PHASES,
     "lean_engine_run": LEAN_ENGINE_RUN_PHASES,
-    "spy_ema_walk_forward": SPY_EMA_WALK_FORWARD_PHASES,
-    "spy_ema_exhaustive": SPY_EMA_EXHAUSTIVE_PHASES,
 }
 
 

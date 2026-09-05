@@ -14,16 +14,15 @@
 
 **Phase 4B — train-side parameter selection (shipped 2026-08-15).** Each fold runs every fully materialized candidate on train and persists each candidate as a child `RunLedger`. The winner is the eligible candidate with the highest train Sharpe, then highest train total return, then earliest declaration order. Eligibility requires the configured minimum train-trade count and a non-null Sharpe. No eligible candidate means the analysis fails closed; no default threshold is tested as a fallback. The winner's exact spec is frozen for the test window, and `selected_parameters` plus all `training_candidates` are persisted on the fold.
 
-## SPY EMA normalized-gap protocol
+## SPY EMA normalized-gap protocol — retired
 
-The frozen job type `POST /api/jobs/spy_ema_walk_forward` implements protocol `spy-ema-normalized-gap` version `1.0`, captured in `docs/references/spy-ema-normalized-gap-walk-forward.md`. The public .NET jobs boundary mints the job identity, exposes progress/result/cancellation, and dispatches to Python's internal `/api/jobs-internal/spy-ema-walk-forward` worker. The worker runs an absolute `$0.20` full-window control, then evaluates the relative EMA-gap candidate grid through rolling 180-day train / 30-day test windows stepped every 30 days. The immutable 2024-08-01 through 2026-08-01 window produces 18 OOS folds.
-
-The linked `spy-ema-exhaustive-run` V1.0 protocol can subsequently retain up
-to five TRAIN candidates per fold, deduplicate their exact specs, and compare
-each unique gap through both an explicitly selection-biased full two-year run
-and a fixed-gap replay of all 18 OOS folds. Its formulas, recency definition,
-lineage, and read endpoints are documented in
-`docs/references/spy-ema-exhaustive-run.md`.
+The frozen job type `spy_ema_walk_forward` (protocol `spy-ema-normalized-gap` V1.0) and its
+linked `spy-ema-exhaustive-run` V1.0 were retired on 2026-09-05 by PRD
+[#1925](https://github.com/tim1016/learn-ai/issues/1925): the Walk-Forward Study
+(`docs/references/walk-forward-study.md`) runs the same selection-then-test procedure for any
+sweepable strategy through Grid Search. The formula provenance the protocol documented
+(`difference_bps`) stays in `docs/references/spy-ema-normalized-gap-walk-forward.md`. Persisted
+protocol artifacts under `artifacts/` were not deleted.
 
 ## Three split policies
 

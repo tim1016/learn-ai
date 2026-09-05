@@ -1,11 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
 
 import { etDayEndMs, etIsoDate, etMidnightMs } from '../../shared/date/et-midnight';
 import { ParamRangeInputComponent } from '../../shared/param-range/param-range-input.component';
-import { defaultNumericValue, numericStrategyParams, type ParamRange } from '../../shared/param-range/param-range';
+import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange } from '../../shared/param-range/param-range';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import type { ParamProperty, StrategyInfo } from '../strategy-lab/strategy-lab.models';
@@ -61,7 +61,16 @@ export class GridSearchFormComponent {
   readonly strategies = input.required<readonly StrategyInfo[]>();
   /** Debounce before the form asks the server to preflight; tests set 0. */
   readonly preflightDebounceMs = input(300);
+  /**
+   * Embedded inside another form (Walk-Forward): no header, no footer, no
+   * preflight of its own — every edit emits the spec through `specChanged`
+   * and the host decides what to ask the server.
+   */
+  readonly embedded = input(false);
+  /** A spec to start from (a completed grid search's request); applied once its strategy is known. */
+  readonly initial = input<GridSearchSpecRequest | null>(null);
   readonly launched = output<GridSearchLaunch>();
+  readonly specChanged = output<GridSearchSpecRequest | null>();
 
   readonly symbol = signal('SPY');
   readonly strategyKey = signal<string | null>(null);
@@ -93,11 +102,18 @@ export class GridSearchFormComponent {
   private debounce: ReturnType<typeof setTimeout> | null = null;
   /** Generation of the latest edit; a preflight that returns for an older generation is ignored. */
   private preflightGeneration = 0;
+  private appliedInitial: GridSearchSpecRequest | null = null;
 
   constructor() {
     effect(() => {
       const strategies = this.eligible();
-      if (this.strategyKey() === null && strategies.length > 0) this.selectStrategy(strategies[0].name);
+      const initial = this.initial();
+      if (initial !== null && initial !== this.appliedInitial && strategies.some((s) => s.name === initial.strategy_key)) {
+        this.appliedInitial = initial;
+        untracked(() => this.applyInitial(initial));
+        return;
+      }
+      if (this.strategyKey() === null && strategies.length > 0) untracked(() => this.selectStrategy(strategies[0].name));
     });
     this.destroyRef.onDestroy(() => {
       if (this.debounce !== null) clearTimeout(this.debounce);
@@ -219,7 +235,34 @@ export class GridSearchFormComponent {
     // An edit invalidates whatever preflight is showing or in flight; Launch waits for the next answer.
     this.preflightGeneration += 1;
     this.preflight.set(null);
-    this.debounce = setTimeout(() => void this.refreshPreflight(), this.preflightDebounceMs());
+    this.debounce = setTimeout(() => {
+      if (this.embedded()) this.specChanged.emit(this.safeSpec());
+      else void this.refreshPreflight();
+    }, this.preflightDebounceMs());
+  }
+
+  /** Seed every control from a stored request, then let the host (or the preflight) see it once. */
+  private applyInitial(initial: GridSearchSpecRequest): void {
+    this.symbol.set(initial.symbol);
+    this.fromDate.set(etIsoDate(initial.start_ms));
+    this.toDate.set(etIsoDate(initial.end_ms - 1));
+    this.fillMode.set(initial.fill_mode);
+    this.resolution.set(initial.resolution);
+    this.commissionPerOrder.set(initial.commission_per_order);
+    this.slippagePerShare.set(initial.slippage_per_share);
+    this.initialCash.set(initial.initial_cash);
+    this.measure.set(initial.measure);
+    this.minTrades.set(initial.min_trades);
+    this.selectStrategy(initial.strategy_key);
+    this.params.update((rows) =>
+      rows.map((row) => {
+        const range = initial.param_ranges[row.name];
+        if (range === undefined) return row;
+        const vary = rangeVaries(range);
+        return { ...row, vary, range, fixedValue: range.type === 'value_list' ? range.values[0] : row.fixedValue };
+      }),
+    );
+    this.scheduleRefresh();
   }
 
   async refreshPreflight(): Promise<void> {

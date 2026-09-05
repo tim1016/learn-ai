@@ -199,6 +199,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "walk-forward",
+    loadComponent: () =>
+      import("./components/walk-forward-study/walk-forward-study-page.component").then(
+        (m) => m.WalkForwardStudyPageComponent
+      ),
+  },
+  {
     path: "strategy-validation",
     loadComponent: () =>
       import(

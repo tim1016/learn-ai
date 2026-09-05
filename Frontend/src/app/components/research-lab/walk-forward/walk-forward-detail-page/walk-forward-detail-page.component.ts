@@ -33,7 +33,6 @@ import type {
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 import { createAppChart } from '../../../../shared/charts/chart-utils';
-import { ExhaustiveRunPanelComponent } from '../exhaustive-run-panel/exhaustive-run-panel.component';
 import { WalkForwardParameterComparisonComponent } from '../walk-forward-parameter-comparison/walk-forward-parameter-comparison.component';
 
 /**
@@ -66,7 +65,6 @@ import { WalkForwardParameterComparisonComponent } from '../walk-forward-paramet
     DecimalPipe,
     PercentPipe,
     AssetIdentityComponent,
-    ExhaustiveRunPanelComponent,
     TimestampDisplayPipe,
     WalkForwardParameterComparisonComponent,
   ],

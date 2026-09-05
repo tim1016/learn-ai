@@ -1,7 +1,7 @@
 <section class="result" aria-labelledby="grid-search-result-title">
   <header class="result__header">
     <div>
-      <button pButton type="button" severity="secondary" [text]="true" size="small" (click)="closed.emit()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>History</span></button>
+      <button pButton type="button" severity="secondary" [text]="true" size="small" (click)="closed.emit()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>{{ backLabel() }}</span></button>
       @if (detail(); as d) {
         <h2 id="grid-search-result-title">{{ strategyName() ?? (d.strategy_key | receiptLabel) }} · <app-asset-identity [symbol]="d.symbol" size="sm" /></h2>
         <p class="muted">
