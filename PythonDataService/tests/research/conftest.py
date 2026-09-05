@@ -125,11 +125,13 @@ async def scratch_db() -> AsyncIterator[asyncpg.Connection]:
     admin = await asyncpg.connect(admin_url)
     try:
         await admin.execute(f'CREATE DATABASE "{name}"')
-        connection = await asyncpg.connect(admin_url, database=name)
         try:
-            yield connection
+            connection = await asyncpg.connect(admin_url, database=name)
+            try:
+                yield connection
+            finally:
+                await connection.close()
         finally:
-            await connection.close()
             await admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
     finally:
         await admin.close()
