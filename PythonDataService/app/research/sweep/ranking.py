@@ -47,7 +47,7 @@ def measure_value(cell: RankableCell, measure: RankingMeasure) -> float | None:
 
 
 def is_eligible(cell: RankableCell, measure: RankingMeasure, *, min_trades: int) -> bool:
-    return cell.status == "completed" and cell.total_trades >= min_trades and measure_value(cell, measure) is not None
+    return cell.status == "completed" and cell.total_trades > 0 and cell.total_trades >= min_trades and measure_value(cell, measure) is not None
 
 
 def ranking_key(cell: RankableCell, measure: RankingMeasure) -> tuple[float, float, str]:

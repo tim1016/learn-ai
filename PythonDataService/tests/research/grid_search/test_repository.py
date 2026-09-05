@@ -47,7 +47,7 @@ def _cell(params_hash: str, *, sharpe: float | None = 1.0, trades: int = 10, sta
     )
 
 
-async def _finish(conn, search_id: str, attempt: int, status: str = "completed", *, incomplete: bool = False, winner: CellResult | None = None) -> None:
+async def _finish(conn: asyncpg.Connection, search_id: str, attempt: int, status: str = "completed", *, incomplete: bool = False, winner: CellResult | None = None) -> None:
     await repo.finish_search(
         conn,
         search_id,

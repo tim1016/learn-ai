@@ -54,15 +54,20 @@ def run_grid(
     on_progress(done, expected_cells)
 
     def _failed(spec: RunSpec, exc: Exception) -> CellResult:
+        # The failure callback receives the candidate that was executed, not a reconstruction of it.
+        on_cell_failed(spec, str(exc))
         return CellResult(params_hash=spec.params_hash, params=dict(spec.params), status="failed", error=str(exc))
 
+    def _executed(spec: RunSpec) -> CellResult:
+        result = execute_cell(spec)
+        if result.status == "failed":
+            on_cell_failed(spec, result.error or "cell failed")
+        return result
+
     remaining = (spec for spec in candidates if spec.params_hash not in skip_params_hashes)
-    for batch in run_batched(remaining, execute_cell, max_workers=max_workers, cancel_check=cancel_check, on_error=_failed):
-        for result in batch:
-            if result.status == "failed":
-                on_cell_failed(RunSpec(symbol="", strategy_key="", params=result.params, params_hash=result.params_hash), result.error or "cell failed")
-            done += 1
-            on_progress(done, expected_cells)
+    for batch in run_batched(remaining, _executed, max_workers=max_workers, cancel_check=cancel_check, on_error=_failed):
+        done += len(batch)
+        on_progress(done, expected_cells)
         persist(batch)
         results.extend(batch)
 

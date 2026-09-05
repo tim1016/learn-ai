@@ -100,21 +100,25 @@ export class GridSearchResultComponent {
     this.destroyRef.onDestroy(() => this.stopPolling());
   }
 
+  /** Revision of the latest reload; a sort, page or poll that resolves late must not restore stale state. */
+  private revision = 0;
+
   async reload(id: string = this.searchId()): Promise<void> {
+    const revision = ++this.revision;
     try {
       const detail = await this.service.get(id);
-      if (id !== this.searchId()) return;
+      if (revision !== this.revision) return;
       // The first page of a search sorts by its own ranking measure, so the leader is on it.
       if (this.page() === null) this.query.update((q) => ({ ...q, sort_by: detail.measure }));
       const page = await this.service.cells(id, this.query());
-      if (id !== this.searchId()) return;
+      if (revision !== this.revision) return;
       this.detail.set(detail);
       this.page.set(page);
       this.error.set(null);
       if (!isTerminal(detail.status)) this.awaitingAttempt = false;
       this.schedulePoll();
     } catch {
-      this.error.set('This search could not be loaded.');
+      if (revision === this.revision) this.error.set('This search could not be loaded.');
     }
   }
 

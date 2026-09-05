@@ -61,9 +61,10 @@ from app.research.sweep.validation import GridInvalidError, WorkloadLimitError, 
 from app.research.sweep.warmup import (
     RunUpExceedsRangeError,
     RunUpPlan,
+    SlowestProbe,
     WarmupProbeError,
     plan_run_up,
-    probe_warmup_samples,
+    slowest_warmup_probe,
 )
 from app.utils.session_anchors import et_date_at_ms, et_day_end_ms, et_midnight_ms
 
@@ -218,6 +219,7 @@ class Preflight:
     expected_sessions: int
     estimated_seconds: float
     roots: list[Path]
+    warmup: SlowestProbe
 
     @property
     def data_start(self) -> date:
@@ -261,15 +263,11 @@ def preflight(spec: GridSearchSpec, *, backtests_per_combination: int = 1, roots
         raise GridSearchRefusal(str(exc), code="GRID_INVALID") from exc
 
     resolved_roots = list(roots) if roots is not None else resolve_data_roots(source="polygon", adjusted=True)
-    config = StrategyGridConfig(strategy_key=spec.strategy_key, param_ranges=ranges)
     try:
-        probes = [
-            probe_warmup_samples(spec.strategy_key, {**candidate.params, "symbol": spec.symbol})
-            for candidate in expand_grid([config], [spec.symbol])
-        ]
+        warmup = slowest_warmup_probe(spec.strategy_key, spec.symbol, ranges)
     except WarmupProbeError as exc:
         raise GridSearchRefusal(str(exc), code="WARMUP_UNMEASURABLE") from exc
-    slowest = max(probes, key=lambda probe: probe.required_samples)
+    slowest = warmup.probe
     start, end = window_dates(spec.start_ms, spec.end_ms)
     try:
         run_up = plan_run_up(
@@ -304,6 +302,7 @@ def preflight(spec: GridSearchSpec, *, backtests_per_combination: int = 1, roots
         expected_sessions=availability.expected_days,
         estimated_seconds=_estimate_seconds(total, run_up.data_start, run_up.evaluation_end),
         roots=resolved_roots,
+        warmup=warmup,
     )
 
 
@@ -337,6 +336,8 @@ def build_receipt(pre: Preflight, snapshot: DataSnapshot, identity: CodeIdentity
             "bar_span_ms": pre.run_up.bar_span_ms,
             "run_up_sessions": pre.run_up.run_up_sessions,
             "carved_from_range": pre.run_up.carved_from_range,
+            "probed_candidates": pre.warmup.probed_candidates,
+            "probe_bounded": pre.warmup.bounded,
         },
         "parameter_schema": public_params_schema(pre.registration),
         "code_identity": identity.as_dict(),

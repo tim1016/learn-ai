@@ -18,7 +18,7 @@ from typing import Any, Literal
 from anyio import to_thread
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.jobs.progress import ProgressEmitter
+from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.research.grid_search import repository as repo
 from app.research.grid_search import service
@@ -284,7 +284,7 @@ async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
         created = await service.create(record)
         search_id = created.id
 
-    def work(emit: ProgressEmitter, cancel) -> dict[str, Any]:
+    def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict[str, Any]:
         row, spec = service.load_search(search_id)
         outcome = service.execute(
             search_id,

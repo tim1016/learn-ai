@@ -44,15 +44,21 @@ export class GridSearchHistoryComponent {
     void this.refresh();
   }
 
+  /** Revision of the latest request; an older response must not overwrite a newer filter's rows. */
+  private revision = 0;
+
   async refresh(): Promise<void> {
+    const revision = ++this.revision;
     this.loading.set(true);
     try {
-      this.rows.set(await this.service.list(this.filters()));
+      const rows = await this.service.list(this.filters());
+      if (revision !== this.revision) return;
+      this.rows.set(rows);
       this.error.set(null);
     } catch {
-      this.error.set('History could not be loaded.');
+      if (revision === this.revision) this.error.set('History could not be loaded.');
     } finally {
-      this.loading.set(false);
+      if (revision === this.revision) this.loading.set(false);
     }
   }
 

@@ -171,12 +171,18 @@ export class GridSearchFormComponent {
 
   onMeasureEvent(event: Event): void {
     const raw = selectValue(event);
-    if (raw !== null && (RANKING_MEASURES as readonly string[]).includes(raw)) this.measure.set(raw as RankingMeasure);
+    if (raw !== null && (RANKING_MEASURES as readonly string[]).includes(raw)) {
+      this.measure.set(raw as RankingMeasure);
+      this.scheduleRefresh();
+    }
   }
 
   onFillModeEvent(event: Event): void {
     const raw = selectValue(event);
-    if (raw !== null) this.fillMode.set(raw);
+    if (raw !== null) {
+      this.fillMode.set(raw);
+      this.scheduleRefresh();
+    }
   }
 
   onResolutionEvent(event: Event): void {

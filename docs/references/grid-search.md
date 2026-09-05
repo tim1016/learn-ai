@@ -22,7 +22,7 @@ The PRD left implementation choices open; these are the ones taken. Each is reve
 | Attempt fencing | `claim_attempt` increments a generation; every chunk write and terminal transition row-locks the search and checks the generation inside its transaction, and a completed search accepts no write at all. A deleted search's row is gone, so the same lock refuses the stale writer. | Review F06. |
 | Cancellation | Poll before every batch and once more after the final batch drains; on cancel, finished cells stay, the search is `cancelled` + `incomplete`, and a **provisional** leader is recorded over what finished. | Review F12 / issue #1928. |
 | Leader on the row | The leader's parameters are persisted on the search row at finish, so history and detail never load cells to describe it. | Review: the summary DTO must not require full results. |
-| Warmup probe cost | The probe is memoized per full assignment for the process lifetime; a re-preflight on every form edit pays for each distinct candidate once. | Review. |
+| Warmup probe cost | The probe is memoized per full assignment for the process lifetime, and preflight does not probe every candidate: it probes the baseline, each swept parameter alone at its largest value to learn which parameters move readiness, then only the combinations of those (`slowest_warmup_probe`); past 512 such combinations it probes the extreme assignment alone and the receipt says so (`probe_bounded`). | Review; CodeRabbit on #1933 (a 5,000-candidate grid must not cost 5,000 probes). Assumes readiness is monotone in each relevant parameter and that relevance does not depend on another parameter's value — true of lookbacks and cadence, the only settings that move it today. |
 | Finish checks | The detail view runs the cheap checks (status, tree state, code identity); the data-snapshot re-hash runs only on the Finish request itself, where it decides something. | Review. |
 | Interrupted | Never stored. A `queued`/`running` row whose Redis job record is gone or terminal reads back as `interrupted`; a Redis error reads back as the stored status (reconcile, do not declare death). | PRD "Lifecycle and persistence". |
 | Finding the launched search | The .NET jobs boundary returns only the job id, so the page lists history filtered by `job_id` until the row appears. | No new .NET surface. |
@@ -38,6 +38,7 @@ Cell identity is `(search_id, params_hash)`, where `params_hash` is the shared g
 ## Known limits
 
 - The runtime figure is an estimate; there is no wall-clock guarantee and no cross-job admission.
+- The jobs boundary carries no authorization or per-caller quota of its own: `POST /api/jobs/grid_search` is as exposed as every other job type, which the default Compose bindings keep loopback-only. A per-caller workload quota and authorization are preconditions for any non-local exposure, not something this feature adds.
 - Grid Search reads the lake as it is: a missing session is a refusal that names the sessions, never an on-demand fetch.
 - Daily-resolution strategies are supported by the machinery but no registered production strategy declares `daily` today.
 - `tree_state` is `unknown` inside the service container (no `git` binary); the source digest still governs Finish.

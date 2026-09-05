@@ -182,6 +182,12 @@ def _verify_bytes(manifest: Mapping[str, str], relative: str, payload: bytes) ->
         )
 
 
+def _refuse_if_receipted(manifest: Mapping[str, str], relative: str) -> None:
+    """An artifact the launch receipted cannot be absent now: it was deleted or renamed, not never there."""
+    if relative in manifest:
+        raise DataSnapshotMismatchError(f"{relative} was receipted at launch but is missing now")
+
+
 class ManifestBoundMinuteReader(LeanMinuteDataReader):
     """A minute reader that parses only bytes matching the receipted manifest."""
 
@@ -196,10 +202,12 @@ class ManifestBoundMinuteReader(LeanMinuteDataReader):
 
     def read_day(self, symbol: str, trading_date: date) -> list[TradeBar]:
         zip_path = self._zip_path(symbol, trading_date)
+        relative = _minute_relative(symbol, trading_date)
         if not zip_path.exists():
+            _refuse_if_receipted(self._manifest, relative)
             return []
         payload = zip_path.read_bytes()
-        _verify_bytes(self._manifest, _minute_relative(symbol, trading_date), payload)
+        _verify_bytes(self._manifest, relative, payload)
         return self.parse_day_zip(payload, symbol, trading_date)
 
 
@@ -211,8 +219,10 @@ class ManifestBoundDailyReader(LeanDailyDataReader):
         self._manifest = dict(manifest)
 
     def _read_zip(self, zip_path: Path, symbol: str) -> list[TradeBar]:
+        relative = _daily_relative(symbol)
         if not zip_path.exists():
+            _refuse_if_receipted(self._manifest, relative)
             return []
         payload = zip_path.read_bytes()
-        _verify_bytes(self._manifest, _daily_relative(symbol), payload)
+        _verify_bytes(self._manifest, relative, payload)
         return self.parse_history_zip(payload, symbol)

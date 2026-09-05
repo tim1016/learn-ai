@@ -150,3 +150,48 @@ def test_a_run_up_that_would_consume_the_whole_range_is_refused(tmp_path: Path) 
             bar_span_ms=FIFTEEN_MIN_MS,
             roots=[tmp_path],
         )
+
+
+# ── Slowest-candidate probe (bounded) ────────────────────────────────────
+
+
+def test_slowest_probe_multiplies_only_over_parameters_that_move_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Thresholds never change readiness, so a 5 × 5 threshold grid costs two probes, not twenty-five."""
+    from app.research.sweep import warmup
+    from app.research.sweep.grid import ValueListRange
+
+    seen: list[dict] = []
+    real = warmup.probe_warmup_samples
+    monkeypatch.setattr(warmup, "probe_warmup_samples", lambda key, params: (seen.append(dict(params)), real(key, params))[1])
+
+    ranges = {
+        "window": ValueListRange((14.0, 20.0, 26.0)),
+        "oversold": ValueListRange((20.0, 25.0, 30.0, 35.0, 40.0)),
+        "overbought": ValueListRange((60.0, 65.0, 70.0, 75.0, 80.0)),
+        "resolution_minutes": ValueListRange((15.0,)),
+    }
+    result = warmup.slowest_warmup_probe("rsi_mean_reversion", "SPY", ranges)
+
+    assert result.probe == real("rsi_mean_reversion", {"window": 26.0, "oversold": 20.0, "overbought": 60.0, "resolution_minutes": 15.0, "symbol": "SPY"})
+    assert result.bounded is False
+    # baseline + one relevance probe per swept parameter (3) + the relevant grid (window alone: 3 values)
+    assert result.probed_candidates == 1 + 3 + 3 == len(seen)
+    assert {p["window"] for p in seen} == {14.0, 20.0, 26.0}
+
+
+def test_slowest_probe_falls_back_to_the_extreme_assignment_past_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.research.sweep import warmup
+    from app.research.sweep.grid import LowHighStepRange, ValueListRange
+
+    monkeypatch.setattr(warmup, "PROBE_BUDGET", 4)
+    ranges = {
+        "short_window": LowHighStepRange(low=2.0, high=6.0, step=1.0),  # 5 relevant values
+        "long_window": LowHighStepRange(low=10.0, high=12.0, step=1.0),  # 3 relevant values → 15 > 4
+        "resolution_minutes": ValueListRange((15.0,)),
+    }
+    result = warmup.slowest_warmup_probe("sma_crossover", "SPY", ranges)
+
+    assert result.bounded is True
+    # The extreme assignment (6, 12) is the slowest; only it is probed beyond the relevance pass.
+    assert result.probe == probe_warmup_samples("sma_crossover", {"short_window": 6.0, "long_window": 12.0, "resolution_minutes": 15.0, "symbol": "SPY"})
+    assert result.probed_candidates == 1 + 2 + 1

@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import asyncpg
 import pytest
 
 from app.config import settings
@@ -44,7 +45,7 @@ def _noop(_: str) -> None:
     return None
 
 
-async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_are_identical(conn, lake: Path) -> None:
+async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_are_identical(conn: asyncpg.Connection, lake: Path) -> None:
     spec = service.GridSearchSpec(
         strategy_key="sma_crossover",
         symbol="SPY",

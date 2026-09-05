@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from functools import lru_cache
+from itertools import product
 from pathlib import Path
 
 from app.engine.data.availability import Resolution, check_availability
@@ -51,6 +52,7 @@ from app.lean_sidecar.trading_calendar import (
     session_start_for_bar_count,
     session_windows_ms_utc,
 )
+from app.research.sweep.grid import ParamRange, expand_param
 
 # A program that is not ready after this many decision bars has no finite
 # requirement this feature can size a run-up for.
@@ -125,6 +127,56 @@ def probe_warmup_samples(strategy_key: str, params: Mapping[str, object]) -> War
     same grid for every fold, pays for each distinct candidate once.
     """
     return _probe_cached(strategy_key, tuple(sorted((str(k), _hashable(v)) for k, v in params.items())))
+
+
+PROBE_BUDGET = 512
+
+
+@dataclass(frozen=True)
+class SlowestProbe:
+    """The slowest candidate's readiness and how it was found."""
+
+    probe: WarmupProbe
+    probed_candidates: int
+    # True when the readiness-relevant grid exceeded PROBE_BUDGET and only its extreme was probed.
+    bounded: bool
+
+
+def _span_key(probe: WarmupProbe) -> tuple[int, int]:
+    """Slowest means the longest run-up in time, then in bars (cadences may differ across a grid)."""
+    return (probe.required_samples * probe.bar_span_ms, probe.required_samples)
+
+
+def slowest_warmup_probe(strategy_key: str, symbol: str, param_ranges: Mapping[str, ParamRange]) -> SlowestProbe:
+    """The slowest candidate's readiness without probing every candidate.
+
+    Most settings (thresholds, sizes) never move readiness; lookbacks and the
+    decision cadence do. So: probe the baseline (every parameter at its
+    smallest value), then each swept parameter alone at its largest value to
+    learn which ones change the answer, then every combination of those with
+    the rest at baseline. Past ``PROBE_BUDGET`` combinations only the extreme
+    assignment (every relevant parameter at its largest value) is probed:
+    readiness is monotone in a lookback, so the extreme is the slowest. The
+    result says which path was taken.
+    """
+    values = {name: sorted(expand_param(spec)) for name, spec in param_ranges.items()}
+    baseline = {name: vals[0] for name, vals in values.items()}
+
+    def _probe(assignment: Mapping[str, float]) -> WarmupProbe:
+        return probe_warmup_samples(strategy_key, {**assignment, "symbol": symbol})
+
+    base = _probe(baseline)
+    swept = [name for name, vals in values.items() if len(vals) > 1]
+    relevant = [name for name in swept if _span_key(_probe({**baseline, name: values[name][-1]})) != _span_key(base)]
+    combinations = math.prod(len(values[name]) for name in relevant)
+    if combinations <= PROBE_BUDGET:
+        assignments = [dict(zip(relevant, combo, strict=True)) for combo in product(*(values[name] for name in relevant))]
+        bounded = False
+    else:
+        assignments = [{name: values[name][-1] for name in relevant}]
+        bounded = True
+    probes = [base, *(_probe({**baseline, **assignment}) for assignment in assignments)]
+    return SlowestProbe(probe=max(probes, key=_span_key), probed_candidates=1 + len(swept) + len(assignments), bounded=bounded)
 
 
 def _hashable(value: object) -> object:
