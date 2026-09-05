@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 import asyncpg
 import pytest
 
+from app.research.grid_search import db
 from app.research.grid_search.schema import ensure_schema
 
 _TABLES = ("research_grid_search_cells", "research_grid_searches", "research_schema_migrations")
@@ -35,6 +36,8 @@ async def conn() -> AsyncIterator[asyncpg.Connection]:
         for table in _TABLES:
             await connection.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await ensure_schema(connection)
+        # Every loop re-ensures after the tables were dropped and recreated above.
+        db._schema_ready_loops.clear()
         yield connection
     finally:
         await connection.close()
