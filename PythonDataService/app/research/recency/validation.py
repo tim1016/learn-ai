@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.recency.eligibility import is_recency_supported
-from app.research.recency.grid import ParamRange, StrategyGridConfig, ValueListRange
+from app.research.sweep.grid import ParamRange, StrategyGridConfig, ValueListRange
 
 # The only DataPolicy this launch path can actually honor today: recency
 # never threads a caller-supplied policy through to the engine — it relies
@@ -68,7 +68,7 @@ def validate_recency_request(
         registration = _STRATEGY_REGISTRY.get(strategy.strategy_key)
         if registration is None:
             raise RecencyRequestInvalidError(f"unknown strategy_key '{strategy.strategy_key}'")
-        if not is_recency_supported(registration.param_schema):
+        if not is_recency_supported(registration):
             raise RecencyRequestInvalidError(f"strategy '{strategy.strategy_key}' is not recency-supported")
 
         low_candidate = {name: _bounds(r)[0] for name, r in strategy.param_ranges.items()}

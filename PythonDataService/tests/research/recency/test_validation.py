@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.research.recency.grid import LowHighStepRange, StrategyGridConfig, ValueListRange
 from app.research.recency.validation import RecencyRequestInvalidError, validate_recency_request
+from app.research.sweep.grid import LowHighStepRange, StrategyGridConfig, ValueListRange
 
 _DATA_POLICY = "polygon-adjusted-regular-minute"
 

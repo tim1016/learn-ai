@@ -35,7 +35,7 @@
             <h4 class="mb-3 mt-0 text-xs font-semibold text-slate-300">{{ strategy.display_name }} parameters</h4>
             <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               @for (entry of numericParams(strategy); track entry[0]) {
-                <app-recency-param-range-input
+                <app-param-range-input
                   [paramName]="entry[0]"
                   [title]="entry[1].title || entry[0]"
                   [defaultValue]="defaultNumericValue(entry[1])"

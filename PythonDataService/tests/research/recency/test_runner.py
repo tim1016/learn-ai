@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from app.research.recency.grid import RunSpec, StrategyGridConfig, ValueListRange
 from app.research.recency.runner import RecencyLaunchConfig, run_recency
+from app.research.sweep.grid import RunSpec, StrategyGridConfig, ValueListRange
 
 
 @dataclass

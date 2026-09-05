@@ -3,12 +3,12 @@ import { FormControl, ReactiveFormsModule } from "@angular/forms";
 import { Checkbox } from "primeng/checkbox";
 
 import type { StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
-import { RecencyParamRangeInputComponent } from "./recency-param-range-input.component";
+import { ParamRangeInputComponent } from "../../../../shared/param-range/param-range-input.component";
 import {
   defaultNumericValue,
   numericStrategyParams,
   type ParamRange,
-} from "./recency-param-range";
+} from "../../../../shared/param-range/param-range";
 
 export interface RecencyRangeChange {
   readonly strategyKey: string;
@@ -18,7 +18,7 @@ export interface RecencyRangeChange {
 
 @Component({
   selector: "app-recency-strategy-selection",
-  imports: [ReactiveFormsModule, Checkbox, RecencyParamRangeInputComponent],
+  imports: [ReactiveFormsModule, Checkbox, ParamRangeInputComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-strategy-selection.component.html",
   styleUrl: "./recency-strategy-selection.component.scss",

@@ -220,6 +220,20 @@ class Portfolio:
     def clear_pending(self) -> None:
         self.pending_orders.clear()
 
+    def rebase(self) -> None:
+        """Return to the configured starting state, keeping only price marks.
+
+        Cash goes back to ``initial_cash``; positions, accumulated fees, and
+        queued orders are dropped. ``reference_price`` survives because it is
+        a fact about the market, not about this book, and the order-id
+        counter keeps counting so ids stay unique across the reset. Used at
+        the warmup → evaluation boundary of a primed backtest.
+        """
+        self.cash = self.initial_cash
+        self.positions.clear()
+        self.total_fees = Decimal(0)
+        self.pending_orders.clear()
+
     def drain_pending(self) -> Iterable[Order]:
         orders = list(self.pending_orders)
         self.pending_orders.clear()

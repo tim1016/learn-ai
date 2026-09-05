@@ -1,0 +1,26 @@
+<app-page-header title="Grid Search" icon="pi-th-large" eyebrow="Strategy Tools" />
+<main class="grid-search">
+  <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">
+    <p-tablist>
+      <p-tab value="new"><i class="pi pi-sliders-h" aria-hidden="true"></i> New Search</p-tab>
+      <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+    </p-tablist>
+    <p-tabpanels>
+      <p-tabpanel value="new">
+        @if (strategiesError(); as error) {
+          <p class="notice notice--error" role="alert">{{ error }}</p>
+        } @else {
+          <app-grid-search-form [strategies]="strategies()" (launched)="onLaunched($event)" />
+        }
+      </p-tabpanel>
+      <p-tabpanel value="history">
+        @if (lookupMessage(); as message) { <p class="notice" role="status">{{ message }}</p> }
+        @if (openSearchId(); as id) {
+          <app-grid-search-result [searchId]="id" [strategies]="strategies()" (closed)="closeSearch()" (deleted)="onDeleted()" />
+        } @else {
+          <app-grid-search-history [strategies]="strategies()" (opened)="openSearch($event)" />
+        }
+      </p-tabpanel>
+    </p-tabpanels>
+  </p-tabs>
+</main>

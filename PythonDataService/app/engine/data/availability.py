@@ -30,7 +30,7 @@ import logging
 import zipfile
 from collections.abc import Container, Sequence
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from itertools import groupby
 from pathlib import Path
 from typing import Any, Literal
@@ -39,53 +39,34 @@ logger = logging.getLogger(__name__)
 
 Resolution = Literal["minute", "daily"]
 
-# US equities open Monday–Friday. This filter is deliberately naive: it
-# ignores exchange holidays. That is harmless for *reporting* — the
-# downstream reader already skips dates with no zip file — but it means
-# `check_availability`'s own expected/missing counts still flag a
-# holiday as perpetually "missing," so a window containing one never
-# reports complete. That no longer forces a re-fetch, though:
-# `_missing_spans` groups over the canonical trading-session calendar
-# (see its docstring) rather than this weekday walk, so a holiday never
-# starts or extends a fetch span. #1830 bounded the leak to the holiday
-# itself; layering the calendar into the span walk (not into this
-# reporting-only filter, which stays this store's one intentionally
-# naive corner) closes it — the window still reports incomplete, but
-# nothing further is ever fetched for a day the market never opened.
-_WEEKEND = {5, 6}
+def _expected_sessions(start: date, end: date) -> list[date]:
+    """Every scheduled NYSE session in ``[start, end]``, from the canonical calendar.
 
+    ``check_availability`` used to walk weekdays here and count every
+    exchange holiday as a day that was perpetually "missing", so a window
+    containing one never reported complete. That was tolerable while the
+    report only decorated a UI; it is not for a preflight that refuses a
+    run on an incomplete window (PRD #1926) — a two-year window contains
+    roughly eighteen closures. Imported here rather than at module top so
+    importing this module stays cheap for callers that never ask.
+    """
+    from app.lean_sidecar.trading_calendar import expected_sessions
 
-def _iter_weekdays(start: date, end: date):
-    current = start
-    one_day = timedelta(days=1)
-    while current <= end:
-        if current.weekday() not in _WEEKEND:
-            yield current
-        current += one_day
+    return expected_sessions(start, end)
 
 
 def _missing_spans(start: date, end: date, missing: Container[date]) -> list[tuple[date, date]]:
     """Group missing days into contiguous fetch spans.
 
-    Adjacency is read off the canonical NYSE trading-session calendar
-    (``app.lean_sidecar.trading_calendar.expected_sessions``), never the
-    weekday-only walk ``check_availability`` still uses for its own
-    expected/missing counts: two missing sessions share a span when no
-    session between them was covered, so a Friday and the following
-    Monday are one span, and a holiday inside the window never starts or
-    extends a span — there is nothing to fetch for a day the market
-    never opened. This is the piece that closes the residual noted on
-    ``_WEEKEND``: it doesn't change what ``check_availability`` reports
-    as "missing," only what ``ensure_range`` bothers fetching for it.
+    Adjacency is read off the canonical NYSE trading-session calendar —
+    the same one ``check_availability`` counts expected days from — so two
+    missing sessions share a span when no session between them was
+    covered (a Friday and the following Monday are one span), and a
+    holiday inside the window never starts or extends a span: there is
+    nothing to fetch for a day the market never opened.
     """
-    # Imported lazily, matching `ensure_range`'s own lazy imports below —
-    # this keeps pure availability-report callers (e.g. the availability
-    # endpoint, which never reaches this function) from paying for the
-    # calendar/pandas stack.
-    from app.lean_sidecar.trading_calendar import expected_sessions
-
     spans: list[tuple[date, date]] = []
-    for is_missing, days in groupby(expected_sessions(start, end), key=lambda day: day in missing):
+    for is_missing, days in groupby(_expected_sessions(start, end), key=lambda day: day in missing):
         if is_missing:
             run = list(days)
             spans.append((run[0], run[-1]))
@@ -182,7 +163,11 @@ def check_availability(
     *,
     resolution: Resolution = "minute",
 ) -> AvailabilityReport:
-    """Scan the given roots and report which weekdays have data on disk.
+    """Scan the given roots and report which trading sessions have data on disk.
+
+    Expected days are the canonical calendar's scheduled sessions — half
+    days included, weekends and exchange closures excluded — so a window is
+    complete exactly when every session the market held is on disk.
 
     The first root that contains a given date "wins" for the ``sources``
     breakdown — matching the read-order used by the corresponding reader
@@ -197,7 +182,7 @@ def check_availability(
     if end < start:
         raise ValueError(f"end ({end}) must not precede start ({start})")
 
-    expected = list(_iter_weekdays(start, end))
+    expected = _expected_sessions(start, end)
     sources: dict[str, list[date]] = {str(r): [] for r in roots}
     found: set[date] = set()
 
@@ -212,7 +197,7 @@ def check_availability(
                     break
     elif resolution == "daily":
         # Read each root's daily zip once and cache the set of dates it
-        # contributes; then walk expected weekdays assigning each to the
+        # contributes; then walk expected sessions assigning each to the
         # first root that has it.
         per_root_dates: list[tuple[Path, set[date]]] = [
             (root, _read_daily_dates(_daily_zip_path(root, symbol))) for root in roots

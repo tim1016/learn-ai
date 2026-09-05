@@ -40,6 +40,7 @@ from app.routers import (
     engine,
     exhaustive_runs,
     golden_fixtures,
+    grid_search,
     indicator_reliability,
     indicators,
     iv30,
@@ -538,6 +539,9 @@ app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
+# Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
+app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
+app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
 app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
 # Research-pipeline walk-forward (Phase C). Registered BEFORE
 # ``research_runs`` so the literal ``/walk-forward`` segment wins

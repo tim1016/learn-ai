@@ -11429,6 +11429,12 @@
             "title": "Resolution",
             "type": "string"
           },
+          "save_study": {
+            "default": true,
+            "description": "Persist this run as a Strategy Lab study and dispatch its parity companion. False keeps the engine result only \u2014 for callers such as Grid Search that record their own summary rows.",
+            "title": "Save Study",
+            "type": "boolean"
+          },
           "session_entry_cutoff": {
             "anyOf": [
               {
@@ -11466,6 +11472,19 @@
             ],
             "description": "YYYY-MM-DD override (legacy: end_date)",
             "title": "To Date"
+          },
+          "warmup_from_date": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "YYYY-MM-DD. Optional earlier data boundary used only to prime indicators; must precede from_date, which then marks where scoring starts. Every reported figure is scoped to the evaluation window [from_date, to_date].",
+            "title": "Warmup From Date"
           }
         },
         "required": [
@@ -11510,6 +11529,16 @@
               }
             ],
             "title": "Error"
+          },
+          "evaluation_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EngineEvaluationWindowResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "fill_mode": {
             "title": "Fill Mode",
@@ -11931,6 +11960,35 @@
           "indicators"
         ],
         "title": "EngineChartResponse",
+        "type": "object"
+      },
+      "EngineEvaluationWindowResponse": {
+        "description": "The interval table a primed run actually executed (PRD #1926 F11).\n\n``data_start_ms`` is the ET-midnight anchor of the first date the engine\nread; ``evaluation_start_ms`` is where scoring began and execution state\nwas reset; ``evaluation_end_ms`` is the half-open end (ET midnight after\nthe last evaluated date). Every figure on the response describes\n``[evaluation_start_ms, evaluation_end_ms)``. For an ordinary run the two\nstarts coincide and ``warmup_primed`` is false. All ``int64 ms UTC``.",
+        "properties": {
+          "data_start_ms": {
+            "title": "Data Start Ms",
+            "type": "integer"
+          },
+          "evaluation_end_ms": {
+            "title": "Evaluation End Ms",
+            "type": "integer"
+          },
+          "evaluation_start_ms": {
+            "title": "Evaluation Start Ms",
+            "type": "integer"
+          },
+          "warmup_primed": {
+            "title": "Warmup Primed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "data_start_ms",
+          "evaluation_start_ms",
+          "evaluation_end_ms",
+          "warmup_primed"
+        ],
+        "title": "EngineEvaluationWindowResponse",
         "type": "object"
       },
       "EngineParityDivergenceModel": {
@@ -14732,6 +14790,812 @@
           "expiry_dates"
         ],
         "title": "GridMetaModel",
+        "type": "object"
+      },
+      "GridSearchCellPageResponse": {
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/GridSearchCellResponse"
+            },
+            "title": "Cells",
+            "type": "array"
+          },
+          "direction": {
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "sort_by": {
+            "title": "Sort By",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "page",
+          "page_size",
+          "sort_by",
+          "direction",
+          "cells"
+        ],
+        "title": "GridSearchCellPageResponse",
+        "type": "object"
+      },
+      "GridSearchCellResponse": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "bars_consumed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bars Consumed"
+          },
+          "completed_at_ms": {
+            "title": "Completed At Ms",
+            "type": "integer"
+          },
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "exploratory": {
+            "title": "Exploratory",
+            "type": "boolean"
+          },
+          "is_leader": {
+            "title": "Is Leader",
+            "type": "boolean"
+          },
+          "max_drawdown_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown Pct"
+          },
+          "net_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit"
+          },
+          "params": {
+            "title": "Params",
+            "type": "object"
+          },
+          "params_hash": {
+            "title": "Params Hash",
+            "type": "string"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Return Pct"
+          },
+          "total_trades": {
+            "title": "Total Trades",
+            "type": "integer"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          }
+        },
+        "required": [
+          "params_hash",
+          "params",
+          "status",
+          "attempt",
+          "total_trades",
+          "net_profit",
+          "total_return_pct",
+          "sharpe_ratio",
+          "max_drawdown_pct",
+          "win_rate",
+          "bars_consumed",
+          "error",
+          "exploratory",
+          "completed_at_ms",
+          "is_leader",
+          "eligible"
+        ],
+        "title": "GridSearchCellResponse",
+        "type": "object"
+      },
+      "GridSearchDetailResponse": {
+        "properties": {
+          "completed_cells": {
+            "title": "Completed Cells",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "expected_cells": {
+            "title": "Expected Cells",
+            "type": "integer"
+          },
+          "failed_cells": {
+            "title": "Failed Cells",
+            "type": "integer"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "finished_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At Ms"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "leader_params": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leader Params"
+          },
+          "leader_params_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leader Params Hash"
+          },
+          "measure": {
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "min_trades": {
+            "title": "Min Trades",
+            "type": "integer"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/SearchOwnerResponse"
+          },
+          "receipt": {
+            "title": "Receipt",
+            "type": "object"
+          },
+          "request": {
+            "title": "Request",
+            "type": "object"
+          },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "resume_refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Refusal"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "uncommitted_changes": {
+            "title": "Uncommitted Changes",
+            "type": "boolean"
+          },
+          "window_end_ms": {
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "strategy_key",
+          "symbol",
+          "status",
+          "job_id",
+          "created_at_ms",
+          "finished_at_ms",
+          "window_start_ms",
+          "window_end_ms",
+          "measure",
+          "min_trades",
+          "expected_cells",
+          "completed_cells",
+          "failed_cells",
+          "leader_params_hash",
+          "leader_params",
+          "incomplete",
+          "uncommitted_changes",
+          "failure_reason",
+          "request",
+          "receipt",
+          "resumable",
+          "resume_refusal"
+        ],
+        "title": "GridSearchDetailResponse",
+        "type": "object"
+      },
+      "GridSearchJobRequest": {
+        "additionalProperties": false,
+        "description": "Body of POST /api/jobs-internal/grid-search \u2014 the spec plus the minted job id.\n\n``resume_search_id`` names an incomplete search to Finish instead: the\nspec fields are ignored and the stored request governs.",
+        "properties": {
+          "commissionPerOrder": {
+            "default": 1.0,
+            "minimum": 0.0,
+            "title": "Commissionperorder",
+            "type": "number"
+          },
+          "endMs": {
+            "description": "Half-open window end, int64 ms UTC",
+            "minimum": 0.0,
+            "title": "Endms",
+            "type": "integer"
+          },
+          "fillMode": {
+            "default": "signal_bar_close",
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open"
+            ],
+            "title": "Fillmode",
+            "type": "string"
+          },
+          "initialCash": {
+            "default": 100000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Initialcash",
+            "type": "number"
+          },
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
+            "type": "string"
+          },
+          "measure": {
+            "default": "sharpe_ratio",
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "minTrades": {
+            "default": 5,
+            "minimum": 1.0,
+            "title": "Mintrades",
+            "type": "integer"
+          },
+          "paramRanges": {
+            "additionalProperties": {
+              "discriminator": {
+                "mapping": {
+                  "low_high_step": "#/components/schemas/app__schemas__grid_search__LowHighStepRangeRequest",
+                  "value_list": "#/components/schemas/app__schemas__grid_search__ValueListRangeRequest"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/app__schemas__grid_search__ValueListRangeRequest"
+                },
+                {
+                  "$ref": "#/components/schemas/app__schemas__grid_search__LowHighStepRangeRequest"
+                }
+              ]
+            },
+            "title": "Paramranges",
+            "type": "object"
+          },
+          "resolution": {
+            "default": "minute",
+            "enum": [
+              "minute",
+              "daily"
+            ],
+            "title": "Resolution",
+            "type": "string"
+          },
+          "resumeSearchId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumesearchid"
+          },
+          "slippagePerShare": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Slippagepershare",
+            "type": "number"
+          },
+          "startMs": {
+            "description": "Half-open window start, int64 ms UTC",
+            "minimum": 0.0,
+            "title": "Startms",
+            "type": "integer"
+          },
+          "strategyKey": {
+            "minLength": 1,
+            "title": "Strategykey",
+            "type": "string"
+          },
+          "symbol": {
+            "pattern": "^[A-Z][A-Z0-9.\\-]{0,11}$",
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategyKey",
+          "symbol",
+          "startMs",
+          "endMs",
+          "jobId"
+        ],
+        "title": "GridSearchJobRequest",
+        "type": "object"
+      },
+      "GridSearchPreflightResponse": {
+        "properties": {
+          "backtest_limit": {
+            "title": "Backtest Limit",
+            "type": "integer"
+          },
+          "combinations": {
+            "title": "Combinations",
+            "type": "integer"
+          },
+          "estimated_seconds": {
+            "title": "Estimated Seconds",
+            "type": "number"
+          },
+          "expected_sessions": {
+            "title": "Expected Sessions",
+            "type": "integer"
+          },
+          "run_up": {
+            "$ref": "#/components/schemas/RunUpPlanResponse"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "total_backtests": {
+            "title": "Total Backtests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "symbol",
+          "combinations",
+          "total_backtests",
+          "backtest_limit",
+          "estimated_seconds",
+          "run_up",
+          "expected_sessions"
+        ],
+        "title": "GridSearchPreflightResponse",
+        "type": "object"
+      },
+      "GridSearchSpecRequest": {
+        "additionalProperties": false,
+        "description": "What the researcher asks for \u2014 the same body for preflight and launch.",
+        "properties": {
+          "commissionPerOrder": {
+            "default": 1.0,
+            "minimum": 0.0,
+            "title": "Commissionperorder",
+            "type": "number"
+          },
+          "endMs": {
+            "description": "Half-open window end, int64 ms UTC",
+            "minimum": 0.0,
+            "title": "Endms",
+            "type": "integer"
+          },
+          "fillMode": {
+            "default": "signal_bar_close",
+            "enum": [
+              "signal_bar_close",
+              "next_bar_open"
+            ],
+            "title": "Fillmode",
+            "type": "string"
+          },
+          "initialCash": {
+            "default": 100000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Initialcash",
+            "type": "number"
+          },
+          "measure": {
+            "default": "sharpe_ratio",
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "minTrades": {
+            "default": 5,
+            "minimum": 1.0,
+            "title": "Mintrades",
+            "type": "integer"
+          },
+          "paramRanges": {
+            "additionalProperties": {
+              "discriminator": {
+                "mapping": {
+                  "low_high_step": "#/components/schemas/app__schemas__grid_search__LowHighStepRangeRequest",
+                  "value_list": "#/components/schemas/app__schemas__grid_search__ValueListRangeRequest"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/app__schemas__grid_search__ValueListRangeRequest"
+                },
+                {
+                  "$ref": "#/components/schemas/app__schemas__grid_search__LowHighStepRangeRequest"
+                }
+              ]
+            },
+            "title": "Paramranges",
+            "type": "object"
+          },
+          "resolution": {
+            "default": "minute",
+            "enum": [
+              "minute",
+              "daily"
+            ],
+            "title": "Resolution",
+            "type": "string"
+          },
+          "slippagePerShare": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Slippagepershare",
+            "type": "number"
+          },
+          "startMs": {
+            "description": "Half-open window start, int64 ms UTC",
+            "minimum": 0.0,
+            "title": "Startms",
+            "type": "integer"
+          },
+          "strategyKey": {
+            "minLength": 1,
+            "title": "Strategykey",
+            "type": "string"
+          },
+          "symbol": {
+            "pattern": "^[A-Z][A-Z0-9.\\-]{0,11}$",
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategyKey",
+          "symbol",
+          "startMs",
+          "endMs"
+        ],
+        "title": "GridSearchSpecRequest",
+        "type": "object"
+      },
+      "GridSearchSummaryResponse": {
+        "description": "The history row: enough to judge a search without opening it.",
+        "properties": {
+          "completed_cells": {
+            "title": "Completed Cells",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "expected_cells": {
+            "title": "Expected Cells",
+            "type": "integer"
+          },
+          "failed_cells": {
+            "title": "Failed Cells",
+            "type": "integer"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "finished_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At Ms"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incomplete": {
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "leader_params": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leader Params"
+          },
+          "leader_params_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leader Params Hash"
+          },
+          "measure": {
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "min_trades": {
+            "title": "Min Trades",
+            "type": "integer"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/SearchOwnerResponse"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "uncommitted_changes": {
+            "title": "Uncommitted Changes",
+            "type": "boolean"
+          },
+          "window_end_ms": {
+            "title": "Window End Ms",
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "title": "Window Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "strategy_key",
+          "symbol",
+          "status",
+          "job_id",
+          "created_at_ms",
+          "finished_at_ms",
+          "window_start_ms",
+          "window_end_ms",
+          "measure",
+          "min_trades",
+          "expected_cells",
+          "completed_cells",
+          "failed_cells",
+          "leader_params_hash",
+          "leader_params",
+          "incomplete",
+          "uncommitted_changes",
+          "failure_reason"
+        ],
+        "title": "GridSearchSummaryResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -18598,34 +19462,6 @@
           "conditions"
         ],
         "title": "LogicNodeOrConditions",
-        "type": "object"
-      },
-      "LowHighStepRangeRequest": {
-        "properties": {
-          "high": {
-            "title": "High",
-            "type": "number"
-          },
-          "low": {
-            "title": "Low",
-            "type": "number"
-          },
-          "step": {
-            "title": "Step",
-            "type": "number"
-          },
-          "type": {
-            "const": "low_high_step",
-            "default": "low_high_step",
-            "title": "Type"
-          }
-        },
-        "required": [
-          "low",
-          "high",
-          "step"
-        ],
-        "title": "LowHighStepRangeRequest",
         "type": "object"
       },
       "ManualOrderBrokerOrderResponse": {
@@ -28002,6 +28838,49 @@
         "title": "RunTrade",
         "type": "object"
       },
+      "RunUpPlanResponse": {
+        "properties": {
+          "bar_span_ms": {
+            "title": "Bar Span Ms",
+            "type": "integer"
+          },
+          "carved_from_range": {
+            "title": "Carved From Range",
+            "type": "boolean"
+          },
+          "data_start_ms": {
+            "title": "Data Start Ms",
+            "type": "integer"
+          },
+          "evaluation_end_ms": {
+            "title": "Evaluation End Ms",
+            "type": "integer"
+          },
+          "evaluation_start_ms": {
+            "title": "Evaluation Start Ms",
+            "type": "integer"
+          },
+          "required_samples": {
+            "title": "Required Samples",
+            "type": "integer"
+          },
+          "run_up_sessions": {
+            "title": "Run Up Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data_start_ms",
+          "evaluation_start_ms",
+          "evaluation_end_ms",
+          "required_samples",
+          "bar_span_ms",
+          "run_up_sessions",
+          "carved_from_range"
+        ],
+        "title": "RunUpPlanResponse",
+        "type": "object"
+      },
       "RunVerdict": {
         "properties": {
           "available_required_metrics": {
@@ -28885,6 +29764,59 @@
           "bot_configuration_hash"
         ],
         "title": "SealedBotProgram",
+        "type": "object"
+      },
+      "SearchOwnerResponse": {
+        "properties": {
+          "fold_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fold Index"
+          },
+          "kind": {
+            "enum": [
+              "user",
+              "walk_forward"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "owner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Id"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          }
+        },
+        "required": [
+          "kind",
+          "owner_id",
+          "fold_index",
+          "phase"
+        ],
+        "title": "SearchOwnerResponse",
         "type": "object"
       },
       "SeasonalityMonthResponse": {
@@ -31495,17 +32427,17 @@
             "additionalProperties": {
               "discriminator": {
                 "mapping": {
-                  "low_high_step": "#/components/schemas/LowHighStepRangeRequest",
-                  "value_list": "#/components/schemas/ValueListRangeRequest"
+                  "low_high_step": "#/components/schemas/app__routers__jobs__LowHighStepRangeRequest",
+                  "value_list": "#/components/schemas/app__routers__jobs__ValueListRangeRequest"
                 },
                 "propertyName": "type"
               },
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/ValueListRangeRequest"
+                  "$ref": "#/components/schemas/app__routers__jobs__ValueListRangeRequest"
                 },
                 {
-                  "$ref": "#/components/schemas/LowHighStepRangeRequest"
+                  "$ref": "#/components/schemas/app__routers__jobs__LowHighStepRangeRequest"
                 }
               ]
             },
@@ -31587,12 +32519,20 @@
           "strategy_bars": {
             "$ref": "#/components/schemas/StrategyBarCadenceInfo"
           },
+          "strategy_category": {
+            "default": "production_candidate",
+            "title": "Strategy Category",
+            "type": "string"
+          },
           "supported_resolutions": {
             "items": {
               "type": "string"
             },
             "title": "Supported Resolutions",
             "type": "array"
+          },
+          "sweep_eligibility": {
+            "$ref": "#/components/schemas/SweepEligibilityInfo"
           }
         },
         "required": [
@@ -33455,6 +34395,33 @@
           "action"
         ],
         "title": "SurvivalRule",
+        "type": "object"
+      },
+      "SweepEligibilityInfo": {
+        "properties": {
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "offending_parameters": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Offending Parameters",
+            "type": "array"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reason Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "eligible"
+        ],
+        "title": "SweepEligibilityInfo",
         "type": "object"
       },
       "SymbolCoverageSpan": {
@@ -35376,28 +36343,6 @@
         "title": "ValidationSummary",
         "type": "object"
       },
-      "ValueListRangeRequest": {
-        "properties": {
-          "type": {
-            "const": "value_list",
-            "default": "value_list",
-            "title": "Type"
-          },
-          "values": {
-            "items": {
-              "type": "number"
-            },
-            "minItems": 1,
-            "title": "Values",
-            "type": "array"
-          }
-        },
-        "required": [
-          "values"
-        ],
-        "title": "ValueListRangeRequest",
-        "type": "object"
-      },
       "VerdictModel": {
         "description": "Top-line verdict card summarizing the best-horizon analysis.",
         "properties": {
@@ -36800,6 +37745,108 @@
           "signal_reason"
         ],
         "title": "_TradeRecordModel",
+        "type": "object"
+      },
+      "app__routers__jobs__LowHighStepRangeRequest": {
+        "properties": {
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "step": {
+            "title": "Step",
+            "type": "number"
+          },
+          "type": {
+            "const": "low_high_step",
+            "default": "low_high_step",
+            "title": "Type"
+          }
+        },
+        "required": [
+          "low",
+          "high",
+          "step"
+        ],
+        "title": "LowHighStepRangeRequest",
+        "type": "object"
+      },
+      "app__routers__jobs__ValueListRangeRequest": {
+        "properties": {
+          "type": {
+            "const": "value_list",
+            "default": "value_list",
+            "title": "Type"
+          },
+          "values": {
+            "items": {
+              "type": "number"
+            },
+            "minItems": 1,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "title": "ValueListRangeRequest",
+        "type": "object"
+      },
+      "app__schemas__grid_search__LowHighStepRangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "step": {
+            "title": "Step",
+            "type": "number"
+          },
+          "type": {
+            "const": "low_high_step",
+            "default": "low_high_step",
+            "title": "Type"
+          }
+        },
+        "required": [
+          "low",
+          "high",
+          "step"
+        ],
+        "title": "LowHighStepRangeRequest",
+        "type": "object"
+      },
+      "app__schemas__grid_search__ValueListRangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "value_list",
+            "default": "value_list",
+            "title": "Type"
+          },
+          "values": {
+            "items": {
+              "type": "number"
+            },
+            "minItems": 1,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "title": "ValueListRangeRequest",
         "type": "object"
       }
     }
@@ -46271,6 +47318,49 @@
         ]
       }
     },
+    "/api/jobs-internal/grid-search": {
+      "post": {
+        "description": "Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable.",
+        "operationId": "start_grid_search_job_api_jobs_internal_grid_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GridSearchJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Grid Search Job Api Jobs Internal Grid Search Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Grid Search Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/jobs-internal/lean-engine-run": {
       "post": {
         "description": "Kick off a LEAN-sidecar run in a worker thread. Returns 202.\n\nWraps ``app.services.lean_sidecar_service.run_trusted_sample`` so the\nEngine Lab's ``runLean()`` path shares the same SSE-driven progress\nsurface as the canonical Python engine. The underlying orchestrator\nreceives ``on_phase`` / ``on_log`` callbacks bound to this job's\nprogress emitter, so the dock and history-auto-refresh wiring need\nno LEAN-specific code paths.\n\nThe synchronous ``/api/lean-sidecar/trusted-runs`` endpoint stays\navailable for test infra and reconcile scripts that target it\ndirectly \u2014 it shares the same orchestrator, just without the\njob-framework envelope.",
@@ -47669,6 +48759,329 @@
         "summary": "List Features",
         "tags": [
           "research"
+        ]
+      }
+    },
+    "/api/research/grid-search": {
+      "get": {
+        "description": "History: user-launched searches only, newest first. Walk-forward-owned sweeps never appear.",
+        "operationId": "list_grid_searches_api_research_grid_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "strategy_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "description": "The launch's job id, so a client can find the search it just started",
+            "in": "query",
+            "name": "job_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The launch's job id, so a client can find the search it just started",
+              "title": "Job Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GridSearchSummaryResponse"
+                  },
+                  "title": "Response List Grid Searches Api Research Grid Search Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Grid Searches",
+        "tags": [
+          "research-grid-search"
+        ]
+      }
+    },
+    "/api/research/grid-search/preflight": {
+      "post": {
+        "description": "Validate, size, and plan a search without launching it.",
+        "operationId": "preflight_grid_search_api_research_grid_search_preflight_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GridSearchSpecRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GridSearchPreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preflight Grid Search",
+        "tags": [
+          "research-grid-search"
+        ]
+      }
+    },
+    "/api/research/grid-search/{search_id}": {
+      "delete": {
+        "description": "Cancel a running search first and wait for the worker's acknowledgement, then remove it.",
+        "operationId": "delete_grid_search_api_research_grid_search__search_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "search_id",
+            "required": true,
+            "schema": {
+              "title": "Search Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Grid Search",
+        "tags": [
+          "research-grid-search"
+        ]
+      },
+      "get": {
+        "operationId": "get_grid_search_api_research_grid_search__search_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "search_id",
+            "required": true,
+            "schema": {
+              "title": "Search Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GridSearchDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Grid Search",
+        "tags": [
+          "research-grid-search"
+        ]
+      }
+    },
+    "/api/research/grid-search/{search_id}/cells": {
+      "get": {
+        "operationId": "list_grid_search_cells_api_research_grid_search__search_id__cells_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "search_id",
+            "required": true,
+            "schema": {
+              "title": "Search Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "default": "sharpe_ratio",
+              "title": "Sort By",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Direction",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GridSearchCellPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Grid Search Cells",
+        "tags": [
+          "research-grid-search"
         ]
       }
     },

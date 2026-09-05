@@ -1,0 +1,118 @@
+<section class="form" aria-labelledby="grid-search-form-title">
+  <header class="form__header">
+    <p class="eyebrow">Parameter sweep</p>
+    <h2 id="grid-search-form-title">New search</h2>
+    <p class="muted">Sweep one strategy's settings over one window. Every number a search produces is in-sample.</p>
+  </header>
+
+  <div class="form__grid">
+    <label class="field">
+      <span>Symbol</span>
+      <input #symbolInput pInputText type="text" [value]="symbol()" (input)="setSymbol(symbolInput.value)" />
+    </label>
+
+    <label class="field">
+      <span>Strategy</span>
+      <select [value]="strategyKey() ?? ''" (change)="onStrategyEvent($event)" aria-label="Strategy">
+        @for (strategy of eligible(); track strategy.name) {
+          <option [value]="strategy.name">{{ strategy.display_name }}</option>
+        }
+      </select>
+    </label>
+
+    <label class="field">
+      <span>From</span>
+      <input #fromInput pInputText type="date" [value]="fromDate()" (input)="setDate('from', fromInput.value)" />
+    </label>
+    <label class="field">
+      <span>To</span>
+      <input #toInput pInputText type="date" [value]="toDate()" (input)="setDate('to', toInput.value)" />
+    </label>
+  </div>
+
+  @if (ineligible().length > 0) {
+    <ul class="ineligible" aria-label="Strategies that cannot be swept">
+      @for (strategy of ineligible(); track strategy.name) {
+        <li>
+          <strong>{{ strategy.display_name }}</strong>
+          @if (strategy.sweep_eligibility; as eligibility) {
+            @for (code of eligibility.reason_codes; track code) {
+              <span class="tag">{{ code | receiptLabel }}</span>
+            }
+            @if (eligibility.offending_parameters.length > 0) {
+              <span class="muted">({{ eligibility.offending_parameters.join(', ') }})</span>
+            }
+          }
+        </li>
+      }
+    </ul>
+  }
+
+  @if (selectedStrategy(); as strategy) {
+    <fieldset class="params">
+      <legend>Settings — tick the ones to vary ({{ variedCount() }} varied)</legend>
+      @for (row of params(); track row.name) {
+        <div class="param">
+          <label class="param__toggle">
+            <input type="checkbox" [checked]="row.vary" (change)="onVaryEvent(row.name, $event)" />
+            <span>{{ row.property.title ?? row.name }}</span>
+            @if (row.property.minimum !== undefined || row.property.maximum !== undefined) {
+              <small class="muted">allowed {{ row.property.minimum ?? '−∞' }} … {{ row.property.maximum ?? '∞' }}</small>
+            }
+          </label>
+          @if (row.vary) {
+            <app-param-range-input [paramName]="row.name" [title]="row.property.title ?? row.name" [defaultValue]="row.fixedValue" [range]="row.range" (rangeChange)="setRange(row.name, $event)" />
+          } @else {
+            <label class="param__fixed">
+              <span class="sr-only">Fixed value for {{ row.property.title ?? row.name }}</span>
+              <input #fixedInput pInputText type="number" [value]="row.fixedValue" [min]="row.property.minimum ?? null" [max]="row.property.maximum ?? null" (input)="setFixed(row.name, fixedInput.value)" />
+            </label>
+          }
+        </div>
+      }
+    </fieldset>
+  }
+
+  <details class="advanced">
+    <summary>Costs and ranking</summary>
+    <div class="form__grid">
+      <label class="field"><span>Resolution</span>
+        <select [value]="resolution()" (change)="onResolutionEvent($event)" aria-label="Resolution">
+          @for (option of resolutions(); track option) { <option [value]="option">{{ option | receiptLabel }}</option> }
+        </select>
+      </label>
+      <label class="field"><span>Fill mode</span>
+        <select [value]="fillMode()" (change)="onFillModeEvent($event)" aria-label="Fill mode">
+          <option value="signal_bar_close">Signal bar close</option>
+          <option value="next_bar_open">Next bar open</option>
+        </select>
+      </label>
+      <label class="field"><span>Initial cash</span><input #cashInput pInputText type="number" min="0" [value]="initialCash()" (input)="setNumber('cash', cashInput.value)" /></label>
+      <label class="field"><span>Commission / order</span><input #commissionInput pInputText type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="setNumber('commission', commissionInput.value)" /></label>
+      <label class="field"><span>Slippage / share</span><input #slippageInput pInputText type="number" min="0" step="0.01" [value]="slippagePerShare()" (input)="setNumber('slippage', slippageInput.value)" /></label>
+      <label class="field"><span>Ranking measure</span>
+        <select [value]="measure()" (change)="onMeasureEvent($event)" aria-label="Ranking measure">
+          @for (option of measures; track option) { <option [value]="option">{{ option | receiptLabel }}</option> }
+        </select>
+      </label>
+      <label class="field"><span>Minimum trades</span><input #minTradesInput pInputText type="number" min="1" [value]="minTrades()" (input)="setNumber('minTrades', minTradesInput.value)" /></label>
+    </div>
+  </details>
+
+  <footer class="form__footer">
+    <div class="preflight" aria-live="polite">
+      @if (checking()) { <p class="muted">Checking…</p> }
+      @else if (refusal(); as refused) {
+        <p class="refusal" role="alert"><strong>{{ refused.code | receiptLabel }}</strong> — {{ refused.message }}</p>
+      } @else if (preflightError(); as message) {
+        <p class="refusal" role="alert">{{ message }}</p>
+      } @else if (preflight(); as plan) {
+        <p class="count"><strong>{{ plan.total_backtests | number }}</strong> backtests (limit {{ plan.backtest_limit | number }}) · estimated ~{{ plan.estimated_seconds | number: '1.0-0' }} s — an estimate, not a guarantee</p>
+        <p class="muted">{{ runUpSentence(plan) }} Results start <app-timestamp-display [value]="plan.run_up.evaluation_start_ms" mode="date-et" />.</p>
+      }
+    </div>
+    <button pButton type="button" [disabled]="!canLaunch()" (click)="launch()">
+      <i class="pi pi-play" aria-hidden="true"></i><span>Launch search</span>
+    </button>
+  </footer>
+</section>

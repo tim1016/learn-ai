@@ -617,17 +617,16 @@ def _write_cache_provenance(cache_root: Path, symbol: str) -> None:
 def _close_materialization_pool(catalog_client) -> None:
     """Close the pool ``materialize_engine_run`` opened on its own loop.
 
-    It runs on a process-wide background loop of its own (see
-    ``run_materialization._materialization_loop``), so the pool it created
-    belongs to that loop and cannot be closed from here by awaiting; the close
-    has to be submitted back onto the same loop.
+    It runs on the process-wide background loop (``app.utils.background_loop``),
+    so the pool it created belongs to that loop and cannot be closed from here
+    by awaiting; the close has to be submitted back onto the same loop.
     """
     import asyncio
     import contextlib
 
-    from app.data_lake import run_materialization
+    from app.utils import background_loop as shared_loop
 
-    loop = run_materialization._loop
+    loop = shared_loop._loop
     if loop is None or loop.is_closed():
         return
     with contextlib.suppress(Exception):

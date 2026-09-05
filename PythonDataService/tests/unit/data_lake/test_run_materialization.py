@@ -37,6 +37,7 @@ from app.data_lake.run_materialization import (
 )
 from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
 from app.lean_sidecar import config as sidecar_config
+from app.utils.background_loop import background_loop
 
 # 2024-05-20 is a Monday and a full NYSE session; 09:30 ET == 13:30 UTC.
 TRADING_DAY = date(2024, 5, 20)
@@ -1401,10 +1402,10 @@ def test_materialize_run_data_sync_reuses_one_loop_for_the_process(monkeypatch):
     monkeypatch.setattr(run_materialization, "_materialize_run_data", _fake)
 
     _materialize_run_data_sync(_spec(), resolution="minute")
-    first_loop = run_materialization._materialization_loop()
+    first_loop = background_loop()
     _materialize_run_data_sync(_spec(), resolution="minute")
 
-    assert run_materialization._materialization_loop() is first_loop
+    assert background_loop() is first_loop
     assert not first_loop.is_closed()
 
 

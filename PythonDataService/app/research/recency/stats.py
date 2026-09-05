@@ -24,11 +24,12 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date
 from math import fsum
 from zoneinfo import ZoneInfo
 
 from app.lean_sidecar.trading_calendar import trading_session_count
+from app.utils.session_anchors import et_date_at_ms
 
 _ET = ZoneInfo("America/New_York")
 
@@ -78,9 +79,10 @@ def _ms_to_et_date(ms: int) -> date:
     """Resolve an ``int64 ms UTC`` instant to its America/New_York calendar date.
 
     Kept private so a language-native ``date`` never crosses the function's
-    module boundary; canonical temporal values remain ``int64 ms UTC``.
+    module boundary; canonical temporal values remain ``int64 ms UTC``. The
+    arithmetic is the shared anchor helper's.
     """
-    return datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_ET).date()
+    return et_date_at_ms(ms)
 
 
 def holding_sessions(entry_ms: int, exit_ms: int) -> int:

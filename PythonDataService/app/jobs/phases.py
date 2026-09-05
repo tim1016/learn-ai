@@ -118,7 +118,17 @@ SPY_EMA_EXHAUSTIVE_PHASES: tuple[Phase, ...] = (
 )
 
 
+# ── Grid Search (PRD #1926) ─────────────────────────────────────────────
+GRID_SEARCH_PHASES: tuple[Phase, ...] = (
+    Phase("preflight", "Validating the grid and freezing the data snapshot", 1),
+    Phase("running", "Running backtests", 8),
+    Phase("ranking", "Ranking combinations", 1),
+    Phase("completed", "Search complete", 1),
+)
+
+
 JOB_PHASES: dict[str, tuple[Phase, ...]] = {
+    "grid_search": GRID_SEARCH_PHASES,
     "cross_sectional": CROSS_SECTIONAL_PHASES,
     "feature_research": FEATURE_RESEARCH_PHASES,
     "signal_engine": SIGNAL_ENGINE_PHASES,

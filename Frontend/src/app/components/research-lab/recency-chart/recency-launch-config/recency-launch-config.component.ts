@@ -16,7 +16,7 @@ import {
   numericStrategyParams,
   type ParamRange,
   type StrategyRangeConfig,
-} from "./recency-param-range";
+} from "../../../../shared/param-range/param-range";
 
 const PRESET_MONTHS: Record<Exclude<DurationPreset, "custom">, number> = { "3m": 3, "6m": 6, "12m": 12, "24m": 24 };
 const MAX_MONTHS = 24;

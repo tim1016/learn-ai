@@ -1,13 +1,15 @@
 /**
  * Wire-matching parameter range types + a client-side pre-launch run-count
- * estimate. Mirrors PythonDataService/app/research/recency/grid.py's
- * ValueListRange / LowHighStepRange / expand_grid size math (design spec
- * D4, D11) — the server is the actual source of truth (and rejects a
- * pathological grid past its own sanity ceiling); this is a fast,
- * client-only preview so the run count updates as the user edits ranges.
+ * estimate. Mirrors PythonDataService/app/research/sweep/grid.py's
+ * ValueListRange / LowHighStepRange / expand_grid size math (Recency Chart
+ * design spec D4, D11; Grid Search PRD #1926) — the server is the actual
+ * source of truth (and rejects a pathological grid past its own sanity
+ * ceiling); this is a fast, client-only preview so the count updates as the
+ * user edits ranges. Shared by the Recency Chart, Grid Search, and
+ * Walk-Forward forms.
  */
 
-import type { ParamProperty, StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
+import type { ParamProperty, StrategyInfo } from "../../components/strategy-lab/strategy-lab.models";
 
 export interface ValueListRange {
   type: "value_list";

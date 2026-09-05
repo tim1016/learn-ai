@@ -1,0 +1,6 @@
+:host { display: block; min-width: 0; }
+.grid-search { display: grid; gap: var(--space-4); min-width: 0; }
+.notice { border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-surface); color: var(--text-secondary); padding: var(--space-3); font-size: var(--fs-xs); margin: 0 0 var(--space-3); }
+.notice--error { border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); color: var(--danger); }
+:host ::ng-deep .p-tabpanels { padding: 0; background: transparent; }
+:host ::ng-deep .p-tabpanel { display: block; padding: var(--page-pad-y) 0; background: transparent; }

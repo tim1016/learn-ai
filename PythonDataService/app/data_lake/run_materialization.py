@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -49,6 +48,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
     trading_date_to_calendar_anchor_ms,
 )
+from app.utils.background_loop import run_on_background_loop
 
 logger = logging.getLogger(__name__)
 
@@ -238,58 +238,16 @@ async def _materialize_run_data(
 #
 # Backtests are synchronous and execute on worker threads (FastAPI's
 # threadpool for the sync route, the Jobs worker's own thread otherwise).
-# An asyncpg pool belongs to the event loop that created it, and
-# ``catalog_client`` keys its pools by that loop (a bare process-global pool
-# used to bind to whichever loop called ``init_pool()`` first, breaking
-# every other loop's catalog calls the moment coexistence with
-# ``/api/data-lake/*`` — which runs on the FastAPI app loop — actually
-# happened; see ``catalog_client``'s own module comment). Loop-awareness
-# there means a fresh ``asyncio.run()`` per call would ALSO work correctly
-# here now, each call getting a valid pool for its own throwaway loop — but
-# it would pay for a brand-new asyncpg pool (real Postgres connections) on
-# every single backtest, and never close it, since nothing calls
-# ``close_pool()`` on a throwaway loop after the fact. A process-wide lock
-# would avoid that churn by serializing everything onto one pool, which is
-# worse than what it replaces — the policy store's lock is per symbol, so
-# two runs on different symbols never wait on each other today.
-#
-# So: one long-lived loop for the whole process. The pool is created on it
-# once, concurrent runs submit onto it and interleave there, and who
-# fetches what stays a question for the catalog rather than for a mutex.
-_loop_lock = threading.Lock()
-_loop: asyncio.AbstractEventLoop | None = None
-
-
-def _materialization_loop() -> asyncio.AbstractEventLoop:
-    """Return the process-wide loop that owns the catalog connection pool."""
-    global _loop
-    with _loop_lock:
-        if _loop is None or _loop.is_closed():
-            loop = asyncio.new_event_loop()
-            thread = threading.Thread(
-                target=loop.run_forever,
-                name="data-lake-materialization",
-                daemon=True,
-            )
-            thread.start()
-            _loop = loop
-        return _loop
+# An asyncpg pool belongs to the event loop that created it, so this bridge
+# submits onto the one process-wide loop in ``app.utils.background_loop``
+# — the pool is created on it once and concurrent runs interleave there,
+# and who fetches what stays a question for the catalog rather than for a
+# mutex. The loop used to live in this module; Grid Search and Walk-Forward
+# persistence share it now, so it moved out (PRD #1926 F15).
 
 
 def _materialize_run_data_sync(spec: DataRunSpec, *, resolution: EngineResolution) -> DataAvailabilityResult:
     """Blocking :func:`_materialize_run_data` for callers without an event loop."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass
-    else:
-        raise RuntimeError(
-            "_materialize_run_data_sync was called from a running event loop; await _materialize_run_data instead"
-        )
-
-    future = asyncio.run_coroutine_threadsafe(
-        _materialize_run_data(spec, resolution=resolution), _materialization_loop()
-    )
     # The coroutine's own deadline is fetch_timeout_seconds; allow a small
     # margin so the wait unwinds through the coroutine's return path rather
     # than being cancelled here.
@@ -300,7 +258,10 @@ def _materialize_run_data_sync(spec: DataRunSpec, *, resolution: EngineResolutio
     # then completes lands in the catalog with no caller waiting for it. That
     # is harmless (the work is idempotent and the row is correct) but it means
     # a timed-out run can still be holding a lease for a while afterwards.
-    return future.result(timeout=spec.fetch_timeout_seconds + 30)
+    return run_on_background_loop(
+        _materialize_run_data(spec, resolution=resolution),
+        timeout=spec.fetch_timeout_seconds + 30,
+    )
 
 
 def _describe_failures(failures: Iterable[ArtifactFailure]) -> str:

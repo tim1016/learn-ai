@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeGridSize, type StrategyRangeConfig } from "./recency-param-range";
+import { computeGridSize, type StrategyRangeConfig } from "./param-range";
 
 describe("computeGridSize", () => {
   it("multiplies symbol count by the cartesian product of param ranges", () => {

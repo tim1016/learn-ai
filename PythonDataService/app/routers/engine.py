@@ -16,7 +16,8 @@ import json
 import logging
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as time_of_day
 from decimal import Decimal
@@ -69,7 +70,8 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.research.recency.eligibility import is_recency_supported
+from app.research.sweep.eligibility import sweep_eligibility
+from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
@@ -93,6 +95,7 @@ from app.services.strategy_lean_source_service import (
     StrategyLeanSourceNotFoundError,
     resolve_strategy_lean_source,
 )
+from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
@@ -234,6 +237,33 @@ class EngineBacktestRequest(BaseModel):
         pattern=r"^\d{4}-\d{2}-\d{2}$",
         validation_alias=AliasChoices("to_date", "end_date"),
     )
+    # Warmup / evaluation-window semantics (PRD #1925, "the gate"). Bars from
+    # ``warmup_from_date`` up to ``from_date`` prime indicators and stateful
+    # primitives; at ``from_date`` the engine resets execution state and every
+    # reported figure — trades, curve, statistics, bars, insights, logs — is
+    # scoped to ``[from_date, to_date]``. Omitted (the default) is the
+    # historical single-phase run, byte-identical to before this field existed.
+    warmup_from_date: str | None = Field(
+        None,
+        description=(
+            "YYYY-MM-DD. Optional earlier data boundary used only to prime "
+            "indicators; must precede from_date, which then marks where "
+            "scoring starts. Every reported figure is scoped to the "
+            "evaluation window [from_date, to_date]."
+        ),
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    )
+    # Study persistence is unconditional by default because Strategy Lab's
+    # history depends on it. A sweep that keeps its own summary rows opts out
+    # (PRD #1926: "The per-backtest study save is suppressed").
+    save_study: bool = Field(
+        True,
+        description=(
+            "Persist this run as a Strategy Lab study and dispatch its parity "
+            "companion. False keeps the engine result only — for callers such "
+            "as Grid Search that record their own summary rows."
+        ),
+    )
     initial_cash: float | None = Field(None, ge=0)
     # Strategy-specific parameters — validated per-strategy against the
     # corresponding ``StrategyParamsBase`` subclass in the registry. Left
@@ -320,6 +350,20 @@ class EngineBacktestRequest(BaseModel):
             input_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
             strategy_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
         )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_warmup_window(self) -> EngineBacktestRequest:
+        """A warmup boundary needs an evaluation start to hand over to."""
+        if self.warmup_from_date is None:
+            return self
+        if self.from_date is None:
+            raise ValueError("warmup_from_date requires from_date: the evaluation window needs an explicit start")
+        if self.warmup_from_date >= self.from_date:
+            raise ValueError(
+                f"warmup_from_date={self.warmup_from_date!r} must precede from_date={self.from_date!r}; "
+                "the warmup phase ends where scoring begins"
+            )
         return self
 
     @model_validator(mode="after")
@@ -441,6 +485,23 @@ class EngineTradeResponse(BaseModel):
     is_synthetic_exit: bool = False
 
 
+class EngineEvaluationWindowResponse(BaseModel):
+    """The interval table a primed run actually executed (PRD #1926 F11).
+
+    ``data_start_ms`` is the ET-midnight anchor of the first date the engine
+    read; ``evaluation_start_ms`` is where scoring began and execution state
+    was reset; ``evaluation_end_ms`` is the half-open end (ET midnight after
+    the last evaluated date). Every figure on the response describes
+    ``[evaluation_start_ms, evaluation_end_ms)``. For an ordinary run the two
+    starts coincide and ``warmup_primed`` is false. All ``int64 ms UTC``.
+    """
+
+    data_start_ms: int
+    evaluation_start_ms: int
+    evaluation_end_ms: int
+    warmup_primed: bool
+
+
 class EngineBacktestResponse(BaseModel):
     success: bool
     strategy_name: str
@@ -486,15 +547,23 @@ class EngineBacktestResponse(BaseModel):
     # Null when the data lake is off, or when the run materialized nothing:
     # a run that read the pre-lake policy cache has no lake bytes to name.
     lake_data_availability_hash: str | None = None
+    # Absent only on a failed run: the window the figures above describe.
+    evaluation_window: EngineEvaluationWindowResponse | None = None
 
 
 class ResolvedRunConfiguration(BaseModel):
-    """The concrete configuration the initialized strategy actually executed."""
+    """The concrete configuration the initialized strategy actually executed.
+
+    ``start_date`` is the evaluation start — the date the persisted study's
+    figures begin — and ``warmup_start_date`` the earlier boundary the run
+    read from when it was primed (``None`` for an ordinary run).
+    """
 
     start_date: str
     end_date: str
     resolution: Literal["minute", "daily"]
     parameters: dict[str, Any]
+    warmup_start_date: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -566,8 +635,13 @@ def _apply_overrides(strategy: Strategy, req: EngineBacktestRequest) -> None:
     The strategy's ``initialize`` has already run by the time this is
     called, so any override here replaces the value set by the algorithm.
     """
-    if req.from_date:
-        d = datetime.strptime(req.from_date, "%Y-%m-%d")
+    data_start = req.warmup_from_date or req.from_date
+    if data_start:
+        # The strategy's start is where the engine begins READING. When a
+        # warmup boundary is supplied that is earlier than the evaluation
+        # start, which ``execute_engine_backtest`` hands to the engine
+        # separately so scoring is scoped to ``from_date`` onward.
+        d = datetime.strptime(data_start, "%Y-%m-%d")
         strategy.set_start_date(d.year, d.month, d.day)
     if req.to_date:
         d = datetime.strptime(req.to_date, "%Y-%m-%d")
@@ -608,12 +682,52 @@ def _resolved_run_configuration(
     if strategy.start_date is None or strategy.end_date is None:
         raise RuntimeError("initialized strategy did not resolve an execution date window")
     parameters = validated_params.model_dump(mode="json", exclude=registration.hidden_params)
+    window = _evaluation_dates(request, strategy)
     return ResolvedRunConfiguration(
-        start_date=strategy.start_date.date().isoformat(),
-        end_date=strategy.end_date.date().isoformat(),
+        start_date=window.evaluation_start.isoformat(),
+        end_date=window.evaluation_end.isoformat(),
         resolution=request.resolution,
         parameters=parameters,
+        warmup_start_date=window.data_start.isoformat() if window.primed else None,
     )
+
+
+@dataclass(frozen=True)
+class _EvaluationDates:
+    """The interval table as inclusive ET trading dates, for the router's own arithmetic."""
+
+    data_start: date
+    evaluation_start: date
+    evaluation_end: date
+    primed: bool
+
+    def response(self) -> EngineEvaluationWindowResponse:
+        return EngineEvaluationWindowResponse(
+            data_start_ms=et_midnight_ms(self.data_start),
+            evaluation_start_ms=et_midnight_ms(self.evaluation_start),
+            evaluation_end_ms=et_day_end_ms(self.evaluation_end),
+            warmup_primed=self.primed,
+        )
+
+
+def _evaluation_dates(request: EngineBacktestRequest, strategy: Strategy) -> _EvaluationDates:
+    """The interval table for an initialized strategy under ``request``."""
+    if strategy.start_date is None or strategy.end_date is None:
+        raise RuntimeError("initialized strategy did not resolve an execution date window")
+    data_start = strategy.start_date.date()
+    primed = request.warmup_from_date is not None
+    # ``_apply_overrides`` pointed the strategy at the warmup boundary, so the
+    # evaluation start is the request's own ``from_date`` — validated to be
+    # present and later than the warmup start whenever one was supplied.
+    evaluation_start = date.fromisoformat(request.from_date) if primed and request.from_date else data_start
+    return _EvaluationDates(data_start=data_start, evaluation_start=evaluation_start, evaluation_end=strategy.end_date.date(), primed=primed)
+
+
+def _evaluation_start_ms(request: EngineBacktestRequest) -> int | None:
+    """ET-midnight ``int64 ms UTC`` anchor of the evaluation start, if primed."""
+    if request.warmup_from_date is None or request.from_date is None:
+        return None
+    return et_midnight_ms(_parse_iso_date(request.from_date, "from_date"))
 
 
 def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
@@ -663,6 +777,12 @@ class StrategyBarCadenceInfo(BaseModel):
     parameter: str | None = None
 
 
+class SweepEligibilityInfo(BaseModel):
+    eligible: bool
+    reason_codes: list[str] = Field(default_factory=list)
+    offending_parameters: list[str] = Field(default_factory=list)
+
+
 class StrategyInfo(BaseModel):
     name: str
     display_name: str
@@ -693,9 +813,12 @@ class StrategyInfo(BaseModel):
     # semantics. ``None`` means Engine Lab must not offer a LEAN parity run.
     lean_twin: str | None = None
     strategy_bars: StrategyBarCadenceInfo
-    # Recency Chart eligibility (design spec D1) — True iff every param
-    # besides ``symbol`` is numeric (int/float). Derived structurally from
-    # the schema, not hand-flagged; see app/research/recency/eligibility.py.
+    # Sweep eligibility (PRD #1926): the one structured answer Recency Chart,
+    # Grid Search and Walk-Forward all derive from — flag, reason codes, and
+    # the offending PUBLIC parameters. ``recency_supported`` is its flag,
+    # kept for existing consumers.
+    strategy_category: str = "production_candidate"
+    sweep_eligibility: SweepEligibilityInfo = Field(default_factory=lambda: SweepEligibilityInfo(eligible=False))
     recency_supported: bool = False
 
 
@@ -714,6 +837,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
             continue
         cadence_param = reg.strategy_bars.multiplier
         defaults = reg.param_schema.model_validate({})
+        eligibility = sweep_eligibility(reg)
         multiplier = (
             getattr(defaults, cadence_param.field) if isinstance(cadence_param, ChartParamRef) else cadence_param
         )
@@ -729,7 +853,9 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 pine_available=reg.pine_generator is not None,
                 sizing_surface=reg.sizing_surface,
                 lean_twin=reg.lean_twin,
-                recency_supported=is_recency_supported(reg.param_schema),
+                strategy_category=reg.strategy_category,
+                sweep_eligibility=SweepEligibilityInfo(**eligibility.as_dict()),
+                recency_supported=eligibility.eligible,
                 strategy_bars=StrategyBarCadenceInfo(
                     timespan=reg.strategy_bars.timespan,
                     multiplier=multiplier,
@@ -1084,6 +1210,7 @@ def execute_engine_backtest(
     request: EngineBacktestRequest,
     on_phase: PhaseCallback,
     on_log: LogCallback,
+    data_manifest: Mapping[str, str] | None = None,
 ) -> EngineBacktestResponse:
     """Core backtest workflow shared by the sync POST and the Jobs worker.
 
@@ -1092,6 +1219,12 @@ def execute_engine_backtest(
     path passes no-ops. Raises HTTPException for client errors; returns
     an EngineBacktestResponse with ``success=False`` for engine
     failures.
+
+    ``data_manifest`` — root-relative artifact path to sha256, as captured
+    by ``app.research.sweep.snapshot`` — binds every read to receipted
+    bytes: a sweep cell whose lake artifact changed after the snapshot
+    fails rather than consuming unreceipted data (PRD #1926 F05). Absent
+    for ordinary runs, which read whatever the lake currently holds.
     """
     _run_start = time.time()
     registration = _STRATEGY_REGISTRY.get(request.strategy_name)
@@ -1143,7 +1276,9 @@ def execute_engine_backtest(
 
     if request.auto_fetch:
         symbol = getattr(validated_params, "symbol", None)
-        start_override = request.from_date
+        # A primed run reads from the warmup boundary, so that is what the
+        # lake must hold — not just the scored window.
+        start_override = request.warmup_from_date or request.from_date
         end_override = request.to_date
         if symbol and start_override and end_override:
             on_phase("fetching_data")
@@ -1191,7 +1326,11 @@ def execute_engine_backtest(
 
     reader: LeanMinuteDataReader | LeanDailyDataReader
     if request.resolution == "daily":
-        reader = LeanDailyDataReader(data_roots)
+        reader = (
+            LeanDailyDataReader(data_roots)
+            if data_manifest is None
+            else ManifestBoundDailyReader(data_roots, data_manifest)
+        )
     else:
         # Honor the request's ``data_policy.session`` so the reader drops
         # extended-hours bars when the operator asked for the regular session.
@@ -1204,7 +1343,11 @@ def execute_engine_backtest(
         session_mode = "regular"
         if request.data_policy is not None:
             session_mode = request.data_policy.session
-        reader = LeanMinuteDataReader(data_roots, session=session_mode)
+        reader = (
+            LeanMinuteDataReader(data_roots, session=session_mode)
+            if data_manifest is None
+            else ManifestBoundMinuteReader(data_roots, data_manifest, session=session_mode)
+        )
     execution_config = ExecutionConfig(
         fill_mode=fill_mode,
         commission_per_order=Decimal(str(request.commission_per_order)),
@@ -1238,7 +1381,7 @@ def execute_engine_backtest(
     on_log(f"Running {request.strategy_name} on {getattr(validated_params, 'symbol', '?')} ({request.resolution})")
 
     try:
-        result = engine.run(strategy)
+        result = engine.run(strategy, evaluation_start_ms=_evaluation_start_ms(request))
     except Exception as exc:
         logger.exception("[ENGINE] Backtest failed for %s", request.strategy_name)
         on_log(f"Engine error: {exc}")
@@ -1269,14 +1412,15 @@ def execute_engine_backtest(
     total = len(trades)
     win_rate = (wins / total) if total else 0.0
 
-    # Approximate calendar span (in trading days) for annualized metrics.
-    # Uses the strategy's declared date range when available.
+    # Approximate calendar span (in trading days) for annualized metrics,
+    # over the evaluation window — a primed run's warmup days are read but
+    # never scored, so they must not dilute the annualization either.
+    evaluation_window = _evaluation_dates(request, strategy)
     trading_days: int | None = None
-    if strategy.start_date and strategy.end_date:
-        delta = (strategy.end_date.date() - strategy.start_date.date()).days
-        if delta > 0:
-            # Rough: 252 trading days per 365 calendar days.
-            trading_days = max(1, round(delta * 252 / 365))
+    delta = (evaluation_window.evaluation_end - evaluation_window.evaluation_start).days
+    if delta > 0:
+        # Rough: 252 trading days per 365 calendar days.
+        trading_days = max(1, round(delta * 252 / 365))
 
     from app.engine.results.statistics import EquityPoint
 
@@ -1451,6 +1595,7 @@ def execute_engine_backtest(
         run_verdict=run_verdict,
         validation_analytics=validation_analytics,
         lake_data_availability_hash=lake_manifest,
+        evaluation_window=evaluation_window.response(),
     )
 
     # ── Auto-save to .NET backend (synchronous so we can return the id) ──
@@ -1458,6 +1603,13 @@ def execute_engine_backtest(
     # without an extra round-trip to /api/studies?latest=true. The save
     # itself is best-effort — a backend hiccup leaves study_id=None and
     # logs the failure but does not fail the backtest response.
+    if not request.save_study:
+        # Grid Search and Walk-Forward keep their own summary rows; a full
+        # study plus a parity companion per cell would be the dominant
+        # storage and round-trip cost of a sweep (PRD #1926).
+        on_log("Study save suppressed by request; no parity companion dispatched")
+        return response
+
     on_phase("persisting")
     on_log("Persisting run to history")
     # Minted BEFORE persisting so the row itself carries the group id —

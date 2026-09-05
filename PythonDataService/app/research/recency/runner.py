@@ -19,14 +19,11 @@ Validated against: tests/research/recency/test_runner.py.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from itertools import islice
 from typing import Literal, Protocol
 
 from app.research.recency.fingerprint import RunFingerprintBase, trade_fingerprint
-from app.research.recency.grid import RunSpec, StrategyGridConfig, expand_grid, grid_size
 from app.research.recency.stats import (
     TradeForStats,
     holding_sessions,
@@ -34,8 +31,8 @@ from app.research.recency.stats import (
     total_pnl,
     trade_dollar_pnl,
 )
-
-MAX_CONCURRENT_RUNS = 8
+from app.research.sweep.concurrency import MAX_CONCURRENT_RUNS, run_batched
+from app.research.sweep.grid import RunSpec, StrategyGridConfig, expand_grid, grid_size
 
 
 class TradeLike(Protocol):
@@ -185,15 +182,6 @@ def _snapshot_for_run(
     )
 
 
-def _batches(run_specs: Iterator[RunSpec], size: int) -> Iterator[list[RunSpec]]:
-    it = iter(run_specs)
-    while True:
-        batch = list(islice(it, size))
-        if not batch:
-            return
-        yield batch
-
-
 def run_recency(
     config: RecencyLaunchConfig,
     *,
@@ -218,8 +206,8 @@ def run_recency(
     The difference: it is called once per batch **and once more after the pool
     drains**, before any completion is announced. A batch-head check alone
     cannot observe a cancellation that arrives while the final batch is
-    executing (issue #1928). The walk-forward, batch, and signal runners still
-    have only the batch-head check and carry the same gap.
+    executing (issue #1928); ``run_batched`` owns that contract for every
+    sweep runner.
     """
     on_phase("expand")
     expected = grid_size(config.strategies, config.symbols)
@@ -237,41 +225,23 @@ def run_recency(
         return RecencyRunOutcome(run_spec=run_spec, status="succeeded")
 
     on_phase("run")
+
+    def _failed(run_spec: RunSpec, exc: Exception) -> RecencyRunOutcome:
+        # Per-run isolation: a failing child is captured and reported, never
+        # silently dropped and never aborts the rest of the batch.
+        message = str(exc)
+        on_run_failed(run_spec, message)
+        return RecencyRunOutcome(run_spec=run_spec, status="failed", error=message)
+
     # Bounded batches (size == max_workers) rather than materializing the
-    # full grid and submitting it all at once: at most max_workers RunSpecs
-    # are pulled from the lazy expand_grid() iterator at any time, so a
-    # large-but-legitimate sweep (up to MAX_GRID_SIZE) never holds its
-    # entire grid in memory. A fully pipelined sliding window (submit-as-
-    # you-go via concurrent.futures.wait(FIRST_COMPLETED)) would trim the
-    # idle time between batches, but isn't worth the added complexity
-    # given this engine's typical grid sizes; batching already bounds
-    # in-flight futures, so there's no separate future-cancellation step
-    # needed beyond letting the pool finish the batch already dispatched
-    # when cancel_check raises.
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for batch in _batches(run_specs, max_workers):
-            cancel_check()
-            futures = {pool.submit(_execute_and_persist, run_spec): run_spec for run_spec in batch}
-
-            for future in as_completed(futures):
-                run_spec = futures[future]
-                try:
-                    outcomes.append(future.result())
-                except Exception as exc:
-                    # Per-run isolation: a failing child is captured and reported,
-                    # never silently dropped and never aborts the rest of the batch.
-                    message = str(exc)
-                    outcomes.append(RecencyRunOutcome(run_spec=run_spec, status="failed", error=message))
-                    on_run_failed(run_spec, message)
-                done += 1
-                on_progress(done, expected)
-
-    # Poll once more now that every dispatched child has drained. The in-loop
-    # check runs only *before* each batch, so a cancellation arriving while the
-    # final batch executed was never observed and the run reported success
-    # (issue #1928). Letting an already-dispatched batch finish is deliberate;
-    # discarding an acknowledged cancellation afterwards is not.
-    cancel_check()
+    # full grid: at most max_workers RunSpecs are pulled from the lazy
+    # expand_grid() iterator at any time, so a large-but-legitimate sweep
+    # never holds its entire grid in memory. The batching and the
+    # cancellation contract live in app.research.sweep.concurrency.
+    for batch in run_batched(run_specs, _execute_and_persist, max_workers=max_workers, cancel_check=cancel_check, on_error=_failed):
+        outcomes.extend(batch)
+        done += len(batch)
+        on_progress(done, expected)
 
     succeeded = sum(1 for outcome in outcomes if outcome.status == "succeeded")
     failed = sum(1 for outcome in outcomes if outcome.status == "failed")

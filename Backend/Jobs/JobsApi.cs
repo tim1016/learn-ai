@@ -46,6 +46,9 @@ public static class JobsApi
         ["spy_ema_walk_forward"] = "/api/jobs-internal/spy-ema-walk-forward",
         ["spy_ema_exhaustive"] = "/api/jobs-internal/spy-ema-exhaustive",
         ["recency_chart"] = "/api/jobs-internal/recency-chart",
+        // Parameter Grid Search (PRD #1926). Python owns the durable record and
+        // its Postgres tables; this row is transport only.
+        ["grid_search"] = "/api/jobs-internal/grid-search",
         // The data-lake backfill worker lives on the data-lake router rather
         // than /api/jobs-internal/*; it accepts the same caller-minted job_id
         // this method injects below, so the framework (state, events, cancel,
