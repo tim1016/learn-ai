@@ -92,8 +92,9 @@ async def create_launch(launch: ValidatedLaunch, *, request: dict[str, Any]) -> 
     """Design spec D20: the durable launch exists before dispatch, so zero-success, cancellation and Redis expiry stay accountable.
 
     Returns whether this dispatch created the launch. An identical redelivery
-    returns ``False`` and must not be dispatched again; the same id with a
-    different configuration raises ``RecencyLaunchConflict``.
+    returns ``False`` (the caller decides, from the job's liveness, whether a
+    worker is still needed); the same id with a different configuration
+    raises ``RecencyLaunchConflict``.
     """
     try:
         return await with_connection(

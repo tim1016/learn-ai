@@ -41,15 +41,19 @@ def liveness(row: FencedRecord) -> bool | None:
     return lifecycle.job_is_live(row.job_id) if row.status in STORED_LIVE_STATUSES else False
 
 
-def liveness_or_503(row: FencedRecord, *, noun: str) -> bool:
-    """For actions that must not proceed on an unknown answer (delete)."""
-    live = liveness(row)
+def job_liveness_or_503(job_id: str | None, *, noun: str) -> bool:
+    """For actions that must not proceed on an unknown answer (delete, a redelivered dispatch)."""
+    live = lifecycle.job_is_live(job_id)
     if live is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"whether the {noun} is still running cannot be established (job store unreachable); try again shortly",
         )
     return live
+
+
+def liveness_or_503(row: FencedRecord, *, noun: str) -> bool:
+    return job_liveness_or_503(row.job_id, noun=noun) if row.status in STORED_LIVE_STATUSES else False
 
 
 def stored_status_query(status_filter: str | None, limit: int) -> tuple[Sequence[str] | None, int]:

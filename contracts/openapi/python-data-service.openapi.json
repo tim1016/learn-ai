@@ -47747,7 +47747,7 @@
     },
     "/api/jobs-internal/recency-chart": {
       "post": {
-        "description": "Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.\n\nA malformed or oversized grid (D11) is refused before anything is written;\nthe launch row exists before the worker starts (D20); a redelivered\n``job_id`` is acknowledged without a second worker, and refused (409) if\nit carries a different configuration.\nEverything after the HTTP boundary is ``app.research.recency.service``.",
+        "description": "Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.\n\nA malformed or oversized grid (D11) is refused before anything is written;\nthe launch row exists before the worker starts (D20); a redelivered\n``job_id`` is acknowledged without a second worker while the first still\nruns, restarted once it is gone, and refused (409) if it carries a\ndifferent configuration.\nEverything after the HTTP boundary is ``app.research.recency.service``.",
         "operationId": "start_recency_chart_job_api_jobs_internal_recency_chart_post",
         "requestBody": {
           "content": {

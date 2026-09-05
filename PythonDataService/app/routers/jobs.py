@@ -51,6 +51,7 @@ from app.research.sweep.grid import (
     ValueListRange,
 )
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
+from app.routers.research_records import job_liveness_or_503
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
@@ -520,8 +521,9 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
 
     A malformed or oversized grid (D11) is refused before anything is written;
     the launch row exists before the worker starts (D20); a redelivered
-    ``job_id`` is acknowledged without a second worker, and refused (409) if
-    it carries a different configuration.
+    ``job_id`` is acknowledged without a second worker while the first still
+    runs, restarted once it is gone, and refused (409) if it carries a
+    different configuration.
     Everything after the HTTP boundary is ``app.research.recency.service``.
     """
     strategies = [
@@ -545,8 +547,10 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
         created = await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
     except recency_service.RecencyLaunchConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    if not created:
-        # A redelivered dispatch: the launch and its worker already exist; a second thread would only race the first.
+    if not created and job_liveness_or_503(req.job_id, noun="Recency launch"):
+        # A redelivery while the worker still runs: a second thread would only race the first. Once the
+        # worker is gone (finished, interrupted, or its job record expired) the same dispatch restarts
+        # it, and every cell the launch already holds is a redelivery no-op.
         return {"job_id": req.job_id, "status": "queued"}
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
