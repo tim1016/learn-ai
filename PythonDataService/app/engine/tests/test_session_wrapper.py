@@ -47,12 +47,16 @@ class _EntryThenExitStrategy(Strategy):
         self,
         *,
         exit_on_bar_index: int | None = None,
+        exit_quantity: int | None = None,
         take_profit: Decimal | None = None,
         stop_loss: Decimal | None = None,
         skip_entry: bool = False,
     ) -> None:
         super().__init__()
         self._exit_on = exit_on_bar_index
+        # None => full exit (-position). An explicit value queues a partial
+        # reduction or a flip instead.
+        self._exit_quantity = exit_quantity
         self._tp = take_profit
         self._sl = stop_loss
         self._skip_entry = skip_entry
@@ -87,7 +91,7 @@ class _EntryThenExitStrategy(Strategy):
             if pos.quantity != 0:
                 self.ctx.portfolio.submit_market_order(
                     self._symbol,
-                    quantity=-pos.quantity,
+                    quantity=self._exit_quantity if self._exit_quantity is not None else -pos.quantity,
                     submitted_at_ms=bar.end_ms,
                     tag="exit",
                 )
@@ -556,3 +560,45 @@ def test_terminal_close_cost_reaches_the_summarized_statistics():
     # pre-liquidation mark of 99980 and this same statistic read 0.0002 — a
     # bare ``> 0`` assertion passes either way and pins nothing.
     assert abs(stats["max_drawdown_pct"] - 0.0004) < 1e-9
+
+
+def test_end_of_data_leaves_a_stranded_partial_reduction_unfilled():
+    """Only a *true liquidation* may be synthesized at end of data.
+
+    A deferred order that reduces part of a position — a rebalance queuing
+    -50 against a 100-share long — is not an exit intent that can be sized
+    from the live position. Collapsing it to "flatten this symbol" fabricates
+    a -100 fill, doubles the intended transaction cost, and reports flat when
+    the strategy asked for half. Before #1928 widened the terminal population
+    to include stranded deferred fills, this order simply never filled; that
+    remains the correct outcome."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32), _bar(15, 33)]
+    strategy = _EntryThenExitStrategy(exit_on_bar_index=2, exit_quantity=-50)
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(fill_mode=FillMode.NEXT_BAR_OPEN),
+    )
+    engine.run(strategy)
+
+    assert strategy.ctx is not None
+    assert [event.tag for event in strategy.order_events] == ["entry"]
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 100
+
+
+def test_end_of_data_leaves_a_stranded_flip_unfilled():
+    """A flip (-150 against a 100-share long) is not a liquidation either —
+    it would leave a short. Synthesizing a flatten would silently discard the
+    short half of the intent."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32), _bar(15, 33)]
+    strategy = _EntryThenExitStrategy(exit_on_bar_index=2, exit_quantity=-150)
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(fill_mode=FillMode.NEXT_BAR_OPEN),
+    )
+    engine.run(strategy)
+
+    assert strategy.ctx is not None
+    assert [event.tag for event in strategy.order_events] == ["entry"]
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 100

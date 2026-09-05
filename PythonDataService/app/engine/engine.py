@@ -520,17 +520,27 @@ class BacktestEngine:
         # synthetic exit. A holding with no exit intent is left open, matching
         # LEAN's no-forced-liquidation semantics.
         #
-        # Collapsed to the set of symbols named, because the order is only ever
-        # a predicate here: the close is sized from the live position, never
-        # from ``order.quantity``. Iterating orders instead made the outcome
-        # queue-order-sensitive (several stale intents can coexist under
-        # NEXT_SESSION_OPEN) and evaluated ``_is_entry_order`` against a
-        # position that earlier iterations had already flattened.
+        # Only a *true liquidation* qualifies — an order that exactly offsets
+        # the live position. A partial reduction (-50 against a 100-share long)
+        # or a flip (-150) is not an exit intent that can be sized from the
+        # position: synthesizing a flatten there would fabricate a larger fill
+        # than the strategy asked for, double the intended transaction cost,
+        # and report flat when half was requested. Those simply do not fill,
+        # which is what happened before this queue joined the terminal path.
+        #
+        # Collapsed to the set of symbols named, because past that test the
+        # order carries no further information: the close is sized from the
+        # position. Iterating orders instead made the outcome queue-order-
+        # sensitive (several stale intents can coexist under NEXT_SESSION_OPEN)
+        # and re-evaluated each predicate against a position that earlier
+        # iterations had already flattened.
         outstanding = [*portfolio.drain_pending(), *(order for order, _signal_bar in pending_fills)]
         exit_symbols = {
             order.symbol
             for order in outstanding
-            if order.order_type is OrderType.MARKET and not self._is_entry_order(portfolio, order)
+            if order.order_type is OrderType.MARKET
+            and order.quantity != 0
+            and order.quantity == -portfolio.get_position(order.symbol).quantity
         }
         for exit_symbol in sorted(exit_symbols):
             position = portfolio.get_position(exit_symbol)
