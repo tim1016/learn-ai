@@ -183,15 +183,16 @@ def test_slowest_probe_falls_back_to_the_extreme_assignment_past_the_budget(monk
     from app.research.sweep import warmup
     from app.research.sweep.grid import LowHighStepRange, ValueListRange
 
-    monkeypatch.setattr(warmup, "PROBE_BUDGET", 4)
+    monkeypatch.setattr(warmup, "PROBE_BUDGET", 2)
     ranges = {
-        "short_window": LowHighStepRange(low=2.0, high=6.0, step=1.0),  # 5 relevant values
-        "long_window": LowHighStepRange(low=10.0, high=12.0, step=1.0),  # 3 relevant values → 15 > 4
+        # The short window never moves readiness while the long one is larger, so it is not relevant.
+        "short_window": LowHighStepRange(low=2.0, high=6.0, step=1.0),
+        "long_window": LowHighStepRange(low=10.0, high=12.0, step=1.0),  # 3 relevant values > budget of 2
         "resolution_minutes": ValueListRange((15.0,)),
     }
     result = warmup.slowest_warmup_probe("sma_crossover", "SPY", ranges)
 
     assert result.bounded is True
-    # The extreme assignment (6, 12) is the slowest; only it is probed beyond the relevance pass.
-    assert result.probe == probe_warmup_samples("sma_crossover", {"short_window": 6.0, "long_window": 12.0, "resolution_minutes": 15.0, "symbol": "SPY"})
+    # Only the extreme of the relevant grid is probed beyond the relevance pass: long window 12 at the baseline short window.
+    assert result.probe == probe_warmup_samples("sma_crossover", {"short_window": 2.0, "long_window": 12.0, "resolution_minutes": 15.0, "symbol": "SPY"})
     assert result.probed_candidates == 1 + 2 + 1
