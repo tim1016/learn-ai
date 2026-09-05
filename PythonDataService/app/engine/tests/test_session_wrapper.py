@@ -47,12 +47,16 @@ class _EntryThenExitStrategy(Strategy):
         self,
         *,
         exit_on_bar_index: int | None = None,
+        exit_quantity: int | None = None,
         take_profit: Decimal | None = None,
         stop_loss: Decimal | None = None,
         skip_entry: bool = False,
     ) -> None:
         super().__init__()
         self._exit_on = exit_on_bar_index
+        # None => full exit (-position). An explicit value queues a partial
+        # reduction or a flip instead.
+        self._exit_quantity = exit_quantity
         self._tp = take_profit
         self._sl = stop_loss
         self._skip_entry = skip_entry
@@ -87,7 +91,7 @@ class _EntryThenExitStrategy(Strategy):
             if pos.quantity != 0:
                 self.ctx.portfolio.submit_market_order(
                     self._symbol,
-                    quantity=-pos.quantity,
+                    quantity=self._exit_quantity if self._exit_quantity is not None else -pos.quantity,
                     submitted_at_ms=bar.end_ms,
                     tag="exit",
                 )
@@ -473,3 +477,128 @@ def test_defaults_preserve_existing_behavior_with_no_session_rules():
 
     assert len(strategy.order_events) == 1
     assert strategy.order_events[0].tag == "entry"
+
+
+# ===========================================================================
+# End-of-data terminal accounting (issue #1928)
+# ===========================================================================
+
+
+def test_end_of_data_closes_a_position_left_by_a_deferred_exit():
+    """A NEXT_BAR_OPEN exit submitted on the final bar has no next bar to
+    fill against, so it is orphaned in the engine's *local* deferred-fill
+    queue. Terminal cleanup drains ``portfolio.pending_orders`` — a
+    different queue — so without a holdings-based check the run ends still
+    holding the position while reporting no closing trade."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32), _bar(15, 33)]
+    strategy = _EntryThenExitStrategy(exit_on_bar_index=2)
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(fill_mode=FillMode.NEXT_BAR_OPEN),
+    )
+    engine.run(strategy)
+
+    assert strategy.ctx is not None
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 0
+
+
+def test_final_equity_curve_point_matches_final_equity():
+    """The last equity snapshot is appended inside the bar loop, before
+    terminal liquidation runs. With non-zero costs on the closing trade the
+    curve therefore ends above the real final equity, and any consumer that
+    compounds curve endpoints across folds propagates the gap."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32)]
+    strategy = _EndHookLiquidatingStrategy()
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(
+            commission_per_order=Decimal("10"),
+            slippage_per_share=Decimal("0.10"),
+        ),
+    )
+    result = engine.run(strategy)
+
+    assert result.equity_curve[-1].equity == result.final_equity
+    # Restated, not appended. ``exposure_pct`` and ``trading_days`` in
+    # app/research/runs/runner.py are derived from the curve's length and its
+    # distinct dates, so a duplicate trailing timestamp would corrupt both.
+    assert len(result.equity_curve) == len(bars)
+    assert result.equity_curve[-1].timestamp_ms == bars[-1].end_ms
+    assert len({point.timestamp_ms for point in result.equity_curve}) == len(result.equity_curve)
+
+
+def test_terminal_close_cost_reaches_the_summarized_statistics():
+    """The curve feeds ``results.statistics.summarize``. Restating its final
+    point moves drawdown and Sharpe for every run ending in a synthetic exit,
+    so pin that the summarized series sees the cost the run actually paid
+    rather than the pre-liquidation mark."""
+    from app.engine.results.statistics import EquityPoint, summarize
+
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32)]
+    strategy = _EndHookLiquidatingStrategy()
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(
+            commission_per_order=Decimal("10"),
+            slippage_per_share=Decimal("0.10"),
+        ),
+    )
+    result = engine.run(strategy)
+
+    points = [EquityPoint(timestamp_ms=p.timestamp_ms, equity=p.equity) for p in result.equity_curve]
+    stats = summarize(
+        initial_cash=result.initial_cash,
+        final_equity=result.final_equity,
+        trades=[],
+        equity_curve=points,
+    )
+    # Curve is [100000, 99980, 99960]: peak 100000, trough the post-cost close,
+    # so drawdown is 40/100000. Before the fix the curve ended at the
+    # pre-liquidation mark of 99980 and this same statistic read 0.0002 — a
+    # bare ``> 0`` assertion passes either way and pins nothing.
+    assert abs(stats["max_drawdown_pct"] - 0.0004) < 1e-9
+
+
+def test_end_of_data_leaves_a_stranded_partial_reduction_unfilled():
+    """Only a *true liquidation* may be synthesized at end of data.
+
+    A deferred order that reduces part of a position — a rebalance queuing
+    -50 against a 100-share long — is not an exit intent that can be sized
+    from the live position. Collapsing it to "flatten this symbol" fabricates
+    a -100 fill, doubles the intended transaction cost, and reports flat when
+    the strategy asked for half. Before #1928 widened the terminal population
+    to include stranded deferred fills, this order simply never filled; that
+    remains the correct outcome."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32), _bar(15, 33)]
+    strategy = _EntryThenExitStrategy(exit_on_bar_index=2, exit_quantity=-50)
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(fill_mode=FillMode.NEXT_BAR_OPEN),
+    )
+    engine.run(strategy)
+
+    assert strategy.ctx is not None
+    assert [event.tag for event in strategy.order_events] == ["entry"]
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 100
+
+
+def test_end_of_data_leaves_a_stranded_flip_unfilled():
+    """A flip (-150 against a 100-share long) is not a liquidation either —
+    it would leave a short. Synthesizing a flatten would silently discard the
+    short half of the intent."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32), _bar(15, 33)]
+    strategy = _EntryThenExitStrategy(exit_on_bar_index=2, exit_quantity=-150)
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(fill_mode=FillMode.NEXT_BAR_OPEN),
+    )
+    engine.run(strategy)
+
+    assert strategy.ctx is not None
+    assert [event.tag for event in strategy.order_events] == ["entry"]
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 100
