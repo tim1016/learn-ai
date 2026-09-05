@@ -2819,8 +2819,11 @@ export interface paths {
          * @description Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
          *
          *     A malformed or oversized grid (D11) is refused before anything is written;
-         *     the launch row exists before the worker starts (D20). Everything after the
-         *     HTTP boundary is ``app.research.recency.service``.
+         *     the launch row exists before the worker starts (D20); a redelivered
+         *     ``job_id`` is acknowledged without a second worker while the first still
+         *     holds the job, and refused (409) once that job is closed or if the
+         *     configuration differs.
+         *     Everything after the HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
         delete?: never;
@@ -10188,6 +10191,14 @@ export interface components {
              * @enum {string}
              */
             kind: "EQUITY_LONG";
+        };
+        /** ErrorDetailResponse */
+        ErrorDetailResponse: {
+            /**
+             * Detail
+             * @description Why the request was refused, in the words the route chose.
+             */
+            detail: string;
         };
         /**
          * EvidenceEntry
@@ -26777,6 +26788,15 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            /** @description A redelivered job_id whose configuration differs or whose job is no longer running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetailResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -26784,6 +26804,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The job store cannot say whether a redelivered job is still running. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetailResponse"];
                 };
             };
         };

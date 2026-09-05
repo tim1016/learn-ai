@@ -10,6 +10,7 @@ import pytest
 from httpx import ASGITransport
 
 from app.main import app
+from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
 from app.research.recency import repository as repo
 from app.research.recency.runner import RecencyRunSnapshot, RecencyTradeSnapshot
@@ -81,3 +82,37 @@ async def test_soft_delete_and_restore_verbs_replace_the_graphql_mutations(clien
 
         missing = await c.post("/api/research/recency/runs/2147000000/soft-delete")
         assert missing.status_code == 404 and missing.json()["detail"]["code"] == "RECENCY_RUN_NOT_FOUND"
+
+
+async def test_a_redelivered_job_id_is_acknowledged_only_while_its_worker_still_holds_the_job(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The durable launch keeps its first configuration (D20). While the job is live a redelivery is acknowledged
+    without a second thread; a closed job and a changed grid are refused; an unknown answer is a 503."""
+    _requires_ephemeral_db()
+    dispatched: list[str] = []
+    monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: dispatched.append(job_id))
+    live: list[bool | None] = [True]
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: live[0])
+    body = {
+        "jobId": f"job-{uuid.uuid4().hex[:10]}",
+        "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0]}}}],
+        "symbols": ["SPY"],
+        "windowStartMs": 0,
+        "windowEndMs": 1,
+    }
+
+    async with client as c:
+        first = await c.post("/api/jobs-internal/recency-chart", json=body)
+        assert first.status_code == 202, first.text
+        while_live = await c.post("/api/jobs-internal/recency-chart", json=body)
+        assert while_live.status_code == 202, while_live.text
+        live[0] = None
+        unknown = await c.post("/api/jobs-internal/recency-chart", json=body)
+        assert unknown.status_code == 503, unknown.text
+        live[0] = False
+        closed = await c.post("/api/jobs-internal/recency-chart", json=body)
+        assert closed.status_code == 409 and "no longer running" in closed.json()["detail"], closed.text
+        changed = await c.post("/api/jobs-internal/recency-chart", json={**body, "windowEndMs": 2})
+
+    assert changed.status_code == 409, changed.text
+    assert "different configuration" in changed.json()["detail"]
+    assert dispatched == [body["jobId"]]  # one worker; a redelivery never starts another

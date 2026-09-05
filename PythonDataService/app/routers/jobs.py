@@ -51,6 +51,8 @@ from app.research.sweep.grid import (
     ValueListRange,
 )
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
+from app.routers.research_records import require_live_redelivery
+from app.schemas.http_errors import ErrorDetailResponse
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
@@ -514,13 +516,29 @@ def _range_request_to_grid_range(req: ValueListRangeRequest | LowHighStepRangeRe
     return LowHighStepRange(low=req.low, high=req.high, step=req.step)
 
 
-@router.post("/recency-chart", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/recency-chart",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorDetailResponse,
+            "description": "A redelivered job_id whose configuration differs or whose job is no longer running.",
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorDetailResponse,
+            "description": "The job store cannot say whether a redelivered job is still running.",
+        },
+    },
+)
 async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     """Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
 
     A malformed or oversized grid (D11) is refused before anything is written;
-    the launch row exists before the worker starts (D20). Everything after the
-    HTTP boundary is ``app.research.recency.service``.
+    the launch row exists before the worker starts (D20); a redelivered
+    ``job_id`` is acknowledged without a second worker while the first still
+    holds the job, and refused (409) once that job is closed or if the
+    configuration differs.
+    Everything after the HTTP boundary is ``app.research.recency.service``.
     """
     strategies = [
         StrategyGridConfig(strategy_key=s.strategy_key, param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()})
@@ -539,7 +557,15 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
         )
     except recency_service.RecencyLaunchRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
+    try:
+        created = await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
+    except recency_service.RecencyLaunchConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if not created:
+        # A redelivery: never a second thread beside the first worker, and never a replay of a closed
+        # job through its old transport record (that is a resume, tracked in #1938).
+        require_live_redelivery(req.job_id, noun="Recency launch")
+        return {"job_id": req.job_id, "status": "queued"}
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
         return recency_service.run_launch(launch.config, emit=emit, cancel=cancel)

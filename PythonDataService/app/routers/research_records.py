@@ -45,11 +45,33 @@ def liveness_or_503(row: FencedRecord, *, noun: str) -> bool:
     """For actions that must not proceed on an unknown answer (delete)."""
     live = liveness(row)
     if live is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"whether the {noun} is still running cannot be established (job store unreachable); try again shortly",
-        )
+        raise _job_store_unreachable(noun)
     return live
+
+
+def require_live_redelivery(job_id: str, *, noun: str) -> None:
+    """A redelivered dispatch is acknowledged only while the first worker still holds the job.
+
+    A job that is no longer live cannot be redelivered under its id (409): replaying a closed
+    job through the same transport record is not a resume (its event stream, result key,
+    cancel flag and run accounting all still describe the first execution). An unknown answer
+    is a 503, as for delete.
+    """
+    live = lifecycle.job_is_live(job_id)
+    if live is None:
+        raise _job_store_unreachable(noun)
+    if not live:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"the {noun}'s job is no longer running; it cannot be redelivered under this job id",
+        )
+
+
+def _job_store_unreachable(noun: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"whether the {noun} is still running cannot be established (job store unreachable); try again shortly",
+    )
 
 
 def stored_status_query(status_filter: str | None, limit: int) -> tuple[Sequence[str] | None, int]:

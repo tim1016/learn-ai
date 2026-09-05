@@ -12243,6 +12243,20 @@
         "title": "EquityLongPosition",
         "type": "object"
       },
+      "ErrorDetailResponse": {
+        "properties": {
+          "detail": {
+            "description": "Why the request was refused, in the words the route chose.",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorDetailResponse",
+        "type": "object"
+      },
       "EvidenceEntry": {
         "description": "One redacted, size-capped journal entry exposed to the operator lens.",
         "properties": {
@@ -47747,7 +47761,7 @@
     },
     "/api/jobs-internal/recency-chart": {
       "post": {
-        "description": "Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.\n\nA malformed or oversized grid (D11) is refused before anything is written;\nthe launch row exists before the worker starts (D20). Everything after the\nHTTP boundary is ``app.research.recency.service``.",
+        "description": "Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.\n\nA malformed or oversized grid (D11) is refused before anything is written;\nthe launch row exists before the worker starts (D20); a redelivered\n``job_id`` is acknowledged without a second worker while the first still\nholds the job, and refused (409) once that job is closed or if the\nconfiguration differs.\nEverything after the HTTP boundary is ``app.research.recency.service``.",
         "operationId": "start_recency_chart_job_api_jobs_internal_recency_chart_post",
         "requestBody": {
           "content": {
@@ -47771,6 +47785,16 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetailResponse"
+                }
+              }
+            },
+            "description": "A redelivered job_id whose configuration differs or whose job is no longer running."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -47780,6 +47804,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetailResponse"
+                }
+              }
+            },
+            "description": "The job store cannot say whether a redelivered job is still running."
           }
         },
         "summary": "Start Recency Chart Job",

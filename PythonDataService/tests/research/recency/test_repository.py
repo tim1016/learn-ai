@@ -36,7 +36,7 @@ def _snapshot(launch_id: str, *, symbol: str, params_hash: str = "h1", trades: l
 
 async def _launch(conn, unique: str, expected: int = 4) -> str:
     launch_id = f"launch-{unique}-{uuid.uuid4().hex[:6]}"
-    await repo.create_launch(conn, launch_id=launch_id, config_json="{}", expected_runs=expected)
+    assert await repo.create_launch(conn, launch_id=launch_id, config_json="{}", expected_runs=expected) is True
     return launch_id
 
 
@@ -44,12 +44,25 @@ async def test_a_launch_is_created_once_and_a_retried_dispatch_does_not_reset_it
     launch_id = await _launch(conn, unique)
     await repo.persist_snapshot(conn, _snapshot(launch_id, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=100, exit_ms=200)]))
 
-    await repo.create_launch(conn, launch_id=launch_id, config_json="{}", expected_runs=4)  # the retry
+    assert await repo.create_launch(conn, launch_id=launch_id, config_json="{}", expected_runs=4) is False  # the retry
 
     row = await conn.fetchrow('SELECT "SucceededRuns", "Status" FROM "RecencyLaunches" WHERE "Id" = $1', launch_id)
     assert row["SucceededRuns"] == 1 and row["Status"] == "RUNNING"
     with pytest.raises(ValueError):
         await repo.create_launch(conn, launch_id=f"{launch_id}-zero", config_json="{}", expected_runs=0)
+
+
+async def test_the_same_launch_id_with_a_different_configuration_is_refused(conn, unique: str) -> None:
+    """A conflict answered by DO NOTHING alone would run the new grid under the first record's ConfigJson."""
+    launch_id = await _launch(conn, unique)
+
+    with pytest.raises(repo.LaunchConflictError):
+        await repo.create_launch(conn, launch_id=launch_id, config_json='{"symbols": ["QQQ"]}', expected_runs=4)
+    with pytest.raises(repo.LaunchConflictError):  # same grid text, a different cell count is not the same launch either
+        await repo.create_launch(conn, launch_id=launch_id, config_json="{}", expected_runs=5)
+
+    stored = await conn.fetchval('SELECT "ConfigJson" FROM "RecencyLaunches" WHERE "Id" = $1', launch_id)
+    assert stored == "{}"
 
 
 async def test_a_snapshot_for_a_tombstoned_launch_is_a_no_op(conn, unique: str) -> None:
