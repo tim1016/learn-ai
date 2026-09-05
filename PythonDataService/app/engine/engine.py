@@ -28,8 +28,18 @@ from app.engine.execution.order import Direction, FillMode, Order, OrderEvent, O
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalSymbolExecutor
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
+from app.engine.framework.insight_manager import InsightManager
 from app.engine.strategy.base import Strategy, StrategyContext
 from app.utils.timestamps import ny_datetime
+
+
+class EvaluationBoundaryError(RuntimeError):
+    """The warmup → evaluation transition could not be made safely.
+
+    Raised when scoring would otherwise start on an unready program, or when
+    the data never reaches the evaluation start at all. Either way the run
+    fails closed rather than reporting figures the caller did not ask for.
+    """
 
 
 @dataclass
@@ -90,7 +100,17 @@ class BacktestEngine:
         # LeanSetHoldingsSizing to reproduce LEAN's buffered share count.
         self.sizing_model = sizing_model or SimpleFloorSizing()
 
-    def run(self, strategy: Strategy) -> BacktestResult:
+    def run(self, strategy: Strategy, *, evaluation_start_ms: int | None = None) -> BacktestResult:
+        """Execute ``strategy`` over its configured window.
+
+        ``evaluation_start_ms`` (``int64 ms UTC``, an ET-midnight session
+        anchor) splits the window into a warmup and an evaluation phase. Bars
+        before it prime indicators and stateful primitives; at the first bar
+        on or after it the engine flushes, asserts readiness, and resets
+        execution state (see :meth:`_enter_evaluation`), so every figure in
+        the returned result describes the evaluation phase only. ``None`` —
+        the default — is the historical single-phase run, unchanged.
+        """
         # ------------------------------------------------------------------
         # 1. Let the strategy configure itself.
         # ------------------------------------------------------------------
@@ -215,7 +235,24 @@ class BacktestEngine:
 
 
         previous_minute_bar: TradeBar | None = None
+        evaluation_pending = evaluation_start_ms is not None
         for minute_bar in self.data_source.iter_bars(symbol, start_date, end_date):
+            if evaluation_pending and minute_bar.start_ms >= evaluation_start_ms:
+                self._enter_evaluation(
+                    ctx=ctx,
+                    strategy=strategy,
+                    portfolio=portfolio,
+                    symbol=symbol,
+                    evaluation_start_ms=evaluation_start_ms,
+                    pending_fills=pending_fills,
+                    active_brackets=active_brackets,
+                    resting_limit_orders=resting_limit_orders,
+                    order_events=order_events,
+                    equity_curve=equity_curve,
+                    retained_bars=retained_bars,
+                )
+                evaluation_pending = False
+
             # Update portfolio reference price with the latest close.
             portfolio.update_reference_price(symbol, minute_bar.close)
 
@@ -409,6 +446,14 @@ class BacktestEngine:
             retained_bars.append(minute_bar)
             previous_minute_bar = minute_bar
 
+        if evaluation_pending:
+            # Every bar fell before the evaluation start. Finalizing here would
+            # report warmup activity as if it were the scored window.
+            raise EvaluationBoundaryError(
+                f"no bar on or after the evaluation start {ny_datetime(evaluation_start_ms)}; "
+                "the data ends inside the warmup phase"
+            )
+
         # ------------------------------------------------------------------
         # 3. Finalize.
         # ------------------------------------------------------------------
@@ -444,6 +489,79 @@ class BacktestEngine:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _enter_evaluation(
+        self,
+        *,
+        ctx: StrategyContext,
+        strategy: Strategy,
+        portfolio: Portfolio,
+        symbol: str,
+        evaluation_start_ms: int,
+        pending_fills: list[tuple[Order, TradeBar]],
+        active_brackets: list[_ActiveBracket],
+        resting_limit_orders: list[Order],
+        order_events: list[OrderEvent],
+        equity_curve: list[EquitySnapshot],
+        retained_bars: list[TradeBar],
+    ) -> None:
+        """Cross from warmup into evaluation: flush, assert readiness, reset.
+
+        The order is the contract (PRD #1925, "State-transition contract at
+        the evaluation boundary"; review finding F10):
+
+        1. **Flush.** A consolidated bar that closed before the boundary is
+           still sitting in its consolidator, because a working bar is only
+           emitted when a later input arrives. Emit it now, so the decision
+           it carries — and any order that decision places — belongs to
+           warmup and is discarded in step 3. Without this the bar would fire
+           on the first evaluation input, after the reset, and a warmup-era
+           crossover would become a scored entry whose fill timestamp looks
+           perfectly legitimate.
+        2. **Assert readiness.** Elapsed history is not evidence that the
+           program's indicators are ready; the program's own last decision
+           is. A caller that sized the warmup too short fails here rather
+           than scoring a cold start.
+        3. **Reset execution state.** Positions are flattened without a fill
+           (a warmup position is not a trade the scored window entered),
+           every order queue is emptied, the book returns to its starting
+           cash, and the strategy's own lifecycle bookkeeping is cleared
+           through the same ``on_force_flat`` hook the session barrier uses.
+           The trade ledger, curve, retained bars, log, and insights restart
+           empty. Indicator memory is the one thing that deliberately crosses.
+        """
+        for consolidator in ctx.get_consolidators(symbol):
+            consolidator.scan(evaluation_start_ms)
+        self._commit_staged_signal_program(strategy)
+
+        program = strategy.signal_program
+        if program is not None:
+            traces = program.session.traces
+            if not traces or not traces[-1].ready:
+                raise EvaluationBoundaryError(
+                    f"program is not ready at the evaluation start {ny_datetime(evaluation_start_ms)}: "
+                    f"{len(traces)} warmup decision(s) observed and the last one reported "
+                    f"ready={traces[-1].ready if traces else None}; lengthen the warmup"
+                )
+
+        portfolio.clear_pending()
+        pending_fills.clear()
+        active_brackets.clear()
+        resting_limit_orders.clear()
+        portfolio.rebase()
+        strategy.on_force_flat()
+        trade_log = getattr(strategy, "trade_log", None)
+        if isinstance(trade_log, list):
+            trade_log.clear()
+
+        ctx.log_lines.clear()
+        ctx.consolidated_bars.clear()
+        ctx.signal_intents.clear()
+        ctx.insight_manager = InsightManager()
+        order_events.clear()
+        equity_curve.clear()
+        retained_bars.clear()
+        ctx.log(f"[EVALUATION START] {ny_datetime(evaluation_start_ms)} — warmup state discarded, indicators primed")
+
     def _finalize(
         self,
         *,
