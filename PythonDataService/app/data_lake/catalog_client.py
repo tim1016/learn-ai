@@ -40,9 +40,8 @@ logger = logging.getLogger(__name__)
 # asyncpg pool is bound to the loop that created it, and this module has
 # two independent callers that each own a loop of their own — the FastAPI
 # app loop serving /api/data-lake/* requests, and the Python engine's
-# dedicated materialization loop (app.data_lake.run_materialization's
-# _materialization_loop, for backtests running on worker threads with no
-# loop of their own). A single global pool binds to whichever of them
+# shared background loop (app.utils.background_loop, for backtests and
+# sweeps running on worker threads with no loop of their own). A single global pool binds to whichever of them
 # calls init_pool() first; the other then hits asyncpg's cross-loop error
 # on every subsequent call. Weak-keyed so a loop that is garbage collected
 # without an explicit close_pool() call (routine in tests, where pytest-

@@ -284,7 +284,17 @@ class LeanMinuteDataReader:
         zip_path = self._zip_path(symbol, trading_date)
         if not zip_path.exists():
             return []
-        with zipfile.ZipFile(zip_path) as zf:
+        return self.parse_day_zip(zip_path.read_bytes(), symbol, trading_date)
+
+    def parse_day_zip(self, payload: bytes, symbol: str, trading_date: date) -> list[TradeBar]:
+        """Decode one day's zip bytes under this reader's session filter.
+
+        Split from :meth:`read_day` so a caller that must bind what it parses
+        to bytes it has already fingerprinted (a sweep's frozen data
+        snapshot) can hand those exact bytes in, rather than re-opening the
+        path and trusting nothing replaced it in between.
+        """
+        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
             # LEAN's filename convention: {YYYYMMDD}_{symbol}_minute_trade.csv
             expected = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_trade.csv"
             # Fall back to the first file in the archive if the name differs.
@@ -410,7 +420,12 @@ class LeanDailyDataReader:
     def _read_zip(self, zip_path: Path, symbol: str) -> list[TradeBar]:
         if not zip_path.exists():
             return []
-        with zipfile.ZipFile(zip_path) as zf:
+        return self.parse_history_zip(zip_path.read_bytes(), symbol)
+
+    @staticmethod
+    def parse_history_zip(payload: bytes, symbol: str) -> list[TradeBar]:
+        """Decode a per-symbol daily history zip from bytes (see ``parse_day_zip``)."""
+        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
             expected = f"{symbol.lower()}.csv"
             names = zf.namelist()
             name = expected if expected in names else names[0]

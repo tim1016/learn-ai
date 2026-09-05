@@ -14,14 +14,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from itertools import islice
-from typing import TypeVar
 
 MAX_CONCURRENT_RUNS = 8
 
-T = TypeVar("T")
 
-
-def batches(items: Iterator[T], size: int) -> Iterator[list[T]]:
+def batches[T](items: Iterator[T], size: int) -> Iterator[list[T]]:
     """Yield ``items`` in consecutive lists of at most ``size``."""
     it = iter(items)
     while True:

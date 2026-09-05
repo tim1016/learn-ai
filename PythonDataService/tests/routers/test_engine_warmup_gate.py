@@ -175,3 +175,19 @@ def test_a_warmup_too_short_to_ready_the_program_fails_the_run(seeded_lake, reco
     assert response.success is False
     assert response.error is not None
     assert "not ready" in response.error
+
+
+def test_a_manifest_bound_run_fails_when_a_lake_artifact_changed_after_capture(seeded_lake, recorded_persistence) -> None:
+    """Reads are bound to receipted bytes (PRD #1926 review F05)."""
+    from app.research.sweep.snapshot import capture_data_snapshot
+
+    snapshot = capture_data_snapshot(roots=[seeded_lake], symbol="SPY", resolution="minute", data_start=DAYS[1], data_end=DAYS[3])
+    bound_ok = execute_engine_backtest(request=_request(save_study=False), on_phase=_noop, on_log=_noop, data_manifest=snapshot.artifacts)
+    assert bound_ok.success, bound_ok.error
+
+    seed_store_day(seeded_lake, "SPY", DAYS[2], count=200)  # a refresh lands mid-study
+
+    tampered = execute_engine_backtest(request=_request(save_study=False), on_phase=_noop, on_log=_noop, data_manifest=snapshot.artifacts)
+
+    assert tampered.success is False
+    assert tampered.error is not None and "changed since the snapshot" in tampered.error

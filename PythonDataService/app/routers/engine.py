@@ -16,7 +16,7 @@ import json
 import logging
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as time_of_day
 from decimal import Decimal
@@ -71,6 +71,7 @@ from app.models.responses import (
     LeanTradeStatsResponse,
 )
 from app.research.recency.eligibility import is_recency_supported
+from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
@@ -1186,6 +1187,7 @@ def execute_engine_backtest(
     request: EngineBacktestRequest,
     on_phase: PhaseCallback,
     on_log: LogCallback,
+    data_manifest: Mapping[str, str] | None = None,
 ) -> EngineBacktestResponse:
     """Core backtest workflow shared by the sync POST and the Jobs worker.
 
@@ -1194,6 +1196,12 @@ def execute_engine_backtest(
     path passes no-ops. Raises HTTPException for client errors; returns
     an EngineBacktestResponse with ``success=False`` for engine
     failures.
+
+    ``data_manifest`` — root-relative artifact path to sha256, as captured
+    by ``app.research.sweep.snapshot`` — binds every read to receipted
+    bytes: a sweep cell whose lake artifact changed after the snapshot
+    fails rather than consuming unreceipted data (PRD #1926 F05). Absent
+    for ordinary runs, which read whatever the lake currently holds.
     """
     _run_start = time.time()
     registration = _STRATEGY_REGISTRY.get(request.strategy_name)
@@ -1295,7 +1303,11 @@ def execute_engine_backtest(
 
     reader: LeanMinuteDataReader | LeanDailyDataReader
     if request.resolution == "daily":
-        reader = LeanDailyDataReader(data_roots)
+        reader = (
+            LeanDailyDataReader(data_roots)
+            if data_manifest is None
+            else ManifestBoundDailyReader(data_roots, data_manifest)
+        )
     else:
         # Honor the request's ``data_policy.session`` so the reader drops
         # extended-hours bars when the operator asked for the regular session.
@@ -1308,7 +1320,11 @@ def execute_engine_backtest(
         session_mode = "regular"
         if request.data_policy is not None:
             session_mode = request.data_policy.session
-        reader = LeanMinuteDataReader(data_roots, session=session_mode)
+        reader = (
+            LeanMinuteDataReader(data_roots, session=session_mode)
+            if data_manifest is None
+            else ManifestBoundMinuteReader(data_roots, data_manifest, session=session_mode)
+        )
     execution_config = ExecutionConfig(
         fill_mode=fill_mode,
         commission_per_order=Decimal(str(request.commission_per_order)),
