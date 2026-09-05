@@ -118,6 +118,26 @@ async def second_conn() -> AsyncIterator[asyncpg.Connection]:
 
 
 @pytest.fixture
+async def scratch_db() -> AsyncIterator[asyncpg.Connection]:
+    """A fresh database on the ephemeral server, for tests that must reshape the schema itself; dropped afterwards."""
+    admin_url = _ephemeral_url()
+    name = f"research_scratch_{uuid.uuid4().hex[:10]}"
+    admin = await asyncpg.connect(admin_url)
+    try:
+        await admin.execute(f'CREATE DATABASE "{name}"')
+        try:
+            connection = await asyncpg.connect(admin_url, database=name)
+            try:
+                yield connection
+            finally:
+                await connection.close()
+        finally:
+            await admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
+    finally:
+        await admin.close()
+
+
+@pytest.fixture
 def unique() -> str:
     """A per-test tag for ids and symbols, so parallel tests never see each other's rows."""
     return uuid.uuid4().hex[:10]
