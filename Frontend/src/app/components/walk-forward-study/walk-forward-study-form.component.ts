@@ -75,7 +75,11 @@ export class WalkForwardStudyFormComponent {
 
   setMonths(which: 'training' | 'test', raw: string): void {
     const value = Number(raw);
-    if (!Number.isInteger(value) || value < 1) return;
+    if (!Number.isInteger(value) || value < 1) {
+      // Nothing to preflight: the shown plan no longer describes the form, so Launch waits.
+      this.invalidate('Training and test lengths are whole months of at least 1.');
+      return;
+    }
     (which === 'training' ? this.trainingMonths : this.testMonths).set(value);
     this.invalidate(null);
     if (this.monthsDebounce !== null) clearTimeout(this.monthsDebounce);

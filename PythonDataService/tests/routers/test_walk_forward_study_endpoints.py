@@ -143,9 +143,15 @@ async def test_launch_lists_by_job_id_and_the_detail_carries_folds_and_the_verdi
         assert cells.status_code == 200
         by_short = {cell["params"]["short_window"]: cell for cell in cells.json()["cells"]}
         assert by_short[3.0]["exploratory"] is False and by_short[2.0]["exploratory"] is True
-        # ...but never in the Grid Search history.
+        # ...but never in the Grid Search history, and never deletable or resumable there.
         history = await c.get("/api/research/grid-search", params={"job_id": job_id})
         assert history.json() == []
+        owned = payload["folds"][0]["train_search_id"]
+        refused = await c.delete(f"/api/research/grid-search/{owned}")
+        assert refused.status_code == 409 and refused.json()["detail"]["code"] == "OWNED_BY_STUDY"
+        grid_body = {k: v for k, v in _body().items() if k not in ("training_months", "test_months")}
+        resumed_owned = await c.post("/api/jobs-internal/grid-search", json={**grid_body, "jobId": "job-owned", "resumeSearchId": owned})
+        assert resumed_owned.status_code == 409 and resumed_owned.json()["detail"]["code"] == "OWNED_BY_STUDY"
 
         resumed = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(), "jobId": "job-wf-finish", "resumeStudyId": study_id})
         assert resumed.status_code == 409 and resumed.json()["detail"]["code"] == "NOT_RESUMABLE"

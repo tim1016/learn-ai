@@ -2,14 +2,14 @@
   <p class="sweep-context" role="note">
     Fold {{ sweep.fold.fold_index + 1 }} · {{ sweep.phase === 'train' ? 'training window — where this fold\'s winner was chosen (in-sample)' : 'test window — only the winner\'s row is evidence; every other row is exploratory' }}
   </p>
-  <app-grid-search-result [searchId]="sweep.id" [strategies]="strategies()" backLabel="Back to the study" (closed)="closeSweep()" (deleted)="closeSweep()" />
+  <app-grid-search-result [searchId]="sweep.id" [strategies]="strategies()" [readonly]="true" backLabel="Back to the study" (closed)="closeSweep()" />
 } @else {
 <section class="result" aria-labelledby="walk-forward-result-title">
   <header class="result__header">
     <div>
       <button pButton type="button" severity="secondary" [text]="true" size="small" (click)="closed.emit()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>History</span></button>
       @if (detail(); as d) {
-        <h2 id="walk-forward-result-title">{{ strategyName() ?? (d.strategy_key | receiptLabel) }} · {{ d.symbol }}</h2>
+        <h2 id="walk-forward-result-title">{{ strategyName() ?? (d.strategy_key | receiptLabel) }} · <app-asset-identity [symbol]="d.symbol" size="sm" /></h2>
         <p class="muted">
           <app-timestamp-display [value]="d.window_start_ms" mode="date-et" /> → <app-timestamp-display [value]="d.window_end_ms - 1" mode="date-et" />
           · train {{ d.training_months }} mo / test {{ d.test_months }} mo · {{ d.fold_count }} folds

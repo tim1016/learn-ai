@@ -76,6 +76,8 @@ describe('WalkForwardStudyFormComponent', () => {
     fireEvent.input(screen.getByLabelText(/training window \(months\)/i), { target: { value: '0' } });
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(preflight.mock.calls.length).toBe(before);
+    expect(screen.getByRole('alert').textContent).toContain('whole months');
+    expect((screen.getByRole('button', { name: /launch study/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('shows a fold refusal with the nearest valid ends and disables launch', async () => {

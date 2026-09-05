@@ -20,7 +20,7 @@ reason to reconcile, never proof that the worker is dead.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 import asyncpg
@@ -272,13 +272,28 @@ async def finish_search(
         )
 
 
-async def mark_exploratory(conn: asyncpg.Connection, search_id: str, *, evidence_params_hash: str) -> None:
-    """Label every cell but the fold winner's as exploratory (PRD #1925: not selection evidence)."""
-    await conn.execute(
-        "UPDATE research_grid_search_cells SET exploratory = (params_hash <> $2) WHERE search_id = $1",
-        search_id,
-        evidence_params_hash,
-    )
+async def record_evidence_winner(conn: asyncpg.Connection, search_id: str, *, params_hash: str, params: Mapping[str, Any]) -> None:
+    """A walk-forward test sweep's evidence is the training winner, not its own best cell (PRD #1925).
+
+    Marks every other cell exploratory and points the sweep's leader at the
+    winner, so a reader of this sweep sees the settings that were chosen
+    without hindsight. Written by the owning study after the sweep finished;
+    the attempt fence guards competing writers of a search, not its owner's
+    labelling of it.
+    """
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE research_grid_search_cells SET exploratory = (params_hash <> $2) WHERE search_id = $1",
+            search_id,
+            params_hash,
+        )
+        await conn.execute(
+            "UPDATE research_grid_searches SET leader_params_hash = $2, leader_params_json = $3::jsonb, updated_at_ms = $4 WHERE id = $1",
+            search_id,
+            params_hash,
+            json.dumps(dict(params), sort_keys=True),
+            now_ms_utc(),
+        )
 
 
 async def delete_search(conn: asyncpg.Connection, search_id: str) -> bool:

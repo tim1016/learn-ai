@@ -21,6 +21,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.grid_search import repository as sweep_repo
 from app.research.grid_search.models import CellResult, GridSearchSpec, SearchRow
 from app.research.persistence import lifecycle
+from app.research.persistence.db import run_sync, with_connection
 from app.research.sweep.grid import RunSpec, ValueListRange
 from app.research.sweep.identity import CodeIdentity
 from app.research.walk_forward_study import repository as repo
@@ -157,6 +158,10 @@ async def test_a_study_sweeps_each_fold_selects_per_fold_winners_and_reaches_a_v
     assert not any(s.id in {o.id for o in owned} for s in await sweep_repo.list_searches(conn, job_id=created.job_id))
     test_cells = {cell.params["short_window"]: cell for cell in await sweep_repo.list_all_cells(conn, row.folds[0].test_search_id)}
     assert test_cells[3.0].exploratory is False and test_cells[2.0].exploratory is True
+    # The test sweep's own best cell (short=2, Sharpe 3.0) is hindsight; its leader is the training winner.
+    test_sweep = await sweep_repo.get_search(conn, row.folds[0].test_search_id)
+    assert test_sweep is not None and test_sweep.leader_params_hash == test_cells[3.0].params_hash
+    assert test_sweep.leader_params == test_cells[3.0].params
     train_cells = await sweep_repo.list_all_cells(conn, row.folds[0].train_search_id)
     assert all(cell.exploratory is False for cell in train_cells)
     # Each fold sweep's window is the fold's window.
@@ -226,6 +231,8 @@ async def test_cancellation_keeps_completed_folds_and_finish_runs_only_the_rest(
     assert row is not None and row.status == "cancelled" and row.incomplete and row.verdict is None
     assert row.folds[0].status == "completed" and row.folds[1].status == "running"
     assert row.folds[1].train_search_id is not None and row.folds[1].test_search_id is None
+    # The interrupted fold's training cells were recorded and the study's count says so.
+    assert row.folds[1].recorded_backtests == 2 and row.completed_backtests == 6
 
     resumed_seen: list[tuple] = []
     outcome = await asyncio.to_thread(service.execute, study_id, job_id="job-b", cell_executor=_fake_factory(seen=resumed_seen), roots=[lake])
@@ -237,6 +244,31 @@ async def test_cancellation_keeps_completed_folds_and_finish_runs_only_the_rest(
     assert finished is not None and finished.status == "completed" and finished.attempt == 2
     assert [fold.status for fold in finished.folds] == ["completed", "completed"]
     assert finished.verdict is not None and finished.verdict["label"] == "got worse"
+
+
+async def test_finish_continues_a_fold_whose_training_sweep_completed_before_the_cancel(conn, lake: Path) -> None:
+    """Cancelled between a completed training sweep and its test sweep: Finish reads the winner, it does not re-run the sweep."""
+    study_id = await _launch(lake)
+
+    def cancel_once_fold_zero_training_is_complete() -> None:
+        owned = run_sync(with_connection(sweep_repo.list_searches, owner_kind="walk_forward", owner_id=study_id))
+        if any(s.owner.phase == "train" and s.status == "completed" for s in owned) and not any(s.owner.phase == "test" for s in owned):
+            raise JobCancelled("cancelled")
+
+    with pytest.raises(JobCancelled):
+        await asyncio.to_thread(service.execute, study_id, job_id="job-a", cell_executor=_fake_factory(), cancel_check=cancel_once_fold_zero_training_is_complete, roots=[lake])
+
+    row = await repo.get_study(conn, study_id)
+    assert row is not None and row.folds[0].status == "running" and row.folds[0].train_search_id and row.folds[0].test_search_id is None
+
+    resumed_seen: list[tuple] = []
+    outcome = await asyncio.to_thread(service.execute, study_id, job_id="job-b", cell_executor=_fake_factory(seen=resumed_seen), roots=[lake])
+
+    assert outcome.status == "completed"
+    assert not any(key[:2] == ("train", 0) for key in resumed_seen)  # the completed training sweep was read, not re-run
+    finished = await repo.get_study(conn, study_id)
+    assert finished is not None and [f.status for f in finished.folds] == ["completed", "completed"]
+    assert finished.folds[0].winner_params["short_window"] == 3.0
 
 
 async def test_a_fold_sweep_is_refused_when_the_study_snapshot_does_not_cover_its_window(conn, lake: Path) -> None:

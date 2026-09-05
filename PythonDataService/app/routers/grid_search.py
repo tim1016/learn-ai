@@ -143,6 +143,15 @@ async def _load(search_id: str) -> SearchRow:
     return row
 
 
+def _refuse_if_owned(row: SearchRow) -> None:
+    """A study's fold sweep is that study's evidence: it is finished, deleted and resumed with the study, never here."""
+    if row.owner.kind != "user":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "OWNED_BY_STUDY", "message": f"grid search {row.id} belongs to walk-forward study {row.owner.owner_id}; manage it through the study"},
+        )
+
+
 @router.get("/{search_id}", response_model=GridSearchDetailResponse)
 async def get_grid_search(search_id: str) -> GridSearchDetailResponse:
     row = await _load(search_id)
@@ -189,6 +198,7 @@ async def list_grid_search_cells(
 async def delete_grid_search(search_id: str) -> Response:
     """Cancel a running search first and wait for the worker's acknowledgement, then remove it."""
     row = await _load(search_id)
+    _refuse_if_owned(row)
     if row.job_id and records.liveness_or_503(row, noun=NOUN):
 
         async def current_status() -> str | None:
@@ -208,6 +218,7 @@ async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
     """Launch (or Finish) a search on a worker thread. Returns 202 once the record is durable."""
     if req.resume_search_id:
         row = await _load(req.resume_search_id)
+        _refuse_if_owned(row)
         refusal = await to_thread.run_sync(partial(_resume_refusal, row, live=records.liveness(row), verify_data=True))
         if refusal is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})

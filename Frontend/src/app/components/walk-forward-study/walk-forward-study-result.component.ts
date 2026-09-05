@@ -3,6 +3,7 @@ import { DecimalPipe, PercentPipe } from '@angular/common';
 import { ButtonModule } from 'primeng/button';
 
 import { JobsService } from '../../services/jobs.service';
+import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { RecordControlsComponent } from '../../shared/research-record/record-controls.component';
 import { RecordPoller } from '../../shared/research-record/record-poller';
@@ -27,7 +28,7 @@ export interface OpenSweep {
  */
 @Component({
   selector: 'app-walk-forward-study-result',
-  imports: [ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './walk-forward-study-result.component.html',
   styleUrl: './walk-forward-study-result.component.scss',

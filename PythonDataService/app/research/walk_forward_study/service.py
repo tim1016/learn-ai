@@ -171,9 +171,14 @@ def _ensure_sweep(run: _StudyRun, fold: FoldRecord, phase: str, window: tuple[in
     return run_sync(sweeps.create(record))
 
 
-def _run_sweep(run: _StudyRun, sweep: SearchRow, fold: FoldRecord, phase: str, progress_base: int) -> sweeps.ExecutionOutcome:
+def _run_sweep(run: _StudyRun, sweep: SearchRow, fold: FoldRecord, phase: str, progress_base: int) -> str | None:
+    """Run the sweep to a terminal state and return its leader; a sweep Finish finds already complete is read, not re-run."""
+    if sweep.status == "completed":
+        run.on_log(f"fold {fold.fold_index + 1} {phase}: sweep {sweep.id[:8]} already complete")
+        run.on_progress(progress_base + sweep.expected_cells)
+        return sweep.leader_params_hash
     run.on_log(f"fold {fold.fold_index + 1} {phase}: sweep {sweep.id[:8]} ({sweep.expected_cells} cells)")
-    return sweeps.execute(
+    outcome = sweeps.execute(
         sweep.id,
         job_id=run.job_id,
         execute_cell=run.cell_executor(sweep, GridSearchSpec.from_request_dict(sweep.request)),
@@ -181,6 +186,7 @@ def _run_sweep(run: _StudyRun, sweep: SearchRow, fold: FoldRecord, phase: str, p
         on_progress=lambda done, total: run.on_progress(progress_base + done),
         on_log=run.on_log,
     )
+    return outcome.leader_params_hash
 
 
 def _cell(search_id: str, params_hash: str) -> CellRow | None:
@@ -203,10 +209,10 @@ def _run_fold(run: _StudyRun, fold: FoldRecord, persist: Callable[[FoldRecord], 
         train = _ensure_sweep(run, fold, "train", (fold.train_start_ms, fold.train_end_ms), fold.train_search_id)
         fold = replace(fold, status="running", train_search_id=train.id)
         persist(fold)  # the sweep id is durable before a cell runs, so a Finish reuses it
-        train_outcome = _run_sweep(run, train, fold, "train", base)
-        if train_outcome.leader_params_hash is None:
+        winner_hash = _run_sweep(run, train, fold, "train", base)
+        if winner_hash is None:
             raise GridSearchRefusal("no candidate was eligible to win the training window", code="NO_ELIGIBLE_CANDIDATE")
-        winner_train = _cell(train.id, train_outcome.leader_params_hash)
+        winner_train = _cell(train.id, winner_hash)
         assert winner_train is not None
 
         run.cancel_check()
@@ -214,7 +220,8 @@ def _run_fold(run: _StudyRun, fold: FoldRecord, persist: Callable[[FoldRecord], 
         fold = replace(fold, test_search_id=test.id)
         persist(fold)
         _run_sweep(run, test, fold, "test", base + run.combinations)
-        run_sync(with_connection(sweep_repo.mark_exploratory, test.id, evidence_params_hash=winner_train.params_hash))
+        # The test sweep's own ranking is hindsight; its evidence is the training winner.
+        run_sync(with_connection(sweep_repo.record_evidence_winner, test.id, params_hash=winner_train.params_hash, params=dict(winner_train.params)))
         winner_test = _cell(test.id, winner_train.params_hash)
         if winner_test is None or winner_test.status != "completed":
             raise GridSearchRefusal(
@@ -278,6 +285,14 @@ def execute(
         folds[index] = fold
         run_sync(with_connection(repo.update_folds, study_id, attempt, folds, completed_backtests=sum(f.recorded_backtests for f in folds)))
 
+    def _persist_partial_progress() -> None:
+        """An interrupted fold keeps the cells its sweeps recorded; the study's count must say so before it stops."""
+        index = next((i for i, f in enumerate(folds) if f.status == "running"), None)
+        if index is None:
+            return
+        fold = folds[index]
+        _persist(index, replace(fold, recorded_backtests=_recorded_cells(fold.train_search_id) + _recorded_cells(fold.test_search_id)))
+
     def _finish(status: StudyStatus, verdict: Verdict | None, *, incomplete: bool, reason: str | None) -> None:
         run_sync(
             with_connection(
@@ -291,6 +306,7 @@ def execute(
             if fold.status != "completed":
                 _persist(index, _run_fold(run, fold, partial(_persist, index)))
     except JobCancelled:
+        _persist_partial_progress()
         _finish("cancelled", None, incomplete=True, reason=None)
         raise
     except StaleAttemptError:

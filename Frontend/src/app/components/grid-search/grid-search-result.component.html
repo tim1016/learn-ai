@@ -38,7 +38,11 @@
       }
       @if (d.failure_reason) { <p class="refusal">{{ d.failure_reason }}</p> }
       <span class="spacer"></span>
-      <app-record-controls [running]="running()" [resumable]="d.resumable" [resumeRefusal]="d.resume_refusal" [incomplete]="d.incomplete" [busy]="busy()" deletePrompt="Delete this search?" cancelAndDeletePrompt="Cancel and delete this search?" (cancelRequested)="cancel()" (finishRequested)="finish()" (deleteConfirmed)="delete()" />
+      @if (readonly()) {
+        <span class="muted">Managed by its walk-forward study</span>
+      } @else {
+        <app-record-controls [running]="running()" [resumable]="d.resumable" [resumeRefusal]="d.resume_refusal" [incomplete]="d.incomplete" [busy]="busy()" deletePrompt="Delete this search?" cancelAndDeletePrompt="Cancel and delete this search?" (cancelRequested)="cancel()" (finishRequested)="finish()" (deleteConfirmed)="delete()" />
+      }
     </div>
   }
 
@@ -67,7 +71,8 @@
               <td class="num">{{ cell.max_drawdown_pct === null ? '—' : (cell.max_drawdown_pct | percent: '1.2-2') }}</td>
               <td class="num">{{ cell.win_rate === null ? '—' : (cell.win_rate | percent: '1.0-1') }}</td>
               <td>
-                @if (cell.is_leader) { <span class="tag tag--leader">Leader</span> }
+                @if (cell.is_leader) { <span class="tag tag--leader">{{ readonly() ? 'Winner' : 'Leader' }}</span> }
+                @if (cell.exploratory) { <span class="tag" title="Run for context only; never a selection candidate">Exploratory</span> }
                 @if (cell.status === 'failed') { <span class="tag tag--warn" [title]="cell.error ?? ''">Failed</span> }
                 @else if (cell.total_trades === 0) { <span class="tag tag--warn">Zero trades</span> }
                 @else if (!cell.eligible) { <span class="tag">Not eligible</span> }

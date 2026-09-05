@@ -3,6 +3,7 @@
 **Status:** Accepted 2026-09-05
 **Provenance:** PRD [#1925](https://github.com/tim1016/learn-ai/issues/1925) revision 7 and its adversarial review; built in the same AFK session as PRD #1926 (Grid Search, ADR 0055). Decisions taken where the PRD was silent are tabled in `docs/references/walk-forward-study.md` for the operator's review.
 **Decision drivers:** Walk-forward's selection step *is* a grid search over a training window. Two sweep implementations would mean two receipts, two warmup policies, two cancellation contracts and two Finish semantics for the same backtests. The existing SPY EMA normalized-gap protocol and its Exhaustive Run were frozen to one strategy, one instrument and one 18-fold window; a generic procedure makes them redundant.
+**Vocabulary:** none owed — the study adds no operator-facing terms; "fold", "winner", "exploratory" and the verdict labels are defined in `docs/references/walk-forward-study.md` and rendered from backend values.
 **Related:** ADR 0055 (Python-owned research tables; `owner_kind` was reserved for exactly this), ADR 0022 (`int64 ms UTC`; the calendar is the session authority), `docs/references/grid-search.md`.
 
 ## Decision
