@@ -69,16 +69,20 @@ export class WalkForwardStudyResultComponent {
     });
   }
 
+  /** Revision of the latest reload; a poll that resolves late must not restore stale state. */
+  private revision = 0;
+
   async reload(id: string = this.studyId()): Promise<void> {
+    const revision = ++this.revision;
     try {
       const detail = await this.service.get(id);
-      if (id !== this.studyId()) return;
+      if (revision !== this.revision) return;
       this.detail.set(detail);
       this.error.set(null);
       if (!isTerminal(detail.status)) this.awaitingAttempt = false;
       this.schedulePoll();
     } catch {
-      this.error.set('This study could not be loaded.');
+      if (revision === this.revision) this.error.set('This study could not be loaded.');
     }
   }
 

@@ -17,7 +17,7 @@ from typing import Any
 from anyio import to_thread
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.jobs.progress import ProgressEmitter
+from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.research.grid_search.engine_adapter import default_execute_cell
 from app.research.grid_search.service import MAX_TOTAL_BACKTESTS, GridSearchRefusal
@@ -189,7 +189,7 @@ async def start_walk_forward_study_job(req: WalkForwardStudyJobRequest) -> dict[
         created = await service.create(record)
         study_id = created.id
 
-    def work(emit: ProgressEmitter, cancel) -> dict[str, Any]:
+    def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict[str, Any]:
         outcome = service.execute(
             study_id,
             job_id=req.job_id,
