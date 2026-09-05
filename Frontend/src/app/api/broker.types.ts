@@ -27731,6 +27731,8 @@ export interface operations {
                 direction?: "asc" | "desc";
                 page?: number;
                 page_size?: number;
+                /** @description Put the leader's cell first whatever the sort (a study-owned sweep's evidence row) */
+                pin_leader?: boolean;
             };
             header?: never;
             path: {

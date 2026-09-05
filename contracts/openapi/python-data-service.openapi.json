@@ -49177,6 +49177,18 @@
               "title": "Page Size",
               "type": "integer"
             }
+          },
+          {
+            "description": "Put the leader's cell first whatever the sort (a study-owned sweep's evidence row)",
+            "in": "query",
+            "name": "pin_leader",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Put the leader's cell first whatever the sort (a study-owned sweep's evidence row)",
+              "title": "Pin Leader",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
