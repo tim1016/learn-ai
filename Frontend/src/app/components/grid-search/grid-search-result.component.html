@@ -3,7 +3,7 @@
     <div>
       <button pButton type="button" severity="secondary" [text]="true" size="small" (click)="closed.emit()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>History</span></button>
       @if (detail(); as d) {
-        <h2 id="grid-search-result-title">{{ d.strategy_key | receiptLabel }} · {{ d.symbol }}</h2>
+        <h2 id="grid-search-result-title">{{ strategyName() ?? (d.strategy_key | receiptLabel) }} · {{ d.symbol }}</h2>
         <p class="muted">
           <app-timestamp-display [value]="d.window_start_ms" mode="date-et" /> → <app-timestamp-display [value]="d.window_end_ms - 1" mode="date-et" />
           · ranked by {{ d.measure | receiptLabel }} · min {{ d.min_trades }} trades
@@ -63,7 +63,7 @@
             <th scope="col">Settings</th>
             @for (column of sortable; track column) {
               <th scope="col" [attr.aria-sort]="query().sort_by === column ? (query().direction === 'asc' ? 'ascending' : 'descending') : 'none'">
-                <button type="button" class="sort" (click)="sortBy(column)">{{ column | receiptLabel }} @if (query().sort_by === column) { <span aria-hidden="true">{{ query().direction === 'asc' ? '▲' : '▼' }}</span> }</button>
+                <button type="button" class="sort" (click)="sortBy(column)">{{ columnLabels[column] }} @if (query().sort_by === column) { <span aria-hidden="true">{{ query().direction === 'asc' ? '▲' : '▼' }}</span> }</button>
               </th>
             }
             <th scope="col">State</th>
@@ -74,11 +74,11 @@
             <tr [class.leader-row]="cell.is_leader" [class.failed-row]="cell.status === 'failed'" [class.zero-row]="cell.status === 'completed' && cell.total_trades === 0">
               <td class="mono">@for (entry of cell.params | keyvalue; track entry.key) { <span>{{ entry.key }}={{ entry.value }}</span> }</td>
               <td class="num">{{ cell.sharpe_ratio === null ? '—' : (cell.sharpe_ratio | number: '1.2-2') }}</td>
-              <td class="num">{{ cell.total_return_pct === null ? '—' : (cell.total_return_pct | number: '1.2-2') }}</td>
+              <td class="num">{{ cell.total_return_pct === null ? '—' : (cell.total_return_pct | percent: '1.2-2') }}</td>
               <td class="num">{{ cell.net_profit === null ? '—' : (cell.net_profit | number: '1.0-2') }}</td>
               <td class="num">{{ cell.total_trades }}</td>
-              <td class="num">{{ cell.max_drawdown_pct === null ? '—' : (cell.max_drawdown_pct | number: '1.2-2') }}</td>
-              <td class="num">{{ cell.win_rate === null ? '—' : (cell.win_rate | number: '1.2-2') }}</td>
+              <td class="num">{{ cell.max_drawdown_pct === null ? '—' : (cell.max_drawdown_pct | percent: '1.2-2') }}</td>
+              <td class="num">{{ cell.win_rate === null ? '—' : (cell.win_rate | percent: '1.0-1') }}</td>
               <td>
                 @if (cell.is_leader) { <span class="tag tag--leader">Leader</span> }
                 @if (cell.status === 'failed') { <span class="tag tag--warn" [title]="cell.error ?? ''">Failed</span> }

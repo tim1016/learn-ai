@@ -36,6 +36,8 @@ export class GridSearchHistoryComponent {
 
   protected readonly statuses = STATUSES;
   protected readonly displayNames = computed(() => new Map(this.strategies().map((s) => [s.name, s.display_name])));
+  /** Only sweepable strategies can have a search, so only they are offered as a filter. */
+  protected readonly filterableStrategies = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible ?? s.recency_supported === true));
 
   constructor() {
     void this.refresh();

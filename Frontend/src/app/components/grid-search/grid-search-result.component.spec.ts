@@ -90,7 +90,7 @@ describe('GridSearchResultComponent', () => {
     expect(screen.getByText('Zero trades')).not.toBeNull();
     expect(screen.getByText('Failed')).not.toBeNull();
     expect(screen.getByText(/short_window=5, long_window=30/)).not.toBeNull();
-    const sortedHeader = screen.getByRole('columnheader', { name: /sharpe ratio/i });
+    const sortedHeader = screen.getByRole('columnheader', { name: /sharpe/i });
     expect(sortedHeader.getAttribute('aria-sort')).toBe('descending');
   });
 
@@ -100,6 +100,7 @@ describe('GridSearchResultComponent', () => {
     await waitFor(() => expect(cells).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole('button', { name: /net profit/i }));
+
 
     await waitFor(() => expect(cells.mock.lastCall?.[1]).toMatchObject({ sort_by: 'net_profit', direction: 'desc', page: 1 }));
   });

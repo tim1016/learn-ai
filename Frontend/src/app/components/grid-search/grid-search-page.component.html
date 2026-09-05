@@ -16,7 +16,7 @@
       <p-tabpanel value="history">
         @if (lookupMessage(); as message) { <p class="notice" role="status">{{ message }}</p> }
         @if (openSearchId(); as id) {
-          <app-grid-search-result [searchId]="id" (closed)="closeSearch()" (deleted)="onDeleted()" />
+          <app-grid-search-result [searchId]="id" [strategies]="strategies()" (closed)="closeSearch()" (deleted)="onDeleted()" />
         } @else {
           <app-grid-search-history [strategies]="strategies()" (opened)="openSearch($event)" />
         }

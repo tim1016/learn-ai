@@ -1,10 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
-import { DecimalPipe, KeyValuePipe } from '@angular/common';
+import { DecimalPipe, KeyValuePipe, PercentPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { GridSearchService } from './grid-search.service';
 import {
   isTerminal,
@@ -15,6 +16,16 @@ import {
 } from './grid-search.types';
 
 const SORTABLE: readonly CellSortColumn[] = ['sharpe_ratio', 'total_return_pct', 'net_profit', 'total_trades', 'max_drawdown_pct', 'win_rate'];
+/** Column headings; the engine reports return, drawdown and win rate as fractions, rendered as percentages. */
+const COLUMN_LABELS: Readonly<Record<CellSortColumn, string>> = {
+  sharpe_ratio: 'Sharpe',
+  total_return_pct: 'Total return',
+  net_profit: 'Net profit',
+  total_trades: 'Trades',
+  max_drawdown_pct: 'Max drawdown',
+  win_rate: 'Win rate',
+  params_hash: 'Settings',
+};
 
 /**
  * One search's result (PRD #1926 "Frontend"): status, a non-dismissible
@@ -24,7 +35,7 @@ const SORTABLE: readonly CellSortColumn[] = ['sharpe_ratio', 'total_return_pct',
  */
 @Component({
   selector: 'app-grid-search-result',
-  imports: [ButtonModule, DecimalPipe, KeyValuePipe, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [ButtonModule, DecimalPipe, KeyValuePipe, PercentPipe, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './grid-search-result.component.html',
   styleUrl: './grid-search-result.component.scss',
@@ -34,6 +45,7 @@ export class GridSearchResultComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly searchId = input.required<string>();
+  readonly strategies = input<readonly StrategyInfo[]>([]);
   /** Poll interval while the search runs; tests set 0 to disable. */
   readonly pollMs = input(2000);
   readonly deleted = output<string>();
@@ -47,6 +59,11 @@ export class GridSearchResultComponent {
   readonly busy = signal(false);
 
   protected readonly sortable = SORTABLE;
+  protected readonly columnLabels = COLUMN_LABELS;
+  protected readonly strategyName = computed(() => {
+    const key = this.detail()?.strategy_key;
+    return key ? (this.strategies().find((s) => s.name === key)?.display_name ?? null) : null;
+  });
   protected readonly running = computed(() => {
     const status = this.detail()?.status;
     return status !== undefined && !isTerminal(status);
