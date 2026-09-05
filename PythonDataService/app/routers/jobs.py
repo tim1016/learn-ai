@@ -519,8 +519,10 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     """Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
 
     A malformed or oversized grid (D11) is refused before anything is written;
-    the launch row exists before the worker starts (D20). Everything after the
-    HTTP boundary is ``app.research.recency.service``.
+    the launch row exists before the worker starts (D20); a redelivered
+    ``job_id`` is acknowledged without a second worker, and refused (409) if
+    it carries a different configuration.
+    Everything after the HTTP boundary is ``app.research.recency.service``.
     """
     strategies = [
         StrategyGridConfig(strategy_key=s.strategy_key, param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()})
@@ -539,7 +541,13 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
         )
     except recency_service.RecencyLaunchRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
+    try:
+        created = await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
+    except recency_service.RecencyLaunchConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if not created:
+        # A redelivered dispatch: the launch and its worker already exist; a second thread would only race the first.
+        return {"job_id": req.job_id, "status": "queued"}
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
         return recency_service.run_launch(launch.config, emit=emit, cancel=cancel)

@@ -37,6 +37,10 @@ class RecencyLaunchRejected(ValueError):
     """The launch cannot run as requested; the message is the reason the client sees."""
 
 
+class RecencyLaunchConflict(ValueError):
+    """The launch id already exists with a different configuration; the first record stands and this dispatch is refused."""
+
+
 @dataclass(frozen=True)
 class ValidatedLaunch:
     config: RecencyLaunchConfig
@@ -84,11 +88,19 @@ def validate_launch(
     return ValidatedLaunch(config=config, expected_runs=grid_size(strategies, symbols))
 
 
-async def create_launch(launch: ValidatedLaunch, *, request: dict[str, Any]) -> None:
-    """Design spec D20: the durable launch exists before dispatch, so zero-success, cancellation and Redis expiry stay accountable."""
-    await with_connection(
-        repo.create_launch, launch_id=launch.config.launch_id, config_json=json.dumps(request, sort_keys=True), expected_runs=launch.expected_runs
-    )
+async def create_launch(launch: ValidatedLaunch, *, request: dict[str, Any]) -> bool:
+    """Design spec D20: the durable launch exists before dispatch, so zero-success, cancellation and Redis expiry stay accountable.
+
+    Returns whether this dispatch created the launch. An identical redelivery
+    returns ``False`` and must not be dispatched again; the same id with a
+    different configuration raises ``RecencyLaunchConflict``.
+    """
+    try:
+        return await with_connection(
+            repo.create_launch, launch_id=launch.config.launch_id, config_json=json.dumps(request, sort_keys=True), expected_runs=launch.expected_runs
+        )
+    except repo.LaunchConflictError as exc:
+        raise RecencyLaunchConflict(str(exc)) from exc
 
 
 def window_date(ms: int) -> str:

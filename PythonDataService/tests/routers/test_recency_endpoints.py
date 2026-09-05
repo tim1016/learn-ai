@@ -81,3 +81,28 @@ async def test_soft_delete_and_restore_verbs_replace_the_graphql_mutations(clien
 
         missing = await c.post("/api/research/recency/runs/2147000000/soft-delete")
         assert missing.status_code == 404 and missing.json()["detail"]["code"] == "RECENCY_RUN_NOT_FOUND"
+
+
+async def test_a_redelivered_job_id_must_carry_the_same_grid(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The durable launch keeps its first configuration (D20): a redelivery is acknowledged once, a changed grid under the same id is refused."""
+    _requires_ephemeral_db()
+    dispatched: list[str] = []
+    monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: dispatched.append(job_id))
+    body = {
+        "jobId": f"job-{uuid.uuid4().hex[:10]}",
+        "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0]}}}],
+        "symbols": ["SPY"],
+        "windowStartMs": 0,
+        "windowEndMs": 1,
+    }
+
+    async with client as c:
+        first = await c.post("/api/jobs-internal/recency-chart", json=body)
+        assert first.status_code == 202, first.text
+        redelivered = await c.post("/api/jobs-internal/recency-chart", json=body)
+        assert redelivered.status_code == 202, redelivered.text
+        changed = await c.post("/api/jobs-internal/recency-chart", json={**body, "windowEndMs": 2})
+
+    assert changed.status_code == 409, changed.text
+    assert "different configuration" in changed.json()["detail"]
+    assert dispatched == [body["jobId"]]  # one worker for two acknowledgements

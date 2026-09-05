@@ -42,6 +42,10 @@ class LaunchAccountingError(ValueError):
     """A terminal status whose run counts do not reconcile with the launch."""
 
 
+class LaunchConflictError(ValueError):
+    """A launch id arrived again with a different configuration; running the new grid under the first record would misdescribe every run it holds."""
+
+
 def _numeric(value: float) -> Decimal:
     """``numeric(18,8)`` columns take a Decimal; ``str`` keeps the float's shortest repr, not its binary expansion."""
     return Decimal(str(value))
@@ -50,21 +54,37 @@ def _numeric(value: float) -> Decimal:
 # ── Launch lifecycle ─────────────────────────────────────────────────────
 
 
-async def create_launch(conn: asyncpg.Connection, *, launch_id: str, config_json: str, expected_runs: int) -> None:
-    """The durable launch, written before dispatch; a retried dispatch neither duplicates nor resets it."""
+async def create_launch(conn: asyncpg.Connection, *, launch_id: str, config_json: str, expected_runs: int) -> bool:
+    """The durable launch, written before dispatch; returns whether this call created it.
+
+    A retried dispatch of the same launch is a no-op (``False``) that neither
+    duplicates nor resets the record. The same id with a *different*
+    configuration is refused: ``ON CONFLICT DO NOTHING`` alone would keep the
+    first ``ConfigJson`` while the new grid ran under it.
+    """
     if expected_runs <= 0:
         raise ValueError("expected_runs must be positive")
-    await conn.execute(
+    inserted = await conn.fetchval(
         """
         INSERT INTO "RecencyLaunches" ("Id", "ConfigJson", "ExpectedRuns", "SucceededRuns", "FailedRuns", "Status", "CreatedAtMs")
         VALUES ($1, $2::jsonb, $3, 0, 0, 'RUNNING', $4)
         ON CONFLICT ("Id") DO NOTHING
+        RETURNING "Id"
         """,
         launch_id,
         config_json,
         expected_runs,
         now_ms_utc(),
     )
+    if inserted is not None:
+        return True
+    # jsonb equality is semantic (key order, numeric scale) and codec-agnostic. Two statements
+    # without a transaction is safe because launches are never hard-deleted: the row read here
+    # is the one the insert collided with.
+    same_config = await conn.fetchval('SELECT "ConfigJson" = $2::jsonb FROM "RecencyLaunches" WHERE "Id" = $1', launch_id, config_json)
+    if not same_config:
+        raise LaunchConflictError(f"launch {launch_id} already exists with a different configuration")
+    return False
 
 
 async def set_terminal_status(
