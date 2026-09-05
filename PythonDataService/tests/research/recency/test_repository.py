@@ -58,6 +58,8 @@ async def test_the_same_launch_id_with_a_different_configuration_is_refused(conn
 
     with pytest.raises(repo.LaunchConflictError):
         await repo.create_launch(conn, launch_id=launch_id, config_json='{"symbols": ["QQQ"]}', expected_runs=4)
+    with pytest.raises(repo.LaunchConflictError):  # same grid text, a different cell count is not the same launch either
+        await repo.create_launch(conn, launch_id=launch_id, config_json="{}", expected_runs=5)
 
     stored = await conn.fetchval('SELECT "ConfigJson" FROM "RecencyLaunches" WHERE "Id" = $1', launch_id)
     assert stored == "{}"

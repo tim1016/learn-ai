@@ -51,7 +51,7 @@ from app.research.sweep.grid import (
     ValueListRange,
 )
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
-from app.routers.research_records import job_liveness_or_503
+from app.routers.research_records import claim_redelivery
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
@@ -521,9 +521,9 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
 
     A malformed or oversized grid (D11) is refused before anything is written;
     the launch row exists before the worker starts (D20); a redelivered
-    ``job_id`` is acknowledged without a second worker while the first still
-    runs, restarted once it is gone, and refused (409) if it carries a
-    different configuration.
+    ``job_id`` is acknowledged without a second worker while its job record
+    is live, restarted once that record is finished, and refused (409) if the
+    record has expired or the configuration differs.
     Everything after the HTTP boundary is ``app.research.recency.service``.
     """
     strategies = [
@@ -547,10 +547,9 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
         created = await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
     except recency_service.RecencyLaunchConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    if not created and job_liveness_or_503(req.job_id, noun="Recency launch"):
-        # A redelivery while the worker still runs: a second thread would only race the first. Once the
-        # worker is gone (finished, interrupted, or its job record expired) the same dispatch restarts
-        # it, and every cell the launch already holds is a redelivery no-op.
+    if not created and not claim_redelivery(req.job_id, noun="Recency launch"):
+        # A redelivery while the first worker still holds the job record; once that record is
+        # finished the same dispatch restarts the worker and every cell already held is a no-op.
         return {"job_id": req.job_id, "status": "queued"}
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:

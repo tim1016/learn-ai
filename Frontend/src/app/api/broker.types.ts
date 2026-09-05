@@ -2820,9 +2820,9 @@ export interface paths {
          *
          *     A malformed or oversized grid (D11) is refused before anything is written;
          *     the launch row exists before the worker starts (D20); a redelivered
-         *     ``job_id`` is acknowledged without a second worker while the first still
-         *     runs, restarted once it is gone, and refused (409) if it carries a
-         *     different configuration.
+         *     ``job_id`` is acknowledged without a second worker while its job record
+         *     is live, restarted once that record is finished, and refused (409) if the
+         *     record has expired or the configuration differs.
          *     Everything after the HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];

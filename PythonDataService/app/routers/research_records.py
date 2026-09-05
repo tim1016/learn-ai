@@ -41,19 +41,40 @@ def liveness(row: FencedRecord) -> bool | None:
     return lifecycle.job_is_live(row.job_id) if row.status in STORED_LIVE_STATUSES else False
 
 
-def job_liveness_or_503(job_id: str | None, *, noun: str) -> bool:
-    """For actions that must not proceed on an unknown answer (delete, a redelivered dispatch)."""
-    live = lifecycle.job_is_live(job_id)
+def liveness_or_503(row: FencedRecord, *, noun: str) -> bool:
+    """For actions that must not proceed on an unknown answer (delete)."""
+    live = liveness(row)
     if live is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"whether the {noun} is still running cannot be established (job store unreachable); try again shortly",
-        )
+        raise _job_store_unreachable(noun)
     return live
 
 
-def liveness_or_503(row: FencedRecord, *, noun: str) -> bool:
-    return job_liveness_or_503(row.job_id, noun=noun) if row.status in STORED_LIVE_STATUSES else False
+def claim_redelivery(job_id: str, *, noun: str) -> bool:
+    """Whether a redelivered dispatch now owns starting the worker.
+
+    ``False`` while the job record is live (a worker holds it; a second thread would only
+    race the first). ``True`` once the record is finished: the transport record still exists,
+    is put back in the active set, and the same dispatch restarts the worker. A record that
+    has expired cannot carry a job again (409), and an unknown answer is a 503, as for delete.
+    """
+    state = lifecycle.job_state(job_id)
+    if state is None:
+        raise _job_store_unreachable(noun)
+    if state == "absent":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"the {noun}'s job record has expired; it cannot be redelivered under this job id",
+        )
+    if state == "finished":
+        lifecycle.mark_job_active(job_id)
+    return state == "finished"
+
+
+def _job_store_unreachable(noun: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"whether the {noun} is still running cannot be established (job store unreachable); try again shortly",
+    )
 
 
 def stored_status_query(status_filter: str | None, limit: int) -> tuple[Sequence[str] | None, int]:

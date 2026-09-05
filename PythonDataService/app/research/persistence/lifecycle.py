@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import redis
 
 from app.engine.data.policy_store import resolve_data_roots
-from app.jobs.progress import _state_key, get_redis
+from app.jobs.progress import _active_set_key, _state_key, get_redis
 from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.research.sweep.snapshot import DataSnapshot, verify_data_snapshot
 
@@ -32,15 +32,36 @@ class FencedRecord(Protocol):
     def receipt(self) -> Mapping[str, Any]: ...
 
 
-def job_is_live(job_id: str | None) -> bool | None:
-    """Whether the Redis job record still says queued/running. ``None`` when Redis cannot answer."""
+JobState = Literal["live", "finished", "absent"]
+
+
+def job_state(job_id: str | None) -> JobState | None:
+    """What the Redis job record says: queued/running is ``live``, any other status ``finished``, no record ``absent``.
+
+    ``None`` when Redis cannot answer. The record is transport state (.NET writes it before
+    dispatch and it expires with the job TTL), so ``live`` means the record has not been
+    closed, not that a worker thread provably exists.
+    """
     if not job_id:
-        return False
+        return "absent"
     try:
         status = get_redis().hget(_state_key(job_id), "status")
     except redis.RedisError:
         return None
-    return status in ("queued", "running")
+    if status is None:
+        return "absent"
+    return "live" if status in ("queued", "running") else "finished"
+
+
+def job_is_live(job_id: str | None) -> bool | None:
+    """Whether the Redis job record still says queued/running. ``None`` when Redis cannot answer."""
+    state = job_state(job_id)
+    return None if state is None else state == "live"
+
+
+def mark_job_active(job_id: str) -> None:
+    """Return a finished job to the transport's active set before its worker is restarted (the emitter removed it when the first worker closed the record)."""
+    get_redis().sadd(_active_set_key(), job_id)
 
 
 def request_cancel(job_id: str) -> None:

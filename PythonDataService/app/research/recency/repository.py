@@ -81,8 +81,10 @@ async def create_launch(conn: asyncpg.Connection, *, launch_id: str, config_json
     # jsonb equality is semantic (key order, numeric scale) and codec-agnostic. Two statements
     # without a transaction is safe because launches are never hard-deleted: the row read here
     # is the one the insert collided with.
-    same_config = await conn.fetchval('SELECT "ConfigJson" = $2::jsonb FROM "RecencyLaunches" WHERE "Id" = $1', launch_id, config_json)
-    if not same_config:
+    same_launch = await conn.fetchval(
+        'SELECT "ConfigJson" = $2::jsonb AND "ExpectedRuns" = $3 FROM "RecencyLaunches" WHERE "Id" = $1', launch_id, config_json, expected_runs
+    )
+    if not same_launch:
         raise LaunchConflictError(f"launch {launch_id} already exists with a different configuration")
     return False
 
