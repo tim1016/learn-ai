@@ -17,13 +17,18 @@ caller could forget (PRD #1925 "Sweep invocation and ownership").
 Version 3 adopts the Recency Chart's tables from EF Core (PRD #1927, ADR
 0057): their names stay as EF created them, because the rows are migrated
 in place, not regenerated.
+
+Version 4 repairs databases that applied an early, since-edited draft of
+version 1 and so never received ``leader_params_json``; the digest test in
+``tests/research/persistence/test_schema.py`` now fails loudly if an applied
+version is edited again.
 """
 
 from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -210,7 +215,10 @@ DDL_V3: tuple[str, ...] = (
     'CREATE INDEX IF NOT EXISTS "IX_RecencyTrades_RecencyRunId" ON "RecencyTrades" ("RecencyRunId")',
 )
 
-VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = ((1, DDL_V1), (2, DDL_V2), (3, DDL_V3))
+# Version 4 — the column an early draft of version 1 lacked (see the module docstring).
+DDL_V4: tuple[str, ...] = ("ALTER TABLE research_grid_searches ADD COLUMN IF NOT EXISTS leader_params_json JSONB NULL",)
+
+VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = ((1, DDL_V1), (2, DDL_V2), (3, DDL_V3), (4, DDL_V4))
 
 
 async def ensure_schema(conn: asyncpg.Connection) -> None:
