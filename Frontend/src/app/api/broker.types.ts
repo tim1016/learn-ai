@@ -2819,8 +2819,10 @@ export interface paths {
          * @description Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.
          *
          *     A malformed or oversized grid (D11) is refused before anything is written;
-         *     the launch row exists before the worker starts (D20). Everything after the
-         *     HTTP boundary is ``app.research.recency.service``.
+         *     the launch row exists before the worker starts (D20); a redelivered
+         *     ``job_id`` is acknowledged without a second worker, and refused (409) if
+         *     it carries a different configuration.
+         *     Everything after the HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
         delete?: never;
