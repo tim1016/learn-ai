@@ -13,13 +13,12 @@ class _FakeRedis:
         self._status = status
         self._unreachable = unreachable
         self.active: list[str] = []
+        self.expires: list[tuple[str, int]] = []
 
     def hget(self, key: str, field: str) -> str | None:
         if self._unreachable:
             raise redis.RedisError("down")
         return self._status
-
-        self.expires: list[tuple[str, int]] = []
 
     def sadd(self, key: str, member: str) -> None:
         self.active.append(member)
