@@ -317,9 +317,21 @@ def run_cross_sectional_study(
                 polygon_client=polygon_client,
             )
         except Exception as e:
+            # Poll before recording the failure: on the final ticker an early
+            # ``continue`` is the last thing this loop does, and a cancellation
+            # that arrived during the IV build would otherwise be reported as a
+            # completed study with one errored row.
+            cancel_check()
             _fail_ticker(result, e, ticker=ticker, index=i, total=n, on_log=on_log, on_progress=on_progress)
             ticker_results.append(result)
             continue
+
+        # The mid-ticker poll sits between the two per-ticker error handlers on
+        # purpose, and ahead of the empty-IV early exit for the same reason as
+        # above. A cancellation raised here must propagate whatever its class;
+        # inside the handler below it would be recorded as a ticker error and the
+        # study would finish ``completed`` (issue #1931, review findings).
+        cancel_check()
 
         if iv_df.empty:
             result["error"] = "No IV data could be derived"
@@ -331,12 +343,6 @@ def run_cross_sectional_study(
 
         result["data_points"] = len(iv_df)
         on_log(f"[{i + 1}/{n}] {ticker}: {len(iv_df)} IV days; fetching daily bars...")
-
-        # The mid-ticker poll sits between the two per-ticker error handlers on
-        # purpose. A cancellation raised here must propagate whatever its class;
-        # inside the handler below it would be recorded as a ticker error and the
-        # study would finish ``completed`` (issue #1931, review finding).
-        cancel_check()
 
         try:
             stock_bars = polygon_client.fetch_aggregates(

@@ -568,3 +568,43 @@ class TestCancellationContract:
                 cancel_check=cancel_check,
             )
         assert polls == 2
+
+    @pytest.mark.parametrize("iv_outcome", ["empty", "error"])
+    def test_a_cancellation_during_the_final_ticker_iv_build_is_not_lost_by_an_early_exit(
+        self, monkeypatch: pytest.MonkeyPatch, iv_outcome: str
+    ) -> None:
+        """An empty IV frame or a failed IV build ``continue``s to the next ticker.
+
+        On the final ticker there is no next ticker, so a cancellation that
+        became active during the build must be observed before the early exit
+        or the study finishes ``completed`` (CodeRabbit review on #1932).
+        """
+
+        class _Cancelled(Exception):
+            pass
+
+        cancelled = False
+
+        def build_iv_history(**kwargs):
+            nonlocal cancelled
+            cancelled = True  # the user cancels while the build runs
+            if iv_outcome == "error":
+                raise RuntimeError("iv build failed")
+            return pd.DataFrame()
+
+        def cancel_check() -> bool:
+            if cancelled:
+                raise _Cancelled("cancelled during the final ticker")
+            return False
+
+        monkeypatch.setattr("app.research.batch_runner.build_iv_history", build_iv_history)
+
+        with pytest.raises(_Cancelled):
+            run_cross_sectional_study(
+                feature_name="iv_rank",
+                tickers=["SPY"],
+                start_date="2024-01-02",
+                end_date="2024-02-01",
+                polygon_client=object(),
+                cancel_check=cancel_check,
+            )
