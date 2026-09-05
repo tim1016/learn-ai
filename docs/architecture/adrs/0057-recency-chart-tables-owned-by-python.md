@@ -3,6 +3,7 @@
 **Status:** Accepted 2026-09-05
 **Provenance:** PRD [#1927](https://github.com/tim1016/learn-ai/issues/1927) revision 2 and its adversarial review (findings F01, F07, F08, F14, F15, all verified). Built after #1926 landed the Python-owned research tables (ADR 0055), which this decision extends to a shipped feature whose tables EF Core created.
 **Decision drivers:** The Recency Chart was the one research feature that persisted through .NET — a POST per run into `RecencyApi`, four EF entities, a GraphQL read — inside a sweep that is otherwise Python end to end. With .NET being deprecated that path is debt, and it had a real cost: an HTTP round-trip per cell, and a schema whose migrations cannot be generated on this host. The move must not lose evidence: Recency rows are a record of runs that happened.
+**Vocabulary:** none owed — no operator-facing term is introduced; "launch", "run", "trade" and "membership" keep the meanings the Recency Chart design spec gave them.
 **Related:** ADR 0055 (Python-owned research tables; `research_schema_migrations`, the writer loop, the connection helper), ADR 0049 (direct asyncpg access to an EF-owned catalog — the precedent for *access*, which this decision turns into *ownership* for these four tables).
 
 ## Decision
