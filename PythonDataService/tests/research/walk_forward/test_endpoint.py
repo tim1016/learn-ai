@@ -185,11 +185,16 @@ async def test_post_with_parent_run_computes_oos_retention(client):
     result = response.json()["result"]
     if result["mean_oos_sharpe"] is None:
         pytest.skip("synthetic folds produced no finite mean OOS Sharpe")
-    assert result["oos_retention"] == pytest.approx(
-        result["mean_oos_sharpe"] / parent_sharpe,
-        abs=1e-12,
-        rel=0,
-    )
+    if parent_sharpe <= 0:
+        # A non-positive parent Sharpe has no retention to report: the ratio
+        # used to come back sign-flipped (PRD #1925 pre-existing correction).
+        assert result["oos_retention"] is None
+    else:
+        assert result["oos_retention"] == pytest.approx(
+            result["mean_oos_sharpe"] / parent_sharpe,
+            abs=1e-12,
+            rel=0,
+        )
 
 
 async def test_post_then_get_round_trips(client):

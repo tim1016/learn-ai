@@ -10,7 +10,6 @@
 import type {
   EquityCurvePoint,
   RunMetrics,
-  StrategyRunResponse,
 } from './strategy-runs.types';
 
 export type WalkForwardStatus = 'completed' | 'failed';
@@ -157,7 +156,3 @@ type ProtocolIdentityFilter =
 
 export type WalkForwardListFilters = WalkForwardBaseFilters & ProtocolIdentityFilter;
 
-export interface SpyEmaPipelineResponse {
-  control: StrategyRunResponse;
-  walk_forward: WalkForwardResponse;
-}

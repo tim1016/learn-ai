@@ -1,0 +1,13 @@
+:host { display: block; }
+.editor { display: grid; gap: var(--space-4); }
+.muted { color: var(--text-secondary); font-size: var(--fs-xs); }
+.editor__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
+.field { display: grid; gap: var(--space-1); font-size: var(--fs-xs); }
+.field select, .field input { min-width: 0; }
+.ineligible { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-1); font-size: var(--fs-xs); }
+.tag { margin-inline-start: var(--space-2); border: 1px solid var(--border-light); border-radius: 999px; padding: 0 var(--space-2); }
+.params { display: grid; gap: var(--space-3); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-3); }
+.param { display: grid; gap: var(--space-2); }
+.param__toggle { display: flex; gap: var(--space-2); align-items: baseline; }
+.param__fixed input { max-width: 200px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

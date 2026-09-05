@@ -115,6 +115,8 @@ export interface CellPageQuery {
   direction: 'asc' | 'desc';
   page: number;
   page_size: number;
+  /** Put the leader's cell first regardless of the sort (a study-owned sweep's evidence row). */
+  pin_leader?: boolean;
 }
 
 export interface GridSearchCellPage extends CellPageQuery {

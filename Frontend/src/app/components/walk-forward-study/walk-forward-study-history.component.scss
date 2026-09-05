@@ -1,0 +1,17 @@
+:host { display: block; }
+.history { display: grid; gap: var(--space-3); }
+.history__header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: var(--space-3); }
+.history__header h2 { margin: 0; }
+.muted { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; }
+.refusal { color: var(--danger); margin: 0; font-size: var(--fs-sm); }
+.table-wrap { overflow-x: auto; }
+.rows { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.rows th, .rows td { padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--border-light); text-align: left; white-space: nowrap; }
+.rows .num { text-align: right; font-variant-numeric: tabular-nums; }
+.tag { border: 1px solid var(--border-light); border-radius: 999px; padding: 0 var(--space-2); margin-inline-start: var(--space-1); }
+.tag--warn { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); color: var(--danger); }
+.verdict { text-transform: capitalize; font-weight: 600; }
+.verdict[data-label="still worked"] { color: var(--success, #22c55e); }
+.verdict[data-label="got worse"], .verdict[data-label="stopped working"] { color: var(--danger); }
+.actions { display: flex; gap: var(--space-1); align-items: center; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

@@ -24,10 +24,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import asdict
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from fastapi.encoders import jsonable_encoder
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -42,7 +41,6 @@ from app.research.batch_runner import (
     run_cross_sectional_study,
 )
 from app.research.config import ResearchConfig
-from app.research.exhaustive_run.runner import run_exhaustive_analysis
 from app.research.recency.persist_client import persist_recency_snapshot, update_recency_launch
 from app.research.recency.runner import RecencyLaunchConfig, run_recency
 from app.research.recency.stats import ms_to_et_date_string
@@ -58,14 +56,7 @@ from app.research.sweep.grid import (
     expand_grid,
     grid_size,
 )
-from app.research.walk_forward.spy_ema import (
-    SPY_EMA_PROTOCOL_ID,
-    SPY_EMA_PROTOCOL_VERSION,
-    frozen_spy_ema_v1_request,
-    run_spy_ema_pipeline,
-)
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
-from app.routers.research_runs import get_artifacts_root, get_data_source_factory
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
@@ -314,31 +305,6 @@ class SignalEngineJobRequest(_CamelCaseTickerRequest):
     flip_sign: bool = True
     regime_gate_enabled: bool = True
     force: bool = False
-
-
-class SpyEmaWalkForwardJobRequest(_CamelCaseModel):
-    """Frozen V1 protocol job; clients may provide no research overrides."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-        extra="forbid",
-    )
-
-    job_id: str = Field(..., min_length=1)
-
-
-class SpyEmaExhaustiveJobRequest(_CamelCaseModel):
-    """Frozen Exhaustive Run request linked to canonical SPY EMA V1 evidence."""
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-        extra="forbid",
-    )
-
-    job_id: str = Field(..., min_length=1)
-    walk_forward_id: str = Field(..., pattern=r"^[0-9a-f]{32}$")
 
 
 # ---------------------------------------------------------------------------
@@ -1211,136 +1177,6 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
         work,
         thread_name=f"signal-{req.job_id[:8]}",
         cancel_check_every_n=50,
-    )
-    return {"job_id": req.job_id, "status": "queued"}
-
-
-@router.post("/spy-ema-walk-forward", status_code=status.HTTP_202_ACCEPTED)
-async def start_spy_ema_walk_forward_job(
-    req: SpyEmaWalkForwardJobRequest,
-    data_source_factory=Depends(get_data_source_factory),
-    artifacts_root: Path | None = Depends(get_artifacts_root),
-) -> dict:
-    """Run the immutable SPY EMA V1 protocol behind the jobs boundary."""
-
-    def work(emit: ProgressEmitter, cancel) -> dict:
-        _emit_friendly_phase(
-            emit,
-            cancel,
-            "spy_ema_walk_forward",
-            "running_control",
-            f"Running {SPY_EMA_PROTOCOL_ID} protocol V{SPY_EMA_PROTOCOL_VERSION}",
-        )
-
-        phase_switched = False
-
-        def on_progress(current: int, total: int, message: str) -> None:
-            nonlocal phase_switched
-            cancel.raise_if_cancelled()
-            emit.progress(
-                current=current,
-                total=total,
-                unit="runs",
-                message=message,
-            )
-            if current >= 1 and not phase_switched:
-                _emit_friendly_phase(
-                    emit,
-                    cancel,
-                    "spy_ema_walk_forward",
-                    "walking_forward",
-                )
-                phase_switched = True
-
-        pipeline = run_spy_ema_pipeline(
-            frozen_spy_ema_v1_request(),
-            data_source_factory=data_source_factory,
-            artifacts_root=artifacts_root,
-            on_progress=on_progress,
-            cancel_check=cancel.raise_if_cancelled,
-        )
-        cancel.raise_if_cancelled()
-        _emit_friendly_phase(
-            emit,
-            cancel,
-            "spy_ema_walk_forward",
-            "persisting_evidence",
-        )
-        return {
-            "control": {
-                "ledger": pipeline.control_ledger.model_dump(mode="json"),
-                "result": pipeline.control_result.model_dump(mode="json"),
-            },
-            "walk_forward": {
-                "config": pipeline.walk_forward_config.model_dump(mode="json"),
-                "result": pipeline.walk_forward_result.model_dump(mode="json"),
-            },
-        }
-
-    run_in_thread(
-        req.job_id,
-        work,
-        thread_name=f"spy-ema-wf-{req.job_id[:8]}",
-        cancel_check_every_n=1,
-    )
-    return {"job_id": req.job_id, "status": "queued"}
-
-
-@router.post("/spy-ema-exhaustive", status_code=status.HTTP_202_ACCEPTED)
-async def start_spy_ema_exhaustive_job(
-    req: SpyEmaExhaustiveJobRequest,
-    data_source_factory=Depends(get_data_source_factory),
-    artifacts_root: Path | None = Depends(get_artifacts_root),
-) -> dict:
-    """Run the frozen full-data plus fixed-gap stability protocol."""
-
-    def work(emit: ProgressEmitter, cancel) -> dict:
-        _emit_friendly_phase(
-            emit,
-            cancel,
-            "spy_ema_exhaustive",
-            "selecting_candidates",
-        )
-        _emit_friendly_phase(
-            emit,
-            cancel,
-            "spy_ema_exhaustive",
-            "running_candidates",
-        )
-
-        def on_progress(current: int, total: int, message: str) -> None:
-            cancel.raise_if_cancelled()
-            emit.progress(
-                current=current,
-                total=total,
-                unit="runs",
-                message=message,
-            )
-
-        config, result = run_exhaustive_analysis(
-            req.walk_forward_id,
-            data_source_factory=data_source_factory,
-            artifacts_root=artifacts_root,
-            on_progress=on_progress,
-            cancel_check=cancel.raise_if_cancelled,
-        )
-        cancel.raise_if_cancelled()
-        _emit_friendly_phase(
-            emit,
-            cancel,
-            "spy_ema_exhaustive",
-            "finalizing_evidence",
-        )
-        return {
-            "config": config.model_dump(mode="json"),
-            "result": result.model_dump(mode="json"),
-        }
-
-    run_in_thread(
-        req.job_id,
-        work,
-        thread_name=f"spy-ema-exhaustive-{req.job_id[:8]}",
-        cancel_check_every_n=1,
     )
     return {"job_id": req.job_id, "status": "queued"}
 

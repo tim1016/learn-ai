@@ -1,5 +1,10 @@
 # SPY EMA normalized-gap walk-forward
 
+> **Protocol retired 2026-09-05 (PRD #1925).** The job types, pages and Exhaustive Run built on
+> this protocol are gone; the Walk-Forward Study (`docs/references/walk-forward-study.md`) is
+> the generic replacement. This document is kept for the `difference_bps` formula provenance
+> and its golden rows, which are still canonical (`docs/math-sources-of-truth.md`).
+
 ## Provenance
 
 This research protocol was derived from the project discussion in the supplied [ChatGPT research conversation](https://chatgpt.com/c/6a7ff340-8f44-83ea-9ccf-bb8b13ca2eee) and then made executable under learn-ai's Python-owned numerical contract. The conversation is design provenance, not a numerical oracle. The 10,000 scale is independently grounded in the U.S. Securities and Exchange Commission's Investor.gov [basis-point definition](https://www.investor.gov/introduction-investing/investing-basics/glossary/basis-point), and the formula fixture pins manually derived exact-rational outputs rather than regenerating expectations with the production algebra. The EMA and RSI implementations retain their existing LEAN-pinned references and parity tests.
@@ -56,7 +61,7 @@ The declaration grid is ascending, so a complete metric tie selects the lower th
 
 - Canonical implementation: `PythonDataService/app/research/walk_forward/selection.py::select_candidate_index`.
 - Validating test: `PythonDataService/tests/research/walk_forward/test_selection.py`.
-- Orchestration/lineage tests: `PythonDataService/tests/research/walk_forward/test_runner.py` and `test_spy_ema.py`.
+- Orchestration/lineage tests: `PythonDataService/tests/research/walk_forward/test_runner.py` (`test_spy_ema.py` was retired with the protocol, PRD #1925).
 
 ## Retention formula
 

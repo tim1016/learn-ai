@@ -38,7 +38,6 @@ from app.routers import (
     dataset,
     edge,
     engine,
-    exhaustive_runs,
     golden_fixtures,
     grid_search,
     indicator_reliability,
@@ -66,6 +65,7 @@ from app.routers import (
     tickers,
     volatility,
     walk_forward,
+    walk_forward_study,
 )
 from app.routers import (
     data_lake as data_lake_router,
@@ -542,6 +542,9 @@ app.include_router(recency.router, prefix="/api/research/recency", tags=["resear
 # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
 app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
 app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+# Walk-Forward Study (PRD #1925): folds of Grid Search sweeps plus the frozen verdict.
+app.include_router(walk_forward_study.router, prefix="/api/research/walk-forward-studies", tags=["research-walk-forward-study"])
+app.include_router(walk_forward_study.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
 app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
 # Research-pipeline walk-forward (Phase C). Registered BEFORE
 # ``research_runs`` so the literal ``/walk-forward`` segment wins
@@ -550,11 +553,6 @@ app.include_router(
     walk_forward.router,
     prefix="/api/research/strategy-runs/walk-forward",
     tags=["research-walk-forward"],
-)
-app.include_router(
-    exhaustive_runs.router,
-    prefix="/api/research/exhaustive-runs",
-    tags=["research-exhaustive-runs"],
 )
 # Research-pipeline Monte Carlo (Phase D). Same pre-research_runs
 # placement so the literal ``/monte-carlo`` segment wins.

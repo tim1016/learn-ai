@@ -1,7 +1,7 @@
 <section class="result" aria-labelledby="grid-search-result-title">
   <header class="result__header">
     <div>
-      <button pButton type="button" severity="secondary" [text]="true" size="small" (click)="closed.emit()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>History</span></button>
+      <button pButton type="button" severity="secondary" [text]="true" size="small" (click)="closed.emit()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>{{ backLabel() }}</span></button>
       @if (detail(); as d) {
         <h2 id="grid-search-result-title">{{ strategyName() ?? (d.strategy_key | receiptLabel) }} · <app-asset-identity [symbol]="d.symbol" size="sm" /></h2>
         <p class="muted">
@@ -21,11 +21,13 @@
     }
   </header>
 
-  <p class="in-sample" role="note">
-    <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-    Every number on this page is <strong>in-sample</strong>: it was measured on the same data these settings were chosen from. A grid search says which settings fit the past; it says nothing about whether they will keep working.
-    @if (detail(); as d) { <a [routerLink]="['/walk-forward']" [queryParams]="{ search: d.id }">Test this grid out of sample in Walk-Forward →</a> }
-  </p>
+  @if (!readonly()) {
+    <p class="in-sample" role="note">
+      <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+      Every number on this page is <strong>in-sample</strong>: it was measured on the same data these settings were chosen from. A grid search says which settings fit the past; it says nothing about whether they will keep working.
+      @if (detail(); as d) { <a [routerLink]="['/walk-forward']" [queryParams]="{ search: d.id }">Test this grid out of sample in Walk-Forward →</a> }
+    </p>
+  }
 
   @if (error(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
 
@@ -38,22 +40,10 @@
       }
       @if (d.failure_reason) { <p class="refusal">{{ d.failure_reason }}</p> }
       <span class="spacer"></span>
-      @if (running()) {
-        <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="busy()" (click)="cancel()"><i class="pi pi-stop" aria-hidden="true"></i><span>Cancel</span></button>
-      }
-      @if (d.resumable) {
-        <button pButton type="button" size="small" [disabled]="busy()" (click)="finish()"><i class="pi pi-forward" aria-hidden="true"></i><span>Finish</span></button>
-      } @else if (d.resume_refusal && d.incomplete) {
-        <span class="muted" title="{{ d.resume_refusal }}">Finish unavailable — {{ d.resume_refusal }}</span>
-      }
-      @if (!confirmingDelete()) {
-        <button pButton type="button" size="small" severity="danger" [outlined]="true" [disabled]="busy()" (click)="requestDelete()">Delete</button>
+      @if (readonly()) {
+        <span class="muted">Managed by its walk-forward study</span>
       } @else {
-        <span class="confirm" role="group" aria-label="Confirm deletion">
-          <span>{{ running() ? 'Cancel and delete this search?' : 'Delete this search?' }}</span>
-          <button pButton type="button" size="small" severity="danger" [disabled]="busy()" (click)="confirmDelete()">Confirm delete</button>
-          <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="cancelDelete()">Keep</button>
-        </span>
+        <app-record-controls [running]="running()" [resumable]="d.resumable" [resumeRefusal]="d.resume_refusal" [incomplete]="d.incomplete" [busy]="busy()" deletePrompt="Delete this search?" cancelAndDeletePrompt="Cancel and delete this search?" (cancelRequested)="cancel()" (finishRequested)="finish()" (deleteConfirmed)="delete()" />
       }
     </div>
   }
@@ -83,7 +73,8 @@
               <td class="num">{{ cell.max_drawdown_pct === null ? '—' : (cell.max_drawdown_pct | percent: '1.2-2') }}</td>
               <td class="num">{{ cell.win_rate === null ? '—' : (cell.win_rate | percent: '1.0-1') }}</td>
               <td>
-                @if (cell.is_leader) { <span class="tag tag--leader">Leader</span> }
+                @if (cell.is_leader) { <span class="tag tag--leader">{{ readonly() ? 'Winner' : 'Leader' }}</span> }
+                @if (cell.exploratory) { <span class="tag" title="Run for context only; never a selection candidate">Exploratory</span> }
                 @if (cell.status === 'failed') { <span class="tag tag--warn" [title]="cell.error ?? ''">Failed</span> }
                 @else if (cell.total_trades === 0) { <span class="tag tag--warn">Zero trades</span> }
                 @else if (!cell.eligible) { <span class="tag">Not eligible</span> }

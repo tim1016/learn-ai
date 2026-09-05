@@ -6,7 +6,6 @@ import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { of } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ExhaustiveRunService } from '../../../../services/exhaustive-run.service';
 import { JobsService } from '../../../../services/jobs.service';
 import { WalkForwardService } from '../../../../services/walk-forward.service';
 import type {
@@ -166,10 +165,6 @@ describe('WalkForwardDetailPageComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: WalkForwardService, useValue: service },
-        {
-          provide: ExhaustiveRunService,
-          useValue: { getLatestForWalkForward: vi.fn().mockResolvedValue(null) },
-        },
         {
           provide: JobsService,
           useValue: {

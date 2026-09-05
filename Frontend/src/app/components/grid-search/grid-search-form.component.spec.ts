@@ -2,29 +2,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
+import { sweepableStrategy as strategy } from './testing/fixtures';
 import { GridSearchFormComponent } from './grid-search-form.component';
 import { GridSearchRefusedError, GridSearchService } from './grid-search.service';
 import type { GridSearchPreflight, GridSearchSpecRequest } from './grid-search.types';
-
-function strategy(overrides: Partial<StrategyInfo> = {}): StrategyInfo {
-  return {
-    name: 'sma_crossover',
-    display_name: 'SMA Crossover',
-    description: '',
-    params_schema: {
-      properties: {
-        symbol: { type: 'string', default: 'SPY' },
-        short_window: { type: 'integer', default: 10, minimum: 2, maximum: 500, title: 'Short window' },
-        long_window: { type: 'integer', default: 30, minimum: 3, maximum: 1000, title: 'Long window' },
-      },
-    },
-    supported_resolutions: ['minute'],
-    strategy_bars: { timespan: 'minute', multiplier: 15 },
-    recency_supported: true,
-    sweep_eligibility: { eligible: true, reason_codes: [], offending_parameters: [] },
-    ...overrides,
-  };
-}
 
 const PLAN: GridSearchPreflight = {
   strategy_key: 'sma_crossover',

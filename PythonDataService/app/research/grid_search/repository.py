@@ -20,7 +20,7 @@ reason to reconcile, never proof that the worker is dead.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 import asyncpg
@@ -35,23 +35,11 @@ from app.research.grid_search.models import (
     SearchRow,
     SearchStatus,
 )
+from app.research.persistence import fence
 from app.utils.timestamps import now_ms_utc
 
+SEARCHES = "research_grid_searches"
 TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
-# A completed search is immutable evidence; everything else may be (re)claimed.
-CLAIMABLE_STATUSES: frozenset[str] = frozenset({"queued", "running", "failed", "cancelled"})
-
-
-class StaleAttemptError(RuntimeError):
-    """The writer's attempt generation is no longer the search's current one."""
-
-
-class SearchNotFoundError(LookupError):
-    pass
-
-
-class SearchNotClaimableError(RuntimeError):
-    pass
 
 
 def _row_to_search(row: asyncpg.Record) -> SearchRow:
@@ -188,42 +176,11 @@ async def list_searches(
 
 async def claim_attempt(conn: asyncpg.Connection, search_id: str, *, job_id: str | None) -> int:
     """Atomically take the next attempt generation and mark the search running."""
-    async with conn.transaction():
-        row = await conn.fetchrow(
-            "SELECT status FROM research_grid_searches WHERE id = $1 FOR UPDATE",
-            search_id,
-        )
-        if row is None:
-            raise SearchNotFoundError(search_id)
-        if row["status"] not in CLAIMABLE_STATUSES:
-            raise SearchNotClaimableError(f"search {search_id} is {row['status']} and cannot be claimed")
-        attempt = await conn.fetchval(
-            """
-            UPDATE research_grid_searches
-               SET attempt = attempt + 1, status = 'running', job_id = $2, updated_at_ms = $3,
-                   finished_at_ms = NULL, failure_reason = NULL, incomplete = FALSE
-             WHERE id = $1
-            RETURNING attempt
-            """,
-            search_id,
-            job_id,
-            now_ms_utc(),
-        )
-        return int(attempt)
+    return await fence.claim_attempt(conn, table=SEARCHES, record_id=search_id, job_id=job_id)
 
 
 async def _lock_current_attempt(conn: asyncpg.Connection, search_id: str, attempt: int) -> None:
-    """Row-lock the search and refuse a writer that is stale, or a search that is complete."""
-    row = await conn.fetchrow(
-        "SELECT attempt, status FROM research_grid_searches WHERE id = $1 FOR UPDATE",
-        search_id,
-    )
-    if row is None:
-        raise StaleAttemptError(f"search {search_id} no longer exists; attempt {attempt} may not write")
-    if int(row["attempt"]) != attempt:
-        raise StaleAttemptError(f"search {search_id} is on attempt {row['attempt']}; attempt {attempt} may not write")
-    if row["status"] == "completed":
-        raise StaleAttemptError(f"search {search_id} is complete and immutable; attempt {attempt} may not write")
+    await fence.lock_current_attempt(conn, table=SEARCHES, record_id=search_id, attempt=attempt)
 
 
 async def write_cells(conn: asyncpg.Connection, search_id: str, attempt: int, cells: Sequence[CellResult]) -> None:
@@ -315,9 +272,38 @@ async def finish_search(
         )
 
 
+async def record_evidence_winner(conn: asyncpg.Connection, search_id: str, *, params_hash: str, params: Mapping[str, Any]) -> None:
+    """A walk-forward test sweep's evidence is the training winner, not its own best cell (PRD #1925).
+
+    Marks every other cell exploratory and points the sweep's leader at the
+    winner, so a reader of this sweep sees the settings that were chosen
+    without hindsight. Written by the owning study after the sweep finished;
+    the attempt fence guards competing writers of a search, not its owner's
+    labelling of it.
+    """
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE research_grid_search_cells SET exploratory = (params_hash <> $2) WHERE search_id = $1",
+            search_id,
+            params_hash,
+        )
+        await conn.execute(
+            "UPDATE research_grid_searches SET leader_params_hash = $2, leader_params_json = $3::jsonb, updated_at_ms = $4 WHERE id = $1",
+            search_id,
+            params_hash,
+            json.dumps(dict(params), sort_keys=True),
+            now_ms_utc(),
+        )
+
+
 async def delete_search(conn: asyncpg.Connection, search_id: str) -> bool:
     result = await conn.execute("DELETE FROM research_grid_searches WHERE id = $1", search_id)
     return result.endswith(" 1")
+
+
+async def delete_owned_searches(conn: asyncpg.Connection, *, owner_kind: str, owner_id: str) -> None:
+    """Remove every sweep an owner (a walk-forward study) launched; cells cascade."""
+    await conn.execute("DELETE FROM research_grid_searches WHERE owner_kind = $1 AND owner_id = $2", owner_kind, owner_id)
 
 
 async def existing_params_hashes(conn: asyncpg.Connection, search_id: str) -> set[str]:
@@ -341,8 +327,14 @@ async def list_cells(
     direction: Literal["asc", "desc"] = "desc",
     page: int = 1,
     page_size: int = 50,
+    pin_params_hash: str | None = None,
 ) -> CellPage:
-    """Server-side sorted, paged cells. Nulls (failed / zero-trade measures) always sort last."""
+    """Server-side sorted, paged cells. Nulls (failed / zero-trade measures) always sort last.
+
+    ``pin_params_hash`` puts that one cell first whatever the sort — a
+    walk-forward test sweep's evidence row must be on the first page even when
+    its test-window rank is not.
+    """
     column = _CELL_SORT_SQL.get(sort_by)
     if column is None:
         raise ValueError(f"unknown sort column {sort_by!r}; allowed: {CELL_SORT_COLUMNS}")
@@ -356,12 +348,13 @@ async def list_cells(
         f"""
         SELECT {_CELL_COLUMNS} FROM research_grid_search_cells
          WHERE search_id = $1
-         ORDER BY {column} {order}, params_hash ASC
+         ORDER BY (params_hash = $4) DESC, {column} {order}, params_hash ASC
          LIMIT $2 OFFSET $3
         """,
         search_id,
         page_size,
         (page - 1) * page_size,
+        pin_params_hash,
     )
     return CellPage(total=int(total or 0), page=page, page_size=page_size, cells=[_row_to_cell(row) for row in rows])
 

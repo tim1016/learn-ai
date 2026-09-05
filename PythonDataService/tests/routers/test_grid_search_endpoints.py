@@ -14,6 +14,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.main import app
 from app.research.grid_search import service
 from app.research.grid_search.models import CellResult
+from app.research.persistence import lifecycle
 from app.routers import grid_search as grid_search_router
 from tests._helpers.lean_store import seed_store_day
 
@@ -124,7 +125,7 @@ async def test_launch_lists_immediately_and_the_result_pages_on_the_server(clien
         return None
 
     monkeypatch.setattr(grid_search_router, "run_in_thread", fake_run_in_thread)
-    monkeypatch.setattr(service, "job_is_live", lambda job_id: True)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
 
     async with client as c:
         launched = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": f"job-http-1-{id(monkeypatch)}"})
@@ -170,7 +171,7 @@ async def test_launch_lists_immediately_and_the_result_pages_on_the_server(clien
 async def test_finish_of_a_completed_search_is_refused(client, lake, monkeypatch) -> None:
     _requires_ephemeral_db()
     monkeypatch.setattr(grid_search_router, "run_in_thread", lambda job_id, work, **kwargs: None)
-    monkeypatch.setattr(service, "job_is_live", lambda job_id: False)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: False)
 
     async with client as c:
         launched = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": "job-http-2"})

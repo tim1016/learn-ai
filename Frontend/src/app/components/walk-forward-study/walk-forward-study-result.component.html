@@ -1,0 +1,96 @@
+@if (openSweep(); as sweep) {
+  <p class="sweep-context" role="note">
+    Fold {{ sweep.fold.fold_index + 1 }} · {{ sweep.phase === 'train' ? 'training window — where this fold\'s winner was chosen (in-sample)' : 'test window — only the winner\'s row is evidence; every other row is exploratory' }}
+  </p>
+  <app-grid-search-result [searchId]="sweep.id" [strategies]="strategies()" [readonly]="true" backLabel="Back to the study" (closed)="closeSweep()" />
+} @else {
+<section class="result" aria-labelledby="walk-forward-result-title">
+  <header class="result__header">
+    <div>
+      <button pButton type="button" severity="secondary" [text]="true" size="small" (click)="closed.emit()"><i class="pi pi-arrow-left" aria-hidden="true"></i><span>History</span></button>
+      @if (detail(); as d) {
+        <h2 id="walk-forward-result-title">{{ strategyName() ?? (d.strategy_key | receiptLabel) }} · <app-asset-identity [symbol]="d.symbol" size="sm" /></h2>
+        <p class="muted">
+          <app-timestamp-display [value]="d.window_start_ms" mode="date-et" /> → <app-timestamp-display [value]="d.window_end_ms - 1" mode="date-et" />
+          · train {{ d.training_months }} mo / test {{ d.test_months }} mo · {{ d.fold_count }} folds
+          · ranked by {{ d.measure | receiptLabel }} · min {{ d.min_trades }} trades
+          · launched <app-timestamp-display [value]="d.created_at_ms" mode="local" />
+        </p>
+      } @else { <h2 id="walk-forward-result-title">Study</h2> }
+    </div>
+    @if (detail(); as d) {
+      <div class="status" [attr.data-status]="d.status">
+        <span class="tag">{{ d.status | receiptLabel }}</span>
+        @if (d.uncommitted_changes) { <span class="tag tag--warn">Uncommitted changes</span> }
+        @if (d.incomplete) { <span class="tag tag--warn">Incomplete — {{ d.fold_count - d.completed_folds - d.failed_folds }} fold(s) not run</span> }
+        <span class="muted">{{ d.completed_backtests }} / {{ d.expected_backtests }} backtests</span>
+      </div>
+    }
+  </header>
+
+  @if (error(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+
+  @if (detail(); as d) {
+    @if (d.verdict; as verdict) {
+      <section class="verdict" [attr.data-label]="verdict.label" aria-labelledby="verdict-title">
+        <p class="eyebrow">Verdict · {{ verdict.based_on }}</p>
+        <h3 id="verdict-title">{{ verdict.label }}</h3>
+        <p class="verdict__reason">{{ verdict.reason }}</p>
+        <dl class="verdict__facts">
+          <div><dt>Median fold retention</dt><dd>{{ verdict.study_retention === null ? '—' : (verdict.study_retention | percent: '1.0-0') }}</dd></div>
+          <div><dt>Median test Sharpe</dt><dd>{{ verdict.median_test_sharpe === null ? '—' : (verdict.median_test_sharpe | number: '1.2-2') }}</dd></div>
+          <div><dt>Out-of-sample trades</dt><dd>{{ verdict.oos_trade_count }}</dd></div>
+          <div><dt>Winner changed</dt><dd>{{ d.winner_changes }} time{{ d.winner_changes === 1 ? '' : 's' }} between folds</dd></div>
+        </dl>
+      </section>
+    } @else if (running()) {
+      <p class="muted" role="status">The verdict is applied once every fold has run.</p>
+    }
+
+    <p class="oos-note" role="note">
+      <i class="pi pi-info-circle" aria-hidden="true"></i>
+      Each fold's test-window result is <strong>out of sample</strong> for the settings chosen in that fold's training window. The other test cells were never chosen and are shown as exploratory only.
+    </p>
+
+    <div class="actions">
+      @if (d.failure_reason) { <p class="refusal">{{ d.failure_reason }}</p> }
+      <span class="spacer"></span>
+      <app-record-controls [running]="running()" [resumable]="d.resumable" [resumeRefusal]="d.resume_refusal" [incomplete]="d.incomplete" [busy]="busy()" deletePrompt="Delete this study and its sweeps?" cancelAndDeletePrompt="Cancel and delete this study and its sweeps?" (cancelRequested)="cancel()" (finishRequested)="finish()" (deleteConfirmed)="delete()" />
+    </div>
+
+    <div class="table-wrap">
+      <table class="folds">
+        <thead>
+          <tr>
+            <th scope="col">Fold</th><th scope="col">Train</th><th scope="col">Test</th><th scope="col">Status</th>
+            <th scope="col">Winner</th><th scope="col" class="num">Train Sharpe</th><th scope="col" class="num">Test Sharpe</th>
+            <th scope="col" class="num">Retention</th><th scope="col" class="num">Test trades</th><th scope="col"><span class="sr-only">Sweeps</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (fold of d.folds; track fold.fold_index) {
+            <tr [class.failed-row]="fold.status === 'failed'">
+              <td>{{ fold.fold_index + 1 }}</td>
+              <td><app-timestamp-display [value]="fold.train_start_ms" mode="date-et" /> → <app-timestamp-display [value]="fold.train_end_ms - 1" mode="date-et" /></td>
+              <td><app-timestamp-display [value]="fold.test_start_ms" mode="date-et" /> → <app-timestamp-display [value]="fold.test_end_ms - 1" mode="date-et" /></td>
+              <td>
+                <span class="tag" [attr.data-status]="fold.status">{{ fold.status | receiptLabel }}</span>
+                @if (fold.failure_reason) { <span class="refusal">{{ fold.failure_reason }}</span> }
+              </td>
+              <td class="mono">{{ winnerText(fold) }}</td>
+              <td class="num">{{ fold.train_sharpe === null ? '—' : (fold.train_sharpe | number: '1.2-2') }}</td>
+              <td class="num">{{ fold.test_sharpe === null ? '—' : (fold.test_sharpe | number: '1.2-2') }}</td>
+              <td class="num">{{ fold.retention === null ? '—' : (fold.retention | percent: '1.0-0') }}</td>
+              <td class="num">{{ fold.test_trades }}</td>
+              <td class="sweeps">
+                @if (fold.train_search_id) { <button pButton type="button" size="small" [text]="true" (click)="open(fold, 'train')" [attr.aria-label]="'Open training sweep of fold ' + (fold.fold_index + 1)">Training sweep</button> }
+                @if (fold.test_search_id) { <button pButton type="button" size="small" [text]="true" (click)="open(fold, 'test')" [attr.aria-label]="'Open test sweep of fold ' + (fold.fold_index + 1)">Test sweep</button> }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+}

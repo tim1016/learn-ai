@@ -1,0 +1,56 @@
+<section class="form" aria-labelledby="walk-forward-form-title">
+  <header class="form__header">
+    <p class="eyebrow">Out-of-sample test</p>
+    <h2 id="walk-forward-form-title">New study</h2>
+    <p class="muted">
+      For each fold the grid is swept over the training window, the winner is chosen there, and the same grid is run over the
+      following test window. Only the winner's test result counts; the verdict comes from how much of its training Sharpe each fold winner kept.
+    </p>
+  </header>
+
+  <app-grid-search-spec-editor [strategies]="strategies()" [initial]="prefill()" [debounceMs]="preflightDebounceMs()" (edited)="onGridEditing()" (specChanged)="onGridEdit($event)" />
+
+  <div class="form__grid months">
+    <label class="field">
+      <span>Training window (months)</span>
+      <input #trainingInput pInputText type="number" min="1" max="120" step="1" [value]="trainingMonths()" (input)="setMonths('training', trainingInput.value)" />
+    </label>
+    <label class="field">
+      <span>Test window (months)</span>
+      <input #testInput pInputText type="number" min="1" max="60" step="1" [value]="testMonths()" (input)="setMonths('test', testInput.value)" />
+    </label>
+    <p class="muted months__note">Folds step forward by the test length, so every month after the first training window is scored exactly once. The range must divide into whole folds.</p>
+  </div>
+
+  <footer class="form__footer">
+    <div class="preflight" aria-live="polite">
+      @if (checking()) { <p class="muted">Checking…</p> }
+      @else if (refusal(); as refused) {
+        <p class="refusal" role="alert"><strong>{{ refused.code | receiptLabel }}</strong> — {{ refused.message }}</p>
+      } @else if (preflightError(); as message) {
+        <p class="refusal" role="alert">{{ message }}</p>
+      } @else if (preflight(); as plan) {
+        <p class="count"><strong>{{ plan.fold_count }}</strong> fold{{ plan.fold_count === 1 ? '' : 's' }} · {{ workloadSentence(plan) }} · estimated ~{{ plan.estimated_seconds | number: '1.0-0' }} s — an estimate, not a guarantee</p>
+        <p class="muted">Slowest setting needs {{ plan.required_samples }} bars → every window is preceded by the same {{ plan.run_up_sessions }}-session run-up.</p>
+        <details class="folds">
+          <summary>Fold calendar</summary>
+          <table class="fold-plan">
+            <thead><tr><th scope="col">Fold</th><th scope="col">Train</th><th scope="col">Test</th></tr></thead>
+            <tbody>
+              @for (fold of plan.folds; track fold.fold_index) {
+                <tr>
+                  <td>{{ fold.fold_index + 1 }}</td>
+                  <td><app-timestamp-display [value]="fold.train_start_ms" mode="date-et" /> → <app-timestamp-display [value]="fold.train_end_ms - 1" mode="date-et" /></td>
+                  <td><app-timestamp-display [value]="fold.test_start_ms" mode="date-et" /> → <app-timestamp-display [value]="fold.test_end_ms - 1" mode="date-et" /></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </details>
+      }
+    </div>
+    <button pButton type="button" [disabled]="!canLaunch()" (click)="launch()">
+      <i class="pi pi-play" aria-hidden="true"></i><span>Launch study</span>
+    </button>
+  </footer>
+</section>

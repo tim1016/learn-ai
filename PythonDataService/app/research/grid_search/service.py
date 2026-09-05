@@ -30,19 +30,27 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-import redis
-
-from app.engine.data.availability import Resolution, check_availability
+from app.engine.data.availability import check_availability
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration, public_params_schema
-from app.jobs.progress import JobCancelled, _state_key, get_redis
+from app.jobs.progress import JobCancelled
+from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.grid_search import repository as repo
-from app.research.grid_search.db import connection, run_sync
-from app.research.grid_search.models import CellResult, CellRow, NewSearch, SearchOwner, SearchRow, SearchStatus
+from app.research.grid_search.models import (
+    CellResult,
+    CellRow,
+    GridSearchSpec,
+    NewSearch,
+    SearchOwner,
+    SearchRow,
+    SearchStatus,
+)
 from app.research.grid_search.runner import GridRunSummary, run_grid
+from app.research.persistence import lifecycle
+from app.research.persistence.db import run_sync, with_connection
+from app.research.persistence.fence import StaleAttemptError
 from app.research.sweep.eligibility import sweep_eligibility
 from app.research.sweep.grid import (
-    LowHighStepRange,
     ParamRange,
     RunSpec,
     StrategyGridConfig,
@@ -50,7 +58,7 @@ from app.research.sweep.grid import (
     expand_grid,
 )
 from app.research.sweep.identity import CodeIdentity, resolve_code_identity
-from app.research.sweep.ranking import RankingMeasure, leader
+from app.research.sweep.ranking import leader
 from app.research.sweep.snapshot import (
     DataSnapshot,
     DataSnapshotIncompleteError,
@@ -100,72 +108,6 @@ def window_dates(start_ms: int, end_ms: int) -> tuple[date, date]:
     either way, the same bars are selected (pinned by test).
     """
     return et_date_at_ms(start_ms), et_date_at_ms(end_ms - 1)
-
-
-# ── Spec ─────────────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class GridSearchSpec:
-    """The researcher's request, already parsed into the grid vocabulary."""
-
-    strategy_key: str
-    symbol: str
-    param_ranges: Mapping[str, ParamRange]
-    start_ms: int
-    end_ms: int
-    resolution: Resolution = "minute"
-    fill_mode: str = "signal_bar_close"
-    commission_per_order: float = 1.0
-    slippage_per_share: float = 0.0
-    initial_cash: float = 100_000.0
-    measure: RankingMeasure = "sharpe_ratio"
-    min_trades: int = 5
-
-    def as_request_dict(self) -> dict[str, Any]:
-        return {
-            "strategy_key": self.strategy_key,
-            "symbol": self.symbol,
-            "param_ranges": {name: _range_to_dict(spec) for name, spec in sorted(self.param_ranges.items())},
-            "start_ms": self.start_ms,
-            "end_ms": self.end_ms,
-            "resolution": self.resolution,
-            "fill_mode": self.fill_mode,
-            "commission_per_order": self.commission_per_order,
-            "slippage_per_share": self.slippage_per_share,
-            "initial_cash": self.initial_cash,
-            "measure": self.measure,
-            "min_trades": self.min_trades,
-        }
-
-    @classmethod
-    def from_request_dict(cls, payload: Mapping[str, Any]) -> GridSearchSpec:
-        return cls(
-            strategy_key=payload["strategy_key"],
-            symbol=payload["symbol"],
-            param_ranges={name: _range_from_dict(spec) for name, spec in payload["param_ranges"].items()},
-            start_ms=int(payload["start_ms"]),
-            end_ms=int(payload["end_ms"]),
-            resolution=payload.get("resolution", "minute"),
-            fill_mode=payload.get("fill_mode", "signal_bar_close"),
-            commission_per_order=float(payload.get("commission_per_order", 1.0)),
-            slippage_per_share=float(payload.get("slippage_per_share", 0.0)),
-            initial_cash=float(payload.get("initial_cash", 100_000.0)),
-            measure=payload.get("measure", "sharpe_ratio"),
-            min_trades=int(payload.get("min_trades", 5)),
-        )
-
-
-def _range_to_dict(spec: ParamRange) -> dict[str, Any]:
-    if isinstance(spec, ValueListRange):
-        return {"type": "value_list", "values": list(spec.values)}
-    return {"type": "low_high_step", "low": spec.low, "high": spec.high, "step": spec.step}
-
-
-def _range_from_dict(payload: Mapping[str, Any]) -> ParamRange:
-    if payload["type"] == "value_list":
-        return ValueListRange(tuple(float(v) for v in payload["values"]))
-    return LowHighStepRange(low=float(payload["low"]), high=float(payload["high"]), step=float(payload["step"]))
 
 
 def _registration(strategy_key: str) -> StrategyRegistration:
@@ -355,24 +297,35 @@ def prepare_launch(
     roots: Sequence[Path] | None = None,
     search_id: str | None = None,
     backtests_per_combination: int = 1,
+    snapshot: DataSnapshot | None = None,
+    identity: CodeIdentity | None = None,
 ) -> NewSearch:
     """Preflight and freeze the receipt — blocking disk and CPU work, no database.
 
     A FastAPI handler runs this off its loop and then awaits :func:`create`;
-    a worker thread calls :func:`launch`, which does both.
+    a worker thread calls :func:`launch`, which does both. An owner that has
+    already frozen a wider ``snapshot`` (a walk-forward study) passes it in,
+    together with the ``identity`` it recorded: the sweep then binds its reads
+    to that manifest instead of hashing its own and carries the owner's code
+    identity, so every fold provably ran on the study's bytes under the
+    study's code.
     """
     pre = preflight(spec, roots=roots, backtests_per_combination=backtests_per_combination)
-    try:
-        snapshot = capture_data_snapshot(
-            roots=pre.roots,
-            symbol=spec.symbol,
-            resolution=spec.resolution,
-            data_start=pre.data_start,
-            data_end=pre.evaluation_end,
-        )
-    except DataSnapshotIncompleteError as exc:
-        raise GridSearchRefusal(str(exc), code="DATA_MISSING") from exc
-    identity = resolve_code_identity()
+    if snapshot is None:
+        try:
+            snapshot = capture_data_snapshot(
+                roots=pre.roots,
+                symbol=spec.symbol,
+                resolution=spec.resolution,
+                data_start=pre.data_start,
+                data_end=pre.evaluation_end,
+            )
+        except DataSnapshotIncompleteError as exc:
+            raise GridSearchRefusal(str(exc), code="DATA_MISSING") from exc
+    else:
+        _assert_snapshot_covers(snapshot, pre)
+    if identity is None:
+        identity = resolve_code_identity()
     return NewSearch(
         id=search_id or uuid.uuid4().hex,
         strategy_key=spec.strategy_key,
@@ -383,6 +336,23 @@ def prepare_launch(
         job_id=job_id,
         owner=owner or SearchOwner(),
     )
+
+
+def _assert_snapshot_covers(snapshot: DataSnapshot, pre: Preflight) -> None:
+    """A supplied snapshot must be the same symbol and resolution and hold every session the sweep reads."""
+    spec = pre.spec
+    if (snapshot.symbol, snapshot.resolution) != (spec.symbol, spec.resolution):
+        raise GridSearchRefusal(
+            f"the supplied data snapshot is for {snapshot.symbol}/{snapshot.resolution}, not {spec.symbol}/{spec.resolution}",
+            code="SNAPSHOT_COVERAGE",
+        )
+    held = set(snapshot.sessions)
+    missing = [day for day in expected_sessions(pre.data_start, pre.evaluation_end) if day not in held]
+    if missing:
+        raise GridSearchRefusal(
+            f"the supplied data snapshot does not cover {len(missing)} session(s) this sweep reads, from {missing[0].isoformat()}",
+            code="SNAPSHOT_COVERAGE",
+        )
 
 
 def launch(spec: GridSearchSpec, **kwargs: Any) -> SearchRow:
@@ -396,8 +366,7 @@ def _spec_with_completed_ranges(spec: GridSearchSpec, ranges: Mapping[str, Param
 
 async def create(record: NewSearch) -> SearchRow:
     """Write the durable ``queued`` record on the calling loop."""
-    async with connection() as conn:
-        return await repo.create_search(conn, record)
+    return await with_connection(repo.create_search, record)
 
 
 # ── Execute ──────────────────────────────────────────────────────────────
@@ -405,7 +374,7 @@ async def create(record: NewSearch) -> SearchRow:
 
 def load_search(search_id: str) -> tuple[SearchRow, GridSearchSpec]:
     """The stored record and its parsed spec, for a worker thread."""
-    row = run_sync(_get(search_id))
+    row = run_sync(with_connection(repo.get_search, search_id))
     if row is None:
         raise GridSearchRefusal(f"search {search_id} not found", code="NOT_FOUND")
     return row, GridSearchSpec.from_request_dict(row.request)
@@ -436,16 +405,16 @@ def execute(
     this module never touches the engine HTTP layer.
     """
     row, spec = load_search(search_id)
-    attempt = run_sync(_claim(search_id, job_id))
+    attempt = run_sync(with_connection(repo.claim_attempt, search_id, job_id=job_id))
     on_phase("preflight")
-    existing = run_sync(_existing(search_id))
+    existing = run_sync(with_connection(repo.existing_params_hashes, search_id))
     if existing:
         on_log(f"Finish: {len(existing)} of {row.expected_cells} cells already recorded; running the rest")
     config = StrategyGridConfig(strategy_key=spec.strategy_key, param_ranges=dict(spec.param_ranges))
     candidates = expand_grid([config], [spec.symbol])
 
     def _persist(cells: list[CellResult]) -> None:
-        run_sync(_write(search_id, attempt, cells))
+        run_sync(with_connection(repo.write_cells, search_id, attempt, cells))
 
     on_phase("running")
     try:
@@ -460,65 +429,34 @@ def execute(
             skip_params_hashes=frozenset(existing),
         )
     except JobCancelled:
-        winner = leader(run_sync(_all_cells(search_id)), spec.measure, min_trades=spec.min_trades)
-        run_sync(_finish(search_id, attempt, "cancelled", winner, True, None))
+        winner = leader(run_sync(with_connection(repo.list_all_cells, search_id)), spec.measure, min_trades=spec.min_trades)
+        _finish(search_id, attempt, "cancelled", winner, True, None)
         raise
-    except repo.StaleAttemptError:
+    except StaleAttemptError:
         logger.warning("grid search %s attempt %s superseded; leaving the newer attempt's record alone", search_id, attempt)
         raise
     except Exception as exc:
-        run_sync(_finish(search_id, attempt, "failed", None, True, f"{type(exc).__name__}: {exc}"))
+        _finish(search_id, attempt, "failed", None, True, f"{type(exc).__name__}: {exc}")
         raise
 
     on_phase("ranking")
-    cells = run_sync(_all_cells(search_id))
+    cells = run_sync(with_connection(repo.list_all_cells, search_id))
     winner = leader(cells, spec.measure, min_trades=spec.min_trades)
     all_failed = cells and all(cell.status == "failed" for cell in cells)
     status = "failed" if all_failed else "completed"
     reason = "every combination failed; see the cells for each error" if all_failed else None
-    diagnostics = verify_data_snapshot(DataSnapshot.from_dict(row.receipt["data_snapshot"]), _roots_for(row))
+    diagnostics = verify_data_snapshot(DataSnapshot.from_dict(row.receipt["data_snapshot"]), lifecycle.roots_for(row))
     if diagnostics:
         on_log(f"data snapshot diagnostic: {len(diagnostics)} artifact(s) changed during the search; reads were bound to receipted bytes")
-    run_sync(_finish(search_id, attempt, status, winner, False, reason))
+    _finish(search_id, attempt, status, winner, False, reason)
     on_phase("completed")
     return ExecutionOutcome(search_id=search_id, status=status, leader_params_hash=winner.params_hash if winner else None, summary=summary)
 
 
-def _roots_for(row: SearchRow) -> list[Path]:
-    return resolve_data_roots(source="polygon", adjusted=bool(row.receipt["execution_contract"]["data_policy"]["adjusted"]))
-
-
-async def _get(search_id: str) -> SearchRow | None:
-    async with connection() as conn:
-        return await repo.get_search(conn, search_id)
-
-
-async def _claim(search_id: str, job_id: str | None) -> int:
-    async with connection() as conn:
-        return await repo.claim_attempt(conn, search_id, job_id=job_id)
-
-
-async def _existing(search_id: str) -> set[str]:
-    async with connection() as conn:
-        return await repo.existing_params_hashes(conn, search_id)
-
-
-async def _write(search_id: str, attempt: int, cells: list[CellResult]) -> None:
-    async with connection() as conn:
-        await repo.write_cells(conn, search_id, attempt, cells)
-
-
-async def _all_cells(search_id: str) -> list[CellRow]:
-    async with connection() as conn:
-        return await repo.list_all_cells(conn, search_id)
-
-
-async def _finish(
-    search_id: str, attempt: int, status: SearchStatus, winner: CellRow | None, incomplete: bool, reason: str | None
-) -> None:
-    async with connection() as conn:
-        await repo.finish_search(
-            conn,
+def _finish(search_id: str, attempt: int, status: SearchStatus, winner: CellRow | None, incomplete: bool, reason: str | None) -> None:
+    run_sync(
+        with_connection(
+            repo.finish_search,
             search_id,
             attempt,
             status=status,
@@ -527,64 +465,5 @@ async def _finish(
             incomplete=incomplete,
             failure_reason=reason,
         )
-
-
-# ── Presentation and Finish rules ────────────────────────────────────────
-
-
-def job_is_live(job_id: str | None) -> bool | None:
-    """Whether the Redis job record still says queued/running. ``None`` when Redis cannot answer."""
-    if not job_id:
-        return False
-    try:
-        status = get_redis().hget(_state_key(job_id), "status")
-    except redis.RedisError:
-        return None
-    return status in ("queued", "running")
-
-
-def presented_status(row: SearchRow, *, live: bool | None) -> str:
-    """A ``running`` record with no live job reads back as ``interrupted``."""
-    if row.status in ("queued", "running") and live is False:
-        return "interrupted"
-    return row.status
-
-
-def request_cancel(job_id: str) -> None:
-    """Set the same flag the .NET DELETE /api/jobs/{id} sets; the worker acknowledges by finishing the record."""
-    get_redis().hset(_state_key(job_id), "cancel_requested", "1")
-
-
-def uncommitted_changes(row: SearchRow) -> bool:
-    return row.receipt.get("code_identity", {}).get("tree_state") == "dirty"
-
-
-def resume_refusal(
-    row: SearchRow, *, live: bool | None, identity: CodeIdentity | None = None, verify_data: bool = False
-) -> str | None:
-    """Why Finish is unavailable, or ``None`` when it may run.
-
-    The status, tree-state and code-identity checks are cheap and answer the
-    detail view; ``verify_data`` re-hashes every receipted artifact and is
-    reserved for the Finish request itself.
-    """
-    if row.status == "completed":
-        return "the search is complete"
-    if row.status == "failed" and not row.incomplete:
-        return "every cell is recorded and failed; there is nothing to finish — launch a fresh search"
-    if row.status in ("queued", "running") and live is not False:
-        return "the search is still running"
-    if uncommitted_changes(row):
-        return "the search was launched from a working tree with uncommitted changes and cannot be resumed; launch a fresh search"
-    recorded = CodeIdentity(**row.receipt["code_identity"])
-    if not recorded.matches(identity or resolve_code_identity()):
-        return "the engine or strategy code changed since launch; launch a fresh search"
-    if not verify_data:
-        return None
-    moved = verify_data_snapshot(DataSnapshot.from_dict(row.receipt["data_snapshot"]), _roots_for(row))
-    if moved:
-        return f"{len(moved)} data artifact(s) changed since launch ({moved[0]}{', …' if len(moved) > 1 else ''}); launch a fresh search"
-    return None
-
-
+    )
 

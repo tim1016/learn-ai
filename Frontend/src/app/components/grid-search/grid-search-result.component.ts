@@ -6,6 +6,8 @@ import { ButtonModule } from 'primeng/button';
 import { JobsService } from '../../services/jobs.service';
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { RecordControlsComponent } from '../../shared/research-record/record-controls.component';
+import { RecordPoller } from '../../shared/research-record/record-poller';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { GridSearchService } from './grid-search.service';
@@ -37,7 +39,7 @@ const COLUMN_LABELS: Readonly<Record<CellSortColumn, string>> = {
  */
 @Component({
   selector: 'app-grid-search-result',
-  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, KeyValuePipe, PercentPipe, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, KeyValuePipe, PercentPipe, RecordControlsComponent, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './grid-search-result.component.html',
   styleUrl: './grid-search-result.component.scss',
@@ -51,6 +53,10 @@ export class GridSearchResultComponent {
   readonly strategies = input<readonly StrategyInfo[]>([]);
   /** Poll interval while the search runs; tests set 0 to disable. */
   readonly pollMs = input(2000);
+  /** Where the back button returns to: Grid Search history, or the walk-forward study that owns this sweep. */
+  readonly backLabel = input('History');
+  /** A study-owned sweep is evidence: no Cancel, Finish or Delete here — the study manages it. */
+  readonly readonly = input(false);
   readonly deleted = output<string>();
   readonly closed = output();
 
@@ -58,7 +64,6 @@ export class GridSearchResultComponent {
   readonly page = signal<GridSearchCellPage | null>(null);
   readonly query = signal<CellPageQuery>({ sort_by: 'sharpe_ratio', direction: 'desc', page: 1, page_size: 25 });
   readonly error = signal<string | null>(null);
-  readonly confirmingDelete = signal(false);
   readonly busy = signal(false);
 
   protected readonly sortable = SORTABLE;
@@ -85,7 +90,7 @@ export class GridSearchResultComponent {
     return params ? Object.entries(params).map(([key, value]) => `${key}=${value}`).join(', ') : null;
   });
 
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly poller = new RecordPoller(this.destroyRef);
   /** Set by Finish: keep polling until the row shows the new attempt running (the worker's claim races the 202). */
   private awaitingAttempt = false;
 
@@ -97,7 +102,6 @@ export class GridSearchResultComponent {
         void this.reload(id);
       });
     });
-    this.destroyRef.onDestroy(() => this.stopPolling());
   }
 
   /** Revision of the latest reload; a sort, page or poll that resolves late must not restore stale state. */
@@ -110,7 +114,8 @@ export class GridSearchResultComponent {
       if (revision !== this.revision) return;
       // The first page of a search sorts by its own ranking measure, so the leader is on it.
       if (this.page() === null) this.query.update((q) => ({ ...q, sort_by: detail.measure }));
-      const page = await this.service.cells(id, this.query());
+      // A study-owned sweep's evidence row is its winner; keep it on the first page whatever the sort says.
+      const page = await this.service.cells(id, { ...this.query(), pin_leader: this.readonly() });
       if (revision !== this.revision) return;
       this.detail.set(detail);
       this.page.set(page);
@@ -163,37 +168,22 @@ export class GridSearchResultComponent {
     }
   }
 
-  requestDelete(): void {
-    this.confirmingDelete.set(true);
-  }
-
-  cancelDelete(): void {
-    this.confirmingDelete.set(false);
-  }
-
-  async confirmDelete(): Promise<void> {
+  async delete(): Promise<void> {
     const id = this.searchId();
     this.busy.set(true);
     try {
       await this.service.delete(id);
-      this.stopPolling();
+      this.poller.stop();
       this.deleted.emit(id);
     } catch {
       this.error.set('The search could not be deleted. If it is running, cancellation is being acknowledged; try again shortly.');
     } finally {
       this.busy.set(false);
-      this.confirmingDelete.set(false);
     }
   }
 
   private schedulePoll(): void {
-    this.stopPolling();
-    if ((!this.running() && !this.awaitingAttempt) || this.pollMs() <= 0) return;
-    this.timer = setTimeout(() => void this.reload(), this.pollMs());
-  }
-
-  private stopPolling(): void {
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
+    if (this.running() || this.awaitingAttempt) this.poller.schedule(this.pollMs(), () => void this.reload());
+    else this.poller.stop();
   }
 }

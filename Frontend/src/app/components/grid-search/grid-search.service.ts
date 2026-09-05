@@ -96,7 +96,7 @@ export class GridSearchService {
 
   async cells(id: string, query: CellPageQuery): Promise<GridSearchCellPage> {
     const params = new HttpParams({
-      fromObject: { sort_by: query.sort_by, direction: query.direction, page: String(query.page), page_size: String(query.page_size) },
+      fromObject: { sort_by: query.sort_by, direction: query.direction, page: String(query.page), page_size: String(query.page_size), pin_leader: String(query.pin_leader ?? false) },
     });
     return firstValueFrom(this.http.get<GridSearchCellPage>(`${this.base}/${encodeURIComponent(id)}/cells`, { params }));
   }
