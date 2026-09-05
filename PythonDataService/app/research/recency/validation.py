@@ -68,7 +68,7 @@ def validate_recency_request(
         registration = _STRATEGY_REGISTRY.get(strategy.strategy_key)
         if registration is None:
             raise RecencyRequestInvalidError(f"unknown strategy_key '{strategy.strategy_key}'")
-        if not is_recency_supported(registration.param_schema):
+        if not is_recency_supported(registration):
             raise RecencyRequestInvalidError(f"strategy '{strategy.strategy_key}' is not recency-supported")
 
         low_candidate = {name: _bounds(r)[0] for name, r in strategy.param_ranges.items()}

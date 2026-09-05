@@ -70,7 +70,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.research.recency.eligibility import is_recency_supported
+from app.research.sweep.eligibility import sweep_eligibility
 from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
@@ -766,6 +766,12 @@ class StrategyBarCadenceInfo(BaseModel):
     parameter: str | None = None
 
 
+class SweepEligibilityInfo(BaseModel):
+    eligible: bool
+    reason_codes: list[str] = Field(default_factory=list)
+    offending_parameters: list[str] = Field(default_factory=list)
+
+
 class StrategyInfo(BaseModel):
     name: str
     display_name: str
@@ -796,9 +802,12 @@ class StrategyInfo(BaseModel):
     # semantics. ``None`` means Engine Lab must not offer a LEAN parity run.
     lean_twin: str | None = None
     strategy_bars: StrategyBarCadenceInfo
-    # Recency Chart eligibility (design spec D1) — True iff every param
-    # besides ``symbol`` is numeric (int/float). Derived structurally from
-    # the schema, not hand-flagged; see app/research/recency/eligibility.py.
+    # Sweep eligibility (PRD #1926): the one structured answer Recency Chart,
+    # Grid Search and Walk-Forward all derive from — flag, reason codes, and
+    # the offending PUBLIC parameters. ``recency_supported`` is its flag,
+    # kept for existing consumers.
+    strategy_category: str = "production_candidate"
+    sweep_eligibility: SweepEligibilityInfo = Field(default_factory=lambda: SweepEligibilityInfo(eligible=False))
     recency_supported: bool = False
 
 
@@ -817,6 +826,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
             continue
         cadence_param = reg.strategy_bars.multiplier
         defaults = reg.param_schema.model_validate({})
+        eligibility = sweep_eligibility(reg)
         multiplier = (
             getattr(defaults, cadence_param.field) if isinstance(cadence_param, ChartParamRef) else cadence_param
         )
@@ -832,7 +842,9 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 pine_available=reg.pine_generator is not None,
                 sizing_surface=reg.sizing_surface,
                 lean_twin=reg.lean_twin,
-                recency_supported=is_recency_supported(reg.param_schema),
+                strategy_category=reg.strategy_category,
+                sweep_eligibility=SweepEligibilityInfo(**eligibility.as_dict()),
+                recency_supported=eligibility.eligible,
                 strategy_bars=StrategyBarCadenceInfo(
                     timespan=reg.strategy_bars.timespan,
                     multiplier=multiplier,
