@@ -37,7 +37,7 @@ export class GridSearchHistoryComponent {
   protected readonly statuses = STATUSES;
   protected readonly displayNames = computed(() => new Map(this.strategies().map((s) => [s.name, s.display_name])));
   /** Only sweepable strategies can have a search, so only they are offered as a filter. */
-  protected readonly filterableStrategies = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible ?? s.recency_supported === true));
+  protected readonly filterableStrategies = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible === true));
 
   constructor() {
     void this.refresh();
@@ -53,6 +53,11 @@ export class GridSearchHistoryComponent {
     } finally {
       this.loading.set(false);
     }
+  }
+
+  onFilterEvent(key: keyof GridSearchHistoryFilters, event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLSelectElement || target instanceof HTMLInputElement) this.setFilter(key, target.value);
   }
 
   setFilter(key: keyof GridSearchHistoryFilters, raw: string): void {

@@ -33,6 +33,10 @@ interface ParamRow {
   readonly fixedValue: number;
 }
 
+function selectValue(event: Event): string | null {
+  return event.target instanceof HTMLSelectElement ? event.target.value : null;
+}
+
 function defaultWindow(now: number): { from: string; to: string } {
   return { from: etIsoDate(now - DEFAULT_WINDOW_DAYS * MS_PER_DAY), to: etIsoDate(now - MS_PER_DAY) };
 }
@@ -64,6 +68,7 @@ export class GridSearchFormComponent {
   readonly fromDate = signal(defaultWindow(Date.now()).from);
   readonly toDate = signal(defaultWindow(Date.now()).to);
   readonly fillMode = signal('signal_bar_close');
+  readonly resolution = signal<'minute' | 'daily'>('minute');
   readonly commissionPerOrder = signal(1);
   readonly slippagePerShare = signal(0);
   readonly initialCash = signal(100_000);
@@ -78,8 +83,9 @@ export class GridSearchFormComponent {
   readonly launching = signal(false);
 
   protected readonly measures = RANKING_MEASURES;
-  protected readonly eligible = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible ?? s.recency_supported === true));
-  protected readonly ineligible = computed(() => this.strategies().filter((s) => !(s.sweep_eligibility?.eligible ?? s.recency_supported === true)));
+  protected readonly eligible = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible === true));
+  protected readonly ineligible = computed(() => this.strategies().filter((s) => s.sweep_eligibility?.eligible !== true));
+  protected readonly resolutions = computed(() => this.selectedStrategy()?.supported_resolutions ?? ['minute']);
   protected readonly selectedStrategy = computed(() => this.strategies().find((s) => s.name === this.strategyKey()) ?? null);
   protected readonly variedCount = computed(() => this.params().filter((p) => p.vary).length);
   protected readonly canLaunch = computed(() => this.preflight() !== null && this.refusal() === null && !this.launching() && !this.checking());
@@ -110,7 +116,7 @@ export class GridSearchFormComponent {
       param_ranges,
       start_ms: etMidnightMs(this.fromDate()),
       end_ms: etDayEndMs(this.toDate()),
-      resolution: 'minute',
+      resolution: this.resolution(),
       fill_mode: this.fillMode(),
       commission_per_order: this.commissionPerOrder(),
       slippage_per_share: this.slippagePerShare(),
@@ -123,6 +129,9 @@ export class GridSearchFormComponent {
   selectStrategy(name: string): void {
     this.strategyKey.set(name);
     const strategy = this.strategies().find((s) => s.name === name);
+    if (strategy && !strategy.supported_resolutions.includes(this.resolution())) {
+      this.resolution.set(strategy.supported_resolutions.includes('daily') ? 'daily' : 'minute');
+    }
     this.params.set(
       strategy
         ? numericStrategyParams(strategy).map(([paramName, property]) => ({
@@ -158,12 +167,26 @@ export class GridSearchFormComponent {
     this.scheduleRefresh();
   }
 
-  setMeasure(raw: string): void {
-    if ((RANKING_MEASURES as readonly string[]).includes(raw)) this.measure.set(raw as RankingMeasure);
+  onMeasureEvent(event: Event): void {
+    const raw = selectValue(event);
+    if (raw !== null && (RANKING_MEASURES as readonly string[]).includes(raw)) this.measure.set(raw as RankingMeasure);
   }
 
-  setFillMode(raw: string): void {
-    this.fillMode.set(raw);
+  onFillModeEvent(event: Event): void {
+    const raw = selectValue(event);
+    if (raw !== null) this.fillMode.set(raw);
+  }
+
+  onResolutionEvent(event: Event): void {
+    const raw = selectValue(event);
+    if (raw === 'minute' || raw === 'daily') {
+      this.resolution.set(raw);
+      this.scheduleRefresh();
+    }
+  }
+
+  onVaryEvent(name: string, event: Event): void {
+    if (event.target instanceof HTMLInputElement) this.toggleVary(name, event.target.checked);
   }
 
   toggleVary(name: string, vary: boolean): void {

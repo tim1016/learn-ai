@@ -116,9 +116,6 @@ async def test_missing_sessions_are_named_in_the_refusal(client, tmp_path: Path,
 
 async def test_launch_lists_immediately_and_the_result_pages_on_the_server(client, lake, monkeypatch) -> None:
     _requires_ephemeral_db()
-    from app.research.grid_search import db as grid_db
-
-    grid_db._schema_ready_loops.clear()
     ran: dict[str, object] = {}
 
     def fake_run_in_thread(job_id, work, **kwargs):
@@ -130,12 +127,12 @@ async def test_launch_lists_immediately_and_the_result_pages_on_the_server(clien
     monkeypatch.setattr(service, "job_is_live", lambda job_id: True)
 
     async with client as c:
-        launched = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": "job-http-1"})
+        launched = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": f"job-http-1-{id(monkeypatch)}"})
         assert launched.status_code == 202, launched.text
         search_id = launched.json()["search_id"]
 
-        listed = await c.get("/api/research/grid-search")
-        assert [row["id"] for row in listed.json()][:1] == [search_id]
+        listed = await c.get("/api/research/grid-search", params={"job_id": f"job-http-1-{id(monkeypatch)}"})
+        assert [row["id"] for row in listed.json()] == [search_id]
         assert listed.json()[0]["status"] == "queued"
 
         # Run the captured worker body synchronously with a fake engine.
@@ -144,7 +141,7 @@ async def test_launch_lists_immediately_and_the_result_pages_on_the_server(clien
 
         import asyncio
 
-        await asyncio.to_thread(service.execute, search_id, job_id="job-http-1", execute_cell=engine)
+        await asyncio.to_thread(service.execute, search_id, job_id=f"job-http-1-{id(monkeypatch)}", execute_cell=engine)
 
         detail = await c.get(f"/api/research/grid-search/{search_id}")
         assert detail.status_code == 200
@@ -167,14 +164,11 @@ async def test_launch_lists_immediately_and_the_result_pages_on_the_server(clien
         assert deleted.status_code == 204
         assert (await c.get(f"/api/research/grid-search/{search_id}")).status_code == 404
 
-    assert ran["job_id"] == "job-http-1"
+    assert ran["job_id"] == f"job-http-1-{id(monkeypatch)}"
 
 
 async def test_finish_of_a_completed_search_is_refused(client, lake, monkeypatch) -> None:
     _requires_ephemeral_db()
-    from app.research.grid_search import db as grid_db
-
-    grid_db._schema_ready_loops.clear()
     monkeypatch.setattr(grid_search_router, "run_in_thread", lambda job_id, work, **kwargs: None)
     monkeypatch.setattr(service, "job_is_live", lambda job_id: False)
 

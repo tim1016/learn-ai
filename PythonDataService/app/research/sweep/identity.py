@@ -29,6 +29,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -111,7 +112,9 @@ def tree_state(root: Path = SERVICE_ROOT, paths: Iterable[str] = IDENTITY_SOURCE
     return "dirty" if result.stdout.strip() else "clean"
 
 
+@cache
 def resolve_code_identity(root: Path = SERVICE_ROOT) -> CodeIdentity:
+    """The identity of THIS process's loaded code — constant for its lifetime, so computed once."""
     return CodeIdentity(
         git_revision=resolved_code_revision(),
         tree_state=tree_state(root),

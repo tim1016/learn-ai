@@ -111,3 +111,30 @@ def test_cancel_check_return_value_is_ignored() -> None:
     summary = run_grid(candidates, expected_cells=expected, execute_cell=_ok, persist=lambda chunk: None, cancel_check=lambda: True)
 
     assert summary.executed_cells == 2
+
+
+def test_a_cancellation_between_batches_stops_before_the_next_batch_starts() -> None:
+    """The head-of-batch poll: with one worker, a cancel set during cell 1 means cell 2 never runs."""
+
+    class _Cancelled(Exception):
+        pass
+
+    candidates, expected = _grid(1, 2)
+    cancelled = threading.Event()
+    executed: list[float] = []
+    persisted: list[list[CellResult]] = []
+
+    def execute(spec) -> CellResult:
+        executed.append(spec.params["short_window"])
+        cancelled.set()
+        return _ok(spec)
+
+    def cancel_check() -> None:
+        if cancelled.is_set():
+            raise _Cancelled()
+
+    with pytest.raises(_Cancelled):
+        run_grid(candidates, expected_cells=expected, execute_cell=execute, persist=persisted.append, cancel_check=cancel_check, max_workers=1)
+
+    assert executed == [1.0]
+    assert [[cell.status for cell in batch] for batch in persisted] == [["completed"]]

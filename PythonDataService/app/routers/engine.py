@@ -22,7 +22,6 @@ from datetime import time as time_of_day
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -95,14 +94,11 @@ from app.services.strategy_lean_source_service import (
     StrategyLeanSourceNotFoundError,
     resolve_strategy_lean_source,
 )
-from app.utils.timestamps import now_ms_utc, to_ms_utc
+from app.utils.session_anchors import et_midnight_ms
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# The evaluation-start anchor is an ET session boundary (temporal-rigor.md:
-# a trading date resolves at a defined ET anchor, never UTC midnight).
-_NY_ZONE = ZoneInfo("America/New_York")
 
 
 def _reject_hidden_params(reg: StrategyRegistration, params: dict[str, Any]) -> None:
@@ -715,8 +711,7 @@ def _evaluation_start_ms(request: EngineBacktestRequest) -> int | None:
     """ET-midnight ``int64 ms UTC`` anchor of the evaluation start, if primed."""
     if request.warmup_from_date is None or request.from_date is None:
         return None
-    day = _parse_iso_date(request.from_date, "from_date")
-    return to_ms_utc(datetime(day.year, day.month, day.day, tzinfo=_NY_ZONE))
+    return et_midnight_ms(_parse_iso_date(request.from_date, "from_date"))
 
 
 def _format_trade(index: int, trade: Any) -> EngineTradeResponse:

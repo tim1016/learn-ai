@@ -3,6 +3,7 @@ import { DecimalPipe, KeyValuePipe, PercentPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
+import { JobsService } from '../../services/jobs.service';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
@@ -42,6 +43,7 @@ const COLUMN_LABELS: Readonly<Record<CellSortColumn, string>> = {
 })
 export class GridSearchResultComponent {
   private readonly service = inject(GridSearchService);
+  private readonly jobs = inject(JobsService);
   private readonly destroyRef = inject(DestroyRef);
 
   readonly searchId = input.required<string>();
@@ -71,6 +73,11 @@ export class GridSearchResultComponent {
   protected readonly pageCount = computed(() => {
     const page = this.page();
     return page ? Math.max(1, Math.ceil(page.total / page.page_size)) : 1;
+  });
+  /** Cells the search has no row for yet — what Finish would run. */
+  protected readonly missingCells = computed(() => {
+    const d = this.detail();
+    return d ? Math.max(0, d.expected_cells - d.completed_cells - d.failed_cells) : 0;
   });
   protected readonly leaderSummary = computed(() => {
     const params = this.detail()?.leader_params;
@@ -121,6 +128,20 @@ export class GridSearchResultComponent {
       await this.reload();
     } catch {
       this.error.set('Finish was not accepted. Reload and check the refusal reason.');
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  async cancel(): Promise<void> {
+    const jobId = this.detail()?.job_id;
+    if (!jobId || !this.running()) return;
+    this.busy.set(true);
+    try {
+      await this.jobs.cancelJob(jobId);
+      await this.reload();
+    } catch {
+      this.error.set('Cancellation could not be requested. Try again.');
     } finally {
       this.busy.set(false);
     }

@@ -205,3 +205,60 @@ def test_without_an_evaluation_start_the_run_is_unchanged() -> None:
     assert strategy.force_flat_calls == 0
     assert len(result.order_events) == 1
     assert len(result.equity_curve) == len(bars)
+
+
+
+class _WarmupNoiseStrategy(Strategy):
+    """Enters with a bracket, logs, and emits an insight during warmup — everything the reset must discard."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bars_seen = 0
+        self.trade_log: list = []
+
+    def initialize(self) -> None:
+        self.set_start_date(2024, 1, 2)
+        self.set_end_date(2024, 1, 3)
+        self.set_cash(100_000)
+        assert self.ctx is not None
+        symbol = self.ctx.add_equity("SPY")
+        self.ctx.register_consolidator(symbol, timedelta(minutes=1), self._on_bar)
+
+    def _on_bar(self, bar: TradeBar) -> None:
+        from app.engine.framework.insight import Insight, InsightDirection
+
+        assert self.ctx is not None
+        self.bars_seen += 1
+        if self.bars_seen == 1:
+            self.ctx.portfolio.submit_market_order("SPY", 100, bar.end_ms, tag="entry", take_profit_price=Decimal("505"))
+            self.ctx.log("warmup entry")
+            self.ctx.emit_insight(Insight(symbol="SPY", direction=InsightDirection.UP, period=timedelta(days=5)))
+
+    def on_force_flat(self) -> None:
+        return None
+
+
+def test_fees_insights_logs_and_brackets_from_warmup_do_not_survive_the_boundary() -> None:
+    """Every accumulator the reset names is checked, not only the position (review M10).
+
+    The warmup entry pays a commission, opens a take-profit bracket that the
+    600-level evaluation bars would trigger at once, logs a line, and emits a
+    five-day insight. None of it may reach the scored record.
+    """
+    warmup = _session(DAY_ONE, ["500", "501", "502"])
+    evaluation = _session(DAY_TWO, ["600", "601", "602"])
+    strategy = _WarmupNoiseStrategy()
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(warmup + evaluation),
+        execution_config=ExecutionConfig(fill_mode=FillMode.SIGNAL_BAR_CLOSE, commission_per_order=Decimal("10")),
+    )
+
+    result = engine.run(strategy, evaluation_start_ms=_ny_midnight_ms(DAY_TWO))
+
+    assert result.total_fees == Decimal(0)
+    assert result.final_equity == Decimal(100_000)
+    assert result.order_events == []  # the bracket was cleared, so no TP fill at 600
+    assert "warmup entry" not in result.log_lines
+    assert result.log_lines[0].startswith("[EVALUATION START]")
+    assert result.insights == []
+    assert result.insight_summary.get("total_insights", 0) == 0

@@ -38,9 +38,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 
-from app.engine.data.availability import check_availability
+from app.engine.data.availability import Resolution, check_availability
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
@@ -118,8 +119,21 @@ def probe_warmup_samples(strategy_key: str, params: Mapping[str, object]) -> War
     Constructs the registered program from validated ``params`` exactly as a
     backtest would, initializes it against a bare context, and feeds
     synthetic bars into ``evaluate_signal_bar`` — the pure decision seam that
-    never emits an intent — until its decision reports ``ready``.
+    never emits an intent — until its decision reports ``ready``. The probe
+    is deterministic in its inputs, so results are memoized per full
+    assignment: a form re-preflighting on every edit, or a study probing the
+    same grid for every fold, pays for each distinct candidate once.
     """
+    return _probe_cached(strategy_key, tuple(sorted((str(k), _hashable(v)) for k, v in params.items())))
+
+
+def _hashable(value: object) -> object:
+    return tuple(value) if isinstance(value, list) else value
+
+
+@lru_cache(maxsize=8192)
+def _probe_cached(strategy_key: str, assignment: tuple[tuple[str, object], ...]) -> WarmupProbe:
+    params = dict(assignment)
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None:
         raise WarmupProbeError(f"unknown strategy {strategy_key!r}")
@@ -129,7 +143,7 @@ def probe_warmup_samples(strategy_key: str, params: Mapping[str, object]) -> War
             f"strategy {strategy_key!r} registers no signal program; its readiness cannot be measured, "
             "so it cannot be swept"
         )
-    validated = registration.param_schema.model_validate(dict(params))
+    validated = registration.param_schema.model_validate(params)
     program = factory(validated)
     strategy = program.strategy
     strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal(100_000)))
@@ -147,7 +161,7 @@ def probe_warmup_samples(strategy_key: str, params: Mapping[str, object]) -> War
                 bar_span_ms=bar_span_ms,
             )
     raise WarmupProbeError(
-        f"strategy {strategy_key!r} with {dict(params)!r} was not ready after {MAX_PROBE_SAMPLES} decision bars"
+        f"strategy {strategy_key!r} with {params!r} was not ready after {MAX_PROBE_SAMPLES} decision bars"
     )
 
 
@@ -166,7 +180,7 @@ def plan_run_up(
     required_samples: int,
     bar_span_ms: int,
     roots: Sequence[Path],
-    resolution: str = "minute",
+    resolution: Resolution = "minute",
 ) -> RunUpPlan:
     """Decide where a primed sweep reads from and where scoring starts.
 
@@ -192,7 +206,7 @@ def plan_run_up(
         bar_span_ms=None if daily else bar_span_ms,
     )
     prior_end = sessions[0].session_date - timedelta(days=1)
-    prior = check_availability(roots, symbol, earliest_prior, prior_end, resolution=resolution)  # type: ignore[arg-type]
+    prior = check_availability(roots, symbol, earliest_prior, prior_end, resolution=resolution)
     if prior.is_complete and prior.expected_days > 0:
         return RunUpPlan(
             symbol=symbol,

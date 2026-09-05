@@ -63,11 +63,11 @@ class CellResult:
     exploratory: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class CellRow(CellResult):
-    search_id: str = ""
-    attempt: int = 0
-    completed_at_ms: int = 0
+    search_id: str
+    attempt: int
+    completed_at_ms: int
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,6 +91,7 @@ class SearchRow:
     completed_cells: int
     failed_cells: int
     leader_params_hash: str | None
+    leader_params: dict[str, Any] | None
     incomplete: bool
     failure_reason: str | None
 

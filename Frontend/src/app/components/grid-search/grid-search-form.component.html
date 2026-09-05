@@ -35,11 +35,13 @@
       @for (strategy of ineligible(); track strategy.name) {
         <li>
           <strong>{{ strategy.display_name }}</strong>
-          @for (code of strategy.sweep_eligibility?.reason_codes ?? ['not_sweepable']; track code) {
-            <span class="tag">{{ code | receiptLabel }}</span>
-          }
-          @if (strategy.sweep_eligibility?.offending_parameters; as offending) {
-            @if (offending.length > 0) { <span class="muted">({{ offending.join(', ') }})</span> }
+          @if (strategy.sweep_eligibility; as eligibility) {
+            @for (code of eligibility.reason_codes; track code) {
+              <span class="tag">{{ code | receiptLabel }}</span>
+            }
+            @if (eligibility.offending_parameters.length > 0) {
+              <span class="muted">({{ eligibility.offending_parameters.join(', ') }})</span>
+            }
           }
         </li>
       }
@@ -52,7 +54,7 @@
       @for (row of params(); track row.name) {
         <div class="param">
           <label class="param__toggle">
-            <input type="checkbox" [checked]="row.vary" (change)="toggleVary(row.name, $any($event.target).checked)" />
+            <input type="checkbox" [checked]="row.vary" (change)="onVaryEvent(row.name, $event)" />
             <span>{{ row.property.title ?? row.name }}</span>
             @if (row.property.minimum !== undefined || row.property.maximum !== undefined) {
               <small class="muted">allowed {{ row.property.minimum ?? '−∞' }} … {{ row.property.maximum ?? '∞' }}</small>
@@ -74,8 +76,13 @@
   <details class="advanced">
     <summary>Costs and ranking</summary>
     <div class="form__grid">
+      <label class="field"><span>Resolution</span>
+        <select [value]="resolution()" (change)="onResolutionEvent($event)" aria-label="Resolution">
+          @for (option of resolutions(); track option) { <option [value]="option">{{ option | receiptLabel }}</option> }
+        </select>
+      </label>
       <label class="field"><span>Fill mode</span>
-        <select [value]="fillMode()" (change)="setFillMode($any($event.target).value)" aria-label="Fill mode">
+        <select [value]="fillMode()" (change)="onFillModeEvent($event)" aria-label="Fill mode">
           <option value="signal_bar_close">Signal bar close</option>
           <option value="next_bar_open">Next bar open</option>
         </select>
@@ -84,7 +91,7 @@
       <label class="field"><span>Commission / order</span><input #commissionInput pInputText type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="setNumber('commission', commissionInput.value)" /></label>
       <label class="field"><span>Slippage / share</span><input #slippageInput pInputText type="number" min="0" step="0.01" [value]="slippagePerShare()" (input)="setNumber('slippage', slippageInput.value)" /></label>
       <label class="field"><span>Ranking measure</span>
-        <select [value]="measure()" (change)="setMeasure($any($event.target).value)" aria-label="Ranking measure">
+        <select [value]="measure()" (change)="onMeasureEvent($event)" aria-label="Ranking measure">
           @for (option of measures; track option) { <option [value]="option">{{ option | receiptLabel }}</option> }
         </select>
       </label>

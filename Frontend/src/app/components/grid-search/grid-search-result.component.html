@@ -15,7 +15,7 @@
       <div class="status" [attr.data-status]="d.status">
         <span class="tag">{{ d.status | receiptLabel }}</span>
         @if (d.uncommitted_changes) { <span class="tag tag--warn">Uncommitted changes</span> }
-        @if (d.incomplete) { <span class="tag tag--warn">Incomplete</span> }
+        @if (d.incomplete) { <span class="tag tag--warn">Incomplete — {{ missingCells() }} of {{ d.expected_cells }} cells missing</span> }
         <span class="muted">{{ d.completed_cells + d.failed_cells }} / {{ d.expected_cells }} cells</span>
       </div>
     }
@@ -38,6 +38,9 @@
       }
       @if (d.failure_reason) { <p class="refusal">{{ d.failure_reason }}</p> }
       <span class="spacer"></span>
+      @if (running()) {
+        <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="busy()" (click)="cancel()"><i class="pi pi-stop" aria-hidden="true"></i><span>Cancel</span></button>
+      }
       @if (d.resumable) {
         <button pButton type="button" size="small" [disabled]="busy()" (click)="finish()"><i class="pi pi-forward" aria-hidden="true"></i><span>Finish</span></button>
       } @else if (d.resume_refusal && d.incomplete) {

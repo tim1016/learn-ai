@@ -47,8 +47,8 @@ def _expected_sessions(start: date, end: date) -> list[date]:
     containing one never reported complete. That was tolerable while the
     report only decorated a UI; it is not for a preflight that refuses a
     run on an incomplete window (PRD #1926) — a two-year window contains
-    roughly eighteen closures. Imported lazily so pure report callers pay
-    for the calendar stack only when they actually ask.
+    roughly eighteen closures. Imported here rather than at module top so
+    importing this module stays cheap for callers that never ask.
     """
     from app.lean_sidecar.trading_calendar import expected_sessions
 

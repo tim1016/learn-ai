@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GridSearchResultComponent } from './grid-search-result.component';
+import { JobsService } from '../../services/jobs.service';
 import { GridSearchService } from './grid-search.service';
 import type { CellPageQuery, GridSearchCell, GridSearchCellPage, GridSearchDetail } from './grid-search.types';
 
@@ -65,7 +66,7 @@ function page(cells: GridSearchCell[], overrides: Partial<GridSearchCellPage> = 
 async function renderResult(service: Partial<GridSearchService>) {
   return render(GridSearchResultComponent, {
     inputs: { searchId: 'abc', pollMs: 0 },
-    providers: [provideRouter([]), { provide: GridSearchService, useValue: { get: vi.fn(async (_id: string) => detail()), cells: vi.fn(async (_id: string, _query: CellPageQuery) => page([cell()])), delete: vi.fn(async (_id: string) => undefined), finish: vi.fn(async () => 'job-2'), ...service } }],
+    providers: [provideRouter([]), { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } }, { provide: GridSearchService, useValue: { get: vi.fn(async (_id: string) => detail()), cells: vi.fn(async (_id: string, _query: CellPageQuery) => page([cell()])), delete: vi.fn(async (_id: string) => undefined), finish: vi.fn(async () => 'job-2'), ...service } }],
   });
 }
 
@@ -103,6 +104,27 @@ describe('GridSearchResultComponent', () => {
 
 
     await waitFor(() => expect(cells.mock.lastCall?.[1]).toMatchObject({ sort_by: 'net_profit', direction: 'desc', page: 1 }));
+  });
+
+  it('offers Cancel while running and requests it through the jobs boundary', async () => {
+    const cancelJob = vi.fn(async () => undefined);
+    const get = vi.fn(async (_id: string) => detail({ status: 'running', completed_cells: 1, expected_cells: 2 }));
+    await render(GridSearchResultComponent, {
+      inputs: { searchId: 'abc', pollMs: 0 },
+      providers: [provideRouter([]), { provide: JobsService, useValue: { cancelJob } }, { provide: GridSearchService, useValue: { get, cells: vi.fn(async () => page([cell()])), delete: vi.fn(), finish: vi.fn() } }],
+    });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /cancel/i })).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+
+    await waitFor(() => expect(cancelJob).toHaveBeenCalledWith('job-1'));
+  });
+
+  it('says how many cells an incomplete search is missing', async () => {
+    const get = vi.fn(async (_id: string) => detail({ status: 'cancelled', incomplete: true, completed_cells: 3, failed_cells: 1, expected_cells: 10 }));
+    await renderResult({ get });
+
+    await waitFor(() => expect(screen.getByText(/6 of 10 cells missing/)).not.toBeNull());
   });
 
   it('offers Finish only when the search is resumable, and explains why not otherwise', async () => {

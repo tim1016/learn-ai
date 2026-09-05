@@ -48,7 +48,9 @@ export interface StrategyInfo {
   recency_supported?: boolean;
   /** Registry role: `production_candidate` or `operational_validation_harness`. */
   strategy_category?: string;
-  /** Structured sweep eligibility shared by Recency Chart, Grid Search, and Walk-Forward (PRD #1926). */
+  /** Structured sweep eligibility shared by Recency Chart, Grid Search, and Walk-Forward (PRD #1926).
+   *  Always present on the wire; optional here only so fixtures predating it still type-check. A
+   *  consumer treats absence as ineligible, never as a fallback to another flag. */
   sweep_eligibility?: SweepEligibility;
 }
 

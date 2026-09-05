@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
-from app.research.sweep.ranking import RANKING_MEASURES, RankingMeasure
+from app.research.sweep.ranking import RankingMeasure
 
 
 class _CamelTolerantModel(BaseModel):
@@ -59,8 +59,6 @@ class GridSearchSpecRequest(_CamelTolerantModel):
     def _window_is_ordered(self) -> GridSearchSpecRequest:
         if self.start_ms >= self.end_ms:
             raise ValueError("start_ms must be before end_ms")
-        if self.measure not in RANKING_MEASURES:
-            raise ValueError(f"measure must be one of {RANKING_MEASURES}")
         return self
 
 
@@ -73,11 +71,6 @@ class GridSearchJobRequest(GridSearchSpecRequest):
 
     job_id: str = Field(min_length=1)
     resume_search_id: str | None = None
-
-
-class GridSearchFinishJobRequest(_CamelTolerantModel):
-    job_id: str = Field(min_length=1)
-    resume_search_id: str = Field(min_length=1)
 
 
 class RunUpPlanResponse(BaseModel):

@@ -6,7 +6,7 @@ import { GridSearchPageComponent } from './grid-search-page.component';
 import { GridSearchService } from './grid-search.service';
 
 describe('GridSearchPageComponent', () => {
-  it('renders the two tabs and opens a launched search once it is listable', async () => {
+  it('renders the two tabs and opens a launched search by its job id', async () => {
     const list = vi.fn(async () => [{ id: 'new-1', status: 'queued' }]);
     const view = await render(GridSearchPageComponent, {
       providers: [

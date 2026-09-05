@@ -3,14 +3,14 @@
     <h2 id="grid-search-history-title">History</h2>
     <div class="filters">
       <label><span>Strategy</span>
-        <select (change)="setFilter('strategy_key', $any($event.target).value)" aria-label="Filter by strategy">
+        <select (change)="onFilterEvent('strategy_key', $event)" aria-label="Filter by strategy">
           <option value="">All</option>
           @for (strategy of filterableStrategies(); track strategy.name) { <option [value]="strategy.name">{{ strategy.display_name }}</option> }
         </select>
       </label>
       <label><span>Symbol</span><input #symbolFilter pInputText type="text" placeholder="Any" (input)="setFilter('symbol', symbolFilter.value)" /></label>
       <label><span>Status</span>
-        <select (change)="setFilter('status', $any($event.target).value)" aria-label="Filter by status">
+        <select (change)="onFilterEvent('status', $event)" aria-label="Filter by status">
           <option value="">All</option>
           @for (status of statuses; track status) { <option [value]="status">{{ status | receiptLabel }}</option> }
         </select>

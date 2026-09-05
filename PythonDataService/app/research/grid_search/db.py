@@ -11,6 +11,7 @@ is ensured once per loop on first use.
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any
@@ -21,7 +22,9 @@ from app.data_lake import catalog_client
 from app.research.grid_search.schema import ensure_schema
 from app.utils.background_loop import run_on_background_loop
 
-_schema_ready_loops: set[int] = set()
+# Weak-keyed like catalog_client's pools: a loop that is garbage collected must
+# not leave a stale "ready" mark behind for whatever loop reuses its id.
+_schema_ready_loops: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, bool] = weakref.WeakKeyDictionary()
 DB_CALL_TIMEOUT_SECONDS = 60.0
 
 
@@ -29,11 +32,11 @@ DB_CALL_TIMEOUT_SECONDS = 60.0
 async def connection() -> AsyncIterator[asyncpg.Connection]:
     """A pooled connection on the calling loop, with the sweep schema in place."""
     await catalog_client.init_pool()
-    loop_id = id(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
     async with catalog_client.connection() as conn:
-        if loop_id not in _schema_ready_loops:
+        if loop not in _schema_ready_loops:
             await ensure_schema(conn)
-            _schema_ready_loops.add(loop_id)
+            _schema_ready_loops[loop] = True
         yield conn
 
 

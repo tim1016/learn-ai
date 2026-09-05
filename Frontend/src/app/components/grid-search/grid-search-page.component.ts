@@ -9,8 +9,6 @@ import { GridSearchResultComponent } from './grid-search-result.component';
 import { GridSearchService } from './grid-search.service';
 
 export type GridSearchTab = 'new' | 'history';
-const LOOKUP_ATTEMPTS = 20;
-const LOOKUP_DELAY_MS = 500;
 
 /**
  * Grid Search page (PRD #1926): one page, two tabs — configure and launch,
@@ -41,18 +39,16 @@ export class GridSearchPageComponent {
   }
 
   async onLaunched(launch: GridSearchLaunch): Promise<void> {
+    // The jobs boundary returns the job id only after Python made the record
+    // durable, so one lookup by job id is enough.
     this.activeTab.set('history');
-    this.lookupMessage.set('Opening the new search…');
-    for (let attempt = 0; attempt < LOOKUP_ATTEMPTS; attempt++) {
-      const rows = await this.service.list({ job_id: launch.jobId });
-      if (rows.length > 0) {
-        this.lookupMessage.set(null);
-        this.openSearchId.set(rows[0].id);
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, LOOKUP_DELAY_MS));
+    const rows = await this.service.list({ job_id: launch.jobId });
+    if (rows.length > 0) {
+      this.lookupMessage.set(null);
+      this.openSearchId.set(rows[0].id);
+      return;
     }
-    this.lookupMessage.set('The search was launched but has not appeared in history yet. Refresh in a moment.');
+    this.lookupMessage.set('The search was launched but its record was not found in history. Refresh in a moment.');
     void this.history()?.refresh();
   }
 

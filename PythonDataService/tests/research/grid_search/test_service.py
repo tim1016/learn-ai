@@ -16,8 +16,8 @@ import pytest
 
 from app.jobs.progress import JobCancelled
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.research.grid_search import engine_adapter, service
 from app.research.grid_search import repository as repo
-from app.research.grid_search import service
 from app.research.grid_search.models import CellResult
 from app.research.sweep.grid import RunSpec, ValueListRange
 from app.research.sweep.identity import CodeIdentity
@@ -146,7 +146,7 @@ async def test_a_cell_builds_the_engine_request_from_its_receipt(conn, lake: Pat
     spec = service.GridSearchSpec.from_request_dict(created.request)
     candidate = RunSpec(symbol="SPY", strategy_key="sma_crossover", params={"short_window": 2.0, "long_window": 5.0, "resolution_minutes": 60.0}, params_hash="x")
 
-    request = service._engine_request(created, spec, candidate)
+    request = engine_adapter.engine_request(created, spec, candidate)
 
     assert request.warmup_from_date == START.isoformat()
     assert request.from_date == SESSIONS[1].isoformat()
@@ -239,12 +239,14 @@ async def test_resume_refusals(conn, lake: Path, monkeypatch) -> None:
 
     assert service.resume_refusal(row, live=True, identity=identity) == "the search is still running"
     assert service.resume_refusal(row, live=False, identity=identity) is None
+    assert service.resume_refusal(row, live=False, identity=identity, verify_data=True) is None
 
     moved = CodeIdentity(git_revision=identity.git_revision, tree_state=identity.tree_state, source_digest="0" * 64, environment_digest=identity.environment_digest)
     assert "code changed" in (service.resume_refusal(row, live=False, identity=moved) or "")
 
     seed_store_day(lake, "SPY", SESSIONS[3], count=100)
-    assert "data artifact" in (service.resume_refusal(row, live=False, identity=identity) or "")
+    assert service.resume_refusal(row, live=False, identity=identity) is None  # detail view: cheap checks only
+    assert "data artifact" in (service.resume_refusal(row, live=False, identity=identity, verify_data=True) or "")
 
 
 async def test_a_search_from_a_dirty_tree_is_labelled_and_not_resumable(conn, lake: Path, monkeypatch) -> None:

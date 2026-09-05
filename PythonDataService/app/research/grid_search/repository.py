@@ -11,9 +11,10 @@ concurrently on one bounded pool, and FastAPI reads through its own.
 atomically by whoever runs it. Every chunk write, terminal transition and
 delete checks that generation inside its transaction, so a worker that lost
 its job record but stayed alive — and looks interrupted from the outside —
-cannot overwrite rows a later Finish produced, nor a terminal status, nor
-resurrect a deleted search. Redis absence is a reason to reconcile, never
-proof that the worker is dead.
+cannot overwrite rows a later Finish produced, nor a terminal status, and a
+completed search accepts no write at all. A deleted search's row is gone, so
+the same lock finds nothing and refuses the stale writer. Redis absence is a
+reason to reconcile, never proof that the worker is dead.
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ def _row_to_search(row: asyncpg.Record) -> SearchRow:
         completed_cells=row["completed_cells"],
         failed_cells=row["failed_cells"],
         leader_params_hash=row["leader_params_hash"],
+        leader_params=json.loads(row["leader_params_json"]) if row["leader_params_json"] else None,
         incomplete=row["incomplete"],
         failure_reason=row["failure_reason"],
     )
@@ -105,7 +107,7 @@ _SEARCH_COLUMNS = """
     id, owner_kind, owner_id, fold_index, phase, strategy_key, symbol, status, attempt, job_id,
     created_at_ms, updated_at_ms, finished_at_ms, request_json::text AS request_json,
     receipt_json::text AS receipt_json, expected_cells, completed_cells, failed_cells,
-    leader_params_hash, incomplete, failure_reason
+    leader_params_hash, leader_params_json::text AS leader_params_json, incomplete, failure_reason
 """
 _CELL_COLUMNS = """
     search_id, params_hash, params_json::text AS params_json, status, attempt, total_trades, net_profit,
@@ -208,14 +210,17 @@ async def claim_attempt(conn: asyncpg.Connection, search_id: str, *, job_id: str
 
 
 async def _lock_current_attempt(conn: asyncpg.Connection, search_id: str, attempt: int) -> None:
-    current = await conn.fetchval(
-        "SELECT attempt FROM research_grid_searches WHERE id = $1 FOR UPDATE",
+    """Row-lock the search and refuse a writer that is stale, or a search that is complete."""
+    row = await conn.fetchrow(
+        "SELECT attempt, status FROM research_grid_searches WHERE id = $1 FOR UPDATE",
         search_id,
     )
-    if current is None:
+    if row is None:
         raise StaleAttemptError(f"search {search_id} no longer exists; attempt {attempt} may not write")
-    if int(current) != attempt:
-        raise StaleAttemptError(f"search {search_id} is on attempt {current}; attempt {attempt} may not write")
+    if int(row["attempt"]) != attempt:
+        raise StaleAttemptError(f"search {search_id} is on attempt {row['attempt']}; attempt {attempt} may not write")
+    if row["status"] == "completed":
+        raise StaleAttemptError(f"search {search_id} is complete and immutable; attempt {attempt} may not write")
 
 
 async def write_cells(conn: asyncpg.Connection, search_id: str, attempt: int, cells: Sequence[CellResult]) -> None:
@@ -283,22 +288,24 @@ async def finish_search(
     *,
     status: SearchStatus,
     leader_params_hash: str | None,
+    leader_params: dict[str, Any] | None,
     incomplete: bool,
     failure_reason: str | None,
 ) -> None:
-    """Terminal transition under the attempt fence."""
+    """Terminal transition under the attempt fence; the leader's parameters are stored with the row."""
     async with conn.transaction():
         await _lock_current_attempt(conn, search_id, attempt)
         await conn.execute(
             """
             UPDATE research_grid_searches
-               SET status = $2, leader_params_hash = $3, incomplete = $4, failure_reason = $5,
-                   finished_at_ms = $6, updated_at_ms = $6
+               SET status = $2, leader_params_hash = $3, leader_params_json = $4::jsonb, incomplete = $5,
+                   failure_reason = $6, finished_at_ms = $7, updated_at_ms = $7
              WHERE id = $1
             """,
             search_id,
             status,
             leader_params_hash,
+            json.dumps(leader_params, sort_keys=True) if leader_params is not None else None,
             incomplete,
             failure_reason,
             now_ms_utc(),
@@ -354,6 +361,3 @@ async def list_cells(
     )
     return CellPage(total=int(total or 0), page=page, page_size=page_size, cells=[_row_to_cell(row) for row in rows])
 
-
-def summarize_cells_as_dicts(cells: Sequence[CellRow]) -> list[dict[str, Any]]:
-    return [cell.as_dict() for cell in cells]

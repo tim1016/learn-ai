@@ -26,20 +26,19 @@ import logging
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import redis
 
-from app.engine.data.availability import check_availability
+from app.engine.data.availability import Resolution, check_availability
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration, public_params_schema
 from app.jobs.progress import JobCancelled, _state_key, get_redis
 from app.research.grid_search import repository as repo
 from app.research.grid_search.db import connection, run_sync
-from app.research.grid_search.models import CellResult, CellRow, NewSearch, SearchOwner, SearchRow
+from app.research.grid_search.models import CellResult, CellRow, NewSearch, SearchOwner, SearchRow, SearchStatus
 from app.research.grid_search.runner import GridRunSummary, run_grid
 from app.research.sweep.eligibility import sweep_eligibility
 from app.research.sweep.grid import (
@@ -49,7 +48,6 @@ from app.research.sweep.grid import (
     StrategyGridConfig,
     ValueListRange,
     expand_grid,
-    params_hash,
 )
 from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.research.sweep.ranking import RankingMeasure, leader
@@ -67,12 +65,10 @@ from app.research.sweep.warmup import (
     plan_run_up,
     probe_warmup_samples,
 )
-from app.routers.engine import EngineBacktestRequest, EngineBacktestResponse, execute_engine_backtest
-from app.utils.timestamps import now_ms_utc, to_ms_utc
+from app.utils.session_anchors import et_date_at_ms, et_day_end_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
 
-_NY = ZoneInfo("America/New_York")
 MAX_TOTAL_BACKTESTS = 5_000
 # Measured on the target machine (rsi_mean_reversion, SPY, 15-minute bars):
 # 3 months 2.3 s, 6 months 3.2 s -> ~1.4 s fixed + 0.3 s per month read. The
@@ -102,17 +98,7 @@ def window_dates(start_ms: int, end_ms: int) -> tuple[date, date]:
     window ending exactly at an ET midnight excludes that day. Expressed
     either way, the same bars are selected (pinned by test).
     """
-    start = datetime.fromtimestamp(start_ms / 1000, tz=UTC).astimezone(_NY).date()
-    end = datetime.fromtimestamp((end_ms - 1) / 1000, tz=UTC).astimezone(_NY).date()
-    return start, end
-
-
-def et_midnight_ms(day: date) -> int:
-    return to_ms_utc(datetime(day.year, day.month, day.day, tzinfo=_NY))
-
-
-def _window_end_ms(day: date) -> int:
-    return et_midnight_ms(day + timedelta(days=1))
+    return et_date_at_ms(start_ms), et_date_at_ms(end_ms - 1)
 
 
 # ── Spec ─────────────────────────────────────────────────────────────────
@@ -127,7 +113,7 @@ class GridSearchSpec:
     param_ranges: Mapping[str, ParamRange]
     start_ms: int
     end_ms: int
-    resolution: str = "minute"
+    resolution: Resolution = "minute"
     fill_mode: str = "signal_bar_close"
     commission_per_order: float = 1.0
     slippage_per_share: float = 0.0
@@ -298,7 +284,7 @@ def preflight(spec: GridSearchSpec, *, backtests_per_combination: int = 1, roots
     except RunUpExceedsRangeError as exc:
         raise GridSearchRefusal(str(exc), code="RUN_UP_EXCEEDS_RANGE") from exc
 
-    availability = check_availability(resolved_roots, spec.symbol, run_up.data_start, run_up.evaluation_end, resolution=spec.resolution)  # type: ignore[arg-type]
+    availability = check_availability(resolved_roots, spec.symbol, run_up.data_start, run_up.evaluation_end, resolution=spec.resolution)
     if not availability.is_complete:
         shown = ", ".join(day.isoformat() for day in availability.missing_days[:10])
         more = f" (+{len(availability.missing_days) - 10} more)" if len(availability.missing_days) > 10 else ""
@@ -345,7 +331,7 @@ def build_receipt(pre: Preflight, snapshot: DataSnapshot, identity: CodeIdentity
             "requested_end_ms": spec.end_ms,
             "data_start_ms": et_midnight_ms(pre.data_start),
             "evaluation_start_ms": et_midnight_ms(pre.evaluation_start),
-            "evaluation_end_ms": _window_end_ms(pre.evaluation_end),
+            "evaluation_end_ms": et_day_end_ms(pre.evaluation_end),
             "warmup_policy": "uniform_run_up",
             "required_samples": pre.run_up.required_samples,
             "bar_span_ms": pre.run_up.bar_span_ms,
@@ -379,7 +365,7 @@ def prepare_launch(
         snapshot = capture_data_snapshot(
             roots=pre.roots,
             symbol=spec.symbol,
-            resolution=spec.resolution,  # type: ignore[arg-type]
+            resolution=spec.resolution,
             data_start=pre.data_start,
             data_end=pre.evaluation_end,
         )
@@ -416,6 +402,14 @@ async def create(record: NewSearch) -> SearchRow:
 # ── Execute ──────────────────────────────────────────────────────────────
 
 
+def load_search(search_id: str) -> tuple[SearchRow, GridSearchSpec]:
+    """The stored record and its parsed spec, for a worker thread."""
+    row = run_sync(_get(search_id))
+    if row is None:
+        raise GridSearchRefusal(f"search {search_id} not found", code="NOT_FOUND")
+    return row, GridSearchSpec.from_request_dict(row.request)
+
+
 @dataclass(frozen=True)
 class ExecutionOutcome:
     search_id: str
@@ -424,75 +418,23 @@ class ExecutionOutcome:
     summary: GridRunSummary
 
 
-def _engine_request(row: SearchRow, spec: GridSearchSpec, candidate: RunSpec) -> EngineBacktestRequest:
-    table = row.receipt["interval_table"]
-    data_start, _ = window_dates(table["data_start_ms"], table["evaluation_end_ms"])
-    evaluation_start, evaluation_end = window_dates(table["evaluation_start_ms"], table["evaluation_end_ms"])
-    return EngineBacktestRequest(
-        strategy_name=spec.strategy_key,
-        params={**candidate.params, "symbol": spec.symbol},
-        from_date=evaluation_start.isoformat(),
-        to_date=evaluation_end.isoformat(),
-        warmup_from_date=data_start.isoformat() if data_start < evaluation_start else None,
-        fill_mode=spec.fill_mode,
-        commission_per_order=spec.commission_per_order,
-        slippage_per_share=spec.slippage_per_share,
-        initial_cash=spec.initial_cash,
-        resolution=spec.resolution,  # type: ignore[arg-type]
-        save_study=False,
-        auto_fetch=False,
-    )
-
-
-def cell_from_response(candidate: RunSpec, response: EngineBacktestResponse) -> CellResult:
-    """Project one engine response onto the summary row a search keeps."""
-    if not response.success:
-        return CellResult(params_hash=candidate.params_hash, params=dict(candidate.params), status="failed", error=response.error or "engine failed")
-    stats = response.statistics or {}
-    return CellResult(
-        params_hash=candidate.params_hash,
-        params=dict(candidate.params),
-        status="completed",
-        total_trades=response.total_trades,
-        net_profit=stats.get("net_profit", response.net_profit),
-        total_return_pct=stats.get("net_profit_pct"),
-        sharpe_ratio=stats.get("sharpe_ratio"),
-        max_drawdown_pct=stats.get("max_drawdown_pct"),
-        win_rate=stats.get("win_rate"),
-        bars_consumed=len(response.equity_curve),
-    )
-
-
-def default_execute_cell(row: SearchRow, spec: GridSearchSpec) -> Callable[[RunSpec], CellResult]:
-    manifest = row.receipt["data_snapshot"]["artifacts"]
-
-    def _execute(candidate: RunSpec) -> CellResult:
-        response = execute_engine_backtest(
-            request=_engine_request(row, spec, candidate),
-            on_phase=lambda phase: None,
-            on_log=lambda message: None,
-            data_manifest=manifest,
-        )
-        return cell_from_response(candidate, response)
-
-    return _execute
-
-
 def execute(
     search_id: str,
     *,
     job_id: str | None,
+    execute_cell: Callable[[RunSpec], CellResult],
     cancel_check: Callable[[], object] = lambda: None,
     on_phase: Callable[[str], None] = lambda phase: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_log: Callable[[str], None] = lambda message: None,
-    execute_cell: Callable[[RunSpec], CellResult] | None = None,
 ) -> ExecutionOutcome:
-    """Run (or Finish) a launched search on the calling worker thread."""
-    row = run_sync(_get(search_id))
-    if row is None:
-        raise GridSearchRefusal(f"search {search_id} not found", code="NOT_FOUND")
-    spec = GridSearchSpec.from_request_dict(row.request)
+    """Run (or Finish) a launched search on the calling worker thread.
+
+    ``execute_cell`` turns one candidate into a cell result; production passes
+    ``engine_adapter.default_execute_cell(row, spec)`` and tests a fake, so
+    this module never touches the engine HTTP layer.
+    """
+    row, spec = load_search(search_id)
     attempt = run_sync(_claim(search_id, job_id))
     on_phase("preflight")
     existing = run_sync(_existing(search_id))
@@ -500,7 +442,6 @@ def execute(
         on_log(f"Finish: {len(existing)} of {row.expected_cells} cells already recorded; running the rest")
     config = StrategyGridConfig(strategy_key=spec.strategy_key, param_ranges=dict(spec.param_ranges))
     candidates = expand_grid([config], [spec.symbol])
-    run_cell = execute_cell or default_execute_cell(row, spec)
 
     def _persist(cells: list[CellResult]) -> None:
         run_sync(_write(search_id, attempt, cells))
@@ -510,7 +451,7 @@ def execute(
         summary = run_grid(
             candidates,
             expected_cells=row.expected_cells,
-            execute_cell=run_cell,
+            execute_cell=execute_cell,
             persist=_persist,
             cancel_check=cancel_check,
             on_progress=on_progress,
@@ -518,9 +459,8 @@ def execute(
             skip_params_hashes=frozenset(existing),
         )
     except JobCancelled:
-        cells = run_sync(_all_cells(search_id))
-        winner = leader(cells, spec.measure, min_trades=spec.min_trades)
-        run_sync(_finish(search_id, attempt, "cancelled", winner.params_hash if winner else None, True, None))
+        winner = leader(run_sync(_all_cells(search_id)), spec.measure, min_trades=spec.min_trades)
+        run_sync(_finish(search_id, attempt, "cancelled", winner, True, None))
         raise
     except repo.StaleAttemptError:
         logger.warning("grid search %s attempt %s superseded; leaving the newer attempt's record alone", search_id, attempt)
@@ -538,7 +478,7 @@ def execute(
     diagnostics = verify_data_snapshot(DataSnapshot.from_dict(row.receipt["data_snapshot"]), _roots_for(row))
     if diagnostics:
         on_log(f"data snapshot diagnostic: {len(diagnostics)} artifact(s) changed during the search; reads were bound to receipted bytes")
-    run_sync(_finish(search_id, attempt, status, winner.params_hash if winner else None, False, reason))
+    run_sync(_finish(search_id, attempt, status, winner, False, reason))
     on_phase("completed")
     return ExecutionOutcome(search_id=search_id, status=status, leader_params_hash=winner.params_hash if winner else None, summary=summary)
 
@@ -572,9 +512,20 @@ async def _all_cells(search_id: str) -> list[CellRow]:
         return await repo.list_all_cells(conn, search_id)
 
 
-async def _finish(search_id: str, attempt: int, status: str, leader_hash: str | None, incomplete: bool, reason: str | None) -> None:
+async def _finish(
+    search_id: str, attempt: int, status: SearchStatus, winner: CellRow | None, incomplete: bool, reason: str | None
+) -> None:
     async with connection() as conn:
-        await repo.finish_search(conn, search_id, attempt, status=status, leader_params_hash=leader_hash, incomplete=incomplete, failure_reason=reason)  # type: ignore[arg-type]
+        await repo.finish_search(
+            conn,
+            search_id,
+            attempt,
+            status=status,
+            leader_params_hash=winner.params_hash if winner else None,
+            leader_params=dict(winner.params) if winner else None,
+            incomplete=incomplete,
+            failure_reason=reason,
+        )
 
 
 # ── Presentation and Finish rules ────────────────────────────────────────
@@ -607,37 +558,30 @@ def uncommitted_changes(row: SearchRow) -> bool:
     return row.receipt.get("code_identity", {}).get("tree_state") == "dirty"
 
 
-def resume_refusal(row: SearchRow, *, live: bool | None, identity: CodeIdentity | None = None) -> str | None:
-    """Why Finish is unavailable, or ``None`` when it may run."""
+def resume_refusal(
+    row: SearchRow, *, live: bool | None, identity: CodeIdentity | None = None, verify_data: bool = False
+) -> str | None:
+    """Why Finish is unavailable, or ``None`` when it may run.
+
+    The status, tree-state and code-identity checks are cheap and answer the
+    detail view; ``verify_data`` re-hashes every receipted artifact and is
+    reserved for the Finish request itself.
+    """
     if row.status == "completed":
         return "the search is complete"
     if row.status in ("queued", "running") and live is not False:
         return "the search is still running"
     if uncommitted_changes(row):
         return "the search was launched from a working tree with uncommitted changes and cannot be resumed; launch a fresh search"
-    current = identity or resolve_code_identity()
-    recorded = row.receipt.get("code_identity", {})
-    if recorded.get("source_digest") != current.source_digest or recorded.get("environment_digest") != current.environment_digest:
+    recorded = CodeIdentity(**row.receipt["code_identity"])
+    if not recorded.matches(identity or resolve_code_identity()):
         return "the engine or strategy code changed since launch; launch a fresh search"
-    snapshot = DataSnapshot.from_dict(row.receipt["data_snapshot"])
-    moved = verify_data_snapshot(snapshot, _roots_for(row))
+    if not verify_data:
+        return None
+    moved = verify_data_snapshot(DataSnapshot.from_dict(row.receipt["data_snapshot"]), _roots_for(row))
     if moved:
         return f"{len(moved)} data artifact(s) changed since launch ({moved[0]}{', …' if len(moved) > 1 else ''}); launch a fresh search"
     return None
 
 
-def leader_params(row: SearchRow, cells: Sequence[CellRow]) -> dict[str, Any] | None:
-    if row.leader_params_hash is None:
-        return None
-    for cell in cells:
-        if cell.params_hash == row.leader_params_hash:
-            return dict(cell.params)
-    return None
 
-
-def candidate_hash(strategy_key: str, params: Mapping[str, float]) -> str:
-    return params_hash(strategy_key, dict(params))
-
-
-def now_ms() -> int:
-    return now_ms_utc()

@@ -52,6 +52,7 @@ DDL_V1: tuple[str, ...] = (
         completed_cells     INTEGER NOT NULL DEFAULT 0,
         failed_cells        INTEGER NOT NULL DEFAULT 0,
         leader_params_hash  TEXT NULL,
+        leader_params_json  JSONB NULL,
         incomplete          BOOLEAN NOT NULL DEFAULT FALSE,
         failure_reason      TEXT NULL,
         CONSTRAINT ck_research_grid_searches_status

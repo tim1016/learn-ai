@@ -2,22 +2,21 @@
 
 Runs only against a database explicitly attested as disposable
 (``POSTGRES_URL_IS_EPHEMERAL=1``, the same signal the data-lake catalog
-tests require) — these tests drop and recreate the Python-owned sweep
-tables, which is never acceptable against a developer's real catalog.
+tests require). The tables are ensured once and never dropped: every test
+works on ids and symbols of its own, so the suite is safe under xdist's
+``--dist load`` (CI runs the change-driven paths in parallel).
 """
 
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import AsyncIterator
 
 import asyncpg
 import pytest
 
-from app.research.grid_search import db
 from app.research.grid_search.schema import ensure_schema
-
-_TABLES = ("research_grid_search_cells", "research_grid_searches", "research_schema_migrations")
 
 
 def _ephemeral_url() -> str:
@@ -33,11 +32,23 @@ def _ephemeral_url() -> str:
 async def conn() -> AsyncIterator[asyncpg.Connection]:
     connection = await asyncpg.connect(_ephemeral_url())
     try:
-        for table in _TABLES:
-            await connection.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await ensure_schema(connection)
-        # Every loop re-ensures after the tables were dropped and recreated above.
-        db._schema_ready_loops.clear()
         yield connection
     finally:
         await connection.close()
+
+
+@pytest.fixture
+async def second_conn() -> AsyncIterator[asyncpg.Connection]:
+    """A second session, for fence tests that need two writers."""
+    connection = await asyncpg.connect(_ephemeral_url())
+    try:
+        yield connection
+    finally:
+        await connection.close()
+
+
+@pytest.fixture
+def unique() -> str:
+    """A per-test tag for ids and symbols, so parallel tests never see each other's rows."""
+    return uuid.uuid4().hex[:10]

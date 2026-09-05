@@ -422,9 +422,8 @@ class LeanDailyDataReader:
             return []
         return self.parse_history_zip(zip_path.read_bytes(), symbol)
 
-    @staticmethod
-    def parse_history_zip(payload: bytes, symbol: str) -> list[TradeBar]:
-        """Decode a per-symbol daily history zip from bytes (see ``parse_day_zip``)."""
+    def parse_history_zip(self, payload: bytes, symbol: str) -> list[TradeBar]:
+        """Decode a per-symbol daily history zip from bytes (see ``LeanMinuteDataReader.parse_day_zip``)."""
         with zipfile.ZipFile(io.BytesIO(payload)) as zf:
             expected = f"{symbol.lower()}.csv"
             names = zf.namelist()
