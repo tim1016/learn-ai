@@ -36,6 +36,7 @@ from app.research.batch_runner import (
     _compute_stage_info,
     _compute_weighted_aggregate_ic,
     _summarize_validity,
+    run_cross_sectional_study,
 )
 from app.research.validation.ic import _select_hac_lag
 
@@ -474,3 +475,136 @@ def test_weighted_aggregate_ic_carries_se_approximation_disclaimer():
     assert result.valid is True
     assert "approximation" in result.se_approximation_note.lower()
     assert "Lo (2002)" in result.se_approximation_note
+
+
+class TestCancellationContract:
+    """``cancel_check`` means one thing across every research runner: raise to
+    cancel, return value ignored. ``run_recency`` and the walk-forward runner
+    both document it and ``test_cancel_check_return_value_is_ignored`` pins it
+    there. This runner used to branch on the boolean instead, so the same
+    callback meant two different things depending on where it was passed
+    (issue #1931). Every production caller injects
+    ``raise_if_cancelled(); return False``, so the boolean branch was
+    unreachable — and untested.
+    """
+
+    @staticmethod
+    def _run(monkeypatch: pytest.MonkeyPatch, cancel_check):
+        def _boom(*args, **kwargs):
+            raise RuntimeError("ticker work reached")
+
+        monkeypatch.setattr("app.research.batch_runner.build_iv_history", _boom)
+        return run_cross_sectional_study(
+            feature_name="iv_rank",
+            tickers=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-02-01",
+            polygon_client=object(),  # never reached: build_iv_history raises first
+            cancel_check=cancel_check,
+        )
+
+    def test_returning_true_does_not_cancel_the_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        report = self._run(monkeypatch, lambda: True)
+
+        # The ticker was processed (and errored on the stubbed IV build) rather
+        # than the loop breaking before it. A runner that honoured the boolean
+        # would return zero ticker results here.
+        assert len(report.ticker_results) == 1
+        assert report.ticker_results[0]["validity"] == "error"
+
+    def test_raising_cancels_the_run_and_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Cancelled(Exception):
+            pass
+
+        def cancel_check() -> bool:
+            raise _Cancelled("cancelled")
+
+        # Raised at the top of the ticker loop, before any data work, so the
+        # exception reaches the caller uncaught — which is what lets jobs.py
+        # emit ``job.cancelled`` instead of ``job.completed``.
+        with pytest.raises(_Cancelled):
+            self._run(monkeypatch, cancel_check)
+
+    def test_raising_at_the_mid_ticker_poll_propagates_whatever_its_class(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The second poll sits after the IV build, inside the ticker's work.
+
+        It used to live inside the per-ticker ``except Exception`` handler, which
+        re-raised only an exception literally named ``JobCancelled`` and turned
+        every other cancellation into a ticker error — so the study finished
+        ``completed`` with one errored row. The contract is raise-only and
+        class-agnostic, so a cancellation raised here must propagate too.
+        """
+
+        class _Cancelled(Exception):
+            pass
+
+        polls = 0
+
+        def cancel_check() -> bool:
+            nonlocal polls
+            polls += 1
+            if polls == 2:
+                raise _Cancelled("cancelled mid-ticker")
+            return False
+
+        # A non-empty IV frame is what lets the loop reach the second poll.
+        monkeypatch.setattr(
+            "app.research.batch_runner.build_iv_history",
+            lambda **kwargs: pd.DataFrame({"iv_30d_atm": [0.2, 0.21]}),
+        )
+
+        def _unreached(*args, **kwargs):
+            raise AssertionError("fetch_aggregates must not run after the cancellation")
+
+        with pytest.raises(_Cancelled):
+            run_cross_sectional_study(
+                feature_name="iv_rank",
+                tickers=["SPY"],
+                start_date="2024-01-02",
+                end_date="2024-02-01",
+                polygon_client=type("_Polygon", (), {"fetch_aggregates": staticmethod(_unreached)})(),
+                cancel_check=cancel_check,
+            )
+        assert polls == 2
+
+    @pytest.mark.parametrize("iv_outcome", ["empty", "error"])
+    def test_a_cancellation_during_the_final_ticker_iv_build_is_not_lost_by_an_early_exit(
+        self, monkeypatch: pytest.MonkeyPatch, iv_outcome: str
+    ) -> None:
+        """An empty IV frame or a failed IV build ``continue``s to the next ticker.
+
+        On the final ticker there is no next ticker, so a cancellation that
+        became active during the build must be observed before the early exit
+        or the study finishes ``completed`` (CodeRabbit review on #1932).
+        """
+
+        class _Cancelled(Exception):
+            pass
+
+        cancelled = False
+
+        def build_iv_history(**kwargs):
+            nonlocal cancelled
+            cancelled = True  # the user cancels while the build runs
+            if iv_outcome == "error":
+                raise RuntimeError("iv build failed")
+            return pd.DataFrame()
+
+        def cancel_check() -> bool:
+            if cancelled:
+                raise _Cancelled("cancelled during the final ticker")
+            return False
+
+        monkeypatch.setattr("app.research.batch_runner.build_iv_history", build_iv_history)
+
+        with pytest.raises(_Cancelled):
+            run_cross_sectional_study(
+                feature_name="iv_rank",
+                tickers=["SPY"],
+                start_date="2024-01-02",
+                end_date="2024-02-01",
+                polygon_client=object(),
+                cancel_check=cancel_check,
+            )

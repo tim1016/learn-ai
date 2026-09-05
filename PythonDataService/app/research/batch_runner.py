@@ -11,6 +11,19 @@ data-lab-style run-dock can show per-ticker phase events as they happen.
 The callbacks are no-ops by default — direct synchronous callers (tests,
 GraphQL one-shot) get the same behaviour as before.
 
+``cancel_check`` follows the same contract as every other research runner
+(``app/research/recency/runner.py``, ``app/research/walk_forward/runner.py``):
+**cancellation works only by raising, and the return value is ignored.** The
+exception propagates out of this function uncaught so ``run_in_thread``
+produces a real ``job.cancelled`` terminal state instead of ``job.completed``.
+
+This runner previously branched on the boolean instead (``if cancel_check():
+break``), which meant the same callback did two different things depending on
+which runner received it. It was also unreachable: every production caller
+injects ``cancel.raise_if_cancelled(); return False``, which never returns
+True. Unified in issue #1931 — behaviour in production is unchanged, and the
+contract is now pinned by ``tests/test_batch_runner.py::TestCancellationContract``.
+
 Inferential machinery (added 2026-05-01 after methodology review):
 
 * **Per-ticker validity classification.** Each ticker gets a
@@ -283,9 +296,9 @@ def run_cross_sectional_study(
     on_log(f"Date range: {start_date} → {end_date}")
 
     for i, ticker in enumerate(tickers):
-        if cancel_check():
-            on_log(f"Cancelled before {ticker}")
-            break
+        # Raise-only: the return value is ignored, matching every other
+        # research runner. See the module docstring (issue #1931).
+        cancel_check()
 
         logger.info("[Batch] Processing ticker %d/%d: %s", i + 1, n, ticker)
 
@@ -303,23 +316,35 @@ def run_cross_sectional_study(
                 end_date=end_date,
                 polygon_client=polygon_client,
             )
+        except Exception as e:
+            # Poll before recording the failure: on the final ticker an early
+            # ``continue`` is the last thing this loop does, and a cancellation
+            # that arrived during the IV build would otherwise be reported as a
+            # completed study with one errored row.
+            cancel_check()
+            _fail_ticker(result, e, ticker=ticker, index=i, total=n, on_log=on_log, on_progress=on_progress)
+            ticker_results.append(result)
+            continue
 
-            if iv_df.empty:
-                result["error"] = "No IV data could be derived"
-                result["validity"] = "invalid_data"
-                ticker_results.append(result)
-                on_log(f"[{i + 1}/{n}] {ticker}: INVALID — no IV data")
-                on_progress(i + 1, n, f"{ticker}: invalid (no IV data)")
-                continue
+        # The mid-ticker poll sits between the two per-ticker error handlers on
+        # purpose, and ahead of the empty-IV early exit for the same reason as
+        # above. A cancellation raised here must propagate whatever its class;
+        # inside the handler below it would be recorded as a ticker error and the
+        # study would finish ``completed`` (issue #1931, review findings).
+        cancel_check()
 
-            result["data_points"] = len(iv_df)
-            on_log(f"[{i + 1}/{n}] {ticker}: {len(iv_df)} IV days; fetching daily bars...")
+        if iv_df.empty:
+            result["error"] = "No IV data could be derived"
+            result["validity"] = "invalid_data"
+            ticker_results.append(result)
+            on_log(f"[{i + 1}/{n}] {ticker}: INVALID — no IV data")
+            on_progress(i + 1, n, f"{ticker}: invalid (no IV data)")
+            continue
 
-            if cancel_check():
-                on_log(f"Cancelled mid-{ticker}")
-                ticker_results.append(result)
-                break
+        result["data_points"] = len(iv_df)
+        on_log(f"[{i + 1}/{n}] {ticker}: {len(iv_df)} IV days; fetching daily bars...")
 
+        try:
             stock_bars = polygon_client.fetch_aggregates(
                 ticker=ticker,
                 multiplier=1,
@@ -416,21 +441,10 @@ def run_cross_sectional_study(
             )
 
         except Exception as e:
-            # Defer-to-wrapper: when the SSE wrapper's cancel_check raises
-            # JobCancelled mid-ticker (e.g. the inner `if cancel_check():`
-            # at the data-fetch boundary), let it propagate so
-            # run_in_thread emits job.cancelled instead of marking the
-            # ticker as a per-row "error" and letting the loop finish
-            # `completed`. We can't import JobCancelled here (research →
-            # jobs would be a layering inversion), so we sniff by class
-            # name — same pattern as runner.py / signal/engine.py.
-            if type(e).__name__ == "JobCancelled":
-                raise
-            result["error"] = str(e)
-            result["validity"] = "error"
-            on_log(f"[{i + 1}/{n}] {ticker}: ERROR — {e}")
-            on_progress(i + 1, n, f"{ticker}: error")
-            logger.error("[Batch] Error processing %s: %s", ticker, str(e))
+            # Every cancellation poll lives outside this handler, so nothing
+            # caught here is a cancellation: it is a per-ticker failure that
+            # must be recorded and must not abort the study.
+            _fail_ticker(result, e, ticker=ticker, index=i, total=n, on_log=on_log, on_progress=on_progress)
 
         ticker_results.append(result)
 
@@ -499,6 +513,24 @@ def run_cross_sectional_study(
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _fail_ticker(
+    result: dict[str, Any],
+    error: Exception,
+    *,
+    ticker: str,
+    index: int,
+    total: int,
+    on_log: LogCallback,
+    on_progress: ProgressCallback,
+) -> None:
+    """Record one ticker's failure on its result row and report it."""
+    result["error"] = str(error)
+    result["validity"] = "error"
+    on_log(f"[{index + 1}/{total}] {ticker}: ERROR — {error}")
+    on_progress(index + 1, total, f"{ticker}: error")
+    logger.error("[Batch] Error processing %s: %s", ticker, str(error))
 
 
 def _empty_ticker_result(ticker: str) -> dict[str, Any]:
