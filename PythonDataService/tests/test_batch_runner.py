@@ -524,3 +524,47 @@ class TestCancellationContract:
         # emit ``job.cancelled`` instead of ``job.completed``.
         with pytest.raises(_Cancelled):
             self._run(monkeypatch, cancel_check)
+
+    def test_raising_at_the_mid_ticker_poll_propagates_whatever_its_class(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The second poll sits after the IV build, inside the ticker's work.
+
+        It used to live inside the per-ticker ``except Exception`` handler, which
+        re-raised only an exception literally named ``JobCancelled`` and turned
+        every other cancellation into a ticker error — so the study finished
+        ``completed`` with one errored row. The contract is raise-only and
+        class-agnostic, so a cancellation raised here must propagate too.
+        """
+
+        class _Cancelled(Exception):
+            pass
+
+        polls = 0
+
+        def cancel_check() -> bool:
+            nonlocal polls
+            polls += 1
+            if polls == 2:
+                raise _Cancelled("cancelled mid-ticker")
+            return False
+
+        # A non-empty IV frame is what lets the loop reach the second poll.
+        monkeypatch.setattr(
+            "app.research.batch_runner.build_iv_history",
+            lambda **kwargs: pd.DataFrame({"iv_30d_atm": [0.2, 0.21]}),
+        )
+
+        def _unreached(*args, **kwargs):
+            raise AssertionError("fetch_aggregates must not run after the cancellation")
+
+        with pytest.raises(_Cancelled):
+            run_cross_sectional_study(
+                feature_name="iv_rank",
+                tickers=["SPY"],
+                start_date="2024-01-02",
+                end_date="2024-02-01",
+                polygon_client=type("_Polygon", (), {"fetch_aggregates": staticmethod(_unreached)})(),
+                cancel_check=cancel_check,
+            )
+        assert polls == 2
