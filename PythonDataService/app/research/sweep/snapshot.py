@@ -24,10 +24,9 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any, Literal
-
-import pandas_market_calendars
 
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
@@ -35,6 +34,10 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.runs.hashing import hash_payload
 
 CALENDAR_IDENTITY = "NYSE"
+# The package version is part of the snapshot because it decides which sessions
+# exist; read from package metadata so the canonical calendar module stays the
+# only importer of pandas_market_calendars (temporal-rigor ban list).
+CALENDAR_PACKAGE_VERSION = _package_version("pandas_market_calendars")
 Resolution = Literal["minute", "daily"]
 
 
@@ -63,7 +66,7 @@ class DataSnapshot:
     # Root-relative artifact path -> sha256 of its bytes at capture.
     artifacts: dict[str, str] = field(default_factory=dict)
     calendar_identity: str = CALENDAR_IDENTITY
-    calendar_version: str = pandas_market_calendars.__version__
+    calendar_version: str = CALENDAR_PACKAGE_VERSION
 
     def digest(self) -> str:
         return hash_payload(self.as_dict())
