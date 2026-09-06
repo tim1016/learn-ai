@@ -975,13 +975,16 @@ async def execute_sqlite_panel_action(
             # A lost execution lease releases for every action, not only
             # stop_bot_decisions: every repository mutation renews the lease
             # as its very first statement under the write lock
-            # (repository.py), so nothing else ran -- the same "nothing
-            # applied" contract as a pre-execution rejection above, not a
-            # real post-execution failure. panel_data_source.run_action's
-            # ADR 0050 revival needs this ORIGINAL idempotency key free for
-            # the operator's (or a cohort batch's same-key) re-POST -- a
-            # ``failed`` burn here left a revived leg permanently
-            # unflattenable under its own key (#1955 final review).
+            # (repository.py), so the mutation that raised applied nothing.
+            # Earlier legs of a multi-leg action may have applied
+            # (safe_flatten submits leg 1 before leg 2 renews); the same-key
+            # re-POST is still safe because execute_safe_flatten_plan
+            # re-filters on active_exit_for_order and refuses a second
+            # reduction of an already-exited entry. panel_data_source
+            # .run_action's ADR 0050 revival needs this ORIGINAL idempotency
+            # key free for the operator's (or a cohort batch's same-key)
+            # re-POST -- a ``failed`` burn here left a revived leg
+            # permanently unflattenable under its own key (#1955 final review).
             await _release_reservation()
         else:
             # Other attempted actions/errors have no equivalent committed-command

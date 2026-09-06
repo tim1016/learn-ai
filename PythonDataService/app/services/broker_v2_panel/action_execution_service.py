@@ -619,12 +619,16 @@ async def execute_action(
         # the revival catch needs the typed condition, not a generic failure.
         #
         # Every repository mutation renews the execution lease as its very
-        # first statement under the write lock (repository.py) -- a lost
-        # lease means nothing else in this call ran, so this releases the
-        # key exactly like a pre-execution rejection above, not the ``failed``
-        # burn a real post-execution failure gets. A cohort leg the write
-        # path later revives (panel_data_source._revive_lease_or_raise) needs
-        # its ORIGINAL idempotency key free for the operator's same-key
+        # first statement under the write lock (repository.py), so the
+        # mutation that raised applied nothing. A multi-leg action can still
+        # have completed earlier legs (safe_flatten submits leg 1 before leg 2
+        # renews); a same-key re-POST is safe there because
+        # execute_safe_flatten_plan re-filters on active_exit_for_order and
+        # refuses a second reduction of an already-exited entry. So this
+        # releases the key like a pre-execution rejection above, not the
+        # ``failed`` burn a real post-execution failure gets. A cohort leg the
+        # write path later revives (panel_data_source._revive_lease_or_raise)
+        # needs its ORIGINAL idempotency key free for the operator's same-key
         # re-POST -- burning it here left that leg permanently unflattenable
         # under its own key (#1955 final review).
         if reserved_fresh:
