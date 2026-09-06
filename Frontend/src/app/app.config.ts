@@ -1,4 +1,4 @@
-import { ApplicationConfig, inject, provideZonelessChangeDetection } from "@angular/core";
+import { ApplicationConfig, provideZonelessChangeDetection } from "@angular/core";
 import {
   provideRouter,
   withComponentInputBinding,
@@ -8,9 +8,6 @@ import {
 import { provideHttpClient, withInterceptors, withXhr } from "@angular/common/http";
 import { providePrimeNG } from "primeng/config";
 import { MessageService } from "primeng/api";
-import { provideApollo } from "apollo-angular";
-import { HttpLink } from "apollo-angular/http";
-import { InMemoryCache } from "@apollo/client/core";
 import { definePreset } from "@primeuix/themes";
 import Aura from "@primeuix/themes/aura";
 import { environment } from "../environments/environment";
@@ -66,9 +63,5 @@ export const appConfig: ApplicationConfig = {
       },
     }),
     MessageService,
-    provideApollo(() => ({
-      link: inject(HttpLink).create({ uri: environment.backendUrl }),
-      cache: new InMemoryCache(),
-    })),
   ],
 };

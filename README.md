@@ -10,7 +10,7 @@ A full-stack quantitative trading research platform for US equity and options ma
 ```
 ┌──────────────┐     GraphQL      ┌──────────────┐     REST/HTTP     ┌──────────────────┐
 │   Angular 22 │ ◄──────────────► │  .NET 10     │ ◄──────────────► │  Python FastAPI   │
-│   Frontend   │     Apollo       │  Backend     │     Polly        │  Data Service     │
+│   Frontend   │   HttpClient     │  Backend     │     Polly        │  Data Service     │
 │              │                  │  Hot Choc v15│                  │  Polygon.io SDK   │
 └──────────────┘                  └──────┬───────┘                  └──────────────────┘
                                          │ EF Core 10
@@ -23,7 +23,7 @@ A full-stack quantitative trading research platform for US equity and options ma
 
 | Layer | Tech | Purpose |
 |-------|------|---------|
-| **Frontend** | Angular 22, Apollo Angular, PrimeNG 22, Tailwind CSS, TradingView lightweight-charts v5 | SPA with interactive charts, tables, and forms |
+| **Frontend** | Angular 22, PrimeNG 22, Tailwind CSS, TradingView lightweight-charts v5 | SPA with interactive charts, tables, and forms |
 | **Backend** | .NET 10, Hot Chocolate v15 (GraphQL), EF Core 10, Polly | GraphQL API, data caching, backtesting engine |
 | **Data Service** | Python FastAPI, Polygon.io REST client v1.12.5, pandas, pandas-ta, scipy, statsmodels | Polygon.io proxy, indicator calculations, data quality pipeline |
 | **Database** | PostgreSQL 16 | Persistent storage for tickers, OHLCV bars, indicators, research experiments |

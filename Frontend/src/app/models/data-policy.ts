@@ -38,11 +38,12 @@ export interface DataPolicy {
 }
 
 /**
- * Rebuild a DataPolicy at the GraphQL-to-engine boundary.
+ * Rebuild a DataPolicy at the run-store-to-engine boundary.
  *
- * Apollo adds ``__typename`` to queried objects, including nested bar specs.
- * Explicit reconstruction keeps editable restored state identical to the
- * strict Python/LEAN request contract without weakening server validation.
+ * A policy restored from a persisted run detail may carry fields the engine
+ * contract does not declare, including on nested bar specs. Explicit
+ * reconstruction keeps editable restored state identical to the strict
+ * Python/LEAN request contract without weakening server validation.
  */
 export function toDataPolicyPayload(policy: DataPolicy): DataPolicy {
   return {

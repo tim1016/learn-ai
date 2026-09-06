@@ -35,10 +35,10 @@ src/app/
 │   ├── portfolio.service.ts     # GraphQL portfolio mutations/queries
 │   ├── replay-engine.service.ts # Backtest replay orchestration
 │   └── ...
-├── graphql/             # Apollo Client type definitions
-│   ├── queries.ts               # Market data GQL queries
-│   ├── types.ts                 # Generated/manual GQL types
-│   └── portfolio-types.ts       # Portfolio GQL types
+├── graphql/             # Hand-written TS types for the .NET GraphQL responses
+│   ├── types.ts                 # Market data GQL types
+│   ├── portfolio-types.ts       # Portfolio GQL types
+│   └── spec-strategy.models.ts  # Strategy-spec aliases over the OpenAPI types
 ├── models/              # Shared TypeScript interfaces
 ├── shared/              # Reusable directives, helpers
 └── utils/               # Pure utility functions (black-scholes, date-validation)
@@ -48,7 +48,7 @@ src/app/
 
 - **Standalone components** with `ChangeDetectionStrategy.OnPush`
 - **Signals** for state: `signal()`, `computed()`, `input()`, `output()`, `inject()`
-- **Apollo Angular** for GraphQL — queries in `graphql/queries.ts`, types in `graphql/types.ts`
+- **Raw `HttpClient` POSTs** to the .NET GraphQL endpoint (no Apollo) — the `gql()` helpers live in the services, types in `graphql/types.ts`
 - **PrimeNG** for UI components + **Tailwind CSS** for utility styling
 - **TradingView lightweight-charts v5** for OHLCV candlestick charts (`chart.addSeries(CandlestickSeries, options)`)
 - Modern control flow: `@if`, `@for` (with `track`), `@switch`, `@let`
