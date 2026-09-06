@@ -8,6 +8,7 @@ import {
   input,
   model,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
@@ -17,7 +18,8 @@ import {
   type TickerOption,
   type TickerRange,
 } from '../ticker-range-picker.types';
-import { TickerCatalogService } from '../../ticker-catalog';
+import { DEFAULT_ADJUSTMENT_MODE, TickerCatalogService } from '../../ticker-catalog';
+import type { PriceAdjustmentMode } from '../../data-lake';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
 
 /**
@@ -58,14 +60,47 @@ export class InstrumentCardComponent {
   readonly value = model.required<TickerRange>();
   readonly appearance = input<'card' | 'flat'>('card');
 
-  // The pool is a system-wide fact — what the lake holds bars for — not a
-  // property of whichever page mounted the picker. It used to be drilled in
-  // as an input from nine hosts, every one of them passing the same constant.
+  /**
+   * The tree this picker's run will read. Belongs to the host page — Strategy
+   * Lab sends `adjusted: false` for a `both` run, Data Lab has its own
+   * toggle — because coverage differs between trees.
+   */
+  readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
+
+  /**
+   * A universe supplied by the host, for pickers whose subject is not lake
+   * bars. Ticker Explorer's snapshot hits Polygon live and can query symbols
+   * the lake has never held, so imposing the backtest universe there removes
+   * working functionality. `null` (the default) means "ask the lake".
+   */
+  readonly universe = input<readonly TickerOption[] | null>(null);
+
   private readonly catalog = inject(TickerCatalogService);
-  readonly tickerPool = this.catalog.pool;
-  readonly recent = this.catalog.recent;
-  readonly catalogLoading = this.catalog.loading;
-  readonly catalogUnavailable = this.catalog.unavailable;
+  private readonly view = computed(() => {
+    // `viewFor` creates the mode's resource on first ask, and `resource()`
+    // installs an effect — illegal inside a reactive context (NG0602). Track
+    // the mode signal, then step outside tracking to build/fetch the view.
+    const mode = this.adjustmentMode();
+    return untracked(() => this.catalog.viewFor(mode));
+  });
+
+  // Lake-backed membership is a system-wide fact per mode, not a property of
+  // whichever page mounted the picker; it used to be drilled in as an input
+  // from nine hosts, every one passing the same hardcoded constant.
+  readonly tickerPool = computed<readonly TickerOption[]>(
+    () => this.universe() ?? this.view().pool(),
+  );
+  readonly recent = computed<readonly string[]>(() =>
+    this.universe() === null ? this.view().recent() : [],
+  );
+  readonly catalogLoading = computed(() =>
+    this.universe() === null ? this.view().loading() : false,
+  );
+  readonly catalogUnavailable = computed<string | null>(() =>
+    this.universe() === null ? this.view().unavailable() : null,
+  );
+  /** A host-supplied universe is not the lake, so lake copy must not appear. */
+  readonly lakeBacked = computed(() => this.universe() === null);
 
   private readonly rootEl =
     viewChild.required<ElementRef<HTMLElement>>('rootEl');
@@ -137,7 +172,7 @@ export class InstrumentCardComponent {
   });
 
   retryCatalog(): void {
-    this.catalog.reload();
+    this.view().reload();
   }
 
   trackBySymbol(_: number, t: TickerOption): string {
@@ -148,6 +183,10 @@ export class InstrumentCardComponent {
     if (this.open()) return;
     this.open.set(true);
     this.query.set('');
+    // Re-read on open so a symbol backfilled since this tab loaded is
+    // selectable without a page reload. `resource.reload()` is a no-op while
+    // one is already in flight, so opening repeatedly costs at most one read.
+    if (this.universe() === null) this.view().reload();
   }
 
   closeDropdown(): void {

@@ -45960,7 +45960,7 @@
     },
     "/api/data-lake/storage-summary": {
       "get": {
-        "description": "Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.\n\nDefaults to the service's configured active root (issue #1876).\n\n``price_adjustment_mode`` is optional and unset by default, which reports\nthe whole lake across every mode \u2014 the storage overview the Observatory\nrenders. A caller asking \"which symbols could a run actually read\" must\npass the mode it will read with: the adjustment mode is a segment of the\nlake root (#1866), so a symbol present only under ``raw`` has no bars for a\n``polygon_split_adjusted`` reader, and an unqualified answer would name it\nas covered.\n\n``kinds`` and ``symbols`` scope together, so a mode-scoped response cannot\nreport totals its own symbol list does not account for.",
+        "description": "Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.\n\nDefaults to the service's configured active root (issue #1876).\n\n``price_adjustment_mode`` is optional and unset by default, which reports\nthe whole lake across every mode \u2014 the storage overview the Observatory\nrenders. A caller asking \"which symbols could a run actually read\" must\npass the mode it will read with: the adjustment mode is a segment of the\nlake root (#1866), so a symbol present only under ``raw`` has no bars for a\n``polygon_split_adjusted`` reader, and an unqualified answer would name it\nas covered.\n\n``kinds`` and ``symbols`` scope together, so a mode-scoped response cannot\nreport totals its own symbol list does not account for.\n\n``data_type`` narrows the symbol spans only (the kind totals are a storage\noverview and stay whole). A caller deciding what can be *run* passes\n``\"trade\"``: a symbol whose trade backfill failed after its quote side\ncompleted still has complete catalog rows, and would otherwise be reported\nas covered to a reader that consumes trade bars.",
         "operationId": "get_storage_summary_api_data_lake_storage_summary_get",
         "parameters": [
           {
@@ -45992,6 +45992,26 @@
                 }
               ],
               "title": "Price Adjustment Mode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "data_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "trade",
+                    "quote"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Type"
             }
           },
           {

@@ -959,6 +959,7 @@ async def test_storage_summary_reports_counts_bytes_and_symbol_spans(
         market: str,
         data_root_id: UUID | None = None,
         price_adjustment_mode: str | None = None,
+        data_type: str | None = None,
     ) -> list[SymbolCoverageSpan]:
         return [
             SymbolCoverageSpan(
@@ -1002,6 +1003,7 @@ async def test_storage_summary_honest_empty_on_empty_catalog(monkeypatch: pytest
         market: str,
         data_root_id: UUID | None = None,
         price_adjustment_mode: str | None = None,
+        data_type: str | None = None,
     ) -> list[SymbolCoverageSpan]:
         return []
 
@@ -1027,6 +1029,7 @@ async def test_storage_summary_forwards_the_price_adjustment_mode(
     a symbol backfilled only in ``raw`` would be reported as covered.
     """
     seen: dict[str, str | None] = {}
+    seen_data_type: dict[str, str | None] = {}
 
     async def _kinds(
         market: str,
@@ -1040,8 +1043,10 @@ async def test_storage_summary_forwards_the_price_adjustment_mode(
         market: str,
         data_root_id: UUID | None = None,
         price_adjustment_mode: str | None = None,
+        data_type: str | None = None,
     ) -> list[SymbolCoverageSpan]:
         seen["spans"] = price_adjustment_mode
+        seen_data_type["spans"] = data_type
         return []
 
     monkeypatch.setattr(catalog_client, "select_storage_totals_by_kind", _kinds)
@@ -1049,17 +1054,24 @@ async def test_storage_summary_forwards_the_price_adjustment_mode(
 
     app = make_data_lake_app(include_data_lake=True)
     status_code, _ = await _get(
-        app, "/api/data-lake/storage-summary?price_adjustment_mode=polygon_split_adjusted"
+        app,
+        "/api/data-lake/storage-summary"
+        "?price_adjustment_mode=polygon_split_adjusted&data_type=trade",
     )
 
     assert status_code == 200
     assert seen == {"kinds": "polygon_split_adjusted", "spans": "polygon_split_adjusted"}
+    # `data_type` narrows the symbol spans only; the kind totals stay a whole
+    # storage overview, so it is not forwarded to them.
+    assert seen_data_type == {"spans": "trade"}
 
     # Omitted stays the whole-lake overview the Observatory renders.
     seen.clear()
+    seen_data_type.clear()
     status_code, _ = await _get(app, "/api/data-lake/storage-summary")
     assert status_code == 200
     assert seen == {"kinds": None, "spans": None}
+    assert seen_data_type == {"spans": None}
 
 
 async def test_storage_summary_rejects_an_unknown_price_adjustment_mode(make_data_lake_app):

@@ -24,7 +24,9 @@
        [class.picker-v2__groups--no-sampling]="hideSampling()">
 
     <app-instrument-card
-      [(value)]="value" />
+      [(value)]="value"
+      [universe]="universe()"
+      [adjustmentMode]="adjustmentMode()" />
 
     <app-time-window-card
       [(value)]="value"

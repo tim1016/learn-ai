@@ -29,6 +29,7 @@ from app.data_lake.types import (
     ArtifactDetail,
     ArtifactIdentity,
     ArtifactRecord,
+    DataType,
     PriceAdjustmentMode,
     StorageKindTotal,
     SymbolCoverageSpan,
@@ -1623,6 +1624,7 @@ async def select_symbol_coverage_spans(
     market: str,
     data_root_id: UUID | None = None,
     price_adjustment_mode: PriceAdjustmentMode | None = None,
+    data_type: DataType | None = None,
 ) -> list[SymbolCoverageSpan]:
     """Per-symbol day-keyed coverage span over complete minute-bar artifacts.
 
@@ -1636,6 +1638,14 @@ async def select_symbol_coverage_spans(
 
     ``data_root_id`` defaults to the service's configured active root
     (issue #1876) — storage summaries are an active-root-default listing.
+
+    ``data_type`` is unset by default, which spans trade and quote rows
+    together. Pass ``"trade"`` when the answer feeds a decision about running
+    a backtest: a spec cannot request quote-only (``DataRunSpec`` requires
+    ``trade`` whenever ``quote`` is present), but a run whose trade side
+    *failed* leaves completed quote rows behind, and pooling the two reports
+    that symbol as covered to a reader that consumes trade bars and will find
+    none.
 
     ``price_adjustment_mode`` is unset by default, which spans every mode.
     Pass one when the answer must be "what could a reader on that tree
@@ -1658,11 +1668,12 @@ async def select_symbol_coverage_spans(
            AND "Symbol" IS NOT NULL
            AND "DataRootId" = $2
            AND ($3::text IS NULL OR "PriceAdjustmentMode" = $3)
+           AND ($4::text IS NULL OR "DataType" = $4)
          GROUP BY "Symbol"
          ORDER BY "Symbol"
     """
     async with connection() as conn:
-        rows = await conn.fetch(query, market, root_id, price_adjustment_mode)
+        rows = await conn.fetch(query, market, root_id, price_adjustment_mode, data_type)
     return [
         SymbolCoverageSpan(
             symbol=r["symbol"],

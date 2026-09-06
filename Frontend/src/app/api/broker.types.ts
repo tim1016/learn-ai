@@ -1907,6 +1907,12 @@ export interface paths {
          *
          *     ``kinds`` and ``symbols`` scope together, so a mode-scoped response cannot
          *     report totals its own symbol list does not account for.
+         *
+         *     ``data_type`` narrows the symbol spans only (the kind totals are a storage
+         *     overview and stay whole). A caller deciding what can be *run* passes
+         *     ``"trade"``: a symbol whose trade backfill failed after its quote side
+         *     completed still has complete catalog rows, and would otherwise be reported
+         *     as covered to a reader that consumes trade bars.
          */
         get: operations["get_storage_summary_api_data_lake_storage_summary_get"];
         put?: never;
@@ -25486,6 +25492,7 @@ export interface operations {
             query?: {
                 market?: "usa";
                 price_adjustment_mode?: ("raw" | "polygon_split_adjusted" | "lean_adjusted") | null;
+                data_type?: ("trade" | "quote") | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

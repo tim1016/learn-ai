@@ -3,24 +3,43 @@ import type { Signal } from '@angular/core';
 import type { PriceAdjustmentMode } from '../data-lake/data-lake.types';
 import type { TickerOption } from '../ticker-range-picker';
 
-/**
- * What a picker needs from the instrument catalog.
- *
- * Named as an interface so the test double is checked against it — a
- * `useValue` provider is not type-checked against the class it replaces, so
- * without this a fake silently drifts as the service grows members.
- */
-export interface TickerCatalog {
-  /** Instruments the lake holds bars for, under `mode`. */
+/** What one adjustment mode's slice of the lake catalog looks like to a picker. */
+export interface TickerCatalogView {
+  /** Instruments the lake holds runnable bars for, under this mode. */
   readonly pool: Signal<readonly TickerOption[]>;
-  /** Seed recents, less any symbol the lake does not hold. */
+  /** Seed recents, less any symbol this mode does not hold. */
   readonly recent: Signal<readonly string[]>;
   readonly loading: Signal<boolean>;
+  /**
+   * The lake has answered successfully for this mode, so `pool` is its
+   * verdict — an empty pool means the tree holds nothing, not "not yet
+   * asked". A failed read is not a verdict: `false` there, with the reason
+   * in `unavailable`.
+   */
+  readonly resolved: Signal<boolean>;
   /** Why the catalog could not be read, or `null` when the lake answered. */
   readonly unavailable: Signal<string | null>;
-  /** The adjustment mode the pool currently describes. */
-  readonly mode: Signal<PriceAdjustmentMode>;
-  /** Ask for a different tree. Idempotent for the mode already loaded. */
-  useMode(mode: PriceAdjustmentMode): void;
+  /** Re-read this mode — after a backfill, or from a failure retry. */
   reload(): void;
+}
+
+/**
+ * The lake catalog, sliced by adjustment mode.
+ *
+ * Named as an interface so test doubles are checked against it: a `useValue`
+ * provider is not type-checked against the class it replaces, so without this
+ * a fake drifts silently as the service grows members.
+ */
+export interface TickerCatalog {
+  /**
+   * The catalog for one adjustment mode. Stable across calls for the same
+   * mode, so a component may call it inside a `computed`.
+   *
+   * Mode is a parameter rather than service state on purpose: it belongs to
+   * whichever page is asking (a Strategy Lab `both` run reads raw, Data Lab
+   * has its own toggle), and holding it on a root-scoped singleton let one
+   * page's choice outlive its own teardown and silently repoint every other
+   * picker in the app.
+   */
+  viewFor(mode: PriceAdjustmentMode): TickerCatalogView;
 }

@@ -20,6 +20,9 @@ import {
   type TickerRange,
 } from './ticker-range-picker.types';
 import { InstrumentCardComponent } from './parts/instrument-card.component';
+import { DEFAULT_ADJUSTMENT_MODE } from '../ticker-catalog';
+import type { PriceAdjustmentMode } from '../data-lake';
+import type { TickerOption } from './ticker-range-picker.types';
 import {
   TimeWindowCardComponent,
   type LegendTreatment,
@@ -58,6 +61,11 @@ type TickerRangePickerPresentation = 'card' | 'embedded';
   styleUrls: ['./ticker-range-picker.component.scss'],
 })
 export class TickerRangePickerComponent {
+  /** A host-supplied universe, for pickers whose subject is not lake bars
+   *  (a live options snapshot, say). `null` means "ask the lake". */
+  readonly universe = input<readonly TickerOption[] | null>(null);
+  /** The lake tree this page's run will read. */
+  readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
   readonly value = model.required<TickerRange>();
 
   readonly availability = input<readonly AvailabilityCell[]>([]);

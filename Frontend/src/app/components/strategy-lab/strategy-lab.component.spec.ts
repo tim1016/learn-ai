@@ -161,6 +161,10 @@ async function createLab(
   );
   const runDetailWatchCount = (): number =>
     watchQuery.mock.calls.filter(([request]) => request.variables && "id" in request.variables).length;
+  // The instrument picker reads the lake catalog on init. This spec drives
+  // the workbench through `HttpTestingController` and verifies no request
+  // is left open, so the catalog is stubbed rather than served.
+  const catalog = fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" }]);
   await TestBed.configureTestingModule({
     imports: [StrategyLabComponent],
     providers: [
@@ -191,12 +195,7 @@ async function createLab(
         },
       },
       { provide: Apollo, useValue: { watchQuery } },
-      // The instrument picker reads the lake catalog on init. This spec drives
-      // the workbench through `HttpTestingController` and verifies no request
-      // is left open, so the catalog is stubbed rather than served.
-      provideFakeTickerCatalog(
-        fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" }]),
-      ),
+      provideFakeTickerCatalog(catalog),
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);
@@ -208,6 +207,7 @@ async function createLab(
   return {
     fixture,
     activeJobs,
+    catalog,
     http: TestBed.inject(HttpTestingController),
     navigate,
     diagnose,
@@ -502,6 +502,97 @@ describe("Strategy Lab Workbench", () => {
     expect(fixture.componentInstance.config.configurationWarning()).toMatch(/Saved run parameters are malformed/);
     expect(fixture.componentInstance.runs.runError()).toMatch(/Saved run parameters are malformed/);
     expect(fixture.componentInstance.config.rerunBlocked()).toBe(true);
+    http.verify();
+  });
+
+  it("blocks a rerun once the tree the engine choice reads has answered without the symbol", async () => {
+    const { fixture, http, catalog } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    const config = fixture.componentInstance.config;
+    expect(config.rerunBlocked()).toBe(false);
+
+    // `both` reads the raw tree, which the lake reports holds nothing at all.
+    // With auto-fetch on (the default) that is the engine's job: it
+    // materializes the missing raw days before reading, so the run stays open.
+    catalog.viewFor("raw").pool.set([]);
+    config.changeEngine("both");
+    expect(config.rerunBlocked()).toBe(false);
+
+    // With auto-fetch off the run reads the tree as it stands. An
+    // answered-empty tree is exactly the case the engine would fail deep
+    // inside, so it must block rather than pass as "not yet known".
+    config.changeRange({ ...config.range(), autoFetch: false });
+    expect(config.rerunBlocked()).toBe(true);
+
+    // Opening the dropdown re-reads the tree. The verdict already in hand
+    // holds through that window rather than briefly opening the run.
+    catalog.viewFor("raw").loading.set(true);
+    expect(config.rerunBlocked()).toBe(true);
+    catalog.viewFor("raw").loading.set(false);
+
+    // Until the raw tree has answered, nothing can be said about the symbol.
+    catalog.viewFor("raw").resolved.set(false);
+    expect(config.rerunBlocked()).toBe(false);
+
+    // The split-adjusted tree still holds SPY: switching back clears the block.
+    catalog.viewFor("raw").resolved.set(true);
+    config.changeEngine("python");
+    expect(config.rerunBlocked()).toBe(false);
+    http.verify();
+  });
+
+  // A frozen recording restores with auto-fetch off, and its symbol (QQQ) is
+  // not in the lake (the catalog holds SPY only). Whether the membership
+  // gate applies depends on who reads the bars.
+  function fixtureBackedRun(requestedEngine: "lean" | "both"): BacktestRunDetail {
+    const basePolicy = run().dataPolicy;
+    if (basePolicy === null) throw new Error("the run factory always carries a data policy");
+    return run({
+      requestedEngine,
+      dataPolicy: {
+        ...basePolicy,
+        source: "synthetic",
+        provider_kind: "fixture",
+        fixture_id: "fixture-1",
+        fixture_sha256: "abc123",
+      },
+    });
+  }
+
+  it("never gates a restored direct LEAN fixture run on lake membership", async () => {
+    // The LEAN sidecar replays the recording itself: the run never reads
+    // the lake, so the gate must not make it impossible to rerun.
+    const saved = fixtureBackedRun("lean");
+    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const config = fixture.componentInstance.config;
+    await vi.waitFor(() => {
+      expect(config.autoFetch()).toBe(false);
+    });
+
+    expect(config.effectiveSymbol()).toBe("QQQ");
+    expect(config.engine()).toBe("lean");
+    expect(config.readsLake()).toBe(false);
+    expect(config.rerunBlocked()).toBe(false);
+    http.verify();
+  });
+
+  it("still gates a restored fixture run that the Python engine would read from the lake", async () => {
+    // `both` goes through the Python engine, which resolves the lake tree
+    // regardless of the restored policy's provenance: the absent symbol
+    // would fail deep in the engine, so the gate stays.
+    const saved = fixtureBackedRun("both");
+    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const config = fixture.componentInstance.config;
+    await vi.waitFor(() => {
+      expect(config.autoFetch()).toBe(false);
+    });
+
+    expect(config.engine()).toBe("both");
+    expect(config.readsLake()).toBe(true);
+    expect(config.rerunBlocked()).toBe(true);
     http.verify();
   });
 

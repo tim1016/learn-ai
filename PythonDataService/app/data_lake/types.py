@@ -62,6 +62,12 @@ MAX_TRADING_RANGE_DAYS = _MAX_RANGE_YEARS * 366
 # uses the full set.
 PriceAdjustmentMode = Literal["raw", "polygon_split_adjusted", "lean_adjusted"]
 
+# The two bar kinds an artifact carries. Named here so read paths can filter
+# on it without re-spelling the literal; a run consumes trade bars, and a
+# symbol whose trade side failed while its quote side completed is not
+# runnable even though the catalog holds complete rows for it.
+DataType = Literal["trade", "quote"]
+
 # Mirrors the shared DataLakeArtifacts.Status CHECK constraint
 # (ck_status_enum) — Python and the .NET side must not drift on what this
 # column can hold. ``"missing"`` is NOT a DB value: the coverage endpoint

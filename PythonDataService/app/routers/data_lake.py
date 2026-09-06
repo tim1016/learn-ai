@@ -54,6 +54,7 @@ from app.data_lake.types import (
     CoverageResponse,
     DataAvailabilityResult,
     DataRunSpec,
+    DataType,
     NonSessionRecord,
     PriceAdjustmentMode,
     StorageSummaryResponse,
@@ -254,6 +255,7 @@ async def get_artifact_detail(artifact_id: int) -> ArtifactDetail:
 async def get_storage_summary(
     market: Literal["usa"] = "usa",
     price_adjustment_mode: PriceAdjustmentMode | None = None,
+    data_type: DataType | None = None,
 ) -> StorageSummaryResponse:
     """Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.
 
@@ -269,11 +271,18 @@ async def get_storage_summary(
 
     ``kinds`` and ``symbols`` scope together, so a mode-scoped response cannot
     report totals its own symbol list does not account for.
+
+    ``data_type`` narrows the symbol spans only (the kind totals are a storage
+    overview and stay whole). A caller deciding what can be *run* passes
+    ``"trade"``: a symbol whose trade backfill failed after its quote side
+    completed still has complete catalog rows, and would otherwise be reported
+    as covered to a reader that consumes trade bars.
     """
     logger.info(
-        "[STEP 1] /api/data-lake/storage-summary requested: market=%s price_adjustment_mode=%s",
+        "[STEP 1] /api/data-lake/storage-summary requested: market=%s price_adjustment_mode=%s data_type=%s",
         market,
         price_adjustment_mode,
+        data_type,
     )
     data_root_id = root_identity.active_root_id()
     kinds, symbols = await asyncio.gather(
@@ -281,7 +290,10 @@ async def get_storage_summary(
             market, data_root_id=data_root_id, price_adjustment_mode=price_adjustment_mode
         ),
         catalog_client.select_symbol_coverage_spans(
-            market, data_root_id=data_root_id, price_adjustment_mode=price_adjustment_mode
+            market,
+            data_root_id=data_root_id,
+            price_adjustment_mode=price_adjustment_mode,
+            data_type=data_type,
         ),
     )
     return StorageSummaryResponse(market=market, data_root_id=data_root_id, kinds=kinds, symbols=symbols)

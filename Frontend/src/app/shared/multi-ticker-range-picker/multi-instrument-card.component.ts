@@ -3,14 +3,17 @@ import {
   Component,
   computed,
   inject,
+  input,
   model,
   signal,
+  untracked,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
-import { TickerCatalogService } from '../ticker-catalog';
+import { DEFAULT_ADJUSTMENT_MODE, TickerCatalogService } from '../ticker-catalog';
+import type { PriceAdjustmentMode } from '../data-lake';
 import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 
 /**
@@ -31,10 +34,20 @@ import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 export class MultiInstrumentCardComponent {
   readonly value = model.required<MultiTickerRange>();
 
+  /** The lake tree this page's run will read. */
+  readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
+
   private readonly catalog = inject(TickerCatalogService);
-  readonly tickerPool = this.catalog.pool;
-  readonly catalogLoading = this.catalog.loading;
-  readonly catalogUnavailable = this.catalog.unavailable;
+  private readonly view = computed(() => {
+    // `viewFor` creates the mode's resource on first ask, and `resource()`
+    // installs an effect — illegal inside a reactive context (NG0602). Track
+    // the mode signal, then step outside tracking to build/fetch the view.
+    const mode = this.adjustmentMode();
+    return untracked(() => this.catalog.viewFor(mode));
+  });
+  readonly tickerPool = computed<readonly TickerOption[]>(() => this.view().pool());
+  readonly catalogLoading = computed(() => this.view().loading());
+  readonly catalogUnavailable = computed<string | null>(() => this.view().unavailable());
 
   /**
    * A universe of every instrument in the lake is a batch nobody meant to
@@ -45,7 +58,7 @@ export class MultiInstrumentCardComponent {
   readonly selectAllDisabled = computed(() => this.tickerPool().length > this.selectAllLimit);
 
   retryCatalog(): void {
-    this.catalog.reload();
+    this.view().reload();
   }
 
   readonly query = signal('');

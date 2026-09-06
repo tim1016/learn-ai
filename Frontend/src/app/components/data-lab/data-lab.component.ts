@@ -12,6 +12,7 @@ import { Tooltip } from 'primeng/tooltip';
 import { environment } from '../../../environments/environment';
 import { DataLabChartComponent } from './data-lab-chart/data-lab-chart.component';
 import type { ChartIndicatorEntry } from '../../shared/trading-chart';
+import type { PriceAdjustmentMode } from '../../shared/data-lake';
 import { DataLabSessionService, DataLabSessionSummary, DataLabSessionChartSnapshot } from '../../services/data-lab-session.service';
 import { MarketMonitorService } from '../../services/market-monitor.service';
 import { RunSessionService } from '../../services/run-session.service';
@@ -405,6 +406,10 @@ export class DataLabComponent {
   forwardFill = signal(false);
   /** Adjust for stock splits (Polygon's built-in adjusted=true). Reliable. */
   adjustForSplits = signal(true);
+  /** The picker offers the tree this page's requests will read (#1946 review). */
+  readonly catalogMode = computed<PriceAdjustmentMode>(() =>
+    this.adjustForSplits() ? 'polygon_split_adjusted' : 'raw',
+  );
   /**
    * Adjust for dividends. Polygon does NOT do this natively — its
    * ``adjusted=true`` only covers splits. When this is on we fetch the

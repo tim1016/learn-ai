@@ -1,11 +1,12 @@
 import { HttpClient } from "@angular/common/http";
-import { computed, effect, inject, Injectable, signal } from "@angular/core";
+import { computed, effect, inject, Injectable, signal, untracked } from "@angular/core";
 import { toSignal } from "@angular/core/rxjs-interop";
 import { ActivatedRoute, type ParamMap } from "@angular/router";
 import { firstValueFrom, map } from "rxjs";
 
 import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
+import type { PriceAdjustmentMode } from "../../shared/data-lake";
 import { TickerCatalogService } from "../../shared/ticker-catalog";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
 import type { TickerRange } from "../../shared/ticker-range-picker";
@@ -128,10 +129,70 @@ export class StrategyLabConfigStore {
     const name = this.selectedStrategyName();
     return name ? this.strategies().find((strategy) => strategy.name === name) ?? null : null;
   });
+  /**
+   * The lake tree this run will read. `both` sends `adjusted: false`, so its
+   * picker must offer the raw tree — passed to the picker as an input rather
+   * than pushed into the root-scoped catalog, which would outlive this page.
+   */
+  readonly adjustmentMode = computed<PriceAdjustmentMode>(() =>
+    this.dataPolicy().adjusted ? "polygon_split_adjusted" : "raw",
+  );
+
+  /**
+   * Whether this run reads lake bars at all. A direct LEAN run restored
+   * from synthetic bars or a frozen fixture recording bypasses the lake
+   * entirely (`lean_sidecar_service.py` generates or replays them), so what
+   * the lake holds says nothing about whether it can rerun. Every other
+   * engine choice goes through the Python engine (`runPython`), which
+   * resolves the selected lake tree regardless of the policy's provenance —
+   * `engine.py` only ever writes `provider_kind` itself, for a
+   * compatibility snapshot taken from lake bytes — so those runs read the
+   * lake whatever the restored policy says.
+   */
+  readonly readsLake = computed(() => {
+    if (this.engine() !== "lean") return true;
+    const policy = this.dataPolicy();
+    return policy.source === "polygon" && policy.provider_kind === "live";
+  });
+
+  /**
+   * The selected symbol is not in the tree this run would read.
+   *
+   * Switching the engine to `both` repoints the run at the raw tree, and the
+   * symbol already chosen may exist only in the split-adjusted one. The picker
+   * keeps displaying it — it is still the configured value — so without this
+   * the run submits a symbol the tree cannot read and fails deep in the
+   * engine. Only asserted once the catalog for that mode has actually
+   * answered: a tree still loading, or a lake that is down, must not read as
+   * "your symbol is wrong". A tree that answered *empty* does — the run would
+   * read nothing — which is why this asks `resolved` rather than treating an
+   * empty pool as "not yet known".
+   *
+   * Membership only matters when the run reads the tree as it stands. With
+   * auto-fetch on (the default), the engine materializes the missing days
+   * from the provider under the run's own mode before it reads
+   * (`engine.py::_materialize_missing_bars`), so a symbol the raw tree lacks
+   * is exactly what that option exists to fetch, not a reason to refuse.
+   * A run that does not read the lake at all is never gated by it.
+   */
+  readonly symbolMissingFromTree = computed(() => {
+    if (!this.readsLake() || this.autoFetch()) return false;
+    const mode = this.adjustmentMode();
+    // See instrument-card: `viewFor` may install a resource effect, which is
+    // illegal inside a reactive context.
+    const view = untracked(() => this.tickerCatalog.viewFor(mode));
+    // `resolved` survives a reload (the dropdown re-reads on open), so the
+    // retained verdict keeps blocking through that window instead of
+    // briefly opening the run to a symbol already known to be absent.
+    if (!view.resolved() || view.unavailable() !== null) return false;
+    return !view.pool().some((option) => option.symbol === this.effectiveSymbol());
+  });
+
   readonly rerunBlocked = computed(() => {
     const name = this.selectedStrategyName();
     return this.configurationWarning() !== null ||
       name === null ||
+      this.symbolMissingFromTree() ||
       !this.selectableStrategies().some((strategy) => strategy.name === name);
   });
   readonly leanValidationTemplate = computed<LeanValidationTemplate | null>(() => {
@@ -152,17 +213,6 @@ export class StrategyLabConfigStore {
 
   constructor() {
     effect(() => persistNavOverride(this.configNavOverride()));
-
-    // The instrument picker must offer the tree this run will read. The
-    // adjustment mode is a segment of the lake root (#1866), and `both`
-    // resolves raw (see composeDataPolicy), so a picker pinned to the
-    // split-adjusted default would offer a symbol a two-engine run then
-    // refuses for missing sessions.
-    effect(() => {
-      this.tickerCatalog.useMode(
-        this.dataPolicy().adjusted ? "polygon_split_adjusted" : "raw",
-      );
-    });
 
     effect(() => {
       const current = this.range();

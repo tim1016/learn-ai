@@ -101,19 +101,22 @@ export class DataLakeService {
    *
    * The mode is a segment of the lake root (#1866), so pooling the modes
    * reports a symbol backfilled only in `raw` as covered to a caller that
-   * reads `polygon_split_adjusted` and would find no bars at all.
+   * reads `polygon_split_adjusted` and would find no bars at all. `dataType`
+   * narrows the symbol spans the same way — a run consumes trade bars, and a
+   * symbol whose trade side failed after its quote side completed still has
+   * complete catalog rows.
    */
   async storageSummary(
     market = 'usa',
     priceAdjustmentMode?: PriceAdjustmentMode,
+    dataType?: DataLakeDataType,
   ): Promise<DataLakeRead<StorageSummaryResponse>> {
+    const params: Record<string, string> = { market };
+    if (priceAdjustmentMode) params['price_adjustment_mode'] = priceAdjustmentMode;
+    if (dataType) params['data_type'] = dataType;
     return this.read(() =>
       firstValueFrom(
-        this.http.get<StorageSummaryResponse>(`${this.base}/storage-summary`, {
-          params: priceAdjustmentMode
-            ? { market, price_adjustment_mode: priceAdjustmentMode }
-            : { market },
-        }),
+        this.http.get<StorageSummaryResponse>(`${this.base}/storage-summary`, { params }),
       ),
     );
   }
