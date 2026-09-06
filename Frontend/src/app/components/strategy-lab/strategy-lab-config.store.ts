@@ -139,12 +139,18 @@ export class StrategyLabConfigStore {
   );
 
   /**
-   * Whether this run reads lake bars at all. A restored LEAN run backed by
-   * synthetic bars, or a frozen fixture recording, bypasses the lake
+   * Whether this run reads lake bars at all. A direct LEAN run restored
+   * from synthetic bars or a frozen fixture recording bypasses the lake
    * entirely (`lean_sidecar_service.py` generates or replays them), so what
-   * the lake holds says nothing about whether it can rerun.
+   * the lake holds says nothing about whether it can rerun. Every other
+   * engine choice goes through the Python engine (`runPython`), which
+   * resolves the selected lake tree regardless of the policy's provenance —
+   * `engine.py` only ever writes `provider_kind` itself, for a
+   * compatibility snapshot taken from lake bytes — so those runs read the
+   * lake whatever the restored policy says.
    */
   readonly readsLake = computed(() => {
+    if (this.engine() !== "lean") return true;
     const policy = this.dataPolicy();
     return policy.source === "polygon" && policy.provider_kind === "live";
   });

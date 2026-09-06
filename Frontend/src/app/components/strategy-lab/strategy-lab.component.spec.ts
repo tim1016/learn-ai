@@ -542,13 +542,14 @@ describe("Strategy Lab Workbench", () => {
     http.verify();
   });
 
-  it("never gates a restored fixture or synthetic run on lake membership", async () => {
-    // A frozen recording restores with auto-fetch off, and its symbol (QQQ)
-    // is not in the lake (the catalog holds SPY only). The run never reads
-    // the lake, so the membership gate must not make it impossible to rerun.
+  // A frozen recording restores with auto-fetch off, and its symbol (QQQ) is
+  // not in the lake (the catalog holds SPY only). Whether the membership
+  // gate applies depends on who reads the bars.
+  function fixtureBackedRun(requestedEngine: "lean" | "both"): BacktestRunDetail {
     const basePolicy = run().dataPolicy;
     if (basePolicy === null) throw new Error("the run factory always carries a data policy");
-    const saved = run({
+    return run({
+      requestedEngine,
       dataPolicy: {
         ...basePolicy,
         source: "synthetic",
@@ -557,6 +558,12 @@ describe("Strategy Lab Workbench", () => {
         fixture_sha256: "abc123",
       },
     });
+  }
+
+  it("never gates a restored direct LEAN fixture run on lake membership", async () => {
+    // The LEAN sidecar replays the recording itself: the run never reads
+    // the lake, so the gate must not make it impossible to rerun.
+    const saved = fixtureBackedRun("lean");
     const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
     const config = fixture.componentInstance.config;
@@ -565,8 +572,27 @@ describe("Strategy Lab Workbench", () => {
     });
 
     expect(config.effectiveSymbol()).toBe("QQQ");
+    expect(config.engine()).toBe("lean");
     expect(config.readsLake()).toBe(false);
     expect(config.rerunBlocked()).toBe(false);
+    http.verify();
+  });
+
+  it("still gates a restored fixture run that the Python engine would read from the lake", async () => {
+    // `both` goes through the Python engine, which resolves the lake tree
+    // regardless of the restored policy's provenance: the absent symbol
+    // would fail deep in the engine, so the gate stays.
+    const saved = fixtureBackedRun("both");
+    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const config = fixture.componentInstance.config;
+    await vi.waitFor(() => {
+      expect(config.autoFetch()).toBe(false);
+    });
+
+    expect(config.engine()).toBe("both");
+    expect(config.readsLake()).toBe(true);
+    expect(config.rerunBlocked()).toBe(true);
     http.verify();
   });
 
