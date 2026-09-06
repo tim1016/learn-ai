@@ -352,7 +352,7 @@ specs:
 
 | FE route | FE component | Backend chain |
 |---|---|---|
-| `/spec-strategy` | `spec-strategy-runner` | GraphQL `runSpecStrategyBacktest` → `/api/spec-strategy/backtest` → `BacktestEngine` (inline result) |
+| `/spec-strategy` | `spec-strategy-runner` | direct FastAPI `/api/spec-strategy/backtest` → `BacktestEngine` (inline result) |
 | `/research-lab` → strategy-runs | `research-lab/strategy-runs` + `run-detail-page` | GraphQL → `/api/research/strategy-runs/*` → `run_strategy_spec` → `BacktestEngine` (RunLedger + RunResult persisted) |
 
 Both paths instantiate the same single `BacktestEngine` class

@@ -1,9 +1,11 @@
-import { TestBed } from '@angular/core/testing';
-import { provideZonelessChangeDetection } from '@angular/core';
-import { ApolloTestingController, ApolloTestingModule } from 'apollo-angular/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideZonelessChangeDetection, signal, WritableSignal } from '@angular/core';
+import { afterEach, beforeEach, describe, expect, it, Mock, vi } from 'vitest';
 
-import { RUN_SPEC_STRATEGY_BACKTEST } from '../../services/spec-strategy.service';
+import completedRun from '@repo-contracts/fixtures/spec-strategy-backtest-response-v1.json';
+
+import type { SpecStrategyBacktestResult } from '../../graphql/spec-strategy.models';
+import { SpecStrategyService } from '../../services/spec-strategy.service';
 import { SpecStrategyRunnerComponent } from './spec-strategy-runner.component';
 import { CANONICAL_FIXTURES } from './canonical-fixtures';
 import type { TickerRange } from '../../shared/ticker-range-picker/ticker-range-picker.types';
@@ -14,27 +16,54 @@ import type { TickerRange } from '../../shared/ticker-range-picker/ticker-range-
  * The component is large (form fields for nine condition kinds) so the
  * tests focus on the orchestration: signal-as-source-of-truth wiring,
  * mutator routing, fixture/saved load semantics, JSON-Advanced
- * apply path, and the Run mutation. Per-condition form rendering is
- * covered by the plain-english / spec-mutators unit tests; here we
- * exercise the component as a whole.
+ * apply path, and the Run hand-off plus what the results panel renders.
+ * `SpecStrategyService` is mocked at the injection level — its signals
+ * are the component's only view of a run, so the transport never enters
+ * these tests. Per-condition form rendering is covered by the
+ * plain-english / spec-mutators unit tests; here we exercise the
+ * component as a whole.
  */
+const COMPLETED_RUN: SpecStrategyBacktestResult = completedRun;
+
 describe('SpecStrategyRunnerComponent', () => {
+  let fixture: ComponentFixture<SpecStrategyRunnerComponent>;
   let component: SpecStrategyRunnerComponent;
-  let controller: ApolloTestingController;
+  let runBacktest: Mock<SpecStrategyService['runBacktest']>;
+  let serviceResult: WritableSignal<SpecStrategyBacktestResult | null>;
+  let serviceLoading: WritableSignal<boolean>;
+  let serviceError: WritableSignal<string | null>;
+
+  const renderedText = (): string => (fixture.nativeElement as HTMLElement).textContent ?? '';
+  const query = (selector: string): HTMLElement | null =>
+    (fixture.nativeElement as HTMLElement).querySelector(selector);
 
   beforeEach(() => {
     localStorage.clear();
+    serviceResult = signal(null);
+    serviceLoading = signal(false);
+    serviceError = signal(null);
+    runBacktest = vi.fn<SpecStrategyService['runBacktest']>(async () => COMPLETED_RUN);
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
-      imports: [SpecStrategyRunnerComponent, ApolloTestingModule],
-      providers: [provideZonelessChangeDetection()],
+      imports: [SpecStrategyRunnerComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        {
+          provide: SpecStrategyService,
+          useValue: {
+            runBacktest,
+            result: serviceResult.asReadonly(),
+            loading: serviceLoading.asReadonly(),
+            error: serviceError.asReadonly(),
+          },
+        },
+      ],
     });
-    component = TestBed.createComponent(SpecStrategyRunnerComponent).componentInstance;
-    controller = TestBed.inject(ApolloTestingController);
+    fixture = TestBed.createComponent(SpecStrategyRunnerComponent);
+    component = fixture.componentInstance;
   });
 
   afterEach(() => {
-    controller.verify();
     localStorage.clear();
   });
 
@@ -232,35 +261,70 @@ describe('SpecStrategyRunnerComponent', () => {
   });
 
   // ---- Run --------------------------------------------------------------
-  it('runBacktest fires the GraphQL mutation with the current spec', async () => {
-    const promise = component.runBacktest();
+  it('runBacktest hands the current spec and run config to the service', async () => {
+    await component.runBacktest();
 
-    const op = controller.expectOne(RUN_SPEC_STRATEGY_BACKTEST);
-    expect(op.operation.variables['startDate']).toBe('2024-03-28');
-    expect(op.operation.variables['endDate']).toBe('2024-12-31');
-
-    op.flush({
-      data: {
-        runSpecStrategyBacktest: {
-          success: true,
-          strategyName: component.spec().name,
-          initialCash: 100000,
-          finalEquity: 100000,
-          netProfit: 0,
-          totalFees: 0,
-          totalTrades: 0,
-          winningTrades: 0,
-          losingTrades: 0,
-          winRate: 0,
-          trades: [],
-          logLines: [],
-          error: null,
-        },
-      },
+    expect(runBacktest).toHaveBeenCalledWith(component.spec(), {
+      startDate: '2024-03-28',
+      endDate: '2024-12-31',
+      initialCash: 100000,
+      fillMode: 'signal_bar_close',
     });
+  });
 
-    await promise;
-    expect(component.result()?.success).toBe(true);
+  it('runBacktest swallows a rejected run — the service error signal is what the user sees', async () => {
+    runBacktest.mockRejectedValueOnce(new Error('transport down'));
+
+    await expect(component.runBacktest()).resolves.toBeUndefined();
+    expect(component.localError()).toBeNull();
+  });
+
+  // ---- Results panel ---------------------------------------------------
+  it('renders a completed run: headline stats and the trade log with its indicator snapshot', () => {
+    serviceResult.set(COMPLETED_RUN);
+    fixture.detectChanges();
+
+    expect(query('.ssr-results-title')?.textContent).toContain('EMA crossover');
+    expect(renderedText()).toContain('100,320.50');
+    const row = query('.ssr-trade-table tbody tr');
+    expect(row?.classList).toContain('ssr-win');
+    expect(row?.textContent).toContain('WIN');
+    expect(row?.textContent).toContain('ema_fast=471.0000, ema_slow=470.2000');
+  });
+
+  it('renders a zero-trade run as completed rather than as an error', () => {
+    serviceResult.set({ ...COMPLETED_RUN, total_trades: 0, trades: [] });
+    fixture.detectChanges();
+
+    expect(renderedText()).toContain('Backtest completed with zero trades on this window.');
+    expect(query('.ssr-trade-table')).toBeNull();
+  });
+
+  it('renders a backtest that reports success=false with its error text', () => {
+    serviceResult.set({ ...COMPLETED_RUN, success: false, error: 'data source unavailable' });
+    fixture.detectChanges();
+
+    expect(renderedText()).toContain('success=false');
+    expect(renderedText()).toContain('data source unavailable');
+    expect(query('.ssr-trade-table')).toBeNull();
+  });
+
+  it('renders a transport failure the service surfaced as a backend error alert', () => {
+    serviceError.set("start_date must be YYYY-MM-DD: '2024/01/02'");
+    fixture.detectChanges();
+
+    expect(query('.ssr-error[role="alert"]')?.textContent).toContain(
+      "Backend error: start_date must be YYYY-MM-DD: '2024/01/02'",
+    );
+  });
+
+  it('disables Run and shows progress while a run is in flight', () => {
+    serviceLoading.set(true);
+    fixture.detectChanges();
+
+    const run = query('button.ssr-btn--primary');
+    expect(run?.hasAttribute('disabled')).toBe(true);
+    expect(run?.textContent).toContain('Running…');
   });
 
   // ---- Display helpers (kept from previous version) -------------------
@@ -268,21 +332,18 @@ describe('SpecStrategyRunnerComponent', () => {
     expect(component.formatTime(1704153600000)).toBe('01/01/2024, 19:00');
   });
 
-  it('formatIndicators serializes a list-of-DTO trade indicators', () => {
+  it('formatIndicators serializes the indicator snapshot dict in recorded order', () => {
     const out = component.formatIndicators({
-      tradeNumber: 1,
-      entryTime: 0,
-      entryPrice: 0,
-      exitTime: 0,
-      exitPrice: 0,
-      indicators: [
-        { name: 'ema5', value: 470.4321 },
-        { name: 'rsi', value: 62.5 },
-      ],
-      pnlPts: 0,
-      pnlPct: 0,
+      trade_number: 1,
+      entry_time: 0,
+      entry_price: 0,
+      exit_time: 0,
+      exit_price: 0,
+      indicators: { ema5: 470.4321, rsi: 62.5 },
+      pnl_pts: 0,
+      pnl_pct: 0,
       result: 'WIN',
-      signalReason: '',
+      signal_reason: '',
     });
     expect(out).toBe('ema5=470.4321, rsi=62.5000');
   });
@@ -307,42 +368,19 @@ describe('SpecStrategyRunnerComponent', () => {
         to: '2025-03-31',
       });
 
-      // Fire the run; the service issues a single GraphQL mutation.
-      const promise = component.runBacktest();
+      // Fire the run; the service receives exactly one call.
+      await component.runBacktest();
 
-      const op = controller.expectOne(RUN_SPEC_STRATEGY_BACKTEST);
-      const vars = op.operation.variables;
+      expect(runBacktest).toHaveBeenCalledTimes(1);
+      const [spec, options] = runBacktest.mock.calls[0];
 
       // Dates flow from range.
-      expect(vars['startDate']).toBe('2025-03-01');
-      expect(vars['endDate']).toBe('2025-03-31');
+      expect(options.startDate).toBe('2025-03-01');
+      expect(options.endDate).toBe('2025-03-31');
 
       // Symbol flows through spec.symbols (the bridge already updated it
-      // in onRangeChange, so the JSON-encoded specJson contains TSLA).
-      const spec = JSON.parse(vars['specJson'] as string);
+      // in onRangeChange, so the spec handed to the service carries TSLA).
       expect(spec.symbols).toEqual(['TSLA']);
-
-      // Resolve the mutation so afterEach()'s controller.verify() passes.
-      op.flush({
-        data: {
-          runSpecStrategyBacktest: {
-            success: true,
-            strategyName: spec.name,
-            initialCash: 100000,
-            finalEquity: 100000,
-            netProfit: 0,
-            totalFees: 0,
-            totalTrades: 0,
-            winningTrades: 0,
-            losingTrades: 0,
-            winRate: 0,
-            trades: [],
-            logLines: [],
-            error: null,
-          },
-        },
-      });
-      await promise;
     });
   });
 

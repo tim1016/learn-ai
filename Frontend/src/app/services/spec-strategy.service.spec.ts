@@ -1,9 +1,18 @@
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { ApolloTestingController, ApolloTestingModule } from 'apollo-angular/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { StrategySpec } from '../graphql/spec-strategy.models';
-import { RUN_SPEC_STRATEGY_BACKTEST, SpecStrategyService } from './spec-strategy.service';
+import completedRun from '@repo-contracts/fixtures/spec-strategy-backtest-response-v1.json';
+
+import { environment } from '../../environments/environment';
+import { SpecStrategyBacktestResult, StrategySpec } from '../graphql/spec-strategy.models';
+import { SpecStrategyService } from './spec-strategy.service';
+
+const URL = `${environment.pythonServiceUrl}/api/spec-strategy/backtest`;
+
+/** The committed cross-stack wire example, typed as the generated response contract. */
+const SUCCESS_BODY: SpecStrategyBacktestResult = completedRun;
 
 const TRIVIAL_SPEC: StrategySpec = {
   schema_version: '1.0',
@@ -22,170 +31,145 @@ const TRIVIAL_SPEC: StrategySpec = {
   exit: { logic: 'OR', conditions: [] },
 };
 
+const RUN_WINDOW = { startDate: '2024-01-02', endDate: '2024-12-31' };
+
 describe('SpecStrategyService', () => {
   let service: SpecStrategyService;
-  let controller: ApolloTestingController;
+  let http: HttpTestingController;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
-      imports: [ApolloTestingModule],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
     });
     service = TestBed.inject(SpecStrategyService);
-    controller = TestBed.inject(ApolloTestingController);
+    http = TestBed.inject(HttpTestingController);
   });
 
-  afterEach(() => {
-    controller.verify();
-  });
+  afterEach(() => http.verify());
 
-  it('serializes the spec to JSON and forwards run params to the mutation', async () => {
-    const promise = service.runBacktest(TRIVIAL_SPEC, {
-      startDate: '2024-01-02',
-      endDate: '2024-12-31',
+  it('POSTs the spec as an object with snake_case run params to the Python backtest endpoint', async () => {
+    const pending = service.runBacktest(TRIVIAL_SPEC, {
+      ...RUN_WINDOW,
       initialCash: 50000,
-      fillMode: 'signal_bar_close',
-      commissionPerOrder: 0,
+      fillMode: 'next_bar_open',
+      commissionPerOrder: 1,
     });
 
-    const op = controller.expectOne(RUN_SPEC_STRATEGY_BACKTEST);
-
-    expect(op.operation.variables['startDate']).toBe('2024-01-02');
-    expect(op.operation.variables['endDate']).toBe('2024-12-31');
-    expect(op.operation.variables['initialCash']).toBe(50000);
-    expect(op.operation.variables['fillMode']).toBe('signal_bar_close');
-
-    const specJson = op.operation.variables['specJson'] as string;
-    expect(typeof specJson).toBe('string');
-    const parsed = JSON.parse(specJson);
-    expect(parsed.name).toBe('spec-service-test');
-    expect(parsed.symbols).toEqual(['SPY']);
-
-    op.flush({
-      data: {
-        runSpecStrategyBacktest: {
-          success: true,
-          strategyName: 'spec-service-test',
-          initialCash: 50000,
-          finalEquity: 51200,
-          netProfit: 1200,
-          totalFees: 0,
-          totalTrades: 1,
-          winningTrades: 1,
-          losingTrades: 0,
-          winRate: 1.0,
-          // entryTime / exitTime are int64 ms UTC (per the wire-format
-          // rule), not ISO strings. 1704153600000 = 2024-01-02 00:00 UTC.
-          trades: [
-            {
-              tradeNumber: 1,
-              entryTime: 1704153600000,
-              entryPrice: 470.5,
-              exitTime: 1704157200000,
-              exitPrice: 472.1,
-              // Indicators arrive as a list-of-DTO from GraphQL — Hot
-              // Chocolate v15's Dictionary<string, decimal> exposure
-              // would need awkward sub-field selection, so the backend
-              // projects to IndicatorSnapshotEntry[] at the boundary.
-              indicators: [
-                { name: 'sma_s', value: 470.4 },
-                { name: 'sma_l', value: 470.0 },
-              ],
-              pnlPts: 1.6,
-              pnlPct: 0.0034,
-              result: 'WIN',
-              signalReason: 'test',
-            },
-          ],
-          logLines: ['ok'],
-          error: null,
-        },
-      },
+    const req = http.expectOne(URL);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({
+      spec: TRIVIAL_SPEC,
+      start_date: '2024-01-02',
+      end_date: '2024-12-31',
+      initial_cash: 50000,
+      fill_mode: 'next_bar_open',
+      commission_per_order: 1,
     });
+    req.flush(SUCCESS_BODY);
 
-    const result = await promise;
-    expect(result.success).toBe(true);
-    expect(result.totalTrades).toBe(1);
-    expect(result.winRate).toBe(1.0);
-    // Wire-format check — TS type declares entryTime/exitTime as number,
-    // and Apollo passes the JSON int through unchanged.
-    const trade = result.trades[0];
-    expect(typeof trade.entryTime).toBe('number');
-    expect(trade.entryTime).toBe(1704153600000);
-    expect(trade.exitTime).toBe(1704157200000);
-    // Indicators arrive as a list of {name, value} entries.
-    expect(Array.isArray(trade.indicators)).toBe(true);
-    expect(trade.indicators).toHaveLength(2);
-    expect(trade.indicators[0]).toEqual({ name: 'sma_s', value: 470.4 });
+    const result = await pending;
+    expect(result).toEqual(SUCCESS_BODY);
+    // The wire shape reaches callers untouched: int64-ms timestamps stay
+    // numbers and the indicator snapshot stays Python's dict.
+    const trade = result.trades?.[0];
+    expect(trade?.entry_time).toBe(1704153600000);
+    expect(trade?.exit_time).toBe(1704157200000);
+    expect(trade?.indicators).toEqual({ ema_fast: 471.0, ema_slow: 470.2 });
   });
 
-  it('exposes loading and result via signals', async () => {
+  it('omits the optional run params when unset so Python applies its own defaults', async () => {
+    const pending = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+
+    const req = http.expectOne(URL);
+    // toStrictEqual: a key carrying `undefined` would still fail this.
+    expect(req.request.body).toStrictEqual({
+      spec: TRIVIAL_SPEC,
+      start_date: '2024-01-02',
+      end_date: '2024-12-31',
+    });
+    req.flush(SUCCESS_BODY);
+
+    await pending;
+  });
+
+  it('exposes loading, result and a clear error via signals', async () => {
     expect(service.loading()).toBe(false);
     expect(service.result()).toBeNull();
 
-    const promise = service.runBacktest(TRIVIAL_SPEC, {
-      startDate: '2024-01-02',
-      endDate: '2024-12-31',
-    });
-
+    const pending = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
     expect(service.loading()).toBe(true);
 
-    const op = controller.expectOne(RUN_SPEC_STRATEGY_BACKTEST);
-    op.flush({
-      data: {
-        runSpecStrategyBacktest: {
-          success: true,
-          strategyName: TRIVIAL_SPEC.name,
-          initialCash: 100000,
-          finalEquity: 100000,
-          netProfit: 0,
-          totalFees: 0,
-          totalTrades: 0,
-          winningTrades: 0,
-          losingTrades: 0,
-          winRate: 0,
-          trades: [],
-          logLines: [],
-          error: null,
-        },
-      },
-    });
+    http.expectOne(URL).flush(SUCCESS_BODY);
+    await pending;
 
-    await promise;
     expect(service.loading()).toBe(false);
-    expect(service.result()?.success).toBe(true);
+    expect(service.result()?.strategy_name).toBe('EMA crossover');
+    expect(service.error()).toBeNull();
   });
 
-  it('surfaces error when GraphQL returns success=false', async () => {
-    const promise = service.runBacktest(TRIVIAL_SPEC, {
-      startDate: '2024-01-02',
-      endDate: '2024-12-31',
+  it('resolves a completed backtest that reports success=false and mirrors its error', async () => {
+    const pending = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+    http.expectOne(URL).flush({
+      ...SUCCESS_BODY,
+      success: false,
+      total_trades: 0,
+      trades: [],
+      error: 'spec uses unsupported feature: option template',
     });
 
-    const op = controller.expectOne(RUN_SPEC_STRATEGY_BACKTEST);
-    op.flush({
-      data: {
-        runSpecStrategyBacktest: {
-          success: false,
-          strategyName: '',
-          initialCash: 0,
-          finalEquity: 0,
-          netProfit: 0,
-          totalFees: 0,
-          totalTrades: 0,
-          winningTrades: 0,
-          losingTrades: 0,
-          winRate: 0,
-          trades: [],
-          logLines: [],
-          error: 'spec uses unsupported feature: option template',
-        },
-      },
-    });
-
-    const result = await promise;
+    const result = await pending;
     expect(result.success).toBe(false);
     expect(result.error).toContain('option template');
+    expect(service.result()).toEqual(result);
     expect(service.error()).toContain('option template');
+  });
+
+  it('rejects an HTTP failure and surfaces the FastAPI detail as the error', async () => {
+    const pending = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+    http
+      .expectOne(URL)
+      .flush({ detail: "start_date must be YYYY-MM-DD: '2024/01/02'" }, { status: 400, statusText: 'Bad Request' });
+
+    await expect(pending).rejects.toBeInstanceOf(HttpErrorResponse);
+    expect(service.error()).toBe("start_date must be YYYY-MM-DD: '2024/01/02'");
+    expect(service.result()).toBeNull();
+    expect(service.loading()).toBe(false);
+  });
+
+  it('drops the previous result as soon as a new request starts, so a failure never renders stale output', async () => {
+    const first = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+    http.expectOne(URL).flush(SUCCESS_BODY);
+    await first;
+    expect(service.result()).not.toBeNull();
+
+    const second = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+    expect(service.result()).toBeNull();
+    http.expectOne(URL).flush({ detail: 'unsupported feature' }, { status: 400, statusText: 'Bad Request' });
+
+    await expect(second).rejects.toBeInstanceOf(HttpErrorResponse);
+    expect(service.result()).toBeNull();
+    expect(service.error()).toBe('unsupported feature');
+  });
+
+  it('falls back to the HTTP status line when the failure body carries no detail', async () => {
+    const pending = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+    http.expectOne(URL).flush('upstream exploded', { status: 502, statusText: 'Bad Gateway' });
+
+    await expect(pending).rejects.toBeInstanceOf(HttpErrorResponse);
+    expect(service.error()).toContain('502');
+  });
+
+  it('reset clears the last result and error', async () => {
+    const pending = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+    http.expectOne(URL).flush({ ...SUCCESS_BODY, success: false, error: 'boom' });
+    await pending;
+    expect(service.result()).not.toBeNull();
+    expect(service.error()).toBe('boom');
+
+    service.reset();
+
+    expect(service.result()).toBeNull();
+    expect(service.error()).toBeNull();
   });
 });

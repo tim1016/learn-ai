@@ -24,7 +24,7 @@ import {
   BarPropertyCondition,
   Operand,
   StrategySpec,
-  SpecStrategyBacktestResult,
+  SpecStrategyTrade,
   EntryBlock,
 } from '../../graphql/spec-strategy.models';
 import { CANONICAL_FIXTURES, CanonicalFixture } from './canonical-fixtures';
@@ -215,7 +215,7 @@ export class SpecStrategyRunnerComponent {
     formatSurvivalBlock(this.spec().survival ?? [], this.spec().indicators),
   );
   readonly specJson = computed(() => JSON.stringify(this.spec(), null, 2));
-  readonly tradeCount = computed<number>(() => this.result()?.totalTrades ?? 0);
+  readonly tradeCount = computed<number>(() => this.result()?.total_trades ?? 0);
 
   /** Rich-fragment summary for the design's Strategy Summary hero card. */
   readonly summaryFragments = computed<readonly SummaryFragment[]>(() =>
@@ -722,8 +722,11 @@ export class SpecStrategyRunnerComponent {
     });
   }
 
-  formatIndicators(trade: SpecStrategyBacktestResult['trades'][0]): string {
-    return trade.indicators.map((entry) => `${entry.name}=${entry.value.toFixed(4)}`).join(', ');
+  /** Indicator snapshot at entry as `id=value` pairs, in the order Python recorded them. */
+  formatIndicators(trade: SpecStrategyTrade): string {
+    return Object.entries(trade.indicators ?? {})
+      .map(([name, value]) => `${name}=${value.toFixed(4)}`)
+      .join(', ');
   }
 
   // -----------------------------------------------------------------------

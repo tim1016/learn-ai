@@ -491,16 +491,16 @@
   <section class="ssr-results">
     @let r = result();
     @if (r && r.success) {
-      <h2 class="ssr-results-title">{{ r.strategyName }}</h2>
+      <h2 class="ssr-results-title">{{ r.strategy_name }}</h2>
       <dl class="ssr-summary-grid">
-        <div><dt>Trades</dt><dd>{{ r.totalTrades }}</dd></div>
-        <div><dt>Wins</dt><dd>{{ r.winningTrades }}</dd></div>
-        <div><dt>Losses</dt><dd>{{ r.losingTrades }}</dd></div>
-        <div><dt>Win rate</dt><dd>{{ (r.winRate * 100) | number: '1.1-1' }}%</dd></div>
-        <div><dt>Initial cash</dt><dd>{{ r.initialCash | number: '1.2-2' }}</dd></div>
-        <div><dt>Final equity</dt><dd>{{ r.finalEquity | number: '1.2-2' }}</dd></div>
-        <div><dt>Net profit</dt><dd>{{ r.netProfit | number: '1.2-2' }}</dd></div>
-        <div><dt>Total fees</dt><dd>{{ r.totalFees | number: '1.2-2' }}</dd></div>
+        <div><dt>Trades</dt><dd>{{ r.total_trades }}</dd></div>
+        <div><dt>Wins</dt><dd>{{ r.winning_trades }}</dd></div>
+        <div><dt>Losses</dt><dd>{{ r.losing_trades }}</dd></div>
+        <div><dt>Win rate</dt><dd>{{ (r.win_rate * 100) | number: '1.1-1' }}%</dd></div>
+        <div><dt>Initial cash</dt><dd>{{ r.initial_cash | number: '1.2-2' }}</dd></div>
+        <div><dt>Final equity</dt><dd>{{ r.final_equity | number: '1.2-2' }}</dd></div>
+        <div><dt>Net profit</dt><dd>{{ r.net_profit | number: '1.2-2' }}</dd></div>
+        <div><dt>Total fees</dt><dd>{{ r.total_fees | number: '1.2-2' }}</dd></div>
       </dl>
       @if (tradeCount() > 0) {
         <table class="ssr-trade-table" aria-label="Trade log">
@@ -513,15 +513,15 @@
             </tr>
           </thead>
           <tbody>
-            @for (trade of r.trades; track trade.tradeNumber) {
+            @for (trade of r.trades ?? []; track trade.trade_number) {
               <tr [class.ssr-win]="trade.result === 'WIN'" [class.ssr-loss]="trade.result === 'LOSS'">
-                <td>{{ trade.tradeNumber }}</td>
-                <td>{{ formatTime(trade.entryTime) }}</td>
-                <td>{{ formatTime(trade.exitTime) }}</td>
-                <td class="ssr-num">{{ trade.entryPrice | number: '1.2-2' }}</td>
-                <td class="ssr-num">{{ trade.exitPrice | number: '1.2-2' }}</td>
-                <td class="ssr-num">{{ trade.pnlPts | number: '1.2-4' }}</td>
-                <td class="ssr-num">{{ (trade.pnlPct * 100) | number: '1.2-2' }}%</td>
+                <td>{{ trade.trade_number }}</td>
+                <td>{{ formatTime(trade.entry_time) }}</td>
+                <td>{{ formatTime(trade.exit_time) }}</td>
+                <td class="ssr-num">{{ trade.entry_price | number: '1.2-2' }}</td>
+                <td class="ssr-num">{{ trade.exit_price | number: '1.2-2' }}</td>
+                <td class="ssr-num">{{ trade.pnl_pts | number: '1.2-4' }}</td>
+                <td class="ssr-num">{{ (trade.pnl_pct * 100) | number: '1.2-2' }}%</td>
                 <td>{{ trade.result }}</td>
                 <td class="ssr-indicator-cell">{{ formatIndicators(trade) }}</td>
               </tr>

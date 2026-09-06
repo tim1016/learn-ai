@@ -33,7 +33,8 @@ The only allowed handwritten frontend contract code is one of:
 
 The strategy-spec editor is the first vertical slice: its Python input types
 are OpenAPI aliases, and its `runSpecStrategyBacktest` result and variables
-come from a generated GraphQL operation. The direct broker data-plane health
+come from a generated GraphQL operation (superseded by #1963: the runner now
+calls FastAPI directly and its result is an OpenAPI alias as well). The direct broker data-plane health
 response is likewise an OpenAPI alias. This establishes the migration pattern;
 it does not claim that every historical frontend interface is already
 generated.
