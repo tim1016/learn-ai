@@ -25,6 +25,7 @@ from app.research.sweep.grid import (
     StrategyGridConfig,
     ValueListRange,
     expand_grid,
+    expand_param,
     grid_size,
 )
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
@@ -60,11 +61,14 @@ def validate_launch(
 ) -> ValidatedLaunch:
     """The canonical grid plus its exact run count, or :class:`RecencyLaunchRejected` (D11 ceiling, ranges, request rules)."""
     try:
-        # Consume the expansion: the ceiling is checked eagerly, but a range
-        # the grid language refuses only when it materialises (a step the
-        # floats cannot resolve) must be rejected here, not in the worker.
-        for _ in expand_grid(strategies, symbols):
-            pass
+        # The ceiling is checked eagerly by expand_grid; a range the grid
+        # language refuses only when it materialises (a step the floats
+        # cannot resolve) is caught by expanding each range once — never the
+        # full symbols x strategies x parameters product on the request loop.
+        expand_grid(strategies, symbols)
+        for strategy in strategies:
+            for range_spec in strategy.param_ranges.values():
+                expand_param(range_spec)
     except RecencyGridTooLargeError as exc:
         raise RecencyLaunchRejected(str(exc)) from exc
     except ValueError as exc:
