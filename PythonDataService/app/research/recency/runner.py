@@ -1,7 +1,7 @@
 """Recency Chart launch runner.
 
 Orchestrates one Recency Chart launch: expands the grid (lazily), executes
-each (symbol, strategy, parameter-combo) backtest with bounded concurrency,
+each (symbol, strategy, parameter-combo) backtest one at a time,
 computes every trade/run statistic in Python (design spec §7.1), assembles
 a fingerprinted snapshot per run, and persists each snapshot independently
 so a failing child is isolated and reported ("N of M failed") rather than
@@ -31,7 +31,7 @@ from app.research.recency.stats import (
     total_pnl,
     trade_dollar_pnl,
 )
-from app.research.sweep.concurrency import MAX_CONCURRENT_RUNS, run_batched
+from app.research.sweep.execution import run_each
 from app.research.sweep.grid import RunSpec, StrategyGridConfig, expand_grid, grid_size
 
 
@@ -192,9 +192,8 @@ def run_recency(
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_run_failed: Callable[[RunSpec, str], None] = lambda run_spec, message: None,
     cancel_check: Callable[[], bool | None] = lambda: False,
-    max_workers: int = MAX_CONCURRENT_RUNS,
 ) -> RecencyRunSummary:
-    """Execute one launch's grid with bounded concurrency and per-run isolation.
+    """Execute one launch's grid one run at a time with per-run isolation.
 
     ``cancel_check`` follows app/research/walk_forward/runner.py's CancelCheck
     contract in every respect but one: its return value is IGNORED —
@@ -203,17 +202,16 @@ def run_recency(
     raises JobCancelled so run_in_thread produces a real ``job.cancelled``
     terminal state instead of ``job.completed``).
 
-    The difference: it is called once per batch **and once more after the pool
-    drains**, before any completion is announced. A batch-head check alone
-    cannot observe a cancellation that arrives while the final batch is
-    executing (issue #1928); ``run_batched`` owns that contract for every
-    sweep runner.
+    The difference: it is called once per run **and once more after the last
+    run completes**, before any completion is announced. A head-of-run check
+    alone cannot observe a cancellation that arrives while the final run is
+    executing (issue #1928); ``run_each`` owns that contract for every sweep
+    runner.
     """
     on_phase("expand")
     expected = grid_size(config.strategies, config.symbols)
     run_specs = expand_grid(config.strategies, config.symbols)
     outcomes: list[RecencyRunOutcome] = []
-    done = 0
 
     def _execute_and_persist(run_spec: RunSpec) -> RecencyRunOutcome:
         result = execute_backtest_fn(run_spec, config)
@@ -228,19 +226,16 @@ def run_recency(
 
     def _failed(run_spec: RunSpec, exc: Exception) -> RecencyRunOutcome:
         # Per-run isolation: a failing child is captured and reported, never
-        # silently dropped and never aborts the rest of the batch.
+        # silently dropped and never aborts the rest of the run.
         message = str(exc)
         on_run_failed(run_spec, message)
         return RecencyRunOutcome(run_spec=run_spec, status="failed", error=message)
 
-    # Bounded batches (size == max_workers) rather than materializing the
-    # full grid: at most max_workers RunSpecs are pulled from the lazy
-    # expand_grid() iterator at any time, so a large-but-legitimate sweep
-    # never holds its entire grid in memory. The batching and the
-    # cancellation contract live in app.research.sweep.concurrency.
-    for batch in run_batched(run_specs, _execute_and_persist, max_workers=max_workers, cancel_check=cancel_check, on_error=_failed):
-        outcomes.extend(batch)
-        done += len(batch)
+    # Runs are pulled one at a time from the lazy expand_grid() iterator, so a
+    # large-but-legitimate sweep never holds its entire grid in memory. The
+    # cancellation contract lives in app.research.sweep.execution.
+    for done, outcome in enumerate(run_each(run_specs, _execute_and_persist, cancel_check=cancel_check, on_error=_failed), start=1):
+        outcomes.append(outcome)
         on_progress(done, expected)
 
     succeeded = sum(1 for outcome in outcomes if outcome.status == "succeeded")

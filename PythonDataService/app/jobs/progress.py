@@ -43,6 +43,12 @@ JOB_TTL_SECONDS = 60 * 60 * 24
 # 50k events at ~200 bytes each = ~10 MB; plenty for a long backtest.
 MAX_STREAM_LENGTH = 50_000
 
+# How long any caller waits to connect to the job store, and then for any one
+# command to answer, before giving up. Every Python call here is a short
+# command (HSET, XADD, HGET, SMEMBERS, SET); the only long stream reads are
+# the .NET jobs facade's, on its own client.
+JOB_STORE_TIMEOUT_SECONDS = 5.0
+
 
 def _redis_url() -> str:
     return os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -56,9 +62,12 @@ def get_redis() -> redis.Redis:
     """Return a process-wide Redis client. Pool is lazily initialized.
 
     Returning a pooled client (vs a connection-per-call) matters because
-    the SSE endpoint holds a long XREAD BLOCK and the producer thread
-    XADDs concurrently; both want their own connection without paying
-    handshake cost on every call.
+    producer threads XADD concurrently with the request handlers' reads;
+    each wants its own connection without paying handshake cost on every
+    call. Connecting and every command are bounded by
+    ``JOB_STORE_TIMEOUT_SECONDS``: a Redis that drops packets, or accepts
+    the connection and then stops answering, cannot hold a caller — least
+    of all the startup sweep, which runs before the listener opens.
     """
     global _pool
     if _pool is None:
@@ -68,6 +77,8 @@ def get_redis() -> redis.Redis:
                     _redis_url(),
                     decode_responses=True,
                     max_connections=32,
+                    socket_connect_timeout=JOB_STORE_TIMEOUT_SECONDS,
+                    socket_timeout=JOB_STORE_TIMEOUT_SECONDS,
                 )
     return redis.Redis(connection_pool=_pool)
 
@@ -312,3 +323,39 @@ class ProgressEmitter:
         )
         self._emit("job.cancelled", {"reason": reason})
         self._r.srem(_active_set_key(), self.job_id)
+
+
+ORPHANED_JOB_CODE = "DATA_SERVICE_RESTARTED"
+ORPHANED_JOB_MESSAGE = "the data service restarted while this job was queued or running; its worker did not survive the restart"
+
+
+def fail_jobs_without_a_worker() -> list[str]:
+    """At startup, fail every job the active set still calls queued or running.
+
+    Every job runs on a thread of this process (``app.jobs.runner.run_in_thread``),
+    so before the listener opens, a job that is still ``queued`` or ``running``
+    belonged to the previous process and has no worker left — a crash, an
+    out-of-memory kill or a restart took it. Nothing else would ever close it:
+    its record would read as live until the 24 h TTL, and the research record
+    behind it (a grid search, a walk-forward study) would present as running
+    and refuse Finish. An id whose state has expired, or that reached a terminal
+    status without leaving the set, is only dropped from the set. Redis being
+    unreachable, or silent after connecting, is logged and leaves everything
+    alone; the service still boots, and every wait is bounded by the pool's
+    connect and command timeouts.
+    Returns the ids failed.
+    """
+    r = get_redis()
+    failed: list[str] = []
+    try:
+        for job_id in sorted(r.smembers(_active_set_key())):
+            if r.hget(_state_key(job_id), "status") in ("queued", "running"):
+                ProgressEmitter(job_id).failed(code=ORPHANED_JOB_CODE, message=ORPHANED_JOB_MESSAGE)
+                failed.append(job_id)
+            else:
+                r.srem(_active_set_key(), job_id)
+    except redis.RedisError as exc:
+        logger.warning("could not close the jobs left by the previous process: %s", exc, exc_info=True)
+    if failed:
+        logger.warning("failed %d job(s) whose worker died with the previous process: %s", len(failed), ", ".join(failed))
+    return failed

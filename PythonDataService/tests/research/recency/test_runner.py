@@ -302,7 +302,6 @@ class TestRunRecencyCancellation:
                 persist_fn=persisted.append,
                 strategy_code_version_fn=lambda strategy_key: "v1",
                 cancel_check=cancel_after_first_batch,
-                max_workers=1,
             )
         assert len(persisted) < 3
 
@@ -384,7 +383,6 @@ class TestRunRecencyLazyGridExecution:
             persist_fn=lambda snap: None,
             strategy_code_version_fn=lambda strategy_key: "v1",
             on_progress=on_progress,
-            max_workers=1,
         )
 
         assert pulled_count_at_first_done["count"] < 5

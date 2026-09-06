@@ -87,6 +87,11 @@ def test_preflight_sizes_the_grid_and_plans_the_run_up(lake: Path) -> None:
     assert set(pre.param_ranges) == {"short_window", "long_window", "resolution_minutes"}
 
 
+def test_the_estimate_sums_the_cells_because_they_run_one_at_a_time() -> None:
+    """Ten cells over 728 days of minute bars, one at a time: 10 × (1.4 s + 0.3 s × 728/30.4 months)."""
+    assert service._estimate_seconds(10, date(2024, 9, 5), date(2026, 9, 3)) == 85.8
+
+
 @pytest.mark.parametrize(
     ("overrides", "code"),
     [
@@ -121,6 +126,9 @@ def test_preflight_refuses_a_window_with_missing_sessions_and_names_them(tmp_pat
 
     assert excinfo.value.code == "DATA_MISSING"
     assert SESSIONS[-1].isoformat() in str(excinfo.value)
+    # The refusal names the tree it read: a symbol backfilled only in raw mode is missing to a sweep.
+    assert "polygon_split_adjusted lake is missing" in str(excinfo.value)
+    assert "in polygon_split_adjusted mode" in str(excinfo.value)
 
 
 # ── Launch + execute ─────────────────────────────────────────────────────
@@ -173,10 +181,10 @@ async def test_cancellation_keeps_finished_cells_and_finish_runs_only_the_rest(c
 
     row = await repo.get_search(conn, created.id)
     assert row is not None and row.status == "cancelled" and row.incomplete
-    assert row.completed_cells == len(calls) == 3  # one 8-wide batch drained before the poll
+    assert row.completed_cells == len(calls) == 1  # the one cell in flight drained before the poll
     assert row.leader_params_hash is not None  # provisional leader over what finished
 
-    # Finish: nothing left to run, but the record still needs its terminal status.
+    # Finish: only the two cells without rows run, and the record reaches its terminal status.
     finished_calls: list[float] = []
 
     def resumed_engine(candidate: RunSpec) -> CellResult:
@@ -184,9 +192,10 @@ async def test_cancellation_keeps_finished_cells_and_finish_runs_only_the_rest(c
         return _fake_engine({2.0: 1.0, 3.0: 2.0, 4.0: 3.0})(candidate)
 
     outcome = await asyncio.to_thread(service.execute, created.id, job_id="job-2", execute_cell=resumed_engine)
-    assert finished_calls == [] and outcome.status == "completed"
+    assert finished_calls == [3.0, 4.0] and outcome.status == "completed"
     resumed = await repo.get_search(conn, created.id)
     assert resumed is not None and resumed.status == "completed" and resumed.attempt == 2 and not resumed.incomplete
+    assert resumed.completed_cells == 3
 
 
 async def test_a_search_where_every_cell_failed_is_failed_with_the_reason(conn, lake: Path) -> None:

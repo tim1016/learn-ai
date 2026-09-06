@@ -27,3 +27,7 @@ PRD #1926 needs cell rows that arrive from eight worker threads at once, are key
 - The data-lake schema drift test does not cover these tables; the DDL in `schema.py` is their authority and the repository tests run against a database attested ephemeral (`POSTGRES_URL_IS_EPHEMERAL=1`), as the catalog tests do.
 - The Recency Chart tables followed this pattern in ADR 0057 (#1927), which also records the non-dropping handover of tables EF had created.
 - Backups and operational tooling that enumerate EF-managed tables must be taught about `research_*` tables.
+
+## Amendment 2026-09-05 — one backtest in flight
+
+The "eight worker threads" above describes the sweep runners as first written. Measured on the data-service container (2 CPUs, 2 GiB) with minute bars over two years, one engine run peaks near 480 MB of resident memory, the engine's per-bar loop holds the GIL (a second thread added memory and no throughput), and at eight the kernel's memory cgroup killed the service mid-search. The runners now execute one backtest at a time (`app/research/sweep/execution.py`), so cells reach the writer loop and pool one at a time; the pool and its ownership are unchanged.
