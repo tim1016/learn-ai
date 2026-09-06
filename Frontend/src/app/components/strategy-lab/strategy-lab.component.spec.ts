@@ -17,6 +17,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
 import { JobsService } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { StrategyLabComponent } from "./strategy-lab.component";
 import { toStrategyLabConfiguration } from "./strategy-lab.models";
 
@@ -176,6 +180,12 @@ async function createLab(
         },
       },
       { provide: Apollo, useValue: { watchQuery } },
+      // The instrument picker reads the lake catalog on init. This spec drives
+      // the workbench through `HttpTestingController` and verifies no request
+      // is left open, so the catalog is stubbed rather than served.
+      provideFakeTickerCatalog(
+        fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" }]),
+      ),
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);

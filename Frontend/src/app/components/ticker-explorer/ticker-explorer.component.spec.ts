@@ -2,6 +2,10 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { TickerExplorerComponent } from './ticker-explorer.component';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import { environment } from '../../../environments/environment';
 
 const GRAPHQL_URL = environment.backendUrl;
@@ -15,7 +19,16 @@ describe('TickerExplorerComponent', () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [TickerExplorerComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        // The instrument picker reads the lake catalog on init; this spec
+        // asserts on the explorer's own requests, so stub it out rather than
+        // let a real read show up as an unexpected open request.
+        provideFakeTickerCatalog(
+          fakeTickerCatalog([{ symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ' }]),
+        ),
+      ],
     }).compileComponents();
 
     fixture = TestBed.createComponent(TickerExplorerComponent);
