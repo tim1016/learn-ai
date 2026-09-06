@@ -541,11 +541,6 @@ type IndicatorSeriesResult {
   data: [IndicatorPoint!]!
 }
 
-type IndicatorSnapshotEntry {
-  name: String!
-  value: Decimal!
-}
-
 type IndicatorTableResult {
   success: Boolean!
   ticker: String!
@@ -691,7 +686,6 @@ type Mutation {
   updateDataLabChartSnapshot(id: UUID! chartSnapshotJson: String!): DataLabSessionResult! @cost(weight: "10")
   renameDataLabSession(id: UUID! name: String!): DataLabSessionResult! @cost(weight: "10")
   deleteDataLabSession(id: UUID!): DataLabSessionResult! @cost(weight: "10")
-  runSpecStrategyBacktest(specJson: String! startDate: String! endDate: String! initialCash: Decimal! = 100000 fillMode: String! = "signal_bar_close" commissionPerOrder: Decimal! = 0): SpecStrategyBacktestResultType! @cost(weight: "10")
   updateBacktestRunNotes(id: Int! notes: String!): BacktestRunNotesResult! @cost(weight: "10")
 }
 
@@ -1412,35 +1406,6 @@ type SnapshotUnderlyingResult {
   price: Decimal!
   change: Decimal!
   changePercent: Decimal!
-}
-
-type SpecStrategyBacktestResultType {
-  success: Boolean!
-  strategyName: String!
-  initialCash: Decimal!
-  finalEquity: Decimal!
-  netProfit: Decimal!
-  totalFees: Decimal!
-  totalTrades: Int!
-  winningTrades: Int!
-  losingTrades: Int!
-  winRate: Decimal!
-  trades: [SpecStrategyTradeType!]!
-  logLines: [String!]!
-  error: String
-}
-
-type SpecStrategyTradeType {
-  tradeNumber: Int!
-  entryTime: Long!
-  entryPrice: Decimal!
-  exitTime: Long!
-  exitPrice: Decimal!
-  indicators: [IndicatorSnapshotEntry!]!
-  pnlPts: Decimal!
-  pnlPct: Decimal!
-  result: String!
-  signalReason: String!
 }
 
 type Stage0FailureType {
