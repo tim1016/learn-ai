@@ -1534,6 +1534,7 @@ def execute_engine_backtest(
                 entry_ms_utc=trade.entry_time,
                 exit_ms_utc=trade.exit_time,
                 pnl_pct=trade.pnl_pct,
+                is_synthetic_exit=trade.is_synthetic_exit,
             )
             for trade in formatted
         ]

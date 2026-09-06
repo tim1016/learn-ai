@@ -58,6 +58,9 @@ class _TradeLike(Protocol):
     pnl_pts: Decimal
     pnl_pct: Decimal
     result: str
+    entry_time_ms: int
+    exit_time_ms: int
+    is_synthetic_exit: bool
 
 
 @dataclass(frozen=True)
@@ -394,18 +397,18 @@ def _daily_returns(daily_equity: Sequence[float]) -> list[float]:
     return [(daily_equity[i] / daily_equity[i - 1]) - 1.0 for i in range(1, len(daily_equity))]
 
 
-def _fills_are_ordered(trade: _TradeLike) -> bool:
-    """Whether a trade's entry instant legitimately precedes its exit.
+def _fill_times_are_admissible(trade: _TradeLike) -> bool:
+    """Whether a trade's entry/exit timestamps are a legitimate round trip:
+    strictly ordered, or exactly one documented exception.
 
-    Ordinarily that means strictly earlier. The one admitted equality is a
-    **terminal forced close**: a position opened on the last bar of the window
-    is flattened at that same instant by ``BacktestEngine._finalize``'s
-    end-of-data sweep (issue #1928 — a completed run holds no residual
-    position, and every sweepable strategy's ``on_end_of_algorithm`` emits its
-    exit at ``ctx.current_time_ms``). The round trip really did last no time:
-    price P&L is zero and fees are charged. Nothing later exists to price the
-    exit at, and fabricating a timestamp would violate
-    ``.claude/rules/temporal-rigor.md``.
+    That exception is a **terminal forced close**: a position opened on the
+    last bar of the window is flattened at that same instant by
+    ``BacktestEngine._finalize``'s end-of-data sweep (issue #1928 — a
+    completed run holds no residual position, and every sweepable strategy's
+    ``on_end_of_algorithm`` emits its exit at ``ctx.current_time_ms``). The
+    round trip really did last no time: price P&L is zero and fees are
+    charged. Nothing later exists to price the exit at, and fabricating a
+    timestamp would violate ``.claude/rules/temporal-rigor.md``.
 
     The exemption is keyed on the engine's own forced-close label, so an equal
     pair reached any other way stays an error, and an *inverted* pair — an
@@ -425,7 +428,7 @@ def validate_trade_log(trades: Sequence[_TradeLike]) -> list[ValidationError]:
             and hasattr(trade, "exit_time_ms")
             and trade.entry_time_ms is not None
             and trade.exit_time_ms is not None
-            and not _fills_are_ordered(trade)
+            and not _fill_times_are_admissible(trade)
         ):
             errors.append(
                 ValidationError(

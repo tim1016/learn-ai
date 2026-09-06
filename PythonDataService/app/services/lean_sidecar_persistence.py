@@ -857,6 +857,7 @@ def _validation_analytics_json(
                 entry_ms_utc=t.entry_ms_utc,
                 exit_ms_utc=t.exit_ms_utc,
                 pnl_pct=_trade_return(t),
+                is_synthetic_exit=t.is_synthetic_exit,
             )
             for t in paired_trades
         ]

@@ -18,6 +18,8 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.execution_config import ExecutionConfig
@@ -602,10 +604,37 @@ def test_an_entry_on_the_final_bar_closes_as_a_zero_duration_forced_close():
     # The label is what earns the exemption in ``validate_trade_log``; without
     # it an equal pair stays an error.
     assert trade.is_synthetic_exit is True
-    # Zero duration means zero price P&L. Fees would still be charged — this
-    # run configures none.
+    # Zero duration means zero price P&L, but the round trip is still two
+    # market orders (SetHoldings entry + EndOfAlgorithm exit) and this run's
+    # default ``ExecutionConfig`` charges $1.00 commission per order.
     assert trade.pnl_pts == Decimal(0)
+    assert float(result.total_fees) == 2.0
+    assert float(result.equity_curve[-1].equity) == float(result.final_equity) == 99998.0
     assert compute_trade_statistics(strategy.trade_log).total_trades == 1
+
+
+@pytest.mark.parametrize("fill_mode", [FillMode.NEXT_BAR_OPEN, FillMode.NEXT_SESSION_OPEN])
+def test_a_deferred_entry_on_the_final_bar_produces_no_trade(fill_mode):
+    """Contrast with the zero-duration forced close above: that scenario is
+    SIGNAL_BAR_CLOSE, which fills the entry immediately, so the terminal
+    sweep has a real position to close. NEXT_BAR_OPEN and NEXT_SESSION_OPEN
+    instead defer the fill to the bar *after* the signal bar — a bar that
+    never arrives when the signal lands on the engine's last bar. The order
+    is orphaned before it ever opens a position, so the run reports no trade
+    and no fill at all, mirroring the orphan-cancellation behavior already
+    covered for deferred exits and force-flat."""
+    bars = [_bar(15, 30)]
+    strategy = _EntryThenExitStrategy()
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(fill_mode=fill_mode),
+    )
+    engine.run(strategy)
+
+    assert strategy.ctx is not None
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 0
+    assert strategy.order_events == []
 
 
 def test_end_of_data_leaves_a_stranded_partial_reduction_unfilled():
