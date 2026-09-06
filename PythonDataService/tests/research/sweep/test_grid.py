@@ -49,6 +49,29 @@ class TestExpandParamLowHighStep:
         with pytest.raises(ValueError, match="low"):
             expand_param(LowHighStepRange(low=5.0, high=1.0, step=1.0))
 
+    def test_decimal_grid_has_no_binary_float_artifacts(self) -> None:
+        # 0.15 + 3 * 0.15 in raw IEEE-754 float arithmetic is
+        # 0.6000000000000001, not the decimal grid the caller specified.
+        assert expand_param(LowHighStepRange(low=0.15, high=0.6, step=0.15)) == [0.15, 0.3, 0.45, 0.6]
+
+    def test_decimal_grid_holds_over_a_finer_step(self) -> None:
+        assert expand_param(LowHighStepRange(low=0.15, high=0.25, step=0.01)) == [
+            0.15,
+            0.16,
+            0.17,
+            0.18,
+            0.19,
+            0.2,
+            0.21,
+            0.22,
+            0.23,
+            0.24,
+            0.25,
+        ]
+
+    def test_integer_range_stays_whole_floats(self) -> None:
+        assert expand_param(LowHighStepRange(low=1.0, high=5.0, step=1.0)) == [1.0, 2.0, 3.0, 4.0, 5.0]
+
 
 class TestRangeSizeMatchesExpandParam:
     """_range_size must count exactly what expand_param will emit — the UI's
@@ -59,6 +82,8 @@ class TestRangeSizeMatchesExpandParam:
         "range_spec",
         [
             LowHighStepRange(low=0.0, high=1.0, step=0.6),
+            LowHighStepRange(low=0.0, high=1.0, step=0.1),
+            LowHighStepRange(low=0.0, high=1.0, step=0.3),
             LowHighStepRange(low=1.0, high=2.2, step=0.5),
             LowHighStepRange(low=1.0, high=3.0, step=1.0),
             LowHighStepRange(low=0.0, high=10.0, step=3.0),
@@ -68,6 +93,17 @@ class TestRangeSizeMatchesExpandParam:
     )
     def test_count_matches_expand_param_length(self, range_spec: LowHighStepRange | ValueListRange) -> None:
         assert _range_size(range_spec) == len(expand_param(range_spec))
+
+    @pytest.mark.parametrize(
+        ("range_spec", "expected_count"),
+        [
+            (LowHighStepRange(low=0.0, high=1.0, step=0.6), 2),
+            (LowHighStepRange(low=0.0, high=1.0, step=0.1), 11),
+            (LowHighStepRange(low=0.0, high=1.0, step=0.3), 4),
+        ],
+    )
+    def test_count_matches_documented_awkward_spans(self, range_spec: LowHighStepRange, expected_count: int) -> None:
+        assert _range_size(range_spec) == expected_count == len(expand_param(range_spec))
 
 
 class TestParamsHash:
@@ -85,6 +121,18 @@ class TestParamsHash:
         a = params_hash("strategy_a", {"gap": 0.2})
         b = params_hash("strategy_b", {"gap": 0.2})
         assert a != b
+
+    def test_low_high_step_cell_hashes_identically_to_the_same_value_list_cell(self) -> None:
+        """A leader chosen from a low/high/step sweep must be the same cell
+        identity as a value-list submission of the same decimal numbers —
+        otherwise the two submission styles disagree about which cell
+        (search_id, params_hash) a given (strategy, params) pair is."""
+        range_values = expand_param(LowHighStepRange(low=0.15, high=0.6, step=0.15))
+        assert range_values == [0.15, 0.3, 0.45, 0.6]
+        for range_value, value_list_value in zip(range_values, [0.15, 0.3, 0.45, 0.6], strict=True):
+            a = params_hash("strategy_a", {"gap": range_value})
+            b = params_hash("strategy_a", {"gap": value_list_value})
+            assert a == b
 
 
 class TestExpandGrid:
@@ -158,3 +206,70 @@ class TestExpandGrid:
 
     def test_empty_strategies_produces_no_runs(self) -> None:
         assert list(expand_grid([], symbols=["SPY"])) == []
+
+
+class TestExpansionNeverPassesHigh:
+    """The count is an exact decimal floor, so no emitted value exceeds ``high``
+    — even when ``step`` is below the absolute float tolerance the old
+    closed form used (which over-counted 0..1e-9 step 1e-10 as 21 values)."""
+
+    def test_step_below_a_float_tolerance_still_stops_at_high(self) -> None:
+        spec = LowHighStepRange(low=0.0, high=1e-9, step=1e-10)
+        values = expand_param(spec)
+        assert len(values) == 11 == _range_size(spec)
+        assert values[-1] == 1e-9
+        assert all(value <= 1e-9 for value in values)
+
+    @pytest.mark.parametrize(
+        ("low", "high", "step"),
+        [(0.0, 1.0, 0.6), (0.15, 0.6, 0.15), (0.0, 1.0, 0.3), (-1.0, 1.0, 0.7), (0.5, 0.5, 0.1)],
+    )
+    def test_last_value_is_within_high(self, low: float, high: float, step: float) -> None:
+        values = expand_param(LowHighStepRange(low=low, high=high, step=step))
+        assert values[0] == low
+        assert values[-1] <= high
+        assert len(values) == _range_size(LowHighStepRange(low=low, high=high, step=step))
+
+
+class TestPathologicalSteps:
+    """Fat-fingered steps are refused the documented way, never a context error
+    or a grid of duplicate cells (review findings on the Decimal expansion)."""
+
+    def test_an_absurdly_small_step_is_refused_not_a_decimal_context_error(self) -> None:
+        # 1 - 1e-28 is 1.0 in float, so the honest refusal is the resolution
+        # guard — never decimal.InvalidOperation from a 28-digit quotient.
+        spec = LowHighStepRange(low=0.0, high=1.0, step=1e-28)
+        with pytest.raises(ValueError, match="collapse to the same float"):
+            _range_size(spec)
+
+    def test_a_huge_but_resolvable_count_is_exact(self) -> None:
+        assert _range_size(LowHighStepRange(low=0.0, high=1e6, step=1e-9)) == 10**15 + 1
+
+    def test_a_step_below_float_spacing_is_refused_rather_than_collapsing_cells(self) -> None:
+        spec = LowHighStepRange(low=0.12345678901234566, high=0.12345678901234568, step=1e-18)
+        with pytest.raises(ValueError, match="collapse to the same float"):
+            _range_size(spec)
+        with pytest.raises(ValueError, match="collapse to the same float"):
+            expand_param(spec)
+
+    def test_expanded_values_are_unique(self) -> None:
+        values = expand_param(LowHighStepRange(low=0.15, high=0.25, step=0.01))
+        assert len(set(values)) == len(values) == 11
+
+
+    def test_a_single_cell_range_is_not_a_resolution_problem(self) -> None:
+        assert expand_param(LowHighStepRange(low=1.0, high=1.0, step=1e-20)) == [1.0]
+
+    def test_a_nan_step_is_refused_as_a_value_error(self) -> None:
+        with pytest.raises(ValueError, match="finite"):
+            _range_size(LowHighStepRange(low=0.0, high=1.0, step=float("nan")))
+
+
+    def test_a_long_span_is_not_rounded_up_to_an_extra_cell(self) -> None:
+        # 1e-30 + 9 * 0.1 exceeds 0.9 exactly; a 28-digit working precision
+        # would round the span to 0.9 and admit a tenth cell (review finding).
+        spec = LowHighStepRange(low=1e-30, high=0.9, step=0.1)
+        assert _range_size(spec) == 9
+        values = expand_param(spec)
+        assert len(values) == 9
+        assert values[-1] == 0.8

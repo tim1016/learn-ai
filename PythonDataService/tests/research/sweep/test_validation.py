@@ -55,3 +55,30 @@ def test_one_under_the_limit_is_admitted_and_one_over_is_refused() -> None:
     _validate(limit=5, long_window=LowHighStepRange(20, 60, 10))  # 5 combinations
     with pytest.raises(WorkloadLimitError):
         _validate(limit=4, long_window=LowHighStepRange(20, 60, 10))
+
+
+def test_a_step_below_float_resolution_is_an_invalid_grid_not_a_server_fault() -> None:
+    with pytest.raises(GridInvalidError, match="collapse to the same float"):
+        _validate(short_window=LowHighStepRange(0.12345678901234566, 0.12345678901234568, 1e-18))
+
+
+def test_an_absurd_step_is_refused_before_any_expansion() -> None:
+    with pytest.raises(GridInvalidError):
+        _validate(short_window=LowHighStepRange(0.0, 1.0, 1e-28))
+
+
+def test_a_single_cell_range_ignores_the_step_size() -> None:
+    validated = _validate(short_window=LowHighStepRange(5.0, 5.0, 1e-20))
+
+    assert validated.combinations == 1
+
+
+def test_a_non_finite_bound_is_an_invalid_grid() -> None:
+    with pytest.raises(GridInvalidError, match="finite"):
+        _validate(short_window=LowHighStepRange(5.0, 10.0, float("nan")))
+
+
+def test_an_interior_float_collapse_is_an_invalid_grid_not_a_server_fault() -> None:
+    # Endpoint neighbours resolve, an interior pair does not (review finding).
+    with pytest.raises(GridInvalidError, match="collapse to the same float"):
+        _validate(short_window=LowHighStepRange(0.9999999999999944, 0.9999999999999949, 1.0880185641326534e-16))

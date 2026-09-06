@@ -43,3 +43,31 @@ describe("computeGridSize", () => {
     expect(computeGridSize(strategies, ["SPY", "AAPL"])).toBe(2);
   });
 });
+
+describe("low/high/step counts match the canonical Python range size", () => {
+  const count = (low: number, high: number, step: number): number =>
+    computeGridSize([{ strategyKey: "s", paramRanges: { p: { type: "low_high_step", low, high, step } } }], ["SPY"]);
+
+  it("never counts a cell past high, even when high sits just below a step boundary", () => {
+    expect(count(0, 0.29999999999999993, 0.1)).toBe(3);
+    expect(count(0, 1, 0.6)).toBe(2);
+    expect(count(0, 1, 0.3)).toBe(4);
+  });
+
+  it("counts a clean decimal grid exactly", () => {
+    expect(count(0.15, 0.6, 0.15)).toBe(4);
+    expect(count(0.15, 0.25, 0.01)).toBe(11);
+    expect(count(5, 5, 1e-20)).toBe(1);
+  });
+
+  it("is exact over a long span and with exponent-form inputs", () => {
+    expect(count(1e-30, 0.9, 0.1)).toBe(9);
+    expect(count(0, 1e-9, 1e-10)).toBe(11);
+    expect(count(0, 1.5e21, 5e20)).toBe(4);
+  });
+
+  it("treats non-finite bounds as an empty grid rather than throwing", () => {
+    expect(count(0, Number.NaN, 0.1)).toBe(0);
+    expect(count(0, Number.POSITIVE_INFINITY, 0.1)).toBe(0);
+  });
+});

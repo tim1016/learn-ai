@@ -26,6 +26,7 @@ import json
 import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from fractions import Fraction
 from itertools import product
 
 # A very high sanity ceiling, not a product-level cap (D11): real sweeps
@@ -83,7 +84,18 @@ class RunSpec:
 
 
 def expand_param(range_spec: ParamRange) -> list[float]:
-    """Expand one parameter's range into its ordered list of values."""
+    """Expand one parameter's range into its ordered list of values.
+
+    A low/high/step range is computed in exact ``fractions.Fraction``, seeded from
+    each input's shortest repr (``str(range_spec.low)`` etc.), so the
+    emitted values are the exact decimal grid the caller specified — e.g.
+    0.15..0.6 step 0.15 yields ``[0.15, 0.3, 0.45, 0.6]``, not the
+    binary-float accumulation artifact ``0.6000000000000001`` that
+    ``low + i * step`` in raw ``float`` arithmetic produces. That artifact
+    used to leak into the leader's persisted params, its ``params_hash``,
+    and the frontend display of a grid-search cell. The value count is
+    delegated to :func:`_range_size` so the two can never disagree.
+    """
     if isinstance(range_spec, ValueListRange):
         if not range_spec.values:
             raise ValueError("value-list range must not be empty")
@@ -94,8 +106,27 @@ def expand_param(range_spec: ParamRange) -> list[float]:
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    count = round((range_spec.high - range_spec.low) / range_spec.step) + 1
-    return [range_spec.low + i * range_spec.step for i in range(count) if range_spec.low + i * range_spec.step <= range_spec.high + 1e-9]
+    low, step = _exact(range_spec.low), _exact(range_spec.step)
+    values = [float(low + i * step) for i in range(_range_size(range_spec))]
+    if len(set(values)) != len(values):
+        raise ValueError(_STEP_BELOW_FLOAT_RESOLUTION)
+    return values
+
+
+_STEP_BELOW_FLOAT_RESOLUTION = (
+    "low/high/step range requires a step the values can resolve: "
+    "neighbouring cells collapse to the same float at this magnitude"
+)
+
+
+def _exact(value: float) -> Fraction:
+    """The exact rational a float's shortest repr denotes (0.1 -> 1/10).
+
+    Rational arithmetic has no working precision to round in, so a range
+    like 1e-30..0.9 step 0.1 counts its nine cells exactly instead of
+    rounding the span up to a tenth.
+    """
+    return Fraction(str(value))
 
 
 def params_hash(strategy_key: str, params: Mapping[str, float]) -> str:
@@ -107,24 +138,39 @@ def params_hash(strategy_key: str, params: Mapping[str, float]) -> str:
 def _range_size(range_spec: ParamRange) -> int:
     """Count a range's values analytically — never materializes the list.
 
-    Mirrors expand_param's ``<= high + 1e-9`` filter via a closed-form floor
-    (not ``round``, which over-counts a non-divisible span — e.g.
-    low=0, high=1, step=0.6 rounds to 3 but expand_param's filter only
-    keeps [0, 0.6], since 1.2 > 1 + 1e-9). Never allocating means a
-    fat-fingered low/high/step (e.g. step=0.0001 over a wide span) can
-    still be rejected by size alone before any memory is spent.
+    ``expand_param`` delegates its value count to this function, so the two
+    can never disagree by construction. The count is the exact decimal
+    floor of ``(high - low) / step`` plus one — inclusive of ``high`` when
+    the span divides evenly, never past it (low=0, high=1, step=0.6 gives
+    [0, 0.6], not 1.2). Exact rational arithmetic needs no epsilon: an
+    absolute float tolerance would over-count once ``step`` itself is near
+    it, and a fixed working precision would round a long span.
+    Never allocating means a fat-fingered low/high/step (e.g. step=0.0001
+    over a wide span) can still be rejected by size alone before any memory
+    is spent.
     """
     if isinstance(range_spec, ValueListRange):
         if not range_spec.values:
             raise ValueError("value-list range must not be empty")
         return len(range_spec.values)
 
+    if not all(math.isfinite(value) for value in (range_spec.low, range_spec.high, range_spec.step)):
+        raise ValueError("low/high/step range requires finite low, high and step")
     if range_spec.step <= 0:
         raise ValueError("low/high/step range requires step > 0")
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    return math.floor((range_spec.high - range_spec.low + 1e-9) / range_spec.step) + 1
+    low, step = _exact(range_spec.low), _exact(range_spec.step)
+    count = int((_exact(range_spec.high) - low) // step) + 1
+    # A step below the float spacing at either end of the range would emit
+    # cells that collapse to the same value; refuse it before any expansion.
+    # A single-cell range (low == high) has no neighbours to collapse, so the
+    # step's size is irrelevant there.
+    top = low + (count - 1) * step
+    if count > 1 and (float(low) == float(low + step) or float(top) == float(top - step)):
+        raise ValueError(_STEP_BELOW_FLOAT_RESOLUTION)
+    return count
 
 
 def _param_combo_count(param_ranges: Mapping[str, ParamRange]) -> int:

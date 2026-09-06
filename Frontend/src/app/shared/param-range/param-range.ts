@@ -54,8 +54,39 @@ function rangeSize(range: ParamRange): number {
   if (range.type === "value_list") {
     return range.values.length;
   }
+  if (![range.low, range.high, range.step].every(Number.isFinite)) return 0;
   if (range.step <= 0 || range.low > range.high) return 0;
-  return Math.round((range.high - range.low) / range.step) + 1;
+  return exactRangeCount(range.low, range.high, range.step);
+}
+
+/**
+ * `floor((high - low) / step) + 1` on the exact decimals each number's
+ * shortest repr denotes — the same count the Python side computes with
+ * exact rationals, so the preview never shows a cell the launch will not
+ * run (e.g. 0..0.29999999999999993 step 0.1 is three cells, not four).
+ */
+function exactRangeCount(low: number, high: number, step: number): number {
+  const [l, h, s] = [low, high, step].map(decimalParts);
+  const scale = Math.max(l.decimals, h.decimals, s.decimals);
+  const scaled = (part: DecimalParts): bigint => part.digits * 10n ** BigInt(scale - part.decimals);
+  return Number((scaled(h) - scaled(l)) / scaled(s)) + 1;
+}
+
+interface DecimalParts {
+  /** All significant digits as an integer, sign included. */
+  digits: bigint;
+  /** How many of those digits sit right of the decimal point (may be negative for large exponents). */
+  decimals: number;
+}
+
+/** Decompose a finite number's shortest repr ("0.15", "1e-7", "1.5e+21") into an exact decimal. */
+function decimalParts(value: number): DecimalParts {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(value.toString());
+  if (match === null) throw new Error(`not a finite decimal: ${value}`);
+  const [, sign, whole, fraction = "", exponent = "0"] = match;
+  const decimals = fraction.length - Number(exponent);
+  const digits = BigInt(`${sign}${whole}${fraction}`);
+  return decimals >= 0 ? { digits, decimals } : { digits: digits * 10n ** BigInt(-decimals), decimals: 0 };
 }
 
 function comboCount(strategy: StrategyRangeConfig): number {
