@@ -20,8 +20,9 @@ SCHEMA_PATH = REPOSITORY_ROOT / "contracts/graphql/backend.schema.graphql"
 # Built-in GraphQL scalars; custom scalars come from the schema itself.
 BUILTIN_SCALARS = frozenset({"Int", "Float", "String", "Boolean", "ID"})
 
-_OPERATION = re.compile(r"\b(?:query|mutation)\s+[A-Za-z_]\w*\s*\(")
 # ``$name: Type``, ``$name: Type!``, ``$name: [Type!]!`` — the named type is captured.
+# Every non-spec TypeScript file is scanned: a gate on operation syntax would
+# skip anonymous or subscription operations whole, with no failure to show for it.
 _VARIABLE = re.compile(r"\$[A-Za-z_]\w*\s*:\s*\[?\s*([A-Za-z_]\w*)")
 _DECLARATION = re.compile(r"^(?:input|enum|scalar)\s+([A-Za-z_]\w*)", re.MULTILINE)
 
@@ -31,17 +32,15 @@ def _schema_variable_types() -> frozenset[str]:
 
 
 def _frontend_variable_types() -> dict[str, set[str]]:
-    """``{type name: {"path:line", ...}}`` for every variable declared in a GraphQL operation."""
+    """``{type name: {"path:line", ...}}`` for every GraphQL variable the Frontend declares."""
     found: dict[str, set[str]] = {}
     for path in sorted(FRONTEND_ROOT.rglob("*.ts")):
         if path.name.endswith(".spec.ts"):
             continue
         text = path.read_text(encoding="utf-8")
-        if not _OPERATION.search(text):
-            continue
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            for type_name in _VARIABLE.findall(line):
-                found.setdefault(type_name, set()).add(f"{path.relative_to(REPOSITORY_ROOT)}:{line_number}")
+        for match in _VARIABLE.finditer(text):
+            line_number = text.count("\n", 0, match.start()) + 1
+            found.setdefault(match.group(1), set()).add(f"{path.relative_to(REPOSITORY_ROOT)}:{line_number}")
     return found
 
 

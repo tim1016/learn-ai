@@ -392,14 +392,11 @@ describe('PortfolioService', () => {
   describe('price-list operations', () => {
     // The three operations declared `$prices: [PriceInputInput!]!`; the schema's
     // input type is `PriceInput`, so Hot Chocolate refused every call with 400.
-    const declaredTypes = (query: string): string[] =>
-      query.match(/\$[A-Za-z_]\w*\s*:\s*\[?[A-Za-z_]\w*!?\]?!?/g) ?? [];
-
     it('evaluateRiskRules declares prices as [PriceInput!]!', () => {
       service.evaluateRiskRules('acc-1', [{ symbol: 'SPY', price: 500 }]).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
-      expect(declaredTypes(req.request.body.query)).toContain('$prices: [PriceInput!]!');
+      expect(req.request.body.query).toContain('$prices: [PriceInput!]!');
       req.flush({ data: { evaluateRiskRules: [] } });
     });
 
@@ -407,7 +404,7 @@ describe('PortfolioService', () => {
       service.getDollarDelta('acc-1', []).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
-      expect(declaredTypes(req.request.body.query)).toContain('$prices: [PriceInput!]!');
+      expect(req.request.body.query).toContain('$prices: [PriceInput!]!');
       req.flush({ data: { getDollarDelta: [] } });
     });
 
@@ -415,7 +412,7 @@ describe('PortfolioService', () => {
       service.runScenario('acc-1', [], -0.1).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
-      expect(declaredTypes(req.request.body.query)).toContain('$prices: [PriceInput!]!');
+      expect(req.request.body.query).toContain('$prices: [PriceInput!]!');
       expect(req.request.body.variables.priceChangePercent).toBe(-0.1);
       req.flush({ data: { runScenario: { currentEquity: 1, scenarioEquity: 1, pnLImpact: 0, pnLImpactPercent: 0, positions: [] } } });
     });
