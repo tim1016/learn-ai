@@ -43,8 +43,11 @@ JOB_TTL_SECONDS = 60 * 60 * 24
 # 50k events at ~200 bytes each = ~10 MB; plenty for a long backtest.
 MAX_STREAM_LENGTH = 50_000
 
-# How long any caller waits to connect to the job store before giving up.
-JOB_STORE_CONNECT_TIMEOUT_SECONDS = 5.0
+# How long any caller waits to connect to the job store, and then for any one
+# command to answer, before giving up. Every Python call here is a short
+# command (HSET, XADD, HGET, SMEMBERS, SET); the only long stream reads are
+# the .NET jobs facade's, on its own client.
+JOB_STORE_TIMEOUT_SECONDS = 5.0
 
 
 def _redis_url() -> str:
@@ -59,9 +62,12 @@ def get_redis() -> redis.Redis:
     """Return a process-wide Redis client. Pool is lazily initialized.
 
     Returning a pooled client (vs a connection-per-call) matters because
-    the SSE endpoint holds a long XREAD BLOCK and the producer thread
-    XADDs concurrently; both want their own connection without paying
-    handshake cost on every call.
+    producer threads XADD concurrently with the request handlers' reads;
+    each wants its own connection without paying handshake cost on every
+    call. Connecting and every command are bounded by
+    ``JOB_STORE_TIMEOUT_SECONDS``: a Redis that drops packets, or accepts
+    the connection and then stops answering, cannot hold a caller — least
+    of all the startup sweep, which runs before the listener opens.
     """
     global _pool
     if _pool is None:
@@ -71,12 +77,8 @@ def get_redis() -> redis.Redis:
                     _redis_url(),
                     decode_responses=True,
                     max_connections=32,
-                    # Connecting is bounded so a Redis endpoint that drops packets
-                    # cannot hold a caller for the OS TCP timeout — the startup
-                    # sweep runs before the listener opens and must stay best-effort.
-                    # Reads are not bounded here: the SSE endpoint's XREAD BLOCK is
-                    # meant to wait.
-                    socket_connect_timeout=JOB_STORE_CONNECT_TIMEOUT_SECONDS,
+                    socket_connect_timeout=JOB_STORE_TIMEOUT_SECONDS,
+                    socket_timeout=JOB_STORE_TIMEOUT_SECONDS,
                 )
     return redis.Redis(connection_pool=_pool)
 
@@ -338,8 +340,9 @@ def fail_jobs_without_a_worker() -> list[str]:
     behind it (a grid search, a walk-forward study) would present as running
     and refuse Finish. An id whose state has expired, or that reached a terminal
     status without leaving the set, is only dropped from the set. Redis being
-    unreachable is logged and leaves everything alone; the service still boots,
-    and the wait is bounded by the pool's connect timeout.
+    unreachable, or silent after connecting, is logged and leaves everything
+    alone; the service still boots, and every wait is bounded by the pool's
+    connect and command timeouts.
     Returns the ids failed.
     """
     r = get_redis()
