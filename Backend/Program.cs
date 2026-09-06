@@ -2,7 +2,6 @@ using Backend;
 using Backend.Configuration;
 using Backend.Data;
 using Backend.GraphQL;
-using Backend.GraphQL.Resolvers;
 using Backend.Jobs;
 using Backend.Services;
 using Backend.Services.Implementation;
@@ -96,17 +95,6 @@ builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
 })
 .AddPolicyHandler(circuitBreakerPolicy);
 
-// HttpClient for ComparisonService — calls POST /api/lean-sidecar/compare.
-// Pure compute on the Python side; no retry (request is fast, not idempotent
-// in a way that benefits retry). Circuit-breaker still trips on hard-down service.
-builder.Services.AddHttpClient<IComparisonService, ComparisonService>(client =>
-{
-    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
-    client.BaseAddress = new Uri(baseUrl);
-    client.Timeout = TimeSpan.FromSeconds(60);
-})
-.AddPolicyHandler(circuitBreakerPolicy);
-
 // Redis — backing store for job state and SSE event streams. The same
 // Redis instance is shared with PythonDataService; the schema is
 // documented in Backend/Jobs/JobsApi.cs and PythonDataService/app/jobs/progress.py.
@@ -136,23 +124,8 @@ builder.Services.AddHttpClient("python", client =>
     client.Timeout = TimeSpan.FromSeconds(60);
 });
 
-// Minimal API JSON: accept snake_case payloads from PythonDataService
-// (and PascalCase from any other caller) without 500-null-column errors.
-// PropertyNameCaseInsensitive=true is the standard fix for the mismatch
-// between Python's snake_case wire format and C#'s PascalCase record
-// properties. PropertyNamingPolicy=null keeps response keys PascalCase
-// (the existing StudiesApi callers expect that). Only the /api/backtest-runs/*
-// minimal API endpoints use this; GraphQL endpoints go through HotChocolate's
-// own serialization and are unaffected.
-builder.Services.ConfigureHttpJsonOptions(opts =>
-{
-    opts.SerializerOptions.PropertyNameCaseInsensitive = true;
-});
-
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
-builder.Services.AddScoped<IBacktestRunPersistenceService, BacktestRunPersistenceService>();
-builder.Services.AddScoped<IParityVerdictService, ParityVerdictService>();
 builder.Services.AddScoped<IPositionEngine, PositionEngine>();
 builder.Services.AddScoped<IPortfolioService, PortfolioService>();
 builder.Services.AddScoped<IPortfolioValuationService, PortfolioValuationService>();
@@ -161,24 +134,15 @@ builder.Services.AddScoped<IPortfolioRiskService, PortfolioRiskService>();
 builder.Services.AddScoped<IPortfolioReconciliationService, PortfolioReconciliationService>();
 builder.Services.AddScoped<IPortfolioValidationService, PortfolioValidationService>();
 
-// PR B (2026-05-19) Phase 4 — compare-view domain service. Stateless;
-// scoped so each request gets a fresh instance and the unit tests stay
-// independent. No HttpClient injected here — the controller passes the
-// named "python" client through to ReconcileTrades.
-
 // Add GraphQL services
 builder.Services
     .AddGraphQLServer()
     .AddQueryType<Query>()
     .AddTypeExtension<PortfolioQuery>()
     .AddTypeExtension<DataLabQuery>()
-    .AddTypeExtension<BacktestRunsQuery>()
-    .AddTypeExtension<BacktestRunDetailQuery>()
-    .AddTypeExtension<BacktestRunResolver>()
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
-    .AddTypeExtension<BacktestRunMutation>()
     .AddProjections()
     .AddFiltering()
     .AddSorting()
@@ -203,9 +167,6 @@ if (!isGraphQLSchemaCommand)
 
 app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
-app.MapStudiesEndpoints();
-app.MapBacktestRunsEndpoints();
-app.MapParityVerdictsEndpoints();
 app.MapJobsEndpoints();
 app.MapGraphQL();
 

@@ -1,5 +1,4 @@
 using Backend.Data;
-using Backend.Models.MarketData;
 using Backend.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -14,22 +13,6 @@ namespace Backend.Tests.Data;
 public class SchemaMigrationTests
 {
     private const string MigrationBeforeLegacySchemaRepair = "20260717010000_PreserveUnavailableRunMetrics";
-
-    [Fact]
-    public void StrategyExecution_HasLeanRunIdProperty()
-    {
-        var prop = typeof(StrategyExecution).GetProperty(nameof(StrategyExecution.LeanRunId));
-        Assert.NotNull(prop);
-        Assert.Equal(typeof(string), prop!.PropertyType);
-    }
-
-    [Fact]
-    public void BacktestTrade_HasIsSyntheticExitProperty()
-    {
-        var prop = typeof(BacktestTrade).GetProperty(nameof(BacktestTrade.IsSyntheticExit));
-        Assert.NotNull(prop);
-        Assert.Equal(typeof(bool), prop!.PropertyType);
-    }
 
     [Fact]
     public void AllConcreteMigrations_AreDiscoverableByEf()

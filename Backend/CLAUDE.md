@@ -19,7 +19,6 @@ Tests run locally using InMemory EF Core — no containers needed.
 ```
 Backend/
 ├── Program.cs                    # Composition root — service registration, middleware
-├── StudiesApi.cs                 # Large minimal API file (REST endpoints alongside GraphQL)
 ├── GraphQL/
 │   ├── Query.cs                  # Root market data queries
 │   ├── Mutation.cs               # Root mutations
