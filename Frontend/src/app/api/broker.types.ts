@@ -3512,6 +3512,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/backtest-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Backtest Runs
+         * @description Run history, newest first.
+         */
+        get: operations["list_backtest_runs_api_research_backtest_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/backtest-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Backtest Run
+         * @description One run with its report evidence; the trade list says when it is truncated.
+         */
+        get: operations["get_backtest_run_api_research_backtest_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Backtest Run
+         * @description Hard-delete a run; a run backing a live Recency Chart run must go through Recency soft-delete.
+         */
+        delete: operations["delete_backtest_run_api_research_backtest_runs__run_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/backtest-runs/{run_id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Backtest Run Notes */
+        patch: operations["update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch"];
+        trace?: never;
+    };
     "/api/research/build-iv-history": {
         parameters: {
             query?: never;
@@ -5835,6 +5896,127 @@ export interface components {
              */
             win_rate?: number;
         };
+        /**
+         * BacktestRunDetailResponse
+         * @description Everything the run report renders, plus the bounded trade evidence.
+         */
+        BacktestRunDetailResponse: {
+            /** Brokeragepolicy */
+            brokeragePolicy: string | null;
+            /** Commissionperorder */
+            commissionPerOrder: number | null;
+            /** Datapolicy */
+            dataPolicy: Record<string, never> | null;
+            /** Durationms */
+            durationMs: number;
+            /** Enddate */
+            endDate: number;
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "PYTHON" | "LEAN";
+            /** Equitycurve */
+            equityCurve: Record<string, never> | null;
+            /** Executedat */
+            executedAt: number;
+            /** Fillmode */
+            fillMode: string;
+            /** Finalequity */
+            finalEquity: number;
+            /** Id */
+            id: number;
+            /** Initialcash */
+            initialCash: number;
+            /** Insightsummaryjson */
+            insightSummaryJson: string | null;
+            /** Leananalysisjson */
+            leanAnalysisJson: string | null;
+            /** Leanrunid */
+            leanRunId: string | null;
+            /** Leanstatisticsjson */
+            leanStatisticsJson: string | null;
+            /** Losingtrades */
+            losingTrades: number;
+            /** Maxdrawdown */
+            maxDrawdown: number;
+            /** Metricdocumentation */
+            metricDocumentation: Record<string, never>[];
+            /** Notes */
+            notes: string | null;
+            /** Parameters */
+            parameters: string;
+            /** Paritygroupid */
+            parityGroupId: string | null;
+            /** Parityverdicts */
+            parityVerdicts: components["schemas"]["BacktestRunParityVerdictResponse"][];
+            /** Profitfactor */
+            profitFactor: number | null;
+            /** Requestedengine */
+            requestedEngine: string | null;
+            /** Sharperatio */
+            sharpeRatio: number | null;
+            /** Sortinoratio */
+            sortinoRatio: number | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "engine" | "lean-sidecar";
+            /** Startdate */
+            startDate: number;
+            /** Strategyname */
+            strategyName: string;
+            /** Symbol */
+            symbol: string;
+            /** Totalfees */
+            totalFees: number;
+            /** Totalpnl */
+            totalPnL: number;
+            /** Totaltrades */
+            totalTrades: number;
+            /** Trades */
+            trades: components["schemas"]["BacktestRunTradeResponse"][];
+            /** Tradestruncated */
+            tradesTruncated: boolean;
+            /** Validationanalytics */
+            validationAnalytics: Record<string, never> | null;
+            /** Verdictgrade */
+            verdictGrade: string | null;
+            /** Verdictjson */
+            verdictJson: string | null;
+            /** Verdictsignal */
+            verdictSignal: string | null;
+            /** Verdictversion */
+            verdictVersion: number | null;
+            /** Winrate */
+            winRate: number;
+            /** Winningtrades */
+            winningTrades: number;
+        };
+        /** BacktestRunNotesRequest */
+        BacktestRunNotesRequest: {
+            /** Notes */
+            notes?: string | null;
+        };
+        /** BacktestRunNotesResponse */
+        BacktestRunNotesResponse: {
+            /** Id */
+            id: number;
+            /** Notes */
+            notes: string | null;
+        };
+        /** BacktestRunParityVerdictResponse */
+        BacktestRunParityVerdictResponse: {
+            /** Createdat */
+            createdAt: number;
+            /** Id */
+            id: number;
+            /** Status */
+            status: string;
+            /** Verdictjson */
+            verdictJson: string;
+        };
         /** BacktestRunResult */
         BacktestRunResult: {
             /**
@@ -5859,6 +6041,83 @@ export interface components {
             trades?: components["schemas"]["RunTrade"][];
             /** Warnings */
             warnings?: string[];
+        };
+        /**
+         * BacktestRunSummaryResponse
+         * @description One run-history row.
+         */
+        BacktestRunSummaryResponse: {
+            /** Brokeragepolicy */
+            brokeragePolicy: string | null;
+            /** Commissionperorder */
+            commissionPerOrder: number | null;
+            /** Datapolicy */
+            dataPolicy: Record<string, never> | null;
+            /** Enddate */
+            endDate: number;
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "PYTHON" | "LEAN";
+            /** Executedat */
+            executedAt: number;
+            /** Hassyntheticexit */
+            hasSyntheticExit: boolean;
+            /** Id */
+            id: number;
+            /** Leanrunid */
+            leanRunId: string | null;
+            /** Notes */
+            notes: string | null;
+            /** Parameters */
+            parameters: string;
+            /** Paritygroupid */
+            parityGroupId: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "engine" | "lean-sidecar";
+            /** Startdate */
+            startDate: number;
+            /** Strategyname */
+            strategyName: string;
+            /** Symbol */
+            symbol: string;
+            /** Totalpnl */
+            totalPnL: number;
+            /** Totaltrades */
+            totalTrades: number;
+            /** Verdictgrade */
+            verdictGrade: string | null;
+            /** Verdictsignal */
+            verdictSignal: string | null;
+        };
+        /** BacktestRunTradeResponse */
+        BacktestRunTradeResponse: {
+            /** Entryprice */
+            entryPrice: number;
+            /** Entrytimestamp */
+            entryTimestamp: number;
+            /** Exitprice */
+            exitPrice: number;
+            /** Exittimestamp */
+            exitTimestamp: number;
+            /** Id */
+            id: number;
+            /** Issyntheticexit */
+            isSyntheticExit: boolean;
+            /** Pnl */
+            pnL: number;
+            /** Pnlpct */
+            pnlPct: number;
+            /** Pnlpts */
+            pnlPts: number;
+            /** Quantity */
+            quantity: number;
+            /** Signalreason */
+            signalReason: string;
         };
         /**
          * BarPayload
@@ -27618,6 +27877,133 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuantLibStrategyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_backtest_runs_api_research_backtest_runs_get: {
+        parameters: {
+            query?: {
+                engine?: ("PYTHON" | "LEAN") | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacktestRunSummaryResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_backtest_run_api_research_backtest_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacktestRunDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_backtest_run_api_research_backtest_runs__run_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BacktestRunNotesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacktestRunNotesResponse"];
                 };
             };
             /** @description Validation Error */

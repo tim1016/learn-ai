@@ -21,6 +21,8 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     2: "cf43cb591e5cc90e",
     3: "9710c4b2f398e124",
     4: "af50760fa9b256df",
+    5: "5bafa2856e347d82",
+    6: "ff9c91a7adf7ac30",
 }
 
 
@@ -70,3 +72,36 @@ async def test_version_4_is_a_no_op_where_version_1_was_complete(scratch_db: asy
         "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'research_grid_searches' ORDER BY ordinal_position"
     )
     assert [tuple(row) for row in after] == [tuple(row) for row in before]
+
+
+async def test_version_6_cascades_a_parity_verdict_with_its_lean_side(scratch_db: asyncpg.Connection) -> None:
+    await ensure_schema(scratch_db)
+
+    delete_rule = await scratch_db.fetchval(
+        "SELECT confdeltype FROM pg_constraint WHERE conname = 'research_parity_verdicts_right_run_id_fkey'"
+    )
+
+    assert delete_rule == b"c"  # CASCADE (asyncpg returns the "char" column as bytes); version 5 had SET NULL
+
+
+async def test_version_5_nulls_every_recency_study_reference(scratch_db: asyncpg.Connection) -> None:
+    """Old study ids named rows of the EF table; under a fresh identity sequence they would point at unrelated runs."""
+    await ensure_schema(scratch_db)
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version = 5")
+    await scratch_db.execute(
+        """
+        INSERT INTO "RecencyLaunches" ("Id", "ConfigJson", "ExpectedRuns", "SucceededRuns", "FailedRuns", "Status", "CreatedAtMs")
+        VALUES ('launch-v5', '{}'::jsonb, 1, 1, 0, 'COMPLETED', 1)
+        """
+    )
+    await scratch_db.execute(
+        """
+        INSERT INTO "RecencyRuns" ("RecencyLaunchId", "StrategyKey", "Symbol", "ParamsJson", "ParamsHash", "StudyId", "TotalPnl", "CreatedAtMs")
+        VALUES ('launch-v5', 'sma_crossover', 'SPY', '{}'::jsonb, 'h', 77, 0, 1)
+        """
+    )
+
+    await ensure_schema(scratch_db)
+
+    assert await scratch_db.fetchval('SELECT count(*) FROM "RecencyRuns" WHERE "StudyId" IS NOT NULL') == 0
+    assert await scratch_db.fetchval("SELECT to_regclass('research_backtest_runs')") is not None

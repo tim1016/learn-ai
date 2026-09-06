@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from decimal import Decimal
 
-import httpx
 import pytest
-import respx
 
+from app.services import engine_persistence
 from app.services.engine_persistence import (
     EngineTrade,
     build_engine_persist_payload,
@@ -103,8 +103,8 @@ class TestBuildEnginePersistPayload:
             strategy_name="ema_crossover",
             symbol="SPY",
             starting_cash=Decimal("100000"),
-            start_date_ms=1_700_000_000_000,
-            end_date_ms=1_700_001_000_000,
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
             trades=[_trade(pnl="10")],
         )
 
@@ -113,8 +113,8 @@ class TestBuildEnginePersistPayload:
         assert payload["strategy_name"] == "ema_crossover"
         assert payload["symbol"] == "SPY"
         assert payload["starting_cash"] == 100_000.0
-        assert payload["start_date_ms"] == 1_700_000_000_000
-        assert payload["end_date_ms"] == 1_700_001_000_000
+        assert payload["start_date"] == "2023-11-14"
+        assert payload["end_date"] == "2023-11-14"
         assert payload["total_trades"] == 1
         assert payload["winning_trades"] == 1
         assert payload["losing_trades"] == 0
@@ -160,8 +160,8 @@ class TestBuildEnginePersistPayload:
             strategy_name="ema_crossover",
             symbol="SPY",
             starting_cash=Decimal("100000"),
-            start_date_ms=1_700_000_000_000,
-            end_date_ms=1_700_001_000_000,
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
             trades=[],
             extra_statistics={"engine_version": "spec-v2", "fill_mode": "signal_bar_close"},
         )
@@ -176,8 +176,8 @@ class TestBuildEnginePersistPayload:
             strategy_name="ema_crossover",
             symbol="SPY",
             starting_cash=Decimal("100000"),
-            start_date_ms=1_700_000_000_000,
-            end_date_ms=1_700_001_000_000,
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
             trades=[],
         )
 
@@ -192,47 +192,45 @@ class TestBuildEnginePersistPayload:
 
 class TestPersistEngineRun:
     @pytest.mark.asyncio
-    async def test_posts_to_persist_lean_and_returns_assigned_id(self) -> None:
-        base_url = "http://test-backend"
-        async with respx.mock(base_url=base_url, assert_all_called=True) as mock:
-            route = mock.post("/api/backtest-runs/persist-lean").mock(
-                return_value=httpx.Response(200, json={"strategy_execution_id": 42})
-            )
+    async def test_writes_the_payload_and_returns_the_assigned_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        written: list[dict] = []
 
-            persisted_id = await persist_engine_run(
-                base_url=base_url,
-                strategy_name="ema_crossover",
-                symbol="SPY",
-                starting_cash=Decimal("100000"),
-                start_date_ms=1_700_000_000_000,
-                end_date_ms=1_700_001_000_000,
-                trades=[_trade()],
-            )
+        async def fake_persist(payload: dict) -> int:
+            written.append(payload)
+            return 42
 
-            assert persisted_id == 42
-            sent = route.calls[0].request
-            import json
+        monkeypatch.setattr(engine_persistence, "persist_run_payload", fake_persist)
 
-            body = json.loads(sent.content)
-            assert body["source"] == "engine"
-            assert body["lean_run_id"] is None
-            assert body["strategy_name"] == "ema_crossover"
-            assert len(body["trades"]) == 1
+        persisted_id = await persist_engine_run(
+            strategy_name="ema_crossover",
+            symbol="SPY",
+            starting_cash=Decimal("100000"),
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
+            trades=[_trade()],
+        )
+
+        assert persisted_id == 42
+        [body] = written
+        assert body["source"] == "engine"
+        assert body["lean_run_id"] is None
+        assert body["strategy_name"] == "ema_crossover"
+        assert len(body["trades"]) == 1
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_backend_returns_500(self) -> None:
-        base_url = "http://test-backend"
-        async with respx.mock(base_url=base_url, assert_all_called=True) as mock:
-            mock.post("/api/backtest-runs/persist-lean").mock(return_value=httpx.Response(500, json={"error": "boom"}))
+    async def test_returns_none_when_persistence_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def failed_persist(payload: dict) -> None:
+            return None
 
-            persisted_id = await persist_engine_run(
-                base_url=base_url,
-                strategy_name="ema_crossover",
-                symbol="SPY",
-                starting_cash=Decimal("100000"),
-                start_date_ms=1_700_000_000_000,
-                end_date_ms=1_700_001_000_000,
-                trades=[],
-            )
+        monkeypatch.setattr(engine_persistence, "persist_run_payload", failed_persist)
 
-            assert persisted_id is None
+        persisted_id = await persist_engine_run(
+            strategy_name="ema_crossover",
+            symbol="SPY",
+            starting_cash=Decimal("100000"),
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
+            trades=[],
+        )
+
+        assert persisted_id is None

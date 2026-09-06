@@ -14,11 +14,10 @@ async function renderModal(options: {
   variantId?: string;
   label?: string;
   context?: {
-    metricId: string;
-    variantId: string;
+    metric_id: string;
+    variant_id: string;
     producer: string;
-    contractId: string | null;
-    contractProvenance: string;
+    contract_id: string | null;
   } | null;
 } = {}) {
   await TestBed.configureTestingModule({
@@ -52,11 +51,10 @@ describe("MetricHelpModalComponent", () => {
       metricId: "maximum_drawdown",
       label: "Max drawdown",
       context: {
-        metricId: "maximum_drawdown",
-        variantId: "lean_native.portfolio.drawdown.v1",
+        metric_id: "maximum_drawdown",
+        variant_id: "lean_native.portfolio.drawdown.v1",
         producer: "lean_native",
-        contractId: "lean-native-statistics-oracle-v1",
-        contractProvenance: "recorded",
+        contract_id: "lean-native-statistics-oracle-v1",
       },
     });
 

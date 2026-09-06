@@ -239,17 +239,16 @@ async def run_spec_against_bars_and_persist(
     start_date: tuple[int, int, int],
     end_date: tuple[int, int, int],
     starting_cash: Decimal,
-    backend_url: str,
     strategy_name: str | None = None,
     commission_per_order: Decimal = Decimal("0"),
     fill_mode: FillMode = FillMode.SIGNAL_BAR_CLOSE,
     extra_statistics: dict[str, Any] | None = None,
 ) -> SpecRunResult:
-    """End-to-end: run the spec against bars AND persist via the .NET backend.
+    """End-to-end: run the spec against bars AND persist the run.
 
     Returns the same ``SpecRunResult`` but with ``strategy_execution_id``
-    populated. If persistence fails (HTTP/network), the id stays ``None`` —
-    the in-memory trades remain authoritative and the caller can retry.
+    populated. If persistence fails, the id stays ``None`` — the in-memory
+    trades remain authoritative and the caller can retry.
 
     ``strategy_name`` defaults to the spec's ``name`` if not provided, so
     LEAN and the spec can be aligned on the same name for guardrail
@@ -271,16 +270,12 @@ async def run_spec_against_bars_and_persist(
         fill_mode=fill_mode,
     )
 
-    start_ms = _date_tuple_to_ms_utc(start_date)
-    end_ms = _date_tuple_to_ms_utc(end_date)
-
     persisted_id = await persist_engine_run(
-        base_url=backend_url,
         strategy_name=resolved_name,
         symbol=symbol,
         starting_cash=starting_cash,
-        start_date_ms=start_ms,
-        end_date_ms=end_ms,
+        start_date=date(*start_date),
+        end_date=date(*end_date),
         trades=result.trades,
         total_fees=result.total_fees,
         extra_statistics=extra_statistics,
@@ -293,9 +288,3 @@ async def run_spec_against_bars_and_persist(
         captured_events=result.captured_events,
     )
 
-
-def _date_tuple_to_ms_utc(date_tuple: tuple[int, int, int]) -> int:
-    """Convert ``(year, month, day)`` to int64 ms UTC at midnight."""
-    from datetime import UTC, datetime
-
-    return int(datetime(*date_tuple, tzinfo=UTC).timestamp() * 1000)

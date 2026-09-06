@@ -56,9 +56,10 @@ export class RecencyTradeFocusComponent {
     return `${t.holdingSessions} session${t.holdingSessions === 1 ? "" : "s"}`;
   });
 
+  /** The Strategy Lab run report for the run that produced this trade; none when the run no longer exists. */
   readonly studyUrl = computed(() => {
     const studyId = this.trade()?.studyId;
-    return studyId === null || studyId === undefined ? null : `/research-lab/strategy-runs/${studyId}`;
+    return studyId === null || studyId === undefined ? null : `/strategy-lab/runs/${studyId}`;
   });
 
   requestDelete(): void {

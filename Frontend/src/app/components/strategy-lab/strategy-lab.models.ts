@@ -1,7 +1,8 @@
 import type { EngineValidationAnalytics } from "../lean-engine/engine-results/engine-validation-analytics.types";
 import type { RunVerdict } from "../../api/run-verdict.types";
 import type { DataPolicy } from "../../models/data-policy";
-import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../services/backtest-runs.types";
+import { runWindowDate } from "../../services/backtest-runs.types";
 import type { TickerRange } from "../../shared/ticker-range-picker";
 
 export type EngineChoice = "python" | "lean" | "both";
@@ -162,8 +163,8 @@ export function toStrategyLabConfiguration(
     range: {
       ...currentRange,
       symbol: symbol.toUpperCase(),
-      from: run.startDate,
-      to: run.endDate,
+      from: runWindowDate(run.startDate),
+      to: runWindowDate(run.endDate),
       resolution: timespan === "day" ? "daily" : timespan ?? "minute",
       multiplier: policy?.input_bars.multiplier ?? 1,
       session: policy?.session === "extended" ? "extended" : "rth",

@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from "@angular/core";
 
 import type { RunVerdict } from "../../../api/run-verdict.types";
-import type { MetricDocumentationContext } from "../../../graphql/backtest-runs.query";
+import type { MetricDocumentationContext } from "../../../services/backtest-runs.types";
 import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.component";
 import { EvidenceGradeComponent } from "../evidence-grade/evidence-grade.component";
 import { MetricHelpModalComponent } from "../metric-help-modal/metric-help-modal.component";
@@ -20,7 +20,7 @@ export class ResultsSummaryComponent {
   readonly metricDocumentation = input<MetricDocumentationContext[]>([]);
   readonly runId = input<number | null>(null);
   private readonly documentationByMetric = computed(() =>
-    new Map(this.metricDocumentation().map((context) => [context.metricId, context])),
+    new Map(this.metricDocumentation().map((context) => [context.metric_id, context])),
   );
 
   documentationFor(metricId: string): MetricDocumentationContext | null {

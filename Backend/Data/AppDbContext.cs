@@ -19,10 +19,6 @@ public class AppDbContext : DbContext
     public DbSet<TechnicalIndicator> TechnicalIndicators => Set<TechnicalIndicator>();
     public DbSet<ReferenceData> ReferenceData => Set<ReferenceData>();
 
-    // Backtesting models
-    public DbSet<StrategyExecution> StrategyExecutions => Set<StrategyExecution>();
-    public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
-    public DbSet<ParityVerdict> ParityVerdicts => Set<ParityVerdict>();
 
 
     // Data lake catalog (Slice 1a)
@@ -154,89 +150,6 @@ public class AppDbContext : DbContext
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(r => new { r.TickerId, r.DataType, r.EventDate });
         });
-
-        // StrategyExecution configuration
-        modelBuilder.Entity<StrategyExecution>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.TotalPnL).HasPrecision(18, 8);
-            entity.Property(e => e.MaxDrawdown).HasPrecision(18, 8);
-            entity.Property(e => e.SharpeRatio).HasPrecision(18, 8);
-            // LEAN-parity KPI precision
-            entity.Property(e => e.InitialCash).HasPrecision(18, 2);
-            entity.Property(e => e.FinalEquity).HasPrecision(18, 2);
-            entity.Property(e => e.TotalFees).HasPrecision(18, 4);
-            entity.Property(e => e.WinRate).HasPrecision(18, 8);
-            entity.Property(e => e.CompoundingAnnualReturn).HasPrecision(18, 8);
-            entity.Property(e => e.SortinoRatio).HasPrecision(18, 8);
-            entity.Property(e => e.ProbabilisticSharpeRatio).HasPrecision(18, 8);
-            entity.Property(e => e.ProfitFactor).HasPrecision(18, 8);
-            entity.Property(e => e.Alpha).HasPrecision(18, 8);
-            entity.Property(e => e.Beta).HasPrecision(18, 8);
-            entity.Property(e => e.InformationRatio).HasPrecision(18, 8);
-            entity.Property(e => e.TrackingError).HasPrecision(18, 8);
-            entity.Property(e => e.TreynorRatio).HasPrecision(18, 8);
-            entity.Property(e => e.ValueAtRisk95).HasPrecision(18, 8);
-            entity.Property(e => e.ValueAtRisk99).HasPrecision(18, 8);
-            entity.Property(e => e.AnnualStandardDeviation).HasPrecision(18, 8);
-            entity.Property(e => e.LeanRunId).HasMaxLength(128);
-            entity.Property(e => e.RunVerdictJson).HasColumnType("jsonb");
-            entity.Property(e => e.VerdictGrade).HasMaxLength(4).HasColumnType("varchar(4)");
-            entity.Property(e => e.VerdictSignal).HasMaxLength(16).HasColumnType("varchar(16)");
-            entity.Property(e => e.EquityCurveJson).HasColumnType("jsonb");
-            entity.Property(e => e.InsightSummaryJson).HasColumnType("jsonb");
-            entity.Property(e => e.ParityGroupId).HasMaxLength(64).HasColumnType("varchar(64)");
-            entity.HasOne(e => e.Ticker)
-                  .WithMany()
-                  .HasForeignKey(e => e.TickerId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(e => new { e.TickerId, e.StrategyName });
-            entity.HasIndex(e => e.ExecutedAt);
-            entity.HasIndex(e => e.Source);
-            entity.HasIndex(e => e.ParityGroupId);
-            entity.HasIndex(e => new { e.Source, e.LeanRunId })
-                  .IsUnique()
-                  .HasFilter("\"LeanRunId\" IS NOT NULL");
-        });
-
-        modelBuilder.Entity<ParityVerdict>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.ParityGroupId).HasMaxLength(64).HasColumnType("varchar(64)");
-            entity.Property(e => e.Status).IsRequired().HasMaxLength(16).HasColumnType("varchar(16)");
-            entity.Property(e => e.VerdictJson).IsRequired().HasColumnType("jsonb");
-            entity.HasOne(e => e.LeftExecution)
-                  .WithMany()
-                  .HasForeignKey(e => e.LeftExecutionId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.RightExecution)
-                  .WithMany()
-                  .HasForeignKey(e => e.RightExecutionId)
-                  .IsRequired(false)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(e => new { e.LeftExecutionId, e.RightExecutionId }).IsUnique();
-            // One verdict row per parity group — the pending row is updated
-            // in place when the companion lands, never duplicated.
-            entity.HasIndex(e => e.ParityGroupId).IsUnique();
-        });
-
-        // BacktestTrade configuration
-        modelBuilder.Entity<BacktestTrade>(entity =>
-        {
-            entity.HasKey(t => t.Id);
-            entity.Property(t => t.EntryPrice).HasPrecision(18, 8);
-            entity.Property(t => t.ExitPrice).HasPrecision(18, 8);
-            entity.Property(t => t.Quantity).HasPrecision(18, 8);
-            entity.Property(t => t.PnL).HasPrecision(18, 8);
-            entity.Property(t => t.CumulativePnL).HasPrecision(18, 8);
-            entity.Property(t => t.IsSyntheticExit).HasDefaultValue(false);
-            entity.HasOne(t => t.StrategyExecution)
-                  .WithMany(e => e.Trades)
-                  .HasForeignKey(t => t.StrategyExecutionId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(t => t.StrategyExecutionId);
-        });
-
 
         // ResearchExperiment configuration
         modelBuilder.Entity<ResearchExperiment>(entity =>

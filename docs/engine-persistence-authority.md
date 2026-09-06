@@ -1,32 +1,33 @@
 # Engine-side persistence authority
 
 **Status:** canonical
-**Domain:** in-process `BacktestEngine` runs writing to `StrategyExecution` + `BacktestTrade` (Postgres) through the same `.NET` persist endpoint as LEAN sidecar runs.
-**Last reviewed:** 2026-05-19
+**Domain:** in-process `BacktestEngine` runs, LEAN sidecar runs and spec-strategy runs writing to the Python-owned run tables (`research_backtest_runs` + `research_backtest_run_trades`, Postgres) through one repository write.
+**Last reviewed:** 2026-09-06 (PRD #1929 / ADR 0058 — the `.NET` persist endpoint is gone)
 
 ## Why
 
 Two engines produce backtest results in this repo:
 
-- **LEAN sidecar.** Subprocess via the launcher, normalized result on disk, then POST to `/api/backtest-runs/persist-lean` (introduced by PR #291).
+- **LEAN sidecar.** Subprocess via the launcher, normalized result on disk, then the canonical persist payload written through `app.research.backtest_runs.service.persist_run_payload` (the `.NET` `/api/backtest-runs/persist-lean` hop introduced by PR #291 was retired by PRD #1929).
 - **In-process spec strategies.** `SpecAlgorithm` driven through `BacktestEngine`. Until PR 4, these only populated a strategy-local `trade_log` and never reached the database.
 
-For the unified history table (#294) and the cross-engine compare view (#295) to show engine-side runs alongside LEAN runs, in-process runs must persist through the same Postgres rows. The persist endpoint and payload are the shared contract; the engine path now uses them too.
+For the unified history table (#294) and the cross-engine compare view (#295) to show engine-side runs alongside LEAN runs, in-process runs must persist through the same Postgres rows. The persist payload and the repository write are the shared contract; the engine path uses them too.
 
-The parity gate (`@pytest.mark.slow` in `PythonDataService/tests/integration/parity/`) closes the loop: it runs LEAN and the spec on the same SPY window, persists both, and asserts via GraphQL that the reconciled trade lists have zero divergences in the gating set from `.claude/rules/numerical-rigor.md` § "Trade-level reconciliation taxonomy".
+The parity gate (`@pytest.mark.slow` in `PythonDataService/tests/integration/parity/`) closes the loop: it runs LEAN and the spec on the same SPY window, persists both, reconciles the persisted ledgers with the in-process classifier the parity verdict uses, and asserts zero divergences in the gating set from `.claude/rules/numerical-rigor.md` § "Trade-level reconciliation taxonomy".
 
 ## Layer-by-layer contract
 
-### `.NET` side (`Backend/`)
+### The write (`PythonDataService/app/research/backtest_runs/`)
 
-- **`PersistLeanRunPayload`** (`Backend/Models/MarketData/PersistLeanRunPayload.cs`) — the shared persist payload. As of PR 4, `LeanRunId` is nullable.
-- **`BacktestRunPersistenceService.PersistAsync`** (`Backend/Services/Implementation/`) — accepts `Source ∈ {"lean-sidecar","engine"}`. For `lean-sidecar`, `LeanRunId` is required and acts as the idempotency key (unique partial index on `(Source, LeanRunId) WHERE LeanRunId IS NOT NULL`, plus a race-condition catch on `SqlState 23505`). For `engine`, `LeanRunId` must be null and there is no idempotency — every persist creates a new row. `FillMode` is set to `"signal_bar_close"` for engine runs.
-- **Endpoint:** `POST /api/backtest-runs/persist-lean` — same URL, both sources. Returns `{"strategy_execution_id": <int>}`.
+- **`records.record_from_payload`** — the one converter from the canonical snake_case persist payload to the row. It enforces what the retired `.NET` writers enforced: `source ∈ {"lean-sidecar","engine"}`; for `lean-sidecar`, `lean_run_id` is required and is the idempotency key (unique partial index on `lean_run_id`; a redelivery returns the existing row and refuses a different `requested_engine`); for `engine`, `lean_run_id` must be null and there is no idempotency — every persist creates a new row; `fill_mode` defaults to `"signal_bar_close"` for engine runs.
+- **`repository.insert_run`** — one transactional INSERT of the run row plus its trades. **`service.persist_run_payload` / `persist_run_payload_sync`** wrap it best-effort (a failure logs and yields `None`; the run that produced the payload is unaffected) and freeze the parity verdict after a LEAN companion lands.
+- **Reads:** `GET /api/research/backtest-runs` and `GET /api/research/backtest-runs/{id}` (`app/routers/backtest_runs.py`).
 
-### `PythonDataService` side
+### The producers (`PythonDataService/app/`)
 
-- **`app/services/lean_sidecar_persistence.py`** — LEAN path. `build_persist_payload` reads a normalized LEAN workspace and produces the dict. `persist_via_dotnet` posts it. (Pre-existing; unchanged in PR 4 except for `LeanRunId` nullability inherited from the model.)
-- **`app/services/engine_persistence.py`** — engine path (PR 4). `EngineTrade` is the closed-round-trip shape with `quantity` (`Decimal`) and signed `pnl`. `compute_aggregates` rolls up KPIs. `build_engine_persist_payload` produces the same wire shape as the LEAN builder, with `source="engine"` and `lean_run_id=None`. `persist_engine_run` reuses `lean_sidecar_persistence.persist_via_dotnet` for transport.
+- **`research/backtest_runs/engine_payload.py`** — the engine backtest path (Strategy Lab). `build_engine_run_payload` is a pure function of the engine response: per-trade dollar P&L under the executed fee policy, the strict dual-curve equity report, the frozen validation-analytics envelope.
+- **`services/lean_sidecar_persistence.py`** — LEAN path. `build_persist_payload` reads a normalized LEAN workspace and produces the payload.
+- **`services/engine_persistence.py`** — spec-runner path (PR 4). `EngineTrade` is the closed-round-trip shape with `quantity` (`Decimal`) and signed `pnl`. `compute_aggregates` rolls up KPIs. `build_engine_persist_payload` produces the same payload shape as the LEAN builder, with `source="engine"` and `lean_run_id=None`. `persist_engine_run` hands it to `persist_run_payload`.
 - **`app/services/spec_strategy_runner.py`** — engine driver (PR 4). Loads a `StrategySpec`, runs it through `BacktestEngine` against a caller-provided `list[TradeBar]`, captures every `OrderEvent` via a thin `SpecAlgorithm` subclass (because the strategy's own `LoggedTrade` doesn't carry `fill_quantity`), pairs LONG/(SHORT|FLAT) fills into `EngineTrade` objects, and (optionally) persists.
 
 ### Pairing logic (`pair_engine_fills`)
@@ -54,8 +55,7 @@ In-scope strategies are long-only. The pairer:
 
 **Skip guards.** Test no-ops gracefully when any of:
 
-- Backend (`http://backend:8080`) isn't reachable.
-- `compareBacktestRuns` is missing from the GraphQL schema (stale `dotnet watch` build — `podman logs my-backend` for NuGet/dotnet errors).
+- `POSTGRES_URL` is unset (the Python-owned run tables, and so both persists, need Postgres).
 - LEAN launcher process (`http://host.containers.internal:8090`) isn't running.
 - No SPY zips under `/lean-cache` or `/lean-data` for the window.
 - `PINNED_LEAN_IMAGE_DIGEST` is unset (run `scripts/lean_sidecar_pin_image.py` first).
@@ -82,10 +82,10 @@ All other six categories (DECISION_MISMATCH, DIRECTION_MISMATCH, QUANTITY_MISMAT
 
 | Layer | File | What it owns |
 |---|---|---|
-| .NET | `Backend/Models/MarketData/PersistLeanRunPayload.cs` | The shared persist payload contract |
-| .NET | `Backend/Services/Implementation/BacktestRunPersistenceService.cs` | Idempotency + source-routing |
-| .NET | `Backend/GraphQL/Comparison/CompareBacktestRunsResolver.cs` | The GraphQL endpoint the parity test queries |
-| Python | `PythonDataService/app/services/engine_persistence.py` | Engine payload builder + POST |
+| Python | `PythonDataService/app/research/backtest_runs/records.py` | The canonical persist payload → row converter (validation, defaults) |
+| Python | `PythonDataService/app/research/backtest_runs/repository.py` | The one write; LEAN idempotency; reads |
+| Python | `PythonDataService/app/research/backtest_runs/parity.py` | The cross-engine parity verdict (trade reconciliation + receipts) |
+| Python | `PythonDataService/app/services/engine_persistence.py` | Spec-runner payload builder |
 | Python | `PythonDataService/app/services/spec_strategy_runner.py` | Load spec → run engine → capture trades → persist |
 | Python | `PythonDataService/app/services/lean_sidecar_compare_service.py` | 6-of-8 category classifier |
 | Python | `PythonDataService/tests/integration/parity/test_ema_crossover_lean_vs_spec.py` | The `@pytest.mark.slow` parity gate |

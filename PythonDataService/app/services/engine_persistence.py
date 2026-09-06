@@ -1,18 +1,15 @@
-"""Persistence layer: send in-process BacktestEngine output to the .NET backend.
+"""Persistence adapter for in-process ``BacktestEngine`` output captured trade by trade.
 
 Sibling to ``lean_sidecar_persistence``. Where the LEAN sidecar normalizes an
 on-disk LEAN workspace into a persist payload, this module converts captured
 engine trades (entry/exit ms_utc, prices, quantities, pnl) into the same
-``PersistLeanRunPayload`` shape that the .NET endpoint already accepts.
+canonical payload and hands it to the one repository write
+(``app.research.backtest_runs.service``, PRD #1929).
 
-The payload sets ``source="engine"`` and ``lean_run_id=None`` — the .NET service
-accepts both as of PR 4. Engine-source persists have no external idempotency
-key, so each call inserts a new ``StrategyExecution`` row. The caller (typically
-a spec-strategy runner) is responsible for not double-persisting.
-
-The HTTP transport is shared with the LEAN path via
-``lean_sidecar_persistence.persist_via_dotnet`` — both routes use the same
-``POST /api/backtest-runs/persist-lean`` endpoint.
+The payload sets ``source="engine"`` and ``lean_run_id=None``. Engine-source
+persists have no external idempotency key, so each call inserts a new run
+row. The caller (the spec-strategy runner) is responsible for not
+double-persisting.
 """
 
 from __future__ import annotations
@@ -20,11 +17,12 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from app.research.backtest_runs.service import persist_run_payload
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
-from app.services.lean_sidecar_persistence import persist_via_dotnet
 
 __all__ = [
     "EngineAggregateKpis",
@@ -101,18 +99,17 @@ def build_engine_persist_payload(
     strategy_name: str,
     symbol: str,
     starting_cash: Decimal,
-    start_date_ms: int,
-    end_date_ms: int,
+    start_date: date,
+    end_date: date,
     trades: list[EngineTrade],
     total_fees: Decimal = Decimal("0"),
     extra_statistics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the engine-source persist payload (source="engine", lean_run_id=None).
 
-    All timestamps in the returned payload are ``int64`` ms UTC. Decimals are
-    serialized as numbers by the consuming JSON encoder (Pydantic v2 / Python's
-    default json.dumps will require ``str(Decimal)`` or ``float`` coercion at
-    the wire boundary — see ``persist_via_dotnet`` for the conversion).
+    Trade timestamps stay ``int64`` ms UTC; the window is the trading dates the
+    caller keyed the run by. Decimals are coerced to floats here because the row
+    stores double precision.
     """
     aggregates = compute_aggregates(trades, starting_cash, total_fees=total_fees)
 
@@ -122,8 +119,8 @@ def build_engine_persist_payload(
         "strategy_name": strategy_name,
         "symbol": symbol,
         "starting_cash": float(starting_cash),
-        "start_date_ms": start_date_ms,
-        "end_date_ms": end_date_ms,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "total_trades": aggregates.total_trades,
         "winning_trades": aggregates.winning_trades,
         "losing_trades": aggregates.losing_trades,
@@ -155,31 +152,27 @@ def build_engine_persist_payload(
 
 async def persist_engine_run(
     *,
-    base_url: str,
     strategy_name: str,
     symbol: str,
     starting_cash: Decimal,
-    start_date_ms: int,
-    end_date_ms: int,
+    start_date: date,
+    end_date: date,
     trades: list[EngineTrade],
     total_fees: Decimal = Decimal("0"),
     extra_statistics: dict[str, Any] | None = None,
-    timeout_seconds: float = 30.0,
 ) -> int | None:
-    """Build the engine persist payload and POST it to the .NET backend.
+    """Build the engine persist payload and write it.
 
-    Returns the assigned ``StrategyExecution.Id`` on success, or ``None`` on
-    HTTP/network failure. Mirrors the failure semantics of
-    ``lean_sidecar_persistence.persist_via_dotnet``: persistence failures must
-    not abort the caller; the in-memory trade list remains authoritative and
-    can be retried.
+    Returns the assigned run id on success, or ``None`` when persistence
+    failed. Persistence failures must not abort the caller; the in-memory
+    trade list remains authoritative and can be retried.
     """
     payload = build_engine_persist_payload(
         strategy_name=strategy_name,
         symbol=symbol,
         starting_cash=starting_cash,
-        start_date_ms=start_date_ms,
-        end_date_ms=end_date_ms,
+        start_date=start_date,
+        end_date=end_date,
         trades=trades,
         total_fees=total_fees,
         extra_statistics=extra_statistics,
@@ -190,4 +183,4 @@ async def persist_engine_run(
         symbol,
         len(trades),
     )
-    return await persist_via_dotnet(payload, base_url=base_url, timeout_seconds=timeout_seconds)
+    return await persist_run_payload(payload)

@@ -25,7 +25,7 @@
           </td>
           <td>{{ strategyLabel(row) }}</td>
           <td>{{ row.symbol ?? '—' }}</td>
-          <td>{{ row.startDate }} – {{ row.endDate }}</td>
+          <td>{{ row.startDate | timestampDisplay: 'date-et' }} – {{ row.endDate | timestampDisplay: 'date-et' }}</td>
           <td class="bars-cell">{{ barsSummary(row.dataPolicy) }}</td>
           <td>{{ row.executedAt | timestampDisplay: 'local' : 'datetime' }}</td>
           <td class="num">{{ row.totalTrades }}</td>

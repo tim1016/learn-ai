@@ -81,65 +81,6 @@ namespace Backend.Migrations
                     b.ToTable("DataLabSessions");
                 });
 
-            modelBuilder.Entity("Backend.Models.MarketData.BacktestTrade", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("CumulativePnL")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("EntryPrice")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<DateTime>("EntryTimestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("ExitPrice")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<DateTime>("ExitTimestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsSyntheticExit")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false);
-
-                    b.Property<decimal>("PnL")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("Quantity")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("SignalReason")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<int>("StrategyExecutionId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("TradeType")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("StrategyExecutionId");
-
-                    b.ToTable("BacktestTrades");
-                });
-
             modelBuilder.Entity("Backend.Models.MarketData.DataLakeArtifact", b =>
                 {
                     b.Property<long>("Id")
@@ -317,52 +258,6 @@ namespace Backend.Migrations
                         .IsUnique();
 
                     b.ToTable("OptionsIvSnapshots");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.ParityVerdict", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("LeftExecutionId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ParityGroupId")
-                        .HasMaxLength(64)
-                        .HasColumnType("varchar(64)");
-
-                    b.Property<int?>("RightExecutionId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("varchar(16)");
-
-                    b.Property<string>("VerdictJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<int>("VerdictVersion")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ParityGroupId")
-                        .IsUnique();
-
-                    b.HasIndex("RightExecutionId");
-
-                    b.HasIndex("LeftExecutionId", "RightExecutionId")
-                        .IsUnique();
-
-                    b.ToTable("ParityVerdicts");
                 });
 
             modelBuilder.Entity("Backend.Models.MarketData.Quote", b =>
@@ -671,222 +566,6 @@ namespace Backend.Migrations
                     b.HasIndex("TickerId", "Timestamp", "Timespan");
 
                     b.ToTable("StockAggregates");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.StrategyExecution", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("Alpha")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("AnnualStandardDeviation")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("Beta")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("BrokeragePolicy")
-                        .HasMaxLength(40)
-                        .HasColumnType("varchar(40)");
-
-                    b.Property<decimal?>("CommissionPerOrder")
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("CompoundingAnnualReturn")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("DataPolicyJson")
-                        .HasColumnType("jsonb");
-
-                    b.Property<int>("DrawdownRecoveryDays")
-                        .HasColumnType("integer");
-
-                    b.Property<long>("DurationMs")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("EndDate")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<string>("EquityCurveJson")
-                        .HasColumnType("jsonb");
-
-                    b.Property<DateTime>("ExecutedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("FillMode")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<decimal>("FinalEquity")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("InformationRatio")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("InitialCash")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<string>("InsightSummaryJson")
-                        .HasColumnType("jsonb");
-
-                    b.Property<string>("LeanAnalysisJson")
-                        .HasColumnType("jsonb");
-
-                    b.Property<string>("LeanRunId")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("LeanStatisticsJson")
-                        .HasColumnType("jsonb");
-
-                    b.Property<int>("LosingTrades")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("MaxDrawdown")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("MetricDocumentationJson")
-                        .HasColumnType("jsonb");
-
-                    b.Property<int>("Multiplier")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Notes")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Parameters")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("ParityGroupId")
-                        .HasMaxLength(64)
-                        .HasColumnType("varchar(64)");
-
-                    b.Property<decimal>("ProbabilisticSharpeRatio")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal?>("ProfitFactor")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("RequestedEngine")
-                        .HasMaxLength(12)
-                        .HasColumnType("varchar(12)");
-
-                    b.Property<string>("RunVerdictJson")
-                        .HasColumnType("jsonb");
-
-                    b.Property<decimal?>("SharpeRatio")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal?>("SortinoRatio")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<string>("StartDate")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<string>("StrategyName")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<int>("TickerId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Timespan")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<decimal>("TotalFees")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("numeric(18,4)");
-
-                    b.Property<decimal>("TotalPnL")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<int>("TotalTrades")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("TrackingError")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("TreynorRatio")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("ValidationAnalyticsJson")
-                        .HasColumnType("jsonb");
-
-                    b.Property<decimal>("ValueAtRisk95")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("ValueAtRisk99")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("VerdictGrade")
-                        .HasMaxLength(4)
-                        .HasColumnType("varchar(4)");
-
-                    b.Property<string>("VerdictSignal")
-                        .HasMaxLength(16)
-                        .HasColumnType("varchar(16)");
-
-                    b.Property<int?>("VerdictVersion")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("WinRate")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<int>("WinningTrades")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ExecutedAt");
-
-                    b.HasIndex("ParityGroupId");
-
-                    b.HasIndex("Source");
-
-                    b.HasIndex("Source", "LeanRunId")
-                        .IsUnique()
-                        .HasFilter("\"LeanRunId\" IS NOT NULL");
-
-                    b.HasIndex("TickerId", "StrategyName");
-
-                    b.ToTable("StrategyExecutions");
                 });
 
             modelBuilder.Entity("Backend.Models.MarketData.TechnicalIndicator", b =>
@@ -1465,17 +1144,6 @@ namespace Backend.Migrations
                     b.ToTable("RiskRules");
                 });
 
-            modelBuilder.Entity("Backend.Models.MarketData.BacktestTrade", b =>
-                {
-                    b.HasOne("Backend.Models.MarketData.StrategyExecution", "StrategyExecution")
-                        .WithMany("Trades")
-                        .HasForeignKey("StrategyExecutionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("StrategyExecution");
-                });
-
             modelBuilder.Entity("Backend.Models.MarketData.OptionsIvSnapshot", b =>
                 {
                     b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
@@ -1485,24 +1153,6 @@ namespace Backend.Migrations
                         .IsRequired();
 
                     b.Navigation("Ticker");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.ParityVerdict", b =>
-                {
-                    b.HasOne("Backend.Models.MarketData.StrategyExecution", "LeftExecution")
-                        .WithMany()
-                        .HasForeignKey("LeftExecutionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Backend.Models.MarketData.StrategyExecution", "RightExecution")
-                        .WithMany()
-                        .HasForeignKey("RightExecutionId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.Navigation("LeftExecution");
-
-                    b.Navigation("RightExecution");
                 });
 
             modelBuilder.Entity("Backend.Models.MarketData.Quote", b =>
@@ -1553,17 +1203,6 @@ namespace Backend.Migrations
                 {
                     b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
                         .WithMany("Aggregates")
-                        .HasForeignKey("TickerId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Ticker");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.StrategyExecution", b =>
-                {
-                    b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
-                        .WithMany()
                         .HasForeignKey("TickerId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -1748,11 +1387,6 @@ namespace Backend.Migrations
                         .IsRequired();
 
                     b.Navigation("Account");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.StrategyExecution", b =>
-                {
-                    b.Navigation("Trades");
                 });
 
             modelBuilder.Entity("Backend.Models.MarketData.Ticker", b =>

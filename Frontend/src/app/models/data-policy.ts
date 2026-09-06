@@ -2,7 +2,7 @@
  * Canonical ``DataPolicy`` wire contract — PR B (2026-05-19).
  *
  * Mirrors the Python ``app.lean_sidecar.data_policy.DataPolicy`` dataclass
- * and the .NET ``StrategyExecution.DataPolicyJson`` column. The shape is
+ * and the Python-owned run row's ``data_policy_json`` column. The shape is
  * backend-neutral: both the in-process engine path and the LEAN sidecar
  * path send the identical block, so the compare-view can gate on field
  * equality without normalizing between two vocabularies.

@@ -1,9 +1,11 @@
-"""Persistence layer: normalize LEAN sidecar output into StrategyExecution rows.
+"""Persistence layer: normalize LEAN sidecar output into a backtest-run persist payload.
 
 Consumed by lean_sidecar_service.run_trusted_sample() at the tail of a successful
 run. Reads the normalized result.json, pairs filled order events into round-trip
 trades, synthesizes a mark-to-market exit for any half-open position, computes
-aggregate KPIs, and writes one StrategyExecution row + N BacktestTrade rows.
+aggregate KPIs, and shapes the canonical persist payload that
+``app.research.backtest_runs.service.persist_run_payload`` writes as one run row
+plus N trade rows (PRD #1929).
 """
 
 from __future__ import annotations
@@ -13,12 +15,10 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-
-import httpx
 
 from app.engine.results.equity_downsample import (
     RealizedEquityTrade,
@@ -538,6 +538,8 @@ def build_persist_payload(
     starting_cash: float,
     symbol: str,
     algorithm_name: str,
+    start_date: date,
+    end_date: date,
     start_date_ms: int,
     end_date_ms: int,
     manifest: RunManifest | Mapping[str, Any] | None = None,
@@ -546,21 +548,23 @@ def build_persist_payload(
     requested_engine: Literal["python", "lean", "both"] = "lean",
     parameters: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a JSON-serializable payload to POST to the .NET persist endpoint.
+    """Build the canonical persist payload for a LEAN run.
 
     This function is pure: it reads normalized/result.json from disk and computes
     aggregates + paired trades using pair_order_events, finalize_open_lot_as_synthetic,
     and compute_aggregates. It performs no DB writes and no HTTP calls.
 
-    The .NET endpoint at POST /api/backtest-runs/persist-lean is responsible for
-    persisting the payload into the StrategyExecution + BacktestTrade tables.
+    ``app.research.backtest_runs.service.persist_run_payload`` writes the payload
+    as one run row plus its trades.
 
     If the workspace has no normalized/result.json (LEAN crashed before output),
     returns a "failed run" payload with TotalTrades=0 and a frozen Reject
-    verdict. The .NET endpoint should still persist this so the failed run
-    appears in the unified history.
+    verdict. It is persisted like any other so the failed run appears in the
+    unified history.
 
-    All timestamps in the returned payload are int64 ms UTC (canonical).
+    ``start_date`` / ``end_date`` are the trading dates the window keys; the
+    row stores them as date-anchored ``int64 ms UTC``. ``start_date_ms`` /
+    ``end_date_ms`` bound only the envelope evidence below.
 
     PR B P1 fix (2026-05-20) — ``manifest`` (optional) lets the caller forward
     the LEAN ``RunManifest`` so the persist payload carries the true
@@ -583,8 +587,8 @@ def build_persist_payload(
             starting_cash=starting_cash,
             symbol=symbol,
             algorithm_name=algorithm_name,
-            start_date_ms=start_date_ms,
-            end_date_ms=end_date_ms,
+            start_date=start_date,
+            end_date=end_date,
             workspace_path=workspace_path,
             error="No normalized/result.json — LEAN run did not produce output",
             manifest=manifest,
@@ -621,8 +625,8 @@ def build_persist_payload(
             starting_cash=starting_cash,
             symbol=symbol,
             algorithm_name=algorithm_name,
-            start_date_ms=start_date_ms,
-            end_date_ms=end_date_ms,
+            start_date=start_date,
+            end_date=end_date,
             workspace_path=workspace_path,
             error=f"normalization_error: {type(exc).__name__}: {exc}",
             manifest=manifest,
@@ -646,8 +650,8 @@ def build_persist_payload(
             paired_trades=paired_trades,
             starting_cash=starting_cash,
             final_equity=agg.final_equity,
-            start_date_ms=start_date_ms,
-            end_date_ms=end_date_ms,
+            start_date=start_date,
+            end_date=end_date,
         )
         if parity_group_id is not None
         else {}
@@ -697,8 +701,8 @@ def build_persist_payload(
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,
-        "start_date_ms": start_date_ms,
-        "end_date_ms": end_date_ms,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "total_trades": agg.total_trades,
         "winning_trades": agg.winning_trades,
         "losing_trades": agg.losing_trades,
@@ -773,8 +777,8 @@ def _compatibility_ledger_statistics(
     paired_trades: Sequence[PairedTrade],
     starting_cash: float,
     final_equity: float,
-    start_date_ms: int,
-    end_date_ms: int,
+    start_date: date,
+    end_date: date,
 ) -> dict[str, float | int | None]:
     """Project a linked LEAN ledger into platform-canonical statistics.
 
@@ -810,8 +814,6 @@ def _compatibility_ledger_statistics(
             )
         )
 
-    start_date = datetime.fromtimestamp(start_date_ms / 1000, tz=UTC).date()
-    end_date = datetime.fromtimestamp(end_date_ms / 1000, tz=UTC).date()
     calendar_days = (end_date - start_date).days
     trading_days = max(1, round(calendar_days * 252 / 365)) if calendar_days > 0 else None
     return summarize(
@@ -897,8 +899,8 @@ def _failed_run_payload(
     starting_cash: float,
     symbol: str,
     algorithm_name: str,
-    start_date_ms: int,
-    end_date_ms: int,
+    start_date: date,
+    end_date: date,
     workspace_path: Path,
     error: str,
     manifest: RunManifest | Mapping[str, Any] | None = None,
@@ -915,8 +917,8 @@ def _failed_run_payload(
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,
-        "start_date_ms": start_date_ms,
-        "end_date_ms": end_date_ms,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "total_trades": 0,
         "winning_trades": 0,
         "losing_trades": 0,
@@ -996,47 +998,3 @@ def _run_verdict_fields(
         "verdict_grade": verdict.grade,
         "verdict_signal": verdict.signal,
     }
-
-
-async def persist_via_dotnet(
-    payload: dict[str, Any],
-    base_url: str,
-    *,
-    timeout_seconds: float = 30.0,
-) -> int | None:
-    """POST a LEAN run payload to the .NET backend for persistence.
-
-    Returns the assigned StrategyExecution.Id on success, or None on any
-    HTTP/network failure. Persistence failure must not abort the LEAN run —
-    the artifacts on disk are the authoritative record and the backfill CLI
-    (Task 5.1) can be used to retry later.
-    """
-    url = f"{base_url.rstrip('/')}/api/backtest-runs/persist-lean"
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return int(data["strategy_execution_id"])
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "persist-lean returned HTTP %s for run %s: %s",
-            exc.response.status_code,
-            payload.get("lean_run_id"),
-            exc.response.text[:500],
-        )
-        return None
-    except httpx.HTTPError as exc:
-        logger.warning(
-            "persist-lean transport error for run %s: %s",
-            payload.get("lean_run_id"),
-            exc,
-        )
-        return None
-    except (KeyError, ValueError) as exc:
-        logger.warning(
-            "persist-lean response malformed for run %s: %s",
-            payload.get("lean_run_id"),
-            exc,
-        )
-        return None

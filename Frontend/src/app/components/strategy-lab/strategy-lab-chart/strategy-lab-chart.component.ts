@@ -5,7 +5,8 @@ import { catchError, forkJoin, from, map, of, switchMap } from "rxjs";
 
 import { environment } from "../../../../environments/environment";
 import type { components } from "../../../api/broker.types";
-import type { BacktestRunDetail } from "../../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
+import { runWindowDate } from "../../../services/backtest-runs.types";
 import { MarketDataService } from "../../../services/market-data.service";
 import { LeanSidecarService } from "../../../services/lean-sidecar.service";
 import { IndicatorCatalogService } from "../../../shared/indicator-catalog/indicator-catalog.service";
@@ -119,8 +120,8 @@ export class StrategyLabChartComponent {
         indicators: this.userIndicators(),
         excluded_strategy_indicator_ids: this.excludedStrategyIndicatorIds(),
       },
-      fromDate: run.startDate,
-      toDate: run.endDate,
+      fromDate: runWindowDate(run.startDate),
+      toDate: runWindowDate(run.endDate),
     };
   });
 

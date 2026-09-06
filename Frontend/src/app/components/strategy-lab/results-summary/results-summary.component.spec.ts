@@ -4,7 +4,7 @@ import { render } from "@testing-library/angular";
 import { RouterTestingModule } from "@angular/router/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { MetricDocumentationContext } from "../../../graphql/backtest-runs.query";
+import type { MetricDocumentationContext } from "../../../services/backtest-runs.types";
 import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.component";
 import { ResultsSummaryComponent } from "./results-summary.component";
 
@@ -61,11 +61,10 @@ async function makeResult(overrides: Partial<EngineResultData> = {}): Promise<En
 
 function recordedContext(metricId: string, variantId: string, producer: string): MetricDocumentationContext {
   return {
-    metricId,
-    variantId,
+    metric_id: metricId,
+    variant_id: variantId,
     producer,
-    contractId: `${producer}-${metricId}-v1`,
-    contractProvenance: "recorded",
+    contract_id: `${producer}-${metricId}-v1`,
   };
 }
 

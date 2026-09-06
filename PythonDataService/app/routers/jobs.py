@@ -653,7 +653,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             """Surface a companion failure on the group's ParityVerdict.
 
             Conditional server-side (pending → failed only), so a verdict
-            the .NET persist step already froze is never overwritten.
+            the companion's persist step already froze is never overwritten.
             """
             if trusted_request.parity_group_id is None:
                 return
@@ -670,8 +670,8 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             return jsonable_encoder(result, by_alias=False)
 
         try:
-            # ``run_trusted_sample`` is async because the launcher and
-            # the .NET persist hop use ``httpx.AsyncClient``. The job
+            # ``run_trusted_sample`` is async because the launcher hop
+            # uses ``httpx.AsyncClient``. The job
             # framework runs ``work`` in a thread, so each job gets its
             # own event loop here — no contention with the FastAPI
             # request loop.
@@ -679,7 +679,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             if result.get("exit_code") != 0:
                 _mark_parity("run_failed", f"LEAN exited with code {result.get('exit_code')}")
             elif result.get("strategy_execution_id") is None:
-                _mark_parity("persist_failed", "LEAN run completed but persisted no StrategyExecution row")
+                _mark_parity("persist_failed", "LEAN run completed but persisted no run row")
             return result
         except RunIdAlreadyUsedError as e:
             # The launcher boundary never saw this — fail with a

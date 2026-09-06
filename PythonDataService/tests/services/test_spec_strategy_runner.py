@@ -12,9 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import httpx
 import pytest
-import respx
 
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.strategy.spec.tests._parity_helpers import (
@@ -307,25 +305,29 @@ class TestRunSpecAgainstBarsStartingCash:
 
 class TestRunSpecAgainstBarsAndPersist:
     @pytest.mark.asyncio
-    async def test_persists_engine_run_after_capturing_trades(self) -> None:
-        backend_url = "http://test-backend"
+    async def test_persists_engine_run_after_capturing_trades(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.services import engine_persistence
+
         bars = build_minute_bars(closes_for_spy_ema(2000))
+        written: list[dict] = []
 
-        async with respx.mock(base_url=backend_url, assert_all_called=True) as mock:
-            mock.post("/api/backtest-runs/persist-lean").mock(
-                return_value=httpx.Response(200, json={"strategy_execution_id": 7})
-            )
+        async def fake_persist(payload: dict) -> int:
+            written.append(payload)
+            return 7
 
-            result = await run_spec_against_bars_and_persist(
-                spec_path=fixture_path("spy_ema_crossover"),
-                symbol="TEST",
-                bars=bars,
-                start_date=(2024, 1, 2),
-                end_date=(2024, 12, 31),
-                starting_cash=Decimal("100000"),
-                backend_url=backend_url,
-                strategy_name="ema_crossover",
-            )
+        monkeypatch.setattr(engine_persistence, "persist_run_payload", fake_persist)
 
-            assert result.strategy_execution_id == 7
-            assert len(result.trades) >= 1
+        result = await run_spec_against_bars_and_persist(
+            spec_path=fixture_path("spy_ema_crossover"),
+            symbol="TEST",
+            bars=bars,
+            start_date=(2024, 1, 2),
+            end_date=(2024, 12, 31),
+            starting_cash=Decimal("100000"),
+            strategy_name="ema_crossover",
+        )
+
+        assert result.strategy_execution_id == 7
+        assert len(result.trades) >= 1
+        [payload] = written
+        assert payload["source"] == "engine" and payload["strategy_name"] == "ema_crossover"

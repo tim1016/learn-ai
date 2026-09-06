@@ -1,6 +1,10 @@
 /** Test-only builders for `BacktestRunDetail` fixtures; not for production use. */
 
-import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../../graphql/backtest-runs.query";
+import type {
+  BacktestRunDetail,
+  BacktestRunDetailTrade,
+  BacktestRunEquitySeries,
+} from "../../../services/backtest-runs.types";
 
 export function makeTrade(overrides: Partial<BacktestRunDetailTrade> = {}): BacktestRunDetailTrade {
   return {
@@ -19,8 +23,8 @@ export function makeTrade(overrides: Partial<BacktestRunDetailTrade> = {}): Back
   };
 }
 
-export function curve(points: { t: number; e: number }[], cadence: string) {
-  return { cadence, rawPoints: points.length, keptPoints: points.length, error: null, points };
+export function curve(points: { t: number; e: number }[], cadence: string): BacktestRunEquitySeries {
+  return { cadence, downsample: { raw_points: points.length, kept_points: points.length }, error: null, points };
 }
 
 export function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
@@ -35,8 +39,8 @@ export function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRun
     symbol: "SPY",
     leanRunId: null,
     parameters: JSON.stringify({ short: 5, long: 10, symbol: "SPY" }),
-    startDate: "2026-01-05",
-    endDate: "2026-01-06",
+    startDate: 1767589200000, // 2026-01-05 ET midnight
+    endDate: 1767675600000, // 2026-01-06 ET midnight
     fillMode: "signal_bar_close",
     executedAt: end,
     durationMs: 1200,
@@ -64,12 +68,12 @@ export function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRun
     verdictGrade: "B",
     verdictSignal: "Iterate",
     equityCurve: {
-      schemaVersion: 2,
-      error: null,
-      markToMarket: curve([{ t: start, e: 100_000 }, { t: end, e: 100_048 }], "strategy_bar_close"),
+      schema_version: 2,
+      mark_to_market: curve([{ t: start, e: 100_000 }, { t: end, e: 100_048 }], "strategy_bar_close"),
       realized: curve([{ t: start, e: 100_000 }, { t: makeTrade().exitTimestamp, e: 100_048 }, { t: end, e: 100_048 }], "trade_exit"),
     },
     validationAnalytics: null,
+    metricDocumentation: [],
     dataPolicy: {
       source: "polygon", symbol: "SPY", adjusted: true, session: "regular",
       input_bars: { timespan: "minute", multiplier: 1 },
@@ -79,6 +83,7 @@ export function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRun
     },
     insightSummaryJson: null,
     parityGroupId: null,
+    notes: null,
     trades: [makeTrade()],
     tradesTruncated: false,
     parityVerdicts: [],

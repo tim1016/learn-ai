@@ -100,7 +100,7 @@ def trade_dollar_pnl(trade: TradeForStats, commission_per_order: float = 0.0) ->
 
     Formula: gross (pnl_pts * quantity) - 2 * commission_per_order — the same
     flat-fee branch as the canonical
-    ``app.routers.engine._persisted_trade_net_pnl`` (compatibility_profile=None),
+    ``app.research.backtest_runs.engine_payload.persisted_trade_net_pnl`` (compatibility_profile=None),
     which this mirrors rather than duplicates independently (CLAUDE.md
     guiding philosophy #5). ``commission_per_order`` defaults to 0.0 so an
     uncommissioned launch's PnL is exactly the gross figure.

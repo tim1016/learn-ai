@@ -5,18 +5,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import httpx
 import pytest
-import respx
 
+from app.scripts import backfill_lean_runs
 from app.scripts.backfill_lean_runs import (
     _algorithm_name_from_manifest,
     _build_payload_for_workspace,
     backfill_directory,
 )
-
-_BACKEND_URL = "http://test-backend"
-_PERSIST_URL = f"{_BACKEND_URL}/api/backtest-runs/persist-lean"
 
 
 def _write_workspace(
@@ -113,8 +109,30 @@ class TestBuildPayloadForWorkspace:
         assert payload["symbol"] == "SPY"
         assert payload["strategy_name"] == "ema_crossover"
         assert payload["starting_cash"] == 100_000.0
-        assert payload["start_date_ms"] == 1_736_053_200_000
-        assert payload["end_date_ms"] == 1_736_348_400_000
+        assert payload["start_date"] == "2025-01-06"  # the requested trading dates, not LEAN's effective window
+        assert payload["end_date"] == "2025-01-10"
+
+    def test_the_window_dates_come_from_the_request_not_leans_utc_midnight_window(self, tmp_path: Path) -> None:
+        """LEAN encodes the window start as UTC midnight; read in ET that is the previous day (Codex, PR #1969)."""
+        workspace = _write_workspace(
+            tmp_path,
+            "ws_utc_window",
+            manifest_overrides={"effective_algorithm_window_ms": {"start_ms": 1_736_121_600_000, "end_ms": 1_736_553_600_000}},
+        )
+
+        payload = _build_payload_for_workspace(workspace)
+
+        assert payload is not None
+        assert payload["start_date"] == "2025-01-06" and payload["end_date"] == "2025-01-10"
+
+    def test_missing_trading_dates_in_parameters_returns_none(self, tmp_path: Path) -> None:
+        workspace = _write_workspace(
+            tmp_path,
+            "ws_no_dates",
+            manifest_overrides={"parameters": {"symbol": "SPY", "starting_cash": 100_000.0}},
+        )
+
+        assert _build_payload_for_workspace(workspace) is None
 
     def test_missing_manifest_returns_none(self, tmp_path: Path) -> None:
         workspace = _write_workspace(tmp_path, "ws_no_manifest", include_manifest=False)
@@ -163,90 +181,72 @@ class TestBuildPayloadForWorkspace:
 
 
 class TestBackfillDirectory:
+    @staticmethod
+    def _recording_persist(monkeypatch: pytest.MonkeyPatch, ids: list[int | None]) -> list[dict]:
+        """Stand in for the repository write: hand back ``ids`` in order, remember every payload."""
+        written: list[dict] = []
+        remaining = iter(ids)
+
+        async def fake_persist(payload: dict) -> int | None:
+            written.append(payload)
+            return next(remaining)
+
+        monkeypatch.setattr(backfill_lean_runs, "persist_run_payload", fake_persist)
+        return written
+
     @pytest.mark.asyncio
-    async def test_backfills_one_workspace_per_directory(self, tmp_path: Path) -> None:
+    async def test_backfills_one_workspace_per_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_workspace(tmp_path, "run_a")
         _write_workspace(tmp_path, "run_b")
+        written = self._recording_persist(monkeypatch, [101, 102])
 
-        # Each persist returns a unique strategy_execution_id
-        responses = iter(
-            [
-                httpx.Response(200, json={"strategy_execution_id": 101}),
-                httpx.Response(200, json={"strategy_execution_id": 102}),
-            ]
-        )
+        persisted_ids = await backfill_directory(tmp_path)
 
-        async with respx.mock(base_url=_BACKEND_URL, assert_all_called=True) as mock:
-            mock.post("/api/backtest-runs/persist-lean").mock(side_effect=lambda req: next(responses))
-
-            persisted_ids = await backfill_directory(tmp_path, _BACKEND_URL)
-
-            assert persisted_ids == [101, 102]
+        assert persisted_ids == [101, 102]
+        assert [payload["lean_run_id"] for payload in written] == ["run_a", "run_b"]
 
     @pytest.mark.asyncio
-    async def test_is_idempotent_when_backend_dedupes(self, tmp_path: Path) -> None:
-        # The real .NET endpoint returns the same StrategyExecution.Id on a
-        # repeated POST with the same LeanRunId; we simulate that by returning
-        # the same id from both responses.
+    async def test_is_idempotent_when_the_repository_dedupes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The repository returns the same run id on a repeated write of the same
+        # lean_run_id; simulated by handing back the same id both times.
         _write_workspace(tmp_path, "run_dup")
+        written = self._recording_persist(monkeypatch, [7, 7])
 
-        async with respx.mock(base_url=_BACKEND_URL, assert_all_called=True) as mock:
-            route = mock.post("/api/backtest-runs/persist-lean").mock(
-                return_value=httpx.Response(200, json={"strategy_execution_id": 7})
-            )
-
-            first = await backfill_directory(tmp_path, _BACKEND_URL)
-            assert first == [7]
-            assert route.call_count == 1
-
-            second = await backfill_directory(tmp_path, _BACKEND_URL)
-            assert second == [7]
-            assert route.call_count == 2  # called again, but backend dedupes
+        assert await backfill_directory(tmp_path) == [7]
+        assert await backfill_directory(tmp_path) == [7]
+        assert len(written) == 2  # written again, the repository dedupes
 
     @pytest.mark.asyncio
-    async def test_skips_incomplete_workspaces_and_persists_the_rest(self, tmp_path: Path) -> None:
+    async def test_skips_incomplete_workspaces_and_persists_the_rest(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_workspace(tmp_path, "run_ok")
         _write_workspace(tmp_path, "run_incomplete", include_normalized=False)
         # Loose file at the root — should be ignored (only dirs are workspaces)
         (tmp_path / "stray.txt").write_text("not a workspace")
+        self._recording_persist(monkeypatch, [42])
 
-        async with respx.mock(base_url=_BACKEND_URL, assert_all_called=True) as mock:
-            mock.post("/api/backtest-runs/persist-lean").mock(
-                return_value=httpx.Response(200, json={"strategy_execution_id": 42})
-            )
+        persisted_ids = await backfill_directory(tmp_path)
 
-            persisted_ids = await backfill_directory(tmp_path, _BACKEND_URL)
-
-            assert persisted_ids == [42]
+        assert persisted_ids == [42]
 
     @pytest.mark.asyncio
-    async def test_continues_when_backend_returns_5xx(self, tmp_path: Path) -> None:
+    async def test_continues_when_a_write_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_workspace(tmp_path, "run_500")
         _write_workspace(tmp_path, "run_ok")
+        self._recording_persist(monkeypatch, [None, 8])
 
-        responses = iter(
-            [
-                httpx.Response(500, json={"error": "boom"}),
-                httpx.Response(200, json={"strategy_execution_id": 8}),
-            ]
-        )
+        persisted_ids = await backfill_directory(tmp_path)
 
-        async with respx.mock(base_url=_BACKEND_URL, assert_all_called=True) as mock:
-            mock.post("/api/backtest-runs/persist-lean").mock(side_effect=lambda req: next(responses))
-
-            persisted_ids = await backfill_directory(tmp_path, _BACKEND_URL)
-
-            # Failed POST is logged + skipped; the OK one is persisted.
-            assert persisted_ids == [8]
+        # The failed write is logged + skipped; the OK one is persisted.
+        assert persisted_ids == [8]
 
     @pytest.mark.asyncio
     async def test_missing_artifacts_root_raises(self, tmp_path: Path) -> None:
         missing = tmp_path / "does-not-exist"
 
         with pytest.raises(FileNotFoundError, match="artifacts_root"):
-            await backfill_directory(missing, _BACKEND_URL)
+            await backfill_directory(missing)
 
     @pytest.mark.asyncio
     async def test_empty_artifacts_root_returns_empty_list(self, tmp_path: Path) -> None:
-        persisted_ids = await backfill_directory(tmp_path, _BACKEND_URL)
+        persisted_ids = await backfill_directory(tmp_path)
         assert persisted_ids == []

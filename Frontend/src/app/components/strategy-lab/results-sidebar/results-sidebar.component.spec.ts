@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { describe, expect, it } from "vitest";
 
-import type { BacktestRunDetail } from "../../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import { ResultsSidebarComponent } from "./results-sidebar.component";
 
 function run(): BacktestRunDetail {
@@ -15,8 +15,8 @@ function run(): BacktestRunDetail {
     symbol: "SPY",
     leanRunId: null,
     parameters: "{}",
-    startDate: "2026-05-11",
-    endDate: "2026-08-07",
+    startDate: 1778472000000, // 2026-05-11 ET midnight
+    endDate: 1786075200000, // 2026-08-07 ET midnight
     fillMode: "signal_bar_close",
     executedAt: 1,
     durationMs: 2,
@@ -70,6 +70,8 @@ function run(): BacktestRunDetail {
     insightSummaryJson: null,
     parityGroupId: "pair-1",
     trades: [],
+    metricDocumentation: [],
+    notes: null,
     tradesTruncated: false,
     parityVerdicts: [{
       id: 1,

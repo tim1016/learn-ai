@@ -1,20 +1,19 @@
-"""One-shot CLI: backfill historical on-disk LEAN runs into Postgres.
+"""One-shot CLI: backfill historical on-disk LEAN runs into the Python-owned run tables.
 
 For each ``<run_id>/`` subdirectory under ``--artifacts-root``, reads the
 LEAN ``manifest.json`` for parameters + windowing, builds a persist payload
 from ``normalized/result.json`` via the existing
-``lean_sidecar_persistence`` pipeline, and POSTs it to the .NET endpoint
-at ``/api/backtest-runs/persist-lean``.
+``lean_sidecar_persistence`` pipeline, and writes it through
+``app.research.backtest_runs.service.persist_run_payload`` (PRD #1929).
 
-Idempotent: the .NET endpoint dedupes on ``(Source='lean-sidecar', LeanRunId)``
-so re-running the backfill is safe — workspaces already persisted are
-returned unchanged with their existing ``StrategyExecution.Id``.
+Idempotent: the repository dedupes on ``lean_run_id`` so re-running the
+backfill is safe — workspaces already persisted are returned unchanged with
+their existing run id.
 
 Usage:
 
     podman exec polygon-data-service python -m app.scripts.backfill_lean_runs \\
-        --artifacts-root /app/artifacts/lean-sidecar \\
-        --backend-url http://backend:8080
+        --artifacts-root /app/artifacts/lean-sidecar
 
 Skip rules (workspace skipped, not aborted):
 
@@ -24,9 +23,9 @@ Skip rules (workspace skipped, not aborted):
   * Effective-algorithm window timestamps are missing.
 
 Any other failure is logged with the workspace's run_id and the loop
-continues with the next workspace. Persistence failures (HTTP/network)
-likewise log and continue — the script returns the count of successful
-persists so the caller can compare against the directory count.
+continues with the next workspace. Persistence failures likewise log and
+continue — the script returns the count of successful persists so the
+caller can compare against the directory count.
 """
 
 from __future__ import annotations
@@ -35,14 +34,12 @@ import argparse
 import asyncio
 import json
 import logging
-import os
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from app.services.lean_sidecar_persistence import (
-    build_persist_payload,
-    persist_via_dotnet,
-)
+from app.research.backtest_runs.service import persist_run_payload
+from app.services.lean_sidecar_persistence import build_persist_payload
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +99,19 @@ def _build_payload_for_workspace(workspace: Path) -> dict[str, Any] | None:
     params = manifest.get("parameters") or {}
     symbol = params.get("symbol")
     starting_cash = params.get("starting_cash")
-    if not symbol or starting_cash is None:
+    # The trading dates the run was asked for live in ``parameters`` verbatim.
+    # ``effective_algorithm_window_ms`` is LEAN's effective window (warmup
+    # start, next-session end) and its instants are not ET-anchored, so
+    # decoding them as dates lands on the wrong calendar day.
+    start_date, end_date = params.get("start_date"), params.get("end_date")
+    if not symbol or starting_cash is None or not start_date or not end_date:
         logger.warning(
-            "Skipping %s: manifest.parameters missing required fields (symbol=%r, starting_cash=%r)",
+            "Skipping %s: manifest.parameters missing required fields (symbol=%r, starting_cash=%r, start_date=%r, end_date=%r)",
             workspace.name,
             symbol,
             starting_cash,
+            start_date,
+            end_date,
         )
         return None
 
@@ -131,6 +135,8 @@ def _build_payload_for_workspace(workspace: Path) -> dict[str, Any] | None:
         starting_cash=float(starting_cash),
         symbol=str(symbol),
         algorithm_name=algorithm_name,
+        start_date=date.fromisoformat(str(start_date)),
+        end_date=date.fromisoformat(str(end_date)),
         start_date_ms=int(start_ms),
         end_date_ms=int(end_ms),
         # PR B P1 fix — forward the manifest dict so the persist payload
@@ -142,19 +148,13 @@ def _build_payload_for_workspace(workspace: Path) -> dict[str, Any] | None:
     )
 
 
-async def backfill_directory(
-    artifacts_root: Path,
-    backend_url: str,
-    *,
-    timeout_seconds: float = 30.0,
-) -> list[int]:
-    """Backfill every workspace under ``artifacts_root``. Returns list of
-    persisted ``StrategyExecution.Id`` integers (only successful persists).
+async def backfill_directory(artifacts_root: Path) -> list[int]:
+    """Backfill every workspace under ``artifacts_root``. Returns the list of
+    persisted run ids (only successful persists).
 
-    Async because ``persist_via_dotnet`` is async. The directory walk itself
-    is sync; we serialize the POSTs to keep the load on the backend
-    predictable (and because backfill is a one-shot maintenance task, not a
-    hot path).
+    The directory walk is sync; the writes are serialized to keep the load
+    on the database predictable (backfill is a one-shot maintenance task,
+    not a hot path).
     """
     if not artifacts_root.exists():
         raise FileNotFoundError(f"artifacts_root does not exist: {artifacts_root}")
@@ -173,32 +173,22 @@ async def backfill_directory(
         if payload is None:
             continue
 
-        try:
-            persisted_id = await persist_via_dotnet(payload, base_url=backend_url, timeout_seconds=timeout_seconds)
-        except Exception as exc:
-            logger.exception("persist_via_dotnet failed for %s: %s", workspace.name, exc)
-            continue
-
+        persisted_id = await persist_run_payload(payload)
         if persisted_id is None:
-            logger.warning("persist_via_dotnet returned None for %s — skipping", workspace.name)
+            logger.warning("Run for %s was not persisted — skipping", workspace.name)
             continue
 
-        logger.info("Backfilled %s → StrategyExecution.Id=%s", workspace.name, persisted_id)
+        logger.info("Backfilled %s → run id %s", workspace.name, persisted_id)
         persisted_ids.append(persisted_id)
 
-    logger.info(
-        "Backfill complete: %d/%d workspaces persisted into %s",
-        len(persisted_ids),
-        len(workspaces),
-        backend_url,
-    )
+    logger.info("Backfill complete: %d/%d workspaces persisted", len(persisted_ids), len(workspaces))
     return persisted_ids
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(
-        description="Backfill historical on-disk LEAN sidecar runs into Postgres via the .NET persist endpoint.",
+        description="Backfill historical on-disk LEAN sidecar runs into the Python-owned run tables.",
     )
     parser.add_argument(
         "--artifacts-root",
@@ -206,27 +196,9 @@ def main() -> None:
         default=Path("/app/artifacts/lean-sidecar"),
         help="Root containing per-run workspace directories (default: /app/artifacts/lean-sidecar)",
     )
-    parser.add_argument(
-        "--backend-url",
-        type=str,
-        default=os.environ.get("BACKEND_URL", "http://backend:8080"),
-        help="Base URL of the .NET backend (default: $BACKEND_URL or http://backend:8080)",
-    )
-    parser.add_argument(
-        "--timeout-seconds",
-        type=float,
-        default=30.0,
-        help="HTTP timeout per persist call (default: 30s)",
-    )
     args = parser.parse_args()
 
-    persisted_ids = asyncio.run(
-        backfill_directory(
-            artifacts_root=args.artifacts_root,
-            backend_url=args.backend_url,
-            timeout_seconds=args.timeout_seconds,
-        )
-    )
+    persisted_ids = asyncio.run(backfill_directory(artifacts_root=args.artifacts_root))
     logger.info("Done. %d run(s) persisted.", len(persisted_ids))
 
 

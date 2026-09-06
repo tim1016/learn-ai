@@ -26,6 +26,7 @@ from app.routers import (
     aggregates,
     alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
+    backtest_runs,
     baselines,
     broker,
     broker_bots,
@@ -547,6 +548,7 @@ app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
+app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
 # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
 app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
 app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])

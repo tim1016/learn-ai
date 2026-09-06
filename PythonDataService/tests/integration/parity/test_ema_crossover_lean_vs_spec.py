@@ -1,21 +1,22 @@
 """LEAN ema_crossover ≡ spec spy_ema_crossover acceptance gate.
 
-Runs both engines on the same SPY data window, persists each through .NET,
-queries ``compareBacktestRuns`` over GraphQL, and asserts zero divergences in
-the gating set from ``.claude/rules/numerical-rigor.md``:
+Runs both engines on the same SPY data window, persists each through the
+Python-owned run tables, reconciles the two persisted trade ledgers with the
+in-process classifier the parity verdict uses, and asserts zero divergences
+in the gating set from ``.claude/rules/numerical-rigor.md``:
 
   {DECISION_MISMATCH, DIRECTION_MISMATCH, QUANTITY_MISMATCH,
    FILL_PRICE_DRIFT, ORDER_TYPE_MISMATCH, PNL_DRIFT,
    FIXTURE_INSUFFICIENT}
 
 ``@pytest.mark.slow`` — excluded from default CI runs. Heavyweight: launches
-the pinned LEAN container, reads SPY minute bars off disk, persists two
-``StrategyExecution`` rows. Skip-guarded so the test no-ops gracefully when
-the LEAN launcher, .NET backend, or LEAN data dump aren't available.
+the pinned LEAN container, reads SPY minute bars off disk, persists two run
+rows. Skip-guarded so the test no-ops gracefully when the LEAN launcher, the
+run tables' Postgres, or the LEAN data dump aren't available.
 
 To run locally:
 
-  podman compose up -d                # backend + python-service + postgres
+  podman compose up -d                # python-service + postgres
   python PythonDataService/scripts/lean_sidecar_pin_image.py
   cd PythonDataService && \
     .venv/Scripts/python.exe -m uvicorn app.lean_sidecar.launcher.app:app \
@@ -30,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import asdict
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -38,8 +40,14 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.config import settings
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
+from app.research.backtest_runs import repository as repo
+from app.research.backtest_runs.parity import FILL_PRICE_ATOL
+from app.research.backtest_runs.records import trades_as_compare_payload
+from app.research.persistence.db import with_connection
+from app.services.lean_sidecar_compare_service import reconcile_trade_lists
 from app.services.lean_sidecar_service import TrustedRunRequest, run_trusted_sample
 from app.services.spec_strategy_runner import run_spec_against_bars_and_persist
 
@@ -66,7 +74,6 @@ GATING_CATEGORIES = frozenset(
     }
 )
 
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:8080")
 LEAN_DATA_ROOTS = [Path("/lean-cache"), Path("/lean-data")]
 SPEC_FIXTURE_PATH = Path("/app/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json")
 REPORT_OUTPUT_DIR = Path("/app/artifacts/parity-reports")
@@ -76,36 +83,10 @@ def _date_to_ms_utc(d: date) -> int:
     return int(datetime(d.year, d.month, d.day, tzinfo=UTC).timestamp() * 1000)
 
 
-async def _require_backend_reachable() -> None:
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{BACKEND_URL}/health")
-            response.raise_for_status()
-    except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        pytest.skip(f"Backend not reachable at {BACKEND_URL}: {exc}")
-
-
-async def _require_compare_resolver_in_schema() -> None:
-    """Skip if the backend hasn't compiled `compareBacktestRuns` yet.
-
-    The backend uses `dotnet watch run`; a stale NuGet restore or build error
-    can leave it running an older compiled snapshot that doesn't expose this
-    resolver. Without it the parity test fails at the comparison step with
-    an opaque 400 instead of skipping cleanly.
-    """
-    introspect = {"query": 'query{__type(name:"Query"){fields{name}}}'}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(f"{BACKEND_URL}/graphql", json=introspect)
-            response.raise_for_status()
-        fields = response.json()["data"]["__type"]["fields"]
-    except (httpx.HTTPError, KeyError, TypeError) as exc:
-        pytest.skip(f"Could not introspect GraphQL schema: {exc}")
-    if not any(f["name"] == "compareBacktestRuns" for f in fields):
-        pytest.skip(
-            "compareBacktestRuns missing from Query schema; backend likely has a stale build "
-            "(check `podman logs my-backend` for NuGet/dotnet errors and rebuild)"
-        )
+def _require_run_tables() -> None:
+    """Skip unless the Python-owned run tables have a Postgres to live in."""
+    if not settings.POSTGRES_URL:
+        pytest.skip("POSTGRES_URL unset; the run tables (and so both persists) need Postgres")
 
 
 async def _require_launcher_reachable() -> None:
@@ -136,43 +117,37 @@ def _require_pinned_lean_image() -> None:
         pytest.skip("PINNED_LEAN_IMAGE_DIGEST not set; run scripts/lean_sidecar_pin_image.py first")
 
 
-async def _query_compare_backtest_runs(
-    left_id: int,
-    right_id: int,
-) -> dict:
-    query = """
-        query Compare($leftId: Int!, $rightId: Int!) {
-          compareBacktestRuns(leftId: $leftId, rightId: $rightId) {
-            left { id source strategyName totalTrades totalPnL finalEquity }
-            right { id source strategyName totalTrades totalPnL finalEquity }
-            guardrails { sameAlgorithm sameSymbol sameWindow sameParameters warnings }
-            summary { pnlDelta tradeCountDelta winRateDelta feesDelta finalEquityDelta }
-            divergences {
-              category
-              tradeNumber
-              msUtc
-              message
-              leftFillPrice
-              rightFillPrice
-            }
-            firstDivergenceMsUtc
-          }
-        }
-    """
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            f"{BACKEND_URL}/graphql",
-            json={
-                "query": query,
-                "variables": {"leftId": left_id, "rightId": right_id},
-            },
-        )
-        response.raise_for_status()
-        body = response.json()
+def _run_summary(run: repo.RunDetail) -> dict:
+    return {
+        "id": run.id,
+        "source": run.source,
+        "strategy_name": run.strategy_name,
+        "total_trades": run.total_trades,
+        "total_pnl": run.total_pnl,
+        "final_equity": run.final_equity,
+    }
 
-    if "errors" in body:
-        raise AssertionError(f"GraphQL errors: {body['errors']}")
-    return body["data"]["compareBacktestRuns"]
+
+async def _reconcile_persisted_runs(lean_id: int, engine_id: int) -> dict:
+    """Read both persisted ledgers and classify their disagreements in-process.
+
+    The same reconciler the parity verdict uses (``parity.compute_parity_verdict``
+    → ``reconcile_trade_lists``), applied to the rows exactly as persisted.
+    """
+    lean_run = await with_connection(repo.get_run, lean_id, trade_limit=None)
+    engine_run = await with_connection(repo.get_run, engine_id, trade_limit=None)
+    assert lean_run is not None and engine_run is not None, "one or both persisted runs could not be read back"
+    comparison = reconcile_trade_lists(
+        left_trades=trades_as_compare_payload(engine_run.trades),
+        right_trades=trades_as_compare_payload(lean_run.trades),
+        fill_price_atol=Decimal(FILL_PRICE_ATOL),
+    )
+    return {
+        "left": _run_summary(engine_run),
+        "right": _run_summary(lean_run),
+        "divergences": [asdict(divergence) for divergence in comparison.divergences],
+        "first_divergence_ms_utc": comparison.first_divergence_ms_utc,
+    }
 
 
 def _write_reconciliation_report(
@@ -189,8 +164,8 @@ def _write_reconciliation_report(
             {
                 "generated_at_utc": stamp,
                 "lean_run_id": run_id,
-                "lean_strategy_execution_id": lean_id,
-                "engine_strategy_execution_id": engine_id,
+                "lean_run_row_id": lean_id,
+                "engine_run_row_id": engine_id,
                 "window_start": WINDOW_START.isoformat(),
                 "window_end": WINDOW_END.isoformat(),
                 "symbol": SYMBOL,
@@ -214,8 +189,7 @@ async def test_ema_crossover_lean_matches_spec_on_real_spy_data() -> None:
     reconciliation report to ``/app/artifacts/parity-reports/`` (bind-mounted
     to ``PythonDataService/artifacts/parity-reports/`` on the host), pass or fail.
     """
-    await _require_backend_reachable()
-    await _require_compare_resolver_in_schema()
+    _require_run_tables()
     await _require_launcher_reachable()
     _require_lean_data_for_window()
     _require_pinned_lean_image()
@@ -255,7 +229,7 @@ async def test_ema_crossover_lean_matches_spec_on_real_spy_data() -> None:
             f"lean_errors={lean_result.lean_errors}"
         )
     lean_id = lean_result.strategy_execution_id
-    logger.info("LEAN run persisted as StrategyExecution.Id=%s", lean_id)
+    logger.info("LEAN run persisted as run id %s", lean_id)
 
     # ---- 2. Run the spec engine on the same SPY data window. ----
     reader = LeanMinuteDataReader(LEAN_DATA_ROOTS)
@@ -270,7 +244,6 @@ async def test_ema_crossover_lean_matches_spec_on_real_spy_data() -> None:
         start_date=(WINDOW_START.year, WINDOW_START.month, WINDOW_START.day),
         end_date=(WINDOW_END.year, WINDOW_END.month, WINDOW_END.day),
         starting_cash=Decimal(str(STARTING_CASH)),
-        backend_url=BACKEND_URL,
         strategy_name=STRATEGY_NAME,
         extra_statistics={
             "engine": "spec",
@@ -281,11 +254,10 @@ async def test_ema_crossover_lean_matches_spec_on_real_spy_data() -> None:
     if spec_result.strategy_execution_id is None:
         pytest.fail("Spec engine run did not persist (strategy_execution_id is None)")
     engine_id = spec_result.strategy_execution_id
-    logger.info("Spec run persisted as StrategyExecution.Id=%s", engine_id)
+    logger.info("Spec run persisted as run id %s", engine_id)
 
-    # ---- 3. Query compareBacktestRuns over GraphQL. ----
-    comparison = await _query_compare_backtest_runs(lean_id, engine_id)
-    assert comparison is not None, "compareBacktestRuns returned null (one or both ids not found)"
+    # ---- 3. Reconcile the two persisted ledgers in-process. ----
+    comparison = await _reconcile_persisted_runs(lean_id, engine_id)
 
     # ---- 4. Always write the reconciliation report (pass or fail). ----
     report_path = _write_reconciliation_report(comparison, lean_id, engine_id, run_id)
@@ -294,13 +266,13 @@ async def test_ema_crossover_lean_matches_spec_on_real_spy_data() -> None:
     divergences = comparison["divergences"]
     gating = [d for d in divergences if d["category"] in GATING_CATEGORIES]
     if gating:
-        summary_lines = [f"  {d['category']} @ trade #{d.get('tradeNumber')}: {d['message']}" for d in gating]
+        summary_lines = [f"  {d['category']} @ trade #{d.get('trade_number')}: {d['message']}" for d in gating]
         pytest.fail(
             f"{len(gating)} gating divergences (out of {len(divergences)} total)\n"
             + "\n".join(summary_lines)
             + f"\n\nFull report: {report_path}\n"
-            + f"LEAN StrategyExecution.Id={lean_id}, "
-            f"Spec StrategyExecution.Id={engine_id}"
+            + f"LEAN run id={lean_id}, "
+            f"Spec run id={engine_id}"
         )
 
     logger.info(

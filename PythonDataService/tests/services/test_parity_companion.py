@@ -10,6 +10,7 @@ import respx
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.routers.engine import EngineBacktestRequest
+from app.services import parity_companion
 from app.services.parity_companion import (
     REASON_EXECUTION_PROFILE,
     REASON_NO_TWIN,
@@ -22,6 +23,19 @@ from app.services.parity_companion import (
 )
 
 BACKEND = "http://localhost:5000"
+
+
+@pytest.fixture
+def verdict_writes(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict]]:
+    """Capture the direct verdict writes instead of reaching the database."""
+    calls: dict[str, list[dict]] = {"created": [], "failed": []}
+    monkeypatch.setattr(parity_companion, "record_parity_disposition_sync", lambda **kwargs: calls["created"].append(kwargs))
+    monkeypatch.setattr(
+        parity_companion,
+        "mark_parity_failed_sync",
+        lambda parity_group_id, *, status, detail: calls["failed"].append({"parity_group_id": parity_group_id, "status": status, "detail": detail}),
+    )
+    return calls
 
 
 def _request(**overrides) -> EngineBacktestRequest:
@@ -111,19 +125,13 @@ def test_companion_ineligibility_reasons(strategy, overrides, expected):
 
 
 @respx.mock
-def test_dispatch_eligible_creates_pending_row_and_launches_job():
-    created: dict = {}
+def test_dispatch_eligible_creates_pending_row_and_launches_job(verdict_writes):
     launched: dict = {}
-
-    def _capture_verdict(request: httpx.Request) -> httpx.Response:
-        created.update(json.loads(request.content))
-        return httpx.Response(200, json={"id": 1, "status": "pending"})
 
     def _capture_job(request: httpx.Request) -> httpx.Response:
         launched.update(json.loads(request.content))
         return httpx.Response(202, json={"id": "job-1"})
 
-    respx.post(f"{BACKEND}/api/parity-verdicts").mock(side_effect=_capture_verdict)
     respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
 
     dispatch_parity_companion(
@@ -133,8 +141,10 @@ def test_dispatch_eligible_creates_pending_row_and_launches_job():
         left_execution_id=42,
     )
 
+    [created] = verdict_writes["created"]
     assert created["status"] == "pending"
-    assert created["leftExecutionId"] == 42
+    assert created["left_run_id"] == 42
+    assert created["parity_group_id"] == "pg-testgroup"
     body = launched["request"]
     assert body["run_id"] == "companion-pg-testgroup"
     assert body["template"] == "ema_crossover_signal"
@@ -147,7 +157,7 @@ def test_dispatch_eligible_creates_pending_row_and_launches_job():
 
 
 @respx.mock
-def test_dispatch_migrated_signal_launches_its_named_lean_template():
+def test_dispatch_migrated_signal_launches_its_named_lean_template(verdict_writes):
     """The canonical signal strategy must not silently dispatch the legacy key."""
     launched: dict = {}
 
@@ -155,7 +165,6 @@ def test_dispatch_migrated_signal_launches_its_named_lean_template():
         launched.update(json.loads(request.content))
         return httpx.Response(202, json={"id": "job-signal"})
 
-    respx.post(f"{BACKEND}/api/parity-verdicts").mock(return_value=httpx.Response(200, json={"id": 1}))
     respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
 
     dispatch_parity_companion(
@@ -191,14 +200,7 @@ def test_companion_is_refused_when_a_tunable_cannot_reach_the_twin() -> None:
 
 
 @respx.mock
-def test_dispatch_ineligible_records_unavailable_and_launches_nothing():
-    created: dict = {}
-
-    def _capture_verdict(request: httpx.Request) -> httpx.Response:
-        created.update(json.loads(request.content))
-        return httpx.Response(200, json={"id": 1, "status": "unavailable"})
-
-    respx.post(f"{BACKEND}/api/parity-verdicts").mock(side_effect=_capture_verdict)
+def test_dispatch_ineligible_records_unavailable_and_launches_nothing(verdict_writes):
     job_route = respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(
         return_value=httpx.Response(202, json={})
     )
@@ -210,22 +212,15 @@ def test_dispatch_ineligible_records_unavailable_and_launches_nothing():
         left_execution_id=7,
     )
 
+    [created] = verdict_writes["created"]
     assert created["status"] == "unavailable"
-    assert json.loads(created["verdictJson"])["reason"] == REASON_NO_TWIN
+    assert json.loads(created["verdict_json"])["reason"] == REASON_NO_TWIN
     assert not job_route.called
 
 
 @respx.mock
-def test_dispatch_marks_run_failed_when_job_submission_rejected():
-    marked: dict = {}
-    respx.post(f"{BACKEND}/api/parity-verdicts").mock(return_value=httpx.Response(200, json={"id": 1}))
+def test_dispatch_marks_run_failed_when_job_submission_rejected(verdict_writes):
     respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(return_value=httpx.Response(503))
-
-    def _capture_mark(request: httpx.Request) -> httpx.Response:
-        marked.update(json.loads(request.content))
-        return httpx.Response(200, json={"transitioned": True})
-
-    respx.post(f"{BACKEND}/api/parity-verdicts/pg-reject/mark-failed").mock(side_effect=_capture_mark)
 
     dispatch_parity_companion(
         registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
@@ -234,15 +229,20 @@ def test_dispatch_marks_run_failed_when_job_submission_rejected():
         left_execution_id=42,
     )
 
+    [marked] = verdict_writes["failed"]
+    assert marked["parity_group_id"] == "pg-reject"
     assert marked["status"] == "run_failed"
     assert "503" in marked["detail"]
 
 
-@respx.mock
-def test_mark_parity_failed_swallows_transport_errors():
-    respx.post(f"{BACKEND}/api/parity-verdicts/pg-x/mark-failed").mock(
-        side_effect=httpx.ConnectError("backend down")
-    )
+def test_mark_parity_failed_swallows_database_errors(monkeypatch: pytest.MonkeyPatch):
+    from app.research.backtest_runs import service as runs_service
+
+    def _boom(coroutine):
+        coroutine.close()
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(runs_service, "run_sync", _boom)
 
     # Must not raise — parity bookkeeping is best-effort.
     mark_parity_failed("pg-x", status="run_failed", detail="test")

@@ -63,8 +63,8 @@ def test_results_catalog_preserves_sortino_unavailability_and_full_run_projectio
     assert {state.state for state in entries["cagr.platform.v1"].value_states} == {"zero", "undefined", "unavailable"}
     assert entries["realized_equity.platform.v1"].canonical_symbol.endswith("equity_downsample.py::build_realized_equity_envelope")
     assert entries["realized_equity.platform.v1"].fixture_or_receipt == "PythonDataService/tests/fixtures/golden/engine-results/ENG-006/v1/"
-    assert entries["initial_cash.platform.v1"].canonical_symbol.endswith("StrategyExecution.cs::InitialCash")
-    assert entries["final_equity.platform.v1"].canonical_symbol.endswith("StrategyExecution.cs::FinalEquity")
+    assert entries["initial_cash.platform.v1"].canonical_symbol.endswith("records.py::BacktestRunRecord.initial_cash")
+    assert entries["final_equity.platform.v1"].canonical_symbol.endswith("records.py::BacktestRunRecord.final_equity")
 
 
 def test_platform_headline_entries_carry_their_own_authored_category() -> None:

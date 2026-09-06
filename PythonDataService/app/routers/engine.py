@@ -12,9 +12,7 @@ being rolled out.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -24,13 +22,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
-import httpx
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.config import settings
 from app.engine.data.availability import (
     AvailabilityReport,
     check_availability,
@@ -47,12 +43,6 @@ from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.execution.sizing import LeanSetHoldingsSizing
-from app.engine.results.equity_downsample import (
-    RealizedEquityTrade,
-    build_realized_equity_envelope,
-    build_run_equity_envelope,
-    from_engine_curve,
-)
 from app.engine.results.lean_statistics import compute_lean_statistics
 from app.engine.results.statistics import summarize
 from app.engine.results.trade_record import TradeRecord
@@ -70,6 +60,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.research.backtest_runs.service import persist_engine_response_sync
 from app.research.sweep.eligibility import sweep_eligibility
 from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
@@ -82,7 +73,6 @@ from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
     build_compatibility_equity_curve,
-    build_validation_analytics_envelope,
     compute_engine_validation_analytics,
 )
 from app.services.parity_companion import (
@@ -96,7 +86,6 @@ from app.services.strategy_lean_source_service import (
     resolve_strategy_lean_source,
 )
 from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
-from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -328,11 +317,11 @@ class EngineBacktestRequest(BaseModel):
         that POST ``params={}`` rely on the strategy registry's default
         symbol (e.g., SPY) being resolved downstream; failing
         validation here would short-circuit one-cycle compat. Downstream
-        consumers (``_save_study_sync``, response serialization) already
+        consumers (``persist_engine_response_sync``, response serialization) already
         treat ``data_policy is None`` as "policy unknown at request
-        time" and emit a null ``dataPolicyJson``; the .NET persistence
-        layer then synthesizes a legacy block from ``Symbol`` in that
-        case (see ``BacktestRunPersistenceService.SynthesizeLegacyDataPolicy``).
+        time" and emit a null data policy; the run record then
+        synthesizes a legacy block from the symbol in that case (see
+        ``app.research.backtest_runs.records.synthesize_legacy_data_policy``).
         """
         if self.data_policy is not None:
             return self
@@ -529,10 +518,10 @@ class EngineBacktestResponse(BaseModel):
     # Phase 1: Insight tracking — per-prediction scoring and aggregate analytics.
     insights: list[dict] = Field(default_factory=list)
     insight_summary: dict[str, Any] = Field(default_factory=dict)
-    # Auto-save study id, populated synchronously before returning so the
-    # Engine Lab can immediately enable the Replay tab without polling
-    # /api/studies for the latest row. Null when the save call failed
-    # (the run still succeeded — the persistence is best-effort).
+    # Persisted run id, populated synchronously before returning so the
+    # Engine Lab can immediately enable the Replay tab without a second
+    # round-trip. Null when persistence failed (the run still succeeded —
+    # persistence is best-effort).
     study_id: int | None = None
     error: str | None = None
     # PR B (2026-05-19) — echo of the post-normalization DataPolicy so the
@@ -1607,11 +1596,11 @@ def execute_engine_backtest(
         evaluation_window=evaluation_window.response(),
     )
 
-    # ── Auto-save to .NET backend (synchronous so we can return the id) ──
+    # ── Persist the run (synchronous so we can return the id) ──
     # Used by the Engine Lab to enable the Replay tab right after a run
-    # without an extra round-trip to /api/studies?latest=true. The save
-    # itself is best-effort — a backend hiccup leaves study_id=None and
-    # logs the failure but does not fail the backtest response.
+    # without a second round-trip. The save itself is best-effort — a
+    # storage failure leaves study_id=None and logs, but does not fail the
+    # backtest response.
     if not request.save_study:
         # Grid Search and Walk-Forward keep their own summary rows; a full
         # study plus a parity companion per cell would be the dominant
@@ -1622,8 +1611,8 @@ def execute_engine_backtest(
     on_phase("persisting")
     on_log("Persisting run to history")
     # Minted BEFORE persisting so the row itself carries the group id —
-    # the .NET persist step joins the LEAN companion back to this run
-    # through it when computing the frozen ParityVerdict.
+    # the LEAN companion's persist step joins back to this run through it
+    # when freezing the parity verdict.
     parity_group_id = _new_parity_group_id_for(request.requested_engine)
     resolved_configuration = _resolved_run_configuration(
         request=request,
@@ -1631,13 +1620,13 @@ def execute_engine_backtest(
         validated_params=validated_params,
         strategy=strategy,
     )
-    response.study_id = _save_study_sync(
+    response.study_id = persist_engine_response_sync(
         response=response,
         symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
         start_date=resolved_configuration.start_date,
         end_date=resolved_configuration.end_date,
         resolution=resolved_configuration.resolution,
-        params_json=json.dumps(resolved_configuration.parameters, sort_keys=True),
+        parameters=resolved_configuration.parameters,
         duration_ms=int((time.time() - _run_start) * 1000),
         commission_per_order=float(request.commission_per_order),
         compatibility_profile=request.compatibility_profile,
@@ -1699,235 +1688,3 @@ def _serialize_chart_bar(b: TradeBar) -> dict[str, Any]:
         "c": float(b.close),
         "v": int(b.volume),
     }
-
-
-# ---------------------------------------------------------------------------
-# Study auto-save (fire-and-forget background task)
-# ---------------------------------------------------------------------------
-def _persisted_trade_net_pnl(
-    *,
-    trade: EngineTradeResponse,
-    commission_per_order: float,
-    compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None,
-) -> float:
-    """Return persisted round-trip dollar P&L under the executed fee policy.
-
-    Formula: net P&L = quantity * (exit_fill - entry_fill) - entry_fee - exit_fee.
-    Reference: the Strategy Lab realized-equity accounting contract in
-      ``docs/references/realized-equity-staircase-v1.md``; compatibility fees
-      use the QuantConnect IBKR equity tier cited by the canonical model.
-    Canonical implementation: gross trade P&L is carried by ``EngineTradeResponse``;
-      IBKR fees delegate to ``app.research.parity.ibkr_commission.IbkrEquityCommissionModel``.
-    Validated against:
-      ``tests/integration/test_engine_persistence_quantity_pnl.py::test_save_study_payload_uses_executed_ibkr_fees_for_compatibility_runs``.
-    """
-    gross_pnl = Decimal(str(trade.pnl_pts)) * Decimal(trade.quantity)
-    if compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1:
-        fee_model = IbkrEquityCommissionModel()
-        fees = fee_model.fee(
-            quantity=trade.quantity,
-            fill_price=Decimal(str(trade.entry_price)),
-        ) + fee_model.fee(
-            quantity=trade.quantity,
-            fill_price=Decimal(str(trade.exit_price)),
-        )
-    else:
-        fees = Decimal("2") * Decimal(str(commission_per_order))
-    return float(gross_pnl - fees)
-
-
-def _save_study_sync(
-    *,
-    response: EngineBacktestResponse,
-    symbol: str,
-    start_date: str,
-    end_date: str,
-    resolution: str,
-    params_json: str,
-    duration_ms: int,
-    commission_per_order: float = 0.0,
-    compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None = None,
-    requested_engine: Literal["python", "lean", "both"] = "python",
-    parity_group_id: str | None = None,
-) -> int | None:
-    """POST the backtest result to the .NET backend for persistence.
-
-    Returns the saved study id so the Engine Lab can immediately enable
-    the Replay tab. Returns None when the save fails — the run itself
-    is unaffected; persistence is best-effort.
-    """
-
-    backend_url = getattr(settings, "BACKEND_URL", "http://localhost:5000")
-    url = f"{backend_url}/api/studies"
-
-    # Engine ``statistics`` is the canonical source for headline metric
-    # identities. ``lean_statistics`` is an explicitly separate compatibility
-    # projection and may only fill fields the canonical payload does not yet
-    # publish. Before verdict v2, preferring the projection made run 77 display
-    # Sharpe 1.54 while its readiness input used canonical Sharpe 1.43.
-    stats = response.statistics
-    lp = response.lean_statistics.portfolio if response.lean_statistics else None
-    lt = response.lean_statistics.trade if response.lean_statistics else None
-
-    def canonical_stat(key: str, fallback: float | int | None) -> float | int | None:
-        return stats.get(key, fallback)
-
-    try:
-        persisted_trades = [
-            {
-                "tradeType": "Buy",
-                "entryTimestamp": t.entry_time,
-                "exitTimestamp": t.exit_time,
-                "entryPrice": t.entry_price,
-                "exitPrice": t.exit_price,
-                "quantity": t.quantity,
-                # Dollar P&L net of the fee policy the engine actually ran.
-                # Compatibility runs pin the IBKR tier even when the legacy
-                # flat-fee control is zero.
-                "pnL": _persisted_trade_net_pnl(
-                    trade=t,
-                    commission_per_order=commission_per_order,
-                    compatibility_profile=compatibility_profile,
-                ),
-                "cumulativePnL": 0,  # not tracked per-trade in engine format
-                "signalReason": t.signal_reason,
-                "isSyntheticExit": t.is_synthetic_exit,
-            }
-            for t in response.trades
-        ]
-        mark_to_market = from_engine_curve(
-            response.equity_curve,
-            trade_timestamps={t["entryTimestamp"] for t in persisted_trades}
-            | {t["exitTimestamp"] for t in persisted_trades},
-        )
-        mark_points = mark_to_market["points"]
-        chart_start_candidates = [int(point["t"]) for point in mark_points]
-        chart_end_candidates = [int(point["t"]) for point in mark_points]
-        # A zero-trade run still has consolidated chart bars. They provide the
-        # producer-authored session bounds for its required flat realized curve;
-        # never synthesize a timestamp from an ISO date or UTC midnight here.
-        chart_start_candidates.extend(
-            int(bar["t"])
-            for bar in response.chart_bars
-            if bar.get("t") is not None
-        )
-        chart_end_candidates.extend(
-            int(bar["t"])
-            for bar in response.chart_bars
-            if bar.get("t") is not None
-        )
-        chart_start_candidates.extend(int(trade["entryTimestamp"]) for trade in persisted_trades)
-        chart_end_candidates.extend(int(trade["exitTimestamp"]) for trade in persisted_trades)
-        if not chart_start_candidates or not chart_end_candidates:
-            raise ValueError("Engine run has no timestamps for the strict run report")
-        realized = build_realized_equity_envelope(
-            initial_cash=Decimal(str(response.initial_cash)),
-            trades=[
-                RealizedEquityTrade(
-                    trade_number=index + 1,
-                    exit_ms_utc=int(trade["exitTimestamp"]),
-                    pnl=Decimal(str(trade["pnL"])),
-                )
-                for index, trade in enumerate(persisted_trades)
-            ],
-            start_ms_utc=min(chart_start_candidates),
-            end_ms_utc=max(chart_end_candidates),
-        )
-        realized_final_equity = realized["points"][-1]["e"]
-        if not math.isclose(
-            realized_final_equity,
-            response.final_equity,
-            rel_tol=0.0,
-            abs_tol=1e-6,
-        ):
-            raise ValueError(
-                "realized equity does not reconcile with the completed engine final equity "
-                "within atol=1e-6, rtol=0"
-            )
-    except (KeyError, TypeError, ValueError):
-        logger.exception("[ENGINE] Study save report preparation failed — study not persisted")
-        return None
-
-    body: dict[str, Any] = {
-        "symbol": symbol,
-        "strategyName": response.strategy_name,
-        "parameters": params_json,
-        "startDate": start_date,
-        "endDate": end_date,
-        "timespan": resolution,
-        "fillMode": response.fill_mode,
-        "source": "engine",
-        "requestedEngine": requested_engine,
-        "totalTrades": response.total_trades,
-        "winningTrades": response.winning_trades,
-        "losingTrades": response.losing_trades,
-        "totalPnL": response.net_profit,
-        "maxDrawdown": canonical_stat("max_drawdown_pct", lp.drawdown if lp else None),
-        "sharpeRatio": canonical_stat("sharpe_ratio", lp.sharpe_ratio if lp else None),
-        "initialCash": response.initial_cash,
-        "finalEquity": response.final_equity,
-        "totalFees": response.total_fees,
-        "winRate": response.win_rate,
-        "compoundingAnnualReturn": canonical_stat("cagr", lp.compounding_annual_return if lp else None),
-        "sortinoRatio": canonical_stat("sortino_ratio", lp.sortino_ratio if lp else None),
-        "probabilisticSharpeRatio": lp.probabilistic_sharpe_ratio if lp else 0,
-        "profitFactor": canonical_stat("profit_factor", lt.profit_factor if lt else None),
-        "alpha": lp.alpha if lp else 0,
-        "beta": lp.beta if lp else 0,
-        "informationRatio": lp.information_ratio if lp else 0,
-        "trackingError": lp.tracking_error if lp else 0,
-        "treynorRatio": lp.treynor_ratio if lp else 0,
-        "valueAtRisk95": lp.value_at_risk_95 if lp else 0,
-        "valueAtRisk99": lp.value_at_risk_99 if lp else 0,
-        "annualStandardDeviation": lp.annual_standard_deviation if lp else 0,
-        "drawdownRecoveryDays": lp.drawdown_recovery if lp else 0,
-        "leanStatisticsJson": response.lean_statistics.model_dump_json() if response.lean_statistics else None,
-        "durationMs": duration_ms,
-        # PR B (2026-05-19) — DataPolicy / Commission / Brokerage. Always
-        # populated because the request synthesizer guarantees ``data_policy``
-        # is non-null by the time we reach response construction. The .NET
-        # ``SaveStudyAsync`` endpoint writes these into the new columns.
-        "dataPolicyJson": response.data_policy.model_dump_json() if response.data_policy else None,
-        "commissionPerOrder": commission_per_order,
-        # Python engine doesn't model brokerage — record the LEAN-side
-        # convention so the compare-view's soft-match treats it correctly.
-        "brokeragePolicy": "algorithm_default",
-        "parityGroupId": parity_group_id,
-        "runVerdictJson": response.run_verdict.model_dump_json() if response.run_verdict else None,
-        "verdictVersion": response.run_verdict.verdict_version if response.run_verdict else None,
-        "verdictGrade": response.run_verdict.grade if response.run_verdict else None,
-        "verdictSignal": response.run_verdict.signal if response.run_verdict else None,
-        "equityCurveJson": json.dumps(
-            build_run_equity_envelope(mark_to_market=mark_to_market, realized=realized)
-        ),
-        # Frozen at run time — the persisted run is the single render
-        # source for the workbench and the run-detail page, so the atlas
-        # analytics must survive the response. Null when the analytics
-        # computation rejected the run's output (honest missing).
-        "validationAnalyticsJson": (
-            json.dumps(
-                build_validation_analytics_envelope(
-                    response.validation_analytics,
-                    engine="python",
-                    computed_at_ms=now_ms_utc(),
-                )
-            )
-            if response.validation_analytics
-            else None
-        ),
-        "insightSummaryJson": json.dumps(response.insight_summary) if response.insight_summary else None,
-        "trades": persisted_trades,
-    }
-
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.post(url, json=body)
-            if resp.status_code < 300:
-                payload = resp.json()
-                study_id = payload.get("id")
-                logger.info("[ENGINE] Study saved (id=%s)", study_id)
-                return int(study_id) if study_id is not None else None
-            logger.warning("[ENGINE] Study save failed: %s %s", resp.status_code, resp.text[:200])
-    except Exception:
-        logger.exception("[ENGINE] Study save request failed — study not persisted")
-    return None

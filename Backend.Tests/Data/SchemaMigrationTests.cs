@@ -1,5 +1,4 @@
 using Backend.Data;
-using Backend.Models.MarketData;
 using Backend.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -14,22 +13,6 @@ namespace Backend.Tests.Data;
 public class SchemaMigrationTests
 {
     private const string MigrationBeforeLegacySchemaRepair = "20260717010000_PreserveUnavailableRunMetrics";
-
-    [Fact]
-    public void StrategyExecution_HasLeanRunIdProperty()
-    {
-        var prop = typeof(StrategyExecution).GetProperty(nameof(StrategyExecution.LeanRunId));
-        Assert.NotNull(prop);
-        Assert.Equal(typeof(string), prop!.PropertyType);
-    }
-
-    [Fact]
-    public void BacktestTrade_HasIsSyntheticExitProperty()
-    {
-        var prop = typeof(BacktestTrade).GetProperty(nameof(BacktestTrade.IsSyntheticExit));
-        Assert.NotNull(prop);
-        Assert.Equal(typeof(bool), prop!.PropertyType);
-    }
 
     [Fact]
     public void AllConcreteMigrations_AreDiscoverableByEf()
@@ -318,7 +301,15 @@ public class SchemaMigrationTests
         // BacktestTrades / ParityVerdicts, which blocked the run-table drop
         // (#1965).
         "StrategyTradeLinks",
-        "StrategyAllocations"
+        "StrategyAllocations",
+
+        // DropBacktestRunTables (#1965): backtest runs, their trades and
+        // parity verdicts moved to the Python-owned research tables
+        // (ADR 0058); the raw-SQL index ix_strategyexecution_datapolicy_symbol
+        // went with the run table.
+        "StrategyExecutions",
+        "BacktestTrades",
+        "ParityVerdicts"
     ];
 
     // ck_raw_only_for_canonical_data_root is deliberately absent: migration
@@ -343,7 +334,6 @@ public class SchemaMigrationTests
 
     private static readonly string[] RawSqlMigrationIndexes =
     [
-        "ix_strategyexecution_datapolicy_symbol",
         "uq_data_lake_artifacts_minute_bars",
         "uq_data_lake_artifacts_aggregated_bars",
         "uq_data_lake_artifacts_corp_actions",
@@ -396,10 +386,6 @@ public class SchemaMigrationTests
     private static async Task CorruptRepairedRawSqlCatalogAsync(NpgsqlConnection connection)
     {
         await using var command = new NpgsqlCommand(@"
-            DROP INDEX ix_strategyexecution_datapolicy_symbol;
-            CREATE INDEX ix_strategyexecution_datapolicy_symbol
-              ON ""StrategyExecutions"" ((""DataPolicyJson""->>'market'));
-
             DROP INDEX uq_data_lake_artifacts_minute_bars;", connection);
 
         await command.ExecuteNonQueryAsync();

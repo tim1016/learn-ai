@@ -10,11 +10,11 @@ import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { within } from "@testing-library/angular";
-import { Apollo } from "apollo-angular";
 import { BehaviorSubject, of, throwError } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
-import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../services/backtest-runs.types";
+import { BacktestRunsService } from "../../services/backtest-runs.service";
 import { JobsService, type JobState } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import {
@@ -34,8 +34,8 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     symbol: "QQQ",
     leanRunId: null,
     parameters: JSON.stringify({ fast: 8, slow: 21, symbol: "QQQ" }),
-    startDate: "2026-03-02",
-    endDate: "2026-04-02",
+    startDate: 1772427600000, // 2026-03-02 ET midnight
+    endDate: 1775102400000, // 2026-04-02 ET midnight
     fillMode: "next_bar_open",
     executedAt: 1,
     durationMs: 2,
@@ -77,6 +77,8 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     parityGroupId: null,
     trades: [],
     tradesTruncated: false,
+    metricDocumentation: [],
+    notes: null,
     parityVerdicts: [],
     ...overrides,
   };
@@ -97,10 +99,6 @@ function strategyCatalog() {
     strategy_bars: { timespan: "minute", multiplier: 15, parameter: null },
     lean_twin: "ema_crossover_signal",
   }];
-}
-
-interface WatchQueryRequest {
-  variables?: Record<string, unknown>;
 }
 
 /**
@@ -130,8 +128,8 @@ async function createLab(
     restoreRun?: number;
     activeRun?: number;
     backtestRun?: BacktestRunDetail | null;
-    /** Makes the run-detail watch query surface a GraphQL/transport error,
-     *  which is a different failure from the fetched run being unrestorable. */
+    /** Makes the run-detail read surface a transport error, which is a
+     *  different failure from the fetched run being unrestorable. */
     backtestRunQueryError?: Error;
   } = {},
 ) {
@@ -146,21 +144,18 @@ async function createLab(
   // input now, so tests drive run selection and back-navigation by pushing
   // params the way the router does.
   const queryParamMap = new BehaviorSubject(convertToParamMap(query));
-  const runDetail = options.backtestRunQueryError
-    ? { data: undefined, loading: false, error: options.backtestRunQueryError }
-    : { data: { backtestRun: options.backtestRun ?? null }, loading: false };
-  const watchQuery = vi.fn((request: WatchQueryRequest) =>
-    // StrategyLabRunReport watches the single-run detail query (variables.id);
-    // the run-history rail watches the paged list query — same mock, two shapes.
-    request.variables && "id" in request.variables
-      ? { valueChanges: of(runDetail), stopPolling: vi.fn() }
-      : {
-          valueChanges: of({ data: { backtestRuns: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }),
-          refetch: vi.fn(),
-        },
-  );
-  const runDetailWatchCount = (): number =>
-    watchQuery.mock.calls.filter(([request]) => request.variables && "id" in request.variables).length;
+  // StrategyLabRunReport reads the single run; the run-history rail reads the
+  // list — one service mock, both reads.
+  const backtestRuns = {
+    get: vi.fn(() =>
+      options.backtestRunQueryError
+        ? throwError(() => options.backtestRunQueryError)
+        : of(options.backtestRun ?? null),
+    ),
+    list: vi.fn(() => of([])),
+    updateNotes: vi.fn(),
+  };
+  const runDetailWatchCount = (): number => backtestRuns.get.mock.calls.length;
   // The instrument picker reads the lake catalog on init. This spec drives
   // the workbench through `HttpTestingController` and verifies no request
   // is left open, so the catalog is stubbed rather than served.
@@ -194,7 +189,7 @@ async function createLab(
           nextTradingDayOpen: vi.fn(async () => ({ session_open_ms_utc: 1_700_000_000_000 })),
         },
       },
-      { provide: Apollo, useValue: { watchQuery } },
+      { provide: BacktestRunsService, useValue: backtestRuns },
       provideFakeTickerCatalog(catalog),
     ],
   }).compileComponents();

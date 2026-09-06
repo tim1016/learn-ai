@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -70,7 +71,9 @@ def test_failed_lean_payload_preserves_requested_engine_for_history(tmp_path: Pa
         starting_cash=100_000,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
         requested_engine="both",
     )
@@ -87,7 +90,9 @@ def test_failed_lean_payload_preserves_strategy_parameters_for_history(tmp_path:
         starting_cash=100_000,
         symbol="SPY",
         algorithm_name="ema_crossover_2_bps",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
         parameters={"gap_bps": 4.0, "rsi_min": 52.0, "rsi_max": 68.0},
     )
@@ -382,7 +387,9 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -391,8 +398,8 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert payload["strategy_name"] == "ema_crossover"
     assert payload["symbol"] == "SPY"
     assert payload["starting_cash"] == 100_000.0
-    assert payload["start_date_ms"] == 1_700_000_000_000
-    assert payload["end_date_ms"] == 1_700_000_600_000
+    assert payload["start_date"] == "2023-11-14"
+    assert payload["end_date"] == "2023-11-14"
     assert payload["total_trades"] == 1
     assert payload["winning_trades"] == 1
     assert payload["total_pnl"] == pytest.approx(9.0)
@@ -468,6 +475,8 @@ def test_build_persist_payload_uses_covered_lean_timestamps_for_realized_bounds(
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover_signal",
+        start_date=date(2024, 8, 9),
+        end_date=date(2026, 8, 7),
         start_date_ms=start_date_ms,
         end_date_ms=end_date_ms,
         parity_group_id="pg-final-session-exit",
@@ -513,6 +522,8 @@ def test_compatibility_pair_scores_the_same_closed_trade_ledger_contract(tmp_pat
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover_signal",
+        start_date=date(2023, 1, 1),
+        end_date=date(2024, 1, 1),
         start_date_ms=start_ms,
         end_date_ms=end_ms,
         parity_group_id="pg-golden-compatibility",
@@ -588,7 +599,9 @@ def test_build_persist_payload_includes_validation_analytics_envelope(tmp_path: 
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -647,7 +660,9 @@ def test_build_persist_payload_analytics_null_when_equity_curve_invalid(tmp_path
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -678,7 +693,9 @@ def test_compatibility_analytics_use_common_trade_curve_not_native_lean_chart(tm
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 15),
         end_date_ms=1_700_086_400_000,
         parity_group_id="pg-common-analytics",
     )
@@ -711,7 +728,9 @@ def test_build_persist_payload_folds_unclean_lean_run_into_verdict(tmp_path: Pat
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
         cleanliness={
             "is_clean": False,
@@ -755,7 +774,9 @@ def test_build_persist_payload_does_not_map_lean_expectancy_into_pct_grader(tmp_
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -797,7 +818,9 @@ def test_build_persist_payload_synthesizes_mtm_for_half_open(tmp_path: Path) -> 
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="trusted_default",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -820,7 +843,9 @@ def test_build_persist_payload_missing_normalized_result(tmp_path: Path) -> None
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -860,7 +885,9 @@ def test_build_persist_payload_empty_order_events(tmp_path: Path) -> None:
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -883,7 +910,9 @@ def test_build_persist_payload_corrupt_json_returns_failed_payload(tmp_path: Pat
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -920,7 +949,9 @@ def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path)
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -931,11 +962,6 @@ def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path)
     stats = payload["lean_statistics"]
     assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
     assert stats["trade"]["total_number_of_trades"] == 0
-
-
-# ---------------------------------------------------------------------------
-# persist_via_dotnet tests
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -994,7 +1020,9 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
         manifest=_stub_manifest_dict(brokerage_policy="interactive_brokers"),
     )
@@ -1065,7 +1093,9 @@ def test_build_persist_payload_without_manifest_emits_none_brokerage(
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -1092,7 +1122,9 @@ def test_build_persist_payload_failed_run_with_manifest_still_forwards_brokerage
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
         manifest=_stub_manifest_dict(brokerage_policy="algorithm_default"),
     )
@@ -1107,7 +1139,7 @@ def test_build_persist_payload_failed_run_with_manifest_still_forwards_brokerage
 #
 # The sidecar persistence path historically wrote a flat
 # ``{statistics, runtime_statistics, parser_version, workspace_path}``
-# dict into ``StrategyExecution.LeanStatisticsJson``. The frontend's
+# dict into the run's persisted LEAN statistics column. The frontend's
 # ``LeanStatistics`` interface expects the engine path's canonical
 # ``{portfolio, trade, runtime}`` shape (``LeanStatisticsResponse``).
 # This helper bridges the two so both engines persist the same shape
@@ -1351,7 +1383,9 @@ def test_build_persist_payload_preserves_every_lean_analysis_record(tmp_path: Pa
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 15),
         end_date_ms=1_700_086_400_000,
     )
 
@@ -1430,7 +1464,9 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
         start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
         end_date_ms=1_700_000_600_000,
     )
 
@@ -1449,85 +1485,9 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     # A failed run's lean_statistics above is an all-zero placeholder, not a
     # normalized result — recording sharpe.lean_native.v1 "recorded" provenance
     # against it would claim LEAN computed a real Sharpe value. No context is
-    # recorded; the Backend infers provenance from execution.Source instead.
+    # recorded; the run record fills in the source's catalogue context instead.
     assert json.loads(payload["metric_documentation_json"]) == []
     equity = json.loads(payload["equity_curve_json"])
     assert equity["schema_version"] == 2
     assert equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"
     assert equity["realized"]["error"] == "No normalized/result.json — LEAN run did not produce output"
-
-
-@pytest.mark.asyncio
-async def test_persist_via_dotnet_posts_payload_and_returns_id() -> None:
-    import respx
-    from httpx import Response
-
-    from app.services.lean_sidecar_persistence import persist_via_dotnet
-
-    with respx.mock:
-        route = respx.post("http://backend/api/backtest-runs/persist-lean").mock(
-            return_value=Response(200, json={"strategy_execution_id": 42})
-        )
-
-        payload: dict = {
-            "lean_run_id": "ui_run_test",
-            "source": "lean-sidecar",
-            "strategy_name": "ema_crossover",
-            "symbol": "SPY",
-            "starting_cash": 100_000.0,
-            "start_date_ms": 1_700_000_000_000,
-            "end_date_ms": 1_700_000_600_000,
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "total_pnl": 0.0,
-            "total_fees": 0.0,
-            "final_equity": 100_000.0,
-            "win_rate": 0.0,
-            "trades": [],
-            "lean_statistics": {},
-        }
-
-        strategy_execution_id = await persist_via_dotnet(payload, base_url="http://backend")
-
-    assert strategy_execution_id == 42
-    assert route.called
-
-
-@pytest.mark.asyncio
-async def test_persist_via_dotnet_returns_none_on_http_error() -> None:
-    import respx
-    from httpx import Response
-
-    from app.services.lean_sidecar_persistence import persist_via_dotnet
-
-    with respx.mock:
-        respx.post("http://backend/api/backtest-runs/persist-lean").mock(
-            return_value=Response(500, json={"error": "boom"})
-        )
-
-        result = await persist_via_dotnet(
-            {"lean_run_id": "ui_run_test", "source": "lean-sidecar", "trades": []},
-            base_url="http://backend",
-        )
-
-    # Must not raise; persistence failure should not abort the LEAN run.
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_persist_via_dotnet_returns_none_on_connection_error() -> None:
-    import respx
-    from httpx import ConnectError
-
-    from app.services.lean_sidecar_persistence import persist_via_dotnet
-
-    with respx.mock:
-        respx.post("http://backend/api/backtest-runs/persist-lean").mock(side_effect=ConnectError("connection refused"))
-
-        result = await persist_via_dotnet(
-            {"lean_run_id": "ui_run_test", "source": "lean-sidecar", "trades": []},
-            base_url="http://backend",
-        )
-
-    assert result is None

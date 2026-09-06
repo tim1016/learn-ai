@@ -1,14 +1,9 @@
 import { computed, inject, Injectable, linkedSignal, signal } from "@angular/core";
 import { rxResource } from "@angular/core/rxjs-interop";
-import { Apollo } from "apollo-angular";
-import { filter, map, of } from "rxjs";
+import { EMPTY, expand, of, switchMap, timer } from "rxjs";
 
-import {
-  BACKTEST_RUN_DETAIL_QUERY,
-  type BacktestRunDetail,
-  type BacktestRunDetailQueryResult,
-  type BacktestRunDetailTrade,
-} from "../../graphql/backtest-runs.query";
+import { BacktestRunsService } from "../../services/backtest-runs.service";
+import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../services/backtest-runs.types";
 import type { TradingMarker, TradingPoint } from "../../shared/trading-chart";
 import type {
   EngineResultData,
@@ -18,10 +13,17 @@ import type {
 } from "../lean-engine/engine-results/engine-results.component";
 import { parseRunVerdictEnvelope, type StrategyLabParityView } from "./strategy-lab.models";
 
+/** A pending parity verdict is the one thing on a report that still changes; poll for it. */
+export const PARITY_POLL_MS = 5000;
+
 interface RunDisplaySource {
   readonly run: BacktestRunDetail | null;
   readonly selected: boolean;
   readonly settled: boolean;
+}
+
+function hasPendingParity(run: BacktestRunDetail | null): boolean {
+  return run !== null && run.parityVerdicts.some((verdict) => verdict.status === "pending");
 }
 
 /**
@@ -33,38 +35,23 @@ interface RunDisplaySource {
  */
 @Injectable()
 export class StrategyLabRunReport {
-  private readonly apollo = inject(Apollo);
+  private readonly runs = inject(BacktestRunsService);
 
   readonly activeRunId = signal<number | null>(null);
 
   private readonly runResource = rxResource<BacktestRunDetail | null, number | null>({
     params: () => this.activeRunId(),
-    stream: ({ params }) => {
-      if (params === null) return of(null);
-      const ref = this.apollo.watchQuery<BacktestRunDetailQueryResult>({
-        query: BACKTEST_RUN_DETAIL_QUERY,
-        variables: { id: params },
-        fetchPolicy: "network-only",
-        pollInterval: 5000,
-      });
-      return ref.valueChanges.pipe(
-        filter((result) => !result.loading),
-        map((result): BacktestRunDetail | null => {
-          // Apollo can surface a GraphQL validation error alongside an empty
-          // result. Propagate it so an unavailable report is not incorrectly
-          // presented as a missing run.
-          if (result.error) {
-            ref.stopPolling();
-            throw result.error;
-          }
-          const run = (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null;
-          if (!run || !run.parityVerdicts.some((verdict) => verdict.status === "pending")) {
-            ref.stopPolling();
-          }
-          return run;
-        }),
-      );
-    },
+    stream: ({ params }) =>
+      params === null
+        ? of(null)
+        : // Read now; while a parity verdict is pending, read again after the
+          // poll interval. The first settled report (or a run the server does
+          // not have) ends the poll.
+          this.runs.get(params).pipe(
+            expand((run) =>
+              hasPendingParity(run) ? timer(PARITY_POLL_MS).pipe(switchMap(() => this.runs.get(params))) : EMPTY,
+            ),
+          ),
   });
 
   readonly run = computed(() => {
@@ -85,7 +72,7 @@ export class StrategyLabRunReport {
   /**
    * The run the page presents, which is not always the run it is loading.
    *
-   * A re-run points `activeRunId` at the new run before that run's query
+   * A re-run points `activeRunId` at the new run before that run's read
    * resolves, so `run()` is null for the whole in-flight window — the chart
    * would unmount and the operator would watch a blank gap open where the
    * evidence was. Holding the last loaded run here keeps the previous chart
@@ -116,7 +103,6 @@ export class StrategyLabRunReport {
   readonly engineResult = computed<EngineResultData | null>(() => {
     const run = this.displayRun();
     if (!run) return null;
-    const analytics = run.validationAnalytics;
     return {
       success: true,
       strategy_name: run.strategyName,
@@ -140,7 +126,9 @@ export class StrategyLabRunReport {
       lean_analysis: parseLeanAnalysis(run.leanAnalysisJson),
       trades: run.trades.map(toEngineTrade),
       log_lines: [],
-      validation_analytics: analytics && !analytics.error ? analytics : null,
+      // The frozen envelope is served as the engine wrote it; the analytics
+      // body inside it is the shape the results components already read.
+      validation_analytics: run.validationAnalytics?.analytics ?? null,
     };
   });
 
@@ -176,14 +164,15 @@ export class StrategyLabRunReport {
     const notices: string[] = [];
     const verdictError = this.verdictEnvelope().error;
     if (verdictError) notices.push(verdictError);
-    if (!run.equityCurve) {
+    const curve = run.equityCurve;
+    if (!curve) {
       notices.push("This run has no strict dual-curve report.");
-    } else if (run.equityCurve.error) {
-      notices.push(run.equityCurve.error);
-    } else if (run.equityCurve.realized?.error) {
-      notices.push(run.equityCurve.realized.error);
-    } else if (run.equityCurve.markToMarket?.error) {
-      notices.push(run.equityCurve.markToMarket.error);
+    } else if (curve.error) {
+      notices.push(curve.error);
+    } else if (curve.realized?.error) {
+      notices.push(curve.realized.error);
+    } else if (curve.mark_to_market?.error) {
+      notices.push(curve.mark_to_market.error);
     } else if (run.source === "lean-sidecar") {
       notices.push(
         "The realized-equity staircase books net P&L only at exits. Native LEAN mark-to-market evidence remains available for its canonical risk statistics and audit receipt.",
@@ -192,8 +181,6 @@ export class StrategyLabRunReport {
 
     if (!run.validationAnalytics) {
       notices.push("Validation analytics were not recorded for this run.");
-    } else if (run.validationAnalytics.error) {
-      notices.push(run.validationAnalytics.error);
     }
 
     if (run.tradesTruncated) {
