@@ -21,7 +21,7 @@ preference for one stack, determines which generated contract applies.
 
 | Browser owner | GraphQL operation / .NET owner | Python dependency | Contract status |
 | --- | --- | --- | --- |
-| `graphql/queries.ts` consumers | `getOrFetchStockAggregates` / `Query` + `PolygonService` | `/api/aggregates/fetch` | Python response is typed at the Pydantic boundary; shared fixture verifies Python → .NET deserialization and `int64 ms UTC` bars. |
+| `market-data.service.ts` (called by `past-chain.service.ts`, `strategy-builder.component.ts`) | `getOrFetchStockAggregates` / `Query` + `PolygonService` | `/api/aggregates/fetch` | Python response is typed at the Pydantic boundary; shared fixture verifies Python → .NET deserialization and `int64 ms UTC` bars. |
 | `backtest-runs.query.ts`, Engine Lab history/report components | Backtest run queries and notes mutation | Backend persistence/projections; no live Python request on the read path | GraphQL-only today; listed so it is not misclassified as a FastAPI relay. |
 
 ## Angular → FastAPI, direct

@@ -162,7 +162,7 @@ document violates one, that should be flagged explicitly.
 | **Sovereignty over the math** (philosophy #3) | Frontend cannot recompute Greeks or IV "as a fallback" if the Python authority disagrees. All Greek/IV numbers in the UI come from the server. (This is also Phase 1.2 of `options-vol-platform-tdd.md`.) |
 | **`int64 ms UTC` at all wire/storage boundaries** (numerical-rigor.md → Timestamp rigor) | Any new endpoint must accept and return timestamps as `int64 ms`. ISO strings or `DateTime` are disallowed. |
 | **No silent forward-fill or synthetic alignment** | When the chain has gaps (missing strikes, missing IVs), they are surfaced — not patched. |
-| **No new dependencies without justification** (CLAUDE.md hard rules) | The shared Angular service uses what's already in the project (Apollo, signals, RxJS); no new state-management libraries. |
+| **No new dependencies without justification** (CLAUDE.md hard rules) | The shared Angular service uses what's already in the project (raw `HttpClient`, signals, RxJS); no new state-management libraries. |
 | **Every port has a golden fixture and tolerance** (numerical-rigor.md) | If a calculation moves from a frontend `utils/` file to a backend Python authority, the parity test compares old and new outputs at `atol=1e-9, rtol=0` (Greeks: `atol=1e-6, rtol=1e-6` per the existing default) before the legacy code is deleted. |
 | **No regressions to live `/options-chain` UX** | The user-visible behaviour of the TradingView-style chain viewer is locked. Refactors are internal-only unless explicitly authorised. |
 

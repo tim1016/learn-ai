@@ -53,10 +53,6 @@ export interface FetchProgress {
   status: string;
 }
 
-export interface GetOrFetchStockAggregatesResponse {
-  getOrFetchStockAggregates: SmartAggregatesResult;
-}
-
 export interface Ticker {
   id: number;
   symbol: string;
@@ -70,10 +66,6 @@ export interface Ticker {
   createdAt: number;
   updatedAt: number | null;
   sanitizationSummary: string | null;
-}
-
-export interface GetTickersResponse {
-  tickers: Ticker[];
 }
 
 export interface IndicatorPoint {
@@ -394,7 +386,6 @@ export interface StrategyAnalyzeResult {
 // Pricing Engine Toggle
 // ------------------------------------------------------------------
 
-export type PricingEngineType = 'legacy' | 'quantlib';
 export type QuantLibEngine = 'analytic_bs' | 'binomial_crr' | 'binomial_jr' | 'binomial_lr' | 'finite_diff' | 'monte_carlo';
 
 export interface QuantLibStatusResult {

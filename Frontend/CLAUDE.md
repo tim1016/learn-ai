@@ -48,7 +48,7 @@ src/app/
 
 - **Standalone components** with `ChangeDetectionStrategy.OnPush`
 - **Signals** for state: `signal()`, `computed()`, `input()`, `output()`, `inject()`
-- **Raw `HttpClient` POSTs** to the .NET GraphQL endpoint (no Apollo) — the `gql()` helpers live in the services, types in `graphql/types.ts`
+- **Raw `HttpClient` POSTs** to the .NET GraphQL endpoint (no Apollo) — each service posts `{ query, variables }` itself (only `portfolio.service.ts` wraps that in a local `gql<T>()`); the canonical `GraphQLResponse<T>` / `GraphqlError` types are in `shared/graphql/graphql-error.ts`, response types in `graphql/types.ts`
 - **PrimeNG** for UI components + **Tailwind CSS** for utility styling
 - **TradingView lightweight-charts v5** for OHLCV candlestick charts (`chart.addSeries(CandlestickSeries, options)`)
 - Modern control flow: `@if`, `@for` (with `track`), `@switch`, `@let`

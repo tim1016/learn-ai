@@ -141,17 +141,17 @@ describe("StrategyLab configuration and runner", () => {
     }));
   });
 
-  it("removes GraphQL metadata before a restored data policy reaches the engine", async () => {
+  it("drops undeclared fields from a restored data policy before it reaches the engine", async () => {
     const restoredPolicy = {
       ...config.dataPolicy(),
-      __typename: "DataPolicyType",
+      extra_field: "persisted-only",
       input_bars: {
         ...config.dataPolicy().input_bars,
-        __typename: "BarsSpecType",
+        extra_field: "persisted-only",
       },
       strategy_bars: {
         ...config.dataPolicy().strategy_bars,
-        __typename: "BarsSpecType",
+        extra_field: "persisted-only",
       },
     };
     config.restoreDataPolicy(restoredPolicy);
@@ -167,7 +167,7 @@ describe("StrategyLab configuration and runner", () => {
         }),
       }),
     }));
-    expect(JSON.stringify(submittedPayload)).not.toContain("__typename");
+    expect(JSON.stringify(submittedPayload)).not.toContain("extra_field");
   });
 
   it("selects a runnable strategy after an ordinary engine change", () => {
