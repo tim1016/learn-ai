@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import io
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import pytest
 
 from app.data_lake.derived_daily import (
@@ -99,10 +100,10 @@ def _span_bars(dates: tuple[str, ...]) -> list[MinuteTradeBar]:
 
 
 @pytest.mark.parametrize("dates", _SPANS, ids=("edt-holiday-half-day", "dst-change-thanksgiving-half-day"))
-def test_rth_daily_closes_matches_the_per_bar_calendar_rule(dates: tuple[str, ...]):
+def test_rth_daily_closes_matches_the_per_bar_calendar_rule(dates: tuple[str, ...]) -> None:
     """Identical to filtering every bar through the canonical per-instant rule."""
     bars = _span_bars(dates)
-    expected: dict = {}
+    expected: dict[date, Decimal] = {}
     for bar in bars:
         if is_regular_session_ms_utc(int(bar.bar_start_et.timestamp() * 1000)):
             expected[bar.bar_start_et.date()] = bar.close
@@ -115,12 +116,12 @@ def test_rth_daily_closes_matches_the_per_bar_calendar_rule(dates: tuple[str, ..
     assert closes[bars[-1].bar_start_et.date()] == Decimal("103.0")  # 12:59 on the 13:00 early close
 
 
-def test_rth_daily_closes_builds_one_calendar_schedule_for_the_whole_span(monkeypatch):
+def test_rth_daily_closes_builds_one_calendar_schedule_for_the_whole_span(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression for issue #1943: one schedule for the span, not one per minute bar."""
     real = trading_calendar._schedule
-    calls: list[tuple] = []
+    calls: list[tuple[date, date]] = []
 
-    def counting(start, end):
+    def counting(start: date, end: date) -> pd.DataFrame:
         calls.append((start, end))
         return real(start, end)
 
@@ -131,5 +132,5 @@ def test_rth_daily_closes_builds_one_calendar_schedule_for_the_whole_span(monkey
     assert len(calls) == 1
 
 
-def test_rth_daily_closes_of_nothing_is_empty():
+def test_rth_daily_closes_of_nothing_is_empty() -> None:
     assert rth_daily_closes([]) == {}
