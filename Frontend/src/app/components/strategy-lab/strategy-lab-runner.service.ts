@@ -83,9 +83,6 @@ export class StrategyLabRunner {
     "cd PythonDataService && PYTHONPATH=. ./.venv/bin/python -m uvicorn app.lean_sidecar.launcher.app:app --host 0.0.0.0 --port 8090";
   readonly leanLauncherStatus = signal<LeanLauncherStatus>("unknown");
   readonly leanLauncherDetail = signal("");
-  readonly leanLauncherBlocksRun = computed(
-    () => this.config.engine() !== "python" && this.leanLauncherStatus() !== "ready",
-  );
   readonly running = signal(false);
   /** A Strategy Lab job is in flight somewhere — this tab's or another's.
    *  The rail keeps Run disabled on it, so ambiguity between several
