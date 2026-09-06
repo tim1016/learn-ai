@@ -1205,6 +1205,30 @@ def _materialize_missing_bars(
     return materialized.availability_hash
 
 
+def _failed_backtest_response(request: EngineBacktestRequest, error: str) -> EngineBacktestResponse:
+    """The engine's failure envelope: a *reported* failure, never a raised 500.
+
+    Every caller — Strategy Lab, the Jobs worker, a Grid Search cell, a
+    Walk-Forward fold — reads ``success``/``error``. An exception escaping
+    ``execute_engine_backtest`` instead reaches them as an unhandled 500 or an
+    opaque cell failure, so each failure path inside it converges here.
+    """
+    return EngineBacktestResponse(
+        success=False,
+        strategy_name=request.strategy_name,
+        fill_mode=request.fill_mode,
+        initial_cash=0.0,
+        final_equity=0.0,
+        net_profit=0.0,
+        total_fees=0.0,
+        total_trades=0,
+        winning_trades=0,
+        losing_trades=0,
+        win_rate=0.0,
+        error=error,
+    )
+
+
 def execute_engine_backtest(
     *,
     request: EngineBacktestRequest,
@@ -1301,20 +1325,7 @@ def execute_engine_backtest(
                     start_override,
                     end_override,
                 )
-                return EngineBacktestResponse(
-                    success=False,
-                    strategy_name=request.strategy_name,
-                    fill_mode=request.fill_mode,
-                    initial_cash=0.0,
-                    final_equity=0.0,
-                    net_profit=0.0,
-                    total_fees=0.0,
-                    total_trades=0,
-                    winning_trades=0,
-                    losing_trades=0,
-                    win_rate=0.0,
-                    error=f"auto_fetch failed: {exc}",
-                )
+                return _failed_backtest_response(request, f"auto_fetch failed: {exc}")
 
     try:
         _pin_compatibility_fixture(request, data_roots)
@@ -1385,20 +1396,7 @@ def execute_engine_backtest(
     except Exception as exc:
         logger.exception("[ENGINE] Backtest failed for %s", request.strategy_name)
         on_log(f"Engine error: {exc}")
-        return EngineBacktestResponse(
-            success=False,
-            strategy_name=request.strategy_name,
-            fill_mode=request.fill_mode,
-            initial_cash=0.0,
-            final_equity=0.0,
-            net_profit=0.0,
-            total_fees=0.0,
-            total_trades=0,
-            winning_trades=0,
-            losing_trades=0,
-            win_rate=0.0,
-            error=str(exc),
-        )
+        return _failed_backtest_response(request, str(exc))
 
     on_phase("aggregating_results")
     on_log(
@@ -1436,13 +1434,23 @@ def execute_engine_backtest(
     statistics_equity_points = (
         None if request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1 else equity_points
     )
-    stats = summarize(
-        initial_cash=float(result.initial_cash),
-        final_equity=float(result.final_equity),
-        trades=trades,
-        trading_days=trading_days,
-        equity_curve=statistics_equity_points,
-    )
+    try:
+        stats = summarize(
+            initial_cash=float(result.initial_cash),
+            final_equity=float(result.final_equity),
+            trades=trades,
+            trading_days=trading_days,
+            equity_curve=statistics_equity_points,
+        )
+    except ValueError as exc:
+        # ``validate_trade_log`` rejected the closed-trade ledger. The run is
+        # genuinely unreportable and must not be graded — but that is a
+        # failure to *report*, not an exception to leak: uncaught it reached
+        # Strategy Lab and the sync endpoint as a 500 and handed Grid Search
+        # and Walk-Forward a stack trace where a verdict belongs.
+        logger.exception("[ENGINE] Trade accounting failed for %s", request.strategy_name)
+        on_log(f"Trade accounting error: {exc}")
+        return _failed_backtest_response(request, f"trade accounting failed: {exc}")
 
     # ── LEAN-parity statistics ──────────────────────────────────────
     lean_stats_resp: LeanStatisticsResponse | None = None

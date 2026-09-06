@@ -562,6 +562,52 @@ def test_terminal_close_cost_reaches_the_summarized_statistics():
     assert abs(stats["max_drawdown_pct"] - 0.0004) < 1e-9
 
 
+def test_an_entry_on_the_final_bar_closes_as_a_zero_duration_forced_close():
+    """A strategy that enters on the last bar the engine processes is closed
+    at that same instant: every sweepable strategy's ``on_end_of_algorithm``
+    emits its exit at ``ctx.current_time_ms``, and #1928's terminal sweep
+    prices it against the final observed close. Entry and exit therefore share
+    a timestamp, which is honest — the round trip really did last no time, and
+    there is no later instant to move the exit to. Fabricating one would
+    violate ``.claude/rules/temporal-rigor.md``; dropping the trade or
+    suppressing the entry would diverge from the strategy's own signal.
+
+    Before the terminal close was admitted, ``validate_trade_log`` rejected the
+    pair and ``compute_trade_statistics`` raised ``invalid_trade_times``. That
+    reached Strategy Lab and the sync endpoint as an unhandled 500, and failed
+    every Grid Search cell and Walk-Forward fold whose window ended on an
+    entry."""
+    from app.engine.results.statistics import compute_trade_statistics
+    from app.engine.strategy.programs.sma_crossover import (
+        SmaCrossoverParams,
+        build_sma_crossover_signal_program,
+    )
+
+    strategy = build_sma_crossover_signal_program(
+        SmaCrossoverParams(short_window=2, long_window=3, resolution_minutes=1)
+    ).strategy
+    # SMA(2) sits below SMA(3) through the fourth bar and crosses above it on
+    # the fifth — the last one — so the entry fills at 15:34 and data ends.
+    closes = ["500", "499", "498", "497", "505"]
+    bars = [_bar(15, 30 + i, high=close, low=close, close=close) for i, close in enumerate(closes)]
+
+    result = BacktestEngine(data_source=_StaticBarReader(bars)).run(strategy)
+
+    assert strategy.ctx is not None
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 0
+    assert [event.tag for event in result.order_events] == ["SetHoldings", "EndOfAlgorithm"]
+    assert len(strategy.trade_log) == 1
+    trade = strategy.trade_log[0]
+    assert trade.entry_time_ms == trade.exit_time_ms == bars[-1].end_ms
+    # The label is what earns the exemption in ``validate_trade_log``; without
+    # it an equal pair stays an error.
+    assert trade.is_synthetic_exit is True
+    # Zero duration means zero price P&L. Fees would still be charged — this
+    # run configures none.
+    assert trade.pnl_pts == Decimal(0)
+    assert compute_trade_statistics(strategy.trade_log).total_trades == 1
+
+
 def test_end_of_data_leaves_a_stranded_partial_reduction_unfilled():
     """Only a *true liquidation* may be synthesized at end of data.
 

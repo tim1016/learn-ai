@@ -192,3 +192,24 @@ def test_a_manifest_bound_run_fails_when_a_lake_artifact_changed_after_capture(s
 
     assert tampered.success is False
     assert tampered.error is not None and "changed since the snapshot" in tampered.error
+
+
+def test_a_trade_accounting_failure_is_reported_not_raised(seeded_lake, recorded_persistence, monkeypatch) -> None:
+    """``summarize`` raises ``ValueError`` when the closed-trade ledger fails
+    ``validate_trade_log``. Uncaught, that left Strategy Lab and the sync
+    ``POST /backtest`` endpoint with an unhandled 500, and handed Grid Search
+    and Walk-Forward a stack trace where a verdict belongs. An accounting
+    failure is still a failure — it just arrives in the same envelope every
+    other engine failure uses."""
+
+    def _reject(**_kwargs):
+        raise ValueError("invalid_trade_times: Trade 0: entry_time_ms >= exit_time_ms")
+
+    monkeypatch.setattr(engine_router, "summarize", _reject)
+    logs: list[str] = []
+
+    response = execute_engine_backtest(request=_request(), on_phase=_noop, on_log=logs.append)
+
+    assert response.success is False
+    assert response.error is not None and "invalid_trade_times" in response.error
+    assert recorded_persistence["save"] == []
