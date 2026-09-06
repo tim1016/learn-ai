@@ -263,3 +263,13 @@ class TestPathologicalSteps:
     def test_a_nan_step_is_refused_as_a_value_error(self) -> None:
         with pytest.raises(ValueError, match="finite"):
             _range_size(LowHighStepRange(low=0.0, high=1.0, step=float("nan")))
+
+
+    def test_a_long_span_is_not_rounded_up_to_an_extra_cell(self) -> None:
+        # 1e-30 + 9 * 0.1 exceeds 0.9 exactly; a 28-digit working precision
+        # would round the span to 0.9 and admit a tenth cell (review finding).
+        spec = LowHighStepRange(low=1e-30, high=0.9, step=0.1)
+        assert _range_size(spec) == 9
+        values = expand_param(spec)
+        assert len(values) == 9
+        assert values[-1] == 0.8

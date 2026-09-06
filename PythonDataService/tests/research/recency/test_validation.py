@@ -95,3 +95,27 @@ class TestValidateRecencyRequest:
                 window_end_ms=1000,
                 data_policy="ibkr-raw-regular-minute",
             )
+
+
+def test_a_range_the_floats_cannot_resolve_is_rejected_at_preflight_not_in_the_worker() -> None:
+    from app.research.recency.service import RecencyLaunchRejected, validate_launch
+    from app.research.sweep.grid import LowHighStepRange, StrategyGridConfig
+
+    # Endpoint neighbours resolve but an interior pair collapses to one float;
+    # only materialising the grid detects it, so preflight must materialise.
+    with pytest.raises(RecencyLaunchRejected, match="invalid parameter range"):
+        validate_launch(
+            launch_id="preflight-collapse",
+            strategies=[
+                StrategyGridConfig(
+                    strategy_key="sma_crossover",
+                    param_ranges={"short_window": LowHighStepRange(0.9999999999999944, 0.9999999999999949, 1.0880185641326534e-16)},
+                )
+            ],
+            symbols=["SPY"],
+            window_start_ms=1_700_000_000_000,
+            window_end_ms=1_700_086_400_000,
+            data_policy="polygon-adjusted-regular-minute",
+            fill_mode="signal_bar_close",
+            commission_per_order=1.0,
+        )

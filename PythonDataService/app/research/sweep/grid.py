@@ -26,7 +26,7 @@ import json
 import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from decimal import Decimal
+from fractions import Fraction
 from itertools import product
 
 # A very high sanity ceiling, not a product-level cap (D11): real sweeps
@@ -86,7 +86,7 @@ class RunSpec:
 def expand_param(range_spec: ParamRange) -> list[float]:
     """Expand one parameter's range into its ordered list of values.
 
-    A low/high/step range is computed in ``decimal.Decimal``, seeded from
+    A low/high/step range is computed in exact ``fractions.Fraction``, seeded from
     each input's shortest repr (``str(range_spec.low)`` etc.), so the
     emitted values are the exact decimal grid the caller specified — e.g.
     0.15..0.6 step 0.15 yields ``[0.15, 0.3, 0.45, 0.6]``, not the
@@ -106,7 +106,7 @@ def expand_param(range_spec: ParamRange) -> list[float]:
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    low, step = _decimal(range_spec.low), _decimal(range_spec.step)
+    low, step = _exact(range_spec.low), _exact(range_spec.step)
     values = [float(low + i * step) for i in range(_range_size(range_spec))]
     if len(set(values)) != len(values):
         raise ValueError(_STEP_BELOW_FLOAT_RESOLUTION)
@@ -119,9 +119,14 @@ _STEP_BELOW_FLOAT_RESOLUTION = (
 )
 
 
-def _decimal(value: float) -> Decimal:
-    """The exact decimal a float's shortest repr denotes (0.1 -> Decimal('0.1'))."""
-    return Decimal(str(value))
+def _exact(value: float) -> Fraction:
+    """The exact rational a float's shortest repr denotes (0.1 -> 1/10).
+
+    Rational arithmetic has no working precision to round in, so a range
+    like 1e-30..0.9 step 0.1 counts its nine cells exactly instead of
+    rounding the span up to a tenth.
+    """
+    return Fraction(str(value))
 
 
 def params_hash(strategy_key: str, params: Mapping[str, float]) -> str:
@@ -137,8 +142,9 @@ def _range_size(range_spec: ParamRange) -> int:
     can never disagree by construction. The count is the exact decimal
     floor of ``(high - low) / step`` plus one — inclusive of ``high`` when
     the span divides evenly, never past it (low=0, high=1, step=0.6 gives
-    [0, 0.6], not 1.2). Decimal arithmetic needs no epsilon: an absolute
-    float tolerance would over-count once ``step`` itself is near it.
+    [0, 0.6], not 1.2). Exact rational arithmetic needs no epsilon: an
+    absolute float tolerance would over-count once ``step`` itself is near
+    it, and a fixed working precision would round a long span.
     Never allocating means a fat-fingered low/high/step (e.g. step=0.0001
     over a wide span) can still be rejected by size alone before any memory
     is spent.
@@ -155,13 +161,8 @@ def _range_size(range_spec: ParamRange) -> int:
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    low, step = _decimal(range_spec.low), _decimal(range_spec.step)
-    span = _decimal(range_spec.high) - low
-    # Exact integer floor division: scale both operands by the same power
-    # of ten so an absurd step (1e-28) yields a huge count for the workload
-    # limit to refuse, instead of tripping Decimal's context precision.
-    scale = max(-span.as_tuple().exponent, -step.as_tuple().exponent, 0)
-    count = int(span.scaleb(scale)) // int(step.scaleb(scale)) + 1
+    low, step = _exact(range_spec.low), _exact(range_spec.step)
+    count = int((_exact(range_spec.high) - low) // step) + 1
     # A step below the float spacing at either end of the range would emit
     # cells that collapse to the same value; refuse it before any expansion.
     # A single-cell range (low == high) has no neighbours to collapse, so the

@@ -60,7 +60,11 @@ def validate_launch(
 ) -> ValidatedLaunch:
     """The canonical grid plus its exact run count, or :class:`RecencyLaunchRejected` (D11 ceiling, ranges, request rules)."""
     try:
-        expand_grid(strategies, symbols)
+        # Consume the expansion: the ceiling is checked eagerly, but a range
+        # the grid language refuses only when it materialises (a step the
+        # floats cannot resolve) must be rejected here, not in the worker.
+        for _ in expand_grid(strategies, symbols):
+            pass
     except RecencyGridTooLargeError as exc:
         raise RecencyLaunchRejected(str(exc)) from exc
     except ValueError as exc:
