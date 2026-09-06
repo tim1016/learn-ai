@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import logging
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -2713,6 +2714,61 @@ async def test_revive_now_stops_waiting_for_a_stalled_revival_after_one_lease_tt
         # answers, the revival completes and the hook runs.
         release_cas.set()
         await asyncio.wait_for(hook_fired.wait(), timeout=2.0)
+    finally:
+        release_cas.set()
+        clerk_repo.close()
+
+
+async def test_an_orphaned_revival_that_fails_after_the_ttl_is_still_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Once the bounded drain gives up, the unit keeps running on the loop.
+    Its failure must still be observed -- logged with the account, not
+    dropped as an unretrieved task exception."""
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=90,
+    )
+    cas_entered = threading.Event()
+    release_cas = threading.Event()
+
+    def stalled_then_failing_revive() -> None:
+        cas_entered.set()
+        assert release_cas.wait(timeout=5.0)
+        raise RuntimeError("store exploded after the caller left")
+
+    monkeypatch.setattr(clerk_repo, "revive_execution_lease", stalled_then_failing_revive)
+    sweep = ReconciliationSweep(repo=clerk_repo, read=_FakeRead(), trade=_FakeTrade())
+    try:
+        now["ms"] += 5_000
+        caller = asyncio.create_task(sweep.revive_now())
+        assert await asyncio.to_thread(cas_entered.wait, 1.0)
+        caller.cancel()
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(caller, timeout=2.0)
+            assert any(
+                getattr(record, "action", None) == "execution_lease_revival_orphaned_timeout"
+                for record in caplog.records
+            )
+            release_cas.set()
+            for _ in range(200):
+                if any(
+                    getattr(record, "action", None) == "execution_lease_revival_orphaned_error"
+                    for record in caplog.records
+                ):
+                    break
+                await asyncio.sleep(0.01)
+        failure = next(
+            record
+            for record in caplog.records
+            if getattr(record, "action", None) == "execution_lease_revival_orphaned_error"
+        )
+        assert getattr(failure, "account_id", None) == ACCOUNT_ID
+        assert failure.exc_info is not None and "store exploded" in str(failure.exc_info[1])
     finally:
         release_cas.set()
         clerk_repo.close()

@@ -237,11 +237,14 @@ class ReconciliationSweep:
         logged here only because the caller who would have received it is
         gone. The wait is bounded by one lease TTL, and a second cancellation
         while waiting (shutdown) propagates; either way the unit keeps
-        running on the loop.
+        running on the loop, with its eventual outcome still observed --
+        a failure after this returns is logged, not dropped as an
+        unretrieved task exception.
         """
         try:
             await asyncio.wait_for(asyncio.shield(revival), timeout=self._repo.lease_ttl_ms / 1000)
         except asyncio.CancelledError:
+            revival.add_done_callback(self._log_orphaned_revival_failure)
             raise
         except TimeoutError:
             logger.error(
@@ -252,15 +255,25 @@ class ReconciliationSweep:
                     "account_id": self._repo.account_id,
                 },
             )
+            revival.add_done_callback(self._log_orphaned_revival_failure)
         except Exception:
-            logger.error(
-                "execution lease revival errored after its caller was cancelled",
-                extra={
-                    "action": "execution_lease_revival_orphaned_error",
-                    "account_id": self._repo.account_id,
-                },
-                exc_info=True,
-            )
+            self._log_orphaned_revival_failure(revival)
+
+    def _log_orphaned_revival_failure(self, revival: asyncio.Future[bool]) -> None:
+        """Retrieve an orphaned revival's outcome so a failure is logged."""
+        if revival.cancelled():
+            return
+        error = revival.exception()
+        if error is None:
+            return
+        logger.error(
+            "execution lease revival errored after its caller was cancelled",
+            extra={
+                "action": "execution_lease_revival_orphaned_error",
+                "account_id": self._repo.account_id,
+            },
+            exc_info=error,
+        )
 
     async def _revive_and_repair(self) -> bool:
         """The CAS, its CRITICAL record, and the recovery hook, as one unit."""
