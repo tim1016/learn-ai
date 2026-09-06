@@ -195,7 +195,7 @@ export class PortfolioService {
 
   getDollarDelta(accountId: string, prices: { symbol: string; price: number }[]): Observable<DollarDeltaResult[]> {
     return gql<{ getDollarDelta: DollarDeltaResult[] }>(this.http, `
-      query GetDollarDelta($accountId: UUID!, $prices: [PriceInputInput!]!) {
+      query GetDollarDelta($accountId: UUID!, $prices: [PriceInput!]!) {
         getDollarDelta(accountId: $accountId, prices: $prices) {
           positionId symbol delta price quantity multiplier dollarDelta
         }
@@ -205,7 +205,7 @@ export class PortfolioService {
 
   evaluateRiskRules(accountId: string, prices: { symbol: string; price: number }[]): Observable<RiskViolation[]> {
     return gql<{ evaluateRiskRules: RiskViolation[] }>(this.http, `
-      query EvaluateRules($accountId: UUID!, $prices: [PriceInputInput!]!) {
+      query EvaluateRules($accountId: UUID!, $prices: [PriceInput!]!) {
         evaluateRiskRules(accountId: $accountId, prices: $prices) {
           ruleId ruleType action severity threshold actualValue message
         }
@@ -216,7 +216,7 @@ export class PortfolioService {
   runScenario(accountId: string, prices: { symbol: string; price: number }[],
     priceChangePercent?: number, ivChangePercent?: number, timeDaysForward?: number): Observable<ScenarioResult> {
     return gql<{ runScenario: ScenarioResult }>(this.http, `
-      mutation RunScenario($accountId: UUID!, $prices: [PriceInputInput!]!,
+      mutation RunScenario($accountId: UUID!, $prices: [PriceInput!]!,
         $priceChangePercent: Decimal, $ivChangePercent: Decimal, $timeDaysForward: Int) {
         runScenario(accountId: $accountId, prices: $prices,
           priceChangePercent: $priceChangePercent, ivChangePercent: $ivChangePercent,
