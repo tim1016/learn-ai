@@ -95,11 +95,24 @@ export class DataLakeService {
     );
   }
 
-  async storageSummary(market = 'usa'): Promise<DataLakeRead<StorageSummaryResponse>> {
+  /**
+   * Whole-lake storage overview, or — with `priceAdjustmentMode` — the lake as
+   * a reader on that tree would see it.
+   *
+   * The mode is a segment of the lake root (#1866), so pooling the modes
+   * reports a symbol backfilled only in `raw` as covered to a caller that
+   * reads `polygon_split_adjusted` and would find no bars at all.
+   */
+  async storageSummary(
+    market = 'usa',
+    priceAdjustmentMode?: PriceAdjustmentMode,
+  ): Promise<DataLakeRead<StorageSummaryResponse>> {
     return this.read(() =>
       firstValueFrom(
         this.http.get<StorageSummaryResponse>(`${this.base}/storage-summary`, {
-          params: { market },
+          params: priceAdjustmentMode
+            ? { market, price_adjustment_mode: priceAdjustmentMode }
+            : { market },
         }),
       ),
     );

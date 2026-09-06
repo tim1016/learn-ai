@@ -15,10 +15,24 @@ function summary(
   return { kind: 'ok', value: { market: 'usa', kinds: [], symbols } };
 }
 
+/** Records the `(market, mode)` each `storageSummary` call asked for. */
+const asked: (readonly [string, string | undefined])[] = [];
+
 async function catalogFor(read: DataLakeRead<StorageSummaryResponse>): Promise<TickerCatalogService> {
   TestBed.resetTestingModule();
+  asked.length = 0;
   TestBed.configureTestingModule({
-    providers: [{ provide: DataLakeService, useValue: { storageSummary: async () => read } }],
+    providers: [
+      {
+        provide: DataLakeService,
+        useValue: {
+          storageSummary: async (market: string, mode?: string) => {
+            asked.push([market, mode]);
+            return read;
+          },
+        },
+      },
+    ],
   });
   const service = TestBed.inject(TickerCatalogService);
   // Reading the signal registers the resource; `tick` runs the effect that
@@ -104,5 +118,15 @@ describe('TickerCatalogService', () => {
 
     expect(service.pool()).toEqual([]);
     expect(service.unavailable()).toBe('The data plane did not answer.');
+  });
+
+  // The adjustment mode is a segment of the lake root (#1866) and a backtest
+  // resolves `adjusted=True` by default. Asking the catalog for every mode
+  // would offer a symbol backfilled only in `raw` — which is what the Data
+  // Lake Observatory produces by default — and the run would then refuse it.
+  it('asks only for the tree a run actually reads', async () => {
+    await catalogFor(summary([]));
+
+    expect(asked).toEqual([['usa', 'polygon_split_adjusted']]);
   });
 });

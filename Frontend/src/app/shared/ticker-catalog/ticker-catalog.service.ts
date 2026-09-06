@@ -2,7 +2,11 @@ import { Injectable, computed, inject, resource, type Signal } from '@angular/co
 
 import { etIsoDate } from '../date/et-midnight';
 import { DataLakeService } from '../data-lake/data-lake.service';
-import type { StorageSummaryResponse, SymbolCoverageSpan } from '../data-lake/data-lake.types';
+import type {
+  PriceAdjustmentMode,
+  StorageSummaryResponse,
+  SymbolCoverageSpan,
+} from '../data-lake/data-lake.types';
 import type { TickerOption } from '../ticker-range-picker';
 import { SEED_RECENT_TICKERS, TICKER_LABELS } from './ticker-labels';
 
@@ -20,12 +24,29 @@ import { SEED_RECENT_TICKERS, TICKER_LABELS } from './ticker-labels';
  * cannot prove we hold bars for, which is the exact failure being fixed. A
  * silent wrong list is worse than a visible outage.
  */
+/**
+ * The tree a run reads.
+ *
+ * A backtest resolves its roots with `adjusted=True` by default
+ * (`engine.py::_policy_adjusted`), which is the `polygon_split_adjusted`
+ * segment of the lake root. Asking the catalog for every mode instead would
+ * offer a symbol backfilled only in `raw` — the Data Lake Observatory's own
+ * default when backfilling — and the run would then refuse it for missing
+ * sessions, with the picker having promised otherwise.
+ *
+ * The consequence is deliberate and one-directional: a raw-only symbol is
+ * absent from the picker even though a run with `adjusted=false` could read
+ * it. Absent-but-runnable costs an operator a backfill in the other mode;
+ * present-but-unrunnable is the bug being fixed.
+ */
+const RUNNABLE_ADJUSTMENT_MODE: PriceAdjustmentMode = 'polygon_split_adjusted';
+
 @Injectable({ providedIn: 'root' })
 export class TickerCatalogService {
   private readonly lake = inject(DataLakeService);
 
   private readonly summary = resource({
-    loader: () => this.lake.storageSummary(),
+    loader: () => this.lake.storageSummary('usa', RUNNABLE_ADJUSTMENT_MODE),
   });
 
   /** Instruments the lake holds bars for, deepest history first. */

@@ -29,6 +29,7 @@ from app.data_lake.types import (
     ArtifactDetail,
     ArtifactIdentity,
     ArtifactRecord,
+    PriceAdjustmentMode,
     StorageKindTotal,
     SymbolCoverageSpan,
 )
@@ -1578,7 +1579,11 @@ async def select_artifact_by_id(artifact_id: int) -> ArtifactDetail | None:
     )
 
 
-async def select_storage_totals_by_kind(market: str, data_root_id: UUID | None = None) -> list[StorageKindTotal]:
+async def select_storage_totals_by_kind(
+    market: str,
+    data_root_id: UUID | None = None,
+    price_adjustment_mode: PriceAdjustmentMode | None = None,
+) -> list[StorageKindTotal]:
     """Complete-artifact counts and bytes, grouped by kind (+ resolution).
 
     Scoped to Status='complete': only completed artifacts have bytes on
@@ -1588,6 +1593,13 @@ async def select_storage_totals_by_kind(market: str, data_root_id: UUID | None =
 
     ``data_root_id`` defaults to the service's configured active root
     (issue #1876) — storage summaries are an active-root-default listing.
+
+    ``price_adjustment_mode`` is unset by default, which totals every mode
+    (the whole-lake overview). Passing one narrows the answer to the tree a
+    reader with that adjustment would actually open. Factor and map files
+    carry a mode of their own and scope with it; the column is nullable, and
+    a row that leaves it NULL belongs to no tree in particular, so it falls
+    outside a mode-scoped total rather than being counted under every mode.
     """
     root_id = _resolve_data_root_id(data_root_id)
     query = """
@@ -1598,15 +1610,20 @@ async def select_storage_totals_by_kind(market: str, data_root_id: UUID | None =
          WHERE "Market" = $1
            AND "DataRootId" = $2
            AND "Status" = 'complete'
+           AND ($3::text IS NULL OR "PriceAdjustmentMode" = $3)
          GROUP BY "ArtifactKind", "Resolution"
          ORDER BY "ArtifactKind", "Resolution" NULLS FIRST
     """
     async with connection() as conn:
-        rows = await conn.fetch(query, market, root_id)
+        rows = await conn.fetch(query, market, root_id, price_adjustment_mode)
     return [StorageKindTotal(**dict(r)) for r in rows]
 
 
-async def select_symbol_coverage_spans(market: str, data_root_id: UUID | None = None) -> list[SymbolCoverageSpan]:
+async def select_symbol_coverage_spans(
+    market: str,
+    data_root_id: UUID | None = None,
+    price_adjustment_mode: PriceAdjustmentMode | None = None,
+) -> list[SymbolCoverageSpan]:
     """Per-symbol day-keyed coverage span over complete minute-bar artifacts.
 
     Resolution='minute' is the filter, not just ArtifactKind='time_series_bars':
@@ -1619,6 +1636,13 @@ async def select_symbol_coverage_spans(market: str, data_root_id: UUID | None = 
 
     ``data_root_id`` defaults to the service's configured active root
     (issue #1876) — storage summaries are an active-root-default listing.
+
+    ``price_adjustment_mode`` is unset by default, which spans every mode.
+    Pass one when the answer must be "what could a reader on that tree
+    actually open" — the adjustment mode is a segment of the lake root
+    (#1866), so a symbol backfilled only in ``raw`` has no bars at all for a
+    ``polygon_split_adjusted`` reader, and pooling the modes would report it
+    as covered to a caller that cannot read a single day of it.
     """
     root_id = _resolve_data_root_id(data_root_id)
     query = """
@@ -1633,11 +1657,12 @@ async def select_symbol_coverage_spans(market: str, data_root_id: UUID | None = 
            AND "Status" = 'complete'
            AND "Symbol" IS NOT NULL
            AND "DataRootId" = $2
+           AND ($3::text IS NULL OR "PriceAdjustmentMode" = $3)
          GROUP BY "Symbol"
          ORDER BY "Symbol"
     """
     async with connection() as conn:
-        rows = await conn.fetch(query, market, root_id)
+        rows = await conn.fetch(query, market, root_id, price_adjustment_mode)
     return [
         SymbolCoverageSpan(
             symbol=r["symbol"],
