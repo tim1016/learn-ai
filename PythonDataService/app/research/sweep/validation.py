@@ -21,7 +21,7 @@ Validated against: tests/research/sweep/test_validation.py.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -29,6 +29,7 @@ from pydantic import ValidationError
 from app.engine.strategy.registry import StrategyRegistration
 from app.research.sweep.grid import (
     ParamRange,
+    RunSpec,
     StrategyGridConfig,
     ValueListRange,
     expand_grid,
@@ -95,15 +96,16 @@ def validate_grid(
     except (GridInvalidError, WorkloadLimitError):
         raise
     except ValueError as exc:
-        # A range the grid language itself refuses (step <= 0, low > high, a
-        # step below float resolution) is an invalid grid, not a server fault.
+        # A range the grid language itself refuses (non-finite bounds, step
+        # <= 0, low > high, a step below float resolution) is an invalid
+        # grid, not a server fault.
         raise GridInvalidError(str(exc)) from exc
     if combinations == 0:
         raise GridInvalidError("the grid expands to zero combinations")
     total = combinations * max(1, multiplier)
     if total > limit:
         raise WorkloadLimitError(total, limit)
-    for candidate in expand_grid([config], [symbol]):
+    for candidate in _expanded_or_invalid(config, symbol):
         try:
             registration.param_schema.model_validate({**candidate.params, "symbol": symbol})
         except ValidationError as exc:
@@ -117,3 +119,18 @@ def validate_grid(
                 value=value,
             ) from exc
     return ValidatedGrid(strategy_key=strategy_key, symbol=symbol, combinations=combinations)
+
+
+def _expanded_or_invalid(config: StrategyGridConfig, symbol: str) -> Iterator[RunSpec]:
+    """Expand the grid, surfacing the grid language's own refusals as invalid.
+
+    Expansion can refuse what the analytic count admitted — an interior pair
+    of decimal cells that collapse to the same float — and that is still an
+    invalid grid, never a server fault.
+    """
+    try:
+        yield from expand_grid([config], [symbol])
+    except GridInvalidError:
+        raise
+    except ValueError as exc:
+        raise GridInvalidError(str(exc)) from exc

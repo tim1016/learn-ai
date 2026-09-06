@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -147,6 +148,8 @@ def _range_size(range_spec: ParamRange) -> int:
             raise ValueError("value-list range must not be empty")
         return len(range_spec.values)
 
+    if not all(math.isfinite(value) for value in (range_spec.low, range_spec.high, range_spec.step)):
+        raise ValueError("low/high/step range requires finite low, high and step")
     if range_spec.step <= 0:
         raise ValueError("low/high/step range requires step > 0")
     if range_spec.low > range_spec.high:
@@ -161,8 +164,10 @@ def _range_size(range_spec: ParamRange) -> int:
     count = int(span.scaleb(scale)) // int(step.scaleb(scale)) + 1
     # A step below the float spacing at either end of the range would emit
     # cells that collapse to the same value; refuse it before any expansion.
+    # A single-cell range (low == high) has no neighbours to collapse, so the
+    # step's size is irrelevant there.
     top = low + (count - 1) * step
-    if float(low) == float(low + step) or (count > 1 and float(top) == float(top - step)):
+    if count > 1 and (float(low) == float(low + step) or float(top) == float(top - step)):
         raise ValueError(_STEP_BELOW_FLOAT_RESOLUTION)
     return count
 

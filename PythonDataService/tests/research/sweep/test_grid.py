@@ -255,3 +255,11 @@ class TestPathologicalSteps:
     def test_expanded_values_are_unique(self) -> None:
         values = expand_param(LowHighStepRange(low=0.15, high=0.25, step=0.01))
         assert len(set(values)) == len(values) == 11
+
+
+    def test_a_single_cell_range_is_not_a_resolution_problem(self) -> None:
+        assert expand_param(LowHighStepRange(low=1.0, high=1.0, step=1e-20)) == [1.0]
+
+    def test_a_nan_step_is_refused_as_a_value_error(self) -> None:
+        with pytest.raises(ValueError, match="finite"):
+            _range_size(LowHighStepRange(low=0.0, high=1.0, step=float("nan")))
