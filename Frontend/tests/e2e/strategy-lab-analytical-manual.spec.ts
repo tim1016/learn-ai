@@ -2,20 +2,19 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Strategy Lab analytical manual', () => {
   test('supports keyboard-addressable search, filters, contextual links, and a non-runtime case study', async ({ page }) => {
-    await page.route('**/graphql', async (route) => {
+    // The run's metric documentation is read from the Python-owned run
+    // detail; only the field the manual consumes is mocked.
+    await page.route('**/api/research/backtest-runs/900001', async (route) => {
       await route.fulfill({
         json: {
-          data: {
-            backtestRun: {
-              metricDocumentation: [{
-                metricId: 'sharpe',
-                variantId: 'sharpe.lean_native.v1',
-                producer: 'lean_native',
-                contractId: 'lean-statistics-oracle-v1',
-                contractProvenance: 'recorded',
-              }],
-            },
-          },
+          id: 900001,
+          metricDocumentation: [{
+            metric_id: 'sharpe',
+            variant_id: 'sharpe.lean_native.v1',
+            producer: 'lean_native',
+            contract_id: 'lean-statistics-oracle-v1',
+            contract_provenance: 'recorded',
+          }],
         },
       });
     });
