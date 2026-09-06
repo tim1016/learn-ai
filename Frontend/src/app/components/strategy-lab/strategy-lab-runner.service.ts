@@ -61,6 +61,15 @@ function ownJobId(): string | null {
   }
 }
 
+function forgetOwnJob(): void {
+  try {
+    if (typeof sessionStorage === "undefined") return;
+    sessionStorage.removeItem(OWN_JOB_KEY);
+  } catch {
+    // A marker that outlives its job is ignored by the reattach rule anyway.
+  }
+}
+
 @Injectable()
 export class StrategyLabRunner {
   private readonly jobs = inject(JobsService);
@@ -78,6 +87,10 @@ export class StrategyLabRunner {
     () => this.config.engine() !== "python" && this.leanLauncherStatus() !== "ready",
   );
   readonly running = signal(false);
+  /** A Strategy Lab job is in flight somewhere — this tab's or another's.
+   *  The rail keeps Run disabled on it, so ambiguity between several
+   *  experiments never re-enables a third backtest on the busy container. */
+  readonly engineBusy = computed(() => this.jobs.activeJobs().some(isStrategyLabJob));
   readonly runPhase = signal<StrategyLabRunPhase>("idle");
   readonly runStatusBanner = signal("");
   readonly runPhaseDetail = signal("");
@@ -322,9 +335,11 @@ export class StrategyLabRunner {
       if (this.adoptionSettled || this.engineJobId() !== null || this.leanJobId() !== null) return;
       const active = this.jobs.activeJobs().filter(isStrategyLabJob);
       const own = ownJobId();
-      // This tab's own job wins; without one, only an unambiguous single
-      // candidate is adopted — never a guess between several experiments.
-      const job = active.find((candidate) => candidate.id === own) ?? (active.length === 1 ? active[0] : undefined);
+      // This tab's own job wins. A tab with no marker at all adopts only an
+      // unambiguous single candidate; a marker whose job is no longer active
+      // (the tab was closed before the run ended) adopts nothing — never a
+      // guess between experiments.
+      const job = own === null ? (active.length === 1 ? active[0] : undefined) : active.find((candidate) => candidate.id === own);
       if (job === undefined) return;
       this.adoptionSettled = true;
       if (job.type === "engine_backtest") {
@@ -363,17 +378,20 @@ export class StrategyLabRunner {
       if (job.status === "failed") {
         this.fail("Backtest failed", job.errorMessage ?? "Backtest failed");
         this.engineJobId.set(null);
+        forgetOwnJob();
         this.updateRunningState();
         return;
       }
       if (job.status === "cancelled") {
         this.fail("Backtest cancelled", job.message ?? "");
         this.engineJobId.set(null);
+        forgetOwnJob();
         this.updateRunningState();
         return;
       }
       if (job.status === "completed") {
         this.engineJobId.set(null);
+        forgetOwnJob();
         void this.handleEngineJobCompleted(id);
       }
     });
@@ -408,17 +426,20 @@ export class StrategyLabRunner {
       if (job.status === "failed") {
         this.fail("LEAN run failed", job.errorMessage ?? "LEAN run failed");
         this.leanJobId.set(null);
+        forgetOwnJob();
         this.updateRunningState();
         return;
       }
       if (job.status === "cancelled") {
         this.fail("LEAN run cancelled", job.message ?? "");
         this.leanJobId.set(null);
+        forgetOwnJob();
         this.updateRunningState();
         return;
       }
       if (job.status === "completed") {
         this.leanJobId.set(null);
+        forgetOwnJob();
         void this.handleLeanJobCompleted(id);
       }
     });

@@ -241,6 +241,17 @@ describe("Strategy Lab Workbench", () => {
     expect(runButton()?.disabled).toBe(true);
     // The resumed job's phase is rendered on the stage, not just the button.
     expect(root.textContent).toContain("Running indicators and strategy logic…");
+
+    // Several active jobs from other tabs: nothing is adopted, but Run stays
+    // disabled — the container is busy either way.
+    activeJobs.set([
+      { id: "tab-a", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0 },
+      { id: "tab-b", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0 },
+    ]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(runButton()?.disabled).toBe(true);
     http.verify();
   });
 

@@ -385,6 +385,43 @@ describe("StrategyLab configuration and runner", () => {
       expect(navigate).not.toHaveBeenCalled();
     });
 
+    it("does not fall back to another tab's job while its own marker is stale", async () => {
+      await runner.run();
+      // This tab's job-1 never shows up as active (it ended while the tab was
+      // away); another tab's single job is running.
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(reloaded.running()).toBe(false);
+      expect(reloaded.engineBusy()).toBe(true);
+    });
+
+    it("forgets its marker once its own job has ended", async () => {
+      await runner.run();
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      fetchResult.mockResolvedValue({ success: false, error: "boom" });
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "failed", errorMessage: "boom" }));
+      TestBed.tick();
+      await Promise.resolve();
+
+      // A later reload with one other active job is unambiguous again.
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(reloaded.running()).toBe(true);
+    });
+
+    it("reports the container busy while several jobs are active even though none is adoptable", () => {
+      putJob(makeJobState({ id: "tab-a", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "tab-b", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(false);
+      expect(runner.engineBusy()).toBe(true);
+    });
+
     it("navigates to the produced study once an adopted engine_backtest job completes", async () => {
       fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
       putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "running" }));
