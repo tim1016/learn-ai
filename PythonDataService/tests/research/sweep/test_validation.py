@@ -55,3 +55,13 @@ def test_one_under_the_limit_is_admitted_and_one_over_is_refused() -> None:
     _validate(limit=5, long_window=LowHighStepRange(20, 60, 10))  # 5 combinations
     with pytest.raises(WorkloadLimitError):
         _validate(limit=4, long_window=LowHighStepRange(20, 60, 10))
+
+
+def test_a_step_below_float_resolution_is_an_invalid_grid_not_a_server_fault() -> None:
+    with pytest.raises(GridInvalidError, match="collapse to the same float"):
+        _validate(short_window=LowHighStepRange(0.12345678901234566, 0.12345678901234568, 1e-18))
+
+
+def test_an_absurd_step_is_refused_before_any_expansion() -> None:
+    with pytest.raises(GridInvalidError):
+        _validate(short_window=LowHighStepRange(0.0, 1.0, 1e-28))

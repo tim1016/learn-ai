@@ -90,7 +90,14 @@ def validate_grid(
     """
     reject_duplicate_values(param_ranges)
     config = StrategyGridConfig(strategy_key=strategy_key, param_ranges=dict(param_ranges))
-    combinations = grid_size([config], [symbol])
+    try:
+        combinations = grid_size([config], [symbol])
+    except (GridInvalidError, WorkloadLimitError):
+        raise
+    except ValueError as exc:
+        # A range the grid language itself refuses (step <= 0, low > high, a
+        # step below float resolution) is an invalid grid, not a server fault.
+        raise GridInvalidError(str(exc)) from exc
     if combinations == 0:
         raise GridInvalidError("the grid expands to zero combinations")
     total = combinations * max(1, multiplier)

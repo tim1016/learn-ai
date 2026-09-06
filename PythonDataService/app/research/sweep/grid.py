@@ -106,7 +106,16 @@ def expand_param(range_spec: ParamRange) -> list[float]:
         raise ValueError("low/high/step range requires low <= high")
 
     low, step = _decimal(range_spec.low), _decimal(range_spec.step)
-    return [float(low + i * step) for i in range(_range_size(range_spec))]
+    values = [float(low + i * step) for i in range(_range_size(range_spec))]
+    if len(set(values)) != len(values):
+        raise ValueError(_STEP_BELOW_FLOAT_RESOLUTION)
+    return values
+
+
+_STEP_BELOW_FLOAT_RESOLUTION = (
+    "low/high/step range requires a step the values can resolve: "
+    "neighbouring cells collapse to the same float at this magnitude"
+)
 
 
 def _decimal(value: float) -> Decimal:
@@ -143,8 +152,19 @@ def _range_size(range_spec: ParamRange) -> int:
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    span = _decimal(range_spec.high) - _decimal(range_spec.low)
-    return int(span // _decimal(range_spec.step)) + 1
+    low, step = _decimal(range_spec.low), _decimal(range_spec.step)
+    span = _decimal(range_spec.high) - low
+    # Exact integer floor division: scale both operands by the same power
+    # of ten so an absurd step (1e-28) yields a huge count for the workload
+    # limit to refuse, instead of tripping Decimal's context precision.
+    scale = max(-span.as_tuple().exponent, -step.as_tuple().exponent, 0)
+    count = int(span.scaleb(scale)) // int(step.scaleb(scale)) + 1
+    # A step below the float spacing at either end of the range would emit
+    # cells that collapse to the same value; refuse it before any expansion.
+    top = low + (count - 1) * step
+    if float(low) == float(low + step) or (count > 1 and float(top) == float(top - step)):
+        raise ValueError(_STEP_BELOW_FLOAT_RESOLUTION)
+    return count
 
 
 def _param_combo_count(param_ranges: Mapping[str, ParamRange]) -> int:

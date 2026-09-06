@@ -229,3 +229,29 @@ class TestExpansionNeverPassesHigh:
         assert values[0] == low
         assert values[-1] <= high
         assert len(values) == _range_size(LowHighStepRange(low=low, high=high, step=step))
+
+
+class TestPathologicalSteps:
+    """Fat-fingered steps are refused the documented way, never a context error
+    or a grid of duplicate cells (review findings on the Decimal expansion)."""
+
+    def test_an_absurdly_small_step_is_refused_not_a_decimal_context_error(self) -> None:
+        # 1 - 1e-28 is 1.0 in float, so the honest refusal is the resolution
+        # guard — never decimal.InvalidOperation from a 28-digit quotient.
+        spec = LowHighStepRange(low=0.0, high=1.0, step=1e-28)
+        with pytest.raises(ValueError, match="collapse to the same float"):
+            _range_size(spec)
+
+    def test_a_huge_but_resolvable_count_is_exact(self) -> None:
+        assert _range_size(LowHighStepRange(low=0.0, high=1e6, step=1e-9)) == 10**15 + 1
+
+    def test_a_step_below_float_spacing_is_refused_rather_than_collapsing_cells(self) -> None:
+        spec = LowHighStepRange(low=0.12345678901234566, high=0.12345678901234568, step=1e-18)
+        with pytest.raises(ValueError, match="collapse to the same float"):
+            _range_size(spec)
+        with pytest.raises(ValueError, match="collapse to the same float"):
+            expand_param(spec)
+
+    def test_expanded_values_are_unique(self) -> None:
+        values = expand_param(LowHighStepRange(low=0.15, high=0.25, step=0.01))
+        assert len(set(values)) == len(values) == 11
