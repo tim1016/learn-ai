@@ -30,9 +30,14 @@
         class="w-full"
         [id]="paramName() + '-values'"
         [value]="valuesText()"
+        [attr.aria-invalid]="valuesProblem() ? 'true' : null"
+        [attr.aria-describedby]="valuesProblem() ? paramName() + '-values-problem' : null"
         (input)="onValuesTextInput(valuesInput.value)"
       />
     </label>
+    @if (valuesProblem(); as problem) {
+      <p class="mb-0 mt-1 text-xs text-red-300" role="alert" [id]="paramName() + '-values-problem'">{{ problem }}</p>
+    }
   } @else {
     <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
       <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-low'">

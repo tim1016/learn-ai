@@ -1,14 +1,7 @@
-import { ChangeDetectionStrategy, Component, computed, input, model } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, input, model, signal } from "@angular/core";
 import { ButtonModule } from "primeng/button";
 import { InputText } from "primeng/inputtext";
-import type { LowHighStepRange, ParamRange, ValueListRange } from "./param-range";
-
-function parseValuesList(raw: string): number[] {
-  return raw
-    .split(",")
-    .map((s) => Number(s.trim()))
-    .filter((n) => !Number.isNaN(n));
-}
+import { parseValueList, type LowHighStepRange, type ParamRange, type ValueListRange } from "./param-range";
 
 /**
  * One numeric strategy parameter's sweep-range editor: value-list or
@@ -33,9 +26,20 @@ export class ParamRangeInputComponent {
   readonly isListMode = computed(() => this.range().type === "value_list");
   readonly isRangeMode = computed(() => this.range().type === "low_high_step");
 
+  /** What the operator has typed since the last external range change; null renders the model. */
+  private readonly valuesDraft = signal<string | null>(null);
+
   readonly valuesText = computed(() => {
+    const draft = this.valuesDraft();
+    if (draft !== null) return draft;
     const r = this.range();
     return r.type === "value_list" ? r.values.join(", ") : "";
+  });
+
+  /** Why the typed list is refused, naming the entry; null while it parses. */
+  readonly valuesProblem = computed(() => {
+    const draft = this.valuesDraft();
+    return draft === null ? null : parseValueList(draft).problem;
   });
 
   readonly lowValue = computed(() => {
@@ -55,6 +59,7 @@ export class ParamRangeInputComponent {
 
   switchToListMode(): void {
     if (this.isListMode()) return;
+    this.valuesDraft.set(null);
     const list: ValueListRange = { type: "value_list", values: [this.defaultValue()] };
     this.range.set(list);
   }
@@ -66,7 +71,10 @@ export class ParamRangeInputComponent {
   }
 
   onValuesTextInput(raw: string): void {
-    this.range.set({ type: "value_list", values: parseValuesList(raw) });
+    // A refused list is an empty one: no consumer can launch it, and the
+    // field keeps the raw text so the operator can see and fix the entry.
+    this.valuesDraft.set(raw);
+    this.range.set({ type: "value_list", values: parseValueList(raw).values });
   }
 
   onLowInput(raw: string): void {

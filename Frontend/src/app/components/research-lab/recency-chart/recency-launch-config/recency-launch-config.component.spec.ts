@@ -143,6 +143,23 @@ describe("RecencyLaunchConfigComponent", () => {
     expect(screen.getByRole("alert").textContent).toMatch(/add at least one symbol/i);
   });
 
+  it("refuses to launch while a parameter's value list is malformed", async () => {
+    // #1940: a malformed entry used to be dropped and the smaller grid launched.
+    const startJob = vi.fn(async () => "job-1");
+    const { view } = await renderConfig([makeStrategy()], startJob);
+
+    fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
+    fireEvent.input(screen.getAllByLabelText(/values \(comma-separated\)/i)[0], { target: { value: "2,.3..4" } });
+    await view.fixture.whenStable();
+    fireEvent.click(screen.getByRole("button", { name: /launch timeline/i }));
+    await view.fixture.whenStable();
+
+    expect(startJob).not.toHaveBeenCalled();
+    const alerts = screen.getAllByRole("alert").map((el) => el.textContent ?? "").join(" ");
+    expect(alerts).toContain('".3..4" is not a number.');
+    expect(alerts).toMatch(/fix the highlighted parameter values/i);
+  });
+
   it("launches a recency_chart job with the selected symbols and strategy ranges", async () => {
     const { view, startJob } = await renderConfig([makeStrategy()]);
 

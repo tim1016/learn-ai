@@ -40,6 +40,32 @@ export function defaultRangeForParameter(property: ParamProperty): ParamRange {
   return { type: "value_list", values: [defaultNumericValue(property)] };
 }
 
+/** A comma-separated value list as typed, or why it cannot become one. */
+export interface ParsedValueList {
+  readonly values: number[];
+  /** Names the first offending entry; null when every entry is a finite number. */
+  readonly problem: string | null;
+}
+
+/**
+ * Parse the value-list field's text. Nothing is dropped or repaired: an entry
+ * that is not a finite number, an empty entry, or an empty list is reported
+ * so the field can refuse it (#1940) — a silently shrunken grid would launch
+ * an experiment other than the one the operator typed.
+ */
+export function parseValueList(raw: string): ParsedValueList {
+  const entries = raw.split(",").map((entry) => entry.trim());
+  if (entries.length === 1 && entries[0] === "") return { values: [], problem: "Enter at least one value." };
+  const values: number[] = [];
+  for (const entry of entries) {
+    if (entry === "") return { values: [], problem: "Remove the empty entry between the commas." };
+    const value = Number(entry);
+    if (!Number.isFinite(value)) return { values: [], problem: `"${entry}" is not a number.` };
+    values.push(value);
+  }
+  return { values, problem: null };
+}
+
 /** Whether a stored range sweeps more than one value (a single-value list is a fixed setting). */
 export function rangeVaries(range: ParamRange): boolean {
   return range.type === "low_high_step" || range.values.length > 1;

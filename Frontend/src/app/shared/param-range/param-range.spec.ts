@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeGridSize, type StrategyRangeConfig } from "./param-range";
+import { computeGridSize, parseValueList, type StrategyRangeConfig } from "./param-range";
 
 describe("computeGridSize", () => {
   it("multiplies symbol count by the cartesian product of param ranges", () => {
@@ -69,5 +69,25 @@ describe("low/high/step counts match the canonical Python range size", () => {
   it("treats non-finite bounds as an empty grid rather than throwing", () => {
     expect(count(0, Number.NaN, 0.1)).toBe(0);
     expect(count(0, Number.POSITIVE_INFINITY, 0.1)).toBe(0);
+  });
+});
+
+describe("parseValueList", () => {
+  it("parses a comma-separated list, trimming whitespace", () => {
+    expect(parseValueList(" 0, .1 ,0.2 ")).toEqual({ values: [0, 0.1, 0.2], problem: null });
+  });
+
+  it("refuses a malformed entry by name instead of dropping it", () => {
+    // #1940: "0,.1,.2,.3..4,.5" used to become [0, 0.1, 0.2, 0.5] with no message.
+    expect(parseValueList("0,.1,.2,.3..4,.5")).toEqual({ values: [], problem: '".3..4" is not a number.' });
+  });
+
+  it("refuses an empty entry between commas", () => {
+    expect(parseValueList("1,,2")).toEqual({ values: [], problem: "Remove the empty entry between the commas." });
+  });
+
+  it("refuses an empty list", () => {
+    expect(parseValueList("")).toEqual({ values: [], problem: "Enter at least one value." });
+    expect(parseValueList("   ")).toEqual({ values: [], problem: "Enter at least one value." });
   });
 });

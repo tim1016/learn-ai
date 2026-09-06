@@ -222,6 +222,12 @@ export class GridSearchSpecEditorComponent {
   }
 
   private edit(): GridSpecEdit {
+    // The range editor turns a malformed or empty value list into an empty
+    // list and names the entry inline (#1940); a spec is not built from one.
+    const refused = this.params().find((row) => row.vary && row.range.type === 'value_list' && row.range.values.length === 0);
+    if (refused !== undefined) {
+      return { spec: null, problem: `Fix the values for ${refused.property.title ?? refused.name} before launching.` };
+    }
     try {
       return { spec: this.spec(), problem: null };
     } catch {

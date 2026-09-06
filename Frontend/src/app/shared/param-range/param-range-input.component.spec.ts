@@ -31,6 +31,44 @@ describe("ParamRangeInputComponent", () => {
     expect(view.fixture.componentInstance.range()).toEqual({ type: "value_list", values: [1, 2, 3] });
   });
 
+  it("keeps a malformed list in the field, names the entry, and refuses it as an empty list", async () => {
+    // #1940: ".3..4" parsed as NaN and was dropped, so the model shrank to
+    // [0, 0.1, 0.2, 0.5] with no message and Launch stayed enabled.
+    const view = await renderInput({ type: "value_list", values: [2] });
+
+    fireEvent.input(screen.getByLabelText(/values/i), { target: { value: "0,.1,.2,.3..4,.5" } });
+    await view.fixture.whenStable();
+
+    const field = screen.getByLabelText(/values/i) as HTMLInputElement;
+    expect(field.value).toBe("0,.1,.2,.3..4,.5");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("alert").textContent).toContain('".3..4" is not a number.');
+    expect(view.fixture.componentInstance.range()).toEqual({ type: "value_list", values: [] });
+  });
+
+  it("refuses an emptied list instead of reading it as a single zero", async () => {
+    const view = await renderInput({ type: "value_list", values: [2] });
+
+    fireEvent.input(screen.getByLabelText(/values/i), { target: { value: "" } });
+    await view.fixture.whenStable();
+
+    expect(screen.getByRole("alert").textContent).toContain("Enter at least one value.");
+    expect(view.fixture.componentInstance.range()).toEqual({ type: "value_list", values: [] });
+  });
+
+  it("clears the refusal once the list parses again", async () => {
+    const view = await renderInput({ type: "value_list", values: [2] });
+
+    fireEvent.input(screen.getByLabelText(/values/i), { target: { value: "1,x" } });
+    await view.fixture.whenStable();
+    fireEvent.input(screen.getByLabelText(/values/i), { target: { value: "1, 2" } });
+    await view.fixture.whenStable();
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect((screen.getByLabelText(/values/i) as HTMLInputElement).getAttribute("aria-invalid")).toBeNull();
+    expect(view.fixture.componentInstance.range()).toEqual({ type: "value_list", values: [1, 2] });
+  });
+
   it("switches to low/high/step mode and updates the model", async () => {
     const view = await renderInput({ type: "value_list", values: [2] });
 

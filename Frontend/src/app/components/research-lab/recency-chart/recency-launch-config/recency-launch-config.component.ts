@@ -73,6 +73,12 @@ export class RecencyLaunchConfigComponent {
   readonly symbolValidationMessage = computed(() =>
     this.attemptedLaunch() && this.symbols().length === 0 ? "Add at least one symbol before launching the timeline." : null,
   );
+  /** A refused value list (#1940) leaves a parameter with no values, so the grid has no runs. */
+  readonly rangeValidationMessage = computed(() =>
+    this.attemptedLaunch() && this.symbols().length > 0 && this.strategyConfigs().length > 0 && this.runCount() === 0
+      ? "Fix the highlighted parameter values before launching the timeline."
+      : null,
+  );
 
   readonly selectedStrategyKeys = signal<string[]>([]);
   readonly rangesByStrategy = signal<Record<string, Record<string, ParamRange>>>({});
@@ -223,6 +229,7 @@ export class RecencyLaunchConfigComponent {
     // strategy list and no local error.
     if (this.strategyConfigs().length === 0) return;
     if (this.customMonthsError() !== null) return;
+    if (this.rangeValidationMessage() !== null) return;
 
     const windowEndMs = Date.now();
     const windowStartMs = windowEndMs - this.windowMonths() * 30 * MS_PER_DAY;
