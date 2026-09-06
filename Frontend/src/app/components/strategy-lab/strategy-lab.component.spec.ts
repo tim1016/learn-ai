@@ -525,6 +525,12 @@ describe("Strategy Lab Workbench", () => {
     config.changeRange({ ...config.range(), autoFetch: false });
     expect(config.rerunBlocked()).toBe(true);
 
+    // Opening the dropdown re-reads the tree. The verdict already in hand
+    // holds through that window rather than briefly opening the run.
+    catalog.viewFor("raw").loading.set(true);
+    expect(config.rerunBlocked()).toBe(true);
+    catalog.viewFor("raw").loading.set(false);
+
     // Until the raw tree has answered, nothing can be said about the symbol.
     catalog.viewFor("raw").resolved.set(false);
     expect(config.rerunBlocked()).toBe(false);

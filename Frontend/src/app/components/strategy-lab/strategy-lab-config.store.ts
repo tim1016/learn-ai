@@ -163,7 +163,10 @@ export class StrategyLabConfigStore {
     // See instrument-card: `viewFor` may install a resource effect, which is
     // illegal inside a reactive context.
     const view = untracked(() => this.tickerCatalog.viewFor(mode));
-    if (view.loading() || !view.resolved() || view.unavailable() !== null) return false;
+    // `resolved` survives a reload (the dropdown re-reads on open), so the
+    // retained verdict keeps blocking through that window instead of
+    // briefly opening the run to a symbol already known to be absent.
+    if (!view.resolved() || view.unavailable() !== null) return false;
     return !view.pool().some((option) => option.symbol === this.effectiveSymbol());
   });
 
