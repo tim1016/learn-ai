@@ -30,8 +30,10 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+import pandas as pd
+
 from app.data_lake.lean_writer import MinuteTradeBar, to_deci_cent
-from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
+from app.lean_sidecar.trading_calendar import regular_session_mask_ms_utc
 
 _DETERMINISTIC_ZIP_DATE_TIME: tuple[int, int, int, int, int, int] = (
     1980,
@@ -123,12 +125,20 @@ def rth_daily_closes(bars: list[MinuteTradeBar]) -> dict[date, Decimal]:
     bars (04:00–20:00); those must not contribute to the close LEAN
     uses to price dividends (see ``factor_files``). Input must be sorted
     ascending by ``bar_start_et``.
+
+    The in-session test is the calendar module's vectorized mask, which reads
+    the span's session windows once. Asking per bar rebuilt a calendar
+    schedule for every minute of a multi-year history and froze the service
+    for minutes per backfill (issue #1943); the parse of every minute zip and
+    this loop still run on the request loop, which is the half of #1943 left
+    open.
     """
+    start_ms = pd.Series([int(bar.bar_start_et.timestamp() * 1000) for bar in bars], dtype="int64")
+    in_session = regular_session_mask_ms_utc(start_ms).to_numpy()
     closes: dict[date, Decimal] = {}
-    for bar in bars:
-        start = bar.bar_start_et
-        if is_regular_session_ms_utc(int(start.timestamp() * 1000)):
-            closes[start.date()] = bar.close
+    for bar, keep in zip(bars, in_session, strict=True):
+        if keep:
+            closes[bar.bar_start_et.date()] = bar.close
     return closes
 
 
