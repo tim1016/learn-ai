@@ -30,6 +30,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from app.data_lake.types import polygon_mode_for
 from app.engine.data.availability import check_availability
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration, public_params_schema
@@ -87,6 +88,10 @@ MAX_TOTAL_BACKTESTS = 5_000
 ESTIMATE_FIXED_SECONDS = 1.4
 ESTIMATE_SECONDS_PER_MONTH = 0.3
 RECEIPT_SCHEMA_VERSION = 1
+# Every sweep reads the split-adjusted lake (the receipt's data policy says so). A symbol
+# backfilled only in raw mode lives in a different tree and is missing to it, so a refusal
+# names the tree it read.
+LAKE_MODE = polygon_mode_for(adjusted=True)
 
 
 class GridSearchRefusal(ValueError):
@@ -230,8 +235,8 @@ def preflight(spec: GridSearchSpec, *, backtests_per_combination: int = 1, roots
         shown = ", ".join(day.isoformat() for day in availability.missing_days[:10])
         more = f" (+{len(availability.missing_days) - 10} more)" if len(availability.missing_days) > 10 else ""
         raise GridSearchRefusal(
-            f"the lake is missing {len(availability.missing_days)} trading session(s) for {spec.symbol}: {shown}{more}; "
-            "backfill them and launch again",
+            f"the {LAKE_MODE} lake is missing {len(availability.missing_days)} trading session(s) for {spec.symbol}: {shown}{more}; "
+            f"backfill {spec.symbol} in {LAKE_MODE} mode and launch again (a raw-mode backfill is a different tree)",
             code="DATA_MISSING",
         )
     total = validated.combinations * max(1, backtests_per_combination)

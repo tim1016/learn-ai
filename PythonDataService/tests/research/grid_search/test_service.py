@@ -126,6 +126,9 @@ def test_preflight_refuses_a_window_with_missing_sessions_and_names_them(tmp_pat
 
     assert excinfo.value.code == "DATA_MISSING"
     assert SESSIONS[-1].isoformat() in str(excinfo.value)
+    # The refusal names the tree it read: a symbol backfilled only in raw mode is missing to a sweep.
+    assert "polygon_split_adjusted lake is missing" in str(excinfo.value)
+    assert "in polygon_split_adjusted mode" in str(excinfo.value)
 
 
 # ── Launch + execute ─────────────────────────────────────────────────────
