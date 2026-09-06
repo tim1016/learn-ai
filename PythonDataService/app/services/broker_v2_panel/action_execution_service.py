@@ -86,29 +86,42 @@ AUTHORITY_POISONED_REASON_CODE = "AUTHORITY_MIRROR_UNCONFIRMED"
 
 
 class ExecutionAuthorityLostError(ActionExecutionError):
-    """This account's execution lease expired or was reassigned (503).
+    """This account's execution lease is lost even after a revival attempt (503).
 
     Fail-closed is correct and stays; this type exists so the surface says so
     in authored copy instead of leaking a raw 500 (T7c). The clerk router has
     translated the same condition since the SQLite cutover -- the panel
     router simply had no handler for it.
+
+    ADR 0050: the write path (``panel_data_source.run_action``) always tries
+    exactly one supervised, store-verified revival before this error is
+    raised -- a lease that merely expired under a frozen-then-thawed process,
+    with nobody else ever touching the account, self-cures there and this
+    error is never seen for that case. By the time this is raised, a control
+    on this panel *did* just try to re-acquire the lease; the copy must say
+    what the store actually refused, never the pre-ADR-0050 claim that no
+    control here could have tried.
     """
 
     http_status = 503
 
-    def __init__(self) -> None:
+    _DEFAULT_REVIVAL_OUTCOME = (
+        "the account's active SQLite authority was not available to attempt a revival"
+    )
+
+    def __init__(self, *, revival_outcome: str | None = None) -> None:
         # Account-scoped problem, account-scoped cure -- the Two-Tap rule's own
         # shape. The internal handle message ("this handle can no longer
         # write") is diagnostic, not operator copy, and must not reach here.
         super().__init__(
             "This account's execution authority can no longer be written to.",
             detail=(
-                "The data plane lost this account's execution lease, which happens "
-                "when the process is frozen or starved past the lease timeout. "
-                "Refusing writes is deliberate: a holder that lost its lease must "
-                "not act on stale authority. Restart the data plane to acquire a "
-                "fresh lease and reconcile custody on boot. No control on this "
-                "panel can re-acquire it."
+                "The data plane's execution lease for this account was lost, and a "
+                "supervised, store-verified revival attempt did not restore it: "
+                f"{revival_outcome or self._DEFAULT_REVIVAL_OUTCOME}. Refusing writes "
+                "is deliberate: a holder that cannot prove it still owns the account "
+                "must not act on stale authority. Restart the data plane to acquire a "
+                "fresh lease and reconcile custody on boot."
             ),
             reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
         )

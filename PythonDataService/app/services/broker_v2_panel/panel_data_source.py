@@ -12,6 +12,7 @@ a stale deep link never reads another account's evidence.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -676,36 +677,163 @@ async def run_action(
         return await _run_action_under_live_authority(
             broker, account_id, sid, request, operator_identity=operator_identity
         )
-    except (ExecutionLeaseLost, RepositoryPoisoned) as error:
-        # T7c (#1794): this account's authority cannot be written to. Refusing
-        # is correct; leaking the internal handle message as a raw 500 is not.
-        # Translated here rather than in the router so SQLite repository
-        # internals stay behind this seam.
-        #
-        # The two are kept apart because their cures differ: a lost lease means
-        # another process owns the account and a restart re-acquires it; a
-        # poisoned repository means this authority's own last transition is
-        # unproven until the fence reconciliation re-runs. Collapsing them
-        # would hand an operator the wrong remedy.
-        lost_lease = isinstance(error, ExecutionLeaseLost)
-        logger.warning(
-            "Panel action refused: account authority unavailable",
+    except ExecutionLeaseLost as error:
+        return await _run_action_after_lease_revival(
+            broker, account_id, sid, request, operator_identity=operator_identity, error=error
+        )
+    except RepositoryPoisoned as error:
+        _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=False)
+        raise AuthorityPoisonedError() from error
+
+
+async def _run_action_after_lease_revival(
+    broker: str,
+    account_id: str,
+    sid: str,
+    request: PanelActionRequest,
+    *,
+    operator_identity: str,
+    error: ExecutionLeaseLost,
+) -> PanelActionResult:
+    """ADR 0050 for the write path: one supervised revival, then one retry.
+
+    Before this, every write-path ``ExecutionLeaseLost`` went straight to the
+    terminal "restart the data plane" blocker (T7c/#1794) -- even the case
+    ADR 0050 says self-cures: a process frozen past its lease TTL and thawed,
+    with nobody else ever touching the account. The lease heartbeat
+    (``ReconciliationSweep._attempt_lease_revival``) already revives that case
+    in place; this mirrors it for the panel action that discovered the loss
+    first, so an operator reaching for a fleet-wide flatten during exactly
+    that window is not told to restart the data plane when no restart is
+    needed.
+
+    The admission rule is not duplicated here: both callers invoke the same
+    ``ClerkSqliteRepository.revive_execution_lease`` -- one atomic
+    conditional UPDATE keyed on unchanged owner + unchanged
+    authority_generation (repository.py). There is no separate refusal
+    policy for this seam to reimplement or drift from.
+
+    The retry uses a derived idempotency key rather than the original: the
+    first attempt's key is already resolved (failed, for most actions;
+    released, for ``stop_bot_decisions``) by the sqlite panel executor's own
+    exception handling before this catches ``ExecutionLeaseLost`` -- no
+    mutation committed under the original key, so replaying it here would
+    either be refused as "already failed" or bypass idempotency guarantees
+    the ledger was designed to give. The derived key gets one fresh,
+    genuinely retried write; the operator sees one action, one outcome.
+    """
+    facade = active_sqlite_facade(broker)
+    if facade is None or facade.account_id != account_id:
+        # The active SQLite authority for this account is gone (a restart or
+        # reset raced this request) -- there is nothing left to revive.
+        _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
+        raise ExecutionAuthorityLostError(
+            revival_outcome=(
+                "the account's active SQLite authority was replaced or removed "
+                "before this action's revival could run"
+            )
+        ) from error
+
+    logger.critical(
+        "panel write path lease expired; attempting one supervised revival",
+        extra={
+            "action": "panel_action_execution_lease_revival_attempted",
+            "broker": broker,
+            "account_id": account_id,
+            "strategy_instance_id": sid,
+            "action_id": request.action_id,
+        },
+    )
+    try:
+        await asyncio.to_thread(facade.repository.revive_execution_lease)
+    except ExecutionLeaseLost as refusal:
+        logger.critical(
+            "panel write path lease revival refused; authority remains fail-closed",
             extra={
-                "action": (
-                    "panel_action_execution_authority_lost"
-                    if lost_lease
-                    else "panel_action_authority_poisoned"
-                ),
+                "action": "panel_action_execution_lease_revival_refused",
                 "broker": broker,
                 "account_id": account_id,
                 "strategy_instance_id": sid,
                 "action_id": request.action_id,
-                "error": str(error),
+                "error": str(refusal),
             },
         )
-        raise (
-            ExecutionAuthorityLostError() if lost_lease else AuthorityPoisonedError()
-        ) from error
+        _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
+        raise ExecutionAuthorityLostError(
+            revival_outcome=(
+                "another writer or an authority ceremony has held this account "
+                "since its execution lease last renewed"
+            )
+        ) from refusal
+
+    logger.critical(
+        "panel write path execution lease revived after expiry; retrying the action",
+        extra={
+            "action": "panel_action_execution_lease_revived",
+            "broker": broker,
+            "account_id": account_id,
+            "strategy_instance_id": sid,
+            "action_id": request.action_id,
+        },
+    )
+    retry_request = request.model_copy(
+        update={"idempotency_key": f"{request.idempotency_key}:lease-revival-retry"}
+    )
+    try:
+        return await _run_action_under_live_authority(
+            broker, account_id, sid, retry_request, operator_identity=operator_identity
+        )
+    except RepositoryPoisoned as retry_error:
+        _log_authority_unavailable(
+            broker, account_id, sid, request, retry_error, lost_lease=False
+        )
+        raise AuthorityPoisonedError() from retry_error
+    except ExecutionLeaseLost as retry_error:
+        _log_authority_unavailable(broker, account_id, sid, request, retry_error, lost_lease=True)
+        raise ExecutionAuthorityLostError(
+            revival_outcome=(
+                "the revived lease was lost again before the retried write "
+                "could commit; another writer took the account in that window"
+            )
+        ) from retry_error
+
+
+def _log_authority_unavailable(
+    broker: str,
+    account_id: str,
+    sid: str,
+    request: PanelActionRequest,
+    error: Exception,
+    *,
+    lost_lease: bool,
+) -> None:
+    """T7c (#1794): this account's authority cannot be written to. Refusing is
+    correct; leaking the internal handle message as a raw 500 is not.
+    Translated at the call sites above rather than in the router so SQLite
+    repository internals stay behind this seam.
+
+    The two conditions are kept apart because their cures differ: a lost
+    lease means the ADR 0050 revival was refused (another writer or an
+    authority ceremony holds the account) and a restart re-acquires it; a
+    poisoned repository means this authority's own last transition is
+    unproven until the fence reconciliation re-runs. Collapsing them would
+    hand an operator the wrong remedy.
+    """
+    logger.warning(
+        "Panel action refused: account authority unavailable",
+        extra={
+            "action": (
+                "panel_action_execution_authority_lost"
+                if lost_lease
+                else "panel_action_authority_poisoned"
+            ),
+            "broker": broker,
+            "account_id": account_id,
+            "strategy_instance_id": sid,
+            "action_id": request.action_id,
+            "error": str(error),
+        },
+    )
 
 
 async def _run_action_under_live_authority(
