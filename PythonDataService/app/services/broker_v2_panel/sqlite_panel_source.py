@@ -35,7 +35,10 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     StaleRecoveryTokenError,
     build_recovery_catalog,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ExecutionLeaseLost,
+    ExecutionLeaseLostAfterBrokerIO,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.broker_bots import BotStatusView
@@ -52,6 +55,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     IdempotencyStore,
     StaleRevisionError,
     get_idempotency_store,
+    outcome_unknown_after_broker_io,
 )
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
@@ -965,6 +969,14 @@ async def execute_sqlite_panel_action(
             str(exc),
             detail=exc.capability.next_step,
         ) from exc
+    except ExecutionLeaseLostAfterBrokerIO as exc:
+        # The broker already acted (ClaimedBrokerIO's post-I/O renewal):
+        # outcome unknown, key burned, no retry -- the release branch below
+        # is only honest for a lease lost before any mutation.
+        await ledger.fail(
+            strategy_instance_id, request.action_id, request.idempotency_key, str(exc)
+        )
+        raise outcome_unknown_after_broker_io(exc) from exc
     except Exception as exc:
         if request.action_id == "stop_bot_decisions" or isinstance(exc, ExecutionLeaseLost):
             # STOP is durably idempotent beneath this panel ledger. It can

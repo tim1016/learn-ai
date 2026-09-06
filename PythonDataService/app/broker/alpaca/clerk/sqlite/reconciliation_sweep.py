@@ -166,13 +166,16 @@ class ReconciliationSweep:
 
         Both the lease heartbeat (:meth:`_attempt_lease_revival`) and any
         write path that discovers a lost lease in the same instant (a panel
-        action -- see ``panel_data_source._revive_lease_or_raise``) call this
-        and only this, so the CAS (``ClerkSqliteRepository.revive_execution_lease``),
-        its CRITICAL logging, and firing ``on_lease_revived`` on success never
-        drift into two implementations that could disagree on the outcome
-        vocabulary or the ADR 0050 §3 post-revival recovery pass
+        action -- see ``panel_data_source._revive_lease_or_raise``) run the
+        one unit, :meth:`_revive_and_repair`, so the CAS
+        (``ClerkSqliteRepository.revive_execution_lease``), its CRITICAL
+        logging, and firing ``on_lease_revived`` on success never drift into
+        two implementations that could disagree on the outcome vocabulary or
+        the ADR 0050 §3 post-revival recovery pass
         (``BotTaskRegistry.run_lease_recovery``, which repairs lifecycle
-        artifacts for runs that died during the freeze).
+        artifacts for runs that died during the freeze). This method is the
+        write path's entry: the unit plus the cancellation safety below,
+        which the heartbeat -- the sweep's own task -- deliberately skips.
 
         That does not make the two call sites single-flighted, and this
         method takes no lock: a concurrent heartbeat tick can call this on
@@ -216,7 +219,9 @@ class ReconciliationSweep:
         artifacts of runs that died during the freeze unrepaired until the
         next boot scan. So the CAS-log-hook unit runs as its own task, the
         caller observes it under ``asyncio.shield``, and a cancelled caller
-        waits for the unit to finish before honouring the cancellation.
+        waits for the unit to finish before honouring the cancellation --
+        for at most one lease TTL: a revival that outlives the lease it is
+        reviving is not worth holding a shutting-down process for.
         """
         revival = asyncio.ensure_future(self._revive_and_repair())
         try:
@@ -230,13 +235,23 @@ class ReconciliationSweep:
 
         The unit's own logging is the record of that outcome; an error is
         logged here only because the caller who would have received it is
-        gone. A second cancellation while waiting (shutdown) propagates and
-        leaves the unit running on the loop.
+        gone. The wait is bounded by one lease TTL, and a second cancellation
+        while waiting (shutdown) propagates; either way the unit keeps
+        running on the loop.
         """
         try:
-            await asyncio.shield(revival)
+            await asyncio.wait_for(asyncio.shield(revival), timeout=self._repo.lease_ttl_ms / 1000)
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            logger.error(
+                "execution lease revival still running one lease TTL after its caller "
+                "was cancelled; not waiting further",
+                extra={
+                    "action": "execution_lease_revival_orphaned_timeout",
+                    "account_id": self._repo.account_id,
+                },
+            )
         except Exception:
             logger.error(
                 "execution lease revival errored after its caller was cancelled",
@@ -292,10 +307,17 @@ class ReconciliationSweep:
         return True
 
     async def _attempt_lease_revival(self) -> bool:
-        """One fenced revival attempt via :meth:`revive_now`; ``False`` means
-        proven-terminal loss and the heartbeat should exit."""
+        """One fenced revival attempt; ``False`` means proven-terminal loss
+        and the heartbeat should exit.
+
+        Runs the unit directly rather than through :meth:`revive_now`: the
+        heartbeat is the sweep's own task, so a cancellation here is the
+        sweep stopping, and shutdown must not wait on a stalled CAS or
+        recovery pass (the write path's cancellation guarantee is for a
+        caller that is *not* the sweep).
+        """
         try:
-            return await self.revive_now()
+            return await self._revive_and_repair()
         except asyncio.CancelledError:
             raise
         except ExecutionLeaseLost:

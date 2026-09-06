@@ -151,6 +151,18 @@ class ExecutionLeaseLost(ClerkSqliteError):
         self.account_id = account_id
 
 
+class ExecutionLeaseLostAfterBrokerIO(ExecutionLeaseLost):
+    """The lease was found lost only *after* a broker call succeeded.
+
+    Raised by ``ClaimedBrokerIO``'s post-I/O renewal in place of the base
+    class. The distinction is the whole point: a lease lost before any
+    mutation means "nothing applied" (the key is released and a retry is
+    honest), but here an order may already be placed or cancelled without
+    its receipt folded, so the outcome is unknown -- the key is burned and
+    no retry is offered.
+    """
+
+
 class RecoveryInProgress(ClerkSqliteError):
     """Startup fence: an exclusive offline recovery currently owns the account."""
 

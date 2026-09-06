@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
+    ExecutionLeaseLost,
+    ExecutionLeaseLostAfterBrokerIO,
     OperationClaimError,
 )
 from app.broker.contract.errors import BrokerError
@@ -34,6 +36,16 @@ class ClaimedBrokerIO:
                 "lost its broker-contact claim"
             )
 
+    def _renew_after_io(self) -> None:
+        """The broker already acted. A lease lost here is not "nothing
+        applied": the response cannot be folded (folding is itself a
+        mutation the lost lease refuses), so the caller must report the
+        outcome unknown rather than release its key and invite a retry."""
+        try:
+            self._renew()
+        except ExecutionLeaseLost as lost:
+            raise ExecutionLeaseLostAfterBrokerIO(str(lost), account_id=lost.account_id) from lost
+
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self._renew()
         try:
@@ -50,7 +62,7 @@ class ClaimedBrokerIO:
         except BrokerError:
             self._renew()
             raise
-        self._renew()
+        self._renew_after_io()
         return observed
 
     async def cancel(self, broker_order_id: str, *, order_ref: str) -> None:
@@ -70,7 +82,7 @@ class ClaimedBrokerIO:
         except BrokerError:
             self._renew()
             raise
-        self._renew()
+        self._renew_after_io()
 
     async def lookup(self, client_order_id: str) -> BrokerOrder | None:
         self._renew()

@@ -30,7 +30,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost, RepositoryPoisoned
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ExecutionLeaseLost,
+    ExecutionLeaseLostAfterBrokerIO,
+    RepositoryPoisoned,
+)
 from app.broker.v2panel.vocabulary import ActionId
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.utils.timestamps import now_ms_utc
@@ -302,6 +306,27 @@ class DryRunAuthorityLeaseLostError(ActionExecutionError):
             ),
             reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
         )
+
+
+def outcome_unknown_after_broker_io(
+    error: ExecutionLeaseLostAfterBrokerIO,
+) -> ActionOutcomeUnknownError:
+    """The lease was found lost only after the broker acted: an order may be
+    placed or cancelled with no receipt folded. Both executors report that
+    as outcome-unknown with a burned key -- never the "nothing applied,
+    retry" reading a pre-mutation lease loss earns -- and leave the lease to
+    the heartbeat's own revival."""
+    return ActionOutcomeUnknownError(
+        "The command reached the broker, but its result could not be recorded.",
+        detail=(
+            "The data plane's execution lease was found lost only after the broker "
+            "acted, so an order may have been placed or cancelled without its receipt "
+            "being folded. Do not retry this key: inspect Clerk evidence for the final "
+            "outcome -- the reconciliation sweep folds the broker's own record on its "
+            "next pass once the lease heartbeat has revived the lease."
+        ),
+        reason_code=type(error).__name__,
+    )
 
 
 class AuthorityPoisonedError(ActionExecutionError):
@@ -670,6 +695,13 @@ async def execute_action(
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise
+    except ExecutionLeaseLostAfterBrokerIO as err:
+        # The broker already acted (ClaimedBrokerIO's post-I/O renewal):
+        # outcome unknown, key burned, no retry offered -- the release below
+        # is only honest for a lease lost before any mutation.
+        if reserved_fresh:
+            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
+        raise outcome_unknown_after_broker_io(err) from err
     except ExecutionLeaseLost:
         # Resume/Retire/Archive dispatch through this executor rather than
         # sqlite_panel_source.execute_sqlite_panel_action (that module returns
@@ -682,7 +714,9 @@ async def execute_action(
         #
         # Every repository mutation renews the execution lease as its very
         # first statement under the write lock (repository.py), so the
-        # mutation that raised applied nothing. A multi-leg action can still
+        # mutation that raised applied nothing -- the one exception, a loss
+        # found after a broker call, is the subclass caught above. A
+        # multi-leg action can still
         # have completed earlier legs (safe_flatten submits leg 1 before leg 2
         # renews); a same-key re-POST is safe there because
         # execute_safe_flatten_plan re-filters on active_exit_for_order and

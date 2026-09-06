@@ -15,7 +15,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
-from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost, RepositoryPoisoned
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ExecutionLeaseLost,
+    ExecutionLeaseLostAfterBrokerIO,
+    RepositoryPoisoned,
+)
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
 from app.services.bot_runner_errors import (
@@ -250,6 +254,33 @@ async def test_execution_lease_lost_propagates_unwrapped_for_the_adr0050_revival
     # operator's same-key re-POST; burning it here left a revived leg
     # permanently unflattenable under its own key.
     assert (_SID, "retire", "lease-lost") not in store._records
+
+
+async def test_a_lease_lost_after_broker_io_is_outcome_unknown_with_a_burned_key() -> None:
+    """The release-not-burn contract above is only honest for a lease lost
+    before any mutation. ``ClaimedBrokerIO`` renews after a broker call too,
+    and a loss found there means an order may already be placed or cancelled
+    with no receipt folded: outcome unknown, key burned, no retry offered --
+    never "nothing applied, retry".
+    """
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        raise ExecutionLeaseLostAfterBrokerIO("lease lost after the broker acted", account_id="acct")
+
+    store = IdempotencyStore()
+    with pytest.raises(ActionOutcomeUnknownError) as unknown:
+        await execute_action(
+            _request(action_id="retire", key="lost-after-io"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"retire": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    assert store._records[(_SID, "retire", "lost-after-io")].state == "failed"
+    assert "may have been placed or cancelled" in (unknown.value.detail or "")
 
 
 async def test_repository_poisoned_propagates_unwrapped_too() -> None:
