@@ -35,7 +35,7 @@ const GRAPHQL_URL = 'http://localhost:5000/graphql';
 
 /**
  * Match a GraphQL request whose body's `query` string contains `needle`.
- * The component sends Apollo-style POST bodies with shape
+ * The component sends raw GraphQL POST bodies with shape
  *   { query: '...', variables: {...} }
  * so we filter by query-text for unambiguous matching when multiple
  * requests are in flight.

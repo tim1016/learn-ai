@@ -1,7 +1,7 @@
 // Shared operator-notice vocabulary — mirrors
 // PythonDataService/app/operator/notices/schema.py. Hand-written; the OpenAPI
-// codegen gate covers only graphql/generated and broker.types.ts, so keep the
-// names in lockstep with the Python source by hand.
+// codegen gate covers only broker.types.ts, so keep the names in lockstep
+// with the Python source by hand.
 //
 // All timestamps are int64 ms UTC on the wire and typed `number` here. Never a
 // string. Render through the shared timestamp component, display-side only.

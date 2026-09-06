@@ -56,7 +56,6 @@ cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytes
 | Spec | Key tests |
 |------|-----------|
 | `app.component.spec.ts` | Creates, renders navigation links, has router-outlet |
-| `authors.component.spec.ts` | Creates, loading state, renders after Apollo query, error handling |
 | `books.component.spec.ts` | Creates, loading state, renders after query, error handling |
 | `market-data.component.spec.ts` | Creates, date range init, empty ticker validation, service call, data loaded on fetch |
 | `candlestick-chart.component.spec.ts` | Creates, calls `createChart` on init, passes data to `setData`, cleanup on destroy |
@@ -75,9 +74,6 @@ cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytes
 | `market-data.service.spec.ts` | GraphQL query/variables mapping, response parsing, indicator queries, error handling |
 | `market-monitor.service.spec.ts` | Python REST API integration, caching (shareReplay), clearCache(), error handling |
 | `ticker.service.spec.ts` | GraphQL tickers query, aggregate stats mapping |
-| `stock-aggregate-store.service.spec.ts` | Cache hit/miss, TTL expiration, invalidation, deduplication |
-| `author.service.spec.ts` | Apollo `watchQuery`, response mapping, empty results |
-| `book.service.spec.ts` | Apollo `watchQuery`, response mapping, empty results |
 | `polygon.service.spec.ts` | Client initialization, environment-based config |
 
 ### Replay Engine Specs (extensive)
@@ -318,7 +314,6 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 |-------|-------|----------|
 | Chart spec failures in jsdom | No Canvas API | `lightweight-charts.mock.ts` via `moduleNameMapper` |
 | `@polygon.io/client-js` import error | ESM-only package | `polygon-client.mock.ts` via `moduleNameMapper` |
-| Apollo service `done()` called multiple times | `watchQuery().valueChanges` is a `BehaviorSubject` | Use `take(1)` for empty-result tests |
 | PrimeNG p-table re-sorts component data | `[sortField]` mutates the backing array | Assert data presence, not specific order |
 | Random parallel failures on Windows | Jest/Vitest worker contention | `maxWorkers: '50%'` in config |
 | Python tests need local deps | The host venv is the gate, and it is not created by `setup-macos.sh` | `./bootstrap-host-venv.sh` from the repo root |
