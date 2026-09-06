@@ -29,7 +29,7 @@ export class PortfolioDocsComponent {
   // ── Section 1: Architecture Overview ──
 
   architectureLayers = [
-    { name: 'Angular Frontend', detail: '8 tab components communicating via PortfolioService (GraphQL client over HttpClient)' },
+    { name: 'Angular Frontend', detail: 'Tab components that reach the backend through PortfolioService (GraphQL client over HttpClient)' },
     { name: 'Hot Chocolate v15 GraphQL', detail: 'PortfolioQuery + PortfolioMutation resolvers exposing all operations' },
     { name: 'Service Layer', detail: 'PortfolioService, PositionEngine, ValuationService, SnapshotService, RiskService, ReconciliationService' },
     { name: 'EF Core 10 + PostgreSQL 16', detail: 'Event-sourced trade log with derived position/lot state' },

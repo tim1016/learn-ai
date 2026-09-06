@@ -152,12 +152,7 @@ public class SchemaMigrationTests
             await AssertRelationExistsAsync(connection, $"public.{indexName}");
         }
 
-        foreach (var tableName in RetiredLifecycleProjectionTables)
-        {
-            await AssertRelationDoesNotExistAsync(connection, $"public.{tableName}");
-        }
-
-        foreach (var tableName in RetiredStrategyAttributionTables)
+        foreach (var tableName in RetiredTables)
         {
             await AssertRelationDoesNotExistAsync(connection, $"public.{tableName}");
         }
@@ -304,22 +299,22 @@ public class SchemaMigrationTests
         Assert.NotNull(exception);
     }
 
-    private static readonly string[] RetiredLifecycleProjectionTables =
+    // Tables a retirement migration dropped. A fresh full migration must
+    // NOT find any of them.
+    private static readonly string[] RetiredTables =
     [
+        // DropLegacyLifecycleProjectionReadModel (#1224): the superseded
+        // lifecycle projection read model.
         "bot_lifecycle_events",
         "account_lifecycle_events",
         "operator_gate_snapshots",
         "lifecycle_node_receipts",
-        "account_owner_status_snapshots"
-    ];
+        "account_owner_status_snapshots",
 
-    // Dropped by DropStrategyAttributionTables (#1964): the dead
-    // trade-attribution feature held the only foreign keys into
-    // StrategyExecutions outside BacktestTrades / ParityVerdicts, which
-    // blocked the run-table drop (#1965). A fresh full migration must
-    // NOT find them.
-    private static readonly string[] RetiredStrategyAttributionTables =
-    [
+        // DropStrategyAttributionTables (#1964): the dead trade-attribution
+        // feature held the only foreign keys into StrategyExecutions outside
+        // BacktestTrades / ParityVerdicts, which blocked the run-table drop
+        // (#1965).
         "StrategyTradeLinks",
         "StrategyAllocations"
     ];

@@ -611,7 +611,7 @@ Assert.Equal(-5_000m, scenario.TotalImpact);
 
 ## Test 10 — Strategy Attribution Correctness
 
-> **Deleted (#1964).** The strategy-attribution feature was removed, and this test went with it. The section is kept as a record of the original plan.
+> **Never implemented; feature deleted (#1964).** This planned test was never written — the live Test 10 in `Backend/Services/Implementation/PortfolioValidationService.cs` is `Test10_EquityInvariant`, unrelated to attribution — and the strategy-attribution feature it would have exercised was removed in #1964. The section is kept as a record of the original plan.
 
 ### Objective
 
@@ -777,7 +777,6 @@ Backend.Tests/
     ├── DrawdownTests.cs               # Test 7
     ├── RiskRuleTests.cs               # Test 8
     ├── ScenarioEngineTests.cs         # Test 9
-    ├── StrategyAttributionTests.cs    # Test 10
     ├── OptionExpirationTests.cs       # Test 11 (bonus)
     ├── StressTests.cs                 # Test 12 (bonus)
     └── Fixtures/
@@ -822,8 +821,8 @@ These invariants must hold true **at all times** across the entire system:
 | I4 | Snapshots are in strict chronological order         | Test 6         |
 | I5 | `RebuildPositions` is deterministic                 | Test 2         |
 | I6 | `RealizedPnL` is monotonically non-decreasing       | Test 6         |
-| I7 | `Sum(strategy contributions) = 100%`               | Test 10        |
-| I8 | `Sum(strategy PnL) = Total PnL`                    | Test 10        |
+| I7 | `Sum(strategy contributions) = 100%`               | Planned Test 10 — never implemented; feature deleted (#1964) |
+| I8 | `Sum(strategy PnL) = Total PnL`                    | Planned Test 10 — never implemented; feature deleted (#1964) |
 | I9 | Cash never goes negative (paper trading)           | Test 3         |
 | I10| Expired options close with correct terminal value  | Test 11        |
 
@@ -844,4 +843,4 @@ If resources are limited, execute tests in this order:
 | 7        | T8   | Risk rules — protective guardrails               |
 | 8        | T9   | Scenario engine — what-if analysis               |
 | 9        | T5   | Greeks aggregation — options-specific            |
-| 10       | T10  | Attribution — strategy-level analytics           |
+| 10       | T10  | Attribution — never implemented; feature deleted (#1964) |

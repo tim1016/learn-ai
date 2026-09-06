@@ -559,7 +559,7 @@ IPortfolioReconciliationService
 
 ## 4. GraphQL API
 
-### 4.1 Queries (18 resolvers)
+### 4.1 Queries
 
 | Query | Arguments | Returns |
 |-------|-----------|---------|
@@ -581,7 +581,7 @@ IPortfolioReconciliationService
 | `evaluateRiskRules` | `accountId: UUID!, prices: [PriceInput!]!` | `[RiskViolation]` |
 | `reconcilePortfolio` | `accountId: UUID!` | `ReconciliationReport` |
 
-### 4.2 Mutations (12 mutations)
+### 4.2 Mutations
 
 | Mutation | Key Arguments | Returns |
 |----------|---------------|---------|
@@ -630,7 +630,7 @@ Injectable singleton (`providedIn: 'root'`). All methods return `Observable<T>` 
 
 ### 5.3 Component Architecture
 
-The `PortfolioComponent` is the container with account selection and a 6-tab PrimeNG layout:
+The `PortfolioComponent` is the container with account selection and an eight-tab PrimeNG layout:
 
 ```
 PortfolioComponent (account selector + create form)
@@ -661,10 +661,20 @@ PortfolioComponent (account selector + create form)
 │     - Custom scenario inputs (price %, IV %, theta days)
 │     - Result summary + per-position breakdown
 │
-└── Tab 6: ReconciliationComponent
-      - Run reconciliation check
-      - Drift report table
-      - Auto-fix action
+├── Tab 6: ReconciliationComponent
+│     - Run reconciliation check
+│     - Drift report table
+│     - Auto-fix action
+│
+├── Tab 7: ValidationComponent
+│     - Run the backend validation suite against a temporary test account
+│     - Pass-rate summary cards + per-category breakdown
+│     - Per-test assertion tables (expected vs actual)
+│
+└── Tab 8: PortfolioDocsComponent
+      - Formula and architecture reference (KaTeX-rendered)
+      - Accordion sections: architecture, FIFO, valuation, metrics, risk,
+        scenarios, position lifecycle, snapshots, reconciliation
 ```
 
 All components use Angular signals, `OnPush` change detection, and modern control flow (`@if`, `@for`, `@switch`).
