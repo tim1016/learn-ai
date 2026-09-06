@@ -2,23 +2,23 @@
 
 ## 1. Overview
 
-The Portfolio Management System is a full-stack, event-sourced portfolio tracker integrated into MarketScope. It supports paper and backtest trading accounts with FIFO lot-based position tracking, real-time valuation, risk analytics, equity curve monitoring, and strategy attribution — all exposed via GraphQL and rendered in an Angular tabbed dashboard.
+The Portfolio Management System is a full-stack, event-sourced portfolio tracker integrated into MarketScope. It supports paper and backtest trading accounts with FIFO lot-based position tracking, real-time valuation, risk analytics, and equity curve monitoring — all exposed via GraphQL and rendered in an Angular tabbed dashboard.
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         Angular 22 Frontend                             │
-│  ┌───────────┬────────────┬──────────┬───────────┬──────────────────┐  │
-│  │ Dashboard │ Positions  │ Equity   │ Risk      │ Strategy         │  │
-│  │  - State  │  - FIFO    │ Chart    │ Panel     │ Attribution      │  │
-│  │  - Trade  │    lots    │  - Area  │  - Rules  │  - Alpha bars    │  │
-│  │    form   │  - Rebuild │  - DD    │  - Delta  │  - Import        │  │
-│  │  - Snap   │            │  - KPIs  │ Scenario  │  - PnL split     │  │
-│  │           │            │          │ Explorer  │                  │  │
-│  │           │            │          │ Reconcil. │                  │  │
-│  └─────┬─────┴──────┬─────┴────┬─────┴─────┬─────┴────────┬─────────┘ │
-│        └─────────────┴──────────┴───────────┴──────────────┘           │
+│  ┌───────────┬────────────┬──────────┬───────────┐                     │
+│  │ Dashboard │ Positions  │ Equity   │ Risk      │                     │
+│  │  - State  │  - FIFO    │ Chart    │ Panel     │                     │
+│  │  - Trade  │    lots    │  - Area  │  - Rules  │                     │
+│  │    form   │  - Rebuild │  - DD    │  - Delta  │                     │
+│  │  - Snap   │            │  - KPIs  │ Scenario  │                     │
+│  │           │            │          │ Explorer  │                     │
+│  │           │            │          │ Reconcil. │                     │
+│  └─────┬─────┴──────┬─────┴────┬─────┴─────┬─────┘                    │
+│        └─────────────┴──────────┴───────────┘                          │
 │                        PortfolioService (GraphQL client)               │
 └──────────────────────────────┬─────────────────────────────────────────┘
                                │ GraphQL over HTTP
@@ -38,11 +38,10 @@ The Portfolio Management System is a full-stack, event-sourced portfolio tracker
 │  │  ISnapshotService ────────► equity curve + performance metrics   │  │
 │  │  IPortfolioRiskService ───► dollar delta, vega, scenarios        │  │
 │  │  IPortfolioReconciliationService ► drift detection + auto-fix    │  │
-│  │  IStrategyAttributionService ──► backtest import + PnL split     │  │
 │  └──────────────────────────┬──────────────────────────────────────┘  │
 │                              │ EF Core 10                              │
 │  ┌───────────────────────────┴─────────────────────────────────────┐  │
-│  │  PostgreSQL 16  (11 portfolio tables + indexes)                  │  │
+│  │  PostgreSQL 16  (9 portfolio tables + indexes)                   │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -81,11 +80,7 @@ Account (1) ──────< (N) Order
    │
    ├──< (N) PortfolioSnapshot
    │
-   ├──< (N) RiskRule
-   │
-   ├──< (N) StrategyAllocation ──► StrategyExecution
-   │
-   └──< (N) StrategyTradeLink ──► StrategyExecution
+   └──< (N) RiskRule
 ```
 
 ### 2.2 Enums
@@ -254,29 +249,6 @@ Index: `(AccountId, Timestamp)`
 | LastTriggered | `DateTime?` | |
 
 Index: `(AccountId, Enabled)`
-
-#### StrategyAllocation
-
-| Field | Type | Notes |
-|-------|------|-------|
-| Id | `Guid` | PK |
-| AccountId | `Guid` | FK -> Account |
-| StrategyExecutionId | `int` | FK -> StrategyExecution |
-| CapitalAllocated | `decimal` | |
-| StartDate | `DateTime` | |
-| EndDate | `DateTime?` | |
-
-Composite index: `(AccountId, StrategyExecutionId)`
-
-#### StrategyTradeLink
-
-| Field | Type | Notes |
-|-------|------|-------|
-| Id | `Guid` | PK |
-| TradeId | `Guid` | FK -> PortfolioTrade |
-| StrategyExecutionId | `int` | FK -> StrategyExecution |
-
-Indexes on both `TradeId` and `StrategyExecutionId`
 
 ---
 
@@ -585,39 +557,6 @@ IPortfolioReconciliationService
 
 ---
 
-### 3.7 IStrategyAttributionService — Backtest Import and PnL Split
-
-```
-IStrategyAttributionService
-├── LinkTradeToStrategyAsync(tradeId, strategyExecutionId)
-├── ImportBacktestTradesAsync(strategyExecutionId, accountId)
-├── GetStrategyPnLAsync(strategyExecutionId)
-└── GetAlphaAttributionAsync(accountId)
-```
-
-#### Backtest Import Flow
-
-```
-For each backtest trade in StrategyExecution:
-    1. Create buy Order (Filled) + PortfolioTrade at entry price
-    2. Create sell Order (Filled) + PortfolioTrade at exit price
-    3. Create StrategyTradeLink for each trade
-    4. Apply trades through PositionEngine
-    5. Create StrategyAllocation record with capital + date range
-```
-
-#### Alpha Attribution
-
-```
-For each StrategyAllocation in account:
-    PnL = sum(realizedPnL from linked position lots)
-    ContributionPercent = PnL / totalAccountPnL * 100
-
-Returns: [ { strategyName, PnL, contributionPercent, tradeCount } ]
-```
-
----
-
 ## 4. GraphQL API
 
 ### 4.1 Queries (18 resolvers)
@@ -641,9 +580,6 @@ Returns: [ { strategyName, PnL, contributionPercent, tradeCount } ]
 | `getPortfolioVega` | `accountId: UUID!` | `Decimal` |
 | `evaluateRiskRules` | `accountId: UUID!, prices: [PriceInput!]!` | `[RiskViolation]` |
 | `reconcilePortfolio` | `accountId: UUID!` | `ReconciliationReport` |
-| `getStrategyPnL` | `strategyExecutionId: Int!` | `StrategyPnLResult` |
-| `getAlphaAttribution` | `accountId: UUID!` | `[AlphaAttribution]` |
-| `getStrategyAllocations` | `accountId: UUID!` | `[StrategyAllocation]` |
 
 ### 4.2 Mutations (12 mutations)
 
@@ -660,8 +596,6 @@ Returns: [ { strategyName, PnL, contributionPercent, tradeCount } ]
 | `updateRiskRule` | `ruleId, threshold?, enabled?, action?, severity?` | `RiskRuleResult` |
 | `runScenario` | `accountId, prices, priceChangePercent?, ivChangePercent?, timeDaysForward?` | `ScenarioResult` |
 | `autoFixPortfolio` | `accountId` | `RebuildResult` |
-| `linkTradeToStrategy` | `tradeId, strategyExecutionId` | `LinkResult` |
-| `importBacktestTrades` | `strategyExecutionId, accountId` | `ImportResult` |
 
 ### 4.3 Common Input/Result Types
 
@@ -693,11 +627,10 @@ Injectable singleton (`providedIn: 'root'`). All methods return `Observable<T>` 
 | **Snapshots** | `takeSnapshot(accountId)`, `getEquityCurve(accountId, from?, to?)`, `getDrawdownSeries(accountId)`, `getMetrics(accountId)` |
 | **Risk** | `getRiskRules(accountId)`, `createRiskRule(...)`, `updateRiskRule(...)`, `getDollarDelta(accountId, prices)`, `evaluateRiskRules(accountId, prices)`, `runScenario(...)` |
 | **Reconciliation** | `reconcile(accountId)`, `autoFix(accountId)`, `rebuildPositions(accountId)` |
-| **Strategy** | `getStrategyAllocations(accountId)`, `importBacktestTrades(strategyExecutionId, accountId)`, `getStrategyPnL(executionId)`, `getAlphaAttribution(accountId)` |
 
 ### 5.3 Component Architecture
 
-The `PortfolioComponent` is the container with account selection and a 7-tab PrimeNG layout:
+The `PortfolioComponent` is the container with account selection and a 6-tab PrimeNG layout:
 
 ```
 PortfolioComponent (account selector + create form)
@@ -728,16 +661,10 @@ PortfolioComponent (account selector + create form)
 │     - Custom scenario inputs (price %, IV %, theta days)
 │     - Result summary + per-position breakdown
 │
-├── Tab 6: ReconciliationComponent
-│     - Run reconciliation check
-│     - Drift report table
-│     - Auto-fix action
-│
-└── Tab 7: StrategyAttributionComponent
-      - Alpha attribution bars (horizontal, normalized)
-      - Import backtest trades
-      - Strategy PnL detail cards
-      - Allocation table
+└── Tab 6: ReconciliationComponent
+      - Run reconciliation check
+      - Drift report table
+      - Auto-fix action
 ```
 
 All components use Angular signals, `OnPush` change detection, and modern control flow (`@if`, `@for`, `@switch`).
@@ -781,13 +708,6 @@ All components use Angular signals, `OnPush` change detection, and modern contro
 | 14 | **Snapshot frequency = metric granularity** | Metrics assume each snapshot represents one period. If snapshots are taken irregularly, Sharpe/Sortino may be misleading. |
 | 15 | **Minimum 2 snapshots** | Metrics require at least 2 snapshots to compute daily returns. With fewer, all metrics return 0. |
 
-### Strategy Attribution
-
-| # | Assumption | Impact |
-|---|-----------|--------|
-| 16 | **Backtest trades replay at stated prices** | Imported backtest trades use the strategy's recorded entry/exit prices. Slippage and market impact are not modeled. |
-| 17 | **Attribution uses realized PnL only** | Unrealized PnL from open positions is not included in strategy attribution. |
-
 ---
 
 ## 7. Database Notes
@@ -814,9 +734,9 @@ podman compose up -d --build
 
 | Category | Path |
 |----------|------|
-| Models | `Backend/Models/Portfolio/*.cs` (Account, Order, PortfolioTrade, Position, PositionLot, OptionContract, OptionLeg, PortfolioSnapshot, RiskRule, StrategyAllocation, StrategyTradeLink, Enums) |
-| Interfaces | `Backend/Services/Interfaces/IPortfolioService.cs`, `IPositionEngine.cs`, `ISnapshotService.cs`, `IPortfolioValuationService.cs`, `IPortfolioRiskService.cs`, `IPortfolioReconciliationService.cs`, `IStrategyAttributionService.cs` |
-| Implementations | `Backend/Services/Implementation/PortfolioService.cs`, `PositionEngine.cs`, `SnapshotService.cs`, `PortfolioValuationService.cs`, `PortfolioRiskService.cs`, `PortfolioReconciliationService.cs`, `StrategyAttributionService.cs` |
+| Models | `Backend/Models/Portfolio/*.cs` (Account, Order, PortfolioTrade, Position, PositionLot, OptionContract, OptionLeg, PortfolioSnapshot, RiskRule, Enums) |
+| Interfaces | `Backend/Services/Interfaces/IPortfolioService.cs`, `IPositionEngine.cs`, `ISnapshotService.cs`, `IPortfolioValuationService.cs`, `IPortfolioRiskService.cs`, `IPortfolioReconciliationService.cs` |
+| Implementations | `Backend/Services/Implementation/PortfolioService.cs`, `PositionEngine.cs`, `SnapshotService.cs`, `PortfolioValuationService.cs`, `PortfolioRiskService.cs`, `PortfolioReconciliationService.cs` |
 | GraphQL | `Backend/GraphQL/PortfolioQuery.cs`, `Backend/GraphQL/PortfolioMutation.cs` |
 | Database | `Backend/Data/AppDbContext.cs` |
 
@@ -833,7 +753,6 @@ podman compose up -d --build
 | Risk Panel | `Frontend/src/app/components/portfolio/risk-panel/` |
 | Scenario Explorer | `Frontend/src/app/components/portfolio/scenario-explorer/` |
 | Reconciliation | `Frontend/src/app/components/portfolio/reconciliation/` |
-| Strategy Attribution | `Frontend/src/app/components/portfolio/strategy-attribution/` |
 
 ### Tests
 
@@ -845,7 +764,6 @@ podman compose up -d --build
 | `Backend.Tests/Unit/Services/PortfolioValuationServiceTests.cs` | MTM, Greeks aggregation |
 | `Backend.Tests/Unit/Services/PortfolioRiskServiceTests.cs` | Delta, vega, rules, scenarios |
 | `Backend.Tests/Unit/Services/PortfolioReconciliationServiceTests.cs` | Drift detection |
-| `Backend.Tests/Unit/Services/StrategyAttributionServiceTests.cs` | Import, PnL, attribution |
 | `Frontend/src/app/components/portfolio/portfolio.component.spec.ts` | Account management (21 tests) |
 | `Frontend/src/app/components/portfolio/dashboard/dashboard.component.spec.ts` | Dashboard behavior (26 tests) |
 | `Frontend/src/app/services/portfolio.service.spec.ts` | Service methods |

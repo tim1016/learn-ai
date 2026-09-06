@@ -287,49 +287,6 @@ public class PortfolioMutation
 
     #endregion
 
-    #region Phase 4 — Strategy Attribution
-
-    [GraphQLName("linkTradeToStrategy")]
-    public async Task<LinkResult> LinkTradeToStrategy(
-        [Service] IStrategyAttributionService attributionService,
-        Guid tradeId,
-        int strategyExecutionId)
-    {
-        try
-        {
-            var link = await attributionService.LinkTradeToStrategyAsync(tradeId, strategyExecutionId);
-            return new LinkResult { Success = true, Link = link };
-        }
-        catch (Exception ex)
-        {
-            return new LinkResult { Success = false, Error = ex.Message };
-        }
-    }
-
-    [GraphQLName("importBacktestTrades")]
-    public async Task<ImportResult> ImportBacktestTrades(
-        [Service] IStrategyAttributionService attributionService,
-        int strategyExecutionId,
-        Guid accountId)
-    {
-        try
-        {
-            var trades = await attributionService.ImportBacktestTradesAsync(strategyExecutionId, accountId);
-            return new ImportResult
-            {
-                Success = true,
-                TradeCount = trades.Count,
-                Message = $"Imported {trades.Count} trades from strategy execution {strategyExecutionId}",
-            };
-        }
-        catch (Exception ex)
-        {
-            return new ImportResult { Success = false, Error = ex.Message };
-        }
-    }
-
-    #endregion
-
     #region Phase 5 — Validation
 
     [GraphQLName("runPortfolioValidation")]
@@ -348,21 +305,6 @@ public class RiskRuleResult
 {
     public bool Success { get; set; }
     public RiskRule? Rule { get; set; }
-    public string? Error { get; set; }
-}
-
-public class LinkResult
-{
-    public bool Success { get; set; }
-    public StrategyTradeLink? Link { get; set; }
-    public string? Error { get; set; }
-}
-
-public class ImportResult
-{
-    public bool Success { get; set; }
-    public int TradeCount { get; set; }
-    public string? Message { get; set; }
     public string? Error { get; set; }
 }
 

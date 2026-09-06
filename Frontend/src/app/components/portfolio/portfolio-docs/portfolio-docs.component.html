@@ -7,7 +7,7 @@
       <h3>Architecture Overview</h3>
     </div>
     <p class="section-description">
-      An event-sourced portfolio tracker with FIFO lot accounting, real-time valuation, risk management, and strategy attribution.
+      An event-sourced portfolio tracker with FIFO lot accounting, real-time valuation, and risk management.
     </p>
 
     <div class="doc-card highlight-card mb-4">
@@ -308,58 +308,7 @@
     </div>
   </div>
 
-  <!-- ═══ 7. Strategy Attribution ═══ -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-chart-pie section-icon"></i>
-      <h3>Strategy Attribution</h3>
-    </div>
-    <p class="section-description">
-      Link trades to automated strategy executions and decompose portfolio PnL by strategy contribution.
-    </p>
-
-    <p-accordion [multiple]="true">
-      @for (f of attributionFormulas; track f.name) {
-        <p-accordion-panel>
-          <p-accordion-header>
-            <div class="feature-header">
-              <span class="feature-name">{{ f.name }}</span>
-              <span class="feature-badge">Attribution</span>
-            </div>
-          </p-accordion-header>
-          <p-accordion-content>
-            <div class="formula-block">
-              <span [appKatex]="f.formulaLatex" [displayMode]="true"></span>
-            </div>
-            @if (f.variablesLatex.length > 0) {
-              <div class="variable-list">
-                <span class="label">Variables</span>
-                @for (v of f.variablesLatex; track v) {
-                  <div class="variable-item">
-                    <span [appKatex]="v"></span>
-                  </div>
-                }
-              </div>
-            }
-            <p class="interpretation">{{ f.interpretation }}</p>
-          </p-accordion-content>
-        </p-accordion-panel>
-      }
-    </p-accordion>
-
-    <div class="hypothesis-callout mt-4">
-      <i class="pi pi-link"></i>
-      <div>
-        <strong>Backtest Import Flow</strong>
-        <span>
-          <code>ImportBacktestTrades</code> reads trades from a completed strategy execution and records them as <code>PortfolioTrade</code> entries linked via <code>StrategyTradeLink</code>.
-          This allows comparing backtest performance against live trading in the same account.
-        </span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ 8. Position Lifecycle & Cash Accounting ═══ -->
+  <!-- ═══ 7. Position Lifecycle & Cash Accounting ═══ -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-replay section-icon"></i>
@@ -420,7 +369,7 @@
     </div>
   </div>
 
-  <!-- ═══ 9. Snapshot Sampling ═══ -->
+  <!-- ═══ 8. Snapshot Sampling ═══ -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-clock section-icon"></i>
@@ -453,7 +402,7 @@
     </div>
   </div>
 
-  <!-- ═══ 10. Reconciliation ═══ -->
+  <!-- ═══ 9. Reconciliation ═══ -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-sync section-icon"></i>
@@ -487,7 +436,7 @@
     </div>
   </div>
 
-  <!-- ═══ 11. Notation Glossary ═══ -->
+  <!-- ═══ 10. Notation Glossary ═══ -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-book section-icon"></i>
@@ -523,7 +472,7 @@
     </table>
   </div>
 
-  <!-- ═══ 12. Data Model Summary ═══ -->
+  <!-- ═══ 11. Data Model Summary ═══ -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-database section-icon"></i>
@@ -576,11 +525,6 @@
           <td class="question-cell"><code>RiskRule</code></td>
           <td>RuleType, Threshold, Action, Severity</td>
           <td>Configurable risk limit with Warn/Block action</td>
-        </tr>
-        <tr>
-          <td class="question-cell"><code>StrategyTradeLink</code></td>
-          <td>TradeId, StrategyExecutionId</td>
-          <td>Links trades to strategy executions for attribution</td>
         </tr>
       </tbody>
     </table>

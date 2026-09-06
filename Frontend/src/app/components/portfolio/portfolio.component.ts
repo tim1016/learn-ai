@@ -11,7 +11,6 @@ import { EquityChartComponent } from './equity-chart/equity-chart.component';
 import { RiskPanelComponent } from './risk-panel/risk-panel.component';
 import { ScenarioExplorerComponent } from './scenario-explorer/scenario-explorer.component';
 import { ReconciliationComponent } from './reconciliation/reconciliation.component';
-import { StrategyAttributionComponent } from './strategy-attribution/strategy-attribution.component';
 import { PortfolioDocsComponent } from './portfolio-docs/portfolio-docs.component';
 import { ValidationComponent } from './validation/validation.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
@@ -25,7 +24,7 @@ import { catchError, finalize, of } from 'rxjs';
     Tabs, TabList, Tab, TabPanel, TabPanels,
     DashboardComponent, PositionsComponent, EquityChartComponent,
     RiskPanelComponent, ScenarioExplorerComponent,
-    ReconciliationComponent, StrategyAttributionComponent,
+    ReconciliationComponent,
     PortfolioDocsComponent, ValidationComponent,
     PageHeaderComponent,
   ],

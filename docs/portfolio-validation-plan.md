@@ -611,6 +611,8 @@ Assert.Equal(-5_000m, scenario.TotalImpact);
 
 ## Test 10 — Strategy Attribution Correctness
 
+> **Deleted (#1964).** The strategy-attribution feature was removed, and this test went with it. The section is kept as a record of the original plan.
+
 ### Objective
 
 Ensure PnL is correctly attributed to individual strategies and that contributions sum to 100%.

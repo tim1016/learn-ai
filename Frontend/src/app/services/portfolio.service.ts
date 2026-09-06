@@ -6,8 +6,7 @@ import {
   Account, AccountResult, PortfolioState, PortfolioValuation,
   PortfolioSnapshot, DrawdownPoint, PortfolioMetrics, Position, RiskRule, RiskRuleResult, DollarDeltaResult,
   RiskViolation, ScenarioResult, ReconciliationReport,
-  StrategyPnLResult, AlphaAttribution, StrategyAllocation,
-  SnapshotResultGql, TradeResult, RebuildResult, ImportResult,
+  SnapshotResultGql, TradeResult, RebuildResult,
   ValidationSuiteResult,
 } from '../graphql/portfolio-types';
 
@@ -259,39 +258,6 @@ export class PortfolioService {
     `, { accountId }).pipe(map(d => d.rebuildPositions));
   }
 
-  // ── Strategy Attribution ──
-
-  getStrategyAllocations(accountId: string): Observable<StrategyAllocation[]> {
-    return gql<{ getStrategyAllocations: StrategyAllocation[] }>(this.http, `
-      query GetAllocations($accountId: UUID!) {
-        getStrategyAllocations(accountId: $accountId) {
-          id strategyExecutionId capitalAllocated startDate endDate
-          strategyExecution { strategyName }
-        }
-      }
-    `, { accountId }).pipe(map(d => d.getStrategyAllocations));
-  }
-
-  importBacktestTrades(strategyExecutionId: number, accountId: string): Observable<ImportResult> {
-    return gql<{ importBacktestTrades: ImportResult }>(this.http, `
-      mutation ImportTrades($strategyExecutionId: Int!, $accountId: UUID!) {
-        importBacktestTrades(strategyExecutionId: $strategyExecutionId, accountId: $accountId) {
-          success error tradeCount message
-        }
-      }
-    `, { strategyExecutionId, accountId }).pipe(map(d => d.importBacktestTrades));
-  }
-
-  getStrategyPnL(strategyExecutionId: number): Observable<StrategyPnLResult> {
-    return gql<{ getStrategyPnL: StrategyPnLResult }>(this.http, `
-      query GetStrategyPnL($strategyExecutionId: Int!) {
-        getStrategyPnL(strategyExecutionId: $strategyExecutionId) {
-          strategyExecutionId strategyName totalPnL tradeCount winRate
-        }
-      }
-    `, { strategyExecutionId }).pipe(map(d => d.getStrategyPnL));
-  }
-
   // ── Validation ──
 
   runValidation(): Observable<ValidationSuiteResult> {
@@ -307,15 +273,5 @@ export class PortfolioService {
         }
       }
     `).pipe(map(d => d.runPortfolioValidation));
-  }
-
-  getAlphaAttribution(accountId: string): Observable<AlphaAttribution[]> {
-    return gql<{ getAlphaAttribution: AlphaAttribution[] }>(this.http, `
-      query GetAttribution($accountId: UUID!) {
-        getAlphaAttribution(accountId: $accountId) {
-          strategyExecutionId strategyName pnL tradeCount contributionPercent
-        }
-      }
-    `, { accountId }).pipe(map(d => d.getAlphaAttribution));
   }
 }

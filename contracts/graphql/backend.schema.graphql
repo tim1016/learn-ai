@@ -48,14 +48,6 @@ type AggregatesSummary {
   totalBars: Int!
 }
 
-type AlphaAttribution {
-  strategyExecutionId: Int!
-  strategyName: String!
-  pnL: Decimal!
-  contributionPercent: Decimal!
-  tradeCount: Int!
-}
-
 type AlphaDecayStatsType {
   slope: Float!
   intercept: Float!
@@ -221,22 +213,6 @@ type BacktestRunsEdge {
   cursor: String!
   "The item at the end of the edge."
   node: BacktestRunNodeType!
-}
-
-type BacktestTrade {
-  id: Int!
-  strategyExecutionId: Int!
-  strategyExecution: StrategyExecution!
-  tradeType: String!
-  entryTimestamp: DateTime!
-  exitTimestamp: DateTime!
-  entryPrice: Decimal!
-  exitPrice: Decimal!
-  quantity: Decimal!
-  pnL: Decimal!
-  cumulativePnL: Decimal!
-  signalReason: String!
-  isSyntheticExit: Boolean!
 }
 
 type BarsSpecType {
@@ -508,13 +484,6 @@ type IcCiType {
   seApproximationNote: String!
 }
 
-type ImportResult {
-  success: Boolean!
-  tradeCount: Int!
-  message: String
-  error: String
-}
-
 type IndicatorCategory {
   name: String!
   indicators: [IndicatorInfoItem!]!
@@ -590,12 +559,6 @@ type LegDiagnosticResult {
   currentTheta: Decimal!
   currentVega: Decimal!
   legPnl: Decimal!
-}
-
-type LinkResult {
-  success: Boolean!
-  link: StrategyTradeLink
-  error: String
 }
 
 type MarketDataRecord {
@@ -683,8 +646,6 @@ type Mutation {
   updateRiskRule(ruleId: UUID! threshold: Decimal enabled: Boolean action: String severity: String): RiskRuleResult! @cost(weight: "10")
   runScenario(accountId: UUID! prices: [PriceInput!]! priceChangePercent: Decimal ivChangePercent: Decimal timeDaysForward: Int): ScenarioResult! @cost(weight: "10")
   autoFixPortfolio(accountId: UUID!): RebuildResult! @cost(weight: "10")
-  linkTradeToStrategy(tradeId: UUID! strategyExecutionId: Int!): LinkResult! @cost(weight: "10")
-  importBacktestTrades(strategyExecutionId: Int! accountId: UUID!): ImportResult! @cost(weight: "10")
   runPortfolioValidation: ValidationSuiteResult! @cost(weight: "10")
   saveDataLabSession(input: DataLabSessionInput!): DataLabSessionResult! @cost(weight: "10")
   updateDataLabSession(id: UUID! input: DataLabSessionInput!): DataLabSessionResult! @cost(weight: "10")
@@ -1055,10 +1016,6 @@ type Query {
   getPortfolioVega(accountId: UUID!): Decimal! @cost(weight: "10")
   evaluateRiskRules(accountId: UUID! prices: [PriceInput!]!): [RiskViolation!]! @cost(weight: "10")
   reconcilePortfolio(accountId: UUID!): ReconciliationReport! @cost(weight: "10")
-  "Get PnL breakdown for a specific strategy execution"
-  getStrategyPnL(strategyExecutionId: Int!): StrategyPnLResult! @cost(weight: "10")
-  getAlphaAttribution(accountId: UUID!): [AlphaAttribution!]! @cost(weight: "10")
-  getStrategyAllocations(accountId: UUID! where: StrategyAllocationFilterInput @cost(weight: "10") order: [StrategyAllocationSortInput!] @cost(weight: "10")): [StrategyAllocation!]! @cost(weight: "10")
   dataLabSessions(where: DataLabSessionFilterInput @cost(weight: "10") order: [DataLabSessionSortInput!] @cost(weight: "10")): [DataLabSession!]! @cost(weight: "10")
   dataLabSession(id: UUID!): DataLabSession @cost(weight: "10")
   backtestRuns(engine: Engine symbol: String "Returns the first _n_ elements from the list." first: Int "Returns the elements in the list that come after the specified cursor." after: String "Returns the last _n_ elements from the list." last: Int "Returns the elements in the list that come before the specified cursor." before: String): BacktestRunsConnection @listSize(assumedSize: 100, slicingArguments: [ "first", "last" ], slicingArgumentDefaultValue: 25, sizedFields: [ "edges", "nodes" ], requireOneSlicingArgument: false) @cost(weight: "10")
@@ -1510,17 +1467,6 @@ type StockTickerSnapshotResult {
   updated: Long
 }
 
-type StrategyAllocation {
-  id: UUID!
-  accountId: UUID!
-  account: Account!
-  strategyExecutionId: Int!
-  strategyExecution: StrategyExecution!
-  capitalAllocated: Decimal!
-  startDate: DateTime!
-  endDate: DateTime
-}
-
 type StrategyAnalyzeResult {
   success: Boolean!
   symbol: String!
@@ -1539,86 +1485,11 @@ type StrategyAnalyzeResult {
   error: String
 }
 
-type StrategyExecution {
-  id: Int!
-  tickerId: Int!
-  ticker: Ticker!
-  strategyName: String!
-  parameters: String!
-  startDate: String!
-  endDate: String!
-  timespan: String!
-  multiplier: Int!
-  totalTrades: Int!
-  winningTrades: Int!
-  losingTrades: Int!
-  totalPnL: Decimal!
-  maxDrawdown: Decimal!
-  sharpeRatio: Decimal
-  initialCash: Decimal!
-  finalEquity: Decimal!
-  totalFees: Decimal!
-  winRate: Decimal!
-  compoundingAnnualReturn: Decimal!
-  sortinoRatio: Decimal
-  probabilisticSharpeRatio: Decimal!
-  profitFactor: Decimal
-  alpha: Decimal!
-  beta: Decimal!
-  informationRatio: Decimal!
-  trackingError: Decimal!
-  treynorRatio: Decimal!
-  valueAtRisk95: Decimal!
-  valueAtRisk99: Decimal!
-  annualStandardDeviation: Decimal!
-  drawdownRecoveryDays: Int!
-  leanStatisticsJson: String
-  leanAnalysisJson: String
-  runVerdictJson: String
-  verdictVersion: Int
-  verdictGrade: String
-  verdictSignal: String
-  equityCurveJson: String
-  insightSummaryJson: String
-  validationAnalyticsJson: String
-  metricDocumentationJson: String
-  source: String!
-  requestedEngine: String
-  leanRunId: String
-  notes: String
-  fillMode: String!
-  dataPolicyJson: String
-  commissionPerOrder: Decimal
-  brokeragePolicy: String
-  parityGroupId: String
-  executedAt: DateTime!
-  durationMs: Long!
-  trades: [BacktestTrade!]!
-  engine: Engine!
-  dataPolicy: DataPolicyType
-}
-
 type StrategyGreeksResult {
   delta: Decimal!
   gamma: Decimal!
   theta: Decimal!
   vega: Decimal!
-}
-
-type StrategyPnLResult {
-  strategyExecutionId: Int!
-  strategyName: String!
-  totalPnL: Decimal!
-  tradeCount: Int!
-  winRate: Decimal!
-}
-
-type StrategyTradeLink {
-  id: UUID!
-  tradeId: UUID!
-  trade: PortfolioTrade!
-  strategyExecutionId: Int!
-  strategyExecution: StrategyExecution!
 }
 
 type StructuralBreakPointType {
@@ -1973,24 +1844,6 @@ input AssetTypeOperationFilterInput {
   nin: [AssetType!] @cost(weight: "10")
 }
 
-input BacktestTradeFilterInput {
-  and: [BacktestTradeFilterInput!]
-  or: [BacktestTradeFilterInput!]
-  id: IntOperationFilterInput
-  strategyExecutionId: IntOperationFilterInput
-  strategyExecution: StrategyExecutionFilterInput
-  tradeType: StringOperationFilterInput
-  entryTimestamp: DateTimeOperationFilterInput
-  exitTimestamp: DateTimeOperationFilterInput
-  entryPrice: DecimalOperationFilterInput
-  exitPrice: DecimalOperationFilterInput
-  quantity: DecimalOperationFilterInput
-  pnL: DecimalOperationFilterInput
-  cumulativePnL: DecimalOperationFilterInput
-  signalReason: StringOperationFilterInput
-  isSyntheticExit: BooleanOperationFilterInput
-}
-
 input BooleanOperationFilterInput {
   eq: Boolean @cost(weight: "10")
   neq: Boolean @cost(weight: "10")
@@ -2093,13 +1946,6 @@ input IntOperationFilterInput {
   nlt: Int @cost(weight: "10")
   lte: Int @cost(weight: "10")
   nlte: Int @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfBacktestTradeFilterInput {
-  all: BacktestTradeFilterInput @cost(weight: "10")
-  none: BacktestTradeFilterInput @cost(weight: "10")
-  some: BacktestTradeFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
 }
 
 input ListFilterInputTypeOfOrderFilterInput {
@@ -2584,145 +2430,6 @@ input StockAggregateSortInput {
   multiplier: SortEnumType @cost(weight: "10")
   transactionCount: SortEnumType @cost(weight: "10")
   createdAt: SortEnumType @cost(weight: "10")
-}
-
-input StrategyAllocationFilterInput {
-  and: [StrategyAllocationFilterInput!]
-  or: [StrategyAllocationFilterInput!]
-  id: UuidOperationFilterInput
-  accountId: UuidOperationFilterInput
-  account: AccountFilterInput
-  strategyExecutionId: IntOperationFilterInput
-  strategyExecution: StrategyExecutionFilterInput
-  capitalAllocated: DecimalOperationFilterInput
-  startDate: DateTimeOperationFilterInput
-  endDate: DateTimeOperationFilterInput
-}
-
-input StrategyAllocationSortInput {
-  id: SortEnumType @cost(weight: "10")
-  accountId: SortEnumType @cost(weight: "10")
-  account: AccountSortInput @cost(weight: "10")
-  strategyExecutionId: SortEnumType @cost(weight: "10")
-  strategyExecution: StrategyExecutionSortInput @cost(weight: "10")
-  capitalAllocated: SortEnumType @cost(weight: "10")
-  startDate: SortEnumType @cost(weight: "10")
-  endDate: SortEnumType @cost(weight: "10")
-}
-
-input StrategyExecutionFilterInput {
-  and: [StrategyExecutionFilterInput!]
-  or: [StrategyExecutionFilterInput!]
-  id: IntOperationFilterInput
-  tickerId: IntOperationFilterInput
-  ticker: TickerFilterInput
-  strategyName: StringOperationFilterInput
-  parameters: StringOperationFilterInput
-  startDate: StringOperationFilterInput
-  endDate: StringOperationFilterInput
-  timespan: StringOperationFilterInput
-  multiplier: IntOperationFilterInput
-  totalTrades: IntOperationFilterInput
-  winningTrades: IntOperationFilterInput
-  losingTrades: IntOperationFilterInput
-  totalPnL: DecimalOperationFilterInput
-  maxDrawdown: DecimalOperationFilterInput
-  sharpeRatio: DecimalOperationFilterInput
-  initialCash: DecimalOperationFilterInput
-  finalEquity: DecimalOperationFilterInput
-  totalFees: DecimalOperationFilterInput
-  winRate: DecimalOperationFilterInput
-  compoundingAnnualReturn: DecimalOperationFilterInput
-  sortinoRatio: DecimalOperationFilterInput
-  probabilisticSharpeRatio: DecimalOperationFilterInput
-  profitFactor: DecimalOperationFilterInput
-  alpha: DecimalOperationFilterInput
-  beta: DecimalOperationFilterInput
-  informationRatio: DecimalOperationFilterInput
-  trackingError: DecimalOperationFilterInput
-  treynorRatio: DecimalOperationFilterInput
-  valueAtRisk95: DecimalOperationFilterInput
-  valueAtRisk99: DecimalOperationFilterInput
-  annualStandardDeviation: DecimalOperationFilterInput
-  drawdownRecoveryDays: IntOperationFilterInput
-  leanStatisticsJson: StringOperationFilterInput
-  leanAnalysisJson: StringOperationFilterInput
-  runVerdictJson: StringOperationFilterInput
-  verdictVersion: IntOperationFilterInput
-  verdictGrade: StringOperationFilterInput
-  verdictSignal: StringOperationFilterInput
-  equityCurveJson: StringOperationFilterInput
-  insightSummaryJson: StringOperationFilterInput
-  validationAnalyticsJson: StringOperationFilterInput
-  metricDocumentationJson: StringOperationFilterInput
-  source: StringOperationFilterInput
-  requestedEngine: StringOperationFilterInput
-  leanRunId: StringOperationFilterInput
-  notes: StringOperationFilterInput
-  fillMode: StringOperationFilterInput
-  dataPolicyJson: StringOperationFilterInput
-  commissionPerOrder: DecimalOperationFilterInput
-  brokeragePolicy: StringOperationFilterInput
-  parityGroupId: StringOperationFilterInput
-  executedAt: DateTimeOperationFilterInput
-  durationMs: LongOperationFilterInput
-  trades: ListFilterInputTypeOfBacktestTradeFilterInput
-}
-
-input StrategyExecutionSortInput {
-  id: SortEnumType @cost(weight: "10")
-  tickerId: SortEnumType @cost(weight: "10")
-  ticker: TickerSortInput @cost(weight: "10")
-  strategyName: SortEnumType @cost(weight: "10")
-  parameters: SortEnumType @cost(weight: "10")
-  startDate: SortEnumType @cost(weight: "10")
-  endDate: SortEnumType @cost(weight: "10")
-  timespan: SortEnumType @cost(weight: "10")
-  multiplier: SortEnumType @cost(weight: "10")
-  totalTrades: SortEnumType @cost(weight: "10")
-  winningTrades: SortEnumType @cost(weight: "10")
-  losingTrades: SortEnumType @cost(weight: "10")
-  totalPnL: SortEnumType @cost(weight: "10")
-  maxDrawdown: SortEnumType @cost(weight: "10")
-  sharpeRatio: SortEnumType @cost(weight: "10")
-  initialCash: SortEnumType @cost(weight: "10")
-  finalEquity: SortEnumType @cost(weight: "10")
-  totalFees: SortEnumType @cost(weight: "10")
-  winRate: SortEnumType @cost(weight: "10")
-  compoundingAnnualReturn: SortEnumType @cost(weight: "10")
-  sortinoRatio: SortEnumType @cost(weight: "10")
-  probabilisticSharpeRatio: SortEnumType @cost(weight: "10")
-  profitFactor: SortEnumType @cost(weight: "10")
-  alpha: SortEnumType @cost(weight: "10")
-  beta: SortEnumType @cost(weight: "10")
-  informationRatio: SortEnumType @cost(weight: "10")
-  trackingError: SortEnumType @cost(weight: "10")
-  treynorRatio: SortEnumType @cost(weight: "10")
-  valueAtRisk95: SortEnumType @cost(weight: "10")
-  valueAtRisk99: SortEnumType @cost(weight: "10")
-  annualStandardDeviation: SortEnumType @cost(weight: "10")
-  drawdownRecoveryDays: SortEnumType @cost(weight: "10")
-  leanStatisticsJson: SortEnumType @cost(weight: "10")
-  leanAnalysisJson: SortEnumType @cost(weight: "10")
-  runVerdictJson: SortEnumType @cost(weight: "10")
-  verdictVersion: SortEnumType @cost(weight: "10")
-  verdictGrade: SortEnumType @cost(weight: "10")
-  verdictSignal: SortEnumType @cost(weight: "10")
-  equityCurveJson: SortEnumType @cost(weight: "10")
-  insightSummaryJson: SortEnumType @cost(weight: "10")
-  validationAnalyticsJson: SortEnumType @cost(weight: "10")
-  metricDocumentationJson: SortEnumType @cost(weight: "10")
-  source: SortEnumType @cost(weight: "10")
-  requestedEngine: SortEnumType @cost(weight: "10")
-  leanRunId: SortEnumType @cost(weight: "10")
-  notes: SortEnumType @cost(weight: "10")
-  fillMode: SortEnumType @cost(weight: "10")
-  dataPolicyJson: SortEnumType @cost(weight: "10")
-  commissionPerOrder: SortEnumType @cost(weight: "10")
-  brokeragePolicy: SortEnumType @cost(weight: "10")
-  parityGroupId: SortEnumType @cost(weight: "10")
-  executedAt: SortEnumType @cost(weight: "10")
-  durationMs: SortEnumType @cost(weight: "10")
 }
 
 input StrategyLegInput {

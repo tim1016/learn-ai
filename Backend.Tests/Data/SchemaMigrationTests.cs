@@ -156,6 +156,11 @@ public class SchemaMigrationTests
         {
             await AssertRelationDoesNotExistAsync(connection, $"public.{tableName}");
         }
+
+        foreach (var tableName in RetiredStrategyAttributionTables)
+        {
+            await AssertRelationDoesNotExistAsync(connection, $"public.{tableName}");
+        }
     }
 
     [Fact]
@@ -306,6 +311,17 @@ public class SchemaMigrationTests
         "operator_gate_snapshots",
         "lifecycle_node_receipts",
         "account_owner_status_snapshots"
+    ];
+
+    // Dropped by DropStrategyAttributionTables (#1964): the dead
+    // trade-attribution feature held the only foreign keys into
+    // StrategyExecutions outside BacktestTrades / ParityVerdicts, which
+    // blocked the run-table drop (#1965). A fresh full migration must
+    // NOT find them.
+    private static readonly string[] RetiredStrategyAttributionTables =
+    [
+        "StrategyTradeLinks",
+        "StrategyAllocations"
     ];
 
     // ck_raw_only_for_canonical_data_root is deliberately absent: migration

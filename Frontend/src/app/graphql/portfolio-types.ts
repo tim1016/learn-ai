@@ -178,34 +178,6 @@ export interface PositionDrift {
   driftType: string;
 }
 
-// Strategy Attribution
-
-export interface StrategyPnLResult {
-  strategyExecutionId: number;
-  strategyName: string;
-  totalPnL: number;
-  tradeCount: number;
-  winRate: number;
-}
-
-export interface AlphaAttribution {
-  strategyExecutionId: number;
-  strategyName: string;
-  pnL: number;
-  tradeCount: number;
-  contributionPercent: number;
-}
-
-export interface StrategyAllocation {
-  id: string;
-  accountId: string;
-  strategyExecutionId: number;
-  capitalAllocated: number;
-  startDate: string;
-  endDate: string;
-  strategyExecution?: { strategyName: string };
-}
-
 // Mutation Results
 
 export interface MutationResult<T = unknown> {
@@ -237,13 +209,6 @@ export interface SnapshotResultGql {
 export interface RiskRuleResult {
   success: boolean;
   rule?: RiskRule;
-  error?: string;
-}
-
-export interface ImportResult {
-  success: boolean;
-  tradeCount: number;
-  message?: string;
   error?: string;
 }
 
