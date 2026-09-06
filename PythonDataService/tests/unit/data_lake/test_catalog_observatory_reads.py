@@ -328,7 +328,8 @@ async def test_coverage_spans_scoped_to_a_mode_omit_a_symbol_backfilled_only_els
             first_bar_start_ms=1716196200000,
             last_bar_start_ms=1716219540000,
             file_size_bytes=123456,
-            content_hash="b" * 64,
+            file_sha256="b" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
         )
 
     unscoped = await catalog_client.select_symbol_coverage_spans("usa")
