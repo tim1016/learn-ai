@@ -29,3 +29,7 @@ Both services deploy from one commit; Python's jobs run in-process, so an in-fli
 - `RecencyApi`, `RecencyQuery`, `RecencyMutation`, `RecencyTypes`, the three services and their interfaces, the two DTOs, the four entities, their `AppDbContext` mappings and the GraphQL registrations are gone; the GraphQL schema snapshot shrinks by the Recency types; `contracts/openapi` gains the `/api/research/recency/*` reads and verbs.
 - `persist_client.py` and its test are gone; `tests/research/recency/test_repository.py` and `tests/routers/test_recency_endpoints.py` pin the semantics above against the ephemeral database; the studies-guard test becomes a PostgreSQL integration test seeded through SQL.
 - A future schema change to these tables is a new numbered statement list in `schema.py`, never an EF migration.
+
+## Amendment 2026-09-05 — one backtest in flight
+
+The "eight worker threads" above describes the sweep runners as first written. Measured on the data-service container (2 CPUs, 2 GiB) with minute bars over two years, one engine run peaks near 480 MB of resident memory, the engine's per-bar loop holds the GIL (a second thread added memory and no throughput), and at eight the kernel's memory cgroup killed the service mid-search. The runners now execute one backtest at a time (`app/research/sweep/execution.py`), so cells reach the writer loop and pool one at a time; the pool and its ownership are unchanged.

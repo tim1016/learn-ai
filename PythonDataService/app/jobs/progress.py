@@ -342,5 +342,7 @@ def fail_jobs_without_a_worker() -> list[str]:
             else:
                 r.srem(_active_set_key(), job_id)
     except redis.RedisError as exc:
-        logger.warning("could not close the jobs left by the previous process: %s", exc)
+        logger.warning("could not close the jobs left by the previous process: %s", exc, exc_info=True)
+    if failed:
+        logger.warning("failed %d job(s) whose worker died with the previous process: %s", len(failed), ", ".join(failed))
     return failed

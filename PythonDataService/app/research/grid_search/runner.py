@@ -1,11 +1,11 @@
-"""Grid Search execution: every cell once, bounded concurrency, chunked persistence.
+"""Grid Search execution: every cell once, one at a time, persisted as it completes.
 
 Mirrors the Recency Chart runner's injected-dependency shape so this module
 has no dependency on the engine HTTP layer or the database: ``execute_cell``
 turns one candidate into a :class:`CellResult`; ``persist`` durably writes a
-finished batch. The batching, per-cell isolation and the raise-only
-cancellation contract (polled before every batch and once more after the
-final batch drains, review F12) live in ``app.research.sweep.concurrency``.
+finished cell. The per-cell isolation and the raise-only cancellation
+contract (polled before every cell and once more after the last cell
+completes, review F12) live in ``app.research.sweep.execution``.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/1926 "Grid and
   workload", "Lifecycle and persistence".
 Canonical implementation: this file.
@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from app.research.grid_search.models import CellResult
-from app.research.sweep.concurrency import MAX_CONCURRENT_RUNS, run_batched
+from app.research.sweep.execution import run_each
 from app.research.sweep.grid import RunSpec
 
 
@@ -36,14 +36,13 @@ def run_grid(
     *,
     expected_cells: int,
     execute_cell: Callable[[RunSpec], CellResult],
-    persist: Callable[[list[CellResult]], None],
+    persist: Callable[[CellResult], None],
     cancel_check: Callable[[], object] = lambda: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_cell_failed: Callable[[RunSpec, str], None] = lambda spec, message: None,
     skip_params_hashes: frozenset[str] = frozenset(),
-    max_workers: int = MAX_CONCURRENT_RUNS,
 ) -> GridRunSummary:
-    """Execute every candidate not already persisted, persisting each batch as it drains.
+    """Execute every candidate not already persisted, persisting each cell as it completes.
 
     ``skip_params_hashes`` is how Finish re-runs only the missing cells: a
     cell with a row is simply not run again. Progress counts skipped cells
@@ -65,11 +64,11 @@ def run_grid(
         return result
 
     remaining = (spec for spec in candidates if spec.params_hash not in skip_params_hashes)
-    for batch in run_batched(remaining, _executed, max_workers=max_workers, cancel_check=cancel_check, on_error=_failed):
-        done += len(batch)
+    for result in run_each(remaining, _executed, cancel_check=cancel_check, on_error=_failed):
+        done += 1
         on_progress(done, expected_cells)
-        persist(batch)
-        results.extend(batch)
+        persist(result)
+        results.append(result)
 
     return GridRunSummary(
         expected_cells=expected_cells,

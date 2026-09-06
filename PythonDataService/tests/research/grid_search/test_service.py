@@ -87,8 +87,8 @@ def test_preflight_sizes_the_grid_and_plans_the_run_up(lake: Path) -> None:
     assert set(pre.param_ranges) == {"short_window", "long_window", "resolution_minutes"}
 
 
-def test_the_estimate_counts_the_measured_one_run_in_flight() -> None:
-    """Ten cells over 728 days of minute bars: 10 × (1.4 s + 0.3 s × 728/30.4 months) / 1 run in flight."""
+def test_the_estimate_sums_the_cells_because_they_run_one_at_a_time() -> None:
+    """Ten cells over 728 days of minute bars, one at a time: 10 × (1.4 s + 0.3 s × 728/30.4 months)."""
     assert service._estimate_seconds(10, date(2024, 9, 5), date(2026, 9, 3)) == 85.8
 
 

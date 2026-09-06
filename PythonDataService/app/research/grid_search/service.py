@@ -50,7 +50,6 @@ from app.research.grid_search.runner import GridRunSummary, run_grid
 from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
 from app.research.persistence.fence import StaleAttemptError
-from app.research.sweep.concurrency import MAX_CONCURRENT_RUNS
 from app.research.sweep.eligibility import sweep_eligibility
 from app.research.sweep.grid import (
     ParamRange,
@@ -88,10 +87,9 @@ MAX_TOTAL_BACKTESTS = 5_000
 ESTIMATE_FIXED_SECONDS = 1.4
 ESTIMATE_SECONDS_PER_MONTH = 0.3
 RECEIPT_SCHEMA_VERSION = 1
-# Every sweep reads the split-adjusted lake (the receipt's data policy says so). A symbol
-# backfilled only in raw mode lives in a different tree and is missing to it, so a refusal
-# names the tree it read.
-LAKE_MODE = polygon_mode_for(adjusted=True)
+# The one data policy every sweep reads under: the roots are resolved from it, the receipt
+# records it verbatim, and a refusal names the lake tree it implies.
+SWEEP_DATA_POLICY: dict[str, Any] = {"source": "polygon", "adjusted": True, "session": "regular"}
 
 
 class GridSearchRefusal(ValueError):
@@ -182,10 +180,11 @@ class Preflight:
         return self.run_up.evaluation_end
 
 
-def _estimate_seconds(cells: int, data_start: date, data_end: date, workers: int = MAX_CONCURRENT_RUNS) -> float:
+def _estimate_seconds(cells: int, data_start: date, data_end: date) -> float:
+    """Cells run one at a time (``app.research.sweep.execution``), so the estimate is their sum."""
     months = max(1.0, (data_end - data_start).days / 30.4)
     per_cell = ESTIMATE_FIXED_SECONDS + ESTIMATE_SECONDS_PER_MONTH * months
-    return round(cells * per_cell / workers, 1)
+    return round(cells * per_cell, 1)
 
 
 def preflight(spec: GridSearchSpec, *, backtests_per_combination: int = 1, roots: Sequence[Path] | None = None) -> Preflight:
@@ -210,7 +209,9 @@ def preflight(spec: GridSearchSpec, *, backtests_per_combination: int = 1, roots
     except GridInvalidError as exc:
         raise GridSearchRefusal(str(exc), code="GRID_INVALID") from exc
 
-    resolved_roots = list(roots) if roots is not None else resolve_data_roots(source="polygon", adjusted=True)
+    resolved_roots = (
+        list(roots) if roots is not None else resolve_data_roots(source=SWEEP_DATA_POLICY["source"], adjusted=SWEEP_DATA_POLICY["adjusted"])
+    )
     try:
         warmup = slowest_warmup_probe(spec.strategy_key, spec.symbol, ranges)
     except WarmupProbeError as exc:
@@ -234,9 +235,10 @@ def preflight(spec: GridSearchSpec, *, backtests_per_combination: int = 1, roots
     if not availability.is_complete:
         shown = ", ".join(day.isoformat() for day in availability.missing_days[:10])
         more = f" (+{len(availability.missing_days) - 10} more)" if len(availability.missing_days) > 10 else ""
+        mode = polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"])
         raise GridSearchRefusal(
-            f"the {LAKE_MODE} lake is missing {len(availability.missing_days)} trading session(s) for {spec.symbol}: {shown}{more}; "
-            f"backfill {spec.symbol} in {LAKE_MODE} mode and launch again (a raw-mode backfill is a different tree)",
+            f"the {mode} lake is missing {len(availability.missing_days)} trading session(s) for {spec.symbol}: {shown}{more}; "
+            f"backfill {spec.symbol} in {mode} mode and launch again",
             code="DATA_MISSING",
         )
     total = validated.combinations * max(1, backtests_per_combination)
@@ -270,7 +272,7 @@ def build_receipt(pre: Preflight, snapshot: DataSnapshot, identity: CodeIdentity
             "commission_per_order": spec.commission_per_order,
             "slippage_per_share": spec.slippage_per_share,
             "initial_cash": spec.initial_cash,
-            "data_policy": {"source": "polygon", "adjusted": True, "session": "regular"},
+            "data_policy": dict(SWEEP_DATA_POLICY),
             "save_study": False,
         },
         "interval_table": {
@@ -419,8 +421,8 @@ def execute(
     config = StrategyGridConfig(strategy_key=spec.strategy_key, param_ranges=dict(spec.param_ranges))
     candidates = expand_grid([config], [spec.symbol])
 
-    def _persist(cells: list[CellResult]) -> None:
-        run_sync(with_connection(repo.write_cells, search_id, attempt, cells))
+    def _persist(cell: CellResult) -> None:
+        run_sync(with_connection(repo.write_cells, search_id, attempt, [cell]))
 
     on_phase("running")
     try:

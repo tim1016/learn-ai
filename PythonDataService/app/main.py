@@ -156,13 +156,7 @@ async def lifespan(app: FastAPI):
     # no worker (a crash, an out-of-memory kill, a restart). Close those records
     # before the listener opens, so nothing reads as live for a day and the
     # research record behind each can be Finished.
-    orphaned_jobs = fail_jobs_without_a_worker()
-    if orphaned_jobs:
-        logger.warning(
-            "Failed %d job(s) whose worker died with the previous process: %s",
-            len(orphaned_jobs),
-            ", ".join(orphaned_jobs),
-        )
+    fail_jobs_without_a_worker()
 
     # Broker System v2 — register the phase-1 read brokers (Alpaca only) so
     # /api/brokers/{broker}/... can resolve them. Cheap and keyless: the client
