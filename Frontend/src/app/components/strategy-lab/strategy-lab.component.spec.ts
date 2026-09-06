@@ -239,6 +239,8 @@ describe("Strategy Lab Workbench", () => {
 
     expect(runButton()?.textContent).toContain("Running…");
     expect(runButton()?.disabled).toBe(true);
+    // The resumed job's phase is rendered on the stage, not just the button.
+    expect(root.textContent).toContain("Running indicators and strategy logic…");
     http.verify();
   });
 
