@@ -10,6 +10,11 @@ export interface TickerCatalogView {
   /** Seed recents, less any symbol this mode does not hold. */
   readonly recent: Signal<readonly string[]>;
   readonly loading: Signal<boolean>;
+  /**
+   * The lake has answered for this mode at least once, so `pool` is its
+   * verdict — an empty pool means the tree holds nothing, not "not yet asked".
+   */
+  readonly resolved: Signal<boolean>;
   /** Why the catalog could not be read, or `null` when the lake answered. */
   readonly unavailable: Signal<string | null>;
   /** Re-read this mode — after a backfill, or from a failure retry. */

@@ -146,18 +146,18 @@ export class StrategyLabConfigStore {
    * keeps displaying it — it is still the configured value — so without this
    * the run submits a symbol the tree cannot read and fails deep in the
    * engine. Only asserted once the catalog for that mode has actually
-   * answered: an empty pool mid-load, or a lake that is down, must not read as
-   * "your symbol is wrong".
+   * answered: a tree still loading, or a lake that is down, must not read as
+   * "your symbol is wrong". A tree that answered *empty* does — the run would
+   * read nothing — which is why this asks `resolved` rather than treating an
+   * empty pool as "not yet known".
    */
   readonly symbolMissingFromTree = computed(() => {
     const mode = this.adjustmentMode();
     // See instrument-card: `viewFor` may install a resource effect, which is
     // illegal inside a reactive context.
     const view = untracked(() => this.tickerCatalog.viewFor(mode));
-    if (view.loading() || view.unavailable() !== null) return false;
-    const pool = view.pool();
-    if (pool.length === 0) return false;
-    return !pool.some((option) => option.symbol === this.effectiveSymbol());
+    if (view.loading() || !view.resolved() || view.unavailable() !== null) return false;
+    return !view.pool().some((option) => option.symbol === this.effectiveSymbol());
   });
 
   readonly rerunBlocked = computed(() => {

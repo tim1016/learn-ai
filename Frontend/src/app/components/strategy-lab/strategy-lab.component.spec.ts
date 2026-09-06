@@ -161,6 +161,10 @@ async function createLab(
   );
   const runDetailWatchCount = (): number =>
     watchQuery.mock.calls.filter(([request]) => request.variables && "id" in request.variables).length;
+  // The instrument picker reads the lake catalog on init. This spec drives
+  // the workbench through `HttpTestingController` and verifies no request
+  // is left open, so the catalog is stubbed rather than served.
+  const catalog = fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" }]);
   await TestBed.configureTestingModule({
     imports: [StrategyLabComponent],
     providers: [
@@ -191,12 +195,7 @@ async function createLab(
         },
       },
       { provide: Apollo, useValue: { watchQuery } },
-      // The instrument picker reads the lake catalog on init. This spec drives
-      // the workbench through `HttpTestingController` and verifies no request
-      // is left open, so the catalog is stubbed rather than served.
-      provideFakeTickerCatalog(
-        fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" }]),
-      ),
+      provideFakeTickerCatalog(catalog),
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);
@@ -208,6 +207,7 @@ async function createLab(
   return {
     fixture,
     activeJobs,
+    catalog,
     http: TestBed.inject(HttpTestingController),
     navigate,
     diagnose,
@@ -502,6 +502,31 @@ describe("Strategy Lab Workbench", () => {
     expect(fixture.componentInstance.config.configurationWarning()).toMatch(/Saved run parameters are malformed/);
     expect(fixture.componentInstance.runs.runError()).toMatch(/Saved run parameters are malformed/);
     expect(fixture.componentInstance.config.rerunBlocked()).toBe(true);
+    http.verify();
+  });
+
+  it("blocks a rerun once the tree the engine choice reads has answered without the symbol", async () => {
+    const { fixture, http, catalog } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    const config = fixture.componentInstance.config;
+    expect(config.rerunBlocked()).toBe(false);
+
+    // `both` reads the raw tree, which the lake reports holds nothing at all.
+    // An answered-empty tree is exactly the case the engine would fail deep
+    // inside, so it must block the run rather than pass as "not yet known".
+    catalog.viewFor("raw").pool.set([]);
+    config.changeEngine("both");
+    expect(config.rerunBlocked()).toBe(true);
+
+    // Until the raw tree has answered, nothing can be said about the symbol.
+    catalog.viewFor("raw").resolved.set(false);
+    expect(config.rerunBlocked()).toBe(false);
+
+    // The split-adjusted tree still holds SPY: switching back clears the block.
+    catalog.viewFor("raw").resolved.set(true);
+    config.changeEngine("python");
+    expect(config.rerunBlocked()).toBe(false);
     http.verify();
   });
 

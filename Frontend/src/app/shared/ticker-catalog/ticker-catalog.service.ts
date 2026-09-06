@@ -82,6 +82,9 @@ export class TickerCatalogService implements TickerCatalog {
         return SEED_RECENT_TICKERS.filter((symbol) => held.has(symbol));
       }),
       loading: computed(() => summary.isLoading()),
+      // `hasValue` survives a reload, so a re-read keeps the previous verdict
+      // on screen instead of flashing back to "not yet asked".
+      resolved: computed(() => summary.hasValue()),
       unavailable: computed(() => {
         // A read in flight has no verdict yet. Without this the previous
         // failure outranks the loading state, so a retry shows the operator

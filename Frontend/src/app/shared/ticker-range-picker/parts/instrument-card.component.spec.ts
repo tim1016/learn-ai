@@ -265,10 +265,19 @@ describe('InstrumentCardComponent', () => {
     expect(text).not.toContain('In the data lake');
   });
 
-  it('asks the catalog for the tree its host names', () => {
+  it('offers the tree its host names', () => {
+    // Every mode of the fake starts from the same seed, so a symbol only the
+    // raw tree holds is what proves the picker read that tree, not the default.
+    catalog.viewFor('raw').pool.set([
+      { symbol: 'RAWONLY', name: 'Raw-tree only', exchange: 'ARCA', lastHeld: '2026-09-04' },
+    ]);
     fixture.componentRef.setInput('adjustmentMode', 'raw');
     fixture.detectChanges();
+    openDropdown();
 
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('RAWONLY');
+    expect(text).not.toContain('QQQ');
     expect(catalog.modesRequested).toContain('raw');
   });
 

@@ -16,6 +16,7 @@ export interface FakeTickerCatalogView extends TickerCatalogView {
   readonly pool: WritableSignal<readonly TickerOption[]>;
   readonly recent: WritableSignal<readonly string[]>;
   readonly loading: WritableSignal<boolean>;
+  readonly resolved: WritableSignal<boolean>;
   readonly unavailable: WritableSignal<string | null>;
   reloadCount: number;
 }
@@ -36,6 +37,8 @@ function makeView(
     pool: signal<readonly TickerOption[]>(pool),
     recent: signal<readonly string[]>(recent),
     loading: signal(false),
+    // A fake starts settled: its seed pool is the lake's answer.
+    resolved: signal(true),
     unavailable: signal<string | null>(null),
     reloadCount: 0,
     reload(): void {
