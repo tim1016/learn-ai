@@ -17,7 +17,7 @@ import type { DataPolicy } from "../models/data-policy";
 /** Unified engine identity used by the history filter and the Engine column. */
 export type Engine = "PYTHON" | "LEAN";
 
-export type RunSource = "engine" | "strategy-lab" | "lean-sidecar";
+export type RunSource = "engine" | "lean-sidecar";
 
 /** One run-history row. */
 export interface BacktestRunSummary {

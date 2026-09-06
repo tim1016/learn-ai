@@ -190,7 +190,12 @@ def _strict_equity_report(response: EngineBacktestResponse, trades: list[dict[st
     # producer-authored session bounds for its required flat realized curve;
     # never synthesize a timestamp from an ISO date or UTC midnight here.
     bar_points = [int(bar["t"]) for bar in response.chart_bars if bar.get("t") is not None]
-    candidates = [*mark_points, *bar_points, *(int(t["entry_ms_utc"]) for t in trades), *(int(t["exit_ms_utc"]) for t in trades)]
+    candidates = [
+        *mark_points,
+        *bar_points,
+        *(int(t["entry_ms_utc"]) for t in trades),
+        *(int(t["exit_ms_utc"]) for t in trades),
+    ]
     if not candidates:
         raise ValueError("Engine run has no timestamps for the strict run report")
     realized = build_realized_equity_envelope(

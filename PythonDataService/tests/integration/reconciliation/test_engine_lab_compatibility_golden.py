@@ -119,7 +119,9 @@ def test_pinned_lean_workspace_reproduces_platform_readiness_and_analysis() -> N
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover_signal",
+        start_date=date(2026, 7, 8),
         start_date_ms=1_783_468_800_000,
+        end_date=date(2026, 8, 7),
         end_date_ms=1_786_060_800_000,
         manifest=source_manifest,
         cleanliness={

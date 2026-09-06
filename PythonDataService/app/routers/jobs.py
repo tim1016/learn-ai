@@ -679,7 +679,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             if result.get("exit_code") != 0:
                 _mark_parity("run_failed", f"LEAN exited with code {result.get('exit_code')}")
             elif result.get("strategy_execution_id") is None:
-                _mark_parity("persist_failed", "LEAN run completed but persisted no StrategyExecution row")
+                _mark_parity("persist_failed", "LEAN run completed but persisted no run row")
             return result
         except RunIdAlreadyUsedError as e:
             # The launcher boundary never saw this — fail with a

@@ -181,7 +181,7 @@ export class EngineResultsComponent {
    * Defensive shape guard: legacy LEAN runs persisted before commit
    * <fix/lean-engine-lab-ui-bugs> wrote a flat
    * ``{statistics, runtime_statistics, parser_version, workspace_path}``
-   * dict into ``StrategyExecution.LeanStatisticsJson`` instead of the
+   * dict into the run's persisted LEAN statistics column instead of the
    * canonical ``{portfolio, trade, runtime}`` shape the engine path
    * emits. Reading ``.portfolio.total_net_profit`` on the legacy shape
    * threw ``Cannot read properties of undefined`` and crashed the

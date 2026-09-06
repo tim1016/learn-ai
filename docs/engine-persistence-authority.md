@@ -13,7 +13,7 @@ Two engines produce backtest results in this repo:
 
 For the unified history table (#294) and the cross-engine compare view (#295) to show engine-side runs alongside LEAN runs, in-process runs must persist through the same Postgres rows. The persist payload and the repository write are the shared contract; the engine path uses them too.
 
-The parity gate (`@pytest.mark.slow` in `PythonDataService/tests/integration/parity/`) closes the loop: it runs LEAN and the spec on the same SPY window, persists both, and asserts that the reconciled trade lists have zero divergences in the gating set from `.claude/rules/numerical-rigor.md` § "Trade-level reconciliation taxonomy".
+The parity gate (`@pytest.mark.slow` in `PythonDataService/tests/integration/parity/`) closes the loop: it runs LEAN and the spec on the same SPY window, persists both, reconciles the persisted ledgers with the in-process classifier the parity verdict uses, and asserts zero divergences in the gating set from `.claude/rules/numerical-rigor.md` § "Trade-level reconciliation taxonomy".
 
 ## Layer-by-layer contract
 
@@ -55,8 +55,7 @@ In-scope strategies are long-only. The pairer:
 
 **Skip guards.** Test no-ops gracefully when any of:
 
-- Backend (`http://backend:8080`) isn't reachable.
-- `compareBacktestRuns` is missing from the GraphQL schema (stale `dotnet watch` build — `podman logs my-backend` for NuGet/dotnet errors).
+- `POSTGRES_URL` is unset (the Python-owned run tables, and so both persists, need Postgres).
 - LEAN launcher process (`http://host.containers.internal:8090`) isn't running.
 - No SPY zips under `/lean-cache` or `/lean-data` for the window.
 - `PINNED_LEAN_IMAGE_DIGEST` is unset (run `scripts/lean_sidecar_pin_image.py` first).

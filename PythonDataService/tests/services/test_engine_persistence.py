@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -102,8 +103,8 @@ class TestBuildEnginePersistPayload:
             strategy_name="ema_crossover",
             symbol="SPY",
             starting_cash=Decimal("100000"),
-            start_date_ms=1_700_000_000_000,
-            end_date_ms=1_700_001_000_000,
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
             trades=[_trade(pnl="10")],
         )
 
@@ -159,8 +160,8 @@ class TestBuildEnginePersistPayload:
             strategy_name="ema_crossover",
             symbol="SPY",
             starting_cash=Decimal("100000"),
-            start_date_ms=1_700_000_000_000,
-            end_date_ms=1_700_001_000_000,
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
             trades=[],
             extra_statistics={"engine_version": "spec-v2", "fill_mode": "signal_bar_close"},
         )
@@ -175,8 +176,8 @@ class TestBuildEnginePersistPayload:
             strategy_name="ema_crossover",
             symbol="SPY",
             starting_cash=Decimal("100000"),
-            start_date_ms=1_700_000_000_000,
-            end_date_ms=1_700_001_000_000,
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
             trades=[],
         )
 
@@ -204,8 +205,8 @@ class TestPersistEngineRun:
             strategy_name="ema_crossover",
             symbol="SPY",
             starting_cash=Decimal("100000"),
-            start_date_ms=1_700_000_000_000,
-            end_date_ms=1_700_001_000_000,
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
             trades=[_trade()],
         )
 
@@ -227,8 +228,8 @@ class TestPersistEngineRun:
             strategy_name="ema_crossover",
             symbol="SPY",
             starting_cash=Decimal("100000"),
-            start_date_ms=1_700_000_000_000,
-            end_date_ms=1_700_001_000_000,
+            start_date=date(2023, 11, 14),
+            end_date=date(2023, 11, 14),
             trades=[],
         )
 

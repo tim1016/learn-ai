@@ -23,7 +23,6 @@ from app.models.responses import (
 )
 from app.research.backtest_runs.engine_payload import build_engine_run_payload
 from app.research.backtest_runs.records import RunPayloadError, record_from_payload
-from app.routers import engine as engine_router
 from app.routers.engine import EngineBacktestResponse, EngineTradeResponse
 
 
@@ -201,12 +200,20 @@ def test_engine_run_payload_rejects_a_non_reconciling_realized_equity_ledger() -
 
 def test_preparation_failure_leaves_the_completed_run_unsaved_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A report the builder refuses yields a null run id and never reaches the writer."""
+    from app.research.backtest_runs import service
+
     response = _response_with_trade(quantity=10, pnl_pts=2.0)
     response.final_equity += 0.01
-    writes: list[dict] = []
-    monkeypatch.setattr(engine_router, "persist_run_payload_sync", lambda payload: writes.append(payload) or 1)
+    writes: list = []
 
-    run_id = engine_router._persist_run_sync(
+    def _record(coroutine):
+        writes.append(coroutine)
+        coroutine.close()
+        return None
+
+    monkeypatch.setattr(service, "run_sync", _record)
+
+    run_id = service.persist_engine_response_sync(
         response=response,
         symbol="SPY",
         start_date="2025-01-06",

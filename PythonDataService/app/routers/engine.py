@@ -60,9 +60,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.research.backtest_runs.engine_payload import build_engine_run_payload
-from app.research.backtest_runs.records import RunPayloadError
-from app.research.backtest_runs.service import persist_run_payload_sync
+from app.research.backtest_runs.service import persist_engine_response_sync
 from app.research.sweep.eligibility import sweep_eligibility
 from app.research.sweep.snapshot import ManifestBoundDailyReader, ManifestBoundMinuteReader
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
@@ -319,7 +317,7 @@ class EngineBacktestRequest(BaseModel):
         that POST ``params={}`` rely on the strategy registry's default
         symbol (e.g., SPY) being resolved downstream; failing
         validation here would short-circuit one-cycle compat. Downstream
-        consumers (``_persist_run_sync``, response serialization) already
+        consumers (``persist_engine_response_sync``, response serialization) already
         treat ``data_policy is None`` as "policy unknown at request
         time" and emit a null data policy; the run record then
         synthesizes a legacy block from the symbol in that case (see
@@ -1622,7 +1620,7 @@ def execute_engine_backtest(
         validated_params=validated_params,
         strategy=strategy,
     )
-    response.study_id = _persist_run_sync(
+    response.study_id = persist_engine_response_sync(
         response=response,
         symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
         start_date=resolved_configuration.start_date,
@@ -1690,46 +1688,3 @@ def _serialize_chart_bar(b: TradeBar) -> dict[str, Any]:
         "c": float(b.close),
         "v": int(b.volume),
     }
-
-
-# ---------------------------------------------------------------------------
-# Run persistence — best-effort, synchronous so the response carries the id
-# ---------------------------------------------------------------------------
-def _persist_run_sync(
-    *,
-    response: EngineBacktestResponse,
-    symbol: str,
-    start_date: str,
-    end_date: str,
-    resolution: str,
-    parameters: Mapping[str, Any],
-    duration_ms: int,
-    commission_per_order: float = 0.0,
-    compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None = None,
-    requested_engine: Literal["python", "lean", "both"] = "python",
-    parity_group_id: str | None = None,
-) -> int | None:
-    """Persist the completed run and return its id, or ``None`` when persistence failed.
-
-    The row is shaped by the pure ``build_engine_run_payload`` and written by
-    the one repository write every producer shares (PRD #1929). Best-effort:
-    a failure logs and leaves ``study_id`` null; the run itself is unaffected.
-    """
-    try:
-        payload = build_engine_run_payload(
-            response=response,
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            resolution=resolution,
-            parameters=parameters,
-            duration_ms=duration_ms,
-            commission_per_order=commission_per_order,
-            compatibility_profile=compatibility_profile,
-            requested_engine=requested_engine,
-            parity_group_id=parity_group_id,
-        )
-    except RunPayloadError:
-        logger.exception("[ENGINE] Run report preparation failed — run not persisted")
-        return None
-    return persist_run_payload_sync(payload)

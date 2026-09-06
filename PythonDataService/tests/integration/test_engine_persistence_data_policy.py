@@ -1,7 +1,7 @@
 """Phase 2 integration: Python engine request/response carry data_policy.
 
 PR B (2026-05-19) — both engines persist a canonical ``DataPolicy`` block
-on every ``StrategyExecution`` row. This module pins the request/response
+on every persisted run row. This module pins the request/response
 side of the contract: the Python ``EngineBacktestRequest`` accepts a
 ``data_policy`` block and synthesizes a default when the legacy shape is
 used, and the ``EngineBacktestResponse`` echoes the post-normalization

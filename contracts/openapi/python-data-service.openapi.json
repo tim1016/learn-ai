@@ -2108,6 +2108,17 @@
       "BacktestRunDetailResponse": {
         "description": "Everything the run report renders, plus the bounded trade evidence.",
         "properties": {
+          "brokeragePolicy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brokeragepolicy"
+          },
           "commissionPerOrder": {
             "anyOf": [
               {
@@ -2314,6 +2325,10 @@
             "title": "Sortinoratio"
           },
           "source": {
+            "enum": [
+              "engine",
+              "lean-sidecar"
+            ],
             "title": "Source",
             "type": "string"
           },
@@ -2418,25 +2433,31 @@
         },
         "required": [
           "id",
-          "engine",
           "source",
-          "requestedEngine",
+          "engine",
           "strategyName",
           "symbol",
           "leanRunId",
           "parameters",
           "startDate",
           "endDate",
-          "fillMode",
           "executedAt",
-          "durationMs",
           "totalTrades",
+          "totalPnL",
+          "commissionPerOrder",
+          "brokeragePolicy",
+          "notes",
+          "dataPolicy",
+          "verdictGrade",
+          "verdictSignal",
+          "parityGroupId",
+          "requestedEngine",
+          "fillMode",
+          "durationMs",
           "winningTrades",
           "losingTrades",
           "winRate",
-          "totalPnL",
           "initialCash",
-          "commissionPerOrder",
           "finalEquity",
           "totalFees",
           "maxDrawdown",
@@ -2447,15 +2468,10 @@
           "leanAnalysisJson",
           "verdictJson",
           "verdictVersion",
-          "verdictGrade",
-          "verdictSignal",
           "equityCurve",
           "validationAnalytics",
           "metricDocumentation",
-          "dataPolicy",
           "insightSummaryJson",
-          "parityGroupId",
-          "notes",
           "trades",
           "tradesTruncated",
           "parityVerdicts"
@@ -2700,6 +2716,10 @@
             "title": "Paritygroupid"
           },
           "source": {
+            "enum": [
+              "engine",
+              "lean-sidecar"
+            ],
             "title": "Source",
             "type": "string"
           },

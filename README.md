@@ -300,8 +300,6 @@ The .NET backend uses Polly policies for all outbound HTTP calls:
 | **Trade** | Individual trade records with exchange and condition codes |
 | **Quote** | Bid/ask snapshots |
 | **TechnicalIndicator** | Computed indicators with signal/histogram/band values |
-| **StrategyExecution** | Backtest results with PnL, drawdown, Sharpe ratio |
-| **BacktestTrade** | Individual trades from backtest executions |
 | **ResearchExperiment** | Alpha validation results (IC, t-stat, stationarity, monotonicity) |
 | **SignalExperiment** | Signal testing results (OOS Sharpe, threshold, cost) |
 | **OptionsIvSnapshot** | Cached IV data (30d ATM/call/put) |

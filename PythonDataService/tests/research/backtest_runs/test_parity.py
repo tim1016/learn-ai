@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pytest
 
@@ -10,6 +11,7 @@ from app.research.backtest_runs import repository as repo
 from app.research.backtest_runs.parity import compute_parity_verdict, freeze_parity_for_lean_run
 from app.research.backtest_runs.records import record_from_payload
 from app.research.backtest_runs.repository import RunDetail, TradeRow
+from app.utils.session_anchors import et_midnight_ms
 from tests.research.backtest_runs.payloads import data_policy, engine_payload, lean_payload, trade
 
 MATCHING_RUN_VERDICT = {
@@ -75,14 +77,13 @@ def _run(run_id: int, source: str, **overrides) -> RunDetail:
     fields = dict(
         id=run_id,
         source=source,
-        engine="LEAN" if source == "lean-sidecar" else "PYTHON",
         requested_engine="both",
         strategy_name="ema_crossover",
         symbol="SPY",
         lean_run_id=f"companion-{run_id}" if source == "lean-sidecar" else None,
         parameters_json='{"symbol": "SPY"}',
-        start_date="2026-01-05",
-        end_date="2026-01-06",
+        start_ms=et_midnight_ms(date(2026, 1, 5)),
+        end_ms=et_midnight_ms(date(2026, 1, 6)),
         fill_mode="signal_bar_close",
         timespan="minute",
         executed_at_ms=1,
@@ -134,10 +135,19 @@ def test_no_divergences_agree_with_every_receipt_matching() -> None:
 
     assert status == "agree" and verdict["status"] == "agree" and verdict["reason"] is None
     assert verdict["native_metric_parity"]["status"] == "match"
-    assert verdict["readiness_parity"] == {"status": "match", "reason": None, "compared_field_count": 17, "mismatched_fields": []}
-    assert verdict["input_parity"]["status"] == "match" and verdict["input_parity"]["fixture_id"] == "bar-store-v1-exact"
+    assert verdict["readiness_parity"] == {
+        "status": "match",
+        "reason": None,
+        "compared_field_count": 17,
+        "mismatched_fields": [],
+    }
+    assert (
+        verdict["input_parity"]["status"] == "match" and verdict["input_parity"]["fixture_id"] == "bar-store-v1-exact"
+    )
     assert verdict["left_execution_id"] == 1 and verdict["right_execution_id"] == 2
-    assert verdict["engines"] == {"left": "python", "right": "lean"} and verdict["tolerances"] == {"fill_price_atol": "0.01"}
+    assert verdict["engines"] == {"left": "python", "right": "lean"} and verdict["tolerances"] == {
+        "fill_price_atol": "0.01"
+    }
     assert verdict["divergences"] == [] and verdict["counts_by_category"] == {} and verdict["computed_at_ms"] > 0
 
 
@@ -146,7 +156,9 @@ def test_a_trade_divergence_freezes_diverged_with_category_counts() -> None:
 
     assert status == "diverged" and verdict["reason"] == "trade_reconciliation_diverged"
     assert "FILL_PRICE_DRIFT" in verdict["counts_by_category"]
-    assert verdict["divergences"][0]["category"] == "FILL_PRICE_DRIFT" and verdict["divergences"][0]["trade_number"] == 1
+    assert (
+        verdict["divergences"][0]["category"] == "FILL_PRICE_DRIFT" and verdict["divergences"][0]["trade_number"] == 1
+    )
 
 
 def test_a_readiness_mismatch_names_the_signature_in_the_receipt() -> None:
@@ -187,7 +199,12 @@ def test_legacy_verdicts_without_a_signature_compare_field_by_field() -> None:
 
     verdict = json.loads(compute_parity_verdict(parity_group_id="pg-test", left=left, right=right).verdict_json)
 
-    assert verdict["readiness_parity"] == {"status": "mismatch", "reason": "readiness_fields_differ", "compared_field_count": 12, "mismatched_fields": ["grade"]}
+    assert verdict["readiness_parity"] == {
+        "status": "mismatch",
+        "reason": "readiness_fields_differ",
+        "compared_field_count": 12,
+        "mismatched_fields": ["grade"],
+    }
 
 
 def test_a_native_metric_mismatch_freezes_diverged() -> None:
@@ -208,7 +225,9 @@ def test_a_missing_metric_receipt_is_unavailable_instead_of_a_false_agreement() 
 
 def test_missing_and_unreadable_native_statistics_are_named() -> None:
     assert _verdict(lean_statistics_json=None)[1]["native_metric_parity"]["reason"] == "lean_statistics_missing"
-    assert _verdict(lean_statistics_json="{not json")[1]["native_metric_parity"]["reason"] == "lean_statistics_unreadable"
+    assert (
+        _verdict(lean_statistics_json="{not json")[1]["native_metric_parity"]["reason"] == "lean_statistics_unreadable"
+    )
 
 
 def test_a_shared_fixture_mismatch_freezes_diverged_and_names_the_fixture() -> None:
@@ -220,7 +239,7 @@ def test_a_shared_fixture_mismatch_freezes_diverged_and_names_the_fixture() -> N
 
 
 def test_cash_window_and_fill_mode_are_compared_as_inputs() -> None:
-    status, verdict = _verdict(initial_cash=50_000.0, end_date="2026-01-07", fill_mode="lean-sidecar")
+    status, verdict = _verdict(initial_cash=50_000.0, end_ms=et_midnight_ms(date(2026, 1, 7)), fill_mode="lean-sidecar")
 
     assert status == "diverged"
     assert verdict["input_parity"]["mismatched_fields"] == ["initial_cash", "end_date", "fill_mode"]
@@ -276,7 +295,9 @@ async def _seed_group(conn, unique: str, *, pending: str | None = "pending") -> 
         )
     ).run_id
     if pending is not None:
-        await repo.create_parity_verdict(conn, parity_group_id=group, left_run_id=left, status="pending", verdict_json="{}")
+        await repo.create_parity_verdict(
+            conn, parity_group_id=group, left_run_id=left, status="pending", verdict_json="{}"
+        )
         if pending != "pending":
             await repo.mark_parity_failed(conn, group, status=pending, detail="seeded")
     return group, left, right
@@ -312,8 +333,11 @@ async def test_a_lost_pending_row_gets_the_terminal_verdict_inserted(conn, uniqu
 @pytest.mark.asyncio
 async def test_a_missing_python_run_leaves_the_group_without_a_verdict(conn, unique: str) -> None:
     group = f"pg-orphan-{unique}"
-    right = (await repo.insert_run(conn, record_from_payload(lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group)))).run_id
+    right = (
+        await repo.insert_run(
+            conn, record_from_payload(lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group))
+        )
+    ).run_id
 
     assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is False
     assert await repo.get_parity_verdict(conn, group) is None
-

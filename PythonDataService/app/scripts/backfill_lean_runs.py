@@ -39,6 +39,7 @@ from typing import Any
 
 from app.research.backtest_runs.service import persist_run_payload
 from app.services.lean_sidecar_persistence import build_persist_payload
+from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,8 @@ def _build_payload_for_workspace(workspace: Path) -> dict[str, Any] | None:
         starting_cash=float(starting_cash),
         symbol=str(symbol),
         algorithm_name=algorithm_name,
+        start_date=et_date_at_ms(int(start_ms)),
+        end_date=et_date_at_ms(int(end_ms)),
         start_date_ms=int(start_ms),
         end_date_ms=int(end_ms),
         # PR B P1 fix — forward the manifest dict so the persist payload

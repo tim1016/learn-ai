@@ -9,7 +9,9 @@ ENTRY_MS = 1_736_173_800_000  # 2025-01-06 09:30 ET
 EXIT_MS = 1_736_179_200_000  # 2025-01-06 11:00 ET
 
 
-def trade(number: int = 1, *, entry_ms: int = ENTRY_MS, exit_ms: int = EXIT_MS, pnl: float = 20.0, synthetic: bool = False) -> dict[str, Any]:
+def trade(
+    number: int = 1, *, entry_ms: int = ENTRY_MS, exit_ms: int = EXIT_MS, pnl: float = 20.0, synthetic: bool = False
+) -> dict[str, Any]:
     return {
         "trade_number": number,
         "entry_ms_utc": entry_ms,
@@ -28,12 +30,20 @@ def equity_curve(final_equity: float = 100_020.0) -> dict[str, Any]:
         "schema_version": 2,
         "mark_to_market": {
             "cadence": "strategy_bar_close",
-            "downsample": {"policy": "first_last+trade_marks+running_extrema+stride", "raw_points": 2, "kept_points": 2},
+            "downsample": {
+                "policy": "first_last+trade_marks+running_extrema+stride",
+                "raw_points": 2,
+                "kept_points": 2,
+            },
             "points": [{"t": ENTRY_MS, "e": 100_000.0}, {"t": EXIT_MS, "e": final_equity}],
         },
         "realized": {
             "cadence": "trade_exit",
-            "downsample": {"policy": "first_last+trade_marks+running_extrema+stride", "raw_points": 2, "kept_points": 2},
+            "downsample": {
+                "policy": "first_last+trade_marks+running_extrema+stride",
+                "raw_points": 2,
+                "kept_points": 2,
+            },
             "points": [{"t": ENTRY_MS, "e": 100_000.0}, {"t": EXIT_MS, "e": final_equity}],
         },
     }
@@ -85,19 +95,37 @@ def engine_payload(symbol: str = "SPY", **overrides: Any) -> dict[str, Any]:
         "commission_per_order": 0.0,
         "brokerage_policy": "algorithm_default",
         "data_policy_json": json.dumps(data_policy(symbol)),
-        "lean_statistics": {"portfolio": {"sharpe_ratio": 1.54, "drawdown": 0.0191}, "trade": {"profit_factor": 1.86}, "runtime": {}},
+        "lean_statistics": {
+            "portfolio": {"sharpe_ratio": 1.54, "drawdown": 0.0191},
+            "trade": {"profit_factor": 1.86},
+            "runtime": {},
+        },
         "lean_analysis_json": None,
-        "run_verdict_json": json.dumps({"verdict_version": 2, "status": "complete", "grade": "A", "signal": "Paper-trade"}),
+        "run_verdict_json": json.dumps(
+            {"verdict_version": 2, "status": "complete", "grade": "A", "signal": "Paper-trade"}
+        ),
         "verdict_version": 2,
         "verdict_grade": "A",
         "verdict_signal": "Paper-trade",
         "equity_curve_json": json.dumps(equity_curve()),
         "validation_analytics_json": json.dumps(
-            {"schema_version": 2, "computed_at_ms": EXIT_MS, "engine": "python", "analytics": {"horizons": [], "timing_cells": []}}
+            {
+                "schema_version": 2,
+                "computed_at_ms": EXIT_MS,
+                "engine": "python",
+                "analytics": {"horizons": [], "timing_cells": []},
+            }
         ),
         "insight_summary_json": json.dumps({"total": 1}),
         "metric_documentation_json": json.dumps(
-            [{"metric_id": "sharpe", "variant_id": "sharpe.platform.v1", "producer": "platform", "contract_id": "platform-sharpe-v1"}]
+            [
+                {
+                    "metric_id": "sharpe",
+                    "variant_id": "sharpe.platform.v1",
+                    "producer": "platform",
+                    "contract_id": "platform-sharpe-v1",
+                }
+            ]
         ),
         "trades": [trade()],
     }

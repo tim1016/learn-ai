@@ -125,6 +125,8 @@ async def _persist_completed_run(
         starting_cash=request.starting_cash,
         symbol=request.symbol,
         algorithm_name=_algorithm_name_for_run(request.template, request.algorithm_source),
+        start_date=request.start_date,
+        end_date=request.end_date,
         start_date_ms=_date_to_ms_utc(request.start_date),
         end_date_ms=_date_to_ms_utc(request.end_date),
         # PR B P1 fix — forward the manifest so the persist payload carries

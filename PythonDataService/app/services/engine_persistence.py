@@ -17,10 +17,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from app.research.backtest_runs.records import utc_date_iso
 from app.research.backtest_runs.service import persist_run_payload
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 
@@ -99,17 +99,17 @@ def build_engine_persist_payload(
     strategy_name: str,
     symbol: str,
     starting_cash: Decimal,
-    start_date_ms: int,
-    end_date_ms: int,
+    start_date: date,
+    end_date: date,
     trades: list[EngineTrade],
     total_fees: Decimal = Decimal("0"),
     extra_statistics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the engine-source persist payload (source="engine", lean_run_id=None).
 
-    Timestamps stay ``int64`` ms UTC; the window is carried as the trading
-    dates the ms anchors name. Decimals are coerced to floats here because the
-    row stores double precision.
+    Trade timestamps stay ``int64`` ms UTC; the window is the trading dates the
+    caller keyed the run by. Decimals are coerced to floats here because the row
+    stores double precision.
     """
     aggregates = compute_aggregates(trades, starting_cash, total_fees=total_fees)
 
@@ -119,8 +119,8 @@ def build_engine_persist_payload(
         "strategy_name": strategy_name,
         "symbol": symbol,
         "starting_cash": float(starting_cash),
-        "start_date": utc_date_iso(start_date_ms),
-        "end_date": utc_date_iso(end_date_ms),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "total_trades": aggregates.total_trades,
         "winning_trades": aggregates.winning_trades,
         "losing_trades": aggregates.losing_trades,
@@ -155,8 +155,8 @@ async def persist_engine_run(
     strategy_name: str,
     symbol: str,
     starting_cash: Decimal,
-    start_date_ms: int,
-    end_date_ms: int,
+    start_date: date,
+    end_date: date,
     trades: list[EngineTrade],
     total_fees: Decimal = Decimal("0"),
     extra_statistics: dict[str, Any] | None = None,
@@ -171,8 +171,8 @@ async def persist_engine_run(
         strategy_name=strategy_name,
         symbol=symbol,
         starting_cash=starting_cash,
-        start_date_ms=start_date_ms,
-        end_date_ms=end_date_ms,
+        start_date=start_date,
+        end_date=end_date,
         trades=trades,
         total_fees=total_fees,
         extra_statistics=extra_statistics,

@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any, Literal
 
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
@@ -176,16 +176,6 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
     )
 
 
-def utc_date_iso(ms_utc: int) -> str:
-    """The UTC calendar date of an instant, as a payload ``start_date`` / ``end_date``.
-
-    The LEAN sidecar and the spec runner key their windows by trading date
-    and carried them as UTC-midnight instants; the row keeps the date. This
-    is the same reading the retired .NET persist applied to those instants.
-    """
-    return datetime.fromtimestamp(ms_utc / 1000, tz=UTC).date().isoformat()
-
-
 def synthesize_legacy_data_policy(symbol: str) -> str:
     """The block the .NET layer recorded for callers that sent no policy: what the engines actually did."""
     return json.dumps(
@@ -272,7 +262,9 @@ def _mapping(container: Mapping[str, Any] | None, key: str) -> Mapping[str, Any]
 def _trade(index: int, trade: Mapping[str, Any]) -> TradeRecord:
     entry_ms, exit_ms = trade.get("entry_ms_utc"), trade.get("exit_ms_utc")
     if not isinstance(entry_ms, int) or entry_ms <= 0:
-        raise RunPayloadError(f"trades[{index}].entry_ms_utc is required and must be a positive int64 ms UTC timestamp.")
+        raise RunPayloadError(
+            f"trades[{index}].entry_ms_utc is required and must be a positive int64 ms UTC timestamp."
+        )
     if not isinstance(exit_ms, int) or exit_ms <= 0:
         raise RunPayloadError(f"trades[{index}].exit_ms_utc is required and must be a positive int64 ms UTC timestamp.")
     quantity = trade.get("quantity")

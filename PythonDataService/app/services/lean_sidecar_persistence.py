@@ -15,7 +15,7 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -34,7 +34,6 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.research.backtest_runs.records import utc_date_iso
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.engine_validation_analytics import (
@@ -539,6 +538,8 @@ def build_persist_payload(
     starting_cash: float,
     symbol: str,
     algorithm_name: str,
+    start_date: date,
+    end_date: date,
     start_date_ms: int,
     end_date_ms: int,
     manifest: RunManifest | Mapping[str, Any] | None = None,
@@ -561,7 +562,9 @@ def build_persist_payload(
     verdict. It is persisted like any other so the failed run appears in the
     unified history.
 
-    All timestamps in the returned payload are int64 ms UTC (canonical).
+    ``start_date`` / ``end_date`` are the trading dates the window keys; the
+    row stores them as date-anchored ``int64 ms UTC``. ``start_date_ms`` /
+    ``end_date_ms`` bound only the envelope evidence below.
 
     PR B P1 fix (2026-05-20) — ``manifest`` (optional) lets the caller forward
     the LEAN ``RunManifest`` so the persist payload carries the true
@@ -584,8 +587,8 @@ def build_persist_payload(
             starting_cash=starting_cash,
             symbol=symbol,
             algorithm_name=algorithm_name,
-            start_date_ms=start_date_ms,
-            end_date_ms=end_date_ms,
+            start_date=start_date,
+            end_date=end_date,
             workspace_path=workspace_path,
             error="No normalized/result.json — LEAN run did not produce output",
             manifest=manifest,
@@ -622,8 +625,8 @@ def build_persist_payload(
             starting_cash=starting_cash,
             symbol=symbol,
             algorithm_name=algorithm_name,
-            start_date_ms=start_date_ms,
-            end_date_ms=end_date_ms,
+            start_date=start_date,
+            end_date=end_date,
             workspace_path=workspace_path,
             error=f"normalization_error: {type(exc).__name__}: {exc}",
             manifest=manifest,
@@ -647,8 +650,8 @@ def build_persist_payload(
             paired_trades=paired_trades,
             starting_cash=starting_cash,
             final_equity=agg.final_equity,
-            start_date_ms=start_date_ms,
-            end_date_ms=end_date_ms,
+            start_date=start_date,
+            end_date=end_date,
         )
         if parity_group_id is not None
         else {}
@@ -698,8 +701,8 @@ def build_persist_payload(
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,
-        "start_date": utc_date_iso(start_date_ms),
-        "end_date": utc_date_iso(end_date_ms),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "total_trades": agg.total_trades,
         "winning_trades": agg.winning_trades,
         "losing_trades": agg.losing_trades,
@@ -774,8 +777,8 @@ def _compatibility_ledger_statistics(
     paired_trades: Sequence[PairedTrade],
     starting_cash: float,
     final_equity: float,
-    start_date_ms: int,
-    end_date_ms: int,
+    start_date: date,
+    end_date: date,
 ) -> dict[str, float | int | None]:
     """Project a linked LEAN ledger into platform-canonical statistics.
 
@@ -811,8 +814,6 @@ def _compatibility_ledger_statistics(
             )
         )
 
-    start_date = datetime.fromtimestamp(start_date_ms / 1000, tz=UTC).date()
-    end_date = datetime.fromtimestamp(end_date_ms / 1000, tz=UTC).date()
     calendar_days = (end_date - start_date).days
     trading_days = max(1, round(calendar_days * 252 / 365)) if calendar_days > 0 else None
     return summarize(
@@ -898,8 +899,8 @@ def _failed_run_payload(
     starting_cash: float,
     symbol: str,
     algorithm_name: str,
-    start_date_ms: int,
-    end_date_ms: int,
+    start_date: date,
+    end_date: date,
     workspace_path: Path,
     error: str,
     manifest: RunManifest | Mapping[str, Any] | None = None,
@@ -916,8 +917,8 @@ def _failed_run_payload(
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,
-        "start_date": utc_date_iso(start_date_ms),
-        "end_date": utc_date_iso(end_date_ms),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "total_trades": 0,
         "winning_trades": 0,
         "losing_trades": 0,

@@ -5901,6 +5901,8 @@ export interface components {
          * @description Everything the run report renders, plus the bounded trade evidence.
          */
         BacktestRunDetailResponse: {
+            /** Brokeragepolicy */
+            brokeragePolicy: string | null;
             /** Commissionperorder */
             commissionPerOrder: number | null;
             /** Datapolicy */
@@ -5956,8 +5958,11 @@ export interface components {
             sharpeRatio: number | null;
             /** Sortinoratio */
             sortinoRatio: number | null;
-            /** Source */
-            source: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "engine" | "lean-sidecar";
             /** Startdate */
             startDate: string;
             /** Strategyname */
@@ -6069,8 +6074,11 @@ export interface components {
             parameters: string;
             /** Paritygroupid */
             parityGroupId: string | null;
-            /** Source */
-            source: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "engine" | "lean-sidecar";
             /** Startdate */
             startDate: string;
             /** Strategyname */

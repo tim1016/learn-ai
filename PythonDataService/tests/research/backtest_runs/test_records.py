@@ -7,7 +7,7 @@ from datetime import date
 
 import pytest
 
-from app.research.backtest_runs.records import RunPayloadError, record_from_payload, utc_date_iso
+from app.research.backtest_runs.records import RunPayloadError, record_from_payload
 from tests.research.backtest_runs.payloads import engine_payload, lean_payload, trade
 
 
@@ -19,7 +19,12 @@ def test_a_complete_engine_payload_maps_onto_the_row_field_for_field() -> None:
     assert record.start_date == date(2025, 1, 6) and record.end_date == date(2025, 1, 10)
     assert record.initial_cash == 100_000.0 and record.final_equity == 100_020.0
     # The engine names its headlines; the LEAN projection with different numbers does not win.
-    assert (record.max_drawdown, record.sharpe_ratio, record.sortino_ratio, record.profit_factor) == (0.0257, 1.43, 2.59, 2.0)
+    assert (record.max_drawdown, record.sharpe_ratio, record.sortino_ratio, record.profit_factor) == (
+        0.0257,
+        1.43,
+        2.59,
+        2.0,
+    )
     assert json.loads(record.lean_statistics_json)["portfolio"]["sharpe_ratio"] == 1.54
     assert json.loads(record.equity_curve_json)["schema_version"] == 2
     [persisted] = record.trades
@@ -37,7 +42,12 @@ def test_a_lean_payload_takes_its_headlines_from_the_native_statistics() -> None
     record = record_from_payload(lean_payload("run-1"))
 
     assert record.source == "lean-sidecar" and record.lean_run_id == "run-1"
-    assert (record.max_drawdown, record.sharpe_ratio, record.sortino_ratio, record.profit_factor) == (0.0191, 1.54, 1.0, 1.86)
+    assert (record.max_drawdown, record.sharpe_ratio, record.sortino_ratio, record.profit_factor) == (
+        0.0191,
+        1.54,
+        1.0,
+        1.86,
+    )
     assert record.brokerage_policy == "interactive_brokers"
     assert record.fill_mode == "lean-sidecar"
 
@@ -62,7 +72,11 @@ def test_defaults_fill_what_the_writers_left_out() -> None:
     assert record.brokerage_policy == "algorithm_default" and record.commission_per_order == 0.0
     assert record.requested_engine is None
     synthesized = json.loads(record.data_policy_json)
-    assert synthesized["symbol"] == "SPY" and synthesized["adjusted"] is True and synthesized["strategy_bars"] == {"timespan": "minute", "multiplier": 15}
+    assert (
+        synthesized["symbol"] == "SPY"
+        and synthesized["adjusted"] is True
+        and synthesized["strategy_bars"] == {"timespan": "minute", "multiplier": 15}
+    )
     assert [context["variant_id"] for context in json.loads(record.metric_documentation_json)] == [
         "sharpe.platform.v1",
         "sortino.platform.v1",
@@ -113,8 +127,3 @@ def test_a_missing_trade_quantity_defaults_to_one_share() -> None:
     record = record_from_payload(engine_payload(trades=[{**trade(), "quantity": None}]))
 
     assert record.trades[0].quantity == 1.0
-
-
-def test_utc_date_iso_reads_the_calendar_date_of_a_utc_midnight_anchor() -> None:
-    assert utc_date_iso(1_736_121_600_000) == "2025-01-06"  # 2025-01-06T00:00:00Z
-    assert utc_date_iso(1_736_173_800_000) == "2025-01-06"  # 09:30 ET the same day

@@ -270,15 +270,12 @@ async def run_spec_against_bars_and_persist(
         fill_mode=fill_mode,
     )
 
-    start_ms = _date_tuple_to_ms_utc(start_date)
-    end_ms = _date_tuple_to_ms_utc(end_date)
-
     persisted_id = await persist_engine_run(
         strategy_name=resolved_name,
         symbol=symbol,
         starting_cash=starting_cash,
-        start_date_ms=start_ms,
-        end_date_ms=end_ms,
+        start_date=date(*start_date),
+        end_date=date(*end_date),
         trades=result.trades,
         total_fees=result.total_fees,
         extra_statistics=extra_statistics,
@@ -291,9 +288,3 @@ async def run_spec_against_bars_and_persist(
         captured_events=result.captured_events,
     )
 
-
-def _date_tuple_to_ms_utc(date_tuple: tuple[int, int, int]) -> int:
-    """Convert ``(year, month, day)`` to int64 ms UTC at midnight."""
-    from datetime import UTC, datetime
-
-    return int(datetime(*date_tuple, tzinfo=UTC).timestamp() * 1000)

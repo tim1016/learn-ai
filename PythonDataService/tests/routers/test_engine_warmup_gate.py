@@ -55,7 +55,7 @@ def recorded_persistence(monkeypatch) -> dict[str, list]:
         calls["save"].append(kwargs)
         return 42
 
-    monkeypatch.setattr(engine_router, "_persist_run_sync", _save)
+    monkeypatch.setattr(engine_router, "persist_engine_response_sync", _save)
     monkeypatch.setattr(
         engine_router,
         "_dispatch_requested_parity_companion",

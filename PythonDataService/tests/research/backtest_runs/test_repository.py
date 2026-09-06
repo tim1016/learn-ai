@@ -80,7 +80,12 @@ async def test_an_engine_run_survives_a_write_then_read_round_trip_with_every_fi
     assert run.trades_truncated is False and run.parity_verdicts == ()
     [persisted] = run.trades
     assert (persisted.trade_number, persisted.entry_ms, persisted.exit_ms) == (1, ENTRY_MS, EXIT_MS)
-    assert (persisted.entry_price, persisted.exit_price, persisted.quantity, persisted.pnl) == (710.0, 712.0, 10.0, 20.0)
+    assert (persisted.entry_price, persisted.exit_price, persisted.quantity, persisted.pnl) == (
+        710.0,
+        712.0,
+        10.0,
+        20.0,
+    )
     assert persisted.signal_reason == "ema cross" and persisted.is_synthetic_exit is False
 
 
@@ -89,9 +94,13 @@ async def test_a_lean_run_is_idempotent_on_its_run_id_and_refuses_a_different_en
     again = await repo.insert_run(conn, record_from_payload(lean_payload(f"lean-{unique}", symbol=unique)))
 
     assert first.created is True and again.created is False and again.run_id == first.run_id
-    assert await conn.fetchval("SELECT count(*) FROM research_backtest_runs WHERE lean_run_id = $1", f"lean-{unique}") == 1
+    assert (
+        await conn.fetchval("SELECT count(*) FROM research_backtest_runs WHERE lean_run_id = $1", f"lean-{unique}") == 1
+    )
     with pytest.raises(repo.RunConflictError):
-        await repo.insert_run(conn, record_from_payload(lean_payload(f"lean-{unique}", symbol=unique, requested_engine="both")))
+        await repo.insert_run(
+            conn, record_from_payload(lean_payload(f"lean-{unique}", symbol=unique, requested_engine="both"))
+        )
 
 
 async def test_every_engine_persist_is_a_new_row(conn, unique: str) -> None:
@@ -108,18 +117,25 @@ async def test_history_reads_newest_first_and_filters_by_engine(conn, unique: st
     rows = [row for row in await repo.list_runs(conn, engine=None, limit=500) if row.symbol == unique.upper()]
     assert [row.id for row in rows] == [lean_id, engine_id]
     lean_row, engine_row = rows
-    assert lean_row.engine == "LEAN" and lean_row.has_synthetic_exit is True and lean_row.lean_run_id == f"lean-{unique}"
+    assert (
+        lean_row.engine == "LEAN" and lean_row.has_synthetic_exit is True and lean_row.lean_run_id == f"lean-{unique}"
+    )
     assert engine_row.engine == "PYTHON" and engine_row.has_synthetic_exit is False
     assert engine_row.start_date == "2025-01-06" and json.loads(engine_row.data_policy_json)["symbol"] == unique
 
-    only_python = [row.id for row in await repo.list_runs(conn, engine="PYTHON", limit=500) if row.symbol == unique.upper()]
+    only_python = [
+        row.id for row in await repo.list_runs(conn, engine="PYTHON", limit=500) if row.symbol == unique.upper()
+    ]
     only_lean = [row.id for row in await repo.list_runs(conn, engine="LEAN", limit=500) if row.symbol == unique.upper()]
     assert only_python == [engine_id] and only_lean == [lean_id]
     assert len(await repo.list_runs(conn, engine=None, limit=1)) == 1
 
 
 async def test_the_report_carries_the_newest_five_hundred_trades_in_entry_order_and_says_so(conn, unique: str) -> None:
-    trades = [trade(number, entry_ms=ENTRY_MS + number * 60_000, exit_ms=ENTRY_MS + number * 60_000 + 30_000) for number in range(1, 502)]
+    trades = [
+        trade(number, entry_ms=ENTRY_MS + number * 60_000, exit_ms=ENTRY_MS + number * 60_000 + 30_000)
+        for number in range(1, 502)
+    ]
     run_id = await _insert(conn, engine_payload(symbol=unique, trades=trades, total_trades=501))
 
     run = await repo.get_run(conn, run_id)
@@ -157,21 +173,31 @@ async def test_a_run_backing_a_live_recency_run_cannot_be_hard_deleted(conn, uni
 async def test_a_parity_disposition_is_recorded_once_per_group(conn, unique: str) -> None:
     left = await _insert(conn, engine_payload(symbol=unique, parity_group_id=f"pg-{unique}"))
 
-    first = await repo.create_parity_verdict(conn, parity_group_id=f"pg-{unique}", left_run_id=left, status="pending", verdict_json='{"status":"pending"}')
-    again = await repo.create_parity_verdict(conn, parity_group_id=f"pg-{unique}", left_run_id=left, status="unavailable", verdict_json="{}")
+    first = await repo.create_parity_verdict(
+        conn, parity_group_id=f"pg-{unique}", left_run_id=left, status="pending", verdict_json='{"status":"pending"}'
+    )
+    again = await repo.create_parity_verdict(
+        conn, parity_group_id=f"pg-{unique}", left_run_id=left, status="unavailable", verdict_json="{}"
+    )
 
     assert first.status == "pending" and again.id == first.id and again.status == "pending"
     with pytest.raises(ValueError):
-        await repo.create_parity_verdict(conn, parity_group_id=f"pg-x-{unique}", left_run_id=left, status="agree", verdict_json="{}")
+        await repo.create_parity_verdict(
+            conn, parity_group_id=f"pg-x-{unique}", left_run_id=left, status="agree", verdict_json="{}"
+        )
     [row] = await repo.list_parity_verdicts(conn, left)
     assert row.left_run_id == left and row.right_run_id is None and row.verdict_version == repo.PARITY_VERDICT_VERSION
 
 
 async def test_mark_failed_transitions_only_a_pending_verdict(conn, unique: str) -> None:
     left = await _insert(conn, engine_payload(symbol=unique, parity_group_id=f"pg-{unique}"))
-    await repo.create_parity_verdict(conn, parity_group_id=f"pg-{unique}", left_run_id=left, status="pending", verdict_json="{}")
+    await repo.create_parity_verdict(
+        conn, parity_group_id=f"pg-{unique}", left_run_id=left, status="pending", verdict_json="{}"
+    )
 
-    row, transitioned = await repo.mark_parity_failed(conn, f"pg-{unique}", status="run_failed", detail="LEAN exited with code 1")
+    row, transitioned = await repo.mark_parity_failed(
+        conn, f"pg-{unique}", status="run_failed", detail="LEAN exited with code 1"
+    )
     assert transitioned is True and row is not None and row.status == "run_failed"
     assert json.loads(row.verdict_json)["reason"] == "LEAN exited with code 1"
 
@@ -188,11 +214,26 @@ async def test_freezing_a_verdict_wins_only_while_pending_and_repairs_a_lost_row
     right = await _insert(conn, lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group))
 
     # The pending row was lost: freezing inserts the terminal verdict directly.
-    assert await repo.freeze_parity_verdict(conn, parity_group_id=group, left_run_id=left, right_run_id=right, status="agree", verdict_json='{"status":"agree"}') is True
+    assert (
+        await repo.freeze_parity_verdict(
+            conn,
+            parity_group_id=group,
+            left_run_id=left,
+            right_run_id=right,
+            status="agree",
+            verdict_json='{"status":"agree"}',
+        )
+        is True
+    )
     row = await repo.get_parity_verdict(conn, group)
     assert row is not None and row.status == "agree" and row.right_run_id == right
     # Terminal already: never overwritten.
-    assert await repo.freeze_parity_verdict(conn, parity_group_id=group, left_run_id=left, right_run_id=right, status="diverged", verdict_json="{}") is False
+    assert (
+        await repo.freeze_parity_verdict(
+            conn, parity_group_id=group, left_run_id=left, right_run_id=right, status="diverged", verdict_json="{}"
+        )
+        is False
+    )
     assert (await repo.get_parity_verdict(conn, group)).status == "agree"
     # Both runs see the verdict on their report.
     assert [v.id for v in await repo.list_parity_verdicts(conn, right)] == [row.id]

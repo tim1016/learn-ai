@@ -11,8 +11,12 @@ five hundred trades in entry order and says when it truncated; a run backing
 a live Recency Chart run cannot be hard-deleted; a parity verdict reaches one
 terminal state and is never overwritten.
 
-Dates are date-anchored values stored as ``int64 ms UTC`` at ET midnight
-(``app.utils.session_anchors``) and read back as the ET calendar date.
+Rows come back as frozen dataclasses built straight from the selected
+columns (the SELECT lists name exactly their fields); the views the wire
+needs but the table does not store — engine identity, the ET calendar dates
+of the date-anchored window, per-trade points — are properties. Dates are
+date-anchored values stored as ``int64 ms UTC`` at ET midnight
+(``app.utils.session_anchors``).
 Canonical implementation: this file.
 Validated against: tests/research/backtest_runs/test_repository.py.
 """
@@ -21,7 +25,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 import asyncpg
 
@@ -30,13 +34,15 @@ from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 REPORT_TRADE_LIMIT = 500
-EngineFilter = Literal["PYTHON", "LEAN"]
+Engine = Literal["PYTHON", "LEAN"]
 _SOURCE_BY_ENGINE: dict[str, str] = {"PYTHON": "engine", "LEAN": "lean-sidecar"}
-_ENGINE_BY_SOURCE: dict[str, str] = {"engine": "PYTHON", "lean-sidecar": "LEAN"}
+_ENGINE_BY_SOURCE: dict[str, Engine] = {"engine": "PYTHON", "lean-sidecar": "LEAN"}
 
 PARITY_CREATE_STATUSES: frozenset[str] = frozenset({"pending", "unavailable"})
 PARITY_FAILURE_STATUSES: frozenset[str] = frozenset({"run_failed", "persist_failed"})
 PARITY_VERDICT_VERSION = 2
+
+DeleteOutcome = Literal["deleted", "not_found", "recency_member"]
 
 
 class RunConflictError(ValueError):
@@ -50,18 +56,17 @@ class InsertOutcome:
 
 
 @dataclass(frozen=True, slots=True)
-class RunSummary:
-    """One history row — the fields the run-history table renders."""
+class RunRow:
+    """The columns both reads share, plus the derived views the wire needs."""
 
     id: int
     source: str
-    engine: str
     strategy_name: str
     symbol: str
     lean_run_id: str | None
     parameters_json: str
-    start_date: str
-    end_date: str
+    start_ms: int
+    end_ms: int
     executed_at_ms: int
     total_trades: int
     total_pnl: float
@@ -72,6 +77,24 @@ class RunSummary:
     verdict_grade: str | None
     verdict_signal: str | None
     parity_group_id: str | None
+
+    @property
+    def engine(self) -> Engine:
+        return _ENGINE_BY_SOURCE[self.source]
+
+    @property
+    def start_date(self) -> str:
+        return et_date_at_ms(self.start_ms).isoformat()
+
+    @property
+    def end_date(self) -> str:
+        return et_date_at_ms(self.end_ms).isoformat()
+
+
+@dataclass(frozen=True, slots=True)
+class RunSummary(RunRow):
+    """One history row."""
+
     has_synthetic_exit: bool
 
 
@@ -88,6 +111,14 @@ class TradeRow:
     signal_reason: str
     is_synthetic_exit: bool
 
+    @property
+    def pnl_pts(self) -> float:
+        return self.exit_price - self.entry_price
+
+    @property
+    def pnl_pct(self) -> float:
+        return (self.exit_price - self.entry_price) / self.entry_price if self.entry_price > 0 else 0.0
+
 
 @dataclass(frozen=True, slots=True)
 class ParityVerdictRow:
@@ -102,28 +133,16 @@ class ParityVerdictRow:
 
 
 @dataclass(frozen=True, slots=True)
-class RunDetail:
+class RunDetail(RunRow):
     """Everything the run report reads, plus the bounded trade evidence."""
 
-    id: int
-    source: str
-    engine: str
     requested_engine: str | None
-    strategy_name: str
-    symbol: str
-    lean_run_id: str | None
-    parameters_json: str
-    start_date: str
-    end_date: str
     fill_mode: str
     timespan: str
-    executed_at_ms: int
     duration_ms: int
-    total_trades: int
     winning_trades: int
     losing_trades: int
     win_rate: float
-    total_pnl: float
     initial_cash: float
     final_equity: float
     total_fees: float
@@ -131,27 +150,17 @@ class RunDetail:
     sharpe_ratio: float | None
     sortino_ratio: float | None
     profit_factor: float | None
-    commission_per_order: float | None
-    brokerage_policy: str | None
     lean_statistics_json: str | None
     lean_analysis_json: str | None
     run_verdict_json: str | None
     verdict_version: int | None
-    verdict_grade: str | None
-    verdict_signal: str | None
     equity_curve_json: str | None
     validation_analytics_json: str | None
     insight_summary_json: str | None
     metric_documentation_json: str | None
-    data_policy_json: str | None
-    parity_group_id: str | None
-    notes: str | None
     trades: tuple[TradeRow, ...]
     trades_truncated: bool
     parity_verdicts: tuple[ParityVerdictRow, ...]
-
-
-DeleteOutcome = Literal["deleted", "not_found", "recency_member"]
 
 
 # ── Writes ───────────────────────────────────────────────────────────────
@@ -242,7 +251,11 @@ async def _existing_lean_run(conn: asyncpg.Connection, record: BacktestRunRecord
     if row is None:
         return None
     existing_engine = row["requested_engine"]
-    if existing_engine is not None and record.requested_engine is not None and existing_engine != record.requested_engine:
+    if (
+        existing_engine is not None
+        and record.requested_engine is not None
+        and existing_engine != record.requested_engine
+    ):
         raise RunConflictError(f"requested_engine conflicts with the existing run '{record.lean_run_id}'")
     return InsertOutcome(run_id=int(row["id"]), created=False)
 
@@ -306,15 +319,34 @@ async def is_recency_member(conn: asyncpg.Connection, run_id: int) -> bool:
 
 # ── Reads ────────────────────────────────────────────────────────────────
 
+# Column lists name exactly the dataclass fields, so a row builds its dataclass directly.
+_RUN_ROW_COLUMNS = """
+    r.id, r.source, r.strategy_name, r.symbol, r.lean_run_id, r.parameters_json::text AS parameters_json,
+    r.start_ms, r.end_ms, r.executed_at_ms, r.total_trades, r.total_pnl, r.commission_per_order,
+    r.brokerage_policy, r.notes, r.data_policy_json::text AS data_policy_json, r.verdict_grade,
+    r.verdict_signal, r.parity_group_id
+"""
+_RUN_DETAIL_COLUMNS = f"""
+    {_RUN_ROW_COLUMNS},
+    r.requested_engine, r.fill_mode, r.timespan, r.duration_ms, r.winning_trades, r.losing_trades, r.win_rate,
+    r.initial_cash, r.final_equity, r.total_fees, r.max_drawdown, r.sharpe_ratio, r.sortino_ratio, r.profit_factor,
+    r.lean_statistics_json::text AS lean_statistics_json, r.lean_analysis_json::text AS lean_analysis_json,
+    r.run_verdict_json::text AS run_verdict_json, r.verdict_version,
+    r.equity_curve_json::text AS equity_curve_json, r.validation_analytics_json::text AS validation_analytics_json,
+    r.insight_summary_json::text AS insight_summary_json,
+    r.metric_documentation_json::text AS metric_documentation_json
+"""
+_TRADE_COLUMNS = (
+    "id, trade_number, entry_ms, exit_ms, entry_price, exit_price, quantity, pnl, signal_reason, is_synthetic_exit"
+)
+_VERDICT_COLUMNS = "id, parity_group_id, left_run_id, right_run_id, verdict_version, status, verdict_json::text AS verdict_json, created_at_ms"
 
-async def list_runs(conn: asyncpg.Connection, *, engine: EngineFilter | None, limit: int) -> list[RunSummary]:
+
+async def list_runs(conn: asyncpg.Connection, *, engine: Engine | None, limit: int) -> list[RunSummary]:
     """History rows newest-first, optionally one engine's."""
     rows = await conn.fetch(
-        """
-        SELECT r.id, r.source, r.strategy_name, r.symbol, r.lean_run_id, r.parameters_json::text AS parameters_json,
-               r.start_ms, r.end_ms, r.executed_at_ms, r.total_trades, r.total_pnl, r.commission_per_order,
-               r.brokerage_policy, r.notes, r.data_policy_json::text AS data_policy_json, r.verdict_grade,
-               r.verdict_signal, r.parity_group_id,
+        f"""
+        SELECT {_RUN_ROW_COLUMNS},
                EXISTS (
                    SELECT 1 FROM research_backtest_run_trades t WHERE t.run_id = r.id AND t.is_synthetic_exit
                ) AS has_synthetic_exit
@@ -326,108 +358,29 @@ async def list_runs(conn: asyncpg.Connection, *, engine: EngineFilter | None, li
         None if engine is None else _SOURCE_BY_ENGINE[engine],
         limit,
     )
-    return [
-        RunSummary(
-            id=row["id"],
-            source=row["source"],
-            engine=_ENGINE_BY_SOURCE[row["source"]],
-            strategy_name=row["strategy_name"],
-            symbol=row["symbol"],
-            lean_run_id=row["lean_run_id"],
-            parameters_json=row["parameters_json"],
-            start_date=et_date_at_ms(row["start_ms"]).isoformat(),
-            end_date=et_date_at_ms(row["end_ms"]).isoformat(),
-            executed_at_ms=row["executed_at_ms"],
-            total_trades=row["total_trades"],
-            total_pnl=row["total_pnl"],
-            commission_per_order=row["commission_per_order"],
-            brokerage_policy=row["brokerage_policy"],
-            notes=row["notes"],
-            data_policy_json=row["data_policy_json"],
-            verdict_grade=row["verdict_grade"],
-            verdict_signal=row["verdict_signal"],
-            parity_group_id=row["parity_group_id"],
-            has_synthetic_exit=bool(row["has_synthetic_exit"]),
-        )
-        for row in rows
-    ]
+    return [RunSummary(**row) for row in rows]
 
 
-_RUN_COLUMNS = """
-    r.id, r.source, r.requested_engine, r.strategy_name, r.symbol, r.lean_run_id,
-    r.parameters_json::text AS parameters_json, r.start_ms, r.end_ms, r.fill_mode, r.timespan,
-    r.executed_at_ms, r.duration_ms, r.total_trades, r.winning_trades, r.losing_trades, r.win_rate,
-    r.total_pnl, r.initial_cash, r.final_equity, r.total_fees, r.max_drawdown, r.sharpe_ratio,
-    r.sortino_ratio, r.profit_factor, r.commission_per_order, r.brokerage_policy,
-    r.lean_statistics_json::text AS lean_statistics_json, r.lean_analysis_json::text AS lean_analysis_json,
-    r.run_verdict_json::text AS run_verdict_json, r.verdict_version, r.verdict_grade, r.verdict_signal,
-    r.equity_curve_json::text AS equity_curve_json, r.validation_analytics_json::text AS validation_analytics_json,
-    r.insight_summary_json::text AS insight_summary_json,
-    r.metric_documentation_json::text AS metric_documentation_json,
-    r.data_policy_json::text AS data_policy_json, r.parity_group_id, r.notes
-"""
-
-
-async def get_run(conn: asyncpg.Connection, run_id: int, *, trade_limit: int | None = REPORT_TRADE_LIMIT) -> RunDetail | None:
+async def get_run(
+    conn: asyncpg.Connection, run_id: int, *, trade_limit: int | None = REPORT_TRADE_LIMIT
+) -> RunDetail | None:
     """One run with its newest ``trade_limit`` trades in entry order (``None`` reads them all)."""
-    row = await conn.fetchrow(f"SELECT {_RUN_COLUMNS} FROM research_backtest_runs r WHERE r.id = $1", run_id)
+    row = await conn.fetchrow(f"SELECT {_RUN_DETAIL_COLUMNS} FROM research_backtest_runs r WHERE r.id = $1", run_id)
     if row is None:
         return None
     trades, truncated = await _trades_for_report(conn, run_id, trade_limit)
-    verdicts = await list_parity_verdicts(conn, run_id)
     return RunDetail(
-        id=row["id"],
-        source=row["source"],
-        engine=_ENGINE_BY_SOURCE[row["source"]],
-        requested_engine=row["requested_engine"],
-        strategy_name=row["strategy_name"],
-        symbol=row["symbol"],
-        lean_run_id=row["lean_run_id"],
-        parameters_json=row["parameters_json"],
-        start_date=et_date_at_ms(row["start_ms"]).isoformat(),
-        end_date=et_date_at_ms(row["end_ms"]).isoformat(),
-        fill_mode=row["fill_mode"],
-        timespan=row["timespan"],
-        executed_at_ms=row["executed_at_ms"],
-        duration_ms=row["duration_ms"],
-        total_trades=row["total_trades"],
-        winning_trades=row["winning_trades"],
-        losing_trades=row["losing_trades"],
-        win_rate=row["win_rate"],
-        total_pnl=row["total_pnl"],
-        initial_cash=row["initial_cash"],
-        final_equity=row["final_equity"],
-        total_fees=row["total_fees"],
-        max_drawdown=row["max_drawdown"],
-        sharpe_ratio=row["sharpe_ratio"],
-        sortino_ratio=row["sortino_ratio"],
-        profit_factor=row["profit_factor"],
-        commission_per_order=row["commission_per_order"],
-        brokerage_policy=row["brokerage_policy"],
-        lean_statistics_json=row["lean_statistics_json"],
-        lean_analysis_json=row["lean_analysis_json"],
-        run_verdict_json=row["run_verdict_json"],
-        verdict_version=row["verdict_version"],
-        verdict_grade=row["verdict_grade"],
-        verdict_signal=row["verdict_signal"],
-        equity_curve_json=row["equity_curve_json"],
-        validation_analytics_json=row["validation_analytics_json"],
-        insight_summary_json=row["insight_summary_json"],
-        metric_documentation_json=row["metric_documentation_json"],
-        data_policy_json=row["data_policy_json"],
-        parity_group_id=row["parity_group_id"],
-        notes=row["notes"],
-        trades=trades,
-        trades_truncated=truncated,
-        parity_verdicts=verdicts,
+        **row, trades=trades, trades_truncated=truncated, parity_verdicts=await list_parity_verdicts(conn, run_id)
     )
 
 
-async def _trades_for_report(conn: asyncpg.Connection, run_id: int, limit: int | None) -> tuple[tuple[TradeRow, ...], bool]:
+async def _trades_for_report(
+    conn: asyncpg.Connection, run_id: int, limit: int | None
+) -> tuple[tuple[TradeRow, ...], bool]:
     """The newest ``limit`` trades, returned in entry order, and whether older ones were left out."""
     rows = await conn.fetch(
-        """
-        SELECT id, trade_number, entry_ms, exit_ms, entry_price, exit_price, quantity, pnl, signal_reason, is_synthetic_exit
+        f"""
+        SELECT {_TRADE_COLUMNS}
           FROM research_backtest_run_trades
          WHERE run_id = $1
          ORDER BY entry_ms DESC, id DESC
@@ -438,22 +391,7 @@ async def _trades_for_report(conn: asyncpg.Connection, run_id: int, limit: int |
     )
     truncated = limit is not None and len(rows) > limit
     kept = rows[:limit] if truncated else rows
-    trades = tuple(
-        TradeRow(
-            id=row["id"],
-            trade_number=row["trade_number"],
-            entry_ms=row["entry_ms"],
-            exit_ms=row["exit_ms"],
-            entry_price=row["entry_price"],
-            exit_price=row["exit_price"],
-            quantity=row["quantity"],
-            pnl=row["pnl"],
-            signal_reason=row["signal_reason"],
-            is_synthetic_exit=row["is_synthetic_exit"],
-        )
-        for row in reversed(kept)
-    )
-    return trades, truncated
+    return tuple(TradeRow(**row) for row in reversed(kept)), truncated
 
 
 # ── Parity verdicts ──────────────────────────────────────────────────────
@@ -461,26 +399,17 @@ async def _trades_for_report(conn: asyncpg.Connection, run_id: int, limit: int |
 
 async def list_parity_verdicts(conn: asyncpg.Connection, run_id: int) -> tuple[ParityVerdictRow, ...]:
     rows = await conn.fetch(
-        """
-        SELECT id, parity_group_id, left_run_id, right_run_id, verdict_version, status, verdict_json::text AS verdict_json, created_at_ms
-          FROM research_parity_verdicts
-         WHERE left_run_id = $1 OR right_run_id = $1
-         ORDER BY id
-        """,
+        f"SELECT {_VERDICT_COLUMNS} FROM research_parity_verdicts WHERE left_run_id = $1 OR right_run_id = $1 ORDER BY id",
         run_id,
     )
-    return tuple(_verdict_row(row) for row in rows)
+    return tuple(ParityVerdictRow(**row) for row in rows)
 
 
 async def get_parity_verdict(conn: asyncpg.Connection, parity_group_id: str) -> ParityVerdictRow | None:
     row = await conn.fetchrow(
-        """
-        SELECT id, parity_group_id, left_run_id, right_run_id, verdict_version, status, verdict_json::text AS verdict_json, created_at_ms
-          FROM research_parity_verdicts WHERE parity_group_id = $1
-        """,
-        parity_group_id,
+        f"SELECT {_VERDICT_COLUMNS} FROM research_parity_verdicts WHERE parity_group_id = $1", parity_group_id
     )
-    return None if row is None else _verdict_row(row)
+    return None if row is None else ParityVerdictRow(**row)
 
 
 async def create_parity_verdict(
@@ -598,21 +527,3 @@ async def find_left_run_id(conn: asyncpg.Connection, parity_group_id: str) -> in
         "SELECT id FROM research_backtest_runs WHERE parity_group_id = $1 AND source = 'engine' ORDER BY id LIMIT 1",
         parity_group_id,
     )
-
-
-def _verdict_row(row: asyncpg.Record) -> ParityVerdictRow:
-    return ParityVerdictRow(
-        id=row["id"],
-        parity_group_id=row["parity_group_id"],
-        left_run_id=row["left_run_id"],
-        right_run_id=row["right_run_id"],
-        verdict_version=row["verdict_version"],
-        status=row["status"],
-        verdict_json=row["verdict_json"],
-        created_at_ms=row["created_at_ms"],
-    )
-
-
-def summary_parameters(summary: RunSummary) -> dict[str, Any]:
-    """The stored configuration as a mapping, for callers that need one field of it."""
-    return json.loads(summary.parameters_json)

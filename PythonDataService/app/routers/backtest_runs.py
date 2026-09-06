@@ -15,13 +15,13 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.research.backtest_runs import repository as repo
+from app.research.backtest_runs.repository import Engine
 from app.research.persistence.db import with_connection
 from app.schemas.backtest_runs import (
     BacktestRunDetailResponse,
     BacktestRunNotesRequest,
     BacktestRunNotesResponse,
     BacktestRunSummaryResponse,
-    Engine,
 )
 
 router = APIRouter()
@@ -44,7 +44,7 @@ async def list_backtest_runs(
 ) -> list[BacktestRunSummaryResponse]:
     """Run history, newest first."""
     rows = await with_connection(repo.list_runs, engine=engine, limit=limit)
-    return [BacktestRunSummaryResponse.from_repository(row) for row in rows]
+    return [BacktestRunSummaryResponse.model_validate(row) for row in rows]
 
 
 @router.get("/{run_id}", response_model=BacktestRunDetailResponse)
@@ -53,7 +53,7 @@ async def get_backtest_run(run_id: int) -> BacktestRunDetailResponse:
     run = await with_connection(repo.get_run, run_id)
     if run is None:
         raise _not_found(run_id)
-    return BacktestRunDetailResponse.from_repository(run)
+    return BacktestRunDetailResponse.model_validate(run)
 
 
 @router.patch("/{run_id}/notes", response_model=BacktestRunNotesResponse)
