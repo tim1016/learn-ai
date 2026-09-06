@@ -30,7 +30,7 @@ from typing import Literal
 import asyncpg
 
 from app.research.backtest_runs.records import BacktestRunRecord, TradeRecord
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 REPORT_TRADE_LIMIT = 500
@@ -82,13 +82,6 @@ class RunRow:
     def engine(self) -> Engine:
         return _ENGINE_BY_SOURCE[self.source]
 
-    @property
-    def start_date(self) -> str:
-        return et_date_at_ms(self.start_ms).isoformat()
-
-    @property
-    def end_date(self) -> str:
-        return et_date_at_ms(self.end_ms).isoformat()
 
 
 @dataclass(frozen=True, slots=True)

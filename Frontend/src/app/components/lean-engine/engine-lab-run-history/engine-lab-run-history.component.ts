@@ -12,7 +12,7 @@ import { firstValueFrom } from "rxjs";
 
 import { RunHistoryComponent } from "../../shared/run-history/run-history.component";
 import { BacktestRunsService, HISTORY_PAGE_SIZE } from "../../../services/backtest-runs.service";
-import { toRunHistoryRow, type BacktestRunSummary, type Engine } from "../../../services/backtest-runs.types";
+import { toRunHistoryRow, type BacktestRunSummary, type Engine, runWindowDate } from "../../../services/backtest-runs.types";
 import { JobsService } from "../../../services/jobs.service";
 
 /** Persisted filter selection. ``ALL`` asks for every engine. */
@@ -214,7 +214,7 @@ export class EngineLabRunHistoryComponent {
       if (visible.has("engine")) cells.push(r.engine, r.source);
       if (visible.has("strategy")) cells.push(r.strategyName);
       if (visible.has("symbol")) cells.push(r.symbol);
-      if (visible.has("window")) cells.push(r.startDate, r.endDate);
+      if (visible.has("window")) cells.push(runWindowDate(r.startDate), runWindowDate(r.endDate));
       if (visible.has("bars")) {
         const dp = r.dataPolicy;
         cells.push(

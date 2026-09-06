@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -340,12 +340,26 @@ DDL_V5: tuple[str, ...] = (
     'UPDATE "RecencyRuns" SET "StudyId" = NULL WHERE "StudyId" IS NOT NULL',
 )
 
+# Version 6 — a parity verdict goes with either of its runs. Version 5 kept the
+# verdict and nulled ``right_run_id`` when the LEAN companion was hard-deleted,
+# which left a terminal "agree" on the Python run after the evidence it was
+# judged against was gone. The retired .NET schema cascaded on both sides.
+DDL_V6: tuple[str, ...] = (
+    """
+    ALTER TABLE research_parity_verdicts
+        DROP CONSTRAINT IF EXISTS research_parity_verdicts_right_run_id_fkey,
+        ADD CONSTRAINT research_parity_verdicts_right_run_id_fkey
+            FOREIGN KEY (right_run_id) REFERENCES research_backtest_runs (id) ON DELETE CASCADE
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
     (3, DDL_V3),
     (4, DDL_V4),
     (5, DDL_V5),
+    (6, DDL_V6),
 )
 
 

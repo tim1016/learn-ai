@@ -13,7 +13,7 @@ as its validation alias, and the stored JSON envelopes — equity curve,
 validation analytics, data policy, metric documentation — are parsed once
 and served in their producer shape rather than re-typed. Every temporal
 value is ``int64 ms UTC``; the run's start and end are date-anchored values
-rendered as ``YYYY-MM-DD``.
+(ET midnight of the date) the client renders in ``date-et`` mode.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ class _RunResponse(BaseModel):
     symbol: str
     lean_run_id: str | None
     parameters: str = _column("parameters_json", "parameters")
-    start_date: str
-    end_date: str
+    start_date: int = _column("start_ms", "startDate")
+    end_date: int = _column("end_ms", "endDate")
     executed_at: int = _column("executed_at_ms", "executedAt")
     total_trades: int
     total_pnl: float = _column("total_pnl", "totalPnL")

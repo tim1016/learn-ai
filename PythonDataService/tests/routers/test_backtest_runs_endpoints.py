@@ -53,7 +53,7 @@ async def test_history_lists_newest_first_filters_by_engine_and_keeps_the_graphq
             "verdictGrade", "verdictSignal", "parityGroupId", "hasSyntheticExit",
         }
         assert engine_row["engine"] == "PYTHON" and engine_row["source"] == "engine" and engine_row["totalPnL"] == 20.0
-        assert engine_row["startDate"] == "2025-01-06" and engine_row["endDate"] == "2025-01-10"
+        assert engine_row["startDate"] == 1736139600000 and engine_row["endDate"] == 1736485200000  # ET midnight, ms UTC
         assert json.loads(engine_row["parameters"]) == {"symbol": symbol, "gap_bps": 0.0}
         assert engine_row["dataPolicy"]["input_bars"] == {"timespan": "minute", "multiplier": 1}
         assert lean_row["engine"] == "LEAN" and lean_row["hasSyntheticExit"] is True and lean_row["leanRunId"] == f"lean-{symbol}"

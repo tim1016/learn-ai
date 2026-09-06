@@ -7,6 +7,13 @@ Reference: QuantConnect LEAN source commit
 Canonical implementation: app.services.lean_sidecar_persistence and
   app.services.run_verdict_service.
 Validated against: this immutable run-95/96 fixture.
+
+The fixture was pinned once (see its ``attribution.md``) by an exporter that
+read runs 95/96 through the retired .NET ``backtestRun`` GraphQL resolver;
+that exporter, the resolver and the rows were deleted together (PR #1969,
+ADR 0058), so the fixture cannot be regenerated and is not meant to be. A
+future re-baseline is a new versioned fixture whose generator reads
+``GET /api/research/backtest-runs/{id}`` on the Python service.
 """
 
 from __future__ import annotations

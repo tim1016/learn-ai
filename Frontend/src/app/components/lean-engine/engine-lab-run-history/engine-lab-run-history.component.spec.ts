@@ -57,8 +57,8 @@ function baseRun(over: Partial<BacktestRunSummary> = {}): BacktestRunSummary {
     symbol: "AAPL",
     leanRunId: null,
     parameters: '{"symbol":"AAPL","starting_cash":100000}',
-    startDate: "2025-01-06",
-    endDate: "2025-01-10",
+    startDate: 1736139600000, // 2025-01-06 ET midnight
+    endDate: 1736485200000, // 2025-01-10 ET midnight
     executedAt: Date.UTC(2026, 4, 19, 8, 0),
     totalTrades: 3,
     totalPnL: 42.0,
@@ -93,7 +93,7 @@ const FAKE_RUNS: BacktestRunSummary[] = [
     strategyName: "rsi_mean_reversion",
     engine: "LEAN",
     source: "lean-sidecar",
-    endDate: "2025-01-06",
+    endDate: 1736139600000,
     executedAt: Date.UTC(2026, 4, 19, 8, 5),
     totalTrades: 1,
     totalPnL: -5.0,

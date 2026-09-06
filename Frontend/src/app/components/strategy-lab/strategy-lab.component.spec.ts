@@ -34,8 +34,8 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     symbol: "QQQ",
     leanRunId: null,
     parameters: JSON.stringify({ fast: 8, slow: 21, symbol: "QQQ" }),
-    startDate: "2026-03-02",
-    endDate: "2026-04-02",
+    startDate: 1772427600000, // 2026-03-02 ET midnight
+    endDate: 1775102400000, // 2026-04-02 ET midnight
     fillMode: "next_bar_open",
     executedAt: 1,
     durationMs: 2,

@@ -19,8 +19,8 @@ export interface RunHistoryRow {
   /** Symbol if known (parsed from Parameters JSON or stored separately). */
   symbol: string | null;
   /** ISO date string for display, e.g. "2025-01-06". */
-  startDate: string;
-  endDate: string;
+  startDate: number;
+  endDate: number;
   /** int64 ms UTC — when the run was persisted. */
   executedAt: number;
   totalTrades: number;

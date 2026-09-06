@@ -2147,7 +2147,7 @@
           },
           "endDate": {
             "title": "Enddate",
-            "type": "string"
+            "type": "integer"
           },
           "engine": {
             "enum": [
@@ -2334,7 +2334,7 @@
           },
           "startDate": {
             "title": "Startdate",
-            "type": "string"
+            "type": "integer"
           },
           "strategyName": {
             "title": "Strategyname",
@@ -2656,7 +2656,7 @@
           },
           "endDate": {
             "title": "Enddate",
-            "type": "string"
+            "type": "integer"
           },
           "engine": {
             "enum": [
@@ -2725,7 +2725,7 @@
           },
           "startDate": {
             "title": "Startdate",
-            "type": "string"
+            "type": "integer"
           },
           "strategyName": {
             "title": "Strategyname",

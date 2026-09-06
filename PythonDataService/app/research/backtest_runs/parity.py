@@ -263,9 +263,9 @@ def compare_inputs(left: RunDetail, right: RunDetail) -> InputParityReceipt:
     mismatches = [field for field in DATA_POLICY_FIELDS if not _properties_equal(left_policy, right_policy, field)]
     if left.initial_cash != right.initial_cash:
         mismatches.append("initial_cash")
-    if left.start_date != right.start_date:
+    if left.start_ms != right.start_ms:  # both ET-midnight anchors: equal iff the trading dates are
         mismatches.append("start_date")
-    if left.end_date != right.end_date:
+    if left.end_ms != right.end_ms:
         mismatches.append("end_date")
     if left.fill_mode != right.fill_mode:
         mismatches.append("fill_mode")

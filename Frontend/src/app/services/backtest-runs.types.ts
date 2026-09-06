@@ -7,12 +7,14 @@
  * analytics, data policy, metric documentation) arrive in the producer's
  * own stored shape: the Python builders are their single source of truth,
  * so nothing re-types them on the way here. Every temporal value is
- * `int64 ms UTC`; `startDate` / `endDate` are date-anchored `YYYY-MM-DD`.
+ * `int64 ms UTC`; `startDate` / `endDate` are date-anchored values (ET midnight of
+ * the trading date) and render only in `date-et` mode — see `runWindowDate`.
  */
 
 import type { EngineValidationAnalytics } from "../components/lean-engine/engine-results/engine-validation-analytics.types";
 import type { RunHistoryRow } from "../components/shared/run-history/run-history.types";
 import type { DataPolicy } from "../models/data-policy";
+import { formatTimestampDisplay } from "../shared/timestamp";
 
 /** Unified engine identity used by the history filter and the Engine column. */
 export type Engine = "PYTHON" | "LEAN";
@@ -30,8 +32,8 @@ export interface BacktestRunSummary {
   leanRunId: string | null;
   /** The run's configuration as a JSON string. */
   parameters: string;
-  startDate: string;
-  endDate: string;
+  startDate: number;
+  endDate: number;
   executedAt: number;
   totalTrades: number;
   totalPnL: number;
@@ -109,8 +111,8 @@ export interface BacktestRunDetail {
   symbol: string;
   leanRunId: string | null;
   parameters: string;
-  startDate: string;
-  endDate: string;
+  startDate: number;
+  endDate: number;
   fillMode: string;
   executedAt: number;
   durationMs: number;
@@ -170,4 +172,15 @@ export function toRunHistoryRow(run: BacktestRunSummary): RunHistoryRow {
     verdictSignal: run.verdictSignal,
     parityGroupId: run.parityGroupId,
   };
+}
+
+/**
+ * A run's window boundary as the `YYYY-MM-DD` trading date it anchors.
+ *
+ * The wire value is ET midnight of that date as `int64 ms UTC`; resolving it
+ * in any zone west of UTC would land on the previous day, so the date is
+ * always read back in ET (`date-et`). Feeds date inputs and calendar reads.
+ */
+export function runWindowDate(anchorMs: number): string {
+  return formatTimestampDisplay(anchorMs, { mode: "date-et" });
 }

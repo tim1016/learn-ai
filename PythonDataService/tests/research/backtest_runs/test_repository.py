@@ -60,7 +60,7 @@ async def test_an_engine_run_survives_a_write_then_read_round_trip_with_every_fi
     assert run.source == "engine" and run.engine == "PYTHON" and run.requested_engine == "python"
     assert run.strategy_name == "ema_crossover_signal" and run.symbol == unique.upper()
     assert json.loads(run.parameters_json) == {"symbol": unique.upper(), "gap_bps": 0.0}
-    assert run.start_date == "2025-01-06" and run.end_date == "2025-01-10"
+    assert run.start_ms == 1736139600000 and run.end_ms == 1736485200000  # ET midnight of the trading dates
     assert run.fill_mode == "signal_bar_close" and run.timespan == "minute" and run.duration_ms == 1234
     assert run.executed_at_ms > 0
     assert (run.total_trades, run.winning_trades, run.losing_trades, run.win_rate) == (1, 1, 0, 1.0)
@@ -121,7 +121,7 @@ async def test_history_reads_newest_first_and_filters_by_engine(conn, unique: st
         lean_row.engine == "LEAN" and lean_row.has_synthetic_exit is True and lean_row.lean_run_id == f"lean-{unique}"
     )
     assert engine_row.engine == "PYTHON" and engine_row.has_synthetic_exit is False
-    assert engine_row.start_date == "2025-01-06" and json.loads(engine_row.data_policy_json)["symbol"] == unique
+    assert engine_row.start_ms == 1736139600000 and json.loads(engine_row.data_policy_json)["symbol"] == unique
 
     only_python = [
         row.id for row in await repo.list_runs(conn, engine="PYTHON", limit=500) if row.symbol == unique.upper()
@@ -168,6 +168,22 @@ async def test_a_run_backing_a_live_recency_run_cannot_be_hard_deleted(conn, uni
     assert await repo.get_run(conn, run_id) is None
     assert await conn.fetchval("SELECT count(*) FROM research_backtest_run_trades WHERE run_id = $1", run_id) == 0
     assert await repo.delete_run(conn, run_id) == "not_found"
+
+
+async def test_deleting_the_lean_side_takes_its_parity_verdict_with_it(conn, unique: str) -> None:
+    """A terminal verdict must not outlive the evidence it was judged against (Codex, PR #1969)."""
+    group = f"pg-{unique}"
+    left = await _insert(conn, engine_payload(symbol=unique, parity_group_id=group))
+    right = await _insert(conn, lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group))
+    await repo.freeze_parity_verdict(
+        conn, parity_group_id=group, left_run_id=left, right_run_id=right, status="agree", verdict_json='{"status":"agree"}'
+    )
+    assert (await repo.get_parity_verdict(conn, group)).status == "agree"
+
+    assert await repo.delete_run(conn, right) == "deleted"
+
+    assert await repo.get_parity_verdict(conn, group) is None
+    assert not (await repo.get_run(conn, left)).parity_verdicts
 
 
 async def test_a_parity_disposition_is_recorded_once_per_group(conn, unique: str) -> None:

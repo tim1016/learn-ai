@@ -39,8 +39,8 @@ export function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRun
     symbol: "SPY",
     leanRunId: null,
     parameters: JSON.stringify({ short: 5, long: 10, symbol: "SPY" }),
-    startDate: "2026-01-05",
-    endDate: "2026-01-06",
+    startDate: 1767589200000, // 2026-01-05 ET midnight
+    endDate: 1767675600000, // 2026-01-06 ET midnight
     fillMode: "signal_bar_close",
     executedAt: end,
     durationMs: 1200,

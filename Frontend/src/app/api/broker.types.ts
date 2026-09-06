@@ -5910,7 +5910,7 @@ export interface components {
             /** Durationms */
             durationMs: number;
             /** Enddate */
-            endDate: string;
+            endDate: number;
             /**
              * Engine
              * @enum {string}
@@ -5964,7 +5964,7 @@ export interface components {
              */
             source: "engine" | "lean-sidecar";
             /** Startdate */
-            startDate: string;
+            startDate: number;
             /** Strategyname */
             strategyName: string;
             /** Symbol */
@@ -6054,7 +6054,7 @@ export interface components {
             /** Datapolicy */
             dataPolicy: Record<string, never> | null;
             /** Enddate */
-            endDate: string;
+            endDate: number;
             /**
              * Engine
              * @enum {string}
@@ -6080,7 +6080,7 @@ export interface components {
              */
             source: "engine" | "lean-sidecar";
             /** Startdate */
-            startDate: string;
+            startDate: number;
             /** Strategyname */
             strategyName: string;
             /** Symbol */
