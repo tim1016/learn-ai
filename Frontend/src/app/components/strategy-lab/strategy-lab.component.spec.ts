@@ -177,6 +177,7 @@ async function createLab(
           jobs,
           activeJobs,
           job: (id: string) => activeJobs().find((job) => job.id === id) ?? null,
+          resumed: signal(true),
           startJob: vi.fn(),
           fetchResult: vi.fn(),
           cancelJob: vi.fn(),

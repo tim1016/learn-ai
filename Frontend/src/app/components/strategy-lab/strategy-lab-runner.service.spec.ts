@@ -55,6 +55,7 @@ describe("StrategyLab configuration and runner", () => {
   let diagnose: ReturnType<typeof vi.fn>;
   let navigate: ReturnType<typeof vi.fn>;
   let jobsById: ReturnType<typeof signal<Map<string, JobState>>>;
+  let resumed: ReturnType<typeof signal<boolean>>;
 
   /** Adds/replaces a job the way `JobsService` itself would — used to
    *  simulate a job `resumeActive()` discovered rather than one this
@@ -73,6 +74,7 @@ describe("StrategyLab configuration and runner", () => {
     fetchResult = vi.fn();
     navigate = vi.fn(async () => true);
     jobsById = signal(new Map<string, JobState>());
+    resumed = signal(false);
     diagnose = vi.fn(async () => ({
       overall_status: "pass",
       checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
@@ -95,6 +97,7 @@ describe("StrategyLab configuration and runner", () => {
               Array.from(jobsById().values()).filter((job) => !TERMINAL_JOB_STATUSES.includes(job.status)),
             ),
             job: (id: string) => jobsById().get(id) ?? null,
+            resumed,
             startJob,
             fetchResult,
           },
@@ -337,6 +340,55 @@ describe("StrategyLab configuration and runner", () => {
         ["/strategy-lab"],
         expect.objectContaining({ queryParams: { run: 224 } }),
       );
+    });
+
+    it("opens the study of a remembered job that finished during the reload", async () => {
+      // #1954: the tab's job completed between the reload and the active-jobs
+      // snapshot, so it never appears in activeJobs() and no terminal event
+      // arrives; the saved study was reachable only through History.
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockResolvedValue({ success: true, study_id: 321, total_trades: 4, net_profit: 12 });
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      TestBed.tick();
+
+      // Until the snapshot settles, absence means "not yet known": nothing is read.
+      expect(fetchResult).not.toHaveBeenCalled();
+
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fetchResult).toHaveBeenCalledWith("job-9");
+      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 321 } }));
+      expect(reloaded.running()).toBe(false);
+      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("reports nothing when the remembered job left no result behind", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockRejectedValue(new Error("404 result not found or expired"));
+      resumed.set(true);
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fetchResult).toHaveBeenCalledWith("job-9");
+      expect(navigate).not.toHaveBeenCalled();
+      expect(reloaded.runError()).toBeNull();
+      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("still prefers the remembered job while it is active, even after the snapshot settles", () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      resumed.set(true);
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(reloaded.running()).toBe(true);
+      expect(fetchResult).not.toHaveBeenCalled();
     });
 
     it("leaves a parity companion's LEAN job alone even though it shares the job type", () => {
