@@ -3,7 +3,7 @@ import { InputText } from 'primeng/inputtext';
 
 import { etDayEndMs, etIsoDate, etMidnightMs, isoDateAfter, shiftIsoDateByMonths } from '../../shared/date/et-midnight';
 import { ParamRangeInputComponent } from '../../shared/param-range/param-range-input.component';
-import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange } from '../../shared/param-range/param-range';
+import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange, rangeProblem } from '../../shared/param-range/param-range';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import type { ParamProperty, StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { RANKING_MEASURES, type GridSearchSpecRequest, type RankingMeasure } from './grid-search.types';
@@ -222,9 +222,8 @@ export class GridSearchSpecEditorComponent {
   }
 
   private edit(): GridSpecEdit {
-    // The range editor turns a malformed or empty value list into an empty
-    // list and names the entry inline (#1940); a spec is not built from one.
-    const refused = this.params().find((row) => row.vary && row.range.type === 'value_list' && row.range.values.length === 0);
+    // The range editor names a refused entry inline (#1940); a spec is not built from it.
+    const refused = this.params().find((row) => row.vary && rangeProblem(row.range) !== null);
     if (refused !== undefined) {
       return { spec: null, problem: `Fix the values for ${refused.property.title ?? refused.name} before launching.` };
     }

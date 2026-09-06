@@ -69,6 +69,19 @@ describe("ParamRangeInputComponent", () => {
     expect(view.fixture.componentInstance.range()).toEqual({ type: "value_list", values: [1, 2] });
   });
 
+  it("shows the parent's new range and drops the refusal when the range is written from outside", async () => {
+    const view = await renderInput({ type: "value_list", values: [2] });
+    fireEvent.input(screen.getByLabelText(/values/i), { target: { value: "1,x" } });
+    await view.fixture.whenStable();
+    expect(screen.getByRole("alert")).not.toBeNull();
+
+    view.fixture.componentRef.setInput("range", { type: "value_list", values: [5, 10] });
+    await view.fixture.whenStable();
+
+    expect((screen.getByLabelText(/values/i) as HTMLInputElement).value).toBe("5, 10");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("switches to low/high/step mode and updates the model", async () => {
     const view = await renderInput({ type: "value_list", values: [2] });
 

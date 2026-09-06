@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeGridSize, parseValueList, type StrategyRangeConfig } from "./param-range";
+import { computeGridSize, parseValueList, rangeProblem, type StrategyRangeConfig } from "./param-range";
 
 describe("computeGridSize", () => {
   it("multiplies symbol count by the cartesian product of param ranges", () => {
@@ -74,20 +74,29 @@ describe("low/high/step counts match the canonical Python range size", () => {
 
 describe("parseValueList", () => {
   it("parses a comma-separated list, trimming whitespace", () => {
-    expect(parseValueList(" 0, .1 ,0.2 ")).toEqual({ values: [0, 0.1, 0.2], problem: null });
+    expect(parseValueList(" 0, .1 ,0.2 ")).toEqual({ values: [0, 0.1, 0.2] });
   });
 
   it("refuses a malformed entry by name instead of dropping it", () => {
     // #1940: "0,.1,.2,.3..4,.5" used to become [0, 0.1, 0.2, 0.5] with no message.
-    expect(parseValueList("0,.1,.2,.3..4,.5")).toEqual({ values: [], problem: '".3..4" is not a number.' });
+    expect(parseValueList("0,.1,.2,.3..4,.5")).toEqual({ problem: '".3..4" is not a number.' });
   });
 
   it("refuses an empty entry between commas", () => {
-    expect(parseValueList("1,,2")).toEqual({ values: [], problem: "Remove the empty entry between the commas." });
+    expect(parseValueList("1,,2")).toEqual({ problem: "Remove the empty entry next to a comma." });
+    expect(parseValueList("1,2,")).toEqual({ problem: "Remove the empty entry next to a comma." });
   });
 
   it("refuses an empty list", () => {
-    expect(parseValueList("")).toEqual({ values: [], problem: "Enter at least one value." });
-    expect(parseValueList("   ")).toEqual({ values: [], problem: "Enter at least one value." });
+    expect(parseValueList("")).toEqual({ problem: "Enter at least one value." });
+    expect(parseValueList("   ")).toEqual({ problem: "Enter at least one value." });
+  });
+});
+
+describe("rangeProblem", () => {
+  it("reports only the editor's refused (empty) value list", () => {
+    expect(rangeProblem({ type: "value_list", values: [] })).not.toBeNull();
+    expect(rangeProblem({ type: "value_list", values: [1] })).toBeNull();
+    expect(rangeProblem({ type: "low_high_step", low: 1, high: 5, step: 1 })).toBeNull();
   });
 });

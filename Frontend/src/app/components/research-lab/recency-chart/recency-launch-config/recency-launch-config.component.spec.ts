@@ -1,6 +1,6 @@
 import { HttpClient } from "@angular/common/http";
 import { signal } from "@angular/core";
-import { fireEvent, render, screen } from "@testing-library/angular";
+import { fireEvent, render, screen, within } from "@testing-library/angular";
 import { of } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
@@ -149,7 +149,8 @@ describe("RecencyLaunchConfigComponent", () => {
     const { view } = await renderConfig([makeStrategy()], startJob);
 
     fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
-    fireEvent.input(screen.getAllByLabelText(/values \(comma-separated\)/i)[0], { target: { value: "2,.3..4" } });
+    const gapField = within(screen.getByRole("group", { name: "Crossover gap (bps)" })).getByLabelText(/values/i);
+    fireEvent.input(gapField, { target: { value: "2,.3..4" } });
     await view.fixture.whenStable();
     fireEvent.click(screen.getByRole("button", { name: /launch timeline/i }));
     await view.fixture.whenStable();
@@ -157,7 +158,27 @@ describe("RecencyLaunchConfigComponent", () => {
     expect(startJob).not.toHaveBeenCalled();
     const alerts = screen.getAllByRole("alert").map((el) => el.textContent ?? "").join(" ");
     expect(alerts).toContain('".3..4" is not a number.');
-    expect(alerts).toMatch(/fix the highlighted parameter values/i);
+    expect(alerts).toContain("Fix the values for EMA Crossover (2 bps) · Crossover gap (bps) before launching the timeline.");
+  });
+
+  it("refuses to launch a refused list even when another selected strategy still counts runs", async () => {
+    // The run count sums across strategies, so a second strategy's runs must
+    // not mask the refused list on the first.
+    const startJob = vi.fn(async () => "job-1");
+    const other = makeStrategy({ name: "sma_crossover", display_name: "SMA Crossover", params_schema: { properties: { symbol: { type: "string", default: "SPY" }, window: { type: "number", default: 20, title: "Window" } } } });
+    const { view } = await renderConfig([makeStrategy(), other], startJob);
+
+    fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /sma crossover/i }));
+    await view.fixture.whenStable();
+    const gapField = within(screen.getByRole("group", { name: "Crossover gap (bps)" })).getByLabelText(/values/i);
+    fireEvent.input(gapField, { target: { value: "2,.3..4" } });
+    await view.fixture.whenStable();
+    fireEvent.click(screen.getByRole("button", { name: /launch timeline/i }));
+    await view.fixture.whenStable();
+
+    expect(startJob).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("alert").map((el) => el.textContent ?? "").join(" ")).toContain("Fix the values for EMA Crossover (2 bps) · Crossover gap (bps)");
   });
 
   it("launches a recency_chart job with the selected symbols and strategy ranges", async () => {

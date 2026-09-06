@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, model, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, model } from "@angular/core";
 import { ButtonModule } from "primeng/button";
 import { InputText } from "primeng/inputtext";
 import { parseValueList, type LowHighStepRange, type ParamRange, type ValueListRange } from "./param-range";
@@ -6,8 +6,10 @@ import { parseValueList, type LowHighStepRange, type ParamRange, type ValueListR
 /**
  * One numeric strategy parameter's sweep-range editor: value-list or
  * low/high/step (design spec D4). A plain model()-bound presentational
- * control, not a Signal Forms field — the compound value has no
- * validation surface beyond what the two modes' inputs already enforce.
+ * control, not a Signal Forms field. Its one validation surface is the
+ * value list: text that does not parse stays in the field, is marked
+ * invalid with the entry named, and publishes an empty list, which
+ * `rangeProblem` reports to every consumer (#1940).
  */
 @Component({
   selector: "app-param-range-input",
@@ -26,20 +28,17 @@ export class ParamRangeInputComponent {
   readonly isListMode = computed(() => this.range().type === "value_list");
   readonly isRangeMode = computed(() => this.range().type === "low_high_step");
 
-  /** What the operator has typed since the last external range change; null renders the model. */
-  private readonly valuesDraft = signal<string | null>(null);
-
-  readonly valuesText = computed(() => {
-    const draft = this.valuesDraft();
-    if (draft !== null) return draft;
+  /** The field's text: what the operator typed, until the parent writes a new range. */
+  readonly valuesText = linkedSignal(() => {
     const r = this.range();
     return r.type === "value_list" ? r.values.join(", ") : "";
   });
 
   /** Why the typed list is refused, naming the entry; null while it parses. */
   readonly valuesProblem = computed(() => {
-    const draft = this.valuesDraft();
-    return draft === null ? null : parseValueList(draft).problem;
+    if (!this.isListMode()) return null;
+    const parsed = parseValueList(this.valuesText());
+    return "problem" in parsed ? parsed.problem : null;
   });
 
   readonly lowValue = computed(() => {
@@ -59,7 +58,6 @@ export class ParamRangeInputComponent {
 
   switchToListMode(): void {
     if (this.isListMode()) return;
-    this.valuesDraft.set(null);
     const list: ValueListRange = { type: "value_list", values: [this.defaultValue()] };
     this.range.set(list);
   }
@@ -71,10 +69,11 @@ export class ParamRangeInputComponent {
   }
 
   onValuesTextInput(raw: string): void {
-    // A refused list is an empty one: no consumer can launch it, and the
+    // A refused list is published as an empty one (see ValueListRange); the
     // field keeps the raw text so the operator can see and fix the entry.
-    this.valuesDraft.set(raw);
-    this.range.set({ type: "value_list", values: parseValueList(raw).values });
+    const parsed = parseValueList(raw);
+    this.range.set({ type: "value_list", values: "values" in parsed ? parsed.values : [] });
+    this.valuesText.set(raw);
   }
 
   onLowInput(raw: string): void {
