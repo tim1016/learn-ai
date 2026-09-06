@@ -1,15 +1,25 @@
 import { provideHttpClient } from "@angular/common/http";
-import { signal } from "@angular/core";
+import { computed, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
-import { ActivatedRoute, convertToParamMap } from "@angular/router";
+import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { of } from "rxjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { JobsService } from "../../services/jobs.service";
+import type { JobState, JobStatus } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
 import type { StrategyInfo } from "./strategy-lab.models";
+
+const TERMINAL_JOB_STATUSES: JobStatus[] = ["completed", "failed", "cancelled"];
+
+/** Mirrors `JobsService.job()`/`activeJobs()` well enough to test a runner
+ *  reacting to a job JobsService discovered on its own (e.g. `resumeActive()`
+ *  finishing after the runner is constructed), instead of one it started. */
+function makeJobState(overrides: Partial<JobState> & Pick<JobState, "id" | "type" | "status">): JobState {
+  return { recentLogs: [], logSeq: 0, ...overrides };
+}
 
 const STRATEGY = {
   name: "ema_crossover_signal",
@@ -40,11 +50,29 @@ describe("StrategyLab configuration and runner", () => {
   let config: StrategyLabConfigStore;
   let runner: StrategyLabRunner;
   let startJob: ReturnType<typeof vi.fn>;
+  let fetchResult: ReturnType<typeof vi.fn>;
   let nextTradingDayOpen: ReturnType<typeof vi.fn>;
   let diagnose: ReturnType<typeof vi.fn>;
+  let navigate: ReturnType<typeof vi.fn>;
+  let jobsById: ReturnType<typeof signal<Map<string, JobState>>>;
+
+  /** Adds/replaces a job the way `JobsService` itself would — used to
+   *  simulate a job `resumeActive()` discovered rather than one this
+   *  runner started. */
+  function putJob(job: JobState): void {
+    jobsById.update((map) => {
+      const next = new Map(map);
+      next.set(job.id, job);
+      return next;
+    });
+  }
 
   beforeEach(() => {
+    sessionStorage.clear();
     startJob = vi.fn(async () => "job-1");
+    fetchResult = vi.fn();
+    navigate = vi.fn(async () => true);
+    jobsById = signal(new Map<string, JobState>());
     diagnose = vi.fn(async () => ({
       overall_status: "pass",
       checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
@@ -58,13 +86,17 @@ describe("StrategyLab configuration and runner", () => {
         StrategyLabConfigStore,
         StrategyLabRunner,
         { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
+        { provide: Router, useValue: { navigate } },
         {
           provide: JobsService,
           useValue: {
-            jobs: signal([]),
-            job: vi.fn(() => null),
+            jobs: computed(() => Array.from(jobsById().values())),
+            activeJobs: computed(() =>
+              Array.from(jobsById().values()).filter((job) => !TERMINAL_JOB_STATUSES.includes(job.status)),
+            ),
+            job: (id: string) => jobsById().get(id) ?? null,
             startJob,
-            fetchResult: vi.fn(),
+            fetchResult,
           },
         },
         {
@@ -237,5 +269,186 @@ describe("StrategyLab configuration and runner", () => {
     expect(runner.runError()).toBe("Load or enter a QCAlgorithm before running custom source.");
     expect(diagnose).not.toHaveBeenCalled();
     expect(startJob).not.toHaveBeenCalled();
+  });
+
+  describe("resuming a job JobsService already had in flight (e.g. after a page reload)", () => {
+    it("adopts an active engine_backtest job discovered after construction and reports running", () => {
+      expect(runner.running()).toBe(false);
+
+      // JobsService's own resumeActive() resolves asynchronously, after this
+      // runner was already constructed — so the job only appears once the
+      // signal updates, not at construction time.
+      putJob(makeJobState({ id: "resumed-1", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(true);
+    });
+
+    it("adopts an active lean_engine_run job discovered after construction and reports running", () => {
+      putJob(makeJobState({ id: "resumed-lean-1", type: "lean_engine_run", status: "running", parameters: { request: { run_id: "strategy_lab_spy_x1" } } }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(true);
+    });
+
+    it("does not adopt a second job while one is already tracked", async () => {
+      config.engine.set("both");
+      await runner.run();
+      expect(startJob).toHaveBeenCalledOnce();
+
+      // A genuinely active second job must not displace the tracked job-1 …
+      fetchResult.mockResolvedValue({ success: true, study_id: 999, total_trades: 1, net_profit: 1 });
+      putJob(makeJobState({ id: "resumed-2", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(runner.running()).toBe(true);
+
+      // … so when that second job completes, its study is not the one this
+      // runner navigates to.
+      putJob(makeJobState({ id: "resumed-2", type: "engine_backtest", status: "completed" }));
+      TestBed.tick();
+      await Promise.resolve();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("reattaches to the job this tab started, not another tab's active backtest", async () => {
+      await runner.run();
+      expect(startJob).toHaveBeenCalledWith("engine_backtest", expect.anything());
+
+      // Simulate the reload: a fresh runner with no job of its own, while two
+      // engine jobs are active and the other tab's job is listed first.
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(reloaded.running()).toBe(true);
+
+      fetchResult.mockResolvedValue({ success: true, study_id: 777, total_trades: 1, net_profit: 1 });
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed" }));
+      TestBed.tick();
+      await Promise.resolve();
+      expect(navigate).not.toHaveBeenCalled();
+
+      fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(navigate).toHaveBeenCalledWith(
+        ["/strategy-lab"],
+        expect.objectContaining({ queryParams: { run: 224 } }),
+      );
+    });
+
+    it("leaves a parity companion's LEAN job alone even though it shares the job type", () => {
+      putJob(
+        makeJobState({
+          id: "companion-lean",
+          type: "lean_engine_run",
+          status: "running",
+          parameters: { request: { run_id: "companion-spy-x1" } },
+        }),
+      );
+      putJob(makeJobState({ id: "unscoped-lean", type: "lean_engine_run", status: "running" }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(false);
+    });
+
+    it("does not guess between several active jobs when it has none of its own", () => {
+      putJob(makeJobState({ id: "tab-a", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "tab-b", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(false);
+    });
+
+    it("ends the run when its own job terminates instead of adopting another active job", async () => {
+      await runner.run();
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      fetchResult.mockResolvedValue({ success: false, error: "boom" });
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "failed", errorMessage: "boom" }));
+      TestBed.tick();
+      await Promise.resolve();
+      expect(runner.running()).toBe(false);
+
+      // The other tab's job is still active, but this run is over: no
+      // adoption, and its completion is not this tab's result.
+      fetchResult.mockResolvedValue({ success: true, study_id: 777, total_trades: 1, net_profit: 1 });
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed" }));
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(runner.running()).toBe(false);
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("does not fall back to another tab's job while its own marker is stale", async () => {
+      await runner.run();
+      // This tab's job-1 never shows up as active (it ended while the tab was
+      // away); another tab's single job is running.
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(reloaded.running()).toBe(false);
+      expect(reloaded.engineBusy()).toBe(true);
+    });
+
+    it("forgets its marker once its own job has ended", async () => {
+      await runner.run();
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      fetchResult.mockResolvedValue({ success: false, error: "boom" });
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "failed", errorMessage: "boom" }));
+      TestBed.tick();
+      await Promise.resolve();
+
+      // A later reload with one other active job is unambiguous again.
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(reloaded.running()).toBe(true);
+    });
+
+    it("reports the container busy while several jobs are active even though none is adoptable", () => {
+      putJob(makeJobState({ id: "tab-a", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "tab-b", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(false);
+      expect(runner.engineBusy()).toBe(true);
+    });
+
+    it("remembers a job adopted by fallback so a later reload prefers it over newer experiments", () => {
+      putJob(makeJobState({ id: "solo", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(runner.running()).toBe(true);
+
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "later", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(reloaded.running()).toBe(true);
+    });
+
+    it("navigates to the produced study once an adopted engine_backtest job completes", async () => {
+      fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
+      putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(runner.running()).toBe(true);
+
+      putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "completed" }));
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(navigate).toHaveBeenCalledWith(
+        ["/strategy-lab"],
+        expect.objectContaining({ queryParams: { run: 224 }, queryParamsHandling: "merge" }),
+      );
+      expect(runner.running()).toBe(false);
+    });
   });
 });

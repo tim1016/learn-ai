@@ -41,6 +41,9 @@ export class StrategyLabConfigRailComponent {
   readonly tickerPool = input<readonly TickerOption[]>([]);
   readonly recentTickers = input<readonly string[]>([]);
   readonly running = input(false);
+  /** A Strategy Lab backtest is in flight in some tab. Blocks submitting
+   *  another one; launcher recovery is not a submission and stays available. */
+  readonly engineBusy = input(false);
   readonly runBlocked = input(false);
   readonly launcherBlocksRun = input(false);
   readonly launcherStatus = input("unknown");
@@ -102,7 +105,7 @@ export class StrategyLabConfigRailComponent {
     return {
       kind: "run",
       label: "Run validation",
-      disabled: recoveryDisabled || unavailableStrategy || this.runBlocked(),
+      disabled: recoveryDisabled || unavailableStrategy || this.runBlocked() || this.engineBusy(),
     };
   });
 
