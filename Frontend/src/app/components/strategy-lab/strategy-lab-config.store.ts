@@ -139,6 +139,17 @@ export class StrategyLabConfigStore {
   );
 
   /**
+   * Whether this run reads lake bars at all. A restored LEAN run backed by
+   * synthetic bars, or a frozen fixture recording, bypasses the lake
+   * entirely (`lean_sidecar_service.py` generates or replays them), so what
+   * the lake holds says nothing about whether it can rerun.
+   */
+  readonly readsLake = computed(() => {
+    const policy = this.dataPolicy();
+    return policy.source === "polygon" && policy.provider_kind === "live";
+  });
+
+  /**
    * The selected symbol is not in the tree this run would read.
    *
    * Switching the engine to `both` repoints the run at the raw tree, and the
@@ -156,9 +167,10 @@ export class StrategyLabConfigStore {
    * from the provider under the run's own mode before it reads
    * (`engine.py::_materialize_missing_bars`), so a symbol the raw tree lacks
    * is exactly what that option exists to fetch, not a reason to refuse.
+   * A run that does not read the lake at all is never gated by it.
    */
   readonly symbolMissingFromTree = computed(() => {
-    if (this.autoFetch()) return false;
+    if (!this.readsLake() || this.autoFetch()) return false;
     const mode = this.adjustmentMode();
     // See instrument-card: `viewFor` may install a resource effect, which is
     // illegal inside a reactive context.

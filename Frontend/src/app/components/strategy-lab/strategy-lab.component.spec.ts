@@ -542,6 +542,34 @@ describe("Strategy Lab Workbench", () => {
     http.verify();
   });
 
+  it("never gates a restored fixture or synthetic run on lake membership", async () => {
+    // A frozen recording restores with auto-fetch off, and its symbol (QQQ)
+    // is not in the lake (the catalog holds SPY only). The run never reads
+    // the lake, so the membership gate must not make it impossible to rerun.
+    const basePolicy = run().dataPolicy;
+    if (basePolicy === null) throw new Error("the run factory always carries a data policy");
+    const saved = run({
+      dataPolicy: {
+        ...basePolicy,
+        source: "synthetic",
+        provider_kind: "fixture",
+        fixture_id: "fixture-1",
+        fixture_sha256: "abc123",
+      },
+    });
+    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const config = fixture.componentInstance.config;
+    await vi.waitFor(() => {
+      expect(config.autoFetch()).toBe(false);
+    });
+
+    expect(config.effectiveSymbol()).toBe("QQQ");
+    expect(config.readsLake()).toBe(false);
+    expect(config.rerunBlocked()).toBe(false);
+    http.verify();
+  });
+
   it("opens the registered QCAlgorithm in a drawer without probing the launcher", async () => {
     const { fixture, http, diagnose } = await createLab();
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
