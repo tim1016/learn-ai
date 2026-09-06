@@ -44,6 +44,7 @@ export class StrategyLabRunner {
   readonly justProducedRunId = signal<number | null>(null);
 
   constructor() {
+    this.wireJobAdoptionEffect();
     this.wireEngineJobEffect();
     this.wireLeanJobEffect();
   }
@@ -251,6 +252,32 @@ export class StrategyLabRunner {
         launcher?.detail ??
         "LEAN launcher is not reachable.",
     );
+  }
+
+  /**
+   * Reattach to a job `JobsService` already has in flight when this runner
+   * is constructed — e.g. a page reload while a backtest is running.
+   * `JobsService.resumeActive()` resolves asynchronously and may finish
+   * after this runner is constructed, so this reacts to `activeJobs()`
+   * rather than reading it once here. Adoption is skipped once this runner
+   * is already tracking a job — its own started/adopted job wins.
+   */
+  private wireJobAdoptionEffect(): void {
+    effect(() => {
+      if (this.engineJobId() !== null || this.leanJobId() !== null) return;
+      const active = this.jobs.activeJobs();
+      const engineJob = active.find((job) => job.type === "engine_backtest");
+      if (engineJob) {
+        this.beginRun("Reattaching to backtest…", "");
+        this.engineJobId.set(engineJob.id);
+        return;
+      }
+      const leanJob = active.find((job) => job.type === "lean_engine_run");
+      if (leanJob) {
+        this.beginRun("Reattaching to LEAN run…", "");
+        this.leanJobId.set(leanJob.id);
+      }
+    });
   }
 
   private wireEngineJobEffect(): void {

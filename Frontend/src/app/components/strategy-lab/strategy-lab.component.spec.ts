@@ -132,6 +132,7 @@ async function createLab(
   } = {},
 ) {
   const jobs = signal<never[]>([]);
+  const activeJobs = signal<never[]>([]);
   const navigate = vi.fn(async () => true);
   const diagnose = vi.fn();
   const query: Record<string, string> = {};
@@ -167,7 +168,7 @@ async function createLab(
         useValue: { queryParamMap, snapshot: { queryParamMap: queryParamMap.value } },
       },
       { provide: Router, useValue: { navigate } },
-      { provide: JobsService, useValue: { jobs, job: vi.fn(() => null), startJob: vi.fn(), fetchResult: vi.fn(), cancelJob: vi.fn() } },
+      { provide: JobsService, useValue: { jobs, activeJobs, job: vi.fn(() => null), startJob: vi.fn(), fetchResult: vi.fn(), cancelJob: vi.fn() } },
       {
         provide: LeanSidecarService,
         useValue: {
