@@ -154,7 +154,9 @@ public class SchemaMigrationTests
 
         foreach (var tableName in RetiredTables)
         {
-            await AssertRelationDoesNotExistAsync(connection, $"public.{tableName}");
+            // Quoted: an unquoted mixed-case name folds to lowercase and would
+            // never match the EF-created table, making this assertion vacuous.
+            await AssertRelationDoesNotExistAsync(connection, $"public.\"{tableName}\"");
         }
     }
 
