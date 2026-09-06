@@ -513,10 +513,16 @@ describe("Strategy Lab Workbench", () => {
     expect(config.rerunBlocked()).toBe(false);
 
     // `both` reads the raw tree, which the lake reports holds nothing at all.
-    // An answered-empty tree is exactly the case the engine would fail deep
-    // inside, so it must block the run rather than pass as "not yet known".
+    // With auto-fetch on (the default) that is the engine's job: it
+    // materializes the missing raw days before reading, so the run stays open.
     catalog.viewFor("raw").pool.set([]);
     config.changeEngine("both");
+    expect(config.rerunBlocked()).toBe(false);
+
+    // With auto-fetch off the run reads the tree as it stands. An
+    // answered-empty tree is exactly the case the engine would fail deep
+    // inside, so it must block rather than pass as "not yet known".
+    config.changeRange({ ...config.range(), autoFetch: false });
     expect(config.rerunBlocked()).toBe(true);
 
     // Until the raw tree has answered, nothing can be said about the symbol.

@@ -150,8 +150,15 @@ export class StrategyLabConfigStore {
    * "your symbol is wrong". A tree that answered *empty* does — the run would
    * read nothing — which is why this asks `resolved` rather than treating an
    * empty pool as "not yet known".
+   *
+   * Membership only matters when the run reads the tree as it stands. With
+   * auto-fetch on (the default), the engine materializes the missing days
+   * from the provider under the run's own mode before it reads
+   * (`engine.py::_materialize_missing_bars`), so a symbol the raw tree lacks
+   * is exactly what that option exists to fetch, not a reason to refuse.
    */
   readonly symbolMissingFromTree = computed(() => {
+    if (this.autoFetch()) return false;
     const mode = this.adjustmentMode();
     // See instrument-card: `viewFor` may install a resource effect, which is
     // illegal inside a reactive context.
