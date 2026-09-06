@@ -66,160 +66,6 @@ type AvailableIndicatorsResult {
   error: String
 }
 
-type BacktestRunDetailType {
-  id: Int!
-  engine: Engine!
-  source: String!
-  requestedEngine: String
-  strategyName: String!
-  symbol: String!
-  leanRunId: String
-  parameters: String
-  startDate: String!
-  endDate: String!
-  fillMode: String!
-  executedAt: Long!
-  durationMs: Long!
-  totalTrades: Int!
-  winningTrades: Int!
-  losingTrades: Int!
-  winRate: Decimal!
-  totalPnL: Decimal!
-  initialCash: Decimal!
-  finalEquity: Decimal!
-  totalFees: Decimal!
-  maxDrawdown: Decimal!
-  sharpeRatio: Decimal
-  sortinoRatio: Decimal
-  profitFactor: Decimal
-  leanStatisticsJson: String
-  leanAnalysisJson: String
-  verdictJson: String
-  verdictVersion: Int
-  verdictGrade: String
-  verdictSignal: String
-  equityCurve: BacktestRunEquityCurvesType
-  validationAnalytics: BacktestRunValidationAnalyticsType
-  metricDocumentation: [MetricDocumentationContextType!]!
-  insightSummaryJson: String
-  dataPolicyJson: String
-  dataPolicy: DataPolicyType
-  commissionPerOrder: Decimal
-  parityGroupId: String
-  trades: [BacktestRunTradeDetailType!]!
-  tradesTruncated: Boolean!
-  parityVerdicts: [BacktestRunParityVerdictType!]!
-}
-
-type BacktestRunEquityCurveType {
-  cadence: String
-  rawPoints: Int!
-  keptPoints: Int!
-  error: String
-  points: [BacktestRunEquityPointType!]!
-}
-
-type BacktestRunEquityCurvesType {
-  schemaVersion: Int!
-  error: String
-  markToMarket: BacktestRunEquityCurveType
-  realized: BacktestRunEquityCurveType
-}
-
-type BacktestRunEquityPointType {
-  t: Long!
-  e: Decimal!
-}
-
-type BacktestRunNodeType {
-  id: Int!
-  source: String!
-  engine: Engine!
-  strategyName: String!
-  leanRunId: String
-  parameters: String
-  startDate: String!
-  endDate: String!
-  executedAt: Long!
-  totalTrades: Int!
-  totalPnL: Decimal!
-  commissionPerOrder: Decimal
-  brokeragePolicy: String
-  notes: String
-  dataPolicy: DataPolicyType
-  verdictGrade: String
-  verdictSignal: String
-  parityGroupId: String
-  hasSyntheticExit: Boolean!
-}
-
-type BacktestRunNotesResult {
-  id: Int!
-  notes: String
-}
-
-type BacktestRunParityVerdictType {
-  id: Int!
-  leftExecutionId: Int!
-  rightExecutionId: Int
-  parityGroupId: String
-  verdictVersion: Int!
-  status: String!
-  verdictJson: String!
-  createdAt: Long!
-}
-
-type BacktestRunTradeDetailType {
-  id: Int!
-  tradeType: String!
-  entryTimestamp: Long!
-  exitTimestamp: Long!
-  entryPrice: Decimal!
-  exitPrice: Decimal!
-  quantity: Decimal!
-  pnL: Decimal!
-  cumulativePnL: Decimal!
-  pnlPts: Decimal!
-  pnlPct: Decimal!
-  signalReason: String!
-  isSyntheticExit: Boolean!
-}
-
-type BacktestRunValidationAnalyticsType {
-  schemaVersion: Int!
-  computedAtMs: Long!
-  engine: String!
-  error: String
-  horizons: [ValidationHorizonType!]!
-  timingCells: [ValidationTimingCellType!]!
-  seasonality: [ValidationSeasonalityMonthType!]!
-  rollingTradeStability: [ValidationRollingTradePointType!]!
-  sharpePnlDivergence: ValidationSharpePnlDivergenceType
-}
-
-"A connection to a list of items."
-type BacktestRunsConnection {
-  "Information to aid in pagination."
-  pageInfo: PageInfo!
-  "A list of edges."
-  edges: [BacktestRunsEdge!]
-  "A flattened list of the nodes."
-  nodes: [BacktestRunNodeType!]
-}
-
-"An edge in a connection."
-type BacktestRunsEdge {
-  "A cursor for use in pagination."
-  cursor: String!
-  "The item at the end of the edge."
-  node: BacktestRunNodeType!
-}
-
-type BarsSpecType {
-  timespan: String!
-  multiplier: Int!
-}
-
 type BatchResearchResultType {
   success: Boolean!
   featureName: String!
@@ -282,20 +128,6 @@ type DataLabSessionResult {
   success: Boolean!
   id: UUID
   message: String!
-}
-
-type DataPolicyType {
-  source: String!
-  symbol: String!
-  adjusted: Boolean!
-  session: String!
-  inputBars: BarsSpecType!
-  strategyBars: BarsSpecType!
-  timestampPolicy: String!
-  timezone: String!
-  providerKind: String!
-  fixtureId: String
-  fixtureSha256: String
 }
 
 type DataSufficiencyType {
@@ -589,14 +421,6 @@ type MethodologyType {
   costBpsOptions: [Float!]!
 }
 
-type MetricDocumentationContextType {
-  metricId: String!
-  variantId: String!
-  producer: String!
-  contractId: String
-  contractProvenance: String!
-}
-
 type MinuteBarResult {
   accumulatedVolume: Decimal
   timestamp: Long
@@ -647,7 +471,6 @@ type Mutation {
   updateDataLabChartSnapshot(id: UUID! chartSnapshotJson: String!): DataLabSessionResult! @cost(weight: "10")
   renameDataLabSession(id: UUID! name: String!): DataLabSessionResult! @cost(weight: "10")
   deleteDataLabSession(id: UUID!): DataLabSessionResult! @cost(weight: "10")
-  updateBacktestRunNotes(id: Int! notes: String!): BacktestRunNotesResult! @cost(weight: "10")
 }
 
 type OptionContract {
@@ -733,18 +556,6 @@ type OrderResult {
   success: Boolean!
   order: Order
   error: String
-}
-
-"Information about pagination in a connection."
-type PageInfo {
-  "Indicates whether more edges exist following the set defined by the clients arguments."
-  hasNextPage: Boolean!
-  "Indicates whether more edges exist prior the set defined by the clients arguments."
-  hasPreviousPage: Boolean!
-  "When paginating backwards, the cursor to continue."
-  startCursor: String
-  "When paginating forwards, the cursor to continue."
-  endCursor: String
 }
 
 type ParameterStabilityType {
@@ -1012,8 +823,6 @@ type Query {
   reconcilePortfolio(accountId: UUID!): ReconciliationReport! @cost(weight: "10")
   dataLabSessions(where: DataLabSessionFilterInput @cost(weight: "10") order: [DataLabSessionSortInput!] @cost(weight: "10")): [DataLabSession!]! @cost(weight: "10")
   dataLabSession(id: UUID!): DataLabSession @cost(weight: "10")
-  backtestRuns(engine: Engine symbol: String "Returns the first _n_ elements from the list." first: Int "Returns the elements in the list that come after the specified cursor." after: String "Returns the last _n_ elements from the list." last: Int "Returns the elements in the list that come before the specified cursor." before: String): BacktestRunsConnection @listSize(assumedSize: 100, slicingArguments: [ "first", "last" ], slicingArgumentDefaultValue: 25, sizedFields: [ "edges", "nodes" ], requireOneSlicingArgument: false) @cost(weight: "10")
-  backtestRun(id: Int!): BacktestRunDetailType @cost(weight: "10")
 }
 
 type Quote {
@@ -1642,64 +1451,12 @@ type ValidationAssertion {
   tolerance: Decimal
 }
 
-type ValidationHorizonType {
-  key: String!
-  label: String!
-  startMsUtc: Long!
-  endMsUtc: Long!
-  hasFullCoverage: Boolean!
-  netReturn: Float
-  tradeCount: Int!
-  winRate: Float
-  profitFactor: Float
-}
-
-type ValidationRollingTradePointType {
-  tradeNumber: Int!
-  endMsUtc: Long!
-  windowSize: Int!
-  averageReturn: Float!
-  winRate: Float!
-}
-
 type ValidationScreenType {
   name: String!
   description: String!
   passed: Boolean!
   requiredForStage1: Boolean!
   failureReasons: [String!]!
-}
-
-type ValidationSeasonalityMonthType {
-  month: Int!
-  monthLabel: String!
-  observationCount: Int!
-  medianCompoundedReturn: Float
-}
-
-type ValidationSharpePnlDivergencePointType {
-  timestampMsUtc: Long!
-  cumulativePnl: Float!
-  rollingSharpe: Float
-  isDivergence: Boolean!
-  isTrendEligible: Boolean!
-}
-
-type ValidationSharpePnlDivergenceType {
-  error: String
-  returnWindowSessions: Int!
-  trendWindowSessions: Int!
-  annualizationSessions: Int!
-  minimumObservationCount: Int!
-  dailyObservationCount: Int!
-  eligibleObservationCount: Int!
-  divergenceObservationCount: Int!
-  divergenceRatio: Float
-  longestDivergenceStreak: Int!
-  latestRollingSharpe: Float
-  latestCumulativePnl: Float
-  currentlyDiverging: Boolean
-  points: [ValidationSharpePnlDivergencePointType!]!
 }
 
 type ValidationSuiteResult {
@@ -1722,15 +1479,6 @@ type ValidationTestResult {
   durationMs: Float!
   error: String
   assertions: [ValidationAssertion!]!
-}
-
-type ValidationTimingCellType {
-  weekday: Int!
-  weekdayLabel: String!
-  hourEt: Int!
-  tradeCount: Int!
-  winRate: Float!
-  averageReturn: Float!
 }
 
 type WalkForwardResultType {
@@ -2545,11 +2293,6 @@ enum AssetType {
   OPTION
 }
 
-enum Engine {
-  PYTHON
-  LEAN
-}
-
 enum OptionType {
   CALL
   PUT
@@ -2604,9 +2347,6 @@ enum SortEnumType {
 
 "The purpose of the `cost` directive is to define a `weight` for GraphQL types, fields, and arguments. Static analysis can use these weights when calculating the overall cost of a query or response."
 directive @cost("The `weight` argument defines what value to add to the overall cost for every appearance, or possible appearance, of a type, field, argument, etc." weight: String!) on SCALAR | OBJECT | FIELD_DEFINITION | ARGUMENT_DEFINITION | ENUM | INPUT_FIELD_DEFINITION
-
-"The purpose of the `@listSize` directive is to either inform the static analysis about the size of returned lists (if that information is statically available), or to point the analysis to where to find that information."
-directive @listSize("The `assumedSize` argument can be used to statically define the maximum length of a list returned by a field." assumedSize: Int "The `slicingArguments` argument can be used to define which of the field's arguments with numeric type are slicing arguments, so that their value determines the size of the list returned by that field. It may specify a list of multiple slicing arguments." slicingArguments: [String!] "The `slicingArgumentDefaultValue` argument can be used to define a default value for a slicing argument, which is used if the argument is not present in a query." slicingArgumentDefaultValue: Int "The `sizedFields` argument can be used to define that the value of the `assumedSize` argument or of a slicing argument does not affect the size of a list returned by a field itself, but that of a list returned by one of its sub-fields." sizedFields: [String!] "The `requireOneSlicingArgument` argument can be used to inform the static analysis that it should expect that exactly one of the defined slicing arguments is present in a query. If that is not the case (i.e., if none or multiple slicing arguments are present), the static analysis may throw an error." requireOneSlicingArgument: Boolean! = true) on FIELD_DEFINITION
 
 "The `@specifiedBy` directive is used within the type system definition language to provide a URL for specifying the behavior of custom scalar definitions."
 directive @specifiedBy("The specifiedBy URL points to a human-readable specification. This field will only read a result for scalar types." url: String!) on SCALAR
