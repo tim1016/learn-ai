@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { formatBytes } from '../lib/artifact-receipt';
-import type { StorageSummaryResponse } from '../../../shared/data-lake/data-lake.types';
+import type { StorageSummaryResponse } from '../../../shared/data-lake';
 
 /**
  * What the lake actually holds: artifact counts and bytes by kind, and each

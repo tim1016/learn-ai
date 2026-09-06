@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { SYMBOL_PATTERN, buildCoverageBoard, coverageGlyph, parseSymbols } from './coverage-board';
-import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../../../shared/data-lake/data-lake.types';
+import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../../../shared/data-lake';
 
 /**
  * `SYMBOL_RE` as `PythonDataService/app/data_lake/types.py` declares it.

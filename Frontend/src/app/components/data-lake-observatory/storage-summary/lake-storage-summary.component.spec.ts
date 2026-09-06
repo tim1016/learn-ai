@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
-import type { StorageSummaryResponse } from '../../../shared/data-lake/data-lake.types';
+import type { StorageSummaryResponse } from '../../../shared/data-lake';
 import { LakeStorageSummaryComponent } from './lake-storage-summary.component';
 
 /** 09:30 America/New_York on the given May 2026 date, as int64 ms UTC. */

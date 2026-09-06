@@ -2,8 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { DataLakeService } from '../../../shared/data-lake/data-lake.service';
-import type { ArtifactDetail, DataLakeRead } from '../../../shared/data-lake/data-lake.types';
+import { ArtifactDetail, DataLakeRead, DataLakeService } from '../../../shared/data-lake';
 import { ArtifactInspectorComponent } from './artifact-inspector.component';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */

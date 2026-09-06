@@ -221,7 +221,7 @@
     text-align: right;
   }
 
-  &__coverage {
+  &__held {
     font-size: 10px;
     color: var(--text-muted);
     text-align: right;
@@ -234,6 +234,14 @@
   justify-content: space-between;
   font-size: 10px;
   color: var(--text-subtle);
+
+  &__label {
+    color: var(--text-muted);
+  }
+
+  &__span {
+    color: var(--text-subtle);
+  }
 
   &__span-val {
     color: var(--text-secondary);

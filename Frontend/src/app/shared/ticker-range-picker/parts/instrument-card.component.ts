@@ -20,6 +20,21 @@ import {
 import { TickerCatalogService } from '../../ticker-catalog';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
 
+/**
+ * Does the window on screen intersect the days the lake holds for `t`?
+ *
+ * Both sides are zero-padded `YYYY-MM-DD`, so lexicographic order is
+ * chronological order and no `Date` round-trip is needed. An unknown bound is
+ * treated as open, which keeps an unlabelled span from moving the window.
+ */
+function overlapsHeldRange(window: TickerRange, t: TickerOption): boolean {
+  const first = t.firstHeld ?? null;
+  const last = t.lastHeld ?? null;
+  if (last !== null && window.from > last) return false;
+  if (first !== null && window.to < first) return false;
+  return true;
+}
+
 const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
   ARCA: 'NYSE Arca',
   NASDAQ: 'NASDAQ',
@@ -73,12 +88,20 @@ export class InstrumentCardComponent {
     this.tickerPool().find((t) => t.symbol === this.value().symbol),
   );
 
-  readonly selectedTickerFirst = computed<string | null>(
-    () => this.selectedTicker()?.first ?? null,
+  readonly selectedFirstHeld = computed<string | null>(
+    () => this.selectedTicker()?.firstHeld ?? null,
   );
 
-  readonly selectedTickerLast = computed<string | null>(
-    () => this.selectedTicker()?.last ?? null,
+  readonly selectedLastHeld = computed<string | null>(
+    () => this.selectedTicker()?.lastHeld ?? null,
+  );
+
+  /** The lake answered, and holds nothing at all — distinct from no match. */
+  readonly catalogEmpty = computed(
+    () =>
+      this.tickerPool().length === 0 &&
+      !this.catalogLoading() &&
+      this.catalogUnavailable() === null,
   );
 
   readonly selectedExchange = computed(
@@ -164,7 +187,14 @@ export class InstrumentCardComponent {
   pickTicker(t: TickerOption): void {
     const current = this.value();
     const patch: Partial<TickerRange> = { symbol: t.symbol };
-    if (t.last) {
+    // Only move the window when the one on screen could not be run against
+    // this symbol at all. Rewriting it unconditionally would silently discard
+    // a window the operator chose — switching SPY to GLD to compare the same
+    // months would jump to the last 30 days instead of comparing anything.
+    // This branch never executed before the lake-backed catalog: no entry in
+    // the constant it replaced carried a date, so `pickTicker` only ever
+    // changed the symbol.
+    if (t.lastHeld && !overlapsHeldRange(current, t)) {
       // Sidecar validator rejects weekend endpoints with 422. ``last``
       // arrives from a data-availability response so it's usually
       // already a weekday, but ``last - 30 days`` lands on a weekend
@@ -177,13 +207,14 @@ export class InstrumentCardComponent {
       // local Friday whose UTC instant fell on Saturday, and
       // ``isoDate``'s UTC ``toISOString`` round-trip emitted the
       // Saturday day stamp (PR #346 P1 review).
-      const start = toMostRecentTradingDayIso(t.last, -30);
-      // Clamp to where coverage actually begins. A thinly-backfilled symbol
-      // (a few days in the lake) would otherwise open on a 30-day window of
-      // which almost none is readable, and the run would refuse on data the
-      // picker itself had proposed.
-      patch.from = t.first && t.first > start ? t.first : start;
-      patch.to = toMostRecentTradingDayIso(t.last);
+      const start = toMostRecentTradingDayIso(t.lastHeld, -30);
+      // Clamp to where the held range begins. A thinly-backfilled symbol
+      // would otherwise open on a 30-day window of which almost none is
+      // readable, and the run would refuse data the picker had proposed.
+      // `firstHeld` is a real trading date, so it needs no weekday walk —
+      // walking it would step before the range and defeat the clamp.
+      patch.from = t.firstHeld && t.firstHeld > start ? t.firstHeld : start;
+      patch.to = toMostRecentTradingDayIso(t.lastHeld);
     }
     this.value.set({ ...current, ...patch });
     this.closeDropdown();

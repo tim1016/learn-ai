@@ -1,4 +1,4 @@
-import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../../../shared/data-lake/data-lake.types';
+import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../../../shared/data-lake';
 
 export interface CoverageCell {
   /** Date-anchored session open, int64 ms UTC. Render in `date-et`. */

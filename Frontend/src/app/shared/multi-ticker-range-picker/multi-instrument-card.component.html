@@ -6,10 +6,35 @@
       <span class="group__count mono">({{ value().symbols.length }}/{{ tickerPool().length }})</span>
     </span>
     <span class="group__actions">
-      <button type="button" class="link-btn" (click)="selectAll()">All</button>
+      <button
+        type="button"
+        class="link-btn"
+        [disabled]="selectAllDisabled()"
+        [attr.title]="
+          selectAllDisabled()
+            ? 'The lake holds more than ' + selectAllLimit + ' instruments — add them individually.'
+            : null
+        "
+        (click)="selectAll()"
+      >
+        All
+      </button>
       <button type="button" class="link-btn" (click)="selectNone()">None</button>
     </span>
   </header>
+
+  @if (catalogLoading()) {
+    <p class="catalog-note" role="status" aria-live="polite">Loading instruments…</p>
+  } @else if (catalogUnavailable(); as reason) {
+    <p class="catalog-note" role="status" aria-live="polite">
+      {{ reason }}
+      <button type="button" class="link-btn" (click)="retryCatalog()">Retry</button>
+    </p>
+  } @else if (tickerPool().length === 0) {
+    <p class="catalog-note" role="status" aria-live="polite">
+      The data lake holds no instruments yet.
+    </p>
+  }
 
   <div class="chips-row">
     @for (s of value().symbols; track s) {

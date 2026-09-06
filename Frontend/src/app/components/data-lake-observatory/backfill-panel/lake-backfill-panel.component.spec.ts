@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService, type JobState } from '../../../services/jobs.service';
 import { DataLakeBackfillStore } from '../lib/data-lake-backfill.store';
-import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../../../shared/data-lake/data-lake.types';
+import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../../../shared/data-lake';
 import { LakeBackfillPanelComponent } from './lake-backfill-panel.component';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */

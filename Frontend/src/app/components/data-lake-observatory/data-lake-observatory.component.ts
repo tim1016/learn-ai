@@ -15,8 +15,7 @@ import {
 } from './coverage-query-bar/coverage-query-bar.component';
 import { LakeStorageSummaryComponent } from './storage-summary/lake-storage-summary.component';
 import { buildCoverageBoard, parseSymbols, type CoverageBoard } from './lib/coverage-board';
-import { DataLakeService, describeFailure } from '../../shared/data-lake/data-lake.service';
-import { MAX_TRADING_RANGE_DAYS } from '../../shared/data-lake/trading-range';
+import { DataLakeService, MAX_TRADING_RANGE_DAYS, describeFailure } from '../../shared/data-lake';
 
 const DAY_MS = 86_400_000;
 const DEFAULT_LOOKBACK_DAYS = 30;

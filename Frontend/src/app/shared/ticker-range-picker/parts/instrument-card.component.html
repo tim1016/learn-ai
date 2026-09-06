@@ -48,10 +48,10 @@
       }
 
       @if (open()) {
-        <div class="dropdown" id="ticker-range-picker-listbox" role="listbox">
-          <div class="dropdown__scroll">
+        <div class="dropdown">
+          <div class="dropdown__scroll" id="ticker-range-picker-listbox" role="listbox">
             @if (query() === "" && recentTickers().length > 0) {
-              <div class="dropdown__header">Recent</div>
+              <div class="dropdown__header" role="presentation">Recent</div>
               @for (t of recentTickers(); track trackBySymbol($index, t)) {
                 <button
                   type="button"
@@ -64,11 +64,11 @@
                   <span class="row__symbol mono">{{ t.symbol }}</span>
                   <span class="row__name">{{ t.name }}</span>
                   <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                  <span class="row__coverage mono">{{ t.last ?? "—" }}</span>
+                  <span class="row__held mono">{{ t.lastHeld ?? "—" }}</span>
                 </button>
               }
             }
-            <div class="dropdown__header">
+            <div class="dropdown__header" role="presentation">
               @if (query() === "") {
                 In the data lake
               } @else {
@@ -89,39 +89,47 @@
                 <span class="row__symbol mono">{{ t.symbol }}</span>
                 <span class="row__name">{{ t.name }}</span>
                 <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                <span class="row__coverage mono">{{ t.last ?? "—" }}</span>
+                <span class="row__held mono">{{ t.lastHeld ?? "—" }}</span>
               </button>
             }
-            @if (filteredTickers().length === 0) {
-              <div class="dropdown__empty">
-                @if (catalogUnavailable(); as reason) {
-                  {{ reason }}
-                  <button type="button" class="dropdown__retry" (click)="retryCatalog()">
-                    Retry
-                  </button>
-                } @else if (catalogLoading()) {
-                  Loading instruments…
-                } @else {
-                  The lake holds no bars for a symbol matching that.
-                  <a routerLink="/data-lake" (click)="closeDropdown()">Backfill it</a>
-                  to make it selectable.
-                }
-              </div>
-            }
           </div>
+
+          @if (filteredTickers().length === 0) {
+            <div class="dropdown__empty" role="status" aria-live="polite">
+              @if (catalogLoading()) {
+                Loading instruments…
+              } @else if (catalogUnavailable(); as reason) {
+                {{ reason }}
+                <button type="button" class="dropdown__retry" (click)="retryCatalog()">
+                  Retry
+                </button>
+              } @else if (catalogEmpty()) {
+                The data lake holds no instruments yet.
+                <a routerLink="/data-lake" (click)="closeDropdown()">Backfill one</a>
+                to make it selectable.
+              } @else {
+                The lake holds no bars for a symbol matching that.
+                <a routerLink="/data-lake" (click)="closeDropdown()">Backfill it</a>
+                to make it selectable.
+              }
+            </div>
+          }
         </div>
       }
     </div>
   </div>
 
-  @if (selectedTickerLast(); as last) {
-    <div class="instrument-foot mono">
-      <span class="instrument-foot__coverage">lake coverage</span>
+  @if (selectedLastHeld(); as lastHeld) {
+    <div
+      class="instrument-foot mono"
+      title="First and last day the lake holds for this symbol. Days in between may still be missing."
+    >
+      <span class="instrument-foot__label">days held</span>
       <span class="instrument-foot__span">
-        @if (selectedTickerFirst(); as first) {
-          <span class="instrument-foot__span-val">{{ first }}</span> →
+        @if (selectedFirstHeld(); as firstHeld) {
+          <span class="instrument-foot__span-val">{{ firstHeld }}</span> →
         }
-        <span class="instrument-foot__span-val">{{ last }}</span>
+        <span class="instrument-foot__span-val">{{ lastHeld }}</span>
       </span>
     </div>
   }

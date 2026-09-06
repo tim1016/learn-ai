@@ -42,6 +42,7 @@ export const TICKER_LABELS: Readonly<Record<string, TickerLabel>> = {
  *
  * A seed, not a guarantee: `TickerCatalogService` intersects it with what the
  * lake actually holds, so a symbol listed here that has no bars never reaches
- * the dropdown.
+ * the dropdown. QQQ used to head this list and was silently dropped by that
+ * intersection — the lake holds nothing for it.
  */
-export const SEED_RECENT_TICKERS: readonly string[] = ['SPY', 'QQQ', 'AAPL'];
+export const SEED_RECENT_TICKERS: readonly string[] = ['SPY', 'AAPL', 'GLD'];

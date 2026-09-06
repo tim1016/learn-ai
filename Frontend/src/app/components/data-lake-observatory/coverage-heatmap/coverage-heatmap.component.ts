@@ -10,7 +10,7 @@ import {
   type CoverageCell,
   type CoverageRow,
 } from '../lib/coverage-board';
-import type { CoverageStatus } from '../../../shared/data-lake/data-lake.types';
+import type { CoverageStatus } from '../../../shared/data-lake';
 
 export interface CoverageCellSelection {
   readonly symbol: string;

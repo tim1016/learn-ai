@@ -75,15 +75,15 @@ describe('TickerCatalogService', () => {
     expect(unknown.exchange).toBeUndefined();
   });
 
-  it('resolves the coverage span in ET, not the viewer zone', async () => {
+  it('resolves the days held in ET, not the viewer zone', async () => {
     const service = await catalogFor(
       summary([
         { symbol: 'SPY', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 1 },
       ]),
     );
 
-    expect(service.pool()[0].first).toBe('2024-08-06');
-    expect(service.pool()[0].last).toBe('2026-09-04');
+    expect(service.pool()[0].firstHeld).toBe('2024-08-06');
+    expect(service.pool()[0].lastHeld).toBe('2026-09-04');
   });
 
   it('drops a catalogued symbol that holds no readable day', async () => {
@@ -128,5 +128,22 @@ describe('TickerCatalogService', () => {
     await catalogFor(summary([]));
 
     expect(asked).toEqual([['usa', 'polygon_split_adjusted']]);
+  });
+
+  // Strategy Lab sends `adjusted: false` when the engine is `both`, which
+  // resolves the raw tree. A pool pinned to the split-adjusted default would
+  // offer a symbol that run then refuses for missing sessions.
+  it('re-reads the lake when the run switches trees', async () => {
+    const service = await catalogFor(summary([]));
+
+    service.useMode('raw');
+    TestBed.tick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(service.mode()).toBe('raw');
+    expect(asked).toEqual([
+      ['usa', 'polygon_split_adjusted'],
+      ['usa', 'raw'],
+    ]);
   });
 });

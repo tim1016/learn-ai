@@ -38,13 +38,13 @@ export interface TickerOption {
   /** Display label. Falls back to the symbol when nothing names it. */
   name: string;
   exchange?: string;
-  /** YYYY-MM-DD of the first day the lake holds, or null when unknown.
-   *  Clamps the window "jump to last 30 days" would otherwise propose
-   *  outside coverage for a thinly-backfilled symbol. */
-  first?: string | null;
+  /** YYYY-MM-DD of the first day the lake holds for this symbol, or null
+   *  when unknown. A bound, not a density claim — sessions inside
+   *  [firstHeld, lastHeld] may be absent. */
+  firstHeld?: string | null;
   /** YYYY-MM-DD of the last day the lake holds, or null when unknown.
-   *  Anchors "jump to the last 30 days of coverage" on pick. */
-  last?: string | null;
+   *  Anchors the window proposed when the current one holds no data. */
+  lastHeld?: string | null;
 }
 
 export type AvailabilityStatus =

@@ -3,6 +3,10 @@ import { HttpClientTestingModule } from '@angular/common/http/testing';
 import { signal, computed, type Signal } from '@angular/core';
 import { vi } from 'vitest';
 
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import { FeatureRunnerComponent } from './feature-runner.component';
 import { JobsService, type JobState } from '../../../services/jobs.service';
 
@@ -53,6 +57,11 @@ describe('FeatureRunnerComponent', () => {
       ],
       providers: [
         { provide: JobsService, useValue: jobsServiceMock },
+        // The card reads the lake catalog on init; without this the real
+        // service is constructed and fires a doomed XHR on every run.
+        provideFakeTickerCatalog(
+          fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCA' }]),
+        ),
       ],
     }).compileComponents();
 

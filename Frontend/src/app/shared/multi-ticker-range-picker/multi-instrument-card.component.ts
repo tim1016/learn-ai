@@ -33,6 +33,20 @@ export class MultiInstrumentCardComponent {
 
   private readonly catalog = inject(TickerCatalogService);
   readonly tickerPool = this.catalog.pool;
+  readonly catalogLoading = this.catalog.loading;
+  readonly catalogUnavailable = this.catalog.unavailable;
+
+  /**
+   * A universe of every instrument in the lake is a batch nobody meant to
+   * launch. "All" used to mean three symbols; the lake grows, so the button
+   * stops being a shortcut past some size and the operator picks explicitly.
+   */
+  readonly selectAllLimit = 12;
+  readonly selectAllDisabled = computed(() => this.tickerPool().length > this.selectAllLimit);
+
+  retryCatalog(): void {
+    this.catalog.reload();
+  }
 
   readonly query = signal('');
 
@@ -64,6 +78,7 @@ export class MultiInstrumentCardComponent {
   }
 
   selectAll(): void {
+    if (this.selectAllDisabled()) return;
     const all = this.tickerPool().map((t) => t.symbol);
     if (all.length === 0) return;
     this.value.set({ ...this.value(), symbols: all });

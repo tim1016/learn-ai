@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DataPolicy } from "../../../models/data-policy";
 import type { EngineChoice, StrategyInfo } from "../strategy-lab.models";
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from "../../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail.component";
 
 const STRATEGY: StrategyInfo = {
@@ -42,7 +46,14 @@ async function createRail(
   TestBed.resetTestingModule();
   await TestBed.configureTestingModule({
     imports: [StrategyLabConfigRailComponent],
-    providers: [provideZonelessChangeDetection()],
+    providers: [
+      provideZonelessChangeDetection(),
+      // The card reads the lake catalog on init; without this the real
+      // service is constructed and fires a doomed XHR on every run.
+      provideFakeTickerCatalog(
+        fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" }]),
+      ),
+    ],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabConfigRailComponent);
   fixture.componentRef.setInput("collapsed", collapsed);
