@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from app.config import active_root_id, settings
+from app.config import active_root_id
 from app.data_lake.types import polygon_mode_for
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
@@ -84,13 +84,13 @@ from app.lean_sidecar.trusted_templates import (
     trusted_template_definition,
 )
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
+from app.research.backtest_runs.service import persist_run_payload
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.lean_sidecar_persistence import (
     StaleLeanPersistenceSourceError,
     _algorithm_name_for_run,
     assert_lean_persistence_source_current,
     build_persist_payload,
-    persist_via_dotnet,
 )
 from app.utils.timestamps import datetime_at_ms, now_ms_utc, to_ms_utc
 
@@ -116,7 +116,6 @@ async def _persist_completed_run(
     workspace: Workspace,
     manifest: RunManifest,
     response: LaunchResponse,
-    backend_url: str,
 ) -> int | None:
     """Persist one launched result even if the worker source changed mid-run."""
     _warn_if_persistence_source_changed(request.run_id)
@@ -143,7 +142,7 @@ async def _persist_completed_run(
         requested_engine=request.requested_engine,
         parameters=dict(request.strategy_parameters),
     )
-    return await persist_via_dotnet(payload=persist_payload, base_url=backend_url)
+    return await persist_run_payload(persist_payload)
 
 
 # Phase 2a uses the same in-process launcher version label as Phase 1.
@@ -981,10 +980,10 @@ async def run_trusted_sample(
     # leave it None is via ``launcher_exc``, which we re-raised above.
     assert response is not None
 
-    # Task 1.10 — POST the run to .NET for persistence. This must happen
-    # AFTER the manifest is finalized so workspace_path is stable. A
-    # persistence failure is logged but does NOT abort the run — the
-    # workspace artifacts on disk are the authoritative record.
+    # Persist the run. This must happen AFTER the manifest is finalized so
+    # workspace_path is stable. A persistence failure is logged but does NOT
+    # abort the run — the workspace artifacts on disk are the authoritative
+    # record.
     # The source guard above rejects *new* work before staging. If the file
     # changes while LEAN is already running, the launched worker and its
     # normalized result still form one coherent completed run; persist that
@@ -996,7 +995,6 @@ async def run_trusted_sample(
         workspace=workspace,
         manifest=manifest,
         response=response,
-        backend_url=settings.BACKEND_URL,
     )
 
     return TrustedRunResult(

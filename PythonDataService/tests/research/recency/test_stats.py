@@ -77,13 +77,14 @@ class TestTradeDollarPnl:
         assert trade_dollar_pnl(trade, commission_per_order=0.0) == trade_dollar_pnl(trade)
 
     def test_matches_the_canonical_engine_flat_fee_formula(self) -> None:
-        """Parity with app.routers.engine._persisted_trade_net_pnl's flat-fee
+        """Parity with the engine payload's ``persisted_trade_net_pnl`` flat-fee
         branch (compatibility_profile=None) — the codebase's one canonical
         formula for round-trip net PnL under a flat per-order commission
         (CLAUDE.md guiding philosophy #5)."""
         from decimal import Decimal
 
-        from app.routers.engine import EngineTradeResponse, _persisted_trade_net_pnl
+        from app.research.backtest_runs.engine_payload import persisted_trade_net_pnl
+        from app.routers.engine import EngineTradeResponse
 
         commission_per_order = 1.5
         engine_trade = EngineTradeResponse(
@@ -97,7 +98,7 @@ class TestTradeDollarPnl:
             pnl_pct=0.025,
             result="win",
         )
-        expected = _persisted_trade_net_pnl(
+        expected = persisted_trade_net_pnl(
             trade=engine_trade, commission_per_order=commission_per_order, compatibility_profile=None
         )
         trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 2), pnl_pts=2.5, pnl_pct=0.025, quantity=10)

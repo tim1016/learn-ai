@@ -116,7 +116,7 @@ def _run() -> object:
 @pytest.fixture(autouse=True)
 def offline_persistence(monkeypatch):
     """The .NET study save is best-effort and not what these tests are about."""
-    monkeypatch.setattr(engine_router, "_save_study_sync", lambda **kwargs: None)
+    monkeypatch.setattr(engine_router, "_persist_run_sync", lambda **kwargs: None)
 
 
 @pytest.fixture

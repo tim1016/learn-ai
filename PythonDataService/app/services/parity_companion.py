@@ -4,21 +4,23 @@ Every persisted Python engine run gets a parity disposition:
 
 - Eligible runs (registered ``lean_twin``, raw bars, minute resolution,
   explicit window) spawn an async LEAN run through the public jobs
-  surface, sharing a ``parity_group_id``. A ``pending`` ParityVerdict
-  row is created immediately; the .NET persist step freezes it to
+  surface, sharing a ``parity_group_id``. A ``pending`` parity verdict
+  row is written immediately; the companion's persist step freezes it to
   ``agree``/``diverged`` when the LEAN row lands.
 - Ineligible runs get an honest ``unavailable`` verdict row carrying the
   reason — never a fake pass, never silence.
 
 Failure surfacing: the LEAN job worker calls :func:`mark_parity_failed`
 when the companion run fails or its persistence returns no row id,
-transitioning ``pending → run_failed | persist_failed``. The .NET
-endpoint makes that transition conditional, so a verdict that already
-froze is never overwritten (first terminal state wins).
+transitioning ``pending → run_failed | persist_failed``. The repository
+makes that transition conditional, so a verdict that already froze is
+never overwritten (first terminal state wins).
 
-Every HTTP call here is best-effort with a short timeout: parity
-bookkeeping must never fail or slow the Python run that triggered it.
-A lost ``pending`` row degrades to "no parity info" on the report.
+The verdict rows are Python-owned direct writes (PRD #1929); the companion
+launch still goes through the .NET jobs surface over HTTP. Everything here
+is best-effort: parity bookkeeping must never fail or slow the Python run
+that triggered it. A lost ``pending`` row degrades to "no parity info" on
+the report.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ import httpx
 
 from app.config import settings
 from app.lean_sidecar.config import COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
+from app.research.backtest_runs.service import mark_parity_failed_sync, record_parity_disposition_sync
 
 if TYPE_CHECKING:
     from app.engine.strategy.registry import StrategyRegistration
@@ -193,24 +196,10 @@ def dispatch_parity_companion(
 def mark_parity_failed(parity_group_id: str, *, status: str, detail: str) -> None:
     """Transition the group's verdict ``pending → run_failed|persist_failed``.
 
-    No-ops (server-side) when the verdict already reached a terminal
-    state — first terminal state wins. Never raises.
+    No-ops when the verdict already reached a terminal state — first
+    terminal state wins. Never raises.
     """
-    try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
-            response = client.post(
-                f"{settings.BACKEND_URL}/api/parity-verdicts/{parity_group_id}/mark-failed",
-                json={"status": status, "detail": detail},
-            )
-        if response.status_code >= 300:
-            logger.warning(
-                "[PARITY] mark-failed rejected for %s: %s %s",
-                parity_group_id,
-                response.status_code,
-                response.text[:200],
-            )
-    except httpx.HTTPError:
-        logger.exception("[PARITY] mark-failed request failed for %s", parity_group_id)
+    mark_parity_failed_sync(parity_group_id, status=status, detail=detail)
 
 
 def _create_verdict_row(
@@ -220,26 +209,12 @@ def _create_verdict_row(
     status: str,
     verdict: dict[str, Any],
 ) -> None:
-    try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
-            response = client.post(
-                f"{settings.BACKEND_URL}/api/parity-verdicts",
-                json={
-                    "parityGroupId": parity_group_id,
-                    "leftExecutionId": left_execution_id,
-                    "status": status,
-                    "verdictJson": json.dumps(verdict),
-                },
-            )
-        if response.status_code >= 300:
-            logger.warning(
-                "[PARITY] verdict-row create rejected for %s: %s %s",
-                parity_group_id,
-                response.status_code,
-                response.text[:200],
-            )
-    except httpx.HTTPError:
-        logger.exception("[PARITY] verdict-row create failed for %s", parity_group_id)
+    record_parity_disposition_sync(
+        parity_group_id=parity_group_id,
+        left_run_id=left_execution_id,
+        status=status,
+        verdict_json=json.dumps(verdict),
+    )
 
 
 def _launch_companion_job(

@@ -89,21 +89,19 @@ async def test_completed_run_persists_after_source_changes_mid_run(
     def reject_stale_source() -> None:
         raise StaleLeanPersistenceSourceError("restart the Python data service")
 
-    async def capture_persist(*, payload, base_url: str) -> int:
+    async def capture_persist(payload) -> int:
         assert payload is persisted_payload
-        assert base_url == "http://backend"
         return 73
 
     monkeypatch.setattr(service, "assert_lean_persistence_source_current", reject_stale_source)
     monkeypatch.setattr(service, "build_persist_payload", lambda **_kwargs: persisted_payload)
-    monkeypatch.setattr(service, "persist_via_dotnet", capture_persist)
+    monkeypatch.setattr(service, "persist_run_payload", capture_persist)
 
     study_id = await service._persist_completed_run(
         request=request,
         workspace=SimpleNamespace(root=tmp_path),
         manifest=SimpleNamespace(),
         response=SimpleNamespace(is_clean=True, lean_errors={}),
-        backend_url="http://backend",
     )
 
     assert study_id == 73

@@ -2105,6 +2105,434 @@
         "title": "BacktestResultResponse",
         "type": "object"
       },
+      "BacktestRunDetailResponse": {
+        "description": "Everything the run report renders, plus the bounded trade evidence.",
+        "properties": {
+          "commissionPerOrder": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commissionperorder"
+          },
+          "dataPolicy": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datapolicy"
+          },
+          "durationMs": {
+            "title": "Durationms",
+            "type": "integer"
+          },
+          "endDate": {
+            "title": "Enddate",
+            "type": "string"
+          },
+          "engine": {
+            "enum": [
+              "PYTHON",
+              "LEAN"
+            ],
+            "title": "Engine",
+            "type": "string"
+          },
+          "equityCurve": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equitycurve"
+          },
+          "executedAt": {
+            "title": "Executedat",
+            "type": "integer"
+          },
+          "fillMode": {
+            "title": "Fillmode",
+            "type": "string"
+          },
+          "finalEquity": {
+            "title": "Finalequity",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "initialCash": {
+            "title": "Initialcash",
+            "type": "number"
+          },
+          "insightSummaryJson": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insightsummaryjson"
+          },
+          "leanAnalysisJson": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leananalysisjson"
+          },
+          "leanRunId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leanrunid"
+          },
+          "leanStatisticsJson": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leanstatisticsjson"
+          },
+          "losingTrades": {
+            "title": "Losingtrades",
+            "type": "integer"
+          },
+          "maxDrawdown": {
+            "title": "Maxdrawdown",
+            "type": "number"
+          },
+          "metricDocumentation": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Metricdocumentation",
+            "type": "array"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "string"
+          },
+          "parityGroupId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paritygroupid"
+          },
+          "parityVerdicts": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestRunParityVerdictResponse"
+            },
+            "title": "Parityverdicts",
+            "type": "array"
+          },
+          "profitFactor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profitfactor"
+          },
+          "requestedEngine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requestedengine"
+          },
+          "sharpeRatio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharperatio"
+          },
+          "sortinoRatio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sortinoratio"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "startDate": {
+            "title": "Startdate",
+            "type": "string"
+          },
+          "strategyName": {
+            "title": "Strategyname",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "totalFees": {
+            "title": "Totalfees",
+            "type": "number"
+          },
+          "totalPnL": {
+            "title": "Totalpnl",
+            "type": "number"
+          },
+          "totalTrades": {
+            "title": "Totaltrades",
+            "type": "integer"
+          },
+          "trades": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestRunTradeResponse"
+            },
+            "title": "Trades",
+            "type": "array"
+          },
+          "tradesTruncated": {
+            "title": "Tradestruncated",
+            "type": "boolean"
+          },
+          "validationAnalytics": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validationanalytics"
+          },
+          "verdictGrade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdictgrade"
+          },
+          "verdictJson": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdictjson"
+          },
+          "verdictSignal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdictsignal"
+          },
+          "verdictVersion": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdictversion"
+          },
+          "winRate": {
+            "title": "Winrate",
+            "type": "number"
+          },
+          "winningTrades": {
+            "title": "Winningtrades",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "engine",
+          "source",
+          "requestedEngine",
+          "strategyName",
+          "symbol",
+          "leanRunId",
+          "parameters",
+          "startDate",
+          "endDate",
+          "fillMode",
+          "executedAt",
+          "durationMs",
+          "totalTrades",
+          "winningTrades",
+          "losingTrades",
+          "winRate",
+          "totalPnL",
+          "initialCash",
+          "commissionPerOrder",
+          "finalEquity",
+          "totalFees",
+          "maxDrawdown",
+          "sharpeRatio",
+          "sortinoRatio",
+          "profitFactor",
+          "leanStatisticsJson",
+          "leanAnalysisJson",
+          "verdictJson",
+          "verdictVersion",
+          "verdictGrade",
+          "verdictSignal",
+          "equityCurve",
+          "validationAnalytics",
+          "metricDocumentation",
+          "dataPolicy",
+          "insightSummaryJson",
+          "parityGroupId",
+          "notes",
+          "trades",
+          "tradesTruncated",
+          "parityVerdicts"
+        ],
+        "title": "BacktestRunDetailResponse",
+        "type": "object"
+      },
+      "BacktestRunNotesRequest": {
+        "properties": {
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "title": "BacktestRunNotesRequest",
+        "type": "object"
+      },
+      "BacktestRunNotesResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "required": [
+          "id",
+          "notes"
+        ],
+        "title": "BacktestRunNotesResponse",
+        "type": "object"
+      },
+      "BacktestRunParityVerdictResponse": {
+        "properties": {
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "verdictJson": {
+            "title": "Verdictjson",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "verdictJson",
+          "createdAt"
+        ],
+        "title": "BacktestRunParityVerdictResponse",
+        "type": "object"
+      },
       "BacktestRunResult": {
         "additionalProperties": false,
         "properties": {
@@ -2172,6 +2600,238 @@
           "metrics"
         ],
         "title": "BacktestRunResult",
+        "type": "object"
+      },
+      "BacktestRunSummaryResponse": {
+        "description": "One run-history row.",
+        "properties": {
+          "brokeragePolicy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brokeragepolicy"
+          },
+          "commissionPerOrder": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commissionperorder"
+          },
+          "dataPolicy": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datapolicy"
+          },
+          "endDate": {
+            "title": "Enddate",
+            "type": "string"
+          },
+          "engine": {
+            "enum": [
+              "PYTHON",
+              "LEAN"
+            ],
+            "title": "Engine",
+            "type": "string"
+          },
+          "executedAt": {
+            "title": "Executedat",
+            "type": "integer"
+          },
+          "hasSyntheticExit": {
+            "title": "Hassyntheticexit",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "leanRunId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leanrunid"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "string"
+          },
+          "parityGroupId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paritygroupid"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "startDate": {
+            "title": "Startdate",
+            "type": "string"
+          },
+          "strategyName": {
+            "title": "Strategyname",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "totalPnL": {
+            "title": "Totalpnl",
+            "type": "number"
+          },
+          "totalTrades": {
+            "title": "Totaltrades",
+            "type": "integer"
+          },
+          "verdictGrade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdictgrade"
+          },
+          "verdictSignal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdictsignal"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "engine",
+          "strategyName",
+          "symbol",
+          "leanRunId",
+          "parameters",
+          "startDate",
+          "endDate",
+          "executedAt",
+          "totalTrades",
+          "totalPnL",
+          "commissionPerOrder",
+          "brokeragePolicy",
+          "notes",
+          "dataPolicy",
+          "verdictGrade",
+          "verdictSignal",
+          "parityGroupId",
+          "hasSyntheticExit"
+        ],
+        "title": "BacktestRunSummaryResponse",
+        "type": "object"
+      },
+      "BacktestRunTradeResponse": {
+        "properties": {
+          "entryPrice": {
+            "title": "Entryprice",
+            "type": "number"
+          },
+          "entryTimestamp": {
+            "title": "Entrytimestamp",
+            "type": "integer"
+          },
+          "exitPrice": {
+            "title": "Exitprice",
+            "type": "number"
+          },
+          "exitTimestamp": {
+            "title": "Exittimestamp",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "isSyntheticExit": {
+            "title": "Issyntheticexit",
+            "type": "boolean"
+          },
+          "pnL": {
+            "title": "Pnl",
+            "type": "number"
+          },
+          "pnlPct": {
+            "title": "Pnlpct",
+            "type": "number"
+          },
+          "pnlPts": {
+            "title": "Pnlpts",
+            "type": "number"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "signalReason": {
+            "title": "Signalreason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "entryTimestamp",
+          "exitTimestamp",
+          "entryPrice",
+          "exitPrice",
+          "quantity",
+          "pnL",
+          "pnlPts",
+          "pnlPct",
+          "signalReason",
+          "isSyntheticExit"
+        ],
+        "title": "BacktestRunTradeResponse",
         "type": "object"
       },
       "BarPayload": {
@@ -48907,6 +49567,205 @@
         "summary": "Quantlib Strategy",
         "tags": [
           "quantlib"
+        ]
+      }
+    },
+    "/api/research/backtest-runs": {
+      "get": {
+        "description": "Run history, newest first.",
+        "operationId": "list_backtest_runs_api_research_backtest_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "engine",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PYTHON",
+                    "LEAN"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Engine"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BacktestRunSummaryResponse"
+                  },
+                  "title": "Response List Backtest Runs Api Research Backtest Runs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Backtest Runs",
+        "tags": [
+          "research-backtest-runs"
+        ]
+      }
+    },
+    "/api/research/backtest-runs/{run_id}": {
+      "delete": {
+        "description": "Hard-delete a run; a run backing a live Recency Chart run must go through Recency soft-delete.",
+        "operationId": "delete_backtest_run_api_research_backtest_runs__run_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Backtest Run",
+        "tags": [
+          "research-backtest-runs"
+        ]
+      },
+      "get": {
+        "description": "One run with its report evidence; the trade list says when it is truncated.",
+        "operationId": "get_backtest_run_api_research_backtest_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestRunDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Backtest Run",
+        "tags": [
+          "research-backtest-runs"
+        ]
+      }
+    },
+    "/api/research/backtest-runs/{run_id}/notes": {
+      "patch": {
+        "operationId": "update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BacktestRunNotesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestRunNotesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Backtest Run Notes",
+        "tags": [
+          "research-backtest-runs"
         ]
       }
     },

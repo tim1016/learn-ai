@@ -1,9 +1,11 @@
-"""Persistence layer: normalize LEAN sidecar output into StrategyExecution rows.
+"""Persistence layer: normalize LEAN sidecar output into a backtest-run persist payload.
 
 Consumed by lean_sidecar_service.run_trusted_sample() at the tail of a successful
 run. Reads the normalized result.json, pairs filled order events into round-trip
 trades, synthesizes a mark-to-market exit for any half-open position, computes
-aggregate KPIs, and writes one StrategyExecution row + N BacktestTrade rows.
+aggregate KPIs, and shapes the canonical persist payload that
+``app.research.backtest_runs.service.persist_run_payload`` writes as one run row
+plus N trade rows (PRD #1929).
 """
 
 from __future__ import annotations
@@ -17,8 +19,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-
-import httpx
 
 from app.engine.results.equity_downsample import (
     RealizedEquityTrade,
@@ -34,6 +34,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.research.backtest_runs.records import utc_date_iso
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.engine_validation_analytics import (
@@ -546,19 +547,19 @@ def build_persist_payload(
     requested_engine: Literal["python", "lean", "both"] = "lean",
     parameters: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a JSON-serializable payload to POST to the .NET persist endpoint.
+    """Build the canonical persist payload for a LEAN run.
 
     This function is pure: it reads normalized/result.json from disk and computes
     aggregates + paired trades using pair_order_events, finalize_open_lot_as_synthetic,
     and compute_aggregates. It performs no DB writes and no HTTP calls.
 
-    The .NET endpoint at POST /api/backtest-runs/persist-lean is responsible for
-    persisting the payload into the StrategyExecution + BacktestTrade tables.
+    ``app.research.backtest_runs.service.persist_run_payload`` writes the payload
+    as one run row plus its trades.
 
     If the workspace has no normalized/result.json (LEAN crashed before output),
     returns a "failed run" payload with TotalTrades=0 and a frozen Reject
-    verdict. The .NET endpoint should still persist this so the failed run
-    appears in the unified history.
+    verdict. It is persisted like any other so the failed run appears in the
+    unified history.
 
     All timestamps in the returned payload are int64 ms UTC (canonical).
 
@@ -697,8 +698,8 @@ def build_persist_payload(
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,
-        "start_date_ms": start_date_ms,
-        "end_date_ms": end_date_ms,
+        "start_date": utc_date_iso(start_date_ms),
+        "end_date": utc_date_iso(end_date_ms),
         "total_trades": agg.total_trades,
         "winning_trades": agg.winning_trades,
         "losing_trades": agg.losing_trades,
@@ -915,8 +916,8 @@ def _failed_run_payload(
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,
-        "start_date_ms": start_date_ms,
-        "end_date_ms": end_date_ms,
+        "start_date": utc_date_iso(start_date_ms),
+        "end_date": utc_date_iso(end_date_ms),
         "total_trades": 0,
         "winning_trades": 0,
         "losing_trades": 0,
@@ -996,47 +997,3 @@ def _run_verdict_fields(
         "verdict_grade": verdict.grade,
         "verdict_signal": verdict.signal,
     }
-
-
-async def persist_via_dotnet(
-    payload: dict[str, Any],
-    base_url: str,
-    *,
-    timeout_seconds: float = 30.0,
-) -> int | None:
-    """POST a LEAN run payload to the .NET backend for persistence.
-
-    Returns the assigned StrategyExecution.Id on success, or None on any
-    HTTP/network failure. Persistence failure must not abort the LEAN run —
-    the artifacts on disk are the authoritative record and the backfill CLI
-    (Task 5.1) can be used to retry later.
-    """
-    url = f"{base_url.rstrip('/')}/api/backtest-runs/persist-lean"
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return int(data["strategy_execution_id"])
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "persist-lean returned HTTP %s for run %s: %s",
-            exc.response.status_code,
-            payload.get("lean_run_id"),
-            exc.response.text[:500],
-        )
-        return None
-    except httpx.HTTPError as exc:
-        logger.warning(
-            "persist-lean transport error for run %s: %s",
-            payload.get("lean_run_id"),
-            exc,
-        )
-        return None
-    except (KeyError, ValueError) as exc:
-        logger.warning(
-            "persist-lean response malformed for run %s: %s",
-            payload.get("lean_run_id"),
-            exc,
-        )
-        return None

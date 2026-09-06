@@ -391,8 +391,8 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert payload["strategy_name"] == "ema_crossover"
     assert payload["symbol"] == "SPY"
     assert payload["starting_cash"] == 100_000.0
-    assert payload["start_date_ms"] == 1_700_000_000_000
-    assert payload["end_date_ms"] == 1_700_000_600_000
+    assert payload["start_date"] == "2023-11-14"
+    assert payload["end_date"] == "2023-11-14"
     assert payload["total_trades"] == 1
     assert payload["winning_trades"] == 1
     assert payload["total_pnl"] == pytest.approx(9.0)
@@ -934,11 +934,6 @@ def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path)
 
 
 # ---------------------------------------------------------------------------
-# persist_via_dotnet tests
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # PR B P1 fix — manifest-forwarded brokerage_policy + data_policy_json
 # ---------------------------------------------------------------------------
 
@@ -1449,85 +1444,9 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     # A failed run's lean_statistics above is an all-zero placeholder, not a
     # normalized result — recording sharpe.lean_native.v1 "recorded" provenance
     # against it would claim LEAN computed a real Sharpe value. No context is
-    # recorded; the Backend infers provenance from execution.Source instead.
+    # recorded; the run record fills in the source's catalogue context instead.
     assert json.loads(payload["metric_documentation_json"]) == []
     equity = json.loads(payload["equity_curve_json"])
     assert equity["schema_version"] == 2
     assert equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"
     assert equity["realized"]["error"] == "No normalized/result.json — LEAN run did not produce output"
-
-
-@pytest.mark.asyncio
-async def test_persist_via_dotnet_posts_payload_and_returns_id() -> None:
-    import respx
-    from httpx import Response
-
-    from app.services.lean_sidecar_persistence import persist_via_dotnet
-
-    with respx.mock:
-        route = respx.post("http://backend/api/backtest-runs/persist-lean").mock(
-            return_value=Response(200, json={"strategy_execution_id": 42})
-        )
-
-        payload: dict = {
-            "lean_run_id": "ui_run_test",
-            "source": "lean-sidecar",
-            "strategy_name": "ema_crossover",
-            "symbol": "SPY",
-            "starting_cash": 100_000.0,
-            "start_date_ms": 1_700_000_000_000,
-            "end_date_ms": 1_700_000_600_000,
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "total_pnl": 0.0,
-            "total_fees": 0.0,
-            "final_equity": 100_000.0,
-            "win_rate": 0.0,
-            "trades": [],
-            "lean_statistics": {},
-        }
-
-        strategy_execution_id = await persist_via_dotnet(payload, base_url="http://backend")
-
-    assert strategy_execution_id == 42
-    assert route.called
-
-
-@pytest.mark.asyncio
-async def test_persist_via_dotnet_returns_none_on_http_error() -> None:
-    import respx
-    from httpx import Response
-
-    from app.services.lean_sidecar_persistence import persist_via_dotnet
-
-    with respx.mock:
-        respx.post("http://backend/api/backtest-runs/persist-lean").mock(
-            return_value=Response(500, json={"error": "boom"})
-        )
-
-        result = await persist_via_dotnet(
-            {"lean_run_id": "ui_run_test", "source": "lean-sidecar", "trades": []},
-            base_url="http://backend",
-        )
-
-    # Must not raise; persistence failure should not abort the LEAN run.
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_persist_via_dotnet_returns_none_on_connection_error() -> None:
-    import respx
-    from httpx import ConnectError
-
-    from app.services.lean_sidecar_persistence import persist_via_dotnet
-
-    with respx.mock:
-        respx.post("http://backend/api/backtest-runs/persist-lean").mock(side_effect=ConnectError("connection refused"))
-
-        result = await persist_via_dotnet(
-            {"lean_run_id": "ui_run_test", "source": "lean-sidecar", "trades": []},
-            base_url="http://backend",
-        )
-
-    assert result is None

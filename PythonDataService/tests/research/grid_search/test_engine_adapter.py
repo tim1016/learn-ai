@@ -35,7 +35,7 @@ def lake(tmp_path: Path, monkeypatch) -> Path:
     lake_dir = write_root / lake_subpath("polygon_split_adjusted")
     lake_dir.mkdir(parents=True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(engine_router, "_save_study_sync", lambda **kwargs: None)
+    monkeypatch.setattr(engine_router, "_persist_run_sync", lambda **kwargs: None)
     for day in SESSIONS:
         seed_store_day(lake_dir, "SPY", day)
     return lake_dir

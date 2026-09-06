@@ -7,7 +7,7 @@ side of the contract: the Python ``EngineBacktestRequest`` accepts a
 used, and the ``EngineBacktestResponse`` echoes the post-normalization
 value back to the caller.
 
-The full engine run (which writes the row through the .NET ``/api/studies``
+The full engine run (which writes the row through the Python-owned run tables
 endpoint) is gated behind the longer integration test in
 ``test_lean_engine_polygon_parity.py``; this file only validates the
 schema layer.
@@ -174,9 +174,9 @@ async def test_engine_backtest_defers_data_policy_when_symbol_absent() -> None:
     The synthesizer leaves ``data_policy=None`` in that case rather
     than raising — request validation must not break legacy callers
     before the strategy registry has a chance to fill in the default.
-    Downstream (``_save_study_sync``, .NET persistence layer) handles
-    the ``None`` case by either emitting ``null`` for ``dataPolicyJson``
-    or synthesizing from the resolved symbol on the .NET side.
+    Downstream (``_persist_run_sync``, the run record) handles the
+    ``None`` case by synthesizing a legacy policy block from the resolved
+    symbol.
     """
     from app.routers.engine import EngineBacktestRequest
 
