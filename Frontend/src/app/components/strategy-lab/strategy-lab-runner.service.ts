@@ -342,6 +342,9 @@ export class StrategyLabRunner {
       const job = own === null ? (active.length === 1 ? active[0] : undefined) : active.find((candidate) => candidate.id === own);
       if (job === undefined) return;
       this.adoptionSettled = true;
+      // A fallback-adopted job becomes this tab's own, so a later reload
+      // prefers it even once other experiments are active.
+      rememberOwnJob(job.id);
       if (job.type === "engine_backtest") {
         this.beginRun("Reattaching to backtest…", "");
         this.engineJobId.set(job.id);

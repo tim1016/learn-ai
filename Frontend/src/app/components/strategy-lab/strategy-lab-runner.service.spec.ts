@@ -422,6 +422,17 @@ describe("StrategyLab configuration and runner", () => {
       expect(runner.engineBusy()).toBe(true);
     });
 
+    it("remembers a job adopted by fallback so a later reload prefers it over newer experiments", () => {
+      putJob(makeJobState({ id: "solo", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(runner.running()).toBe(true);
+
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "later", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(reloaded.running()).toBe(true);
+    });
+
     it("navigates to the produced study once an adopted engine_backtest job completes", async () => {
       fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
       putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "running" }));

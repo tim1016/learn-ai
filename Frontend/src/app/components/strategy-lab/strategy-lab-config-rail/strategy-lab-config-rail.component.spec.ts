@@ -136,6 +136,24 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(runRequested).not.toHaveBeenCalled();
   });
 
+  it("blocks Run while another tab's backtest is busy, but keeps launcher recovery clickable", async () => {
+    const fixture = await createRail();
+    fixture.componentRef.setInput("engineBusy", true);
+    fixture.componentRef.setInput("launcherBlocksRun", true);
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+
+    const launcher = root.querySelector<HTMLButtonElement>(".run-button");
+    expect(launcher?.textContent).toContain("Check launcher");
+    expect(launcher?.disabled).toBe(false);
+
+    fixture.componentRef.setInput("launcherBlocksRun", false);
+    fixture.detectChanges();
+    const run = root.querySelector<HTMLButtonElement>(".run-button");
+    expect(run?.textContent).toContain("Run validation");
+    expect(run?.disabled).toBe(true);
+  });
+
   it("disables rerun when the restored strategy is no longer selectable", async () => {
     const fixture = await createRail();
     fixture.componentRef.setInput("launcherBlocksRun", false);
