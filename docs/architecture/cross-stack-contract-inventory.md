@@ -21,7 +21,6 @@ preference for one stack, determines which generated contract applies.
 
 | Browser owner | GraphQL operation / .NET owner | Python dependency | Contract status |
 | --- | --- | --- | --- |
-| `spec-strategy.service.ts` | `runSpecStrategyBacktest` / `SpecStrategyMutation` | `/api/spec-strategy/backtest` | Generated GraphQL operation result plus generated OpenAPI strategy input aliases; shared fixture verifies the Python → .NET response and GraphQL projection. |
 | `graphql/queries.ts` consumers | `getOrFetchStockAggregates` / `Query` + `PolygonService` | `/api/aggregates/fetch` | Python response is typed at the Pydantic boundary; shared fixture verifies Python → .NET deserialization and `int64 ms UTC` bars. |
 | `backtest-runs.query.ts`, Engine Lab history/report components | Backtest run queries and notes mutation | Backend persistence/projections; no live Python request on the read path | GraphQL-only today; listed so it is not misclassified as a FastAPI relay. |
 
@@ -31,6 +30,7 @@ preference for one stack, determines which generated contract applies.
 | --- | --- | --- |
 | `broker.service.ts`, `broker-health.service.ts`, broker control components | `/api/broker/**`, `/api/accounts/**` | OpenAPI source of truth. `DataPlaneHealth` is now a generated alias; broker SSE streams remain the documented non-OpenAPI exception. |
 | bot-control/account-desk stores | `/api/brokers/**`, `/api/accounts/**` | Direct FastAPI control-plane surface, protected by the proxy intent/secret policy. Legacy lifecycle-projection routes were retired in #1224; the `/api/live-runs/**`, `/api/live-instances/**` and `/api/broker/session-mirror/**` families and their Angular owners were retired with the IBKR control plane (#1813). |
+| `spec-strategy.service.ts` | `/api/spec-strategy/backtest` | Direct FastAPI since #1963 (the .NET pass-through mutation was retired); request and response are generated OpenAPI aliases in `spec-strategy.models.ts`, and the shared fixture pins the Python response. |
 | `strategy-validation.service.ts` | `/api/strategy-validation/**`, `/api/engine/strategies`, `/api/spec-strategy/fixtures/**` | Direct FastAPI; generated schema is available for the next typed migration slices. |
 | `strategy-runs.service.ts`, `baselines.service.ts`, `monte-carlo.service.ts`, `walk-forward.service.ts` | `/api/research/strategy-runs/**` | Direct FastAPI research-run contracts. |
 | `lean-sidecar.service.ts` | `/api/lean-sidecar/**` | Direct FastAPI comparison boundary. |

@@ -1,17 +1,14 @@
 /**
  * Contract-owned types used by the strategy-spec editor.
  *
- * Input shapes are aliases of the generated PythonDataService OpenAPI client.
- * The backtest result and mutation variables are aliases of the generated
- * GraphQL operation. This module only gives those generated contracts the
- * editor's stable, readable names; it does not mirror their fields.
+ * Every alias is a generated PythonDataService OpenAPI type: the spec input
+ * shapes and, since #1963, the request and response the runner exchanges with
+ * `POST /api/spec-strategy/backtest` directly. This module only gives those
+ * generated contracts the editor's stable, readable names; it does not mirror
+ * their fields.
  */
 
 import type { components } from '../api/broker.types';
-import type {
-  RunSpecStrategyBacktestMutation,
-  RunSpecStrategyBacktestMutationVariables,
-} from './generated/graphql';
 
 type Schema = components['schemas'];
 
@@ -66,8 +63,9 @@ export type StrategySpec = Schema['StrategySpec-Input'] & {
   indicators: IndicatorBlock[];
 };
 
-export type RunSpecStrategyBacktestVariables = RunSpecStrategyBacktestMutationVariables;
-export type RunSpecStrategyBacktestResponse = RunSpecStrategyBacktestMutation;
-export type SpecStrategyBacktestResult = RunSpecStrategyBacktestMutation['runSpecStrategyBacktest'];
-export type SpecStrategyTrade = SpecStrategyBacktestResult['trades'][number];
-export type IndicatorSnapshotEntry = SpecStrategyTrade['indicators'][number];
+/** Wire shapes of `POST /api/spec-strategy/backtest` — snake_case, exactly as Python emits them. */
+export type SpecBacktestRequest = Schema['SpecBacktestRequest'];
+export type SpecStrategyBacktestResult = Schema['SpecBacktestResponse'];
+export type SpecStrategyTrade = Schema['SpecTradeResponse'];
+/** Indicator values captured at the entry signal, keyed by indicator id. */
+export type SpecStrategyIndicatorSnapshot = NonNullable<SpecStrategyTrade['indicators']>;

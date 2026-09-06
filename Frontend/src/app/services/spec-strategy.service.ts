@@ -1,23 +1,47 @@
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
-import { Apollo } from 'apollo-angular';
 import { firstValueFrom } from 'rxjs';
+
+import { environment } from '../../environments/environment';
 import {
-  RunSpecStrategyBacktestResponse,
-  RunSpecStrategyBacktestVariables,
+  SpecBacktestRequest,
   SpecStrategyBacktestResult,
   StrategySpec,
 } from '../graphql/spec-strategy.models';
-import { RunSpecStrategyBacktestDocument } from '../graphql/generated/graphql';
+
+/** Run configuration the runner supplies alongside the spec. */
+export interface SpecBacktestRunOptions {
+  startDate: string;
+  endDate: string;
+  initialCash?: number;
+  fillMode?: 'signal_bar_close' | 'next_bar_open';
+  commissionPerOrder?: number;
+}
+
+/** Python's own `SpecBacktestRequest` defaults, sent explicitly so the wire body is self-describing. */
+const DEFAULT_INITIAL_CASH = 100000;
+const DEFAULT_FILL_MODE = 'signal_bar_close';
+const DEFAULT_COMMISSION_PER_ORDER = 0;
 
 /**
- * Frontend wrapper around the `runSpecStrategyBacktest` GraphQL mutation.
+ * Readable message for a failed POST: FastAPI's string `detail` when the
+ * body carries one, otherwise Angular's status line for the response.
+ */
+function httpErrorMessage(err: unknown): string {
+  if (err instanceof HttpErrorResponse) {
+    const detail: unknown = err.error?.detail;
+    return typeof detail === 'string' ? detail : err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Frontend client for Python's `POST /api/spec-strategy/backtest`.
  *
- * Apollo round-trips the spec as a JSON string (the mutation declares
- * `specJson: String!`) — caller passes a typed `StrategySpec`, the
- * service handles serialization. Backend deserializes the string into a
- * JsonNode and re-emits it as a JSON object on the wire to the Python
- * service, so the Python Pydantic schema sees a proper object as
- * required.
+ * The runner talks to the Python service directly (#1963): the spec goes
+ * over the wire as a JSON object and Python's Pydantic schema is the single
+ * validator of its shape. Request and response types are the generated
+ * OpenAPI contract, so field names are Python's snake_case.
  *
  * The service exposes a tiny signal-based reactive surface alongside
  * the imperative `runBacktest` method:
@@ -25,14 +49,14 @@ import { RunSpecStrategyBacktestDocument } from '../graphql/generated/graphql';
  *   * `loading()`   — true while a request is in flight
  *   * `error()`     — last error message, or null
  *
- * UI components can either call `runBacktest()` and await the result
- * directly, or read the signals to drive a reactive view. Phase 1 of
- * the UI work uses the imperative path; signals are there for the
- * eventual editor where multiple components share one in-flight run.
+ * A backtest that completed with `success: false` still resolves — the
+ * result carries Python's `error` text and `error()` mirrors it. A failed
+ * HTTP round trip rejects, and `error()` carries a readable message.
  */
 @Injectable({ providedIn: 'root' })
 export class SpecStrategyService {
-  private readonly apollo = inject(Apollo);
+  private readonly http = inject(HttpClient);
+  private readonly url = `${environment.pythonServiceUrl}/api/spec-strategy/backtest`;
 
   private readonly _result = signal<SpecStrategyBacktestResult | null>(null);
   private readonly _loading = signal<boolean>(false);
@@ -42,56 +66,33 @@ export class SpecStrategyService {
   readonly loading = this._loading.asReadonly();
   readonly error = this._error.asReadonly();
 
-  /**
-   * Run a backtest with a fully-typed `StrategySpec`.
-   *
-   * The spec is serialized via `JSON.stringify` and the resulting
-   * string is sent as the `specJson` mutation variable. Backend parses
-   * it back into a JSON object before forwarding to Python so the
-   * Pydantic schema sees the structural form.
-   */
   async runBacktest(
     spec: StrategySpec,
-    options: {
-      startDate: string;
-      endDate: string;
-      initialCash?: number;
-      fillMode?: 'signal_bar_close' | 'next_bar_open';
-      commissionPerOrder?: number;
-    },
+    options: SpecBacktestRunOptions,
   ): Promise<SpecStrategyBacktestResult> {
     this._loading.set(true);
     this._error.set(null);
 
-    const variables: RunSpecStrategyBacktestVariables = {
-      specJson: JSON.stringify(spec),
-      startDate: options.startDate,
-      endDate: options.endDate,
-      initialCash: options.initialCash,
-      fillMode: options.fillMode,
-      commissionPerOrder: options.commissionPerOrder,
+    const body: SpecBacktestRequest = {
+      spec,
+      start_date: options.startDate,
+      end_date: options.endDate,
+      initial_cash: options.initialCash ?? DEFAULT_INITIAL_CASH,
+      fill_mode: options.fillMode ?? DEFAULT_FILL_MODE,
+      commission_per_order: options.commissionPerOrder ?? DEFAULT_COMMISSION_PER_ORDER,
     };
 
     try {
-      const response = await firstValueFrom(
-        this.apollo.mutate<RunSpecStrategyBacktestResponse, RunSpecStrategyBacktestVariables>({
-          mutation: RunSpecStrategyBacktestDocument,
-          variables,
-        }),
+      const result = await firstValueFrom(
+        this.http.post<SpecStrategyBacktestResult>(this.url, body),
       );
-
-      const result = response.data?.runSpecStrategyBacktest;
-      if (!result) {
-        throw new Error('No data returned from runSpecStrategyBacktest');
-      }
       this._result.set(result);
       if (!result.success && result.error) {
         this._error.set(result.error);
       }
       return result;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this._error.set(message);
+      this._error.set(httpErrorMessage(err));
       throw err;
     } finally {
       this._loading.set(false);
@@ -104,5 +105,3 @@ export class SpecStrategyService {
     this._error.set(null);
   }
 }
-
-export { RunSpecStrategyBacktestDocument as RUN_SPEC_STRATEGY_BACKTEST };

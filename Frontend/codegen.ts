@@ -4,6 +4,9 @@ const config: CodegenConfig = {
   overwrite: true,
   schema: '../contracts/graphql/backend.schema.graphql',
   documents: ['src/app/**/*.graphql'],
+  // No operation files remain after #1963; the pipeline stays until the Apollo
+  // consumers are migrated, so an empty document set must still regenerate cleanly.
+  ignoreNoDocuments: true,
   generates: {
     'src/app/graphql/generated/': {
       preset: 'client',
