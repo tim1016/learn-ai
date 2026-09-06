@@ -10,7 +10,10 @@ import { FormsModule } from '@angular/forms';
 import { DatePickerModule } from 'primeng/datepicker';
 
 import { InstrumentCardComponent } from '../ticker-range-picker/parts/instrument-card.component';
+import { DEFAULT_ADJUSTMENT_MODE } from '../ticker-catalog';
+import type { PriceAdjustmentMode } from '../data-lake';
 import type {
+  TickerOption,
   TickerRange,
 } from '../ticker-range-picker/ticker-range-picker.types';
 import type { TickerSnapshot } from './ticker-date-picker.types';
@@ -32,6 +35,11 @@ import type { TickerSnapshot } from './ticker-date-picker.types';
   styleUrls: ['./ticker-date-picker.component.scss'],
 })
 export class TickerDatePickerComponent {
+  /** A host-supplied universe, for pickers whose subject is not lake bars
+   *  (a live options snapshot, say). `null` means "ask the lake". */
+  readonly universe = input<readonly TickerOption[] | null>(null);
+  /** The lake tree this page's run will read. */
+  readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
   readonly value = model.required<TickerSnapshot>();
   readonly minDate = input<Date | null>(null);
   readonly maxDate = input<Date | null>(null);

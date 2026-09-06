@@ -1,6 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from "@angular/core";
 
 import type { DataPolicy } from "../../../models/data-policy";
+import { DEFAULT_ADJUSTMENT_MODE } from '../../../shared/ticker-catalog';
+import type { PriceAdjustmentMode } from '../../../shared/data-lake';
 import { InstrumentCardComponent } from "../../../shared/ticker-range-picker/parts/instrument-card.component";
 import { TimeWindowCardComponent } from "../../../shared/ticker-range-picker/parts/time-window-card.component";
 import type { TickerRange } from "../../../shared/ticker-range-picker/ticker-range-picker.types";
@@ -42,6 +44,8 @@ export class StrategyLabConfigRailComponent {
   /** A Strategy Lab backtest is in flight in some tab. Blocks submitting
    *  another one; launcher recovery is not a submission and stays available. */
   readonly engineBusy = input(false);
+  /** The lake tree this run reads; the instrument card offers only that tree. */
+  readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
   readonly runBlocked = input(false);
   readonly launcherBlocksRun = input(false);
   readonly launcherStatus = input("unknown");

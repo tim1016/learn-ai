@@ -70,7 +70,7 @@
             }
             <div class="dropdown__header" role="presentation">
               @if (query() === "") {
-                In the data lake
+                {{ lakeBacked() ? "In the data lake" : "Instruments" }}
               } @else {
                 {{ filteredTickers().length }} match{{
                   filteredTickers().length === 1 ? "" : "es"
@@ -103,6 +103,8 @@
                 <button type="button" class="dropdown__retry" (click)="retryCatalog()">
                   Retry
                 </button>
+              } @else if (!lakeBacked()) {
+                No instrument matches that.
               } @else if (catalogEmpty()) {
                 The data lake holds no instruments yet.
                 <a routerLink="/data-lake" (click)="closeDropdown()">Backfill one</a>

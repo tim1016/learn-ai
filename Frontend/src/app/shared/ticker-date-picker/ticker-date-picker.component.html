@@ -14,7 +14,9 @@
   <div class="picker-v2__groups picker-v2__groups--two">
     <app-instrument-card
       [value]="rangeProjection()"
-      (valueChange)="onInstrumentPatch($event)" />
+      (valueChange)="onInstrumentPatch($event)"
+      [universe]="universe()"
+      [adjustmentMode]="adjustmentMode()" />
 
     <section class="group" aria-label="Date">
       <header class="group__head">

@@ -70,7 +70,7 @@ describe('InstrumentCardComponent', () => {
   });
 
   it('opens the dropdown on click and shows the recent list when query is empty', () => {
-    catalog.recent.set(['QQQ']);
+    catalog.view.recent.set(['QQQ']);
     fixture.detectChanges();
     openDropdown();
 
@@ -95,7 +95,7 @@ describe('InstrumentCardComponent', () => {
   // pool that hid GLD, DIA, SLV, GE and STRL from every UI path even though
   // the lake had them fully backfilled.
   it('offers whatever the catalog lists, not a fixed roster', () => {
-    catalog.pool.set([
+    catalog.view.pool.set([
       { symbol: 'GLD', name: 'SPDR Gold Shares', exchange: 'ARCA', lastHeld: '2026-09-04' },
     ]);
     fixture.detectChanges();
@@ -114,8 +114,8 @@ describe('InstrumentCardComponent', () => {
   });
 
   it('says why the list is empty when the lake did not answer, and can retry', () => {
-    catalog.pool.set([]);
-    catalog.unavailable.set('The data lake is unreachable.');
+    catalog.view.pool.set([]);
+    catalog.view.unavailable.set('The data lake is unreachable.');
     fixture.detectChanges();
     openDropdown();
 
@@ -124,8 +124,10 @@ describe('InstrumentCardComponent', () => {
     const retry: HTMLButtonElement | null =
       fixture.nativeElement.querySelector('.dropdown__retry');
     expect(retry).not.toBeNull();
+    // Delta, not an absolute: opening the dropdown re-reads too.
+    const before = catalog.view.reloadCount;
     retry?.click();
-    expect(catalog.reloadCount).toBe(1);
+    expect(catalog.view.reloadCount).toBe(before + 1);
   });
 
   it('points a no-match search at backfilling rather than a page with no add flow', () => {
@@ -202,7 +204,7 @@ describe('InstrumentCardComponent', () => {
   });
 
   it('distinguishes an empty lake from a search that matched nothing', () => {
-    catalog.pool.set([]);
+    catalog.view.pool.set([]);
     fixture.detectChanges();
     openDropdown();
 
@@ -212,16 +214,16 @@ describe('InstrumentCardComponent', () => {
   });
 
   it('shows the read in flight rather than a stale failure while retrying', () => {
-    catalog.pool.set([]);
-    catalog.unavailable.set('The data lake is unreachable.');
+    catalog.view.pool.set([]);
+    catalog.view.unavailable.set('The data lake is unreachable.');
     fixture.detectChanges();
     openDropdown();
 
     // The real service clears `unavailable` for the duration of a reload, so
     // the operator sees the retry working instead of the message that
     // prompted it.
-    catalog.unavailable.set(null);
-    catalog.loading.set(true);
+    catalog.view.unavailable.set(null);
+    catalog.view.loading.set(true);
     fixture.detectChanges();
 
     const text: string = fixture.nativeElement.textContent ?? '';
@@ -230,8 +232,8 @@ describe('InstrumentCardComponent', () => {
   });
 
   it('keeps the retry control out of the listbox', () => {
-    catalog.pool.set([]);
-    catalog.unavailable.set('The data lake is unreachable.');
+    catalog.view.pool.set([]);
+    catalog.view.unavailable.set('The data lake is unreachable.');
     fixture.detectChanges();
     openDropdown();
 
@@ -241,5 +243,54 @@ describe('InstrumentCardComponent', () => {
     // A focusable control inside a listbox is not an option: it lands in the
     // tab order of a widget navigated by arrow keys.
     expect(listbox?.querySelector('button, a')).toBeNull();
+  });
+
+  // Ticker Explorer's "Fetch Chain" is a live Polygon lookup, not a backtest.
+  // Pinning it to lake holdings silently removed symbols that endpoint still
+  // serves, so a host may supply its own universe.
+  it('offers a host-supplied universe instead of the lake when given one', () => {
+    catalog.view.pool.set([
+      { symbol: 'GLD', name: 'SPDR Gold Shares', exchange: 'ARCA', lastHeld: '2026-09-04' },
+    ]);
+    fixture.componentRef.setInput('universe', [
+      { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
+    ]);
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('QQQ');
+    expect(text).not.toContain('GLD');
+    // Lake copy must not appear over a list the lake did not supply.
+    expect(text).not.toContain('In the data lake');
+  });
+
+  it('asks the catalog for the tree its host names', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.detectChanges();
+
+    expect(catalog.modesRequested).toContain('raw');
+  });
+
+  // A symbol backfilled after this tab loaded must be selectable without a
+  // page reload; the root-scoped resource otherwise serves its first answer
+  // forever.
+  it('re-reads the catalog when the dropdown opens', () => {
+    fixture.detectChanges();
+    const before = catalog.view.reloadCount;
+    openDropdown();
+
+    expect(catalog.view.reloadCount).toBe(before + 1);
+  });
+
+  it('does not re-read the lake for a host-supplied universe', () => {
+    fixture.componentRef.setInput('universe', [
+      { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
+    ]);
+    fixture.detectChanges();
+    const before = catalog.view.reloadCount;
+    openDropdown();
+
+    expect(catalog.view.reloadCount).toBe(before);
   });
 });

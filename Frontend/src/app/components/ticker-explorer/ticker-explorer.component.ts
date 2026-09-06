@@ -7,6 +7,8 @@ import { SnapshotUnderlyingResult, SnapshotContractResult } from '../../graphql/
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { TickerDatePickerComponent } from '../../shared/ticker-date-picker/ticker-date-picker.component';
 import type { TickerSnapshot } from '../../shared/ticker-date-picker/ticker-date-picker.types';
+import type { TickerOption } from '../../shared/ticker-range-picker';
+import { TICKER_LABELS } from '../../shared/ticker-catalog/ticker-labels';
 
 @Component({
   selector: 'app-ticker-explorer',
@@ -23,6 +25,17 @@ export class TickerExplorerComponent {
   // The default expiration is the next Friday; the component-supplied
   // minDate restricts selection to today and forward (option expirations
   // are always future-dated).
+  /**
+   * This page's "Fetch Chain" calls `getOptionsChainSnapshot`, a live Polygon
+   * lookup — not a backtest over lake bars. Its universe is therefore what
+   * Polygon can answer for, not what the lake happens to hold: pinning it to
+   * lake holdings silently dropped QQQ, AMZN, META, GOOGL and AMD, all of
+   * which this endpoint still serves.
+   */
+  readonly liveUniverse: readonly TickerOption[] = Object.entries(TICKER_LABELS)
+    .map(([symbol, label]) => ({ symbol, name: label.name, exchange: label.exchange }))
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
+
   snapshot = signal<TickerSnapshot>({
     symbol: 'AAPL',
     date: TickerExplorerComponent.getNextFriday(),

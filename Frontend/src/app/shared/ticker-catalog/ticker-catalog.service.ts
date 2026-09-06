@@ -1,90 +1,100 @@
-import { Injectable, computed, inject, resource, signal, type Signal } from '@angular/core';
+import { Injectable, Injector, computed, inject, resource, type Signal } from '@angular/core';
 
 import { etIsoDate } from '../date/et-midnight';
-import { DataLakeService } from '../data-lake/data-lake.service';
+import { DataLakeService } from '../data-lake';
 import type {
+  DataLakeDataType,
   PriceAdjustmentMode,
   StorageSummaryResponse,
   SymbolCoverageSpan,
-} from '../data-lake/data-lake.types';
+} from '../data-lake';
 import type { TickerOption } from '../ticker-range-picker';
-import type { TickerCatalog } from './ticker-catalog';
+import type { TickerCatalog, TickerCatalogView } from './ticker-catalog';
 import { SEED_RECENT_TICKERS, TICKER_LABELS } from './ticker-labels';
 
 /**
- * The tree a run reads unless it says otherwise.
- *
- * A backtest resolves its roots with `adjusted=true` by default
- * (`engine.py::_policy_adjusted`), which is the `polygon_split_adjusted`
- * segment of the lake root (#1866). It is only a default: Strategy Lab sends
- * `adjusted: false` when the engine is `both`, and the picker on that page
- * says so through `useMode`.
+ * The tree a run reads unless its page says otherwise. A backtest resolves its
+ * roots with `adjusted=true` by default (`engine.py::_policy_adjusted`), which
+ * is the `polygon_split_adjusted` segment of the lake root (#1866).
  */
-const DEFAULT_ADJUSTMENT_MODE: PriceAdjustmentMode = 'polygon_split_adjusted';
+export const DEFAULT_ADJUSTMENT_MODE: PriceAdjustmentMode = 'polygon_split_adjusted';
+
+/**
+ * A backtest consumes trade bars. A symbol whose quote side completed while
+ * its trade backfill failed still has complete catalog rows, so an unfiltered
+ * pool would offer it and the run would find nothing to read.
+ */
+const RUNNABLE_DATA_TYPE: DataLakeDataType = 'trade';
 
 /**
  * The instruments a run can actually be configured against.
  *
  * The lake is the sole market-data store (#1893 retired the policy store), so
  * "what can I backtest" has exactly one honest answer: what the lake holds.
- * This service asks it — `/api/data-lake/storage-summary` reports every
- * catalogued symbol with the first and last day it holds — and hands the
- * pickers a pool that cannot drift from reality the way the hardcoded list it
- * replaces had.
+ * This service asks `/api/data-lake/storage-summary` and hands the pickers a
+ * pool that cannot drift from reality the way the hardcoded list it replaces
+ * had.
  *
- * The pool is per adjustment mode, because coverage is: the mode is a segment
- * of the lake root, so a symbol backfilled only in `raw` has no bars at all
- * for a split-adjusted reader. `useMode` follows the run's data policy so the
- * picker does not offer what that run would refuse. One picker is mounted at a
- * time, so a single active mode suffices; a second picker asking for another
- * mode repoints this one, which is why `useMode` is a request from the page
- * that owns the data policy rather than a per-component input.
+ * **The catalog is sliced by adjustment mode, and the mode is the caller's.**
+ * Coverage is per mode — the mode is a segment of the lake root, so a symbol
+ * backfilled only in `raw` has no bars at all for a split-adjusted reader.
+ * Each mode gets its own resource, cached here so several pickers asking for
+ * the same tree share one read. Mode deliberately is *not* service state: an
+ * earlier revision kept a single `requestedMode` that pages set, and because
+ * this service is `providedIn: 'root'` that choice outlived the page's own
+ * teardown — a Strategy Lab `both` run left every later picker reading raw.
  *
  * On a failed read the pool is empty and `unavailable()` carries the reason.
  * That is deliberate: falling back to a canned list would offer instruments we
  * cannot prove we hold bars for, which is the exact failure being fixed. A
  * silent wrong list is worse than a visible outage.
+ *
+ * Pickers whose subject is **not** lake bars — Ticker Explorer's live options
+ * snapshot, say — must not use this at all; they pass their own universe to
+ * the picker instead.
  */
 @Injectable({ providedIn: 'root' })
 export class TickerCatalogService implements TickerCatalog {
   private readonly lake = inject(DataLakeService);
-  private readonly requestedMode = signal<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
+  private readonly injector = inject(Injector);
+  private readonly views = new Map<PriceAdjustmentMode, TickerCatalogView>();
 
-  private readonly summary = resource({
-    params: () => this.requestedMode(),
-    loader: ({ params }) => this.lake.storageSummary('usa', params),
-  });
+  viewFor(mode: PriceAdjustmentMode): TickerCatalogView {
+    const existing = this.views.get(mode);
+    if (existing) return existing;
 
-  readonly mode: Signal<PriceAdjustmentMode> = this.requestedMode.asReadonly();
+    // `injector` lets the resource be created lazily, outside the constructor's
+    // injection context, and ties its lifetime to this root-scoped service.
+    const summary = resource({
+      loader: () => this.lake.storageSummary('usa', mode, RUNNABLE_DATA_TYPE),
+      injector: this.injector,
+    });
 
-  readonly pool: Signal<readonly TickerOption[]> = computed(() => {
-    const read = this.summary.value();
-    return read?.kind === 'ok' ? toPool(read.value) : [];
-  });
+    const pool: Signal<readonly TickerOption[]> = computed(() => {
+      const read = summary.value();
+      return read?.kind === 'ok' ? toPool(read.value) : [];
+    });
 
-  readonly recent: Signal<readonly string[]> = computed(() => {
-    const held = new Set(this.pool().map((t) => t.symbol));
-    return SEED_RECENT_TICKERS.filter((symbol) => held.has(symbol));
-  });
-
-  readonly loading: Signal<boolean> = computed(() => this.summary.isLoading());
-
-  readonly unavailable: Signal<string | null> = computed(() => {
-    // A read in flight has no verdict yet. Without this the previous failure
-    // outranks the loading state, so a retry shows the operator nothing until
-    // it resolves and the button looks dead.
-    if (this.summary.isLoading()) return null;
-    const read = this.summary.value();
-    if (read === undefined || read.kind === 'ok') return null;
-    return read.message;
-  });
-
-  useMode(mode: PriceAdjustmentMode): void {
-    this.requestedMode.set(mode);
-  }
-
-  reload(): void {
-    this.summary.reload();
+    const view: TickerCatalogView = {
+      pool,
+      recent: computed(() => {
+        const held = new Set(pool().map((t) => t.symbol));
+        return SEED_RECENT_TICKERS.filter((symbol) => held.has(symbol));
+      }),
+      loading: computed(() => summary.isLoading()),
+      unavailable: computed(() => {
+        // A read in flight has no verdict yet. Without this the previous
+        // failure outranks the loading state, so a retry shows the operator
+        // nothing until it resolves and the button looks dead.
+        if (summary.isLoading()) return null;
+        const read = summary.value();
+        if (read === undefined || read.kind === 'ok') return null;
+        return read.message;
+      }),
+      reload: () => summary.reload(),
+    };
+    this.views.set(mode, view);
+    return view;
   }
 }
 
@@ -107,7 +117,9 @@ function toPool(summary: StorageSummaryResponse): readonly TickerOption[] {
 
 /**
  * A catalogued symbol with no span, or no artifacts, holds nothing a run could
- * read — the row exists but the bars do not.
+ * read — the row exists but the bars do not. The endpoint is asked for
+ * trade-bar spans specifically, so a symbol whose quote side backfilled and
+ * whose trade side failed does not reach here at all.
  */
 function isRunnable(span: SymbolCoverageSpan): boolean {
   return span.artifact_count > 0 && span.last_trading_date_ms !== null;

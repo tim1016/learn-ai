@@ -349,3 +349,46 @@ async def test_coverage_spans_scoped_to_a_mode_omit_a_symbol_backfilled_only_els
         "usa", price_adjustment_mode="polygon_split_adjusted"
     )
     assert [(t.artifact_kind, t.artifact_count) for t in totals] == [("time_series_bars", 1)]
+
+
+async def test_coverage_spans_scoped_to_trade_omit_a_quote_only_symbol(clean_artifacts, pool):
+    """A symbol whose trade backfill failed is not runnable, quote rows or not.
+
+    ``DataRunSpec`` refuses quote-without-trade, but a run whose trade side
+    *failed* leaves completed quote rows in the catalog. Pooling the two data
+    types reported that symbol as covered to the instrument picker, which
+    offers it for a backtest that consumes trade bars and finds none.
+    """
+    for symbol, data_type in (("SPY", "trade"), ("QOT", "quote")):
+        identity = ArtifactIdentity(
+            artifact_kind="time_series_bars",
+            market="usa",
+            symbol=symbol,
+            trading_date=date(2024, 5, 20),
+            resolution="minute",
+            data_type=data_type,
+            provider="polygon",
+            price_adjustment_mode="raw",
+        )
+        artifact_id = await catalog_client.claim_minute_bar(
+            identity=identity,
+            worker_id="w-1",
+            lease_ttl_ms=300_000,
+            data_contract_hash="a" * 64,
+            file_path=f"equity/usa/minute/{symbol.lower()}/20240520_{data_type}.zip",
+        )
+        await catalog_client.complete_artifact(
+            artifact_id,
+            row_count=390,
+            first_bar_start_ms=1716196200000,
+            last_bar_start_ms=1716219540000,
+            file_size_bytes=123456,
+            file_sha256="b" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+        )
+
+    unscoped = await catalog_client.select_symbol_coverage_spans("usa")
+    assert {s.symbol for s in unscoped} == {"QOT", "SPY"}
+
+    tradable = await catalog_client.select_symbol_coverage_spans("usa", data_type="trade")
+    assert [s.symbol for s in tradable] == ["SPY"]
