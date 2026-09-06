@@ -67,6 +67,9 @@ export class SpecStrategyService {
   ): Promise<SpecStrategyBacktestResult> {
     this._loading.set(true);
     this._error.set(null);
+    // A new request supersedes the last result: output from the prior run
+    // must never render alongside this run's error.
+    this._result.set(null);
 
     // The optional run params travel only when the caller set them. Python's
     // `SpecBacktestRequest` owns their defaults and applies them to an absent key.

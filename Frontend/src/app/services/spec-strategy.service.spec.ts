@@ -137,6 +137,21 @@ describe('SpecStrategyService', () => {
     expect(service.loading()).toBe(false);
   });
 
+  it('drops the previous result as soon as a new request starts, so a failure never renders stale output', async () => {
+    const first = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+    http.expectOne(URL).flush(SUCCESS_BODY);
+    await first;
+    expect(service.result()).not.toBeNull();
+
+    const second = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
+    expect(service.result()).toBeNull();
+    http.expectOne(URL).flush({ detail: 'unsupported feature' }, { status: 400, statusText: 'Bad Request' });
+
+    await expect(second).rejects.toBeInstanceOf(HttpErrorResponse);
+    expect(service.result()).toBeNull();
+    expect(service.error()).toBe('unsupported feature');
+  });
+
   it('falls back to the HTTP status line when the failure body carries no detail', async () => {
     const pending = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
     http.expectOne(URL).flush('upstream exploded', { status: 502, statusText: 'Bad Gateway' });
