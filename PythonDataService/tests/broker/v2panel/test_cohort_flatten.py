@@ -40,6 +40,7 @@ from app.services.broker_v2_panel import cohort_flatten, panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     ActionOutcomeUnknownError,
     ExecutionAuthorityLostError,
+    ExecutionAuthorityRevivedError,
     StaleRevisionError,
     reset_idempotency_store_for_testing,
 )
@@ -206,6 +207,48 @@ async def test_account_scoped_authority_loss_ends_the_batch_early(
     assert result.legs[1].outcome == "failed"
     assert result.legs[1].error is not None
     assert result.legs[1].error.reason_code is not None
+
+
+async def test_execution_authority_revived_is_a_per_leg_refusal_not_a_batch_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR 0050 round 3: ``ExecutionAuthorityRevivedError`` means the account's
+    revival already succeeded -- unlike ``ExecutionAuthorityLostError``, it is
+    not an account-scoped fact that dooms every later leg. The batch must
+    continue to the next leg (whose own lease renewal is now expected to
+    succeed) and report the revived leg as refused/retryable, not failed, so
+    a re-POST under the same cohort key covers exactly that leg.
+    """
+    attempted: list[str] = []
+
+    async def fake_run_action(broker, account_id, sid, request, *, operator_identity):
+        attempted.append(sid)
+        if sid == _COHORT_SIDS[0]:
+            raise ExecutionAuthorityRevivedError()
+        return _applied()
+
+    monkeypatch.setattr(panel_data_source, "run_action", fake_run_action)
+    monkeypatch.setattr(cohort_flatten, "validate_account", _accept_account)
+
+    result = await cohort_flatten.run_cohort_flatten(
+        "alpaca", ACCT, _request(*_COHORT_SIDS[:2]), operator_identity="op"
+    )
+
+    # Both legs attempted -- the revived leg did not end the batch.
+    assert attempted == list(_COHORT_SIDS[:2])
+    assert [leg.strategy_instance_id for leg in result.legs] == list(_COHORT_SIDS[:2])
+
+    revived_leg, next_leg = result.legs
+    assert revived_leg.outcome == "refused"
+    assert revived_leg.error is not None
+    assert revived_leg.error.outcome == "conflict"
+    assert revived_leg.error.reason_code == "EXECUTION_LEASE_REVIVED"
+
+    # The next leg's own renewal succeeded -- the revival already fixed the
+    # account, so nothing about it should block a sibling leg.
+    assert next_leg.outcome == "applied"
+    assert result.refused_count == 1
+    assert result.applied_count == 1
 
 
 def test_request_rejects_duplicate_legs_and_oversized_identity() -> None:

@@ -82,6 +82,13 @@ class ActionOutcomeUnknownError(ActionExecutionError):
 #: Reason code for a lost/expired account execution lease (T7c, #1794).
 EXECUTION_AUTHORITY_LOST_REASON_CODE = "EXECUTION_LEASE_LOST"
 
+#: Reason code for a lease the ADR 0050 revival just restored, distinct from
+#: the terminal ``EXECUTION_AUTHORITY_LOST_REASON_CODE``: the account's
+#: authority is fine again, this one request simply landed on the outage and
+#: applied nothing. Kept apart so a frontend (or an operator reading logs)
+#: never confuses "restart the data plane" with "click the action again".
+EXECUTION_LEASE_REVIVED_REASON_CODE = "EXECUTION_LEASE_REVIVED"
+
 #: Reason code for an authority fenced by an unconfirmed mirror finalize.
 AUTHORITY_POISONED_REASON_CODE = "AUTHORITY_MIRROR_UNCONFIRMED"
 
@@ -126,8 +133,8 @@ class ExecutionAuthorityLostError(ActionExecutionError):
 
 
 # Operator-facing copy for each way the write path's ADR 0050 revival attempt
-# (panel_data_source._run_action_after_lease_revival) can end in this error --
-# kept beside the error class, not inline in the data-source module, so the
+# (panel_data_source._revive_lease_or_raise) can end in this error -- kept
+# beside the error class, not inline in the data-source module, so the
 # authored copy and the reason it exists stay in one place. Every call site
 # names a real store-proven outcome; there is deliberately no generic
 # fallback string for an outcome nothing observed.
@@ -139,10 +146,71 @@ REVIVAL_OUTCOME_REFUSED = (
     "another writer or an authority ceremony has held this account since "
     "its execution lease last renewed"
 )
-REVIVAL_OUTCOME_LOST_AGAIN_ON_RETRY = (
-    "the revived lease was lost again before the retried write could commit; "
-    "another writer took the account in that window"
+#: The account's SQLite authority is present, but there is no reconciliation
+#: sweep behind it to revive through -- e.g. a synthetic authority (which
+#: never binds a write-path-reachable sweep of its own kind) or a boot window
+#: in which the sweep has not been wired up yet. Distinct from
+#: ``REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE``, which says the authority itself
+#: was replaced or removed -- here the authority is exactly the one this
+#: action was presented against; it just has nothing to revive through.
+REVIVAL_OUTCOME_NO_SWEEP = (
+    "this account's active SQLite authority is not running a reconciliation "
+    "sweep to revive through -- there is no supervised revival path available "
+    "for it"
 )
+#: ``ReconciliationSweep.revive_now()`` raised something other than
+#: ``ExecutionLeaseLost``/``RepositoryPoisoned`` -- a transient store error
+#: (e.g. "database is locked") that never reached a confirmed outcome. This
+#: mirrors the lease heartbeat's own transient vocabulary
+#: (``_run_lease_heartbeat``'s "errored; retrying" branch): the store
+#: hiccupped rather than proved the lease unrecoverable, so the honest copy
+#: is "retry shortly", not "another writer took the account".
+REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR = (
+    "the store returned a transient error while attempting the revival and "
+    "never reached a confirmed outcome -- this is the same class of hiccup "
+    "the lease heartbeat retries on its own; retry this action shortly"
+)
+
+
+class ExecutionAuthorityRevivedError(ActionExecutionError):
+    """The ADR 0050 revival just succeeded; this request applied nothing (503).
+
+    Round 3 of the write-path revival design (two independent reviews
+    blocked rounds 1 and 2's auto-retry-under-a-derived-key): a revived
+    lease is reported to the operator as a retryable refusal instead of
+    silently retried in-process. Auto-retry gave the performer a *new*
+    broker decision identity (``f"{key}:lease-revival-retry"``) that neither
+    the in-process nor the durable ``(sid, decision_id)`` dedupe recognised,
+    so a second EXIT could reach the broker after the first already had; and
+    it left the original idempotency key burned ``failed`` for a leg that,
+    from the operator's perspective, never actually failed.
+
+    Raised only when :meth:`ReconciliationSweep.revive_now` returns
+    successfully -- i.e. the store just proved this handle's lease is good
+    again. Nothing about *this* request's mutation was attempted after that:
+    the CAS confirming the lease is separate from, and prior to, whatever
+    the performer was doing when it discovered the loss. The operator's next
+    click is a genuinely fresh request: the panel client mints a new
+    ``idempotency_key`` per submission (``crypto.randomUUID()`` in
+    ``broker-v2-panel.service.ts``'s ``submitAction``), so the original
+    key's ``failed``/released disposition never blocks it.
+    """
+
+    http_status = 503
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This account's execution lease had expired and has just been "
+            "revived; nothing was applied.",
+            detail=(
+                "The data plane's execution lease for this account expired while "
+                "the process was paused, and a supervised, store-verified revival "
+                "just re-acquired it -- no other writer ever held the account. "
+                "This request's write was not attempted under the revived lease: "
+                "retry the action now that authority is restored."
+            ),
+            reason_code=EXECUTION_LEASE_REVIVED_REASON_CODE,
+        )
 
 
 class AuthorityPoisonedError(ActionExecutionError):

@@ -166,18 +166,37 @@ class ReconciliationSweep:
 
         Both the lease heartbeat (:meth:`_attempt_lease_revival`) and any
         write path that discovers a lost lease in the same instant (a panel
-        action -- see ``panel_data_source._run_action_after_lease_revival``)
-        call this and only this. It owns the CAS
-        (``ClerkSqliteRepository.revive_execution_lease``), the CRITICAL
-        logging for both outcomes, and firing ``on_lease_revived`` on success
-        -- so the revival vocabulary and the ADR 0050 §3 post-revival
-        recovery pass (``BotTaskRegistry.run_lease_recovery``, which repairs
-        lifecycle artifacts for runs that died during the freeze) can never
-        drift or double-fire between two call sites. A synthetic authority's
-        carve-out (no hook bound at construction -- see
-        ``active_authority.py``'s synthetic branch) is inherited automatically
-        here: whichever caller reaches this same running instance gets
-        whatever hook (or lack of one) it was built with.
+        action -- see ``panel_data_source._revive_lease_or_raise``) call this
+        and only this, so the CAS (``ClerkSqliteRepository.revive_execution_lease``),
+        its CRITICAL logging, and firing ``on_lease_revived`` on success never
+        drift into two implementations that could disagree on the outcome
+        vocabulary or the ADR 0050 §3 post-revival recovery pass
+        (``BotTaskRegistry.run_lease_recovery``, which repairs lifecycle
+        artifacts for runs that died during the freeze).
+
+        That does not make the two call sites single-flighted, and this
+        method takes no lock: a concurrent heartbeat tick can call this on
+        the same sweep instance at the same moment a write path does, so the
+        CAS can run twice and the hook can fire twice. Both are harmless.
+        The CAS's condition (owner unchanged AND generation unchanged) does
+        not become false once satisfied -- a second concurrent revival still
+        matches it and simply re-extends the same expiry, which is exactly
+        what a renewal does anyway. A second hook invocation either repeats
+        an idempotent step (``AlpacaLifecycleProjector.refresh`` for a run
+        still live) or loses a race to re-validate a stop that the other
+        invocation already committed (``stop_interrupted_alpaca_duty_run``
+        re-checks ``sqlite_active`` immediately before its own commit) and
+        raises -- caught here and logged, isolated, with the next boot scan
+        remaining the backstop, exactly like any other hook failure.
+
+        A synthetic authority's carve-out (no hook bound at its construction
+        site -- see ``active_authority.py``'s synthetic branch) is real for a
+        caller that already holds a reference to *that* sweep instance, but
+        it is not "inherited" by the write path: ``active_reconciliation_sweep``
+        gates on ``authority_kind == "sqlite"``, identically to
+        ``active_sqlite_facade``, so the write path never reaches a synthetic
+        sweep's ``revive_now()`` at all -- it is refused earlier, as "no
+        supervised revival available for this authority".
 
         Returns ``True`` once the lease is confirmed revived and the hook (if
         any) has run or failed in isolation. Raises :class:`ExecutionLeaseLost`

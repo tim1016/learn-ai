@@ -30,6 +30,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionOutcomeUnknownError,
     AuthorityPoisonedError,
     ExecutionAuthorityLostError,
+    ExecutionAuthorityRevivedError,
     StaleRevisionError,
 )
 from app.services.broker_v2_panel.panel_errors import PanelDataError
@@ -145,7 +146,16 @@ async def execute_cohort_legs(
             )
             break
         except ActionExecutionError as error:
-            refused = isinstance(error, StaleRevisionError) or error.http_status == 409
+            # ExecutionAuthorityRevivedError (ADR 0050 round 3) is a
+            # per-leg, retryable refusal, not the account-scoped authority
+            # loss the branch above ends the batch for: the ADR 0050 revival
+            # already succeeded, so a later leg's own renewal is expected to
+            # succeed too. It is refused/retryable like a stale revision --
+            # nothing applied, a re-POST covers it -- not a hard failure.
+            refused = (
+                isinstance(error, (StaleRevisionError, ExecutionAuthorityRevivedError))
+                or error.http_status == 409
+            )
             results.append(
                 _leg_error(
                     leg,
