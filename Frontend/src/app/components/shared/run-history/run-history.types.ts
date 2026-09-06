@@ -7,7 +7,7 @@ export type EngineSourceLiteral = "engine" | "strategy-lab" | "lean-sidecar";
 export type EngineLiteral = "PYTHON" | "LEAN";
 
 export interface RunHistoryRow {
-  /** StrategyExecution.Id as a string (GraphQL ID type). */
+  /** The run's numeric id as a string. */
   id: string;
   /** Engine that produced this run. */
   source: EngineSourceLiteral;
@@ -21,7 +21,7 @@ export interface RunHistoryRow {
   /** ISO date string for display, e.g. "2025-01-06". */
   startDate: string;
   endDate: string;
-  /** int64 ms UTC from StrategyExecution.ExecutedAt. */
+  /** int64 ms UTC — when the run was persisted. */
   executedAt: number;
   totalTrades: number;
   totalPnl: number;

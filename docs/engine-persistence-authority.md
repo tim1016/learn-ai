@@ -83,10 +83,10 @@ All other six categories (DECISION_MISMATCH, DIRECTION_MISMATCH, QUANTITY_MISMAT
 
 | Layer | File | What it owns |
 |---|---|---|
-| .NET | `Backend/Models/MarketData/PersistLeanRunPayload.cs` | The shared persist payload contract |
-| .NET | `Backend/Services/Implementation/BacktestRunPersistenceService.cs` | Idempotency + source-routing |
-| .NET | `Backend/GraphQL/Comparison/CompareBacktestRunsResolver.cs` | The GraphQL endpoint the parity test queries |
-| Python | `PythonDataService/app/services/engine_persistence.py` | Engine payload builder + POST |
+| Python | `PythonDataService/app/research/backtest_runs/records.py` | The canonical persist payload → row converter (validation, defaults) |
+| Python | `PythonDataService/app/research/backtest_runs/repository.py` | The one write; LEAN idempotency; reads |
+| Python | `PythonDataService/app/research/backtest_runs/parity.py` | The cross-engine parity verdict (trade reconciliation + receipts) |
+| Python | `PythonDataService/app/services/engine_persistence.py` | Spec-runner payload builder |
 | Python | `PythonDataService/app/services/spec_strategy_runner.py` | Load spec → run engine → capture trades → persist |
 | Python | `PythonDataService/app/services/lean_sidecar_compare_service.py` | 6-of-8 category classifier |
 | Python | `PythonDataService/tests/integration/parity/test_ema_crossover_lean_vs_spec.py` | The `@pytest.mark.slow` parity gate |

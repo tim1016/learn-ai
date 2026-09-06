@@ -5437,7 +5437,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "Backend/Models/MarketData/StrategyExecution.cs::InitialCash",
+      "canonical_symbol": "PythonDataService/app/research/backtest_runs/records.py::BacktestRunRecord.initial_cash",
       "category": "returns",
       "common_misreadings": [
         "A larger capital base can make dollar results look larger without improving return quality.",
@@ -5471,7 +5471,7 @@
       "timezone_convention": "All persisted timestamps are int64 ms UTC; ordinary timestamps render in the viewer's local timezone unless this entry says otherwise.",
       "units": "USD",
       "validating_tests": [
-        "Backend.Tests/Unit/GraphQL/BacktestRunDetailQueryTests.cs"
+        "PythonDataService/tests/research/backtest_runs/test_repository.py::test_an_engine_run_survives_a_write_then_read_round_trip_with_every_field"
       ],
       "value_states": [
         {
@@ -5496,7 +5496,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "Backend/Models/MarketData/StrategyExecution.cs::FinalEquity",
+      "canonical_symbol": "PythonDataService/app/research/backtest_runs/records.py::BacktestRunRecord.final_equity",
       "category": "returns",
       "common_misreadings": [
         "The same endpoint can conceal very different drawdowns and open-position paths.",
@@ -5530,7 +5530,7 @@
       "timezone_convention": "All persisted timestamps are int64 ms UTC; ordinary timestamps render in the viewer's local timezone unless this entry says otherwise.",
       "units": "USD",
       "validating_tests": [
-        "Backend.Tests/Unit/GraphQL/BacktestRunDetailQueryTests.cs"
+        "PythonDataService/tests/research/backtest_runs/test_repository.py::test_an_engine_run_survives_a_write_then_read_round_trip_with_every_field"
       ],
       "value_states": [
         {
@@ -6756,7 +6756,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "Backend/GraphQL/BacktestRunDetailQuery.cs",
+      "canonical_symbol": "PythonDataService/app/research/backtest_runs/repository.py::get_run",
       "category": "returns",
       "common_misreadings": [
         "Do not replace the persisted totals with arithmetic over a truncated UI table.",
@@ -6790,7 +6790,7 @@
       "timezone_convention": "All persisted timestamps are int64 ms UTC; ordinary timestamps render in the viewer's local timezone unless this entry says otherwise.",
       "units": "context",
       "validating_tests": [
-        "Backend.Tests/Unit/GraphQL/BacktestRunDetailQueryTests.cs"
+        "PythonDataService/tests/research/backtest_runs/test_repository.py::test_the_report_carries_the_newest_five_hundred_trades_in_entry_order_and_says_so"
       ],
       "value_states": [
         {
@@ -6810,7 +6810,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "Backend/GraphQL/BacktestRunDetailQuery.cs",
+      "canonical_symbol": "PythonDataService/app/research/backtest_runs/repository.py::get_run",
       "category": "returns",
       "common_misreadings": [
         "The visible rows can overrepresent the latest regime and omit earlier behavior.",
@@ -6844,7 +6844,7 @@
       "timezone_convention": "All persisted timestamps are int64 ms UTC; ordinary timestamps render in the viewer's local timezone unless this entry says otherwise.",
       "units": "trades",
       "validating_tests": [
-        "Backend.Tests/Unit/GraphQL/BacktestRunDetailQueryTests.cs"
+        "PythonDataService/tests/research/backtest_runs/test_repository.py::test_the_report_carries_the_newest_five_hundred_trades_in_entry_order_and_says_so"
       ],
       "value_states": [
         {

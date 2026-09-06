@@ -270,7 +270,6 @@ async def test_ema_crossover_lean_matches_spec_on_real_spy_data() -> None:
         start_date=(WINDOW_START.year, WINDOW_START.month, WINDOW_START.day),
         end_date=(WINDOW_END.year, WINDOW_END.month, WINDOW_END.day),
         starting_cash=Decimal(str(STARTING_CASH)),
-        backend_url=BACKEND_URL,
         strategy_name=STRATEGY_NAME,
         extra_statistics={
             "engine": "spec",

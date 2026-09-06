@@ -116,7 +116,7 @@ export interface TrustedRunResponse {
   total_order_events: number | null;
   total_equity_points: number | null;
   /**
-   * PR #291 — the ``StrategyExecution.Id`` row written to Postgres at
+   * The persisted run's id (Python-owned run tables since PRD #1929) written at
    * the tail of ``run_trusted_sample()``. ``null`` when persistence is
    * disabled or the run failed before normalization.
    */

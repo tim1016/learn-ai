@@ -127,9 +127,20 @@ def _evidence_for(metric_id: str, canonical_symbol: str) -> tuple[tuple[str, ...
             ("PythonDataService/tests/services/test_engine_validation_analytics.py::test_compatibility_equity_curve_compounds_common_trade_returns_and_pins_endpoints",),
             None,
         )
-    if canonical_symbol.startswith("Backend/"):
+    if canonical_symbol.startswith("PythonDataService/app/research/backtest_runs/records.py"):
         return (
-            ("Backend.Tests/Unit/GraphQL/BacktestRunDetailQueryTests.cs",),
+            (
+                "PythonDataService/tests/research/backtest_runs/test_repository.py::"
+                "test_an_engine_run_survives_a_write_then_read_round_trip_with_every_field",
+            ),
+            None,
+        )
+    if canonical_symbol.startswith("PythonDataService/app/research/backtest_runs/repository.py"):
+        return (
+            (
+                "PythonDataService/tests/research/backtest_runs/test_repository.py::"
+                "test_the_report_carries_the_newest_five_hundred_trades_in_entry_order_and_says_so",
+            ),
             None,
         )
     if "run_verdict_service.py" in canonical_symbol:
@@ -320,7 +331,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         input_series="Persisted run configuration.",
         units="USD",
         formatting="currency, two decimal places",
-        canonical_symbol="Backend/Models/MarketData/StrategyExecution.cs::InitialCash",
+        canonical_symbol="PythonDataService/app/research/backtest_runs/records.py::BacktestRunRecord.initial_cash",
     ),
     _platform_metric(
         "final_equity",
@@ -330,7 +341,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         input_series="Persisted final equity evidence.",
         units="USD",
         formatting="currency, two decimal places",
-        canonical_symbol="Backend/Models/MarketData/StrategyExecution.cs::FinalEquity",
+        canonical_symbol="PythonDataService/app/research/backtest_runs/records.py::BacktestRunRecord.final_equity",
     ),
     _platform_metric(
         "total_fees",
@@ -576,7 +587,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         input_series="Complete persisted trade and equity evidence.",
         units="context",
         formatting="plain language",
-        canonical_symbol="Backend/GraphQL/BacktestRunDetailQuery.cs",
+        canonical_symbol="PythonDataService/app/research/backtest_runs/repository.py::get_run",
         value_states=(_PLATFORM_UNAVAILABLE,),
     ),
     _platform_metric(
@@ -587,7 +598,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         input_series="Recent chronological projection of the authoritative closed-trade ledger.",
         units="trades",
         formatting="integer rows",
-        canonical_symbol="Backend/GraphQL/BacktestRunDetailQuery.cs",
+        canonical_symbol="PythonDataService/app/research/backtest_runs/repository.py::get_run",
         value_states=(_PLATFORM_UNAVAILABLE,),
     ),
     _platform_metric(
