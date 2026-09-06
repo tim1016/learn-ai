@@ -17,7 +17,6 @@ import {
   type AdvisoryAction,
   type AvailabilityCell,
   type Resolution,
-  type TickerOption,
   type TickerRange,
 } from './ticker-range-picker.types';
 import { InstrumentCardComponent } from './parts/instrument-card.component';
@@ -61,8 +60,6 @@ type TickerRangePickerPresentation = 'card' | 'embedded';
 export class TickerRangePickerComponent {
   readonly value = model.required<TickerRange>();
 
-  readonly tickerPool = input<readonly TickerOption[]>([]);
-  readonly recent = input<readonly string[]>([]);
   readonly availability = input<readonly AvailabilityCell[]>([]);
 
   readonly availableResolutions = input<readonly Resolution[]>([

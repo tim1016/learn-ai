@@ -16,7 +16,6 @@ import type {
   Resolution,
   TickerRange,
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
-import { TICKER_POOL, RECENT_TICKERS } from '../../../shared/ticker-catalog';
 
 type Severity = 'ok' | 'warning' | 'blocking';
 type SessionFilter = 'rth_only' | 'full_session' | 'unspecified';
@@ -84,8 +83,6 @@ export class StrategyPreflightComponent {
     resolution: 'minute',
     multiplier: 15,
   });
-  readonly tickerPool = TICKER_POOL;
-  readonly recentTickers = RECENT_TICKERS;
   readonly sessionFilter = signal<SessionFilter>('unspecified');
   readonly warmupDays = signal<number>(0);
   readonly dividendAdjustment = signal<boolean>(false);

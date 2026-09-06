@@ -4,17 +4,20 @@ import {
   computed,
   effect,
   ElementRef,
+  inject,
   input,
   model,
   signal,
   viewChild,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { Tooltip } from 'primeng/tooltip';
 
 import {
   type TickerOption,
   type TickerRange,
 } from '../ticker-range-picker.types';
+import { TickerCatalogService } from '../../ticker-catalog';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
 
 const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
@@ -28,7 +31,7 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
 
 @Component({
   selector: 'app-instrument-card',
-  imports: [Tooltip],
+  imports: [RouterLink, Tooltip],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './instrument-card.component.html',
   styleUrls: ['./instrument-card.component.scss'],
@@ -38,9 +41,16 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
 })
 export class InstrumentCardComponent {
   readonly value = model.required<TickerRange>();
-  readonly tickerPool = input<readonly TickerOption[]>([]);
-  readonly recent = input<readonly string[]>([]);
   readonly appearance = input<'card' | 'flat'>('card');
+
+  // The pool is a system-wide fact — what the lake holds bars for — not a
+  // property of whichever page mounted the picker. It used to be drilled in
+  // as an input from nine hosts, every one of them passing the same constant.
+  private readonly catalog = inject(TickerCatalogService);
+  readonly tickerPool = this.catalog.pool;
+  readonly recent = this.catalog.recent;
+  readonly catalogLoading = this.catalog.loading;
+  readonly catalogUnavailable = this.catalog.unavailable;
 
   private readonly rootEl =
     viewChild.required<ElementRef<HTMLElement>>('rootEl');
@@ -63,10 +73,9 @@ export class InstrumentCardComponent {
     this.tickerPool().find((t) => t.symbol === this.value().symbol),
   );
 
-  readonly selectedTickerCachePct = computed<number | null>(() => {
-    const cache = this.selectedTicker()?.cache;
-    return typeof cache === 'number' ? cache : null;
-  });
+  readonly selectedTickerFirst = computed<string | null>(
+    () => this.selectedTicker()?.first ?? null,
+  );
 
   readonly selectedTickerLast = computed<string | null>(
     () => this.selectedTicker()?.last ?? null,
@@ -103,6 +112,10 @@ export class InstrumentCardComponent {
       .map((s) => pool.find((t) => t.symbol === s))
       .filter((t): t is TickerOption => !!t);
   });
+
+  retryCatalog(): void {
+    this.catalog.reload();
+  }
 
   trackBySymbol(_: number, t: TickerOption): string {
     return t.symbol;
@@ -164,22 +177,15 @@ export class InstrumentCardComponent {
       // local Friday whose UTC instant fell on Saturday, and
       // ``isoDate``'s UTC ``toISOString`` round-trip emitted the
       // Saturday day stamp (PR #346 P1 review).
-      patch.from = toMostRecentTradingDayIso(t.last, -30);
+      const start = toMostRecentTradingDayIso(t.last, -30);
+      // Clamp to where coverage actually begins. A thinly-backfilled symbol
+      // (a few days in the lake) would otherwise open on a 30-day window of
+      // which almost none is readable, and the run would refuse on data the
+      // picker itself had proposed.
+      patch.from = t.first && t.first > start ? t.first : start;
       patch.to = toMostRecentTradingDayIso(t.last);
     }
     this.value.set({ ...current, ...patch });
     this.closeDropdown();
-  }
-
-  cacheTextColor(pct: number | undefined): string {
-    if (pct === undefined) return 'var(--text-muted)';
-    if (pct >= 0.9) return 'var(--bull)';
-    if (pct >= 0.5) return 'var(--warn)';
-    return 'var(--text-muted)';
-  }
-
-  cacheLabel(pct: number | undefined): string {
-    if (pct === undefined || pct === 0) return 'no cache';
-    return `${Math.round(pct * 100)}%`;
   }
 }

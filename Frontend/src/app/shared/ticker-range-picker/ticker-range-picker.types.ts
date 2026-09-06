@@ -35,13 +35,15 @@ export interface TickerRange {
 
 export interface TickerOption {
   symbol: string;
+  /** Display label. Falls back to the symbol when nothing names it. */
   name: string;
   exchange?: string;
-  /** Cache completeness fraction 0..1 — colours the per-row hint and
-   *  drives the recent/sort order in the combobox. Optional. */
-  cache?: number;
-  /** YYYY-MM-DD of the last cached day, or null if nothing cached.
-   *  Used for "jump to last 30 days of cache" on pick. */
+  /** YYYY-MM-DD of the first day the lake holds, or null when unknown.
+   *  Clamps the window "jump to last 30 days" would otherwise propose
+   *  outside coverage for a thinly-backfilled symbol. */
+  first?: string | null;
+  /** YYYY-MM-DD of the last day the lake holds, or null when unknown.
+   *  Anchors "jump to the last 30 days of coverage" on pick. */
   last?: string | null;
 }
 

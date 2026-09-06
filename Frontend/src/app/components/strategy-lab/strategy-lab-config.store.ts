@@ -7,7 +7,6 @@ import { firstValueFrom, map } from "rxjs";
 import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
-import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import type { TickerRange } from "../../shared/ticker-range-picker";
 import {
   leanValidationTemplateForStrategy,
@@ -80,8 +79,6 @@ export class StrategyLabConfigStore {
   readonly configurationWarning = signal<string | null>(null);
   readonly restoredDataPolicy = signal<DataPolicy | null>(null);
 
-  readonly tickerPool = TICKER_POOL;
-  readonly recentTickers = RECENT_TICKERS;
   readonly startDate = computed(() => this.range().from);
   readonly endDate = computed(() => this.range().to);
   readonly resolution = computed<EngineResolution>(() => {

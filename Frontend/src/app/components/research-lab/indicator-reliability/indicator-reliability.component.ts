@@ -36,7 +36,6 @@ import {
 } from '../../../shared/indicator-verdict-hero';
 import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
 import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
-import { TICKER_POOL, RECENT_TICKERS } from '../../../shared/ticker-catalog';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
 
 Chart.register(...registerables);
@@ -249,8 +248,6 @@ export class IndicatorReliabilityComponent {
     to: '2024-06-30',
     resolution: 'minute',
   });
-  readonly tickerPool = TICKER_POOL;
-  readonly recentTickers = RECENT_TICKERS;
 
   indicatorName = signal('rsi');
   includeSlope = signal(false);

@@ -64,18 +64,13 @@
                   <span class="row__symbol mono">{{ t.symbol }}</span>
                   <span class="row__name">{{ t.name }}</span>
                   <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                  <span
-                    class="row__cache mono"
-                    [style.color]="cacheTextColor(t.cache)"
-                  >
-                    {{ cacheLabel(t.cache) }}
-                  </span>
+                  <span class="row__coverage mono">{{ t.last ?? "—" }}</span>
                 </button>
               }
             }
             <div class="dropdown__header">
               @if (query() === "") {
-                All tracked instruments
+                In the data lake
               } @else {
                 {{ filteredTickers().length }} match{{
                   filteredTickers().length === 1 ? "" : "es"
@@ -94,18 +89,23 @@
                 <span class="row__symbol mono">{{ t.symbol }}</span>
                 <span class="row__name">{{ t.name }}</span>
                 <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                <span
-                  class="row__cache mono"
-                  [style.color]="cacheTextColor(t.cache)"
-                >
-                  {{ cacheLabel(t.cache) }}
-                </span>
+                <span class="row__coverage mono">{{ t.last ?? "—" }}</span>
               </button>
             }
             @if (filteredTickers().length === 0) {
               <div class="dropdown__empty">
-                No matches. Add via
-                <a routerLink="/tracked-instruments">Tracked Instruments</a>.
+                @if (catalogUnavailable(); as reason) {
+                  {{ reason }}
+                  <button type="button" class="dropdown__retry" (click)="retryCatalog()">
+                    Retry
+                  </button>
+                } @else if (catalogLoading()) {
+                  Loading instruments…
+                } @else {
+                  The lake holds no bars for a symbol matching that.
+                  <a routerLink="/data-lake" (click)="closeDropdown()">Backfill it</a>
+                  to make it selectable.
+                }
               </div>
             }
           </div>
@@ -114,19 +114,15 @@
     </div>
   </div>
 
-  @if (selectedTickerCachePct() !== null || selectedTickerLast()) {
+  @if (selectedTickerLast(); as last) {
     <div class="instrument-foot mono">
-      <span class="instrument-foot__cache">
-        cache
-        <strong [style.color]="cacheTextColor(selectedTickerCachePct() ?? undefined)">
-          {{ cacheLabel(selectedTickerCachePct() ?? undefined) }}
-        </strong>
+      <span class="instrument-foot__coverage">lake coverage</span>
+      <span class="instrument-foot__span">
+        @if (selectedTickerFirst(); as first) {
+          <span class="instrument-foot__span-val">{{ first }}</span> →
+        }
+        <span class="instrument-foot__span-val">{{ last }}</span>
       </span>
-      @if (selectedTickerLast()) {
-        <span class="instrument-foot__last">
-          last <span class="instrument-foot__last-val">{{ selectedTickerLast() }}</span>
-        </span>
-      }
     </div>
   }
 </section>

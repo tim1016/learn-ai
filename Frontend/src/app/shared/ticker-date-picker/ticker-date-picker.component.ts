@@ -11,7 +11,6 @@ import { DatePickerModule } from 'primeng/datepicker';
 
 import { InstrumentCardComponent } from '../ticker-range-picker/parts/instrument-card.component';
 import type {
-  TickerOption,
   TickerRange,
 } from '../ticker-range-picker/ticker-range-picker.types';
 import type { TickerSnapshot } from './ticker-date-picker.types';
@@ -34,8 +33,6 @@ import type { TickerSnapshot } from './ticker-date-picker.types';
 })
 export class TickerDatePickerComponent {
   readonly value = model.required<TickerSnapshot>();
-  readonly tickerPool = input<readonly TickerOption[]>([]);
-  readonly recent = input<readonly string[]>([]);
   readonly minDate = input<Date | null>(null);
   readonly maxDate = input<Date | null>(null);
   readonly title = input('Snapshot');

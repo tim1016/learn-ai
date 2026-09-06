@@ -1,8 +1,13 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TickerDatePickerComponent } from './ticker-date-picker.component';
 import type { TickerSnapshot } from './ticker-date-picker.types';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../ticker-catalog/testing/fake-ticker-catalog';
 
 describe('TickerDatePickerComponent', () => {
   const baseValue: TickerSnapshot = { symbol: 'SPY', date: '2025-04-30' };
@@ -17,13 +22,13 @@ describe('TickerDatePickerComponent', () => {
   beforeEach(async () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
+      providers: [provideRouter([]), provideFakeTickerCatalog(fakeTickerCatalog(pool))],
       imports: [TickerDatePickerComponent],
     }).compileComponents();
 
     fixture = TestBed.createComponent(TickerDatePickerComponent);
     component = fixture.componentInstance;
     fixture.componentRef.setInput('value', baseValue);
-    fixture.componentRef.setInput('tickerPool', pool);
   });
 
   it('renders the symbol and date in the summary line', () => {

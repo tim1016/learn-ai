@@ -17,7 +17,6 @@ import {
 } from '../ticker-range-picker/parts/sampling-card.component';
 import type {
   Resolution,
-  TickerOption,
   TickerRange,
 } from '../ticker-range-picker/ticker-range-picker.types';
 import { MultiInstrumentCardComponent } from './multi-instrument-card.component';
@@ -49,8 +48,6 @@ import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 })
 export class MultiTickerRangePickerComponent {
   readonly value = model.required<MultiTickerRange>();
-  readonly tickerPool = input<readonly TickerOption[]>([]);
-  readonly recent = input<readonly string[]>([]);
   readonly availableResolutions = input<readonly Resolution[]>([
     'minute',
     'hour',

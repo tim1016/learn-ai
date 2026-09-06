@@ -165,11 +165,23 @@
       &:hover { color: var(--accent-hover); text-decoration: underline; }
     }
   }
+
+  &__retry {
+    margin-left: 4px;
+    padding: 0;
+    background: none;
+    border: none;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+
+    &:hover { color: var(--accent-hover); text-decoration: underline; }
+  }
 }
 
 .row {
   display: grid;
-  grid-template-columns: 64px 1fr 60px 50px;
+  grid-template-columns: 64px 1fr 56px 74px;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -209,8 +221,9 @@
     text-align: right;
   }
 
-  &__cache {
+  &__coverage {
     font-size: 10px;
+    color: var(--text-muted);
     text-align: right;
   }
 }
@@ -222,11 +235,7 @@
   font-size: 10px;
   color: var(--text-subtle);
 
-  strong {
-    font-weight: var(--fw-bold);
-  }
-
-  &__last-val {
+  &__span-val {
     color: var(--text-secondary);
   }
 }

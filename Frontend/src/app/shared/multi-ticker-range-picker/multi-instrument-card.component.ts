@@ -2,7 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
-  input,
+  inject,
   model,
   signal,
 } from '@angular/core';
@@ -10,6 +10,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
+import { TickerCatalogService } from '../ticker-catalog';
 import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 
 /**
@@ -29,8 +30,9 @@ import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 })
 export class MultiInstrumentCardComponent {
   readonly value = model.required<MultiTickerRange>();
-  readonly tickerPool = input<readonly TickerOption[]>([]);
-  readonly recent = input<readonly string[]>([]);
+
+  private readonly catalog = inject(TickerCatalogService);
+  readonly tickerPool = this.catalog.pool;
 
   readonly query = signal('');
 
