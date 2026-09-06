@@ -15,7 +15,7 @@ import { BehaviorSubject, of, throwError } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
-import { JobsService } from "../../services/jobs.service";
+import { JobsService, type JobState } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import { StrategyLabComponent } from "./strategy-lab.component";
 import { toStrategyLabConfiguration } from "./strategy-lab.models";
@@ -132,7 +132,7 @@ async function createLab(
   } = {},
 ) {
   const jobs = signal<never[]>([]);
-  const activeJobs = signal<never[]>([]);
+  const activeJobs = signal<JobState[]>([]);
   const navigate = vi.fn(async () => true);
   const diagnose = vi.fn();
   const query: Record<string, string> = {};
@@ -168,7 +168,17 @@ async function createLab(
         useValue: { queryParamMap, snapshot: { queryParamMap: queryParamMap.value } },
       },
       { provide: Router, useValue: { navigate } },
-      { provide: JobsService, useValue: { jobs, activeJobs, job: vi.fn(() => null), startJob: vi.fn(), fetchResult: vi.fn(), cancelJob: vi.fn() } },
+      {
+        provide: JobsService,
+        useValue: {
+          jobs,
+          activeJobs,
+          job: (id: string) => activeJobs().find((job) => job.id === id) ?? null,
+          startJob: vi.fn(),
+          fetchResult: vi.fn(),
+          cancelJob: vi.fn(),
+        },
+      },
       {
         provide: LeanSidecarService,
         useValue: {
@@ -187,6 +197,7 @@ async function createLab(
   };
   return {
     fixture,
+    activeJobs,
     http: TestBed.inject(HttpTestingController),
     navigate,
     diagnose,
@@ -207,6 +218,27 @@ describe("Strategy Lab Workbench", () => {
     expect(root.textContent).toContain("History");
     expect(root.textContent).not.toContain("Run a strategy, inspect its evidence");
     expect(root.querySelector("app-strategy-lab-config-rail")).not.toBeNull();
+    http.verify();
+  });
+
+  it("keeps Run disabled and shows the run as in flight when a backtest is resumed after a reload", async () => {
+    const { fixture, http, activeJobs } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const runButton = (): HTMLButtonElement | undefined =>
+      Array.from(root.querySelectorAll("button")).find((button) => /Run validation|Running…/.test(button.textContent ?? ""));
+    expect(runButton()?.textContent).toContain("Run validation");
+
+    // JobsService.resumeActive() finds the job the reload interrupted.
+    activeJobs.set([{ id: "resumed-1", type: "engine_backtest", status: "running", phase: "running_indicators", recentLogs: [], logSeq: 0 }]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(runButton()?.textContent).toContain("Running…");
+    expect(runButton()?.disabled).toBe(true);
     http.verify();
   });
 

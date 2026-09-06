@@ -68,6 +68,7 @@ describe("StrategyLab configuration and runner", () => {
   }
 
   beforeEach(() => {
+    sessionStorage.clear();
     startJob = vi.fn(async () => "job-1");
     fetchResult = vi.fn();
     navigate = vi.fn(async () => true);
@@ -284,7 +285,7 @@ describe("StrategyLab configuration and runner", () => {
     });
 
     it("adopts an active lean_engine_run job discovered after construction and reports running", () => {
-      putJob(makeJobState({ id: "resumed-lean-1", type: "lean_engine_run", status: "running" }));
+      putJob(makeJobState({ id: "resumed-lean-1", type: "lean_engine_run", status: "running", parameters: { request: { run_id: "strategy_lab_spy_x1" } } }));
       TestBed.tick();
 
       expect(runner.running()).toBe(true);
@@ -307,6 +308,50 @@ describe("StrategyLab configuration and runner", () => {
       TestBed.tick();
       await Promise.resolve();
       expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("reattaches to the job this tab started, not another tab's active backtest", async () => {
+      await runner.run();
+      expect(startJob).toHaveBeenCalledWith("engine_backtest", expect.anything());
+
+      // Simulate the reload: a fresh runner with no job of its own, while two
+      // engine jobs are active and the other tab's job is listed first.
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+      expect(reloaded.running()).toBe(true);
+
+      fetchResult.mockResolvedValue({ success: true, study_id: 777, total_trades: 1, net_profit: 1 });
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed" }));
+      TestBed.tick();
+      await Promise.resolve();
+      expect(navigate).not.toHaveBeenCalled();
+
+      fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(navigate).toHaveBeenCalledWith(
+        ["/strategy-lab"],
+        expect.objectContaining({ queryParams: { run: 224 } }),
+      );
+    });
+
+    it("leaves a parity companion's LEAN job alone even though it shares the job type", () => {
+      putJob(
+        makeJobState({
+          id: "companion-lean",
+          type: "lean_engine_run",
+          status: "running",
+          parameters: { request: { run_id: "companion-spy-x1" } },
+        }),
+      );
+      putJob(makeJobState({ id: "unscoped-lean", type: "lean_engine_run", status: "running" }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(false);
     });
 
     it("navigates to the produced study once an adopted engine_backtest job completes", async () => {

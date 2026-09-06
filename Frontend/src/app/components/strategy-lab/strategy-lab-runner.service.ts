@@ -2,7 +2,7 @@ import { HttpErrorResponse } from "@angular/common/http";
 import { computed, effect, inject, Injectable, signal } from "@angular/core";
 import { Router } from "@angular/router";
 
-import { JobsService } from "../../services/jobs.service";
+import { JobsService, type JobState } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import type {
   LeanLauncherDiagnosticReport,
@@ -17,6 +17,48 @@ import {
 } from "./strategy-lab.models";
 
 const COMPATIBILITY_PROFILE = "us-equity-raw-ibkr-v1";
+
+/**
+ * The job this browser tab started, kept in `sessionStorage` (per-tab,
+ * survives a reload, never shared with other tabs) so a reload reattaches
+ * to *this* tab's run even when other backtests are active. Storage is a
+ * convenience, not execution state: when it is unavailable the runner
+ * falls back to adopting any active job of the right type.
+ */
+const OWN_JOB_KEY = "strategyLab.ownJobId";
+
+/** Every LEAN run this workbench submits carries this `run_id` prefix; the
+ *  parity companion submits `lean_engine_run` jobs through the same public
+ *  route with a `companion-…` id, and those must never be adopted here. */
+const STRATEGY_LAB_RUN_ID_PREFIX = "strategy_lab_";
+
+function isStrategyLabJob(job: JobState): boolean {
+  if (job.type === "engine_backtest") return true;
+  if (job.type !== "lean_engine_run") return false;
+  const request = job.parameters?.["request"];
+  const runId = typeof request === "object" && request !== null ? (request as Record<string, unknown>)["run_id"] : undefined;
+  // Parameters can be missing for old or malformed server state; a job whose
+  // owner cannot be established is left alone rather than guessed.
+  return typeof runId === "string" && runId.startsWith(STRATEGY_LAB_RUN_ID_PREFIX);
+}
+
+function rememberOwnJob(id: string): void {
+  try {
+    if (typeof sessionStorage === "undefined") return;
+    sessionStorage.setItem(OWN_JOB_KEY, id);
+  } catch {
+    // Browser storage is an optional convenience, not execution state.
+  }
+}
+
+function ownJobId(): string | null {
+  try {
+    if (typeof sessionStorage === "undefined") return null;
+    return sessionStorage.getItem(OWN_JOB_KEY);
+  } catch {
+    return null;
+  }
+}
 
 @Injectable()
 export class StrategyLabRunner {
@@ -106,7 +148,7 @@ export class StrategyLabRunner {
 
   composeRunId(): string {
     const symbol = this.config.effectiveSymbol().toLowerCase().replace(/[^a-z0-9]/g, "");
-    return `strategy_lab_${symbol}_${Date.now().toString(36)}`;
+    return `${STRATEGY_LAB_RUN_ID_PREFIX}${symbol}_${Date.now().toString(36)}`;
   }
 
   private async ensureLeanLauncherReady(): Promise<boolean> {
@@ -142,7 +184,9 @@ export class StrategyLabRunner {
       end_date: this.config.endDate(),
     };
     try {
-      this.engineJobId.set(await this.jobs.startJob("engine_backtest", { backtest }));
+      const jobId = await this.jobs.startJob("engine_backtest", { backtest });
+      rememberOwnJob(jobId);
+      this.engineJobId.set(jobId);
     } catch (error) {
       const detail = httpErrorDetail(error);
       this.fail(
@@ -193,19 +237,19 @@ export class StrategyLabRunner {
       const algorithm = customSource === null
         ? { template }
         : { algorithm_source: customSource };
-      this.leanJobId.set(
-        await this.jobs.startJob("lean_engine_run", {
-          request: {
-            run_id: this.composeRunId(),
-            requested_engine: this.config.engine(),
-            starting_cash: this.config.initialCash(),
-            start_ms_utc: startResolution.session_open_ms_utc,
-            end_ms_utc: endResolution.session_open_ms_utc,
-            data_policy: this.config.dataPolicy(),
-            ...algorithm,
-          },
-        }),
-      );
+      const leanJobId = await this.jobs.startJob("lean_engine_run", {
+        request: {
+          run_id: this.composeRunId(),
+          requested_engine: this.config.engine(),
+          starting_cash: this.config.initialCash(),
+          start_ms_utc: startResolution.session_open_ms_utc,
+          end_ms_utc: endResolution.session_open_ms_utc,
+          data_policy: this.config.dataPolicy(),
+          ...algorithm,
+        },
+      });
+      rememberOwnJob(leanJobId);
+      this.leanJobId.set(leanJobId);
     } catch (error) {
       this.fail(
         "LEAN run request failed",
@@ -259,23 +303,28 @@ export class StrategyLabRunner {
    * is constructed — e.g. a page reload while a backtest is running.
    * `JobsService.resumeActive()` resolves asynchronously and may finish
    * after this runner is constructed, so this reacts to `activeJobs()`
-   * rather than reading it once here. Adoption is skipped once this runner
-   * is already tracking a job — its own started/adopted job wins.
+   * rather than reading it once here. The job this tab started (remembered
+   * per tab) is preferred over any other active job of the same type, so a
+   * reload never lands on another tab's experiment; a tab with no job of
+   * its own adopts whichever engine job is active so Run stays disabled
+   * while the container is busy. Adoption is skipped once this runner is
+   * already tracking a job — its own started/adopted job wins.
    */
   private wireJobAdoptionEffect(): void {
     effect(() => {
       if (this.engineJobId() !== null || this.leanJobId() !== null) return;
-      const active = this.jobs.activeJobs();
-      const engineJob = active.find((job) => job.type === "engine_backtest");
-      if (engineJob) {
+      const active = this.jobs.activeJobs().filter(isStrategyLabJob);
+      const own = ownJobId();
+      const job =
+        active.find((candidate) => candidate.id === own) ??
+        active.find((candidate) => candidate.type === "engine_backtest") ??
+        active.find((candidate) => candidate.type === "lean_engine_run");
+      if (job?.type === "engine_backtest") {
         this.beginRun("Reattaching to backtest…", "");
-        this.engineJobId.set(engineJob.id);
-        return;
-      }
-      const leanJob = active.find((job) => job.type === "lean_engine_run");
-      if (leanJob) {
+        this.engineJobId.set(job.id);
+      } else if (job?.type === "lean_engine_run") {
         this.beginRun("Reattaching to LEAN run…", "");
-        this.leanJobId.set(leanJob.id);
+        this.leanJobId.set(job.id);
       }
     });
   }
