@@ -1,7 +1,7 @@
 import type { EngineValidationAnalytics } from "../lean-engine/engine-results/engine-validation-analytics.types";
 import type { RunVerdict } from "../../api/run-verdict.types";
 import type { DataPolicy } from "../../models/data-policy";
-import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../services/backtest-runs.types";
 import type { TickerRange } from "../../shared/ticker-range-picker";
 
 export type EngineChoice = "python" | "lean" | "both";

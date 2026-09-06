@@ -5,7 +5,7 @@ import { TestBed } from "@angular/core/testing";
 import { of } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
-import type { BacktestRunDetail } from "../../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import { MarketDataService } from "../../../services/market-data.service";
 import { IndicatorCatalogService } from "../../../shared/indicator-catalog/indicator-catalog.service";
 import { TradingChartComponent } from "../../../shared/trading-chart";
@@ -81,6 +81,8 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     parityGroupId: null,
     trades: [],
     tradesTruncated: false,
+    metricDocumentation: [],
+    notes: null,
     parityVerdicts: [],
     ...overrides,
   };

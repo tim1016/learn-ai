@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { describe, expect, it } from "vitest";
 
-import type { BacktestRunDetail } from "../../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import { ResultsSidebarComponent } from "./results-sidebar.component";
 
 function run(): BacktestRunDetail {
@@ -70,6 +70,8 @@ function run(): BacktestRunDetail {
     insightSummaryJson: null,
     parityGroupId: "pair-1",
     trades: [],
+    metricDocumentation: [],
+    notes: null,
     tradesTruncated: false,
     parityVerdicts: [{
       id: 1,

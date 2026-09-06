@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, input } from "@angular/core";
 
 import type { RunVerdict } from "../../../api/run-verdict.types";
-import type { BacktestRunDetail } from "../../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.component";
 import { ResultsSidebarComponent } from "../results-sidebar/results-sidebar.component";
 import { ResultsSummaryComponent } from "../results-summary/results-summary.component";

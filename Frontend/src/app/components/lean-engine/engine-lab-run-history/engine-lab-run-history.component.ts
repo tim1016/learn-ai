@@ -5,43 +5,34 @@ import {
   effect,
   inject,
   output,
+  resource,
   signal,
 } from "@angular/core";
-import { Apollo } from "apollo-angular";
-import { toSignal } from "@angular/core/rxjs-interop";
 import { firstValueFrom } from "rxjs";
-import { map } from "rxjs/operators";
 
 import { RunHistoryComponent } from "../../shared/run-history/run-history.component";
-import {
-  BACKTEST_RUNS_QUERY,
-  BacktestRunNode,
-  BacktestRunsQueryResult,
-  Engine,
-  toRunHistoryRow,
-  UPDATE_BACKTEST_RUN_NOTES_MUTATION,
-} from "../../../graphql/backtest-runs.query";
+import { BacktestRunsService, HISTORY_PAGE_SIZE } from "../../../services/backtest-runs.service";
+import { toRunHistoryRow, type BacktestRunSummary, type Engine } from "../../../services/backtest-runs.types";
 import { JobsService } from "../../../services/jobs.service";
 
-/** Persisted filter selection. ``ALL`` keeps the GraphQL variable null. */
+/** Persisted filter selection. ``ALL`` asks for every engine. */
 type EngineFilter = "ALL" | Engine;
 
 const COLUMN_PREF_KEY = "engine-lab-history.columns.v1";
 
-/** Job types whose successful completion should refresh the History table.
- *  ``engine_backtest`` is the Python engine path today. ``lean_engine_run``
- *  is the planned LEAN sidecar path (issue #470) — listing it here now
- *  means the auto-refresh starts working for LEAN runs the moment that
- *  ships, with no change to this component. */
+/** Job types whose successful completion should refresh the History table:
+ *  ``engine_backtest`` is the Python engine path, ``lean_engine_run`` the
+ *  LEAN sidecar path. */
 const ENGINE_JOB_TYPES = new Set<string>(["engine_backtest", "lean_engine_run"]);
 
 /**
- * PR B.3 (2026-05-19) — unified history surface. Hosts the Engine filter
- * dropdown + CSV export + column visibility chooser around the shared
- * <see cref="RunHistoryComponent"/>, and persists inline notes edits via the
- * new <c>updateBacktestRunNotes</c> mutation. The legacy REST-backed
- * <c>EngineHistoryComponent</c> retires in Task 3.6; the features that
- * actually got used (notes / CSV / column toggle) are ported forward here.
+ * Unified history surface. Hosts the Engine filter dropdown + CSV export +
+ * column visibility chooser around the shared <see cref="RunHistoryComponent"/>,
+ * and persists inline notes edits through the run service (PRD #1929).
+ *
+ * The list is a `resource`: the engine filter is a params change, while a
+ * job completing is a `reload()` — a params change discards the previous
+ * value and would blank the table mid-refresh.
  */
 @Component({
   selector: "app-engine-lab-run-history",
@@ -51,21 +42,19 @@ const ENGINE_JOB_TYPES = new Set<string>(["engine_backtest", "lean_engine_run"])
   styleUrl: "./engine-lab-run-history.component.scss",
 })
 export class EngineLabRunHistoryComponent {
-  private readonly apollo = inject(Apollo);
+  private readonly runs = inject(BacktestRunsService);
   private readonly jobsService = inject(JobsService);
-  /** Job ids we've already refetched for. Without this, every signal tick
+  /** Job ids we've already refreshed for. Without this, every signal tick
    *  while a completed engine job sits in `JobsService.jobs` would refire
-   *  the refetch — the user would see a refetch storm on subsequent filter
+   *  the reload — the user would see a refresh storm on subsequent filter
    *  changes or recentLogs ticks. */
   private readonly seenCompletedIds = new Set<string>();
 
-  /** Active engine filter — drives the GraphQL ``engine`` variable. */
+  /** Active engine filter — drives the list's ``engine`` parameter. */
   readonly engineFilter = signal<EngineFilter>("ALL");
 
   /** Emitted when a row is clicked — the parent component routes this to
-   *  the Results tab (replacing the deleted REST EngineHistoryComponent's
-   *  studySelected output). The id is the StrategyExecution numeric id as
-   *  a string (GraphQL ID). */
+   *  the Results tab. The id is the run's numeric id as a string. */
   readonly runSelected = output<string>();
 
   /** Column-visibility set, persisted to localStorage so a researcher's
@@ -76,22 +65,12 @@ export class EngineLabRunHistoryComponent {
   /** Drives the column-chooser dropdown open state. */
   readonly chooserOpen = signal(false);
 
-  private readonly queryRef = this.apollo.watchQuery<BacktestRunsQueryResult>({
-    query: BACKTEST_RUNS_QUERY,
-    variables: { engine: null, first: 50 },
-    fetchPolicy: "cache-and-network",
+  private readonly history = resource<BacktestRunSummary[], { engine: Engine | null }>({
+    params: () => ({ engine: this.engineFilter() === "ALL" ? null : (this.engineFilter() as Engine) }),
+    loader: ({ params }) => firstValueFrom(this.runs.list(params.engine, HISTORY_PAGE_SIZE)),
   });
 
-  readonly rows = toSignal(
-    this.queryRef.valueChanges.pipe(
-      map((r) => {
-        const nodes = r.data?.backtestRuns?.nodes;
-        if (!nodes) return [];
-        return (nodes as BacktestRunNode[]).map(toRunHistoryRow);
-      }),
-    ),
-    { initialValue: [] },
-  );
+  readonly rows = computed(() => (this.history.hasValue() ? this.history.value() : []).map(toRunHistoryRow));
 
   /** All known toggleable columns. Order is the rendering order. */
   readonly allColumns: readonly ColumnDef[] = [
@@ -106,20 +85,10 @@ export class EngineLabRunHistoryComponent {
   ];
 
   constructor() {
-    // Re-fetch whenever the engine filter changes. The dropdown is a 3-state
-    // (ALL | PYTHON | LEAN) selector and ALL maps to a null GraphQL variable.
-    effect(() => {
-      const filter = this.engineFilter();
-      void this.queryRef.refetch({
-        engine: filter === "ALL" ? null : filter,
-        first: 50,
-      });
-    });
-
-    // Re-fetch whenever an engine-type job transitions to ``completed``.
-    // The runs persist before the SSE ``job.completed`` event fires (see
+    // Reload whenever an engine-type job transitions to ``completed``. The
+    // runs persist before the SSE ``job.completed`` event fires (see
     // ``lean_sidecar_service.run_trusted_sample`` and the Python engine
-    // job worker), so the row is already in the DB by the time we refetch.
+    // job worker), so the row is already in the table by the time we reload.
     // The seen-ids set is mutated as a non-signal side effect so the
     // effect doesn't re-trigger on its own writes.
     effect(() => {
@@ -132,9 +101,7 @@ export class EngineLabRunHistoryComponent {
       );
       if (newlyCompleted.length === 0) return;
       newlyCompleted.forEach((j) => this.seenCompletedIds.add(j.id));
-      // ``refetch()`` with no args reuses the last-set variables — the
-      // current engine filter / pagination is preserved.
-      void this.queryRef.refetch();
+      this.history.reload();
     });
   }
 
@@ -149,18 +116,13 @@ export class EngineLabRunHistoryComponent {
   }
 
   // ------------------------------------------------------------------
-  // Notes — round-trip through the new updateBacktestRunNotes mutation.
-  // Apollo's normalized cache picks up the mutation result (id + notes
-  // selection) and updates the watched query without a refetch.
+  // Notes — persisted through the run service; the loaded page is
+  // patched in place with the value the server kept, so no reload.
   // ------------------------------------------------------------------
   async onNotesEdited(event: { id: string; notes: string }): Promise<void> {
     try {
-      await firstValueFrom(
-        this.apollo.mutate({
-          mutation: UPDATE_BACKTEST_RUN_NOTES_MUTATION,
-          variables: { id: Number(event.id), notes: event.notes },
-        }),
-      );
+      const saved = await firstValueFrom(this.runs.updateNotes(Number(event.id), event.notes));
+      this.history.update((runs) => runs?.map((run) => (run.id === saved.id ? { ...run, notes: saved.notes } : run)));
     } catch (err) {
       console.warn("notes update failed", { id: event.id, error: err });
     }
@@ -219,7 +181,7 @@ export class EngineLabRunHistoryComponent {
   }
 
   // ------------------------------------------------------------------
-  // CSV export — client-side serialization of the GraphQL result.
+  // CSV export — client-side serialization of the loaded page.
   // Preserves the column-visibility selection so the file matches
   // what the user sees on screen.
   // ------------------------------------------------------------------

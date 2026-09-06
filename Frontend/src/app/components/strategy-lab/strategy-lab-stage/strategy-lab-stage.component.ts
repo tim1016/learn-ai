@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, input } from "@angular/core";
 
-import type { BacktestRunDetail } from "../../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import type { TradingMarker, TradingPoint } from "../../../shared/trading-chart";
 import { ValidationStagePlaceholderComponent } from "../../lean-engine/validation-stage-placeholder/validation-stage-placeholder.component";
 import { StrategyLabChartComponent } from "../strategy-lab-chart/strategy-lab-chart.component";

@@ -16,7 +16,7 @@ import {
   RUN_DOCK_SOURCE,
   RUN_DOCK_STORAGE_KEY,
 } from "../../shared/run-dock/run-dock-source";
-import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../services/backtest-runs.types";
 import { EngineLabRunHistoryComponent } from "../lean-engine/engine-lab-run-history/engine-lab-run-history.component";
 import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
 import { LeanSourceEditorComponent } from "./lean-source-editor/lean-source-editor.component";

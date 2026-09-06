@@ -4,7 +4,7 @@ import { Dialog } from "primeng/dialog";
 
 import analyticalMetricCatalog from "@repo-contracts/strategy-lab/analytical-metric-catalog-v1.json";
 
-import type { MetricDocumentationContext } from "../../../graphql/backtest-runs.query";
+import type { MetricDocumentationContext } from "../../../services/backtest-runs.types";
 import type { AnalyticalMetricCatalog, MetricVariant } from "../analytical-manual/analytical-metric-catalog.models";
 import { resolveMetricContext } from "../analytical-manual/metric-context.util";
 import { MetricReferenceEntryComponent } from "../analytical-manual/metric-reference-entry.component";
@@ -46,12 +46,12 @@ export class MetricHelpModalComponent {
     }
 
     const metricId = this.metricId();
-    const context = this.context()?.metricId === metricId ? this.context() : null;
+    const context = this.context()?.metric_id === metricId ? this.context() : null;
     return resolveMetricContext(CATALOG.variants, {
       metricId,
-      variantId: context?.variantId ?? null,
+      variantId: context?.variant_id ?? null,
       producer: context?.producer ?? null,
-      contractId: context?.contractId ?? null,
+      contractId: context?.contract_id ?? null,
     });
   });
   readonly variant = computed(() => this.resolution().variant);

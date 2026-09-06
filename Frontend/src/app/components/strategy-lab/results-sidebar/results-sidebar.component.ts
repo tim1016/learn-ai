@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from "@angular/core";
 
 import type { RunVerdictSubScore } from "../../../api/run-verdict.types";
-import type { BacktestRunDetail } from "../../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 import { parseRunVerdict } from "../strategy-lab.models";
 

@@ -1,10 +1,12 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, convertToParamMap } from "@angular/router";
-import { Apollo } from "apollo-angular";
 import { of, throwError } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
+import { BacktestRunsService } from "../../../services/backtest-runs.service";
+import type { MetricDocumentationContext } from "../../../services/backtest-runs.types";
+import { makeRun } from "../testing/run-fixtures";
 import type { MetricVariant } from "./analytical-metric-catalog.models";
 import {
   StrategyLabAnalyticalManualComponent,
@@ -93,7 +95,7 @@ describe("resolveMetricContext", () => {
 
 async function renderManual(options: {
   queryParams: Record<string, string>;
-  metricDocumentation?: { metricId: string; variantId: string; producer: string; contractId: string | null; contractProvenance: string }[] | null;
+  metricDocumentation?: MetricDocumentationContext[] | null;
   queryError?: Error;
 }) {
   const params = convertToParamMap(options.queryParams);
@@ -103,12 +105,12 @@ async function renderManual(options: {
       provideZonelessChangeDetection(),
       { provide: ActivatedRoute, useValue: { queryParamMap: of(params), snapshot: { queryParamMap: params } } },
       {
-        provide: Apollo,
+        provide: BacktestRunsService,
         useValue: {
-          query: vi.fn(() =>
+          get: vi.fn(() =>
             options.queryError
               ? throwError(() => options.queryError)
-              : of({ data: { backtestRun: { metricDocumentation: options.metricDocumentation ?? null } } }),
+              : of(options.metricDocumentation ? makeRun({ metricDocumentation: options.metricDocumentation }) : null),
           ),
         },
       },
@@ -126,13 +128,7 @@ describe("StrategyLabAnalyticalManualComponent — used-by-this-run trust bounda
     const fixture = await renderManual({
       queryParams: { run: "42", metric: "sharpe", variant: "sharpe.lean_native.v1", producer: "lean_native" },
       metricDocumentation: [
-        {
-          metricId: "sharpe",
-          variantId: "sharpe.platform.v1",
-          producer: "platform",
-          contractId: "platform-sharpe-v1",
-          contractProvenance: "recorded",
-        },
+        { metric_id: "sharpe", variant_id: "sharpe.platform.v1", producer: "platform", contract_id: "platform-sharpe-v1" },
       ],
     });
 
@@ -145,13 +141,7 @@ describe("StrategyLabAnalyticalManualComponent — used-by-this-run trust bounda
     const fixture = await renderManual({
       queryParams: { run: "42", metric: "sharpe", variant: "sharpe.lean_native.v1", producer: "lean_native" },
       metricDocumentation: [
-        {
-          metricId: "sharpe",
-          variantId: "sharpe.lean_native.v1",
-          producer: "lean_native",
-          contractId: "lean-statistics-oracle-v1",
-          contractProvenance: "recorded",
-        },
+        { metric_id: "sharpe", variant_id: "sharpe.lean_native.v1", producer: "lean_native", contract_id: "lean-statistics-oracle-v1" },
       ],
     });
 

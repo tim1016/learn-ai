@@ -1,15 +1,11 @@
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Router } from "@angular/router";
-import { Apollo } from "apollo-angular";
 import { of } from "rxjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history.component";
-import {
-  BACKTEST_RUNS_QUERY,
-  BacktestRunNode,
-  UPDATE_BACKTEST_RUN_NOTES_MUTATION,
-} from "../../../graphql/backtest-runs.query";
+import { BacktestRunsService, HISTORY_PAGE_SIZE } from "../../../services/backtest-runs.service";
+import type { BacktestRunSummary } from "../../../services/backtest-runs.types";
 import { JobsService, JobState } from "../../../services/jobs.service";
 
 /** Writable signal the auto-refresh tests use to drive JobsService state.
@@ -52,12 +48,13 @@ function makeJob(over: Partial<JobState>): JobState {
   };
 }
 
-function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
+function baseRun(over: Partial<BacktestRunSummary> = {}): BacktestRunSummary {
   return {
     id: 30,
     source: "engine",
     engine: "PYTHON",
     strategyName: "sma_crossover",
+    symbol: "AAPL",
     leanRunId: null,
     parameters: '{"symbol":"AAPL","starting_cash":100000}',
     startDate: "2025-01-06",
@@ -89,9 +86,9 @@ function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
   };
 }
 
-const FAKE_NODES: BacktestRunNode[] = [
-  baseNode({ id: 30, strategyName: "sma_crossover" }),
-  baseNode({
+const FAKE_RUNS: BacktestRunSummary[] = [
+  baseRun({ id: 30, strategyName: "sma_crossover" }),
+  baseRun({
     id: 31,
     strategyName: "rsi_mean_reversion",
     engine: "LEAN",
@@ -104,39 +101,30 @@ const FAKE_NODES: BacktestRunNode[] = [
   }),
 ];
 
-function makeApollo(nodes: BacktestRunNode[] = FAKE_NODES) {
-  const valueChanges$ = of({
-    data: {
-      backtestRuns: {
-        pageInfo: { hasNextPage: false, endCursor: null },
-        nodes,
-      },
-    },
-  });
-  const refetch = vi.fn();
-  const mutate = vi.fn().mockReturnValue(of({ data: { updateBacktestRunNotes: { id: 30, notes: "new" } } }));
+function makeRunsService(runs: BacktestRunSummary[] = FAKE_RUNS) {
   return {
-    watchQuery: vi.fn().mockReturnValue({ valueChanges: valueChanges$, refetch }),
-    mutate,
-    _refetch: refetch,
-    _mutate: mutate,
+    list: vi.fn(() => of(runs)),
+    get: vi.fn(),
+    updateNotes: vi.fn((id: number, notes: string) => of({ id, notes })),
   };
 }
 
 async function setup(
-  apolloStub = makeApollo(),
+  runsService = makeRunsService(),
   navigateSpy = vi.fn(),
 ): Promise<ComponentFixture<EngineLabRunHistoryComponent>> {
   await TestBed.configureTestingModule({
     imports: [EngineLabRunHistoryComponent],
     providers: [
       provideZonelessChangeDetection(),
-      { provide: Apollo, useValue: apolloStub },
+      { provide: BacktestRunsService, useValue: runsService },
       { provide: Router, useValue: { navigate: navigateSpy } },
       { provide: JobsService, useValue: jobsServiceMock },
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(EngineLabRunHistoryComponent);
+  fixture.detectChanges();
+  await fixture.whenStable();
   fixture.detectChanges();
   return fixture;
 }
@@ -148,15 +136,10 @@ describe("EngineLabRunHistoryComponent", () => {
     fakeJobsSignal.set([]);
   });
 
-  it("queries backtestRuns with engine=null by default (All filter)", async () => {
-    const apollo = makeApollo();
-    await setup(apollo);
-    expect(apollo.watchQuery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: BACKTEST_RUNS_QUERY,
-        variables: expect.objectContaining({ engine: null }),
-      }),
-    );
+  it("lists every engine's runs by default (All filter) as one fixed page", async () => {
+    const runs = makeRunsService();
+    await setup(runs);
+    expect(runs.list).toHaveBeenCalledWith(null, HISTORY_PAGE_SIZE);
   });
 
   it("renders strategy names from mapped rows", async () => {
@@ -166,7 +149,7 @@ describe("EngineLabRunHistoryComponent", () => {
     expect(html).toContain("rsi_mean_reversion");
   });
 
-  it("renders symbol extracted from parameters JSON", async () => {
+  it("renders the symbol stored on the run", async () => {
     const fixture = await setup();
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(html).toContain("AAPL");
@@ -192,34 +175,16 @@ describe("EngineLabRunHistoryComponent", () => {
   });
 
   it("renders the empty state when no rows are returned", async () => {
-    const fixture = await setup(makeApollo([]));
+    const fixture = await setup(makeRunsService([]));
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(html).toContain("No runs yet");
   });
-
-  it("extracts null symbol when parameters is null", async () => {
-    const nodes: BacktestRunNode[] = [
-      baseNode({
-        id: 40,
-        strategyName: "no_params",
-        parameters: null,
-        endDate: "2025-01-10",
-        executedAt: Date.UTC(2026, 4, 19, 9, 0),
-        totalTrades: 0,
-        totalPnL: 0,
-        hasSyntheticExit: false,
-      }),
-    ];
-    const fixture = await setup(makeApollo(nodes));
-    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(html).toContain("—");
-  });
 });
 
-describe("EngineLabRunHistoryComponent — filter dropdown (PR B.3)", () => {
-  it("changing the engine filter to PYTHON refetches with engine=PYTHON", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
+describe("EngineLabRunHistoryComponent — filter dropdown", () => {
+  it("changing the engine filter to PYTHON re-reads with engine=PYTHON", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
 
     const select = fixture.nativeElement.querySelector(
       '[data-testid="engine-filter"]',
@@ -227,15 +192,14 @@ describe("EngineLabRunHistoryComponent — filter dropdown (PR B.3)", () => {
     select.value = "PYTHON";
     select.dispatchEvent(new Event("change"));
     fixture.detectChanges();
+    await fixture.whenStable();
 
-    expect(apollo._refetch).toHaveBeenCalledWith(
-      expect.objectContaining({ engine: "PYTHON" }),
-    );
+    expect(runs.list).toHaveBeenLastCalledWith("PYTHON", HISTORY_PAGE_SIZE);
   });
 
-  it("changing the engine filter to LEAN refetches with engine=LEAN", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
+  it("changing the engine filter to LEAN re-reads with engine=LEAN", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
 
     const select = fixture.nativeElement.querySelector(
       '[data-testid="engine-filter"]',
@@ -243,32 +207,30 @@ describe("EngineLabRunHistoryComponent — filter dropdown (PR B.3)", () => {
     select.value = "LEAN";
     select.dispatchEvent(new Event("change"));
     fixture.detectChanges();
+    await fixture.whenStable();
 
-    expect(apollo._refetch).toHaveBeenCalledWith(
-      expect.objectContaining({ engine: "LEAN" }),
-    );
+    expect(runs.list).toHaveBeenLastCalledWith("LEAN", HISTORY_PAGE_SIZE);
   });
 });
 
-describe("EngineLabRunHistoryComponent — notes editing (PR B.3)", () => {
-  it("notesEdited from the inner table triggers the GraphQL mutation", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
+describe("EngineLabRunHistoryComponent — notes editing", () => {
+  it("notesEdited from the inner table persists through the run service and patches the row", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
 
     await fixture.componentInstance.onNotesEdited({ id: "30", notes: "good run" });
+    fixture.detectChanges();
 
-    expect(apollo._mutate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mutation: UPDATE_BACKTEST_RUN_NOTES_MUTATION,
-        variables: { id: 30, notes: "good run" },
-      }),
-    );
+    expect(runs.updateNotes).toHaveBeenCalledWith(30, "good run");
+    expect(fixture.componentInstance.rows().find((row) => row.id === "30")?.notes).toBe("good run");
+    // The loaded page is patched in place; no re-read of the list.
+    expect(runs.list).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("EngineLabRunHistoryComponent — CSV export (PR B.3)", () => {
+describe("EngineLabRunHistoryComponent — CSV export", () => {
   it("export button is disabled when there are no rows", async () => {
-    const fixture = await setup(makeApollo([]));
+    const fixture = await setup(makeRunsService([]));
     const button = fixture.nativeElement.querySelector(
       '[data-testid="export-csv"]',
     ) as HTMLButtonElement;
@@ -328,69 +290,75 @@ describe("EngineLabRunHistoryComponent — auto-refresh on job.completed (#468)"
     fakeJobsSignal.set([]);
   });
 
-  it("refetches when an engine_backtest job transitions to completed", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
-    // The filter effect fires one refetch on init; clear so we can assert
-    // exactly what the job-completed effect produces.
-    apollo._refetch.mockClear();
+  async function settle(fixture: ComponentFixture<EngineLabRunHistoryComponent>): Promise<void> {
+    fixture.detectChanges();
+    await fixture.whenStable();
+  }
+
+  it("re-reads when an engine_backtest job transitions to completed, keeping the rows on screen meanwhile", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
+    runs.list.mockClear();
 
     fakeJobsSignal.set([makeJob({ id: "py-1", type: "engine_backtest", status: "completed" })]);
     fixture.detectChanges();
+    // A reload keeps the previous page visible while the new one is in flight.
+    expect(fixture.componentInstance.rows().length).toBe(2);
+    await settle(fixture);
 
-    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+    expect(runs.list).toHaveBeenCalledTimes(1);
   });
 
-  it("refetches when a lean_engine_run job transitions to completed", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
-    apollo._refetch.mockClear();
+  it("re-reads when a lean_engine_run job transitions to completed", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
+    runs.list.mockClear();
 
     fakeJobsSignal.set([makeJob({ id: "lean-1", type: "lean_engine_run", status: "completed" })]);
-    fixture.detectChanges();
+    await settle(fixture);
 
-    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+    expect(runs.list).toHaveBeenCalledTimes(1);
   });
 
-  it("does not refetch when a non-engine job (dataset-zip) completes", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
-    apollo._refetch.mockClear();
+  it("does not re-read when a non-engine job (dataset-zip) completes", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
+    runs.list.mockClear();
 
     fakeJobsSignal.set([makeJob({ id: "ds-1", type: "dataset-zip", status: "completed" })]);
-    fixture.detectChanges();
+    await settle(fixture);
 
-    expect(apollo._refetch).not.toHaveBeenCalled();
+    expect(runs.list).not.toHaveBeenCalled();
   });
 
-  it("does not refetch for running/failed/cancelled engine jobs", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
-    apollo._refetch.mockClear();
+  it("does not re-read for running/failed/cancelled engine jobs", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
+    runs.list.mockClear();
 
     fakeJobsSignal.set([
       makeJob({ id: "r-1", type: "engine_backtest", status: "running" }),
       makeJob({ id: "f-1", type: "engine_backtest", status: "failed" }),
       makeJob({ id: "c-1", type: "engine_backtest", status: "cancelled" }),
     ]);
-    fixture.detectChanges();
+    await settle(fixture);
 
-    expect(apollo._refetch).not.toHaveBeenCalled();
+    expect(runs.list).not.toHaveBeenCalled();
   });
 
-  it("does not re-refetch on subsequent signal ticks for the same completed job", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
-    apollo._refetch.mockClear();
+  it("does not re-read on subsequent signal ticks for the same completed job", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
+    runs.list.mockClear();
 
-    // Initial completion → one refetch.
+    // Initial completion → one re-read.
     fakeJobsSignal.set([makeJob({ id: "py-2", type: "engine_backtest", status: "completed" })]);
-    fixture.detectChanges();
-    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+    await settle(fixture);
+    expect(runs.list).toHaveBeenCalledTimes(1);
 
     // Same job reported again with a fresh recentLogs entry → should not
-    // refire the refetch. (Real-world trigger: recentLogs rolls after
-    // completion as the worker drains its log queue.)
+    // refire. (Real-world trigger: recentLogs rolls after completion as the
+    // worker drains its log queue.)
     fakeJobsSignal.set([
       makeJob({
         id: "py-2",
@@ -400,29 +368,29 @@ describe("EngineLabRunHistoryComponent — auto-refresh on job.completed (#468)"
         logSeq: 1,
       }),
     ]);
-    fixture.detectChanges();
-    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+    await settle(fixture);
+    expect(runs.list).toHaveBeenCalledTimes(1);
   });
 
-  it("refetches separately for two distinct engine jobs that complete in sequence", async () => {
-    const apollo = makeApollo();
-    const fixture = await setup(apollo);
-    apollo._refetch.mockClear();
+  it("re-reads separately for two distinct engine jobs that complete in sequence", async () => {
+    const runs = makeRunsService();
+    const fixture = await setup(runs);
+    runs.list.mockClear();
 
     fakeJobsSignal.set([makeJob({ id: "first", type: "engine_backtest", status: "completed" })]);
-    fixture.detectChanges();
-    expect(apollo._refetch).toHaveBeenCalledTimes(1);
+    await settle(fixture);
+    expect(runs.list).toHaveBeenCalledTimes(1);
 
     fakeJobsSignal.set([
       makeJob({ id: "first", type: "engine_backtest", status: "completed" }),
       makeJob({ id: "second", type: "lean_engine_run", status: "completed" }),
     ]);
-    fixture.detectChanges();
-    expect(apollo._refetch).toHaveBeenCalledTimes(2);
+    await settle(fixture);
+    expect(runs.list).toHaveBeenCalledTimes(2);
   });
 });
 
-describe("EngineLabRunHistoryComponent — column visibility (PR B.3)", () => {
+describe("EngineLabRunHistoryComponent — column visibility", () => {
   it("toggle persists the choice to localStorage", async () => {
     const fixture = await setup();
 

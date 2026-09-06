@@ -2,7 +2,7 @@ import { Component, input, provideZonelessChangeDetection } from "@angular/core"
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { describe, expect, it } from "vitest";
 
-import type { BacktestRunDetail } from "../../../graphql/backtest-runs.query";
+import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import { makeRun } from "../testing/run-fixtures";
 import { StrategyLabChartComponent } from "../strategy-lab-chart/strategy-lab-chart.component";
 import { StrategyLabStageComponent } from "./strategy-lab-stage.component";
