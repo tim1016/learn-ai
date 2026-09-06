@@ -646,10 +646,14 @@ def test_revive_refused_after_another_owner_took_the_lease(tmp_path: Path) -> No
     r._conn.commit()
     clock.advance(5_000)  # the usurper's lease has itself lapsed
 
-    with pytest.raises(ExecutionLeaseLost):
+    with pytest.raises(ExecutionLeaseLost) as refused:
         r.revive_execution_lease()
-    with pytest.raises(ExecutionLeaseLost):
+    with pytest.raises(ExecutionLeaseLost) as lost:
         r.register_strategy_instance(strategy_instance_id=SID_B, symbol="QQQ", config_hash="h2")
+    # Both name the authority whose lease it is: the write path tells a Dry
+    # Run bot's synthetic lease from the account's by this (ADR 0050).
+    assert refused.value.account_id == ACCOUNT_ID
+    assert lost.value.account_id == ACCOUNT_ID
 
 
 def test_revive_refused_after_authority_generation_changed(tmp_path: Path) -> None:

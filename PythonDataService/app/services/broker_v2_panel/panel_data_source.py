@@ -58,9 +58,11 @@ from app.services.bot_runner import (
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
+    REVIVAL_OUTCOME_FOREIGN_AUTHORITY,
     REVIVAL_OUTCOME_NO_SWEEP,
     REVIVAL_OUTCOME_REFUSED,
     REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR,
+    REVIVAL_REMEDY_FOREIGN_AUTHORITY,
     REVIVAL_REMEDY_TRANSIENT_STORE_ERROR,
     ActionNotAvailableError,
     ActionPerformer,
@@ -726,6 +728,15 @@ async def _revive_lease_or_raise(
     ``ReconciliationSweep.revive_now``'s own docstring for why that race is
     harmless rather than guarded against.
 
+    The lease that lapsed must be *this* authority's. ``ExecutionLeaseLost``
+    names the account whose lease it is; a Dry Run bot's lifecycle performers
+    write through the binding's isolated ``sim:`` Clerk, so the exception can
+    arrive here naming a synthetic authority while ``account_id`` is the real
+    operator account the route was authorized against. That case is refused
+    before the primary sweep is consulted (``REVIVAL_OUTCOME_FOREIGN_AUTHORITY``):
+    the synthetic authority revives through its own heartbeat, and the real
+    account's recovery pass must not run on an unrelated bot's behalf.
+
     A synthetic authority is not "inherited" here in any sense -- it never
     reaches this function's ``sweep.revive_now()`` call at all.
     ``active_reconciliation_sweep`` gates on ``authority_kind == "sqlite"``
@@ -742,6 +753,20 @@ async def _revive_lease_or_raise(
         _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
         raise ExecutionAuthorityLostError(
             revival_outcome=REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE, attempted=False
+        ) from error
+
+    if error.account_id is not None and error.account_id != facade.account_id:
+        # The lease that lapsed is another authority's -- a Dry Run bot's
+        # isolated ``sim:`` account, whose performers write through the
+        # binding's synthetic Clerk while ``account_id`` here is still the
+        # real operator account. The primary sweep is not this lease's, so
+        # reviving it would mutate an unrelated authority and report
+        # "revived" about a lease it never touched. Nothing is attempted.
+        _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
+        raise ExecutionAuthorityLostError(
+            revival_outcome=REVIVAL_OUTCOME_FOREIGN_AUTHORITY,
+            attempted=False,
+            remedy=REVIVAL_REMEDY_FOREIGN_AUTHORITY,
         ) from error
 
     sweep = active_reconciliation_sweep(broker)

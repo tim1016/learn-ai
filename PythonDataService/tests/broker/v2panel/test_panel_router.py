@@ -970,6 +970,47 @@ async def test_write_path_revives_an_expired_lease_and_reports_a_retryable_refus
     assert len(hook_calls) == 1
 
 
+async def test_write_path_does_not_revive_the_account_for_a_dry_run_authoritys_lost_lease(
+    lease_lost_api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Dry Run bot's performers write through its isolated ``sim:`` Clerk,
+    so the lost lease can be the synthetic authority's while ``account_id``
+    is the real operator account. The write path must not revive the real
+    account on that bot's behalf: no recovery hook for an unrelated
+    authority, no "revived" report about a lease it never touched.
+    """
+    app, repo, _clock, hook_calls = lease_lost_api
+    lease_before = repo._conn.execute(
+        "SELECT execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
+    ).fetchone()[0]
+
+    def _synthetic_lease_lost(*_args: object, **_kwargs: object) -> None:
+        raise ExecutionLeaseLost(
+            f"account 'sim:{SID}' execution lease was lost or expired; "
+            "this handle can no longer write",
+            account_id=f"sim:{SID}",
+        )
+
+    monkeypatch.setattr(
+        broker_v2_panel.ds, "_run_action_under_live_authority", _synthetic_lease_lost, raising=True
+    )
+    response = await _post_stop_bot_decisions(app, idempotency_key="sim-lease-lost")
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXECUTION_LEASE_LOST"
+    assert detail["outcome"] == "failure"
+    assert "Dry Run" in detail["why"]
+    # Nothing was attempted against the account: its hook never fired and
+    # its lease expiry is exactly what it was.
+    assert hook_calls == []
+    lease_after = repo._conn.execute(
+        "SELECT execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
+    ).fetchone()[0]
+    assert lease_after == lease_before
+
+
 async def test_write_path_keeps_the_restart_cure_when_revival_is_refused(
     lease_lost_api,
 ) -> None:

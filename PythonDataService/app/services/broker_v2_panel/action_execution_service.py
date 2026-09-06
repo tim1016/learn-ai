@@ -193,6 +193,29 @@ REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR = (
     "never reached a confirmed outcome -- this is the same class of hiccup "
     "the lease heartbeat retries on its own"
 )
+#: The lease that lapsed is not the one behind the authority this action was
+#: presented against. A Dry Run bot's lifecycle performers write through its
+#: binding's isolated ``sim:`` Clerk while the request's ``account_id`` stays
+#: the real operator account used for route authorization, so the exception
+#: can arrive naming a synthetic authority. Reviving the primary sweep on its
+#: behalf would run the real account's recovery pass for an unrelated
+#: authority and report "revived" about a lease it never touched. A synthetic
+#: authority revives through its own heartbeat (no recovery hook by design --
+#: see ``active_authority.py``'s synthetic branch), so nothing is attempted
+#: here.
+REVIVAL_OUTCOME_FOREIGN_AUTHORITY = (
+    "the lease that lapsed belongs to this bot's isolated Dry Run authority, "
+    "not the account authority this action was presented against, and the "
+    "write path does not revive it on the account's behalf"
+)
+#: One ordered remedy, not two contradictory ones: the thaw case self-cures
+#: through the synthetic heartbeat, and only a heartbeat that has exited on a
+#: store-refused revival leaves the restart cure.
+REVIVAL_REMEDY_FOREIGN_AUTHORITY = (
+    "Retry this action shortly -- a Dry Run authority's own lease heartbeat "
+    "revives it after a thaw. If it keeps refusing, that heartbeat has exited "
+    "on a store-refused revival and the data plane needs a restart."
+)
 #: The single remedy sentence for :data:`REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR`.
 #: Deliberately does not mention restarting the data plane: nothing here
 #: proved the lease lost, so the terminal cure would be a false claim, and a

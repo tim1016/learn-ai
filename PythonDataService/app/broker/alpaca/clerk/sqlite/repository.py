@@ -138,7 +138,17 @@ class ExecutionLeaseHeld(ClerkSqliteError):
 
 
 class ExecutionLeaseLost(ClerkSqliteError):
-    """§9a: this handle's lease expired or was reassigned; it can no longer write."""
+    """§9a: this handle's lease expired or was reassigned; it can no longer write.
+
+    ``account_id`` names the authority whose lease lapsed. A write path that
+    catches this for a bot whose custody lives under an isolated ``sim:``
+    account (Dry Run) must not revive the real account's lease on its behalf
+    (ADR 0050); the identity is how it tells the two apart.
+    """
+
+    def __init__(self, message: str, *, account_id: str | None = None) -> None:
+        super().__init__(message)
+        self.account_id = account_id
 
 
 class RecoveryInProgress(ClerkSqliteError):
@@ -346,7 +356,8 @@ class ClerkSqliteRepository(
         if cursor.rowcount == 0:
             raise ExecutionLeaseLost(
                 f"account {self._account_id!r} execution lease was lost or expired; "
-                "this handle can no longer write"
+                "this handle can no longer write",
+                account_id=self._account_id,
             )
 
     def renew_execution_lease(self) -> None:
@@ -396,7 +407,8 @@ class ClerkSqliteRepository(
             if cursor.rowcount == 0:
                 raise ExecutionLeaseLost(
                     f"account {self._account_id!r} execution lease cannot be revived; "
-                    "another writer or an authority ceremony has held this account"
+                    "another writer or an authority ceremony has held this account",
+                    account_id=self._account_id,
                 )
 
     def _assert_not_poisoned(self) -> None:
