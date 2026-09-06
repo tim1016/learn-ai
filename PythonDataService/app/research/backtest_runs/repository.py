@@ -30,7 +30,6 @@ from typing import Literal
 import asyncpg
 
 from app.research.backtest_runs.records import BacktestRunRecord, TradeRecord
-from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 REPORT_TRADE_LIMIT = 500
@@ -195,8 +194,8 @@ async def insert_run(conn: asyncpg.Connection, record: BacktestRunRecord) -> Ins
                 record.strategy_name,
                 record.symbol,
                 json.dumps(record.parameters, sort_keys=True),
-                et_midnight_ms(record.start_date),
-                et_midnight_ms(record.end_date),
+                record.start_ms,
+                record.end_ms,
                 record.timespan,
                 record.fill_mode,
                 now_ms_utc(),

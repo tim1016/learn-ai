@@ -28,6 +28,7 @@ from datetime import date
 from typing import Any, Literal
 
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
+from app.utils.session_anchors import et_midnight_ms
 
 RunSource = Literal["engine", "lean-sidecar"]
 RequestedEngine = Literal["python", "lean", "both"]
@@ -67,8 +68,8 @@ class BacktestRunRecord:
     strategy_name: str
     symbol: str
     parameters: dict[str, Any]
-    start_date: date
-    end_date: date
+    start_ms: int  # ET midnight of the first trading date, int64 ms UTC
+    end_ms: int  # ET midnight of the last trading date, int64 ms UTC
     timespan: str
     fill_mode: str
     duration_ms: int
@@ -142,8 +143,8 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
         strategy_name=str(payload.get("strategy_name") or ""),
         symbol=symbol,
         parameters=parameters,
-        start_date=start_date,
-        end_date=end_date,
+        start_ms=et_midnight_ms(start_date),
+        end_ms=et_midnight_ms(end_date),
         timespan=str(payload.get("timespan") or "minute"),
         fill_mode=str(payload.get("fill_mode") or DEFAULT_FILL_MODE_BY_SOURCE[source]),
         duration_ms=int(payload.get("duration_ms") or 0),

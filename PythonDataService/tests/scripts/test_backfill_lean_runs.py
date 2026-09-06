@@ -109,8 +109,30 @@ class TestBuildPayloadForWorkspace:
         assert payload["symbol"] == "SPY"
         assert payload["strategy_name"] == "ema_crossover"
         assert payload["starting_cash"] == 100_000.0
-        assert payload["start_date"] == "2025-01-05"
-        assert payload["end_date"] == "2025-01-08"
+        assert payload["start_date"] == "2025-01-06"  # the requested trading dates, not LEAN's effective window
+        assert payload["end_date"] == "2025-01-10"
+
+    def test_the_window_dates_come_from_the_request_not_leans_utc_midnight_window(self, tmp_path: Path) -> None:
+        """LEAN encodes the window start as UTC midnight; read in ET that is the previous day (Codex, PR #1969)."""
+        workspace = _write_workspace(
+            tmp_path,
+            "ws_utc_window",
+            manifest_overrides={"effective_algorithm_window_ms": {"start_ms": 1_736_121_600_000, "end_ms": 1_736_553_600_000}},
+        )
+
+        payload = _build_payload_for_workspace(workspace)
+
+        assert payload is not None
+        assert payload["start_date"] == "2025-01-06" and payload["end_date"] == "2025-01-10"
+
+    def test_missing_trading_dates_in_parameters_returns_none(self, tmp_path: Path) -> None:
+        workspace = _write_workspace(
+            tmp_path,
+            "ws_no_dates",
+            manifest_overrides={"parameters": {"symbol": "SPY", "starting_cash": 100_000.0}},
+        )
+
+        assert _build_payload_for_workspace(workspace) is None
 
     def test_missing_manifest_returns_none(self, tmp_path: Path) -> None:
         workspace = _write_workspace(tmp_path, "ws_no_manifest", include_manifest=False)

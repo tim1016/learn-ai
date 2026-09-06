@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import date
 
 import pytest
 
@@ -16,7 +15,7 @@ def test_a_complete_engine_payload_maps_onto_the_row_field_for_field() -> None:
 
     assert record.source == "engine" and record.requested_engine == "python" and record.lean_run_id is None
     assert record.symbol == "SPY" and record.parameters == {"symbol": "SPY", "gap_bps": 0.0}
-    assert record.start_date == date(2025, 1, 6) and record.end_date == date(2025, 1, 10)
+    assert record.start_ms == 1736139600000 and record.end_ms == 1736485200000  # ET midnight of the trading dates
     assert record.initial_cash == 100_000.0 and record.final_equity == 100_020.0
     # The engine names its headlines; the LEAN projection with different numbers does not win.
     assert (record.max_drawdown, record.sharpe_ratio, record.sortino_ratio, record.profit_factor) == (

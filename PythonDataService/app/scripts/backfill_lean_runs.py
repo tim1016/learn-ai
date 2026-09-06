@@ -34,12 +34,12 @@ import argparse
 import asyncio
 import json
 import logging
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from app.research.backtest_runs.service import persist_run_payload
 from app.services.lean_sidecar_persistence import build_persist_payload
-from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +99,19 @@ def _build_payload_for_workspace(workspace: Path) -> dict[str, Any] | None:
     params = manifest.get("parameters") or {}
     symbol = params.get("symbol")
     starting_cash = params.get("starting_cash")
-    if not symbol or starting_cash is None:
+    # The trading dates the run was asked for live in ``parameters`` verbatim.
+    # ``effective_algorithm_window_ms`` is LEAN's effective window (warmup
+    # start, next-session end) and its instants are not ET-anchored, so
+    # decoding them as dates lands on the wrong calendar day.
+    start_date, end_date = params.get("start_date"), params.get("end_date")
+    if not symbol or starting_cash is None or not start_date or not end_date:
         logger.warning(
-            "Skipping %s: manifest.parameters missing required fields (symbol=%r, starting_cash=%r)",
+            "Skipping %s: manifest.parameters missing required fields (symbol=%r, starting_cash=%r, start_date=%r, end_date=%r)",
             workspace.name,
             symbol,
             starting_cash,
+            start_date,
+            end_date,
         )
         return None
 
@@ -128,8 +135,8 @@ def _build_payload_for_workspace(workspace: Path) -> dict[str, Any] | None:
         starting_cash=float(starting_cash),
         symbol=str(symbol),
         algorithm_name=algorithm_name,
-        start_date=et_date_at_ms(int(start_ms)),
-        end_date=et_date_at_ms(int(end_ms)),
+        start_date=date.fromisoformat(str(start_date)),
+        end_date=date.fromisoformat(str(end_date)),
         start_date_ms=int(start_ms),
         end_date_ms=int(end_ms),
         # PR B P1 fix — forward the manifest dict so the persist payload
