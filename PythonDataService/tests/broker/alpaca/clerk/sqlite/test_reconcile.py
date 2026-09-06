@@ -2603,6 +2603,64 @@ async def test_heartbeat_revives_an_expired_lease_and_fires_the_recovery_hook(
         clerk_repo.close()
 
 
+async def test_revive_now_finishes_the_recovery_hook_when_its_caller_is_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A panel action's request abandoned mid-revival must not strand a
+    revived lease without its recovery pass.
+
+    The CAS runs on a worker thread, so cancelling the awaiting request does
+    not stop it: the lease comes back revived after the caller is gone. The
+    CRITICAL record and ``on_lease_revived`` still run, and only then does
+    the cancellation reach the caller.
+    """
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=90,
+    )
+    cas_entered = threading.Event()
+    release_cas = threading.Event()
+    real_revive = clerk_repo.revive_execution_lease
+
+    def held_revive() -> None:
+        # The thread is inside the store when the request goes away.
+        cas_entered.set()
+        assert release_cas.wait(timeout=5.0)
+        real_revive()
+
+    monkeypatch.setattr(clerk_repo, "revive_execution_lease", held_revive)
+    hook_calls: list[int] = []
+
+    async def on_lease_revived() -> None:
+        hook_calls.append(now["ms"])
+
+    sweep = ReconciliationSweep(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        on_lease_revived=on_lease_revived,
+    )
+    try:
+        now["ms"] += 5_000  # the freeze: TTL long expired
+        caller = asyncio.create_task(sweep.revive_now())
+        assert await asyncio.to_thread(cas_entered.wait, 1.0)
+        caller.cancel()  # the HTTP client gave up mid-CAS
+        release_cas.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, timeout=1.0)
+
+        assert hook_calls == [now["ms"]]
+        lease = clerk_repo._conn.execute(
+            "SELECT execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
+        ).fetchone()
+        assert lease["execution_lease_expires_at_ms"] == now["ms"] + 90
+    finally:
+        clerk_repo.close()
+
+
 async def test_heartbeat_exits_without_hook_when_revival_is_refused(
     tmp_path: Path,
 ) -> None:

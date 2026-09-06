@@ -205,7 +205,50 @@ class ReconciliationSweep:
         their own terminal handling. Any other exception is a transient store
         error and propagates uninterpreted: the CAS never reached a confirmed
         outcome, so no lease/hook logging happens for it.
+
+        The unit is cancellation-safe from the caller's side. The write path
+        awaits this from an HTTP request a client can abandon mid-flight, and
+        the CAS runs on a worker thread that a cancelled ``await`` does not
+        unwind: the lease can come back revived after the caller is already
+        gone. If the cancellation were simply propagated, the CRITICAL record
+        and ``on_lease_revived`` would never run, and the heartbeat -- seeing
+        a healthy lease -- would only renew it, leaving the lifecycle
+        artifacts of runs that died during the freeze unrepaired until the
+        next boot scan. So the CAS-log-hook unit runs as its own task, the
+        caller observes it under ``asyncio.shield``, and a cancelled caller
+        waits for the unit to finish before honouring the cancellation.
         """
+        revival = asyncio.ensure_future(self._revive_and_repair())
+        try:
+            return await asyncio.shield(revival)
+        except asyncio.CancelledError:
+            await self._finish_orphaned_revival(revival)
+            raise
+
+    async def _finish_orphaned_revival(self, revival: asyncio.Future[bool]) -> None:
+        """Let a revival whose caller was cancelled reach its outcome.
+
+        The unit's own logging is the record of that outcome; an error is
+        logged here only because the caller who would have received it is
+        gone. A second cancellation while waiting (shutdown) propagates and
+        leaves the unit running on the loop.
+        """
+        try:
+            await asyncio.shield(revival)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.error(
+                "execution lease revival errored after its caller was cancelled",
+                extra={
+                    "action": "execution_lease_revival_orphaned_error",
+                    "account_id": self._repo.account_id,
+                },
+                exc_info=True,
+            )
+
+    async def _revive_and_repair(self) -> bool:
+        """The CAS, its CRITICAL record, and the recovery hook, as one unit."""
         try:
             await asyncio.to_thread(self._repo.revive_execution_lease)
         except asyncio.CancelledError:
