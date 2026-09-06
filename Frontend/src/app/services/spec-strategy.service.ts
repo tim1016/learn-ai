@@ -18,11 +18,6 @@ export interface SpecBacktestRunOptions {
   commissionPerOrder?: number;
 }
 
-/** Python's own `SpecBacktestRequest` defaults, sent explicitly so the wire body is self-describing. */
-const DEFAULT_INITIAL_CASH = 100000;
-const DEFAULT_FILL_MODE = 'signal_bar_close';
-const DEFAULT_COMMISSION_PER_ORDER = 0;
-
 /**
  * Readable message for a failed POST: FastAPI's string `detail` when the
  * body carries one, otherwise Angular's status line for the response.
@@ -73,13 +68,17 @@ export class SpecStrategyService {
     this._loading.set(true);
     this._error.set(null);
 
+    // The optional run params travel only when the caller set them. Python's
+    // `SpecBacktestRequest` owns their defaults and applies them to an absent key.
     const body: SpecBacktestRequest = {
       spec,
       start_date: options.startDate,
       end_date: options.endDate,
-      initial_cash: options.initialCash ?? DEFAULT_INITIAL_CASH,
-      fill_mode: options.fillMode ?? DEFAULT_FILL_MODE,
-      commission_per_order: options.commissionPerOrder ?? DEFAULT_COMMISSION_PER_ORDER,
+      ...(options.initialCash !== undefined ? { initial_cash: options.initialCash } : {}),
+      ...(options.fillMode !== undefined ? { fill_mode: options.fillMode } : {}),
+      ...(options.commissionPerOrder !== undefined
+        ? { commission_per_order: options.commissionPerOrder }
+        : {}),
     };
 
     try {

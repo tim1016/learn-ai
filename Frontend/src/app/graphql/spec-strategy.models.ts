@@ -67,5 +67,3 @@ export type StrategySpec = Schema['StrategySpec-Input'] & {
 export type SpecBacktestRequest = Schema['SpecBacktestRequest'];
 export type SpecStrategyBacktestResult = Schema['SpecBacktestResponse'];
 export type SpecStrategyTrade = Schema['SpecTradeResponse'];
-/** Indicator values captured at the entry signal, keyed by indicator id. */
-export type SpecStrategyIndicatorSnapshot = NonNullable<SpecStrategyTrade['indicators']>;

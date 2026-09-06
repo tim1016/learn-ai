@@ -78,14 +78,15 @@ describe('SpecStrategyService', () => {
     expect(trade?.indicators).toEqual({ ema_fast: 471.0, ema_slow: 470.2 });
   });
 
-  it("applies Python's own defaults for the optional run params", async () => {
+  it('omits the optional run params when unset so Python applies its own defaults', async () => {
     const pending = service.runBacktest(TRIVIAL_SPEC, RUN_WINDOW);
 
     const req = http.expectOne(URL);
-    expect(req.request.body).toMatchObject({
-      initial_cash: 100000,
-      fill_mode: 'signal_bar_close',
-      commission_per_order: 0,
+    // toStrictEqual: a key carrying `undefined` would still fail this.
+    expect(req.request.body).toStrictEqual({
+      spec: TRIVIAL_SPEC,
+      start_date: '2024-01-02',
+      end_date: '2024-12-31',
     });
     req.flush(SUCCESS_BODY);
 
