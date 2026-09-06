@@ -73,6 +73,7 @@ from app.services.broker_v2_panel import panel_data_source as ds
 from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
     ActionOutcomeUnknownError,
+    ExecutionAuthorityRevivedError,
     StaleRevisionError,
 )
 from app.services.broker_v2_panel.chart_projection_service import (
@@ -162,10 +163,23 @@ def _raise_paper_access_error(
 
 def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest) -> NoReturn:
     outcome_unknown = isinstance(error, ActionOutcomeUnknownError)
+    # ExecutionAuthorityRevivedError shares StaleRevisionError's retryable
+    # reading, not a hard failure's: nothing applied and a same-key re-POST
+    # (a fresh key for a solo action; the same derived key for a cohort leg,
+    # per action_execution_service's release-not-fail contract) covers it --
+    # exactly the "conflict" vocabulary already used for a stale token.
+    # cohort_execution.py's per-leg classification maps this error to
+    # "refused" -> "conflict" for the identical reason; aligned here so both
+    # surfaces report the same outcome for the same condition (#1955 final
+    # review).
     outcome: Literal["conflict", "failure", "unknown"] = (
         "unknown"
         if outcome_unknown
-        else ("conflict" if isinstance(error, StaleRevisionError) else "failure")
+        else (
+            "conflict"
+            if isinstance(error, (StaleRevisionError, ExecutionAuthorityRevivedError))
+            else "failure"
+        )
     )
     raise HTTPException(
         status_code=error.http_status,

@@ -912,22 +912,19 @@ async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(
 async def test_write_path_revives_an_expired_lease_and_reports_a_retryable_refusal(
     lease_lost_api,
 ) -> None:
-    """ADR 0050 round 3 for the write path: a process frozen past its lease
-    TTL and then thawed, with nobody else ever touching the account,
-    self-cures on the very action that discovers the loss -- exactly like the
-    lease heartbeat already self-cures it. Before ADR 0050, the write path had
-    no revival attempt at all: every mutating action after a thaw (Stop,
-    Resume, Retire, flatten, reconcile_now, cohort flatten) went straight to
-    the terminal "restart the data plane" blocker, even during the ADR 0050
-    self-cure window.
+    """A process frozen past its lease TTL and then thawed, with nobody else
+    ever touching the account, self-cures on the very action that discovers
+    the loss -- exactly like the lease heartbeat already self-cures it.
+    Before ADR 0050, the write path had no revival attempt at all: every
+    mutating action after a thaw (Stop, Resume, Retire, flatten,
+    reconcile_now, cohort flatten) went straight to the terminal "restart the
+    data plane" blocker, even during the ADR 0050 self-cure window.
 
-    Rounds 1 and 2 revived and then retried the same mutation in-process
-    under a derived idempotency key; two independent reviews blocked that
-    design (a second EXIT could reach the broker after the first attempt's
-    already had). Round 3 revives and reports a retryable refusal instead --
-    nothing was applied under the revived lease -- and only a second,
-    genuinely fresh request (a fresh idempotency key, exactly like the panel
-    client mints per submission) reaches the broker.
+    See ADR 0050's 2026-09-06 addendum for why this reports a retryable
+    refusal instead of auto-retrying the mutation in-process: nothing was
+    applied under the revived lease, and only a second, genuinely fresh
+    request (a fresh idempotency key, exactly like the panel client mints
+    per submission) reaches the broker.
     """
     app, repo, clock, hook_calls = lease_lost_api
     clock.advance(5_000)  # freeze past the 1 s TTL; nobody else takes the lease
@@ -937,7 +934,10 @@ async def test_write_path_revives_an_expired_lease_and_reports_a_retryable_refus
     assert response.status_code == 503, response.text
     detail = response.json()["detail"]
     assert detail["reason_code"] == "EXECUTION_LEASE_REVIVED"
-    assert detail["outcome"] == "failure"
+    # "conflict", not "failure": nothing applied and a re-POST covers it --
+    # the same retryable reading cohort_execution.py's classification gives
+    # this error ("refused" -> "conflict"), aligned here (#1955 final review).
+    assert detail["outcome"] == "conflict"
 
     # The copy reports a self-cured lease and a retry, never the terminal
     # restart cure -- that copy is reserved for a revival the store refuses.

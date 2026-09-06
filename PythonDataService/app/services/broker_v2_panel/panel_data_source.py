@@ -61,6 +61,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_NO_SWEEP,
     REVIVAL_OUTCOME_REFUSED,
     REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR,
+    REVIVAL_REMEDY_TRANSIENT_STORE_ERROR,
     ActionNotAvailableError,
     ActionPerformer,
     ActivationFailedError,
@@ -696,40 +697,28 @@ async def _revive_lease_or_raise(
     *,
     error: ExecutionLeaseLost,
 ) -> NoReturn:
-    """ADR 0050 round 3 for the write path: revive, then tell the operator to
-    retry -- never retry the mutation here.
+    """ADR 0050 for the write path: revive, then tell the operator to retry --
+    never retry the mutation here.
 
     Before this, every write-path ``ExecutionLeaseLost`` went straight to the
     terminal "restart the data plane" blocker (T7c/#1794) -- even the case
     ADR 0050 says self-cures: a process frozen past its lease TTL and thawed,
-    with nobody else ever touching the account. Rounds 1 and 2 revived and
-    then retried the same mutation in-process under a derived idempotency key
-    (``f"{key}:lease-revival-retry"``); two independent reviews blocked that
-    design. The derived key gave the retried performer a *new* broker
-    decision identity that neither the in-process nor the durable
-    ``(sid, decision_id)`` dedupe recognised, so a second EXIT could reach the
-    broker after the first attempt's already had (a decision the original
-    request's own performer may have made before the lease loss surfaced);
-    the original key stayed burned ``failed`` for a leg an operator would
-    read as permanently failed when it had actually just been revived;
-    and a store error other than ``ExecutionLeaseLost``/``RepositoryPoisoned``
-    from ``revive_now()`` (e.g. a transient "database is locked") reached no
-    ``except`` clause at all and leaked as a raw 500.
+    with nobody else ever touching the account. See ADR 0050's 2026-09-06
+    addendum for the full history of why this reports a typed, authored
+    refusal for every outcome (success, refused, poisoned, transient error)
+    instead of retrying the mutation in-process under a derived idempotency
+    key (rounds 1 and 2; rejected by two independent reviews). Nothing this
+    function raises implies the mutation was attempted twice, because it is
+    never attempted a second time at all -- the operator's next click is a
+    genuinely new request, admitted through the normal path with a fresh
+    idempotency key (the panel client mints one per submission; see
+    ``ExecutionAuthorityRevivedError``'s docstring).
 
-    Round 3 fixes all three by never re-driving the mutation here: revival
-    either succeeds, is refused, is blocked by poisoning, or errors
-    transiently, and every one of those four outcomes ends in a typed,
-    authored refusal. Nothing this function raises implies the mutation was
-    attempted twice, because it is never attempted a second time at all --
-    the operator's next click is a genuinely new request, admitted through
-    the normal path with a fresh idempotency key (the panel client mints one
-    per submission; see ``ExecutionAuthorityRevivedError``'s docstring).
-
-    Revival itself is unchanged from round 2: delegated entirely to
-    ``ReconciliationSweep.revive_now()`` -- the same entry point the lease
-    heartbeat's own tick uses (``_attempt_lease_revival``) -- rather than
-    calling ``ClerkSqliteRepository.revive_execution_lease`` directly, so the
-    CAS, its CRITICAL logging, and the ADR 0050 §3 post-revival recovery hook
+    Revival itself delegates entirely to ``ReconciliationSweep.revive_now()``
+    -- the same entry point the lease heartbeat's own tick uses
+    (``_attempt_lease_revival``) -- rather than calling
+    ``ClerkSqliteRepository.revive_execution_lease`` directly, so the CAS,
+    its CRITICAL logging, and the ADR 0050 §3 post-revival recovery hook
     (``BotTaskRegistry.run_lease_recovery``) all run from the one
     implementation the heartbeat itself uses. There is no single-flight
     around ``revive_now()``: a concurrent heartbeat tick can call it on this
@@ -752,16 +741,20 @@ async def _revive_lease_or_raise(
         # so there is nothing left to revive.
         _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
         raise ExecutionAuthorityLostError(
-            revival_outcome=REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE
+            revival_outcome=REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE, attempted=False
         ) from error
 
     sweep = active_reconciliation_sweep(broker)
     if sweep is None:
         # The authority is exactly the one this action was presented against,
         # but it has no reconciliation sweep to revive through (see
-        # REVIVAL_OUTCOME_NO_SWEEP).
+        # REVIVAL_OUTCOME_NO_SWEEP). Neither this nor the branch above ever
+        # called revive_now(), so attempted=False -- the store never
+        # "verified" anything here.
         _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
-        raise ExecutionAuthorityLostError(revival_outcome=REVIVAL_OUTCOME_NO_SWEEP) from error
+        raise ExecutionAuthorityLostError(
+            revival_outcome=REVIVAL_OUTCOME_NO_SWEEP, attempted=False
+        ) from error
 
     try:
         await sweep.revive_now()
@@ -783,7 +776,8 @@ async def _revive_lease_or_raise(
         # "errored; retrying" vocabulary for the identical condition.
         _log_authority_unavailable(broker, account_id, sid, request, transient, lost_lease=True)
         raise ExecutionAuthorityLostError(
-            revival_outcome=REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR
+            revival_outcome=REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR,
+            remedy=REVIVAL_REMEDY_TRANSIENT_STORE_ERROR,
         ) from transient
 
     # Revival succeeded: the lease is good again, but this request's mutation

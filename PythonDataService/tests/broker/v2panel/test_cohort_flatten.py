@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.registry import (
@@ -36,14 +37,14 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.services.bot_runner import set_bot_task_registry
-from app.services.broker_v2_panel import cohort_flatten, panel_data_source
+from app.services.broker_v2_panel import cohort_execution, cohort_flatten, panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     ActionOutcomeUnknownError,
     ExecutionAuthorityLostError,
-    ExecutionAuthorityRevivedError,
     StaleRevisionError,
     reset_idempotency_store_for_testing,
 )
+from app.services.broker_v2_panel.cohort_execution import CohortLegCommand
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     _broker_position_fixture,
     _FakeReadPort,
@@ -51,7 +52,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _make_held_position,
 )
 from tests.broker.v2panel.fixtures import ACCT
-from tests.broker.v2panel.test_panel_router import _FakeBrokerPort, _FakeRegistry
+from tests.broker.v2panel.test_panel_router import _clock_seq, _FakeBrokerPort, _FakeRegistry
 
 _COHORT_SIDS = ("qq-bot-1", "qq-bot-2", "qq-bot-3")
 _LONER_SID = "solo-bot-1"
@@ -59,6 +60,7 @@ _LONER_SID = "solo-bot-1"
 # reconciled attributed exposure, which arms the recovery ladder's
 # execute_safe_flatten on its panel.
 _STRANDED_SID = _COHORT_SIDS[0]
+_LEASE_COHORT_SIDS = ("lease-cohort-1", "lease-cohort-2")
 
 
 def _leg(sid: str, token: str = "token-1") -> CohortFlattenLegRequest:
@@ -209,46 +211,160 @@ async def test_account_scoped_authority_loss_ends_the_batch_early(
     assert result.legs[1].error.reason_code is not None
 
 
-async def test_execution_authority_revived_is_a_per_leg_refusal_not_a_batch_abort(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ADR 0050 round 3: ``ExecutionAuthorityRevivedError`` means the account's
-    revival already succeeded -- unlike ``ExecutionAuthorityLostError``, it is
-    not an account-scoped fact that dooms every later leg. The batch must
-    continue to the next leg (whose own lease renewal is now expected to
-    succeed) and report the revived leg as refused/retryable, not failed, so
-    a re-POST under the same cohort key covers exactly that leg.
+@pytest.fixture()
+def cohort_lease_lost_api(tmp_path):
+    """Two running bots sharing one SQLite account authority, wired with a
+    controllable clock, a short (1 s) execution-lease TTL, and a real
+    ``ReconciliationSweep`` -- the harness for proving the ADR 0050 write-path
+    revival's idempotency-key contract end to end through the REAL
+    ``panel_data_source.run_action`` (never monkeypatched). The lease is
+    account-scoped (one ``ClerkSqliteRepository`` per account, shared by every
+    strategy instance on it), so within one cohort batch only the FIRST leg
+    that touches the account discovers the expired lease and revives it; the
+    second leg's own renewal then finds an already-fresh lease and applies
+    normally -- exactly the real mechanics a fleet-wide flatten hits.
     """
-    attempted: list[str] = []
+    reset_broker_registry_for_testing()
+    reset_idempotency_store_for_testing()
+    set_active_clerk_runtime(None)
+    set_bot_task_registry(_FakeRegistry(tmp_path, sids=_LEASE_COHORT_SIDS))  # type: ignore[arg-type]
+    port = _FakeBrokerPort()
+    get_broker_registry().register(port)  # type: ignore[arg-type]
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCT, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=1_000
+    )
+    for sid in _LEASE_COHORT_SIDS:
+        repo.register_strategy_instance(
+            strategy_instance_id=sid,
+            symbol="SPY",
+            config_hash="config-1",
+            strategy_key="deployment_validation",
+            display_name="Deployment Validation",
+            config_json=json.dumps(
+                {"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}
+            ),
+        )
+        submit_start_run(
+            repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}"
+        )
+    facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
+        repo=repo,
+        read=port,  # type: ignore[arg-type]
+        trade=port,  # type: ignore[arg-type]
+    )
+    hook_calls: list[int] = []
 
-    async def fake_run_action(broker, account_id, sid, request, *, operator_identity):
-        attempted.append(sid)
-        if sid == _COHORT_SIDS[0]:
-            raise ExecutionAuthorityRevivedError()
-        return _applied()
+    async def _on_lease_revived() -> None:
+        hook_calls.append(repo.clock())
 
-    monkeypatch.setattr(panel_data_source, "run_action", fake_run_action)
-    monkeypatch.setattr(cohort_flatten, "validate_account", _accept_account)
+    sweep = ReconciliationSweep(
+        repo=repo,
+        read=port,  # type: ignore[arg-type]
+        trade=port,  # type: ignore[arg-type]
+        intake=facade.intake,
+        on_lease_revived=_on_lease_revived,
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, sweep=sweep)
+    )
+    try:
+        yield repo, clock, hook_calls
+    finally:
+        set_active_clerk_runtime(None)
+        set_bot_task_registry(None)
+        repo.close()
+        reset_broker_registry_for_testing()
+        reset_idempotency_store_for_testing()
 
-    result = await cohort_flatten.run_cohort_flatten(
-        "alpaca", ACCT, _request(*_COHORT_SIDS[:2]), operator_identity="op"
+
+async def _stop_bot_decisions_leg(sid: str) -> CohortLegCommand:
+    panel = await panel_data_source.get_panel("alpaca", ACCT, sid)
+    action = next(item for item in panel.actions if item.action_id == "stop_bot_decisions")
+    assert action.enabled, action
+    return CohortLegCommand(
+        strategy_instance_id=sid,
+        action_id="stop_bot_decisions",
+        revision=panel.revision,
+        concurrency_token=action.concurrency_token,
     )
 
-    # Both legs attempted -- the revived leg did not end the batch.
-    assert attempted == list(_COHORT_SIDS[:2])
-    assert [leg.strategy_instance_id for leg in result.legs] == list(_COHORT_SIDS[:2])
 
-    revived_leg, next_leg = result.legs
-    assert revived_leg.outcome == "refused"
+async def test_a_revived_lease_leg_applies_on_the_same_cohort_key_repost(
+    cohort_lease_lost_api,
+) -> None:
+    """Final independent review of ADR 0050 round 3 (#1955): cohort_execution
+    derives each leg's idempotency key as ``{cohort_key}:{sid}``
+    (``cohort_execution.py``). Before this fix, ``ExecutionLeaseLost`` burned
+    that derived key ``failed`` on its way to ``ExecutionAuthorityRevivedError``
+    -- so the batch contract's own promise ("refused, a re-POST under the
+    same key covers it") was false for this outcome: a re-POST under the
+    identical derived key hit the burned record ("This action previously
+    failed; the idempotency key cannot be reused") and the leg could never be
+    flattened under its own key while the bot stayed exposed.
+
+    This proves the real property end to end through the REAL
+    ``panel_data_source.run_action`` -- no monkeypatching of it -- so the fix
+    (release, not fail, on ``ExecutionLeaseLost``) in both
+    ``action_execution_service.execute_action`` and
+    ``sqlite_panel_source.execute_sqlite_panel_action`` is what a cohort
+    batch's own idempotency promise actually depends on.
+    """
+    repo, clock, hook_calls = cohort_lease_lost_api
+    sid_revived, sid_applies = _LEASE_COHORT_SIDS
+    legs = [await _stop_bot_decisions_leg(sid) for sid in (sid_revived, sid_applies)]
+
+    clock.advance(5_000)  # freeze past the 1 s TTL; nobody else takes the lease
+
+    first = await cohort_execution.execute_cohort_legs(
+        "alpaca",
+        ACCT,
+        legs=legs,
+        idempotency_key="lease-cohort-wave",
+        reason=None,
+        operator_identity="op",
+        telemetry_kind="lease_revival_repost_test",
+    )
+
+    outcomes = {leg.strategy_instance_id: leg.outcome for leg in first}
+    # The first leg to touch the account discovers the loss and revives it
+    # (ADR 0050) -- reported refused/retryable, not applied, and not the
+    # account-scoped failure that would end the batch early. The second leg's
+    # own renewal then succeeds against the now-fresh lease.
+    assert outcomes[sid_revived] == "refused"
+    assert outcomes[sid_applies] == "applied"
+    revived_leg = next(leg for leg in first if leg.strategy_instance_id == sid_revived)
     assert revived_leg.error is not None
     assert revived_leg.error.outcome == "conflict"
     assert revived_leg.error.reason_code == "EXECUTION_LEASE_REVIVED"
+    assert len(hook_calls) == 1
 
-    # The next leg's own renewal succeeded -- the revival already fixed the
-    # account, so nothing about it should block a sibling leg.
-    assert next_leg.outcome == "applied"
-    assert result.refused_count == 1
-    assert result.applied_count == 1
+    # The whole point of the fix: the revived leg's derived key
+    # (``lease-cohort-wave:{sid_revived}``) is released, not burned failed,
+    # so a re-POST under the SAME cohort key reaches a fresh execution
+    # instead of "This action previously failed".
+    retry_leg = await _stop_bot_decisions_leg(sid_revived)
+    second = await cohort_execution.execute_cohort_legs(
+        "alpaca",
+        ACCT,
+        legs=[retry_leg],
+        idempotency_key="lease-cohort-wave",
+        reason=None,
+        operator_identity="op",
+        telemetry_kind="lease_revival_repost_test",
+    )
+
+    assert len(second) == 1
+    assert second[0].outcome == "applied"
+    assert second[0].error is None
+    assert second[0].result is not None
+    assert second[0].result.applied is True
+    # The revival is not re-triggered by the re-POST: the hook fired exactly
+    # once for the whole scenario, and the lease repo confirms only one bot's
+    # worth of renewal state, not a second freeze-and-revive cycle.
+    assert len(hook_calls) == 1
+    repo.renew_execution_lease()
 
 
 def test_request_rejects_duplicate_legs_and_oversized_identity() -> None:

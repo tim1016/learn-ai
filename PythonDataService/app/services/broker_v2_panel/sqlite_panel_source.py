@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     StaleRecoveryTokenError,
     build_recovery_catalog,
 )
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.broker_bots import BotStatusView
@@ -965,14 +966,25 @@ async def execute_sqlite_panel_action(
             detail=exc.capability.next_step,
         ) from exc
     except Exception as exc:
-        if request.action_id == "stop_bot_decisions":
+        if request.action_id == "stop_bot_decisions" or isinstance(exc, ExecutionLeaseLost):
             # STOP is durably idempotent beneath this panel ledger. It can
             # commit before local task quiescence fails; releasing the panel
             # reservation lets the same-key retry reach the recovery layer's
             # existing-command branch and re-drive that quiescence.
+            #
+            # A lost execution lease releases for every action, not only
+            # stop_bot_decisions: every repository mutation renews the lease
+            # as its very first statement under the write lock
+            # (repository.py), so nothing else ran -- the same "nothing
+            # applied" contract as a pre-execution rejection above, not a
+            # real post-execution failure. panel_data_source.run_action's
+            # ADR 0050 revival needs this ORIGINAL idempotency key free for
+            # the operator's (or a cohort batch's same-key) re-POST -- a
+            # ``failed`` burn here left a revived leg permanently
+            # unflattenable under its own key (#1955 final review).
             await _release_reservation()
         else:
-            # Other attempted actions have no equivalent committed-command
+            # Other attempted actions/errors have no equivalent committed-command
             # replay contract, so a blind same-key retry remains unsafe.
             await ledger.fail(
                 strategy_instance_id, request.action_id, request.idempotency_key, str(exc)

@@ -242,10 +242,14 @@ async def test_execution_lease_lost_propagates_unwrapped_for_the_adr0050_revival
             store=store,
         )
 
-    # Burned like any other post-execution failure -- none of these three
-    # actions has stop_bot_decisions' committed-command replay contract, so
-    # a blind same-key retry stays unsafe.
-    assert store._records[(_SID, "retire", "lease-lost")].state == "failed"
+    # Released, not burned failed (#1955 final review): every repository
+    # mutation renews the execution lease as its very first statement under
+    # the write lock, so a lost lease means nothing else ran here -- the same
+    # "nothing applied" contract a pre-execution rejection gets. A cohort leg
+    # the write path later revives needs this ORIGINAL key free for the
+    # operator's same-key re-POST; burning it here left a revived leg
+    # permanently unflattenable under its own key.
+    assert (_SID, "retire", "lease-lost") not in store._records
 
 
 async def test_repository_poisoned_propagates_unwrapped_too() -> None:

@@ -114,19 +114,39 @@ class ExecutionAuthorityLostError(ActionExecutionError):
 
     http_status = 503
 
-    def __init__(self, *, revival_outcome: str) -> None:
+    def __init__(
+        self,
+        *,
+        revival_outcome: str,
+        attempted: bool = True,
+        remedy: str | None = None,
+    ) -> None:
         # Account-scoped problem, account-scoped cure -- the Two-Tap rule's own
         # shape. The internal handle message ("this handle can no longer
         # write") is diagnostic, not operator copy, and must not reach here.
+        #
+        # ``attempted`` distinguishes an outcome the store actually proved
+        # (a revival ran and was refused, or errored) from one where no
+        # revival could even be tried (the authority or its sweep was gone) --
+        # claiming a "store-verified" attempt on the latter would be false.
+        # ``remedy`` lets a genuinely transient outcome close on "retry",
+        # never both "retry" and "restart the data plane" in the same
+        # message -- one blocker, one remedy (#1955 final review).
+        lede = (
+            "a supervised, store-verified revival attempt did not restore it"
+            if attempted
+            else "no supervised revival could even be attempted"
+        )
         super().__init__(
             "This account's execution authority can no longer be written to.",
             detail=(
-                "The data plane's execution lease for this account was lost, and a "
-                "supervised, store-verified revival attempt did not restore it: "
-                f"{revival_outcome}. Refusing writes "
-                "is deliberate: a holder that cannot prove it still owns the account "
-                "must not act on stale authority. Restart the data plane to acquire a "
-                "fresh lease and reconcile custody on boot."
+                f"The data plane's execution lease for this account was lost, and {lede}: "
+                f"{revival_outcome}. Refusing writes is deliberate: a holder that cannot "
+                "prove it still owns the account must not act on stale authority. "
+                + (
+                    remedy
+                    or "Restart the data plane to acquire a fresh lease and reconcile custody on boot."
+                )
             ),
             reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
         )
@@ -164,26 +184,32 @@ REVIVAL_OUTCOME_NO_SWEEP = (
 #: mirrors the lease heartbeat's own transient vocabulary
 #: (``_run_lease_heartbeat``'s "errored; retrying" branch): the store
 #: hiccupped rather than proved the lease unrecoverable, so the honest copy
-#: is "retry shortly", not "another writer took the account".
+#: is "retry shortly", not "another writer took the account". The remedy
+#: sentence (not this string) is what actually tells the operator to retry --
+#: kept out of here so it is said exactly once (see
+#: ``ExecutionAuthorityLostError``'s ``remedy`` parameter).
 REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR = (
     "the store returned a transient error while attempting the revival and "
     "never reached a confirmed outcome -- this is the same class of hiccup "
-    "the lease heartbeat retries on its own; retry this action shortly"
+    "the lease heartbeat retries on its own"
+)
+#: The single remedy sentence for :data:`REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR`.
+#: Deliberately does not mention restarting the data plane: nothing here
+#: proved the lease lost, so the terminal cure would be a false claim, and a
+#: message ending in both "retry shortly" and "restart the data plane" gives
+#: an operator two contradictory remedies for one blocker (#1955 final review).
+REVIVAL_REMEDY_TRANSIENT_STORE_ERROR = (
+    "Retry this action shortly -- the store hiccupped without proving the "
+    "lease unrecoverable, unlike a store-refused revival."
 )
 
 
 class ExecutionAuthorityRevivedError(ActionExecutionError):
     """The ADR 0050 revival just succeeded; this request applied nothing (503).
 
-    Round 3 of the write-path revival design (two independent reviews
-    blocked rounds 1 and 2's auto-retry-under-a-derived-key): a revived
-    lease is reported to the operator as a retryable refusal instead of
-    silently retried in-process. Auto-retry gave the performer a *new*
-    broker decision identity (``f"{key}:lease-revival-retry"``) that neither
-    the in-process nor the durable ``(sid, decision_id)`` dedupe recognised,
-    so a second EXIT could reach the broker after the first already had; and
-    it left the original idempotency key burned ``failed`` for a leg that,
-    from the operator's perspective, never actually failed.
+    See ADR 0050's 2026-09-06 addendum for why the write path reports this as
+    a retryable refusal instead of auto-retrying the mutation in-process
+    (two independent reviews rejected that design in rounds 1 and 2).
 
     Raised only when :meth:`ReconciliationSweep.revive_now` returns
     successfully -- i.e. the store just proved this handle's lease is good
@@ -192,8 +218,11 @@ class ExecutionAuthorityRevivedError(ActionExecutionError):
     the performer was doing when it discovered the loss. The operator's next
     click is a genuinely fresh request: the panel client mints a new
     ``idempotency_key`` per submission (``crypto.randomUUID()`` in
-    ``broker-v2-panel.service.ts``'s ``submitAction``), so the original
-    key's ``failed``/released disposition never blocks it.
+    ``broker-v2-panel.service.ts``'s ``submitAction``), so a fresh key always
+    reaches the broker -- and the ORIGINAL key is released, not burned
+    ``failed`` (:meth:`execute_action`'s ``ExecutionLeaseLost`` handling), so
+    the same-key re-POST a cohort batch derives (``{key}:{sid}``) reaches it
+    too (#1955).
     """
 
     http_status = 503
@@ -579,17 +608,34 @@ async def execute_action(
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise
-    except (ExecutionLeaseLost, RepositoryPoisoned) as err:
+    except ExecutionLeaseLost:
         # Resume/Retire/Archive dispatch through this executor rather than
         # sqlite_panel_source.execute_sqlite_panel_action (that module returns
         # None for the SQLITE_PANEL_LIFECYCLE_ACTION_IDS and defers here). That
-        # module already lets these two propagate unwrapped past its own
-        # exception handling so panel_data_source.run_action's ADR 0050
-        # revival catch can see them; burn the key the same way it does for
-        # every action but stop_bot_decisions (none of these three has a
-        # committed-command replay contract), then re-raise unwrapped instead
-        # of collapsing into ActionOutcomeUnknownError's opaque 500 -- the
-        # revival catch needs the typed condition, not a generic failure.
+        # module lets ExecutionLeaseLost/RepositoryPoisoned propagate unwrapped
+        # past its own exception handling so panel_data_source.run_action's
+        # ADR 0050 revival catch can see them; re-raise unwrapped here too,
+        # instead of collapsing into ActionOutcomeUnknownError's opaque 500 --
+        # the revival catch needs the typed condition, not a generic failure.
+        #
+        # Every repository mutation renews the execution lease as its very
+        # first statement under the write lock (repository.py) -- a lost
+        # lease means nothing else in this call ran, so this releases the
+        # key exactly like a pre-execution rejection above, not the ``failed``
+        # burn a real post-execution failure gets. A cohort leg the write
+        # path later revives (panel_data_source._revive_lease_or_raise) needs
+        # its ORIGINAL idempotency key free for the operator's same-key
+        # re-POST -- burning it here left that leg permanently unflattenable
+        # under its own key (#1955 final review).
+        if reserved_fresh:
+            await ledger.release(sid, request.action_id, request.idempotency_key)
+        raise
+    except RepositoryPoisoned as err:
+        # Unlike a lost lease, a poison can be raised AFTER a transition's
+        # SQLite commit already succeeded (append_transition's own
+        # mirror-finalize failure, repository.py) -- so a mutation may really
+        # have applied. Keep burning the key ``failed``: a blind same-key
+        # retry must not re-fire a command that may have partially committed.
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise
