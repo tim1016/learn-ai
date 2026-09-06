@@ -121,7 +121,7 @@ def test_validation_analytics_rejects_an_unlabelled_zero_duration_trade() -> Non
         compute_engine_validation_analytics(trades=trades, equity_curve=equity)
 
 
-def test_entry_exit_ordering_matches_statistics_fills_are_ordered() -> None:
+def test_entry_exit_ordering_matches_statistics_fill_times_are_admissible() -> None:
     """``_validate_inputs``'s entry/exit ordering rule is a documented
     duplicate of the canonical
     ``app.engine.results.statistics._fill_times_are_admissible`` (see that

@@ -228,7 +228,7 @@ def _validate_inputs(
     ``is_synthetic_exit``); this predicate is a duplicate kept for
     layer-locality (the platform-analytics dataclass is decoupled from the
     engine's internal trade record) and carries a parity test naming that file:
-    ``tests/services/test_engine_validation_analytics.py::test_entry_exit_ordering_matches_statistics_fills_are_ordered``.
+    ``tests/services/test_engine_validation_analytics.py::test_entry_exit_ordering_matches_statistics_fill_times_are_admissible``.
     """
     if rolling_window < 1:
         raise ValueError("rolling_window must be positive")

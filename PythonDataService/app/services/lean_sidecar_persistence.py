@@ -806,6 +806,7 @@ def _compatibility_ledger_statistics(
                 pnl_pts=pnl_points,
                 pnl_pct=pnl_pct,
                 result="WIN" if pnl_points >= 0 else "LOSS",
+                is_synthetic_exit=trade.is_synthetic_exit,
             )
         )
 
