@@ -10,29 +10,29 @@ const GRAPHQL_URL = environment.backendUrl;
 
 const mockState: PortfolioState = {
   account: {
-    id: 'acc-1', name: 'Paper Trading', type: 'Paper',
+    id: 'acc-1', name: 'Paper Trading', type: 'PAPER',
     baseCurrency: 'USD', initialCash: 100000, cash: 95000, createdAt: '2026-01-01',
   },
   positions: [
     {
       id: 'pos-1', accountId: 'acc-1', tickerId: 1, assetType: 'Stock',
-      netQuantity: 100, avgCostBasis: 150, realizedPnL: 0, status: 'Open',
+      netQuantity: 100, avgCostBasis: 150, realizedPnL: 0, status: 'OPEN',
       openedAt: '2026-02-01', ticker: { symbol: 'AAPL', name: 'Apple' },
     },
     {
       id: 'pos-2', accountId: 'acc-1', tickerId: 2, assetType: 'Stock',
-      netQuantity: 0, avgCostBasis: 200, realizedPnL: 500, status: 'Closed',
+      netQuantity: 0, avgCostBasis: 200, realizedPnL: 500, status: 'CLOSED',
       openedAt: '2026-01-15', closedAt: '2026-02-15', ticker: { symbol: 'MSFT', name: 'Microsoft' },
     },
   ],
   recentTrades: [
     {
-      id: 'trd-1', accountId: 'acc-1', tickerId: 1, side: 'Buy', quantity: 100,
+      id: 'trd-1', accountId: 'acc-1', tickerId: 1, side: 'BUY', quantity: 100,
       price: 150, fees: 1, multiplier: 1, executionTimestamp: '2026-02-01T10:00:00Z',
       ticker: { symbol: 'AAPL', name: 'Apple' },
     },
     {
-      id: 'trd-2', accountId: 'acc-1', tickerId: 2, side: 'Sell', quantity: 50,
+      id: 'trd-2', accountId: 'acc-1', tickerId: 2, side: 'SELL', quantity: 50,
       price: 210, fees: 0.5, multiplier: 1, executionTimestamp: '2026-02-15T14:30:00Z',
       ticker: { symbol: 'MSFT', name: 'Microsoft' },
     },
@@ -235,12 +235,12 @@ describe('DashboardComponent', () => {
 
     const firstRow = rows[0].textContent ?? '';
     expect(firstRow).toContain('AAPL');
-    expect(firstRow).toContain('Buy');
+    expect(firstRow).toContain('BUY');
     expect(firstRow).toContain('100');
 
     const secondRow = rows[1].textContent ?? '';
     expect(secondRow).toContain('MSFT');
-    expect(secondRow).toContain('Sell');
+    expect(secondRow).toContain('SELL');
 
     const identities = el.querySelectorAll('app-asset-identity');
     expect(identities).toHaveLength(2);
@@ -303,7 +303,7 @@ describe('DashboardComponent', () => {
       data: {
         recordTrade: {
           success: true, error: null,
-          trade: { id: 'trd-new', side: 'Buy', quantity: 50, price: 175, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'AAPL' } },
+          trade: { id: 'trd-new', side: 'BUY', quantity: 50, price: 175, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'AAPL' } },
         },
       },
     });
@@ -353,7 +353,7 @@ describe('DashboardComponent', () => {
       data: {
         recordTrade: {
           success: true, error: null,
-          trade: { id: 'trd-new', side: 'Buy', quantity: 100, price: 175, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'AAPL' } },
+          trade: { id: 'trd-new', side: 'BUY', quantity: 100, price: 175, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'AAPL' } },
         },
       },
     });
@@ -434,7 +434,7 @@ describe('DashboardComponent', () => {
     flushDashboardLoad();
 
     const dashboard = getDashboard();
-    // mockState has 1 Open and 1 Closed position
+    // mockState has one OPEN and one CLOSED position, as the API serializes them (#1973)
     expect(dashboard.openPositionCount).toBe(1);
   });
 

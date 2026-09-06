@@ -8,8 +8,8 @@ import { Account } from '../../graphql/portfolio-types';
 const GRAPHQL_URL = environment.backendUrl;
 
 const mockAccounts: Account[] = [
-  { id: 'acc-1', name: 'Paper Trading', type: 'Paper', baseCurrency: 'USD', initialCash: 100000, cash: 95000, createdAt: '2026-01-01' },
-  { id: 'acc-2', name: 'Live Account', type: 'Live', baseCurrency: 'USD', initialCash: 50000, cash: 52000, createdAt: '2026-02-01' },
+  { id: 'acc-1', name: 'Paper Trading', type: 'PAPER', baseCurrency: 'USD', initialCash: 100000, cash: 95000, createdAt: '2026-01-01' },
+  { id: 'acc-2', name: 'Live Account', type: 'BACKTEST', baseCurrency: 'USD', initialCash: 50000, cash: 52000, createdAt: '2026-02-01' },
 ];
 
 describe('PortfolioComponent', () => {
@@ -148,7 +148,7 @@ describe('PortfolioComponent', () => {
     });
 
     const newAccount: Account = {
-      id: 'acc-3', name: 'Backtest Account', type: 'Backtest',
+      id: 'acc-3', name: 'Backtest Account', type: 'BACKTEST',
       baseCurrency: 'USD', initialCash: 25000, cash: 25000, createdAt: '2026-03-06',
     };
     req.flush({

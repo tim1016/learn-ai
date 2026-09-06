@@ -36,7 +36,7 @@ export class DashboardComponent {
   recording = signal(false);
 
   get openPositionCount(): number {
-    return this.state()?.positions.filter(p => p.status === 'Open').length ?? 0;
+    return this.state()?.positions.filter(p => p.status === 'OPEN').length ?? 0;
   }
 
   constructor() {

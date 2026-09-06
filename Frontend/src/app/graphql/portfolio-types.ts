@@ -1,9 +1,18 @@
 // Portfolio Management System Types
 
+/**
+ * Enum values as the .NET GraphQL API serializes them: Hot Chocolate emits
+ * enum members upper-cased (`OPEN`, `BUY`, `PAPER`), never the C# casing.
+ * Every comparison against these fields must use these literals (#1973).
+ */
+export type AccountType = 'PAPER' | 'BACKTEST';
+export type PositionStatus = 'OPEN' | 'CLOSED';
+export type OrderSide = 'BUY' | 'SELL';
+
 export interface Account {
   id: string;
   name: string;
-  type: string;
+  type: AccountType;
   baseCurrency: string;
   initialCash: number;
   cash: number;
@@ -18,7 +27,7 @@ export interface Position {
   netQuantity: number;
   avgCostBasis: number;
   realizedPnL: number;
-  status: string;
+  status: PositionStatus;
   openedAt: string;
   closedAt?: string;
   ticker?: { symbol: string; name: string };
@@ -41,7 +50,7 @@ export interface PortfolioTrade {
   id: string;
   accountId: string;
   tickerId: number;
-  side: string;
+  side: OrderSide;
   quantity: number;
   price: number;
   fees: number;

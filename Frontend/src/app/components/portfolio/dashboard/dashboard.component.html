@@ -125,7 +125,7 @@
                     {{ 'ID:' + trade.tickerId }}
                   }
                 </td>
-                <td [class.buy]="trade.side === 'Buy'" [class.sell]="trade.side === 'Sell'">{{ trade.side }}</td>
+                <td [class.buy]="trade.side === 'BUY'" [class.sell]="trade.side === 'SELL'">{{ trade.side }}</td>
                 <td>{{ trade.quantity }}</td>
                 <td>${{ trade.price | number:'1.2-2' }}</td>
                 <td>${{ trade.fees | number:'1.2-2' }}</td>
