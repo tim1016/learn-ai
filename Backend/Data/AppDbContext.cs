@@ -48,8 +48,6 @@ public class AppDbContext : DbContext
     public DbSet<OptionLeg> OptionLegs => Set<OptionLeg>();
     public DbSet<PortfolioSnapshot> PortfolioSnapshots => Set<PortfolioSnapshot>();
     public DbSet<RiskRule> RiskRules => Set<RiskRule>();
-    public DbSet<StrategyAllocation> StrategyAllocations => Set<StrategyAllocation>();
-    public DbSet<StrategyTradeLink> StrategyTradeLinks => Set<StrategyTradeLink>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -469,36 +467,6 @@ public class AppDbContext : DbContext
                   .HasForeignKey(r => r.AccountId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(r => new { r.AccountId, r.Enabled });
-        });
-
-        modelBuilder.Entity<StrategyAllocation>(entity =>
-        {
-            entity.HasKey(a => a.Id);
-            entity.Property(a => a.CapitalAllocated).HasPrecision(18, 8);
-            entity.HasOne(a => a.Account)
-                  .WithMany()
-                  .HasForeignKey(a => a.AccountId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(a => a.StrategyExecution)
-                  .WithMany()
-                  .HasForeignKey(a => a.StrategyExecutionId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(a => new { a.AccountId, a.StrategyExecutionId });
-        });
-
-        modelBuilder.Entity<StrategyTradeLink>(entity =>
-        {
-            entity.HasKey(l => l.Id);
-            entity.HasOne(l => l.Trade)
-                  .WithMany()
-                  .HasForeignKey(l => l.TradeId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(l => l.StrategyExecution)
-                  .WithMany()
-                  .HasForeignKey(l => l.StrategyExecutionId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(l => l.StrategyExecutionId);
-            entity.HasIndex(l => l.TradeId);
         });
     }
 

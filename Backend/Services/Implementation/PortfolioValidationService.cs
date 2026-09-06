@@ -788,21 +788,8 @@ public class PortfolioValidationService : IPortfolioValidationService
     private static async Task CleanupTestAccount(AppDbContext db, Guid accountId, CancellationToken ct)
     {
         // Delete in dependency order
-        var tradeIds = await db.PortfolioTrades
-            .Where(t => t.AccountId == accountId)
-            .Select(t => t.Id)
-            .ToListAsync(ct);
-
-        if (tradeIds.Count > 0)
-        {
-            await db.StrategyTradeLinks
-                .Where(l => tradeIds.Contains(l.TradeId))
-                .ExecuteDeleteAsync(ct);
-        }
-
         await db.PortfolioSnapshots.Where(s => s.AccountId == accountId).ExecuteDeleteAsync(ct);
         await db.RiskRules.Where(r => r.AccountId == accountId).ExecuteDeleteAsync(ct);
-        await db.StrategyAllocations.Where(a => a.AccountId == accountId).ExecuteDeleteAsync(ct);
 
         var positionIds = await db.Positions
             .Where(p => p.AccountId == accountId)

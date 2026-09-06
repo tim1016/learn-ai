@@ -159,7 +159,6 @@ builder.Services.AddScoped<IPortfolioValuationService, PortfolioValuationService
 builder.Services.AddScoped<ISnapshotService, SnapshotService>();
 builder.Services.AddScoped<IPortfolioRiskService, PortfolioRiskService>();
 builder.Services.AddScoped<IPortfolioReconciliationService, PortfolioReconciliationService>();
-builder.Services.AddScoped<IStrategyAttributionService, StrategyAttributionService>();
 builder.Services.AddScoped<IPortfolioValidationService, PortfolioValidationService>();
 
 // PR B (2026-05-19) Phase 4 — compare-view domain service. Stateless;

@@ -119,7 +119,7 @@ End-to-end IBKR paper-trading runtime with safety-first design. Three coordinate
 
 ### Portfolio Management
 
-**Portfolio Dashboard** (`/portfolio`) — Full event-sourced portfolio tracking system with FIFO lot accounting, risk management, strategy attribution, and built-in system validation. Nine interactive tabs:
+**Portfolio Dashboard** (`/portfolio`) — Full event-sourced portfolio tracking system with FIFO lot accounting, risk management, and built-in system validation. Eight interactive tabs:
 
 **Dashboard** — Account summary with cash balance, position count, performance metrics (Sharpe, Sortino, Calmar, max drawdown, win rate, profit factor), trade recording form, and recent trades table. Take point-in-time snapshots to build your equity curve.
 
@@ -153,13 +153,6 @@ End-to-end IBKR paper-trading runtime with safety-first design. Three coordinate
 - Shows quantity and PnL differences per position
 - One-click Auto-Fix rebuilds positions from the authoritative trade log
 
-**Strategy Attribution** — Connect backtest results to portfolio performance:
-
-- Import trades from backtest strategy executions into the portfolio
-- Per-strategy PnL breakdown with win rate and trade count
-- Alpha contribution bar chart — see which strategies drive returns
-- Contribution percentages showing each strategy's share of total PnL
-
 **Validation** — Frontend-piloted system validation suite that verifies the entire portfolio engine:
 
 - One-click execution of automated tests against a temporary test account
@@ -176,7 +169,7 @@ End-to-end IBKR paper-trading runtime with safety-first design. Three coordinate
 - Per-assertion pass/fail detail with expected vs. actual values, timing, and category breakdown
 - Automatic cleanup — test account and all related data are deleted after the suite completes
 
-**Documentation** — Built-in reference with LaTeX-rendered formulas for FIFO algorithm, valuation, performance metrics (Sharpe, Sortino, Calmar), risk engine, scenario analysis, strategy attribution, position lifecycle, snapshot sampling, reconciliation process, notation glossary, and data model summary.
+**Documentation** — Built-in reference with LaTeX-rendered formulas for FIFO algorithm, valuation, performance metrics (Sharpe, Sortino, Calmar), risk engine, scenario analysis, position lifecycle, snapshot sampling, reconciliation process, notation glossary, and data model summary.
 
 **Architecture**:
 
@@ -321,8 +314,6 @@ The .NET backend uses Polly policies for all outbound HTTP calls:
 | **OptionLeg** | Greeks snapshot at trade entry (IV, delta, gamma, theta, vega) |
 | **PortfolioSnapshot** | Point-in-time equity, cash, Greeks, PnL capture |
 | **RiskRule** | Configurable risk rule (MaxDrawdown, MaxPositionSize, etc.) |
-| **StrategyAllocation** | Links account to strategy execution with capital allocated |
-| **StrategyTradeLink** | Maps portfolio trades to backtest strategy executions |
 
 Key indexes: composite `(TickerId, Timestamp, Timespan)` on StockAggregate for fast range queries. Unique constraint on `(Symbol, Market)` for Ticker. Composite `(AccountId, TickerId, Status)` on Position for portfolio queries.
 
@@ -550,7 +541,7 @@ learn-ai/
     Services/
       Implementation/               MarketDataService, PolygonService, ResearchService,
                                     PositionEngine, PortfolioService, PortfolioValuationService, SnapshotService,
-                                    PortfolioRiskService, PortfolioReconciliationService, StrategyAttributionService,
+                                    PortfolioRiskService, PortfolioReconciliationService,
                                     PortfolioValidationService
       Interfaces/                   Service contracts (IMarketDataService, IResearchService, IPositionEngine, etc.)
     Data/                           AppDbContext (EF Core)

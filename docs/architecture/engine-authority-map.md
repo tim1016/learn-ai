@@ -209,7 +209,6 @@ names the follow-up that would clear it, so "kept" stays distinguishable from
 |---|---|---|
 | `Backend/Services/Implementation/PortfolioValuationService.cs::ComputeValuationInternal` (the aggregation arithmetic, not the option-theoretical path) | Pure aggregation over persistence data; rule-5 compliant | Compute FX, theoretical option value with cost-basis lots, or any non-trivial math. If it ever does, the canonical moves to Python and this path becomes a passthrough. |
 | `Backend/Services/Implementation/PortfolioReconciliationService.cs` | Persistence-layer reconciliation only | Same as above |
-| `Backend/Services/Implementation/StrategyAttributionService.cs` | Persistence-layer trade ↔ strategy linking | Same as above |
 | `Backend/Services/Implementation/TechnicalAnalysisService.cs` | HTTP passthrough to `/api/indicators/calculate` | Compute indicators locally |
 | `Backend/Services/Implementation/MarketDataService.cs` | Polygon API client for bars / aggregates | Compute indicators or strategy results |
 | `docs/validation/*.pine` | TradingView Pine reference for strategy validation | Run in production; one-time validation only |

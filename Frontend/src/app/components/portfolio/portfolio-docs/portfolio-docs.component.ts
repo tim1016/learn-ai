@@ -29,9 +29,9 @@ export class PortfolioDocsComponent {
   // ── Section 1: Architecture Overview ──
 
   architectureLayers = [
-    { name: 'Angular Frontend', detail: '8 tab components communicating via PortfolioService (GraphQL client over HttpClient)' },
+    { name: 'Angular Frontend', detail: 'Tab components that reach the backend through PortfolioService (GraphQL client over HttpClient)' },
     { name: 'Hot Chocolate v15 GraphQL', detail: 'PortfolioQuery + PortfolioMutation resolvers exposing all operations' },
-    { name: 'Service Layer', detail: 'PortfolioService, PositionEngine, ValuationService, SnapshotService, RiskService, ReconciliationService, StrategyAttributionService' },
+    { name: 'Service Layer', detail: 'PortfolioService, PositionEngine, ValuationService, SnapshotService, RiskService, ReconciliationService' },
     { name: 'EF Core 10 + PostgreSQL 16', detail: 'Event-sourced trade log with derived position/lot state' },
   ];
 
@@ -274,35 +274,7 @@ export class PortfolioDocsComponent {
     },
   ];
 
-  // ── Section 7: Strategy Attribution ──
-
-  attributionFormulas: FormulaDoc[] = [
-    {
-      name: 'Strategy PnL',
-      formulaLatex: '\\text{PnL}_s = \\sum_{t \\in \\text{trades}(s)} \\text{RealizedPnL}_t',
-      variablesLatex: [
-        's = \\text{a specific strategy execution}',
-        '\\text{trades}(s) = \\text{all trades linked to strategy } s',
-      ],
-      interpretation: 'Total realized PnL from all trades attributed to a given strategy execution.',
-    },
-    {
-      name: 'Contribution Percent',
-      formulaLatex: 'C_s = \\frac{\\text{PnL}_s}{\\sum_{k} \\text{PnL}_k} \\times 100\\%',
-      variablesLatex: [
-        'k = \\text{all strategies with trades in the account}',
-      ],
-      interpretation: 'Each strategy\'s share of the total attributed PnL. Shows which strategies drive returns.',
-    },
-    {
-      name: 'Strategy Win Rate',
-      formulaLatex: 'W_s = \\frac{\\#\\{t \\in \\text{trades}(s) : \\text{PnL}_t > 0\\}}{|\\text{trades}(s)|}',
-      variablesLatex: [],
-      interpretation: 'Fraction of profitable trades within a single strategy.',
-    },
-  ];
-
-  // ── Section 8: Position Lifecycle ──
+  // ── Section 7: Position Lifecycle ──
 
   positionLifecycle = [
     { state: 'Open', rule: 'Position has at least one lot with RemainingQuantity > 0.' },
@@ -318,7 +290,7 @@ export class PortfolioDocsComponent {
     { scenario: 'Option Expiration (OTM)', status: 'Not automated. Must be manually recorded as a sell at price $0 to close the position with zero proceeds.' },
   ];
 
-  // ── Section 9: Snapshot & Sampling ──
+  // ── Section 8: Snapshot & Sampling ──
 
   snapshotNotes = [
     'Snapshots are taken on-demand via the "Take Snapshot" button or the takePortfolioSnapshot mutation.',
@@ -328,7 +300,7 @@ export class PortfolioDocsComponent {
     'The annualization factor √252 assumes daily snapshots taken on trading days only.',
   ];
 
-  // ── Section 10: Reconciliation ──
+  // ── Section 9: Reconciliation ──
 
   reconciliationSteps = [
     { step: 1, action: 'Snapshot', detail: 'Read all current (cached) positions for the account.' },

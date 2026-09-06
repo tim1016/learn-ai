@@ -168,34 +168,4 @@ public class PortfolioQuery
     }
 
     #endregion
-
-    #region Phase 4 — Strategy Attribution
-
-    [GraphQLName("getStrategyPnL")]
-    [GraphQLDescription("Get PnL breakdown for a specific strategy execution")]
-    public async Task<StrategyPnLResult> GetStrategyPnL(
-        [Service] IStrategyAttributionService attributionService,
-        int strategyExecutionId)
-    {
-        return await attributionService.GetStrategyPnLAsync(strategyExecutionId);
-    }
-
-    [GraphQLName("getAlphaAttribution")]
-    public async Task<List<AlphaAttribution>> GetAlphaAttribution(
-        [Service] IStrategyAttributionService attributionService,
-        Guid accountId)
-    {
-        return await attributionService.GetAlphaAttributionAsync(accountId);
-    }
-
-    [UseProjection]
-    [UseFiltering]
-    [UseSorting]
-    [GraphQLName("getStrategyAllocations")]
-    public IQueryable<StrategyAllocation> GetStrategyAllocations(AppDbContext context, Guid accountId)
-        => context.StrategyAllocations
-            .Include(a => a.StrategyExecution)
-            .Where(a => a.AccountId == accountId);
-
-    #endregion
 }

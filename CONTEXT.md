@@ -844,10 +844,10 @@ an IBKR order.
   It will sit at the **portfolio-value provider** feeding `order_sizer`'s
   `SetHoldings` path (whole account today → per-strategy sleeve later →
   `LeanSetHoldingsSizing`); `FixedShares` / `FixedNotional` never read it. **Do not
-  conflate with `allocation`** — `allocation` (`.NET`/Postgres
-  `StrategyAllocation.CapitalAllocated`) is an after-the-fact attribution /
-  reporting record; `capital sleeve` is a live pre-trade sizing input. The two
-  words must stay distinct across stacks.
+  conflate with `allocation`** — `allocation` was the `.NET`/Postgres
+  `StrategyAllocation.CapitalAllocated` record of the trade-attribution feature
+  (deleted in #1964): an after-the-fact attribution / reporting record, never a
+  live pre-trade sizing input. The two words must stay distinct across stacks.
 - **all-in coexistence guard** — the interim v1 stand-in for the capital-sleeve
   layer: a start / pre-flight **refusal**, scoped to the **trade symbol** (not the
   whole account). If resolved sizing is `SetHoldings(1.0)` (Reference parity) **and**

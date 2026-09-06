@@ -152,9 +152,11 @@ public class SchemaMigrationTests
             await AssertRelationExistsAsync(connection, $"public.{indexName}");
         }
 
-        foreach (var tableName in RetiredLifecycleProjectionTables)
+        foreach (var tableName in RetiredTables)
         {
-            await AssertRelationDoesNotExistAsync(connection, $"public.{tableName}");
+            // Quoted: an unquoted mixed-case name folds to lowercase and would
+            // never match the EF-created table, making this assertion vacuous.
+            await AssertRelationDoesNotExistAsync(connection, $"public.\"{tableName}\"");
         }
     }
 
@@ -299,13 +301,24 @@ public class SchemaMigrationTests
         Assert.NotNull(exception);
     }
 
-    private static readonly string[] RetiredLifecycleProjectionTables =
+    // Tables a retirement migration dropped. A fresh full migration must
+    // NOT find any of them.
+    private static readonly string[] RetiredTables =
     [
+        // DropLegacyLifecycleProjectionReadModel (#1224): the superseded
+        // lifecycle projection read model.
         "bot_lifecycle_events",
         "account_lifecycle_events",
         "operator_gate_snapshots",
         "lifecycle_node_receipts",
-        "account_owner_status_snapshots"
+        "account_owner_status_snapshots",
+
+        // DropStrategyAttributionTables (#1964): the dead trade-attribution
+        // feature held the only foreign keys into StrategyExecutions outside
+        // BacktestTrades / ParityVerdicts, which blocked the run-table drop
+        // (#1965).
+        "StrategyTradeLinks",
+        "StrategyAllocations"
     ];
 
     // ck_raw_only_for_canonical_data_root is deliberately absent: migration
