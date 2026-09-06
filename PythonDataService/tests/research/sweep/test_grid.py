@@ -49,6 +49,29 @@ class TestExpandParamLowHighStep:
         with pytest.raises(ValueError, match="low"):
             expand_param(LowHighStepRange(low=5.0, high=1.0, step=1.0))
 
+    def test_decimal_grid_has_no_binary_float_artifacts(self) -> None:
+        # 0.15 + 3 * 0.15 in raw IEEE-754 float arithmetic is
+        # 0.6000000000000001, not the decimal grid the caller specified.
+        assert expand_param(LowHighStepRange(low=0.15, high=0.6, step=0.15)) == [0.15, 0.3, 0.45, 0.6]
+
+    def test_decimal_grid_holds_over_a_finer_step(self) -> None:
+        assert expand_param(LowHighStepRange(low=0.15, high=0.25, step=0.01)) == [
+            0.15,
+            0.16,
+            0.17,
+            0.18,
+            0.19,
+            0.2,
+            0.21,
+            0.22,
+            0.23,
+            0.24,
+            0.25,
+        ]
+
+    def test_integer_range_stays_whole_floats(self) -> None:
+        assert expand_param(LowHighStepRange(low=1.0, high=5.0, step=1.0)) == [1.0, 2.0, 3.0, 4.0, 5.0]
+
 
 class TestRangeSizeMatchesExpandParam:
     """_range_size must count exactly what expand_param will emit — the UI's
@@ -59,6 +82,8 @@ class TestRangeSizeMatchesExpandParam:
         "range_spec",
         [
             LowHighStepRange(low=0.0, high=1.0, step=0.6),
+            LowHighStepRange(low=0.0, high=1.0, step=0.1),
+            LowHighStepRange(low=0.0, high=1.0, step=0.3),
             LowHighStepRange(low=1.0, high=2.2, step=0.5),
             LowHighStepRange(low=1.0, high=3.0, step=1.0),
             LowHighStepRange(low=0.0, high=10.0, step=3.0),
@@ -68,6 +93,17 @@ class TestRangeSizeMatchesExpandParam:
     )
     def test_count_matches_expand_param_length(self, range_spec: LowHighStepRange | ValueListRange) -> None:
         assert _range_size(range_spec) == len(expand_param(range_spec))
+
+    @pytest.mark.parametrize(
+        ("range_spec", "expected_count"),
+        [
+            (LowHighStepRange(low=0.0, high=1.0, step=0.6), 2),
+            (LowHighStepRange(low=0.0, high=1.0, step=0.1), 11),
+            (LowHighStepRange(low=0.0, high=1.0, step=0.3), 4),
+        ],
+    )
+    def test_count_matches_documented_awkward_spans(self, range_spec: LowHighStepRange, expected_count: int) -> None:
+        assert _range_size(range_spec) == expected_count == len(expand_param(range_spec))
 
 
 class TestParamsHash:
@@ -85,6 +121,18 @@ class TestParamsHash:
         a = params_hash("strategy_a", {"gap": 0.2})
         b = params_hash("strategy_b", {"gap": 0.2})
         assert a != b
+
+    def test_low_high_step_cell_hashes_identically_to_the_same_value_list_cell(self) -> None:
+        """A leader chosen from a low/high/step sweep must be the same cell
+        identity as a value-list submission of the same decimal numbers —
+        otherwise the two submission styles disagree about which cell
+        (search_id, params_hash) a given (strategy, params) pair is."""
+        range_values = expand_param(LowHighStepRange(low=0.15, high=0.6, step=0.15))
+        assert range_values == [0.15, 0.3, 0.45, 0.6]
+        for range_value, value_list_value in zip(range_values, [0.15, 0.3, 0.45, 0.6], strict=True):
+            a = params_hash("strategy_a", {"gap": range_value})
+            b = params_hash("strategy_a", {"gap": value_list_value})
+            assert a == b
 
 
 class TestExpandGrid:

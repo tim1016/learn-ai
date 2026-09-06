@@ -26,6 +26,7 @@ import json
 import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from itertools import product
 
 # A very high sanity ceiling, not a product-level cap (D11): real sweeps
@@ -83,7 +84,18 @@ class RunSpec:
 
 
 def expand_param(range_spec: ParamRange) -> list[float]:
-    """Expand one parameter's range into its ordered list of values."""
+    """Expand one parameter's range into its ordered list of values.
+
+    A low/high/step range is computed in ``decimal.Decimal``, seeded from
+    each input's shortest repr (``str(range_spec.low)`` etc.), so the
+    emitted values are the exact decimal grid the caller specified — e.g.
+    0.15..0.6 step 0.15 yields ``[0.15, 0.3, 0.45, 0.6]``, not the
+    binary-float accumulation artifact ``0.6000000000000001`` that
+    ``low + i * step`` in raw ``float`` arithmetic produces. That artifact
+    used to leak into the leader's persisted params, its ``params_hash``,
+    and the frontend display of a grid-search cell. The value count is
+    delegated to :func:`_range_size` so the two can never disagree.
+    """
     if isinstance(range_spec, ValueListRange):
         if not range_spec.values:
             raise ValueError("value-list range must not be empty")
@@ -94,8 +106,9 @@ def expand_param(range_spec: ParamRange) -> list[float]:
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    count = round((range_spec.high - range_spec.low) / range_spec.step) + 1
-    return [range_spec.low + i * range_spec.step for i in range(count) if range_spec.low + i * range_spec.step <= range_spec.high + 1e-9]
+    low = Decimal(str(range_spec.low))
+    step = Decimal(str(range_spec.step))
+    return [float(low + i * step) for i in range(_range_size(range_spec))]
 
 
 def params_hash(strategy_key: str, params: Mapping[str, float]) -> str:
@@ -107,12 +120,14 @@ def params_hash(strategy_key: str, params: Mapping[str, float]) -> str:
 def _range_size(range_spec: ParamRange) -> int:
     """Count a range's values analytically — never materializes the list.
 
-    Mirrors expand_param's ``<= high + 1e-9`` filter via a closed-form floor
-    (not ``round``, which over-counts a non-divisible span — e.g.
-    low=0, high=1, step=0.6 rounds to 3 but expand_param's filter only
-    keeps [0, 0.6], since 1.2 > 1 + 1e-9). Never allocating means a
-    fat-fingered low/high/step (e.g. step=0.0001 over a wide span) can
-    still be rejected by size alone before any memory is spent.
+    ``expand_param`` delegates its value count to this function, so the two
+    can never disagree by construction. The closed-form floor below (not
+    ``round``, which over-counts a non-divisible span — e.g. low=0, high=1,
+    step=0.6 rounds to 3, but only [0, 0.6] falls within the inclusive
+    ``high + 1e-9`` boundary tolerance) admits exactly the values
+    ``expand_param`` emits. Never allocating means a fat-fingered
+    low/high/step (e.g. step=0.0001 over a wide span) can still be rejected
+    by size alone before any memory is spent.
     """
     if isinstance(range_spec, ValueListRange):
         if not range_spec.values:
