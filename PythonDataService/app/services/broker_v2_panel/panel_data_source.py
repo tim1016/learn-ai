@@ -58,16 +58,15 @@ from app.services.bot_runner import (
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
-    REVIVAL_OUTCOME_FOREIGN_AUTHORITY,
     REVIVAL_OUTCOME_NO_SWEEP,
     REVIVAL_OUTCOME_REFUSED,
     REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR,
-    REVIVAL_REMEDY_FOREIGN_AUTHORITY,
     REVIVAL_REMEDY_TRANSIENT_STORE_ERROR,
     ActionNotAvailableError,
     ActionPerformer,
     ActivationFailedError,
     AuthorityPoisonedError,
+    DryRunAuthorityLeaseLostError,
     ExecutionAuthorityLostError,
     ExecutionAuthorityRevivedError,
     durable_idempotency_store_for,
@@ -733,8 +732,10 @@ async def _revive_lease_or_raise(
     write through the binding's isolated ``sim:`` Clerk, so the exception can
     arrive here naming a synthetic authority while ``account_id`` is the real
     operator account the route was authorized against. That case is refused
-    before the primary sweep is consulted (``REVIVAL_OUTCOME_FOREIGN_AUTHORITY``):
-    the synthetic authority revives through its own heartbeat, and the real
+    before the primary sweep is consulted, as the bot-scoped
+    ``DryRunAuthorityLeaseLostError`` rather than the account-scoped loss (a
+    cohort batch continues past it; the router reports ``conflict``): the
+    synthetic authority revives through its own heartbeat, and the real
     account's recovery pass must not run on an unrelated bot's behalf.
 
     A synthetic authority is not "inherited" here in any sense -- it never
@@ -761,13 +762,10 @@ async def _revive_lease_or_raise(
         # binding's synthetic Clerk while ``account_id`` here is still the
         # real operator account. The primary sweep is not this lease's, so
         # reviving it would mutate an unrelated authority and report
-        # "revived" about a lease it never touched. Nothing is attempted.
+        # "revived" about a lease it never touched. Nothing is attempted, and
+        # the error is bot-scoped: a cohort batch continues past this leg.
         _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
-        raise ExecutionAuthorityLostError(
-            revival_outcome=REVIVAL_OUTCOME_FOREIGN_AUTHORITY,
-            attempted=False,
-            remedy=REVIVAL_REMEDY_FOREIGN_AUTHORITY,
-        ) from error
+        raise DryRunAuthorityLeaseLostError() from error
 
     sweep = active_reconciliation_sweep(broker)
     if sweep is None:

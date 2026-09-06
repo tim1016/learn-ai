@@ -202,7 +202,8 @@ REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR = (
 #: authority and report "revived" about a lease it never touched. A synthetic
 #: authority revives through its own heartbeat (no recovery hook by design --
 #: see ``active_authority.py``'s synthetic branch), so nothing is attempted
-#: here.
+#: here. Reported through :class:`DryRunAuthorityLeaseLostError`, its own
+#: bot-scoped type, never the account-scoped error.
 REVIVAL_OUTCOME_FOREIGN_AUTHORITY = (
     "the lease that lapsed belongs to this bot's isolated Dry Run authority, "
     "not the account authority this action was presented against, and the "
@@ -262,6 +263,44 @@ class ExecutionAuthorityRevivedError(ActionExecutionError):
                 "retry the action now that authority is restored."
             ),
             reason_code=EXECUTION_LEASE_REVIVED_REASON_CODE,
+        )
+
+
+class DryRunAuthorityLeaseLostError(ActionExecutionError):
+    """This bot's own isolated Dry Run authority lost its lease; the account
+    is untouched (503).
+
+    Raised by the write path in place of :class:`ExecutionAuthorityLostError`
+    when the ``ExecutionLeaseLost`` it caught names a ``sim:`` authority other
+    than the account the action was presented against: a Dry Run bot's
+    lifecycle performers write through its binding's synthetic Clerk while the
+    request's ``account_id`` is the real operator account. Nothing is
+    attempted against the account -- reviving the primary sweep on this bot's
+    behalf would run the real account's recovery pass for an unrelated
+    authority and report "revived" about a lease it never touched.
+
+    Scoped to the bot, not the account, which is the whole reason it is its
+    own type: a cohort batch records it as a per-leg refusal and continues
+    (a later real-paper or Dry Run leg is unaffected, unlike the
+    account-scoped loss that ends a batch early, ADR 0051), and the router
+    reports it as ``conflict`` -- retryable, since a synthetic authority's own
+    lease heartbeat revives it after a thaw (hook-less by design, see
+    ``active_authority.py``'s synthetic branch).
+    """
+
+    http_status = 503
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This bot's Dry Run authority can no longer be written to.",
+            detail=(
+                "The data plane's execution lease for this bot's isolated Dry Run "
+                "authority was lost, and no supervised revival could even be "
+                f"attempted: {REVIVAL_OUTCOME_FOREIGN_AUTHORITY}. Refusing writes is "
+                "deliberate: a holder that cannot prove it still owns the account "
+                f"must not act on stale authority. {REVIVAL_REMEDY_FOREIGN_AUTHORITY}"
+            ),
+            reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
         )
 
 

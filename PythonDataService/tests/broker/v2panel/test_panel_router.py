@@ -1000,7 +1000,9 @@ async def test_write_path_does_not_revive_the_account_for_a_dry_run_authoritys_l
     assert response.status_code == 503, response.text
     detail = response.json()["detail"]
     assert detail["reason_code"] == "EXECUTION_LEASE_LOST"
-    assert detail["outcome"] == "failure"
+    # Retryable, like a revived lease: the bot's own synthetic heartbeat
+    # revives it after a thaw, and nothing was applied.
+    assert detail["outcome"] == "conflict"
     assert "Dry Run" in detail["why"]
     # Nothing was attempted against the account: its hook never fired and
     # its lease expiry is exactly what it was.

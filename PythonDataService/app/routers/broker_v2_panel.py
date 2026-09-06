@@ -73,6 +73,7 @@ from app.services.broker_v2_panel import panel_data_source as ds
 from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
     ActionOutcomeUnknownError,
+    DryRunAuthorityLeaseLostError,
     ExecutionAuthorityRevivedError,
     StaleRevisionError,
 )
@@ -171,13 +172,18 @@ def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest
     # cohort_execution.py's per-leg classification maps this error to
     # "refused" -> "conflict" for the identical reason; aligned here so both
     # surfaces report the same outcome for the same condition (#1955 final
-    # review).
+    # review). DryRunAuthorityLeaseLostError is retryable for the same
+    # reason: nothing applied, and the bot's own synthetic heartbeat revives
+    # its lease after a thaw.
     outcome: Literal["conflict", "failure", "unknown"] = (
         "unknown"
         if outcome_unknown
         else (
             "conflict"
-            if isinstance(error, (StaleRevisionError, ExecutionAuthorityRevivedError))
+            if isinstance(
+                error,
+                (StaleRevisionError, ExecutionAuthorityRevivedError, DryRunAuthorityLeaseLostError),
+            )
             else "failure"
         )
     )

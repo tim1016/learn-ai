@@ -29,6 +29,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
     ActionOutcomeUnknownError,
     AuthorityPoisonedError,
+    DryRunAuthorityLeaseLostError,
     ExecutionAuthorityLostError,
     ExecutionAuthorityRevivedError,
     StaleRevisionError,
@@ -152,8 +153,14 @@ async def execute_cohort_legs(
             # already succeeded, so a later leg's own renewal is expected to
             # succeed too. It is refused/retryable like a stale revision --
             # nothing applied, a re-POST covers it -- not a hard failure.
+            # DryRunAuthorityLeaseLostError is a leg's OWN isolated authority
+            # losing its lease: bot-scoped, so the batch continues, and
+            # retryable, since that authority's heartbeat revives it.
             refused = (
-                isinstance(error, (StaleRevisionError, ExecutionAuthorityRevivedError))
+                isinstance(
+                    error,
+                    (StaleRevisionError, ExecutionAuthorityRevivedError, DryRunAuthorityLeaseLostError),
+                )
                 or error.http_status == 409
             )
             results.append(

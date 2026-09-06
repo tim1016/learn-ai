@@ -24,7 +24,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -365,6 +365,54 @@ async def test_a_revived_lease_leg_applies_on_the_same_cohort_key_repost(
     # worth of renewal state, not a second freeze-and-revive cycle.
     assert len(hook_calls) == 1
     repo.renew_execution_lease()
+
+
+async def test_a_dry_run_legs_own_lost_lease_is_a_per_leg_refusal_not_the_batchs_end(
+    cohort_lease_lost_api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Dry Run leg's performers write through its isolated ``sim:`` Clerk,
+    so its lost lease is a fact about that bot, not the account. The batch
+    records it refused (retryable: the synthetic heartbeat revives it) and
+    continues to the next leg, which applies against the untouched account
+    -- and no revival, nor the account's recovery hook, ever runs.
+    """
+    _repo, _clock, hook_calls = cohort_lease_lost_api
+    sid_dry_run, sid_applies = _LEASE_COHORT_SIDS
+    legs = [await _stop_bot_decisions_leg(sid) for sid in (sid_dry_run, sid_applies)]
+    real_run = panel_data_source._run_action_under_live_authority
+
+    async def _dry_run_leg_loses_its_own_lease(broker, account_id, sid, request, **kwargs):
+        if sid == sid_dry_run:
+            raise ExecutionLeaseLost(
+                f"account 'sim:{sid}' execution lease was lost or expired; "
+                "this handle can no longer write",
+                account_id=f"sim:{sid}",
+            )
+        return await real_run(broker, account_id, sid, request, **kwargs)
+
+    monkeypatch.setattr(
+        panel_data_source, "_run_action_under_live_authority", _dry_run_leg_loses_its_own_lease
+    )
+
+    results = await cohort_execution.execute_cohort_legs(
+        "alpaca",
+        ACCT,
+        legs=legs,
+        idempotency_key="dry-run-lease-wave",
+        reason=None,
+        operator_identity="op",
+        telemetry_kind="dry_run_lease_test",
+    )
+
+    outcomes = {leg.strategy_instance_id: leg.outcome for leg in results}
+    assert outcomes == {sid_dry_run: "refused", sid_applies: "applied"}
+    refused_leg = next(leg for leg in results if leg.strategy_instance_id == sid_dry_run)
+    assert refused_leg.error is not None
+    assert refused_leg.error.outcome == "conflict"
+    assert refused_leg.error.reason_code == "EXECUTION_LEASE_LOST"
+    # The account was never touched on the Dry Run bot's behalf.
+    assert hook_calls == []
 
 
 def test_request_rejects_duplicate_legs_and_oversized_identity() -> None:
