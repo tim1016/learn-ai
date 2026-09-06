@@ -11,8 +11,10 @@ export interface TickerCatalogView {
   readonly recent: Signal<readonly string[]>;
   readonly loading: Signal<boolean>;
   /**
-   * The lake has answered for this mode at least once, so `pool` is its
-   * verdict — an empty pool means the tree holds nothing, not "not yet asked".
+   * The lake has answered successfully for this mode, so `pool` is its
+   * verdict — an empty pool means the tree holds nothing, not "not yet
+   * asked". A failed read is not a verdict: `false` there, with the reason
+   * in `unavailable`.
    */
   readonly resolved: Signal<boolean>;
   /** Why the catalog could not be read, or `null` when the lake answered. */

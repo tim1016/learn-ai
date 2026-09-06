@@ -60,6 +60,7 @@ describe('TickerCatalogService', () => {
 
     expect(view.pool().map((t) => t.symbol)).toEqual(['SPY', 'GLD']);
     expect(view.unavailable()).toBeNull();
+    expect(view.resolved()).toBe(true);
   });
 
   it('labels a known symbol and falls back to the ticker for an unknown one', async () => {
@@ -121,6 +122,10 @@ describe('TickerCatalogService', () => {
 
     expect(view.pool()).toEqual([]);
     expect(view.unavailable()).toBe('The data plane did not answer.');
+    // A failed read is not a verdict: a retry clears `unavailable` while it
+    // is in flight, and a resolved-looking empty pool would read as "the
+    // tree holds nothing" for as long as that retry takes.
+    expect(view.resolved()).toBe(false);
   });
 
   // The adjustment mode is a segment of the lake root (#1866) and a backtest
