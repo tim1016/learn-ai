@@ -102,7 +102,7 @@ const GET_SESSION = `
 `;
 
 const SAVE_SESSION = `
-  mutation SaveDataLabSession($input: DataLabSessionInputInput!) {
+  mutation SaveDataLabSession($input: DataLabSessionInput!) {
     saveDataLabSession(input: $input) {
       success
       id
@@ -112,7 +112,7 @@ const SAVE_SESSION = `
 `;
 
 const UPDATE_SESSION = `
-  mutation UpdateDataLabSession($id: UUID!, $input: DataLabSessionInputInput!) {
+  mutation UpdateDataLabSession($id: UUID!, $input: DataLabSessionInput!) {
     updateDataLabSession(id: $id, input: $input) {
       success
       id
