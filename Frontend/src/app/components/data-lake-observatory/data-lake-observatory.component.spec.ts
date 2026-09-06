@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JobsService } from '../../services/jobs.service';
 import { DataLakeObservatoryComponent } from './data-lake-observatory.component';
-import { DataLakeService } from './lib/data-lake.service';
+import { DataLakeService } from '../../shared/data-lake/data-lake.service';
 import type {
   ArtifactDetail,
   BackfillDefaults,
@@ -13,7 +13,7 @@ import type {
   CoverageStatus,
   DataLakeRead,
   StorageSummaryResponse,
-} from './lib/data-lake.types';
+} from '../../shared/data-lake/data-lake.types';
 
 /** 09:30 America/New_York on the given May 2026 date, as int64 ms UTC. */
 function sessionOpenMs(day: number): number {

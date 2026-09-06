@@ -1,5 +1,5 @@
 import { isOpaqueReceiptValueLabel } from '../../../shared/pipes/receipt-label.pipe';
-import type { ArtifactDetail } from './data-lake.types';
+import type { ArtifactDetail } from '../../../shared/data-lake/data-lake.types';
 
 /**
  * One line of an artifact receipt, tagged with how it must be rendered.

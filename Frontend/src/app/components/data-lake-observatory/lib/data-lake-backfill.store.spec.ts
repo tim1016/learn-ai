@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService } from '../../../services/jobs.service';
 import { BACKFILL_JOB_TYPE, DataLakeBackfillStore } from './data-lake-backfill.store';
-import type { DataRunSpec } from './data-lake.types';
+import type { DataRunSpec } from '../../../shared/data-lake/data-lake.types';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
 const MAY_20_OPEN_MS = Date.UTC(2026, 4, 20, 13, 30);

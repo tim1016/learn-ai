@@ -24,8 +24,8 @@ import type {
   DataLakeDataType,
   DataRunSpec,
   PriceAdjustmentMode,
-} from '../lib/data-lake.types';
-import { MAX_TRADING_RANGE_DAYS, tradingDateToMs, tradingRangeRejection } from '../lib/trading-range';
+} from '../../../shared/data-lake/data-lake.types';
+import { MAX_TRADING_RANGE_DAYS, tradingDateToMs, tradingRangeRejection } from '../../../shared/data-lake/trading-range';
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;

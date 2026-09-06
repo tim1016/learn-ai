@@ -9,8 +9,8 @@ import {
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { parseSymbols } from '../lib/coverage-board';
-import { MAX_TRADING_RANGE_DAYS, tradingRangeRejection } from '../lib/trading-range';
-import type { DataLakeDataType, PriceAdjustmentMode } from '../lib/data-lake.types';
+import { MAX_TRADING_RANGE_DAYS, tradingRangeRejection } from '../../../shared/data-lake/trading-range';
+import type { DataLakeDataType, PriceAdjustmentMode } from '../../../shared/data-lake/data-lake.types';
 
 export interface ObservatoryQuery {
   readonly symbolsText: string;

@@ -3,7 +3,7 @@ import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
 import { buildCoverageBoard, type CoverageBoard } from '../lib/coverage-board';
-import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../lib/data-lake.types';
+import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../../../shared/data-lake/data-lake.types';
 import { CoverageHeatmapComponent } from './coverage-heatmap.component';
 
 /** 09:30 America/New_York on the given May 2026 date, as int64 ms UTC. */

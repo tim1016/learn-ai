@@ -1,8 +1,8 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
 import { JobsService, type JobStreamEvent } from '../../../services/jobs.service';
-import { classifyDataLakeError } from './data-lake.service';
-import type { BackfillDayEvent, BackfillFailure, DataRunSpec } from './data-lake.types';
+import { classifyDataLakeError } from '../../../shared/data-lake/data-lake.service';
+import type { BackfillDayEvent, BackfillFailure, DataRunSpec } from '../../../shared/data-lake/data-lake.types';
 
 /** The public job type the .NET jobs framework forwards to the data-lake router. */
 export const BACKFILL_JOB_TYPE = 'data_lake_backfill';
