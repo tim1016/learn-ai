@@ -11,6 +11,10 @@ import { PastChainService } from '../../services/past-chain.service';
 import { MarketDataService } from '../../services/market-data.service';
 import { RunSessionService } from '../../services/run-session.service';
 import { DataLabComponent } from './data-lab.component';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../../shared/ticker-catalog/testing/fake-ticker-catalog';
 
 const savedSession = {
   id: 'session-1',
@@ -50,6 +54,9 @@ describe('DataLabComponent', () => {
     const runSession = idleRunSession();
     const { container, fixture } = await render(DataLabComponent, {
       providers: [
+        provideFakeTickerCatalog(
+          fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCA' }]),
+        ),
         provideRouter([]),
         {
           provide: HttpClient,

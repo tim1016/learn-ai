@@ -57,16 +57,21 @@ async def pool():
     await catalog_client.close_pool()
 
 
-def _minute_identity(date_val: date = date(2024, 5, 20)) -> ArtifactIdentity:
+def _minute_identity(
+    date_val: date = date(2024, 5, 20),
+    *,
+    symbol: str = "SPY",
+    price_adjustment_mode: str = "raw",
+) -> ArtifactIdentity:
     return ArtifactIdentity(
         artifact_kind="time_series_bars",
         market="usa",
-        symbol="SPY",
+        symbol=symbol,
         trading_date=date_val,
         resolution="minute",
         data_type="trade",
         provider="polygon",
-        price_adjustment_mode="raw",
+        price_adjustment_mode=price_adjustment_mode,
     )
 
 
@@ -296,3 +301,51 @@ async def test_coverage_finds_a_real_quote_artifact_seeded_under_learn_ai_derive
     assert coverage[0].trading_date == date(2024, 5, 21)
     assert coverage[0].status == "complete"
     assert coverage[0].artifact_id == artifact_id
+
+
+async def test_coverage_spans_scoped_to_a_mode_omit_a_symbol_backfilled_only_elsewhere(
+    clean_artifacts, pool
+):
+    """A raw-only symbol is not covered for a split-adjusted reader.
+
+    The adjustment mode is a segment of the lake root (#1866): a run resolving
+    ``polygon_split_adjusted`` opens a different directory, where a raw-only
+    symbol has no bars at all. Pooling the modes reported it as covered, which
+    is how the Strategy Lab instrument picker came to offer a symbol every run
+    against it then refused for missing sessions.
+    """
+    for symbol, mode in (("SPY", "polygon_split_adjusted"), ("GLD", "raw")):
+        artifact_id = await catalog_client.claim_minute_bar(
+            identity=_minute_identity(symbol=symbol, price_adjustment_mode=mode),
+            worker_id="w-1",
+            lease_ttl_ms=300_000,
+            data_contract_hash="a" * 64,
+            file_path=f"equity/usa/minute/{symbol.lower()}/20240520_trade.zip",
+        )
+        await catalog_client.complete_artifact(
+            artifact_id,
+            row_count=390,
+            first_bar_start_ms=1716196200000,
+            last_bar_start_ms=1716219540000,
+            file_size_bytes=123456,
+            file_sha256="b" * 64,
+            lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+        )
+
+    unscoped = await catalog_client.select_symbol_coverage_spans("usa")
+    assert {s.symbol for s in unscoped} == {"GLD", "SPY"}
+
+    adjusted = await catalog_client.select_symbol_coverage_spans(
+        "usa", price_adjustment_mode="polygon_split_adjusted"
+    )
+    assert [s.symbol for s in adjusted] == ["SPY"]
+
+    raw = await catalog_client.select_symbol_coverage_spans("usa", price_adjustment_mode="raw")
+    assert [s.symbol for s in raw] == ["GLD"]
+
+    # The kind totals scope with it, so the response cannot say the lake holds
+    # two minute-bar artifacts under a mode that accounts for one.
+    totals = await catalog_client.select_storage_totals_by_kind(
+        "usa", price_adjustment_mode="polygon_split_adjusted"
+    )
+    assert [(t.artifact_kind, t.artifact_count) for t in totals] == [("time_series_bars", 1)]

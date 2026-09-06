@@ -945,13 +945,21 @@ async def test_artifact_detail_404_when_row_does_not_exist(monkeypatch: pytest.M
 async def test_storage_summary_reports_counts_bytes_and_symbol_spans(
     monkeypatch: pytest.MonkeyPatch, make_data_lake_app
 ):
-    async def _kinds(market: str, data_root_id: UUID | None = None) -> list[StorageKindTotal]:
+    async def _kinds(
+        market: str,
+        data_root_id: UUID | None = None,
+        price_adjustment_mode: str | None = None,
+    ) -> list[StorageKindTotal]:
         return [
             StorageKindTotal(artifact_kind="time_series_bars", resolution="minute", artifact_count=42, total_bytes=1_048_576),
             StorageKindTotal(artifact_kind="factor_file", resolution=None, artifact_count=1, total_bytes=2048),
         ]
 
-    async def _spans(market: str, data_root_id: UUID | None = None) -> list[SymbolCoverageSpan]:
+    async def _spans(
+        market: str,
+        data_root_id: UUID | None = None,
+        price_adjustment_mode: str | None = None,
+    ) -> list[SymbolCoverageSpan]:
         return [
             SymbolCoverageSpan(
                 symbol="SPY",
@@ -983,10 +991,18 @@ async def test_storage_summary_reports_counts_bytes_and_symbol_spans(
 
 
 async def test_storage_summary_honest_empty_on_empty_catalog(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
-    async def _no_kinds(market: str, data_root_id: UUID | None = None) -> list[StorageKindTotal]:
+    async def _no_kinds(
+        market: str,
+        data_root_id: UUID | None = None,
+        price_adjustment_mode: str | None = None,
+    ) -> list[StorageKindTotal]:
         return []
 
-    async def _no_spans(market: str, data_root_id: UUID | None = None) -> list[SymbolCoverageSpan]:
+    async def _no_spans(
+        market: str,
+        data_root_id: UUID | None = None,
+        price_adjustment_mode: str | None = None,
+    ) -> list[SymbolCoverageSpan]:
         return []
 
     monkeypatch.setattr(catalog_client, "select_storage_totals_by_kind", _no_kinds)
@@ -998,3 +1014,56 @@ async def test_storage_summary_honest_empty_on_empty_catalog(monkeypatch: pytest
     assert status_code == 200
     assert body["kinds"] == []
     assert body["symbols"] == []
+
+
+async def test_storage_summary_forwards_the_price_adjustment_mode(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    """A mode-scoped summary must reach the catalog as a filter, not be dropped.
+
+    The adjustment mode is a segment of the lake root (#1866). A caller asking
+    "which symbols could a split-adjusted run read" gets a wrong — and
+    dangerously reassuring — answer if the parameter is accepted and ignored:
+    a symbol backfilled only in ``raw`` would be reported as covered.
+    """
+    seen: dict[str, str | None] = {}
+
+    async def _kinds(
+        market: str,
+        data_root_id: UUID | None = None,
+        price_adjustment_mode: str | None = None,
+    ) -> list[StorageKindTotal]:
+        seen["kinds"] = price_adjustment_mode
+        return []
+
+    async def _spans(
+        market: str,
+        data_root_id: UUID | None = None,
+        price_adjustment_mode: str | None = None,
+    ) -> list[SymbolCoverageSpan]:
+        seen["spans"] = price_adjustment_mode
+        return []
+
+    monkeypatch.setattr(catalog_client, "select_storage_totals_by_kind", _kinds)
+    monkeypatch.setattr(catalog_client, "select_symbol_coverage_spans", _spans)
+
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, _ = await _get(
+        app, "/api/data-lake/storage-summary?price_adjustment_mode=polygon_split_adjusted"
+    )
+
+    assert status_code == 200
+    assert seen == {"kinds": "polygon_split_adjusted", "spans": "polygon_split_adjusted"}
+
+    # Omitted stays the whole-lake overview the Observatory renders.
+    seen.clear()
+    status_code, _ = await _get(app, "/api/data-lake/storage-summary")
+    assert status_code == 200
+    assert seen == {"kinds": None, "spans": None}
+
+
+async def test_storage_summary_rejects_an_unknown_price_adjustment_mode(make_data_lake_app):
+    """An unrecognised mode is a 422, never a silent whole-lake answer."""
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, _ = await _get(app, "/api/data-lake/storage-summary?price_adjustment_mode=nonsense")
+    assert status_code == 422

@@ -6,8 +6,8 @@ import { firstValueFrom, map } from "rxjs";
 
 import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
+import { TickerCatalogService } from "../../shared/ticker-catalog";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
-import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import type { TickerRange } from "../../shared/ticker-range-picker";
 import {
   leanValidationTemplateForStrategy,
@@ -37,6 +37,7 @@ const CONFIG_NAV_KEY = "engineLab.configNavOverride";
 export class StrategyLabConfigStore {
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
+  private readonly tickerCatalog = inject(TickerCatalogService);
   private readonly launchParams = toSignal(
     this.route.queryParamMap.pipe(map(parseEngineLaunchParams)),
     { initialValue: {} },
@@ -80,8 +81,6 @@ export class StrategyLabConfigStore {
   readonly configurationWarning = signal<string | null>(null);
   readonly restoredDataPolicy = signal<DataPolicy | null>(null);
 
-  readonly tickerPool = TICKER_POOL;
-  readonly recentTickers = RECENT_TICKERS;
   readonly startDate = computed(() => this.range().from);
   readonly endDate = computed(() => this.range().to);
   readonly resolution = computed<EngineResolution>(() => {
@@ -153,6 +152,17 @@ export class StrategyLabConfigStore {
 
   constructor() {
     effect(() => persistNavOverride(this.configNavOverride()));
+
+    // The instrument picker must offer the tree this run will read. The
+    // adjustment mode is a segment of the lake root (#1866), and `both`
+    // resolves raw (see composeDataPolicy), so a picker pinned to the
+    // split-adjusted default would offer a symbol a two-engine run then
+    // refuses for missing sessions.
+    effect(() => {
+      this.tickerCatalog.useMode(
+        this.dataPolicy().adjusted ? "polygon_split_adjusted" : "raw",
+      );
+    });
 
     effect(() => {
       const current = this.range();

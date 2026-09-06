@@ -4,18 +4,36 @@ import {
   computed,
   effect,
   ElementRef,
+  inject,
   input,
   model,
   signal,
   viewChild,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { Tooltip } from 'primeng/tooltip';
 
 import {
   type TickerOption,
   type TickerRange,
 } from '../ticker-range-picker.types';
+import { TickerCatalogService } from '../../ticker-catalog';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
+
+/**
+ * Does the window on screen intersect the days the lake holds for `t`?
+ *
+ * Both sides are zero-padded `YYYY-MM-DD`, so lexicographic order is
+ * chronological order and no `Date` round-trip is needed. An unknown bound is
+ * treated as open, which keeps an unlabelled span from moving the window.
+ */
+function overlapsHeldRange(window: TickerRange, t: TickerOption): boolean {
+  const first = t.firstHeld ?? null;
+  const last = t.lastHeld ?? null;
+  if (last !== null && window.from > last) return false;
+  if (first !== null && window.to < first) return false;
+  return true;
+}
 
 const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
   ARCA: 'NYSE Arca',
@@ -28,7 +46,7 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
 
 @Component({
   selector: 'app-instrument-card',
-  imports: [Tooltip],
+  imports: [RouterLink, Tooltip],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './instrument-card.component.html',
   styleUrls: ['./instrument-card.component.scss'],
@@ -38,9 +56,16 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
 })
 export class InstrumentCardComponent {
   readonly value = model.required<TickerRange>();
-  readonly tickerPool = input<readonly TickerOption[]>([]);
-  readonly recent = input<readonly string[]>([]);
   readonly appearance = input<'card' | 'flat'>('card');
+
+  // The pool is a system-wide fact — what the lake holds bars for — not a
+  // property of whichever page mounted the picker. It used to be drilled in
+  // as an input from nine hosts, every one of them passing the same constant.
+  private readonly catalog = inject(TickerCatalogService);
+  readonly tickerPool = this.catalog.pool;
+  readonly recent = this.catalog.recent;
+  readonly catalogLoading = this.catalog.loading;
+  readonly catalogUnavailable = this.catalog.unavailable;
 
   private readonly rootEl =
     viewChild.required<ElementRef<HTMLElement>>('rootEl');
@@ -63,13 +88,20 @@ export class InstrumentCardComponent {
     this.tickerPool().find((t) => t.symbol === this.value().symbol),
   );
 
-  readonly selectedTickerCachePct = computed<number | null>(() => {
-    const cache = this.selectedTicker()?.cache;
-    return typeof cache === 'number' ? cache : null;
-  });
+  readonly selectedFirstHeld = computed<string | null>(
+    () => this.selectedTicker()?.firstHeld ?? null,
+  );
 
-  readonly selectedTickerLast = computed<string | null>(
-    () => this.selectedTicker()?.last ?? null,
+  readonly selectedLastHeld = computed<string | null>(
+    () => this.selectedTicker()?.lastHeld ?? null,
+  );
+
+  /** The lake answered, and holds nothing at all — distinct from no match. */
+  readonly catalogEmpty = computed(
+    () =>
+      this.tickerPool().length === 0 &&
+      !this.catalogLoading() &&
+      this.catalogUnavailable() === null,
   );
 
   readonly selectedExchange = computed(
@@ -103,6 +135,10 @@ export class InstrumentCardComponent {
       .map((s) => pool.find((t) => t.symbol === s))
       .filter((t): t is TickerOption => !!t);
   });
+
+  retryCatalog(): void {
+    this.catalog.reload();
+  }
 
   trackBySymbol(_: number, t: TickerOption): string {
     return t.symbol;
@@ -151,7 +187,14 @@ export class InstrumentCardComponent {
   pickTicker(t: TickerOption): void {
     const current = this.value();
     const patch: Partial<TickerRange> = { symbol: t.symbol };
-    if (t.last) {
+    // Only move the window when the one on screen could not be run against
+    // this symbol at all. Rewriting it unconditionally would silently discard
+    // a window the operator chose — switching SPY to GLD to compare the same
+    // months would jump to the last 30 days instead of comparing anything.
+    // This branch never executed before the lake-backed catalog: no entry in
+    // the constant it replaced carried a date, so `pickTicker` only ever
+    // changed the symbol.
+    if (t.lastHeld && !overlapsHeldRange(current, t)) {
       // Sidecar validator rejects weekend endpoints with 422. ``last``
       // arrives from a data-availability response so it's usually
       // already a weekday, but ``last - 30 days`` lands on a weekend
@@ -164,22 +207,16 @@ export class InstrumentCardComponent {
       // local Friday whose UTC instant fell on Saturday, and
       // ``isoDate``'s UTC ``toISOString`` round-trip emitted the
       // Saturday day stamp (PR #346 P1 review).
-      patch.from = toMostRecentTradingDayIso(t.last, -30);
-      patch.to = toMostRecentTradingDayIso(t.last);
+      const start = toMostRecentTradingDayIso(t.lastHeld, -30);
+      // Clamp to where the held range begins. A thinly-backfilled symbol
+      // would otherwise open on a 30-day window of which almost none is
+      // readable, and the run would refuse data the picker had proposed.
+      // `firstHeld` is a real trading date, so it needs no weekday walk —
+      // walking it would step before the range and defeat the clamp.
+      patch.from = t.firstHeld && t.firstHeld > start ? t.firstHeld : start;
+      patch.to = toMostRecentTradingDayIso(t.lastHeld);
     }
     this.value.set({ ...current, ...patch });
     this.closeDropdown();
-  }
-
-  cacheTextColor(pct: number | undefined): string {
-    if (pct === undefined) return 'var(--text-muted)';
-    if (pct >= 0.9) return 'var(--bull)';
-    if (pct >= 0.5) return 'var(--warn)';
-    return 'var(--text-muted)';
-  }
-
-  cacheLabel(pct: number | undefined): string {
-    if (pct === undefined || pct === 0) return 'no cache';
-    return `${Math.round(pct * 100)}%`;
   }
 }

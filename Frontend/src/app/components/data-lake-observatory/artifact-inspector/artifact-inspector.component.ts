@@ -4,7 +4,7 @@ import { CopyButtonComponent } from '../../../shared/copy-button/copy-button.com
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { artifactReceiptSections } from '../lib/artifact-receipt';
-import { DataLakeService, describeFailure } from '../lib/data-lake.service';
+import { DataLakeService, describeFailure } from '../../../shared/data-lake';
 
 /**
  * Full receipt for one catalog row: hashes, byte metadata, provider

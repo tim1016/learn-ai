@@ -8,7 +8,7 @@ import type {
   BackfillPhase,
   BackfillProgress,
 } from '../lib/data-lake-backfill.store';
-import type { BackfillDayEvent, BackfillFailure } from '../lib/data-lake.types';
+import type { BackfillDayEvent, BackfillFailure } from '../../../shared/data-lake';
 
 /**
  * Live narration of one backfill run: the per-day progress tick, each

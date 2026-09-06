@@ -2,6 +2,10 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MultiTickerRangePickerComponent } from './multi-ticker-range-picker.component';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 
 describe('MultiTickerRangePickerComponent', () => {
@@ -21,12 +25,12 @@ describe('MultiTickerRangePickerComponent', () => {
   beforeEach(async () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
+      providers: [provideFakeTickerCatalog(fakeTickerCatalog(pool))],
       imports: [MultiTickerRangePickerComponent],
     }).compileComponents();
 
     fixture = TestBed.createComponent(MultiTickerRangePickerComponent);
     fixture.componentRef.setInput('value', baseValue);
-    fixture.componentRef.setInput('tickerPool', pool);
   });
 
   it('composes the three sub-components', () => {

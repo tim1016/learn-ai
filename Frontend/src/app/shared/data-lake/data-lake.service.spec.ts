@@ -6,7 +6,7 @@ import {
 import { TestBed } from '@angular/core/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { environment } from '../../../../environments/environment';
+import { environment } from '../../../environments/environment';
 import { DataLakeService, classifyDataLakeError, describeFailure } from './data-lake.service';
 import { tradingDateToMs } from './trading-range';
 

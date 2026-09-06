@@ -19,13 +19,7 @@ import {
   DataLakeBackfillStore,
   type BackfillPhase,
 } from '../lib/data-lake-backfill.store';
-import type {
-  BackfillDefaults,
-  DataLakeDataType,
-  DataRunSpec,
-  PriceAdjustmentMode,
-} from '../lib/data-lake.types';
-import { MAX_TRADING_RANGE_DAYS, tradingDateToMs, tradingRangeRejection } from '../lib/trading-range';
+import { BackfillDefaults, DataLakeDataType, DataRunSpec, MAX_TRADING_RANGE_DAYS, PriceAdjustmentMode, tradingDateToMs, tradingRangeRejection } from '../../../shared/data-lake';
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;

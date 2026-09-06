@@ -35,14 +35,16 @@ export interface TickerRange {
 
 export interface TickerOption {
   symbol: string;
+  /** Display label. Falls back to the symbol when nothing names it. */
   name: string;
   exchange?: string;
-  /** Cache completeness fraction 0..1 — colours the per-row hint and
-   *  drives the recent/sort order in the combobox. Optional. */
-  cache?: number;
-  /** YYYY-MM-DD of the last cached day, or null if nothing cached.
-   *  Used for "jump to last 30 days of cache" on pick. */
-  last?: string | null;
+  /** YYYY-MM-DD of the first day the lake holds for this symbol, or null
+   *  when unknown. A bound, not a density claim — sessions inside
+   *  [firstHeld, lastHeld] may be absent. */
+  firstHeld?: string | null;
+  /** YYYY-MM-DD of the last day the lake holds, or null when unknown.
+   *  Anchors the window proposed when the current one holds no data. */
+  lastHeld?: string | null;
 }
 
 export type AvailabilityStatus =

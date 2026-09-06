@@ -251,16 +251,38 @@ async def get_artifact_detail(artifact_id: int) -> ArtifactDetail:
 
 
 @router.get("/storage-summary", response_model=StorageSummaryResponse, dependencies=[Depends(_ensure_catalog_pool)])
-async def get_storage_summary(market: Literal["usa"] = "usa") -> StorageSummaryResponse:
+async def get_storage_summary(
+    market: Literal["usa"] = "usa",
+    price_adjustment_mode: PriceAdjustmentMode | None = None,
+) -> StorageSummaryResponse:
     """Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.
 
     Defaults to the service's configured active root (issue #1876).
+
+    ``price_adjustment_mode`` is optional and unset by default, which reports
+    the whole lake across every mode — the storage overview the Observatory
+    renders. A caller asking "which symbols could a run actually read" must
+    pass the mode it will read with: the adjustment mode is a segment of the
+    lake root (#1866), so a symbol present only under ``raw`` has no bars for a
+    ``polygon_split_adjusted`` reader, and an unqualified answer would name it
+    as covered.
+
+    ``kinds`` and ``symbols`` scope together, so a mode-scoped response cannot
+    report totals its own symbol list does not account for.
     """
-    logger.info("[STEP 1] /api/data-lake/storage-summary requested: market=%s", market)
+    logger.info(
+        "[STEP 1] /api/data-lake/storage-summary requested: market=%s price_adjustment_mode=%s",
+        market,
+        price_adjustment_mode,
+    )
     data_root_id = root_identity.active_root_id()
     kinds, symbols = await asyncio.gather(
-        catalog_client.select_storage_totals_by_kind(market, data_root_id=data_root_id),
-        catalog_client.select_symbol_coverage_spans(market, data_root_id=data_root_id),
+        catalog_client.select_storage_totals_by_kind(
+            market, data_root_id=data_root_id, price_adjustment_mode=price_adjustment_mode
+        ),
+        catalog_client.select_symbol_coverage_spans(
+            market, data_root_id=data_root_id, price_adjustment_mode=price_adjustment_mode
+        ),
     )
     return StorageSummaryResponse(market=market, data_root_id=data_root_id, kinds=kinds, symbols=symbols)
 

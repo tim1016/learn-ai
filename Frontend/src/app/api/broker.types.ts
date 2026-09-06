@@ -1896,6 +1896,17 @@ export interface paths {
          * @description Artifact counts/bytes by kind, plus each symbol's day-keyed coverage span.
          *
          *     Defaults to the service's configured active root (issue #1876).
+         *
+         *     ``price_adjustment_mode`` is optional and unset by default, which reports
+         *     the whole lake across every mode — the storage overview the Observatory
+         *     renders. A caller asking "which symbols could a run actually read" must
+         *     pass the mode it will read with: the adjustment mode is a segment of the
+         *     lake root (#1866), so a symbol present only under ``raw`` has no bars for a
+         *     ``polygon_split_adjusted`` reader, and an unqualified answer would name it
+         *     as covered.
+         *
+         *     ``kinds`` and ``symbols`` scope together, so a mode-scoped response cannot
+         *     report totals its own symbol list does not account for.
          */
         get: operations["get_storage_summary_api_data_lake_storage_summary_get"];
         put?: never;
@@ -25474,6 +25485,7 @@ export interface operations {
         parameters: {
             query?: {
                 market?: "usa";
+                price_adjustment_mode?: ("raw" | "polygon_split_adjusted" | "lean_adjusted") | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

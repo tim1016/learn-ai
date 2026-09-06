@@ -1,1 +1,2 @@
-export { TICKER_POOL, RECENT_TICKERS } from './ticker-pool';
+export { TickerCatalogService } from './ticker-catalog.service';
+export type { TickerCatalog } from './ticker-catalog';

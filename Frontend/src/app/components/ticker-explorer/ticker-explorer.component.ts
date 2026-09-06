@@ -7,7 +7,6 @@ import { SnapshotUnderlyingResult, SnapshotContractResult } from '../../graphql/
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { TickerDatePickerComponent } from '../../shared/ticker-date-picker/ticker-date-picker.component';
 import type { TickerSnapshot } from '../../shared/ticker-date-picker/ticker-date-picker.types';
-import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
 
 @Component({
   selector: 'app-ticker-explorer',
@@ -28,8 +27,6 @@ export class TickerExplorerComponent {
     symbol: 'AAPL',
     date: TickerExplorerComponent.getNextFriday(),
   });
-  readonly tickerPool = TICKER_POOL;
-  readonly recentTickers = RECENT_TICKERS;
   protected readonly minDate = (() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);

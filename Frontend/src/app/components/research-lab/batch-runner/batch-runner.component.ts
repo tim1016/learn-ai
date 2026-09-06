@@ -40,18 +40,10 @@ import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-prog
 import { MultiTickerRangePickerComponent } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
-import type {
-  Resolution,
-  TickerOption,
-} from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import type { Resolution } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { multiTickerRangeToWire } from '../../../utils/ticker-wire';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'AAPL'];
-
-const DEFAULT_TICKER_POOL: readonly TickerOption[] = DEFAULT_TICKERS.map((s) => ({
-  symbol: s,
-  name: s,
-}));
 
 const OPTIONS_FEATURES = [
   { label: 'IV 30-Day ATM', value: 'iv_30d' },
@@ -189,7 +181,6 @@ export class BatchRunnerComponent {
     resolution: 'daily',
     multiplier: 1,
   });
-  readonly tickerPool = DEFAULT_TICKER_POOL;
   readonly availableMultipliers: readonly number[] = [1];
   readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
 
@@ -219,7 +210,6 @@ export class BatchRunnerComponent {
 
   readonly features = OPTIONS_FEATURES;
   readonly targetTypes = TARGET_TYPES;
-  readonly allTickers = DEFAULT_TICKERS;
 
   constructor() {
     // Watch the JobsService for changes to the active job. We use an

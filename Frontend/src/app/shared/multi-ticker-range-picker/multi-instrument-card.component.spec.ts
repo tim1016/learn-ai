@@ -2,6 +2,10 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MultiInstrumentCardComponent } from './multi-instrument-card.component';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 
 describe('MultiInstrumentCardComponent', () => {
@@ -23,13 +27,13 @@ describe('MultiInstrumentCardComponent', () => {
   beforeEach(async () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
+      providers: [provideFakeTickerCatalog(fakeTickerCatalog(pool))],
       imports: [MultiInstrumentCardComponent],
     }).compileComponents();
 
     fixture = TestBed.createComponent(MultiInstrumentCardComponent);
     component = fixture.componentInstance;
     fixture.componentRef.setInput('value', baseValue);
-    fixture.componentRef.setInput('tickerPool', pool);
   });
 
   it('renders one chip per selected symbol', () => {

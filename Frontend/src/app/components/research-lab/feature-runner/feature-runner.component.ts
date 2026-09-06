@@ -55,7 +55,6 @@ import type {
   Resolution,
   TickerRange,
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
-import { TICKER_POOL, RECENT_TICKERS } from '../../../shared/ticker-catalog';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
 
@@ -147,8 +146,6 @@ export class FeatureRunnerComponent {
     resolution: 'minute',
     multiplier: 1,
   });
-  readonly tickerPool = TICKER_POOL;
-  readonly recentTickers = RECENT_TICKERS;
   readonly availableMultipliers: readonly number[] = [1, 5, 15, 60, 240];
   readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
 

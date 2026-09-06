@@ -16,9 +16,7 @@
   <div class="picker-v2__groups"
        [class.picker-v2__groups--no-sampling]="hideSampling()">
     <app-multi-instrument-card
-      [(value)]="value"
-      [tickerPool]="tickerPool()"
-      [recent]="recent()" />
+      [(value)]="value" />
 
     <app-time-window-card
       [value]="singleProjection()"

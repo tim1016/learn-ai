@@ -68,7 +68,6 @@ import type {
   Resolution,
   TickerRange,
 } from '../../shared/ticker-range-picker/ticker-range-picker.types';
-import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
 
 type LifecycleTab = 'entry' | 'manage' | 'exit';
 
@@ -155,8 +154,6 @@ export class SpecStrategyRunnerComponent {
     to: '2024-12-31',
     resolution: 'minute', // ignored — Sampling card hidden on this consumer
   });
-  readonly tickerPool = TICKER_POOL;
-  readonly recentTickers = RECENT_TICKERS;
 
   /** Computed TickerRange the picker binds to. Symbol always reads
    *  from ``spec.symbols[0]`` (the canonical home); dates and

@@ -50,10 +50,8 @@ import {
   type AdvisoryAction,
   type AvailabilityCell,
   type Resolution,
-  type TickerOption,
   type TickerRange,
 } from '../../shared/ticker-range-picker';
-import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
 import {
   getDisabledHolidayDates,
   buildHolidayMap,
@@ -435,8 +433,6 @@ export class DataLabComponent {
   polygonLimit = signal(50000);
 
   // ── Shared ticker-range picker wiring ─────────────────────
-  readonly tickerPool: readonly TickerOption[] = TICKER_POOL;
-  readonly recentTickers: readonly string[] = RECENT_TICKERS;
 
   private static timespanToResolution(
     t: 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year',

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { artifactReceiptSections, formatBytes, type ReceiptRow } from './artifact-receipt';
-import type { ArtifactDetail } from './data-lake.types';
+import type { ArtifactDetail } from '../../../shared/data-lake';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
 const MAY_20_OPEN_MS = Date.UTC(2026, 4, 20, 13, 30);

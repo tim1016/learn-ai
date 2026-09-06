@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, input, model, output } fr
 import type { DataPolicy } from "../../../models/data-policy";
 import { InstrumentCardComponent } from "../../../shared/ticker-range-picker/parts/instrument-card.component";
 import { TimeWindowCardComponent } from "../../../shared/ticker-range-picker/parts/time-window-card.component";
-import type { TickerOption, TickerRange } from "../../../shared/ticker-range-picker/ticker-range-picker.types";
+import type { TickerRange } from "../../../shared/ticker-range-picker/ticker-range-picker.types";
 import type { EngineChoice, StrategyInfo } from "../strategy-lab.models";
 
 export interface StrategyParameterChange {
@@ -38,8 +38,6 @@ export class StrategyLabConfigRailComponent {
   readonly fillMode = input<"signal_bar_close" | "next_bar_open">("signal_bar_close");
   readonly initialCash = input(100000);
   readonly commissionPerOrder = input(1);
-  readonly tickerPool = input<readonly TickerOption[]>([]);
-  readonly recentTickers = input<readonly string[]>([]);
   readonly running = input(false);
   /** A Strategy Lab backtest is in flight in some tab. Blocks submitting
    *  another one; launcher recovery is not a submission and stays available. */
