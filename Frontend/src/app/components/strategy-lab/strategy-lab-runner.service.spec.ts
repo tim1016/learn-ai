@@ -354,6 +354,37 @@ describe("StrategyLab configuration and runner", () => {
       expect(runner.running()).toBe(false);
     });
 
+    it("does not guess between several active jobs when it has none of its own", () => {
+      putJob(makeJobState({ id: "tab-a", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "tab-b", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(false);
+    });
+
+    it("ends the run when its own job terminates instead of adopting another active job", async () => {
+      await runner.run();
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      fetchResult.mockResolvedValue({ success: false, error: "boom" });
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "failed", errorMessage: "boom" }));
+      TestBed.tick();
+      await Promise.resolve();
+      expect(runner.running()).toBe(false);
+
+      // The other tab's job is still active, but this run is over: no
+      // adoption, and its completion is not this tab's result.
+      fetchResult.mockResolvedValue({ success: true, study_id: 777, total_trades: 1, net_profit: 1 });
+      putJob(makeJobState({ id: "other-tab", type: "engine_backtest", status: "completed" }));
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(runner.running()).toBe(false);
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
     it("navigates to the produced study once an adopted engine_backtest job completes", async () => {
       fetchResult.mockResolvedValue({ success: true, study_id: 224, total_trades: 2, net_profit: 150 });
       putJob(makeJobState({ id: "resumed-3", type: "engine_backtest", status: "running" }));

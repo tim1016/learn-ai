@@ -47,7 +47,8 @@ function rememberOwnJob(id: string): void {
     if (typeof sessionStorage === "undefined") return;
     sessionStorage.setItem(OWN_JOB_KEY, id);
   } catch {
-    // Browser storage is an optional convenience, not execution state.
+    // Denied storage only loses the marker; `wireJobAdoptionEffect` then
+    // reattaches solely to an unambiguous single job, never a guess.
   }
 }
 
@@ -84,6 +85,8 @@ export class StrategyLabRunner {
   /** The run this runner just persisted, so the workbench can skip a restore
    *  that would clobber the configuration which produced it. */
   readonly justProducedRunId = signal<number | null>(null);
+  /** True once this runner has started or adopted a job — see `wireJobAdoptionEffect`. */
+  private adoptionSettled = false;
 
   constructor() {
     this.wireJobAdoptionEffect();
@@ -186,6 +189,7 @@ export class StrategyLabRunner {
     try {
       const jobId = await this.jobs.startJob("engine_backtest", { backtest });
       rememberOwnJob(jobId);
+      this.adoptionSettled = true;
       this.engineJobId.set(jobId);
     } catch (error) {
       const detail = httpErrorDetail(error);
@@ -249,6 +253,7 @@ export class StrategyLabRunner {
         },
       });
       rememberOwnJob(leanJobId);
+      this.adoptionSettled = true;
       this.leanJobId.set(leanJobId);
     } catch (error) {
       this.fail(
@@ -306,23 +311,26 @@ export class StrategyLabRunner {
    * rather than reading it once here. The job this tab started (remembered
    * per tab) is preferred over any other active job of the same type, so a
    * reload never lands on another tab's experiment; a tab with no job of
-   * its own adopts whichever engine job is active so Run stays disabled
-   * while the container is busy. Adoption is skipped once this runner is
-   * already tracking a job — its own started/adopted job wins.
+   * its own adopts an active job only when there is exactly one, so Run
+   * stays disabled while the container is busy without guessing between
+   * experiments. Adoption happens at most once per runner: once this runner
+   * has started or adopted a job, its terminal transition ends the run
+   * rather than falling through to some other active job.
    */
   private wireJobAdoptionEffect(): void {
     effect(() => {
-      if (this.engineJobId() !== null || this.leanJobId() !== null) return;
+      if (this.adoptionSettled || this.engineJobId() !== null || this.leanJobId() !== null) return;
       const active = this.jobs.activeJobs().filter(isStrategyLabJob);
       const own = ownJobId();
-      const job =
-        active.find((candidate) => candidate.id === own) ??
-        active.find((candidate) => candidate.type === "engine_backtest") ??
-        active.find((candidate) => candidate.type === "lean_engine_run");
-      if (job?.type === "engine_backtest") {
+      // This tab's own job wins; without one, only an unambiguous single
+      // candidate is adopted — never a guess between several experiments.
+      const job = active.find((candidate) => candidate.id === own) ?? (active.length === 1 ? active[0] : undefined);
+      if (job === undefined) return;
+      this.adoptionSettled = true;
+      if (job.type === "engine_backtest") {
         this.beginRun("Reattaching to backtest…", "");
         this.engineJobId.set(job.id);
-      } else if (job?.type === "lean_engine_run") {
+      } else {
         this.beginRun("Reattaching to LEAN run…", "");
         this.leanJobId.set(job.id);
       }
