@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -106,9 +105,13 @@ def expand_param(range_spec: ParamRange) -> list[float]:
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    low = Decimal(str(range_spec.low))
-    step = Decimal(str(range_spec.step))
+    low, step = _decimal(range_spec.low), _decimal(range_spec.step)
     return [float(low + i * step) for i in range(_range_size(range_spec))]
+
+
+def _decimal(value: float) -> Decimal:
+    """The exact decimal a float's shortest repr denotes (0.1 -> Decimal('0.1'))."""
+    return Decimal(str(value))
 
 
 def params_hash(strategy_key: str, params: Mapping[str, float]) -> str:
@@ -121,13 +124,14 @@ def _range_size(range_spec: ParamRange) -> int:
     """Count a range's values analytically — never materializes the list.
 
     ``expand_param`` delegates its value count to this function, so the two
-    can never disagree by construction. The closed-form floor below (not
-    ``round``, which over-counts a non-divisible span — e.g. low=0, high=1,
-    step=0.6 rounds to 3, but only [0, 0.6] falls within the inclusive
-    ``high + 1e-9`` boundary tolerance) admits exactly the values
-    ``expand_param`` emits. Never allocating means a fat-fingered
-    low/high/step (e.g. step=0.0001 over a wide span) can still be rejected
-    by size alone before any memory is spent.
+    can never disagree by construction. The count is the exact decimal
+    floor of ``(high - low) / step`` plus one — inclusive of ``high`` when
+    the span divides evenly, never past it (low=0, high=1, step=0.6 gives
+    [0, 0.6], not 1.2). Decimal arithmetic needs no epsilon: an absolute
+    float tolerance would over-count once ``step`` itself is near it.
+    Never allocating means a fat-fingered low/high/step (e.g. step=0.0001
+    over a wide span) can still be rejected by size alone before any memory
+    is spent.
     """
     if isinstance(range_spec, ValueListRange):
         if not range_spec.values:
@@ -139,7 +143,8 @@ def _range_size(range_spec: ParamRange) -> int:
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    return math.floor((range_spec.high - range_spec.low + 1e-9) / range_spec.step) + 1
+    span = _decimal(range_spec.high) - _decimal(range_spec.low)
+    return int(span // _decimal(range_spec.step)) + 1
 
 
 def _param_combo_count(param_ranges: Mapping[str, ParamRange]) -> int:

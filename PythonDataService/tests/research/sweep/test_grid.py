@@ -206,3 +206,26 @@ class TestExpandGrid:
 
     def test_empty_strategies_produces_no_runs(self) -> None:
         assert list(expand_grid([], symbols=["SPY"])) == []
+
+
+class TestExpansionNeverPassesHigh:
+    """The count is an exact decimal floor, so no emitted value exceeds ``high``
+    — even when ``step`` is below the absolute float tolerance the old
+    closed form used (which over-counted 0..1e-9 step 1e-10 as 21 values)."""
+
+    def test_step_below_a_float_tolerance_still_stops_at_high(self) -> None:
+        spec = LowHighStepRange(low=0.0, high=1e-9, step=1e-10)
+        values = expand_param(spec)
+        assert len(values) == 11 == _range_size(spec)
+        assert values[-1] == 1e-9
+        assert all(value <= 1e-9 for value in values)
+
+    @pytest.mark.parametrize(
+        ("low", "high", "step"),
+        [(0.0, 1.0, 0.6), (0.15, 0.6, 0.15), (0.0, 1.0, 0.3), (-1.0, 1.0, 0.7), (0.5, 0.5, 0.1)],
+    )
+    def test_last_value_is_within_high(self, low: float, high: float, step: float) -> None:
+        values = expand_param(LowHighStepRange(low=low, high=high, step=step))
+        assert values[0] == low
+        assert values[-1] <= high
+        assert len(values) == _range_size(LowHighStepRange(low=low, high=high, step=step))
