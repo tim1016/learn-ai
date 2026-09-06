@@ -220,9 +220,9 @@ class TrustedRunRequest:
     # source picks its own brokerage via SetBrokerageModel.
     template: TrustedTemplate = TrustedTemplate.TRUSTED_DEFAULT
     # Engine Lab parity — set when this run is the LEAN validating
-    # companion of a Python engine run. Persisted onto the
-    # StrategyExecution row so the .NET persist step can compute the
-    # frozen ParityVerdict for the group.
+    # companion of a Python engine run. Persisted onto the run row so
+    # the companion's persist step can freeze the parity verdict for
+    # the group.
     parity_group_id: str | None = None
     # Validated numeric parameters for the selected bundled template. A tuple
     # keeps the frozen request deeply immutable while remaining easy to merge

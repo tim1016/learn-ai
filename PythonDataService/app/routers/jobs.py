@@ -653,7 +653,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             """Surface a companion failure on the group's ParityVerdict.
 
             Conditional server-side (pending → failed only), so a verdict
-            the .NET persist step already froze is never overwritten.
+            the companion's persist step already froze is never overwritten.
             """
             if trusted_request.parity_group_id is None:
                 return
@@ -670,8 +670,8 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             return jsonable_encoder(result, by_alias=False)
 
         try:
-            # ``run_trusted_sample`` is async because the launcher and
-            # the .NET persist hop use ``httpx.AsyncClient``. The job
+            # ``run_trusted_sample`` is async because the launcher hop
+            # uses ``httpx.AsyncClient``. The job
             # framework runs ``work`` in a thread, so each job gets its
             # own event loop here — no contention with the FastAPI
             # request loop.
