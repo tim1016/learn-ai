@@ -76,6 +76,12 @@ class ValidationTrade:
     entry_ms_utc: int
     exit_ms_utc: int
     pnl_pct: float
+    # Mirrors ``LoggedTrade.is_synthetic_exit`` / ``PairedTrade.is_synthetic_exit``
+    # — the engine's terminal forced-close label (issue #1928). Lets
+    # ``_validate_inputs`` admit the one legitimate ``entry_ms_utc ==
+    # exit_ms_utc`` pair instead of rejecting every run that ends in a
+    # final-bar entry.
+    is_synthetic_exit: bool = False
 
     @property
     def pnl_pts(self) -> float:
@@ -213,10 +219,23 @@ def _validate_inputs(
     equity_curve: Sequence[ValidationEquityPoint],
     rolling_window: int,
 ) -> None:
+    """Reject a trade log with non-canonical or backwards timestamps.
+
+    The entry/exit ordering rule mirrors
+    ``app/engine/results/statistics.py::_fill_times_are_admissible`` — that
+    function is the canonical implementation of "when is an equal entry/exit
+    pair legitimate" (issue #1928's terminal forced close, labelled
+    ``is_synthetic_exit``); this predicate is a duplicate kept for
+    layer-locality (the platform-analytics dataclass is decoupled from the
+    engine's internal trade record) and carries a parity test naming that file:
+    ``tests/services/test_engine_validation_analytics.py::test_entry_exit_ordering_matches_statistics_fill_times_are_admissible``.
+    """
     if rolling_window < 1:
         raise ValueError("rolling_window must be positive")
     for index, trade in enumerate(trades):
-        if trade.entry_ms_utc <= 0 or trade.exit_ms_utc <= trade.entry_ms_utc:
+        backwards = trade.exit_ms_utc < trade.entry_ms_utc
+        unlabelled_tie = trade.exit_ms_utc == trade.entry_ms_utc and not trade.is_synthetic_exit
+        if trade.entry_ms_utc <= 0 or backwards or unlabelled_tie:
             raise ValueError(f"trade {index} has invalid canonical timestamps")
         if not math.isfinite(trade.pnl_pct):
             raise ValueError(f"trade {index} has non-finite pnl_pct")

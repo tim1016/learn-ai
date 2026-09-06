@@ -43,6 +43,9 @@ class FakeTrade:
     entry_time_ms: int | None = None
     exit_time_ms: int | None = None
     indicators: dict | None = None
+    # Mirrors ``LoggedTrade.is_synthetic_exit`` — the engine's terminal
+    # forced-close label, which ``validate_trade_log`` reads.
+    is_synthetic_exit: bool = False
 
 
 def _make_trades() -> list[FakeTrade]:
@@ -501,6 +504,39 @@ class TestValidateTradeLog:
         errors = validate_trade_log([t])
         assert len(errors) == 1
         assert errors[0].code == "invalid_trade_times"
+
+    def test_a_labelled_terminal_forced_close_may_share_its_entry_instant(self) -> None:
+        """A position opened on the final bar of the window is force-closed at
+        that same instant by the engine's terminal sweep (issue #1928). The
+        round trip is genuinely zero-duration; there is no later instant to
+        move the exit to, and inventing one would violate
+        ``.claude/rules/temporal-rigor.md``."""
+        ms = to_ms_utc(datetime(2024, 1, 2, 21, 0, tzinfo=UTC))
+        t = FakeTrade(Decimal("0"), Decimal("0"), "LOSS", ms, ms, is_synthetic_exit=True)
+
+        assert validate_trade_log([t]) == []
+
+    def test_an_unlabelled_zero_duration_trade_still_fails(self) -> None:
+        """Only the engine's forced-close label earns the exemption. An equal
+        pair from the ordinary signal path is still an accounting error."""
+        ms = to_ms_utc(datetime(2024, 1, 2, 21, 0, tzinfo=UTC))
+        t = FakeTrade(Decimal("0"), Decimal("0"), "LOSS", ms, ms)
+
+        assert [e.code for e in validate_trade_log([t])] == ["invalid_trade_times"]
+
+    def test_an_inverted_pair_fails_even_when_labelled_a_forced_close(self) -> None:
+        """The exemption covers an *equal* pair only. An exit that precedes its
+        entry is corrupt however the exit was produced."""
+        t = FakeTrade(
+            Decimal("1"),
+            Decimal("0.01"),
+            "WIN",
+            entry_time_ms=to_ms_utc(datetime(2024, 1, 2, 12, 0, tzinfo=UTC)),
+            exit_time_ms=to_ms_utc(datetime(2024, 1, 2, 10, 0, tzinfo=UTC)),
+            is_synthetic_exit=True,
+        )
+
+        assert [e.code for e in validate_trade_log([t])] == ["invalid_trade_times"]
 
     def test_nan_pnl(self) -> None:
         t = FakeTrade(Decimal("nan"), Decimal("nan"), "WIN")

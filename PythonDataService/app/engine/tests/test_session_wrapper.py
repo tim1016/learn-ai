@@ -18,6 +18,8 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.execution_config import ExecutionConfig
@@ -560,6 +562,79 @@ def test_terminal_close_cost_reaches_the_summarized_statistics():
     # pre-liquidation mark of 99980 and this same statistic read 0.0002 — a
     # bare ``> 0`` assertion passes either way and pins nothing.
     assert abs(stats["max_drawdown_pct"] - 0.0004) < 1e-9
+
+
+def test_an_entry_on_the_final_bar_closes_as_a_zero_duration_forced_close():
+    """A strategy that enters on the last bar the engine processes is closed
+    at that same instant: every sweepable strategy's ``on_end_of_algorithm``
+    emits its exit at ``ctx.current_time_ms``, and #1928's terminal sweep
+    prices it against the final observed close. Entry and exit therefore share
+    a timestamp, which is honest — the round trip really did last no time, and
+    there is no later instant to move the exit to. Fabricating one would
+    violate ``.claude/rules/temporal-rigor.md``; dropping the trade or
+    suppressing the entry would diverge from the strategy's own signal.
+
+    Before the terminal close was admitted, ``validate_trade_log`` rejected the
+    pair and ``compute_trade_statistics`` raised ``invalid_trade_times``. That
+    reached Strategy Lab and the sync endpoint as an unhandled 500, and failed
+    every Grid Search cell and Walk-Forward fold whose window ended on an
+    entry."""
+    from app.engine.results.statistics import compute_trade_statistics
+    from app.engine.strategy.programs.sma_crossover import (
+        SmaCrossoverParams,
+        build_sma_crossover_signal_program,
+    )
+
+    strategy = build_sma_crossover_signal_program(
+        SmaCrossoverParams(short_window=2, long_window=3, resolution_minutes=1)
+    ).strategy
+    # SMA(2) sits below SMA(3) through the fourth bar and crosses above it on
+    # the fifth — the last one — so the entry fills at 15:34 and data ends.
+    closes = ["500", "499", "498", "497", "505"]
+    bars = [_bar(15, 30 + i, high=close, low=close, close=close) for i, close in enumerate(closes)]
+
+    result = BacktestEngine(data_source=_StaticBarReader(bars)).run(strategy)
+
+    assert strategy.ctx is not None
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 0
+    assert [event.tag for event in result.order_events] == ["SetHoldings", "EndOfAlgorithm"]
+    assert len(strategy.trade_log) == 1
+    trade = strategy.trade_log[0]
+    assert trade.entry_time_ms == trade.exit_time_ms == bars[-1].end_ms
+    # The label is what earns the exemption in ``validate_trade_log``; without
+    # it an equal pair stays an error.
+    assert trade.is_synthetic_exit is True
+    # Zero duration means zero price P&L, but the round trip is still two
+    # market orders (SetHoldings entry + EndOfAlgorithm exit) and this run's
+    # default ``ExecutionConfig`` charges $1.00 commission per order.
+    assert trade.pnl_pts == Decimal(0)
+    assert float(result.total_fees) == 2.0
+    assert float(result.equity_curve[-1].equity) == float(result.final_equity) == 99998.0
+    assert compute_trade_statistics(strategy.trade_log).total_trades == 1
+
+
+@pytest.mark.parametrize("fill_mode", [FillMode.NEXT_BAR_OPEN, FillMode.NEXT_SESSION_OPEN])
+def test_a_deferred_entry_on_the_final_bar_produces_no_trade(fill_mode):
+    """Contrast with the zero-duration forced close above: that scenario is
+    SIGNAL_BAR_CLOSE, which fills the entry immediately, so the terminal
+    sweep has a real position to close. NEXT_BAR_OPEN and NEXT_SESSION_OPEN
+    instead defer the fill to the bar *after* the signal bar — a bar that
+    never arrives when the signal lands on the engine's last bar. The order
+    is orphaned before it ever opens a position, so the run reports no trade
+    and no fill at all, mirroring the orphan-cancellation behavior already
+    covered for deferred exits and force-flat."""
+    bars = [_bar(15, 30)]
+    strategy = _EntryThenExitStrategy()
+
+    engine = BacktestEngine(
+        data_source=_StaticBarReader(bars),
+        execution_config=ExecutionConfig(fill_mode=fill_mode),
+    )
+    engine.run(strategy)
+
+    assert strategy.ctx is not None
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 0
+    assert strategy.order_events == []
 
 
 def test_end_of_data_leaves_a_stranded_partial_reduction_unfilled():

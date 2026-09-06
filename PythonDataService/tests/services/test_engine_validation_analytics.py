@@ -17,12 +17,15 @@ def _ms(year: int, month: int, day: int, hour: int = 15) -> int:
     return int(datetime(year, month, day, hour, tzinfo=UTC).timestamp() * 1000)
 
 
-def _trade(number: int, entry_ms: int, exit_ms: int, pnl_pct: float) -> ValidationTrade:
+def _trade(
+    number: int, entry_ms: int, exit_ms: int, pnl_pct: float, *, is_synthetic_exit: bool = False
+) -> ValidationTrade:
     return ValidationTrade(
         trade_number=number,
         entry_ms_utc=entry_ms,
         exit_ms_utc=exit_ms,
         pnl_pct=pnl_pct,
+        is_synthetic_exit=is_synthetic_exit,
     )
 
 
@@ -82,6 +85,81 @@ def test_validation_analytics_rejects_non_monotonic_equity() -> None:
                 ValidationEquityPoint(timestamp, 101_000.0),
             ],
         )
+
+
+def test_validation_analytics_admits_a_labelled_terminal_forced_close() -> None:
+    """A run ending in a final-bar entry (issue #1928) closes at the same
+    instant it opened. Before ``is_synthetic_exit`` reached ``ValidationTrade``,
+    ``_validate_inputs`` rejected every such run's closed-trade ledger and
+    Strategy Lab's validation-analytics panel silently vanished behind the
+    router's blanket ``except`` — a 200 response with no panel and no error
+    the operator could see."""
+    entry_exit_ms = _ms(2026, 1, 6, 16)
+    trades = [_trade(1, entry_exit_ms, entry_exit_ms, 0.0, is_synthetic_exit=True)]
+    equity = [
+        ValidationEquityPoint(_ms(2026, 1, 6, 15), 100_000.0),
+        ValidationEquityPoint(entry_exit_ms, 100_000.0),
+    ]
+
+    result = compute_engine_validation_analytics(trades=trades, equity_curve=equity)
+
+    assert result is not None
+
+
+def test_validation_analytics_rejects_an_unlabelled_zero_duration_trade() -> None:
+    """The exemption is keyed on the engine's forced-close label, not on
+    equal timestamps alone — an equal pair reached any other way must still
+    fail, mirroring ``app.engine.results.statistics._fill_times_are_admissible``."""
+    entry_exit_ms = _ms(2026, 1, 6, 16)
+    trades = [_trade(1, entry_exit_ms, entry_exit_ms, 0.0, is_synthetic_exit=False)]
+    equity = [
+        ValidationEquityPoint(_ms(2026, 1, 6, 15), 100_000.0),
+        ValidationEquityPoint(entry_exit_ms, 100_000.0),
+    ]
+
+    with pytest.raises(ValueError, match="invalid canonical timestamps"):
+        compute_engine_validation_analytics(trades=trades, equity_curve=equity)
+
+
+def test_entry_exit_ordering_matches_statistics_fill_times_are_admissible() -> None:
+    """``_validate_inputs``'s entry/exit ordering rule is a documented
+    duplicate of the canonical
+    ``app.engine.results.statistics._fill_times_are_admissible`` (see that
+    predicate's docstring, and ``_validate_inputs``'s). Pin that the two agree
+    on every case: an ordinarily ordered trade, an equal pair carrying the
+    engine's forced-close label, an equal pair without it, and an inverted
+    pair — never admitted however it was produced."""
+    from dataclasses import dataclass
+
+    from app.engine.results.statistics import _fill_times_are_admissible
+    from app.services.engine_validation_analytics import _validate_inputs
+
+    @dataclass(frozen=True)
+    class _FakeEngineTrade:
+        entry_time_ms: int
+        exit_time_ms: int
+        is_synthetic_exit: bool
+
+    cases = [
+        (100, 200, False),  # earlier
+        (100, 100, True),  # equal, labelled terminal forced close
+        (100, 100, False),  # equal, unlabelled
+        (200, 100, True),  # inverted, labelled — never admitted
+    ]
+    for entry_ms, exit_ms, is_synthetic in cases:
+        statistics_admits = _fill_times_are_admissible(_FakeEngineTrade(entry_ms, exit_ms, is_synthetic))
+
+        analytics_admits = True
+        try:
+            _validate_inputs(
+                trades=[_trade(1, entry_ms, exit_ms, 0.0, is_synthetic_exit=is_synthetic)],
+                equity_curve=[],
+                rolling_window=1,
+            )
+        except ValueError:
+            analytics_admits = False
+
+        assert analytics_admits == statistics_admits, (entry_ms, exit_ms, is_synthetic)
 
 
 def test_compatibility_equity_curve_compounds_common_trade_returns_and_pins_endpoints() -> None:
