@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import logging
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -2600,6 +2601,231 @@ async def test_heartbeat_revives_an_expired_lease_and_fires_the_recovery_hook(
     finally:
         hold_heartbeat.set()
         await sweep.stop()
+        clerk_repo.close()
+
+
+async def test_revive_now_finishes_the_recovery_hook_when_its_caller_is_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A panel action's request abandoned mid-revival must not strand a
+    revived lease without its recovery pass.
+
+    The CAS runs on a worker thread, so cancelling the awaiting request does
+    not stop it: the lease comes back revived after the caller is gone. The
+    CRITICAL record and ``on_lease_revived`` still run, and only then does
+    the cancellation reach the caller.
+    """
+    now = {"ms": 1_700_000_000_000}
+    # A generous TTL: the drain is bounded by one lease TTL, and this test is
+    # about the drain finishing, not about the bound.
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=5_000,
+    )
+    cas_entered = threading.Event()
+    release_cas = threading.Event()
+    real_revive = clerk_repo.revive_execution_lease
+
+    def held_revive() -> None:
+        # The thread is inside the store when the request goes away.
+        cas_entered.set()
+        assert release_cas.wait(timeout=5.0)
+        real_revive()
+
+    monkeypatch.setattr(clerk_repo, "revive_execution_lease", held_revive)
+    hook_calls: list[int] = []
+
+    async def on_lease_revived() -> None:
+        hook_calls.append(now["ms"])
+
+    sweep = ReconciliationSweep(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        on_lease_revived=on_lease_revived,
+    )
+    try:
+        now["ms"] += 5_000  # the freeze: TTL long expired
+        caller = asyncio.create_task(sweep.revive_now())
+        assert await asyncio.to_thread(cas_entered.wait, 1.0)
+        caller.cancel()  # the HTTP client gave up mid-CAS
+        release_cas.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, timeout=1.0)
+
+        assert hook_calls == [now["ms"]]
+        lease = clerk_repo._conn.execute(
+            "SELECT execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
+        ).fetchone()
+        assert lease["execution_lease_expires_at_ms"] == now["ms"] + 5_000
+    finally:
+        clerk_repo.close()
+
+
+async def test_revive_now_stops_waiting_for_a_stalled_revival_after_one_lease_ttl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cancelled-caller drain is bounded: a CAS stalled inside the store
+    must not hold a cancelled request (or a shutting-down process) forever.
+    The unit itself keeps running and still finishes its hook once the
+    store answers."""
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=90,
+    )
+    cas_entered = threading.Event()
+    release_cas = threading.Event()
+    real_revive = clerk_repo.revive_execution_lease
+
+    def stalled_revive() -> None:
+        cas_entered.set()
+        assert release_cas.wait(timeout=5.0)
+        real_revive()
+
+    monkeypatch.setattr(clerk_repo, "revive_execution_lease", stalled_revive)
+    hook_fired = asyncio.Event()
+
+    async def on_lease_revived() -> None:
+        hook_fired.set()
+
+    sweep = ReconciliationSweep(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        on_lease_revived=on_lease_revived,
+    )
+    try:
+        now["ms"] += 5_000
+        caller = asyncio.create_task(sweep.revive_now())
+        assert await asyncio.to_thread(cas_entered.wait, 1.0)
+        caller.cancel()
+        # One lease TTL (90 ms) later the cancellation goes through even
+        # though the store has not answered.
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, timeout=2.0)
+        assert not hook_fired.is_set()
+
+        # The orphaned unit is still alive on the loop: once the store
+        # answers, the revival completes and the hook runs.
+        release_cas.set()
+        await asyncio.wait_for(hook_fired.wait(), timeout=2.0)
+    finally:
+        release_cas.set()
+        clerk_repo.close()
+
+
+async def test_an_orphaned_revival_that_fails_after_the_ttl_is_still_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Once the bounded drain gives up, the unit keeps running on the loop.
+    Its failure must still be observed -- logged with the account, not
+    dropped as an unretrieved task exception."""
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=90,
+    )
+    cas_entered = threading.Event()
+    release_cas = threading.Event()
+
+    def stalled_then_failing_revive() -> None:
+        cas_entered.set()
+        assert release_cas.wait(timeout=5.0)
+        raise RuntimeError("store exploded after the caller left")
+
+    monkeypatch.setattr(clerk_repo, "revive_execution_lease", stalled_then_failing_revive)
+    sweep = ReconciliationSweep(repo=clerk_repo, read=_FakeRead(), trade=_FakeTrade())
+    try:
+        now["ms"] += 5_000
+        caller = asyncio.create_task(sweep.revive_now())
+        assert await asyncio.to_thread(cas_entered.wait, 1.0)
+        caller.cancel()
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(caller, timeout=2.0)
+            assert any(
+                getattr(record, "action", None) == "execution_lease_revival_orphaned_timeout"
+                for record in caplog.records
+            )
+            release_cas.set()
+            for _ in range(200):
+                if any(
+                    getattr(record, "action", None) == "execution_lease_revival_orphaned_error"
+                    for record in caplog.records
+                ):
+                    break
+                await asyncio.sleep(0.01)
+        failure = next(
+            record
+            for record in caplog.records
+            if getattr(record, "action", None) == "execution_lease_revival_orphaned_error"
+        )
+        assert getattr(failure, "account_id", None) == ACCOUNT_ID
+        assert failure.exc_info is not None and "store exploded" in str(failure.exc_info[1])
+    finally:
+        release_cas.set()
+        clerk_repo.close()
+
+
+async def test_stop_does_not_wait_on_a_revival_stalled_inside_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lifespan teardown calls ``stop()``. The heartbeat is the sweep's own
+    task, so its cancellation is the sweep stopping and must not drain a
+    stalled CAS -- otherwise a hung SQLite operation hangs container
+    shutdown until it is killed."""
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=5_000,
+    )
+    cas_entered = threading.Event()
+    release_cas = threading.Event()
+    cas_done = threading.Event()
+    real_revive = clerk_repo.revive_execution_lease
+
+    def stalled_revive() -> None:
+        cas_entered.set()
+        assert release_cas.wait(timeout=5.0)
+        real_revive()
+        cas_done.set()
+
+    monkeypatch.setattr(clerk_repo, "revive_execution_lease", stalled_revive)
+    hold = asyncio.Event()
+
+    async def heartbeat_sleep(delay: float) -> None:
+        del delay
+        now["ms"] += 10_000  # the freeze: expired on the first wake
+
+    class IdleSweep(ReconciliationSweep):
+        async def run(self) -> None:
+            await hold.wait()
+
+    sweep = IdleSweep(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        lease_sleep=heartbeat_sleep,
+    )
+    try:
+        sweep.start()
+        assert await asyncio.to_thread(cas_entered.wait, 1.0)
+        # The heartbeat is inside the stalled CAS. Stopping returns anyway.
+        hold.set()
+        await asyncio.wait_for(sweep.stop(), timeout=1.0)
+    finally:
+        hold.set()
+        release_cas.set()
+        await asyncio.to_thread(cas_done.wait, 2.0)
         clerk_repo.close()
 
 

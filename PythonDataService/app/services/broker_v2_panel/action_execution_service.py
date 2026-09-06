@@ -30,6 +30,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ExecutionLeaseLost,
+    ExecutionLeaseLostAfterBrokerIO,
+    RepositoryPoisoned,
+)
 from app.broker.v2panel.vocabulary import ActionId
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.utils.timestamps import now_ms_utc
@@ -81,37 +86,247 @@ class ActionOutcomeUnknownError(ActionExecutionError):
 #: Reason code for a lost/expired account execution lease (T7c, #1794).
 EXECUTION_AUTHORITY_LOST_REASON_CODE = "EXECUTION_LEASE_LOST"
 
+#: Reason code for a lease the ADR 0050 revival just restored, distinct from
+#: the terminal ``EXECUTION_AUTHORITY_LOST_REASON_CODE``: the account's
+#: authority is fine again, this one request simply landed on the outage and
+#: applied nothing. Kept apart so a frontend (or an operator reading logs)
+#: never confuses "restart the data plane" with "click the action again".
+EXECUTION_LEASE_REVIVED_REASON_CODE = "EXECUTION_LEASE_REVIVED"
+
 #: Reason code for an authority fenced by an unconfirmed mirror finalize.
 AUTHORITY_POISONED_REASON_CODE = "AUTHORITY_MIRROR_UNCONFIRMED"
 
 
 class ExecutionAuthorityLostError(ActionExecutionError):
-    """This account's execution lease expired or was reassigned (503).
+    """This account's execution lease is lost even after a revival attempt (503).
 
     Fail-closed is correct and stays; this type exists so the surface says so
     in authored copy instead of leaking a raw 500 (T7c). The clerk router has
     translated the same condition since the SQLite cutover -- the panel
     router simply had no handler for it.
+
+    ADR 0050: the write path (``panel_data_source.run_action``) always tries
+    exactly one supervised revival via ``ReconciliationSweep.revive_now()`` --
+    the same entry point the lease heartbeat uses -- before this error is
+    raised. A lease that merely expired under a frozen-then-thawed process,
+    with nobody else ever touching the account, self-cures there and this
+    error is never seen for that case. By the time this is raised, a control
+    on this panel *did* just try to re-acquire the lease; the copy must say
+    what the store actually refused, never the pre-ADR-0050 claim that no
+    control here could have tried.
+    """
+
+    http_status = 503
+
+    def __init__(
+        self,
+        *,
+        revival_outcome: str,
+        attempted: bool = True,
+        remedy: str | None = None,
+    ) -> None:
+        # Account-scoped problem, account-scoped cure -- the Two-Tap rule's own
+        # shape. The internal handle message ("this handle can no longer
+        # write") is diagnostic, not operator copy, and must not reach here.
+        #
+        # ``attempted`` distinguishes an outcome the store actually proved
+        # (a revival ran and was refused, or errored) from one where no
+        # revival could even be tried (the authority or its sweep was gone) --
+        # claiming a "store-verified" attempt on the latter would be false.
+        # ``remedy`` lets a genuinely transient outcome close on "retry",
+        # never both "retry" and "restart the data plane" in the same
+        # message -- one blocker, one remedy (#1955 final review).
+        lede = (
+            "a supervised, store-verified revival attempt did not restore it"
+            if attempted
+            else "no supervised revival could even be attempted"
+        )
+        super().__init__(
+            "This account's execution authority can no longer be written to.",
+            detail=(
+                f"The data plane's execution lease for this account was lost, and {lede}: "
+                f"{revival_outcome}. Refusing writes is deliberate: a holder that cannot "
+                "prove it still owns the account must not act on stale authority. "
+                + (
+                    remedy
+                    or "Restart the data plane to acquire a fresh lease and reconcile custody on boot."
+                )
+            ),
+            reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
+        )
+
+
+# Operator-facing copy for each way the write path's ADR 0050 revival attempt
+# (panel_data_source._revive_lease_or_raise) can end in this error -- kept
+# beside the error class, not inline in the data-source module, so the
+# authored copy and the reason it exists stay in one place. Every call site
+# names a real store-proven outcome; there is deliberately no generic
+# fallback string for an outcome nothing observed.
+REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE = (
+    "the account's active SQLite authority was replaced or removed before "
+    "this action's revival could run"
+)
+REVIVAL_OUTCOME_REFUSED = (
+    "another writer or an authority ceremony has held this account since "
+    "its execution lease last renewed"
+)
+#: The account's SQLite authority is present, but there is no reconciliation
+#: sweep behind it to revive through -- e.g. a synthetic authority (which
+#: never binds a write-path-reachable sweep of its own kind) or a boot window
+#: in which the sweep has not been wired up yet. Distinct from
+#: ``REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE``, which says the authority itself
+#: was replaced or removed -- here the authority is exactly the one this
+#: action was presented against; it just has nothing to revive through.
+REVIVAL_OUTCOME_NO_SWEEP = (
+    "this account's active SQLite authority is not running a reconciliation "
+    "sweep to revive through -- there is no supervised revival path available "
+    "for it"
+)
+#: ``ReconciliationSweep.revive_now()`` raised something other than
+#: ``ExecutionLeaseLost``/``RepositoryPoisoned`` -- a transient store error
+#: (e.g. "database is locked") that never reached a confirmed outcome. This
+#: mirrors the lease heartbeat's own transient vocabulary
+#: (``_run_lease_heartbeat``'s "errored; retrying" branch): the store
+#: hiccupped rather than proved the lease unrecoverable, so the honest copy
+#: is "retry shortly", not "another writer took the account". The remedy
+#: sentence (not this string) is what actually tells the operator to retry --
+#: kept out of here so it is said exactly once (see
+#: ``ExecutionAuthorityLostError``'s ``remedy`` parameter).
+REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR = (
+    "the store returned a transient error while attempting the revival and "
+    "never reached a confirmed outcome -- this is the same class of hiccup "
+    "the lease heartbeat retries on its own"
+)
+#: The lease that lapsed is not the one behind the authority this action was
+#: presented against. A Dry Run bot's lifecycle performers write through its
+#: binding's isolated ``sim:`` Clerk while the request's ``account_id`` stays
+#: the real operator account used for route authorization, so the exception
+#: can arrive naming a synthetic authority. Reviving the primary sweep on its
+#: behalf would run the real account's recovery pass for an unrelated
+#: authority and report "revived" about a lease it never touched. A synthetic
+#: authority revives through its own heartbeat (no recovery hook by design --
+#: see ``active_authority.py``'s synthetic branch), so nothing is attempted
+#: here. Reported through :class:`DryRunAuthorityLeaseLostError`, its own
+#: bot-scoped type, never the account-scoped error.
+REVIVAL_OUTCOME_FOREIGN_AUTHORITY = (
+    "the lease that lapsed belongs to this bot's isolated Dry Run authority, "
+    "not the account authority this action was presented against, and the "
+    "write path does not revive it on the account's behalf"
+)
+#: One ordered remedy, not two contradictory ones: the thaw case self-cures
+#: through the synthetic heartbeat, and only a heartbeat that has exited on a
+#: store-refused revival leaves the restart cure.
+REVIVAL_REMEDY_FOREIGN_AUTHORITY = (
+    "Retry this action shortly -- a Dry Run authority's own lease heartbeat "
+    "revives it after a thaw. If it keeps refusing, that heartbeat has exited "
+    "on a store-refused revival and the data plane needs a restart."
+)
+#: The single remedy sentence for :data:`REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR`.
+#: Deliberately does not mention restarting the data plane: nothing here
+#: proved the lease lost, so the terminal cure would be a false claim, and a
+#: message ending in both "retry shortly" and "restart the data plane" gives
+#: an operator two contradictory remedies for one blocker (#1955 final review).
+REVIVAL_REMEDY_TRANSIENT_STORE_ERROR = (
+    "Retry this action shortly -- the store hiccupped without proving the "
+    "lease unrecoverable, unlike a store-refused revival."
+)
+
+
+class ExecutionAuthorityRevivedError(ActionExecutionError):
+    """The ADR 0050 revival just succeeded; this request applied nothing (503).
+
+    See ADR 0050's 2026-09-06 addendum for why the write path reports this as
+    a retryable refusal instead of auto-retrying the mutation in-process
+    (two independent reviews rejected that design in rounds 1 and 2).
+
+    Raised only when :meth:`ReconciliationSweep.revive_now` returns
+    successfully -- i.e. the store just proved this handle's lease is good
+    again. Nothing about *this* request's mutation was attempted after that:
+    the CAS confirming the lease is separate from, and prior to, whatever
+    the performer was doing when it discovered the loss. The operator's next
+    click is a genuinely fresh request: the panel client mints a new
+    ``idempotency_key`` per submission (``crypto.randomUUID()`` in
+    ``broker-v2-panel.service.ts``'s ``submitAction``), so a fresh key always
+    reaches the broker -- and the ORIGINAL key is released, not burned
+    ``failed`` (:meth:`execute_action`'s ``ExecutionLeaseLost`` handling), so
+    the same-key re-POST a cohort batch derives (``{key}:{sid}``) reaches it
+    too (#1955).
     """
 
     http_status = 503
 
     def __init__(self) -> None:
-        # Account-scoped problem, account-scoped cure -- the Two-Tap rule's own
-        # shape. The internal handle message ("this handle can no longer
-        # write") is diagnostic, not operator copy, and must not reach here.
         super().__init__(
-            "This account's execution authority can no longer be written to.",
+            "This account's execution lease had expired and has just been "
+            "revived; nothing was applied.",
             detail=(
-                "The data plane lost this account's execution lease, which happens "
-                "when the process is frozen or starved past the lease timeout. "
-                "Refusing writes is deliberate: a holder that lost its lease must "
-                "not act on stale authority. Restart the data plane to acquire a "
-                "fresh lease and reconcile custody on boot. No control on this "
-                "panel can re-acquire it."
+                "The data plane's execution lease for this account expired while "
+                "the process was paused, and a supervised, store-verified revival "
+                "just re-acquired it -- no other writer ever held the account. "
+                "This request's write was not attempted under the revived lease: "
+                "retry the action now that authority is restored."
+            ),
+            reason_code=EXECUTION_LEASE_REVIVED_REASON_CODE,
+        )
+
+
+class DryRunAuthorityLeaseLostError(ActionExecutionError):
+    """This bot's own isolated Dry Run authority lost its lease; the account
+    is untouched (503).
+
+    Raised by the write path in place of :class:`ExecutionAuthorityLostError`
+    when the ``ExecutionLeaseLost`` it caught names a ``sim:`` authority other
+    than the account the action was presented against: a Dry Run bot's
+    lifecycle performers write through its binding's synthetic Clerk while the
+    request's ``account_id`` is the real operator account. Nothing is
+    attempted against the account -- reviving the primary sweep on this bot's
+    behalf would run the real account's recovery pass for an unrelated
+    authority and report "revived" about a lease it never touched.
+
+    Scoped to the bot, not the account, which is the whole reason it is its
+    own type: a cohort batch records it as a per-leg refusal and continues
+    (a later real-paper or Dry Run leg is unaffected, unlike the
+    account-scoped loss that ends a batch early, ADR 0051), and the router
+    reports it as ``conflict`` -- retryable, since a synthetic authority's own
+    lease heartbeat revives it after a thaw (hook-less by design, see
+    ``active_authority.py``'s synthetic branch).
+    """
+
+    http_status = 503
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This bot's Dry Run authority can no longer be written to.",
+            detail=(
+                "The data plane's execution lease for this bot's isolated Dry Run "
+                "authority was lost, and no supervised revival could even be "
+                f"attempted: {REVIVAL_OUTCOME_FOREIGN_AUTHORITY}. Refusing writes is "
+                "deliberate: a holder that cannot prove it still owns the account "
+                f"must not act on stale authority. {REVIVAL_REMEDY_FOREIGN_AUTHORITY}"
             ),
             reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
         )
+
+
+def outcome_unknown_after_broker_io(
+    error: ExecutionLeaseLostAfterBrokerIO,
+) -> ActionOutcomeUnknownError:
+    """The lease was found lost only after the broker acted: an order may be
+    placed or cancelled with no receipt folded. Both executors report that
+    as outcome-unknown with a burned key -- never the "nothing applied,
+    retry" reading a pre-mutation lease loss earns -- and leave the lease to
+    the heartbeat's own revival."""
+    return ActionOutcomeUnknownError(
+        "The command reached the broker, but its result could not be recorded.",
+        detail=(
+            "The data plane's execution lease was found lost only after the broker "
+            "acted, so an order may have been placed or cancelled without its receipt "
+            "being folded. Do not retry this key: inspect Clerk evidence for the final "
+            "outcome -- the reconciliation sweep folds the broker's own record on its "
+            "next pass once the lease heartbeat has revived the lease."
+        ),
+        reason_code=type(error).__name__,
+    )
 
 
 class AuthorityPoisonedError(ActionExecutionError):
@@ -477,6 +692,50 @@ async def execute_action(
         # other post-execution failure, but report it as-is rather than
         # collapsing it into ActionOutcomeUnknownError — the outcome is
         # failure, not unknown.
+        if reserved_fresh:
+            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
+        raise
+    except ExecutionLeaseLostAfterBrokerIO as err:
+        # The broker already acted (ClaimedBrokerIO's post-I/O renewal):
+        # outcome unknown, key burned, no retry offered -- the release below
+        # is only honest for a lease lost before any mutation.
+        if reserved_fresh:
+            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
+        raise outcome_unknown_after_broker_io(err) from err
+    except ExecutionLeaseLost:
+        # Resume/Retire/Archive dispatch through this executor rather than
+        # sqlite_panel_source.execute_sqlite_panel_action (that module returns
+        # None for the SQLITE_PANEL_LIFECYCLE_ACTION_IDS and defers here). That
+        # module lets ExecutionLeaseLost/RepositoryPoisoned propagate unwrapped
+        # past its own exception handling so panel_data_source.run_action's
+        # ADR 0050 revival catch can see them; re-raise unwrapped here too,
+        # instead of collapsing into ActionOutcomeUnknownError's opaque 500 --
+        # the revival catch needs the typed condition, not a generic failure.
+        #
+        # Every repository mutation renews the execution lease as its very
+        # first statement under the write lock (repository.py), so the
+        # mutation that raised applied nothing -- the one exception, a loss
+        # found after a broker call, is the subclass caught above. A
+        # multi-leg action can still
+        # have completed earlier legs (safe_flatten submits leg 1 before leg 2
+        # renews); a same-key re-POST is safe there because
+        # execute_safe_flatten_plan re-filters on active_exit_for_order and
+        # refuses a second reduction of an already-exited entry. So this
+        # releases the key like a pre-execution rejection above, not the
+        # ``failed`` burn a real post-execution failure gets. A cohort leg the
+        # write path later revives (panel_data_source._revive_lease_or_raise)
+        # needs its ORIGINAL idempotency key free for the operator's same-key
+        # re-POST -- burning it here left that leg permanently unflattenable
+        # under its own key (#1955 final review).
+        if reserved_fresh:
+            await ledger.release(sid, request.action_id, request.idempotency_key)
+        raise
+    except RepositoryPoisoned as err:
+        # Unlike a lost lease, a poison can be raised AFTER a transition's
+        # SQLite commit already succeeded (append_transition's own
+        # mirror-finalize failure, repository.py) -- so a mutation may really
+        # have applied. Keep burning the key ``failed``: a blind same-key
+        # retry must not re-fire a command that may have partially committed.
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise

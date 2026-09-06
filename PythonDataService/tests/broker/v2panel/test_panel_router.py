@@ -18,11 +18,13 @@ from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
+    get_active_clerk_runtime,
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
+from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseLost,
@@ -40,7 +42,7 @@ from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotPanelLiveSnapshot, ChartLiveResponse
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services import broker_account_snapshot
-from app.services.bot_runner import set_bot_task_registry
+from app.services.bot_runner import get_bot_task_registry, set_bot_task_registry
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
@@ -181,6 +183,17 @@ class _FakeRegistry:
         """No durable dry-run bindings — the catalog is the plain SQLite roster."""
         return []
 
+    async def stop_after_durable_clerk_stop(
+        self, broker: str, sid: str, *, updated_by: str, reason: str
+    ) -> None:
+        """The in-process quiescence step `stop_bot_decisions` drives after its
+        durable SQLite STOP commits (recovery_execution._quiesce_bot_process).
+        Recorded, not asserted on, by every test in this module except the
+        lease-revival ones, which use it to prove the retried write actually
+        reached this step."""
+        assert broker == "alpaca"
+        self._running = False
+
 
 @pytest.fixture()
 def fleet_size(request: pytest.FixtureRequest) -> int:
@@ -238,6 +251,115 @@ def api(tmp_path: Path, fleet_size: int):
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+def _clock_seq(start: int = _T0):
+    """A controllable millisecond clock, mirroring
+    test_corrective_foundation.py's ``_clock_seq`` so the same
+    freeze-then-thaw and foreign-writer patterns work here."""
+    counter = {"t": start}
+
+    def clock() -> int:
+        counter["t"] += 1
+        return counter["t"]
+
+    clock.advance = lambda delta: counter.__setitem__("t", counter["t"] + delta)
+    return clock
+
+
+@pytest.fixture()
+def lease_lost_api(tmp_path: Path):
+    """A single-bot panel wired to a repository with a controllable clock and
+    a short execution-lease TTL (1 s), so a test can freeze time past the
+    lease and exercise the real ADR 0050 write-path revival end to end --
+    not a monkeypatched exception like the tests around
+    ``test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500``, which
+    prove only the translation, not that the write path actually revives (or
+    correctly refuses to) per ADR 0050.
+
+    A real ``ReconciliationSweep`` is wired into the runtime (not started --
+    the write path calls its ``revive_now()`` directly, never the background
+    heartbeat loop) so the panel action's revival runs through the one
+    supervised entry point production uses, with an ``on_lease_revived`` hook
+    the test can observe fired exactly like ``BotTaskRegistry.run_lease_recovery``
+    would in production (B1: proving the hook fires, not just that the retry
+    succeeds, is the whole point of routing through the sweep instead of the
+    bare repository CAS).
+    """
+    reset_broker_registry_for_testing()
+    reset_idempotency_store_for_testing()
+    set_active_clerk_runtime(None)
+    set_bot_task_registry(_FakeRegistry(tmp_path, sids=(SID,)))  # type: ignore[arg-type]
+    port = _FakeBrokerPort()
+    get_broker_registry().register(port)  # type: ignore[arg-type]
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCT, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=1_000
+    )
+    repo.register_strategy_instance(
+        strategy_instance_id=SID,
+        symbol="SPY",
+        config_hash="config-1",
+        strategy_key="deployment_validation",
+        display_name="Deployment Validation",
+        config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
+    )
+    submit_start_run(
+        repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID)
+    )
+    facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
+        repo=repo,
+        read=port,  # type: ignore[arg-type]
+        trade=port,  # type: ignore[arg-type]
+    )
+    hook_calls: list[int] = []
+
+    async def _on_lease_revived() -> None:
+        hook_calls.append(repo.clock())
+
+    sweep = ReconciliationSweep(
+        repo=repo,
+        read=port,  # type: ignore[arg-type]
+        trade=port,  # type: ignore[arg-type]
+        intake=facade.intake,
+        on_lease_revived=_on_lease_revived,
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, sweep=sweep)
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        yield app, repo, clock, hook_calls
+    finally:
+        set_active_clerk_runtime(None)
+        set_bot_task_registry(None)
+        repo.close()
+        reset_broker_registry_for_testing()
+        reset_idempotency_store_for_testing()
+
+
+async def _post_stop_bot_decisions(
+    app: FastAPI, *, idempotency_key: str
+) -> httpx.Response:
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        action = next(
+            item
+            for item in panel.json()["actions"]
+            if item["action_id"] == "stop_bot_decisions"
+        )
+        assert action["enabled"], action
+        return await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
+            json={
+                "action_id": "stop_bot_decisions",
+                "revision": panel.json()["revision"],
+                "concurrency_token": action["concurrency_token"],
+                "idempotency_key": idempotency_key,
+            },
+        )
 
 
 @pytest.fixture()
@@ -785,6 +907,225 @@ async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(
     assert "can no longer write" not in rendered
     assert "handle" not in rendered
     assert "restart" in detail["why"].lower()
+
+
+async def test_write_path_revives_an_expired_lease_and_reports_a_retryable_refusal(
+    lease_lost_api,
+) -> None:
+    """A process frozen past its lease TTL and then thawed, with nobody else
+    ever touching the account, self-cures on the very action that discovers
+    the loss -- exactly like the lease heartbeat already self-cures it.
+    Before ADR 0050, the write path had no revival attempt at all: every
+    mutating action after a thaw (Stop, Resume, Retire, flatten,
+    reconcile_now, cohort flatten) went straight to the terminal "restart the
+    data plane" blocker, even during the ADR 0050 self-cure window.
+
+    See ADR 0050's 2026-09-06 addendum for why this reports a retryable
+    refusal instead of auto-retrying the mutation in-process: nothing was
+    applied under the revived lease, and only a second, genuinely fresh
+    request (a fresh idempotency key, exactly like the panel client mints
+    per submission) reaches the broker.
+    """
+    app, repo, clock, hook_calls = lease_lost_api
+    clock.advance(5_000)  # freeze past the 1 s TTL; nobody else takes the lease
+
+    response = await _post_stop_bot_decisions(app, idempotency_key="lease-revival-success")
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXECUTION_LEASE_REVIVED"
+    # "conflict", not "failure": nothing applied and a re-POST covers it --
+    # the same retryable reading cohort_execution.py's classification gives
+    # this error ("refused" -> "conflict"), aligned here (#1955 final review).
+    assert detail["outcome"] == "conflict"
+
+    # The copy reports a self-cured lease and a retry, never the terminal
+    # restart cure -- that copy is reserved for a revival the store refuses.
+    rendered = json.dumps(detail)
+    assert "restart" not in rendered.lower()
+    assert "revived" in rendered.lower()
+
+    # Nothing applied: the bot is still running, the action stays enabled.
+    registry = get_bot_task_registry()
+    assert registry is not None and registry._running is True  # type: ignore[attr-defined]
+
+    # ADR 0050 §3: the revival went through ReconciliationSweep.revive_now()
+    # -- the same entry point the lease heartbeat uses -- so the post-revival
+    # recovery hook fired exactly once, even though this request's own
+    # mutation was never retried.
+    assert len(hook_calls) == 1
+
+    # The operator's next click is a genuinely fresh request (a fresh
+    # idempotency key -- the panel client mints one per submission) and
+    # reaches the now-revived lease.
+    retry = await _post_stop_bot_decisions(app, idempotency_key="lease-revival-operator-retry")
+
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["applied"] is True
+    repo.renew_execution_lease()
+    assert registry._running is False  # type: ignore[attr-defined]
+
+    # The revival is not re-triggered by the second request: the hook still
+    # fired exactly once for the whole scenario.
+    assert len(hook_calls) == 1
+
+
+async def test_write_path_does_not_revive_the_account_for_a_dry_run_authoritys_lost_lease(
+    lease_lost_api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Dry Run bot's performers write through its isolated ``sim:`` Clerk,
+    so the lost lease can be the synthetic authority's while ``account_id``
+    is the real operator account. The write path must not revive the real
+    account on that bot's behalf: no recovery hook for an unrelated
+    authority, no "revived" report about a lease it never touched.
+    """
+    app, repo, _clock, hook_calls = lease_lost_api
+    lease_before = repo._conn.execute(
+        "SELECT execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
+    ).fetchone()[0]
+
+    def _synthetic_lease_lost(*_args: object, **_kwargs: object) -> None:
+        raise ExecutionLeaseLost(
+            f"account 'sim:{SID}' execution lease was lost or expired; "
+            "this handle can no longer write",
+            account_id=f"sim:{SID}",
+        )
+
+    monkeypatch.setattr(
+        broker_v2_panel.ds, "_run_action_under_live_authority", _synthetic_lease_lost, raising=True
+    )
+    response = await _post_stop_bot_decisions(app, idempotency_key="sim-lease-lost")
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXECUTION_LEASE_LOST"
+    # Retryable, like a revived lease: the bot's own synthetic heartbeat
+    # revives it after a thaw, and nothing was applied.
+    assert detail["outcome"] == "conflict"
+    assert "Dry Run" in detail["why"]
+    # Nothing was attempted against the account: its hook never fired and
+    # its lease expiry is exactly what it was.
+    assert hook_calls == []
+    lease_after = repo._conn.execute(
+        "SELECT execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
+    ).fetchone()[0]
+    assert lease_after == lease_before
+
+
+async def test_write_path_keeps_the_restart_cure_when_revival_is_refused(
+    lease_lost_api,
+) -> None:
+    """ADR 0050's other half: when the store proves another writer (or a
+    reset ceremony) actually touched the account while this handle's lease
+    was expired, the write path's own revival attempt must be refused too --
+    the terminal restart cure stays correct. The copy must give the store's
+    refusal reason and must not claim "no control on this panel can
+    re-acquire it": this panel action just tried, and the store said no.
+    """
+    app, repo, clock, hook_calls = lease_lost_api
+    repo._conn.execute(
+        "UPDATE control_meta SET execution_lease_owner = 'someone-else', "
+        "execution_lease_expires_at_ms = ? WHERE id = 1",
+        (repo.clock() + 1,),
+    )
+    repo._conn.commit()
+    clock.advance(5_000)  # the usurper's lease has itself lapsed too
+
+    response = await _post_stop_bot_decisions(app, idempotency_key="lease-revival-refused")
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXECUTION_LEASE_LOST"
+
+    rendered = json.dumps(detail)
+    assert "can no longer write" not in rendered
+    assert "handle" not in rendered
+    assert "restart" in detail["why"].lower()
+    assert "no control on this panel can re-acquire it" not in detail["why"].lower()
+    assert "another writer" in detail["why"].lower()
+
+    # The refused CAS never reached the success branch, so the post-revival
+    # recovery hook must not have fired.
+    assert hook_calls == []
+
+
+async def test_write_path_translates_a_repository_poisoned_by_revive_now(
+    lease_lost_api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """revive_now()'s own admission check (``_assert_not_poisoned``) can find
+    the repository poisoned by an unconfirmed mirror finalize from before the
+    freeze -- a lease lost AND poisoned after one freeze is not a made-up
+    edge case, it is the same freeze producing both symptoms. This must
+    translate to ``AuthorityPoisonedError`` (a different cure than a lost
+    lease -- fence reconciliation, not a lease timeout), never an unhandled
+    500 leaking internal remediation text.
+    """
+    app, _repo, clock, hook_calls = lease_lost_api
+    clock.advance(5_000)  # freeze past the 1 s TTL
+
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None and runtime.sweep is not None
+
+    async def _poisoned_revive_now() -> bool:
+        raise RepositoryPoisoned(
+            "account repository is poisoned after an unconfirmed mirror finalize"
+        )
+
+    monkeypatch.setattr(runtime.sweep, "revive_now", _poisoned_revive_now)
+
+    response = await _post_stop_bot_decisions(app, idempotency_key="lease-revival-poisoned")
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "AUTHORITY_MIRROR_UNCONFIRMED"
+
+    # Never reported as a lost lease -- the cures differ.
+    rendered = json.dumps(detail)
+    assert "EXECUTION_LEASE" not in rendered
+
+    # The CAS never confirmed a revival, so the post-revival hook never ran.
+    assert hook_calls == []
+
+
+async def test_write_path_reports_a_transient_store_error_as_a_typed_blocker(
+    lease_lost_api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A store error other than ``ExecutionLeaseLost``/``RepositoryPoisoned``
+    (e.g. a locked SQLite file mid-CAS) never reached an ``except`` clause in
+    rounds 1 and 2 and leaked as a raw 500 with internal exception text. The
+    CAS never reached a confirmed outcome -- unknown, not proven-lost -- so
+    this reports a typed, transient blocker mirroring the lease heartbeat's
+    own "errored; retrying" vocabulary, never a bare 500.
+    """
+    app, _repo, clock, hook_calls = lease_lost_api
+    clock.advance(5_000)  # freeze past the 1 s TTL
+
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None and runtime.sweep is not None
+
+    async def _locked_revive_now() -> bool:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(runtime.sweep, "revive_now", _locked_revive_now)
+
+    response = await _post_stop_bot_decisions(app, idempotency_key="lease-revival-transient")
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXECUTION_LEASE_LOST"
+
+    # Distinct from a store-proven refusal: no claim another writer took the
+    # account, and the internal exception text never leaks to the surface.
+    rendered = json.dumps(detail)
+    assert "database is locked" not in rendered
+    assert "another writer" not in rendered.lower()
+    assert "retry" in detail["why"].lower()
+
+    # The CAS never confirmed a revival, so the post-revival hook never ran.
+    assert hook_calls == []
 
 
 async def test_poisoned_authority_is_not_reported_as_a_lost_lease(

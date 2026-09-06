@@ -161,8 +161,122 @@ class ReconciliationSweep:
                     exc_info=True,
                 )
 
-    async def _attempt_lease_revival(self) -> bool:
-        """One fenced revival attempt; ``False`` means proven-terminal loss."""
+    async def revive_now(self) -> bool:
+        """One fenced ADR 0050 revival attempt -- the sole implementation.
+
+        Both the lease heartbeat (:meth:`_attempt_lease_revival`) and any
+        write path that discovers a lost lease in the same instant (a panel
+        action -- see ``panel_data_source._revive_lease_or_raise``) run the
+        one unit, :meth:`_revive_and_repair`, so the CAS
+        (``ClerkSqliteRepository.revive_execution_lease``), its CRITICAL
+        logging, and firing ``on_lease_revived`` on success never drift into
+        two implementations that could disagree on the outcome vocabulary or
+        the ADR 0050 §3 post-revival recovery pass
+        (``BotTaskRegistry.run_lease_recovery``, which repairs lifecycle
+        artifacts for runs that died during the freeze). This method is the
+        write path's entry: the unit plus the cancellation safety below,
+        which the heartbeat -- the sweep's own task -- deliberately skips.
+
+        That does not make the two call sites single-flighted, and this
+        method takes no lock: a concurrent heartbeat tick can call this on
+        the same sweep instance at the same moment a write path does, so the
+        CAS can run twice and the hook can fire twice. Both are harmless.
+        The CAS's condition (owner unchanged AND generation unchanged) does
+        not become false once satisfied -- a second concurrent revival still
+        matches it and simply re-extends the same expiry, which is exactly
+        what a renewal does anyway. A second hook invocation either repeats
+        an idempotent step (``AlpacaLifecycleProjector.refresh`` for a run
+        still live) or loses a race to re-validate a stop that the other
+        invocation already committed (``stop_interrupted_alpaca_duty_run``
+        re-checks ``sqlite_active`` immediately before its own commit) and
+        raises -- caught here and logged, isolated, with the next boot scan
+        remaining the backstop, exactly like any other hook failure.
+
+        A synthetic authority's carve-out (no hook bound at its construction
+        site -- see ``active_authority.py``'s synthetic branch) is real for a
+        caller that already holds a reference to *that* sweep instance, but
+        it is not "inherited" by the write path: ``active_reconciliation_sweep``
+        gates on ``authority_kind == "sqlite"``, identically to
+        ``active_sqlite_facade``, so the write path never reaches a synthetic
+        sweep's ``revive_now()`` at all -- it is refused earlier, as "no
+        supervised revival available for this authority".
+
+        Returns ``True`` once the lease is confirmed revived and the hook (if
+        any) has run or failed in isolation. Raises :class:`ExecutionLeaseLost`
+        when the store proves revival is impossible (another writer or an
+        authority ceremony held the account) -- callers translate that into
+        their own terminal handling. Any other exception is a transient store
+        error and propagates uninterpreted: the CAS never reached a confirmed
+        outcome, so no lease/hook logging happens for it.
+
+        The unit is cancellation-safe from the caller's side. The write path
+        awaits this from an HTTP request a client can abandon mid-flight, and
+        the CAS runs on a worker thread that a cancelled ``await`` does not
+        unwind: the lease can come back revived after the caller is already
+        gone. If the cancellation were simply propagated, the CRITICAL record
+        and ``on_lease_revived`` would never run, and the heartbeat -- seeing
+        a healthy lease -- would only renew it, leaving the lifecycle
+        artifacts of runs that died during the freeze unrepaired until the
+        next boot scan. So the CAS-log-hook unit runs as its own task, the
+        caller observes it under ``asyncio.shield``, and a cancelled caller
+        waits for the unit to finish before honouring the cancellation --
+        for at most one lease TTL: a revival that outlives the lease it is
+        reviving is not worth holding a shutting-down process for.
+        """
+        revival = asyncio.ensure_future(self._revive_and_repair())
+        try:
+            return await asyncio.shield(revival)
+        except asyncio.CancelledError:
+            await self._finish_orphaned_revival(revival)
+            raise
+
+    async def _finish_orphaned_revival(self, revival: asyncio.Future[bool]) -> None:
+        """Let a revival whose caller was cancelled reach its outcome.
+
+        The unit's own logging is the record of that outcome; an error is
+        logged here only because the caller who would have received it is
+        gone. The wait is bounded by one lease TTL, and a second cancellation
+        while waiting (shutdown) propagates; either way the unit keeps
+        running on the loop, with its eventual outcome still observed --
+        a failure after this returns is logged, not dropped as an
+        unretrieved task exception.
+        """
+        try:
+            await asyncio.wait_for(asyncio.shield(revival), timeout=self._repo.lease_ttl_ms / 1000)
+        except asyncio.CancelledError:
+            revival.add_done_callback(self._log_orphaned_revival_failure)
+            raise
+        except TimeoutError:
+            logger.error(
+                "execution lease revival still running one lease TTL after its caller "
+                "was cancelled; not waiting further",
+                extra={
+                    "action": "execution_lease_revival_orphaned_timeout",
+                    "account_id": self._repo.account_id,
+                },
+            )
+            revival.add_done_callback(self._log_orphaned_revival_failure)
+        except Exception:
+            self._log_orphaned_revival_failure(revival)
+
+    def _log_orphaned_revival_failure(self, revival: asyncio.Future[bool]) -> None:
+        """Retrieve an orphaned revival's outcome so a failure is logged."""
+        if revival.cancelled():
+            return
+        error = revival.exception()
+        if error is None:
+            return
+        logger.error(
+            "execution lease revival errored after its caller was cancelled",
+            extra={
+                "action": "execution_lease_revival_orphaned_error",
+                "account_id": self._repo.account_id,
+            },
+            exc_info=error,
+        )
+
+    async def _revive_and_repair(self) -> bool:
+        """The CAS, its CRITICAL record, and the recovery hook, as one unit."""
         try:
             await asyncio.to_thread(self._repo.revive_execution_lease)
         except asyncio.CancelledError:
@@ -177,19 +291,7 @@ class ReconciliationSweep:
                 },
                 exc_info=True,
             )
-            return False
-        except Exception:
-            # Transient store error: stay alive. The next tick's renewal will
-            # raise ExecutionLeaseLost again and land back here.
-            logger.critical(
-                "alpaca sqlite execution lease revival errored; retrying",
-                extra={
-                    "action": "execution_lease_revival_transient_error",
-                    "account_id": self._repo.account_id,
-                },
-                exc_info=True,
-            )
-            return True
+            raise
         logger.critical(
             "alpaca sqlite execution lease revived after expiry; no other "
             "writer held the account (ADR 0050)",
@@ -216,6 +318,35 @@ class ReconciliationSweep:
                     exc_info=True,
                 )
         return True
+
+    async def _attempt_lease_revival(self) -> bool:
+        """One fenced revival attempt; ``False`` means proven-terminal loss
+        and the heartbeat should exit.
+
+        Runs the unit directly rather than through :meth:`revive_now`: the
+        heartbeat is the sweep's own task, so a cancellation here is the
+        sweep stopping, and shutdown must not wait on a stalled CAS or
+        recovery pass (the write path's cancellation guarantee is for a
+        caller that is *not* the sweep).
+        """
+        try:
+            return await self._revive_and_repair()
+        except asyncio.CancelledError:
+            raise
+        except ExecutionLeaseLost:
+            return False
+        except Exception:
+            # Transient store error: stay alive. The next tick's renewal will
+            # raise ExecutionLeaseLost again and land back here.
+            logger.critical(
+                "alpaca sqlite execution lease revival errored; retrying",
+                extra={
+                    "action": "execution_lease_revival_transient_error",
+                    "account_id": self._repo.account_id,
+                },
+                exc_info=True,
+            )
+            return True
 
     async def run(self) -> None:
         passes = 0

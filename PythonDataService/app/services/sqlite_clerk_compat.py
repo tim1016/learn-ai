@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOperation,
 )
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryPolicyContext,
     build_projection_guidance,
@@ -56,6 +57,31 @@ def active_sqlite_facade(broker: str = "alpaca") -> SqliteAlpacaClerkFacade | No
     ):
         return None
     return runtime.clerk
+
+
+def active_reconciliation_sweep(broker: str = "alpaca") -> ReconciliationSweep | None:
+    """Return the running ADR 0050 sweep behind the active SQLite authority.
+
+    Gated identically to :func:`active_sqlite_facade` -- same broker and
+    authority-kind checks -- so a caller reaching for
+    ``ReconciliationSweep.revive_now()`` (the write path's supervised lease
+    revival) always finds the one sweep already running the account's lease
+    heartbeat, instead of constructing a second one. ``runtime.sweep`` is
+    typed narrowly as ``BackgroundSweep`` (start/stop only) at its
+    construction site; the ``isinstance`` check here is what recovers the
+    concrete type the revival entry point lives on.
+    """
+    if broker != "alpaca":
+        return None
+    runtime = get_active_clerk_runtime()
+    if (
+        runtime is None
+        or runtime.authority_kind != "sqlite"
+        or not isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+        or not isinstance(runtime.sweep, ReconciliationSweep)
+    ):
+        return None
+    return runtime.sweep
 
 
 def sqlite_projection(
