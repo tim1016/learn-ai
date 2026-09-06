@@ -8,6 +8,10 @@
   background: $bg-canvas;
   color: $text-primary;
   min-height: 100%;
+  // The run dock is position:fixed at the bottom; reserve what it occupies
+  // (--run-dock-height, published by the dock) so the last controls scroll
+  // clear of it instead of hiding underneath (#1974).
+  padding-bottom: var(--run-dock-height, 36px);
 }
 
 // ─── Page Header ────────────────────────────────────────

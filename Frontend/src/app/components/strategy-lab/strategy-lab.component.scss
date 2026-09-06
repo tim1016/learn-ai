@@ -5,9 +5,11 @@
 
 .strategy-lab {
   // The shell's top bar (this page renders inside it, not above it) + the
-  // tab list + the run dock's 36px collapsed strip. The dock is
-  // position:fixed; expanded (320px) it deliberately overlays.
-  --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + 36px);
+  // tab list + whatever the run dock occupies right now. The dock is
+  // position:fixed and publishes its height as --run-dock-height (36px
+  // collapsed, 320px expanded); reserving it keeps the rail's last control
+  // reachable instead of hidden under the expanded dock (#1974).
+  --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + var(--run-dock-height, 36px));
 
   display: grid;
   gap: var(--space-4);

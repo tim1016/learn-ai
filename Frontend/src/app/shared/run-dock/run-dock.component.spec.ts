@@ -114,6 +114,18 @@ describe('RunDockComponent', () => {
     expect(host.querySelector('.run-dock__strip')).not.toBeNull();
   });
 
+  it('publishes its current height as --run-dock-height so host pages can reserve it', () => {
+    // #1974: hosts size their content against this variable; a fixed 36px
+    // assumption left the rail's last control under the expanded dock.
+    const { fixture } = configure('false');
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--run-dock-height')).toBe('36px');
+
+    fixture.nativeElement.querySelector<HTMLButtonElement>('.run-dock__strip')?.click();
+    fixture.detectChanges();
+    expect(root.style.getPropertyValue('--run-dock-height')).toBe('320px');
+  });
+
   it('reflects the source headline in both collapsed and expanded modes', () => {
     const { fixture, source } = configure(null);
     source.dockState.set('active');
