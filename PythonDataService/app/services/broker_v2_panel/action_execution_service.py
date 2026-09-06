@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost, RepositoryPoisoned
 from app.broker.v2panel.vocabulary import ActionId
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.utils.timestamps import now_ms_utc
@@ -94,8 +95,9 @@ class ExecutionAuthorityLostError(ActionExecutionError):
     router simply had no handler for it.
 
     ADR 0050: the write path (``panel_data_source.run_action``) always tries
-    exactly one supervised, store-verified revival before this error is
-    raised -- a lease that merely expired under a frozen-then-thawed process,
+    exactly one supervised revival via ``ReconciliationSweep.revive_now()`` --
+    the same entry point the lease heartbeat uses -- before this error is
+    raised. A lease that merely expired under a frozen-then-thawed process,
     with nobody else ever touching the account, self-cures there and this
     error is never seen for that case. By the time this is raised, a control
     on this panel *did* just try to re-acquire the lease; the copy must say
@@ -105,11 +107,7 @@ class ExecutionAuthorityLostError(ActionExecutionError):
 
     http_status = 503
 
-    _DEFAULT_REVIVAL_OUTCOME = (
-        "the account's active SQLite authority was not available to attempt a revival"
-    )
-
-    def __init__(self, *, revival_outcome: str | None = None) -> None:
+    def __init__(self, *, revival_outcome: str) -> None:
         # Account-scoped problem, account-scoped cure -- the Two-Tap rule's own
         # shape. The internal handle message ("this handle can no longer
         # write") is diagnostic, not operator copy, and must not reach here.
@@ -118,13 +116,33 @@ class ExecutionAuthorityLostError(ActionExecutionError):
             detail=(
                 "The data plane's execution lease for this account was lost, and a "
                 "supervised, store-verified revival attempt did not restore it: "
-                f"{revival_outcome or self._DEFAULT_REVIVAL_OUTCOME}. Refusing writes "
+                f"{revival_outcome}. Refusing writes "
                 "is deliberate: a holder that cannot prove it still owns the account "
                 "must not act on stale authority. Restart the data plane to acquire a "
                 "fresh lease and reconcile custody on boot."
             ),
             reason_code=EXECUTION_AUTHORITY_LOST_REASON_CODE,
         )
+
+
+# Operator-facing copy for each way the write path's ADR 0050 revival attempt
+# (panel_data_source._run_action_after_lease_revival) can end in this error --
+# kept beside the error class, not inline in the data-source module, so the
+# authored copy and the reason it exists stay in one place. Every call site
+# names a real store-proven outcome; there is deliberately no generic
+# fallback string for an outcome nothing observed.
+REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE = (
+    "the account's active SQLite authority was replaced or removed before "
+    "this action's revival could run"
+)
+REVIVAL_OUTCOME_REFUSED = (
+    "another writer or an authority ceremony has held this account since "
+    "its execution lease last renewed"
+)
+REVIVAL_OUTCOME_LOST_AGAIN_ON_RETRY = (
+    "the revived lease was lost again before the retried write could commit; "
+    "another writer took the account in that window"
+)
 
 
 class AuthorityPoisonedError(ActionExecutionError):
@@ -490,6 +508,20 @@ async def execute_action(
         # other post-execution failure, but report it as-is rather than
         # collapsing it into ActionOutcomeUnknownError — the outcome is
         # failure, not unknown.
+        if reserved_fresh:
+            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
+        raise
+    except (ExecutionLeaseLost, RepositoryPoisoned) as err:
+        # Resume/Retire/Archive dispatch through this executor rather than
+        # sqlite_panel_source.execute_sqlite_panel_action (that module returns
+        # None for the SQLITE_PANEL_LIFECYCLE_ACTION_IDS and defers here). That
+        # module already lets these two propagate unwrapped past its own
+        # exception handling so panel_data_source.run_action's ADR 0050
+        # revival catch can see them; burn the key the same way it does for
+        # every action but stop_bot_decisions (none of these three has a
+        # committed-command replay contract), then re-raise unwrapped instead
+        # of collapsing into ActionOutcomeUnknownError's opaque 500 -- the
+        # revival catch needs the typed condition, not a generic failure.
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise

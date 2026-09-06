@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost, RepositoryPoisoned
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
 from app.services.bot_runner_errors import (
@@ -211,6 +212,64 @@ async def test_performer_raised_action_execution_error_burns_key_not_released(
 
     assert store._records[(_SID, "stop", "mid-flight")].state == "failed"
     assert "panel_action_rejected" not in caplog.text
+
+
+async def test_execution_lease_lost_propagates_unwrapped_for_the_adr0050_revival_catch() -> None:
+    """B5: Resume/Retire/Archive dispatch through this shared executor, not
+    ``sqlite_panel_source.execute_sqlite_panel_action`` (which returns
+    ``None`` for ``SQLITE_PANEL_LIFECYCLE_ACTION_IDS`` and defers here).
+    That module already lets ``ExecutionLeaseLost``/``RepositoryPoisoned``
+    propagate past its own exception handling so
+    ``panel_data_source.run_action``'s ADR 0050 revival catch can see them.
+    Before this fix, this executor's blanket ``except Exception`` wrapped
+    both into ``ActionOutcomeUnknownError`` (an opaque 500) before
+    ``run_action`` ever got a chance to attempt a revival -- silently
+    denying these three actions the same self-cure every other action gets.
+    """
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        raise ExecutionLeaseLost("account lease lost mid-performer")
+
+    store = IdempotencyStore()
+    with pytest.raises(ExecutionLeaseLost):
+        await execute_action(
+            _request(action_id="retire", key="lease-lost"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"retire": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    # Burned like any other post-execution failure -- none of these three
+    # actions has stop_bot_decisions' committed-command replay contract, so
+    # a blind same-key retry stays unsafe.
+    assert store._records[(_SID, "retire", "lease-lost")].state == "failed"
+
+
+async def test_repository_poisoned_propagates_unwrapped_too() -> None:
+    """The other half of B5's fix: ``RepositoryPoisoned`` gets the identical
+    unwrapped treatment, so ``run_action``'s ``AuthorityPoisonedError``
+    translation (distinct cure from a lost lease) also reaches Resume/
+    Retire/Archive."""
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        raise RepositoryPoisoned("account repository is poisoned")
+
+    store = IdempotencyStore()
+    with pytest.raises(RepositoryPoisoned):
+        await execute_action(
+            _request(action_id="archive", key="poisoned"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"archive": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    assert store._records[(_SID, "archive", "poisoned")].state == "failed"
 
 
 async def test_activation_failed_cleanup_proven_burns_the_key_as_a_known_failure() -> None:

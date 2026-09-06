@@ -12,7 +12,6 @@ a stale deep link never reads another account's evidence.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -58,6 +57,9 @@ from app.services.bot_runner import (
 )
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
+    REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
+    REVIVAL_OUTCOME_LOST_AGAIN_ON_RETRY,
+    REVIVAL_OUTCOME_REFUSED,
     ActionNotAvailableError,
     ActionPerformer,
     ActivationFailedError,
@@ -99,7 +101,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
 )
 from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.signal_program_admission import prove_running_program_build
-from app.services.sqlite_clerk_compat import active_sqlite_facade
+from app.services.sqlite_clerk_compat import active_reconciliation_sweep, active_sqlite_facade
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -700,20 +702,34 @@ async def _run_action_after_lease_revival(
     Before this, every write-path ``ExecutionLeaseLost`` went straight to the
     terminal "restart the data plane" blocker (T7c/#1794) -- even the case
     ADR 0050 says self-cures: a process frozen past its lease TTL and thawed,
-    with nobody else ever touching the account. The lease heartbeat
-    (``ReconciliationSweep._attempt_lease_revival``) already revives that case
-    in place; this mirrors it for the panel action that discovered the loss
-    first, so an operator reaching for a fleet-wide flatten during exactly
-    that window is not told to restart the data plane when no restart is
-    needed.
+    with nobody else ever touching the account.
 
-    The admission rule is not duplicated here: both callers invoke the same
-    ``ClerkSqliteRepository.revive_execution_lease`` -- one atomic
-    conditional UPDATE keyed on unchanged owner + unchanged
-    authority_generation (repository.py). There is no separate refusal
-    policy for this seam to reimplement or drift from.
+    Revival is delegated entirely to ``ReconciliationSweep.revive_now()`` --
+    the exact same entry point the lease heartbeat calls
+    (``_attempt_lease_revival``) -- rather than calling
+    ``ClerkSqliteRepository.revive_execution_lease`` directly. Calling the
+    repository method here a second time, independently of the heartbeat,
+    would let a write-path revival win the race and leave the ADR 0050 §3
+    post-revival recovery hook (``BotTaskRegistry.run_lease_recovery``, which
+    repairs lifecycle artifacts for runs that died during the freeze) never
+    fired: the next heartbeat tick would then find the lease already renewed
+    and succeed silently, with no revival of its own to hang the hook off.
+    Going through the sweep's own ``revive_now()`` means the CAS, its
+    CRITICAL logging, and the hook all happen exactly once, from the one
+    implementation the heartbeat itself uses -- including a synthetic
+    authority's carve-out (no hook bound at its construction site), which is
+    inherited for free because this calls the same running instance rather
+    than re-deriving the rule.
 
-    The retry uses a derived idempotency key rather than the original: the
+    The retry uses a derived idempotency key rather than the original. What
+    actually rules out the retry double-applying the mutation is structural,
+    not this key choice: every repository mutation renews the execution
+    lease as its first statement under the write lock
+    (``ClerkSqliteRepository``), and custody commits precede any broker
+    contact -- so a retry either reaches the broker as the only writer that
+    ever did, or never starts a mutation at all because the revived lease
+    was lost again before it began (the ``ExecutionLeaseLost`` catch below).
+    The derived key exists for a narrower, ledger-bookkeeping reason: the
     first attempt's key is already resolved (failed, for most actions;
     released, for ``stop_bot_decisions``) by the sqlite panel executor's own
     exception handling before this catches ``ExecutionLeaseLost`` -- no
@@ -723,59 +739,24 @@ async def _run_action_after_lease_revival(
     genuinely retried write; the operator sees one action, one outcome.
     """
     facade = active_sqlite_facade(broker)
-    if facade is None or facade.account_id != account_id:
-        # The active SQLite authority for this account is gone (a restart or
-        # reset raced this request) -- there is nothing left to revive.
+    sweep = active_reconciliation_sweep(broker)
+    if facade is None or facade.account_id != account_id or sweep is None:
+        # The active SQLite authority for this account (or its sweep) is gone
+        # -- a restart or reset raced this request -- so there is nothing
+        # left to revive.
         _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
         raise ExecutionAuthorityLostError(
-            revival_outcome=(
-                "the account's active SQLite authority was replaced or removed "
-                "before this action's revival could run"
-            )
+            revival_outcome=REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE
         ) from error
 
-    logger.critical(
-        "panel write path lease expired; attempting one supervised revival",
-        extra={
-            "action": "panel_action_execution_lease_revival_attempted",
-            "broker": broker,
-            "account_id": account_id,
-            "strategy_instance_id": sid,
-            "action_id": request.action_id,
-        },
-    )
     try:
-        await asyncio.to_thread(facade.repository.revive_execution_lease)
+        await sweep.revive_now()
     except ExecutionLeaseLost as refusal:
-        logger.critical(
-            "panel write path lease revival refused; authority remains fail-closed",
-            extra={
-                "action": "panel_action_execution_lease_revival_refused",
-                "broker": broker,
-                "account_id": account_id,
-                "strategy_instance_id": sid,
-                "action_id": request.action_id,
-                "error": str(refusal),
-            },
-        )
         _log_authority_unavailable(broker, account_id, sid, request, error, lost_lease=True)
         raise ExecutionAuthorityLostError(
-            revival_outcome=(
-                "another writer or an authority ceremony has held this account "
-                "since its execution lease last renewed"
-            )
+            revival_outcome=REVIVAL_OUTCOME_REFUSED
         ) from refusal
 
-    logger.critical(
-        "panel write path execution lease revived after expiry; retrying the action",
-        extra={
-            "action": "panel_action_execution_lease_revived",
-            "broker": broker,
-            "account_id": account_id,
-            "strategy_instance_id": sid,
-            "action_id": request.action_id,
-        },
-    )
     retry_request = request.model_copy(
         update={"idempotency_key": f"{request.idempotency_key}:lease-revival-retry"}
     )
@@ -791,10 +772,7 @@ async def _run_action_after_lease_revival(
     except ExecutionLeaseLost as retry_error:
         _log_authority_unavailable(broker, account_id, sid, request, retry_error, lost_lease=True)
         raise ExecutionAuthorityLostError(
-            revival_outcome=(
-                "the revived lease was lost again before the retried write "
-                "could commit; another writer took the account in that window"
-            )
+            revival_outcome=REVIVAL_OUTCOME_LOST_AGAIN_ON_RETRY
         ) from retry_error
 
 

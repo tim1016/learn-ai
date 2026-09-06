@@ -161,8 +161,32 @@ class ReconciliationSweep:
                     exc_info=True,
                 )
 
-    async def _attempt_lease_revival(self) -> bool:
-        """One fenced revival attempt; ``False`` means proven-terminal loss."""
+    async def revive_now(self) -> bool:
+        """One fenced ADR 0050 revival attempt -- the sole implementation.
+
+        Both the lease heartbeat (:meth:`_attempt_lease_revival`) and any
+        write path that discovers a lost lease in the same instant (a panel
+        action -- see ``panel_data_source._run_action_after_lease_revival``)
+        call this and only this. It owns the CAS
+        (``ClerkSqliteRepository.revive_execution_lease``), the CRITICAL
+        logging for both outcomes, and firing ``on_lease_revived`` on success
+        -- so the revival vocabulary and the ADR 0050 §3 post-revival
+        recovery pass (``BotTaskRegistry.run_lease_recovery``, which repairs
+        lifecycle artifacts for runs that died during the freeze) can never
+        drift or double-fire between two call sites. A synthetic authority's
+        carve-out (no hook bound at construction -- see
+        ``active_authority.py``'s synthetic branch) is inherited automatically
+        here: whichever caller reaches this same running instance gets
+        whatever hook (or lack of one) it was built with.
+
+        Returns ``True`` once the lease is confirmed revived and the hook (if
+        any) has run or failed in isolation. Raises :class:`ExecutionLeaseLost`
+        when the store proves revival is impossible (another writer or an
+        authority ceremony held the account) -- callers translate that into
+        their own terminal handling. Any other exception is a transient store
+        error and propagates uninterpreted: the CAS never reached a confirmed
+        outcome, so no lease/hook logging happens for it.
+        """
         try:
             await asyncio.to_thread(self._repo.revive_execution_lease)
         except asyncio.CancelledError:
@@ -177,19 +201,7 @@ class ReconciliationSweep:
                 },
                 exc_info=True,
             )
-            return False
-        except Exception:
-            # Transient store error: stay alive. The next tick's renewal will
-            # raise ExecutionLeaseLost again and land back here.
-            logger.critical(
-                "alpaca sqlite execution lease revival errored; retrying",
-                extra={
-                    "action": "execution_lease_revival_transient_error",
-                    "account_id": self._repo.account_id,
-                },
-                exc_info=True,
-            )
-            return True
+            raise
         logger.critical(
             "alpaca sqlite execution lease revived after expiry; no other "
             "writer held the account (ADR 0050)",
@@ -216,6 +228,28 @@ class ReconciliationSweep:
                     exc_info=True,
                 )
         return True
+
+    async def _attempt_lease_revival(self) -> bool:
+        """One fenced revival attempt via :meth:`revive_now`; ``False`` means
+        proven-terminal loss and the heartbeat should exit."""
+        try:
+            return await self.revive_now()
+        except asyncio.CancelledError:
+            raise
+        except ExecutionLeaseLost:
+            return False
+        except Exception:
+            # Transient store error: stay alive. The next tick's renewal will
+            # raise ExecutionLeaseLost again and land back here.
+            logger.critical(
+                "alpaca sqlite execution lease revival errored; retrying",
+                extra={
+                    "action": "execution_lease_revival_transient_error",
+                    "account_id": self._repo.account_id,
+                },
+                exc_info=True,
+            )
+            return True
 
     async def run(self) -> None:
         passes = 0

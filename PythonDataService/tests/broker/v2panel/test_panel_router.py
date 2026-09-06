@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
+from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseLost,
@@ -274,6 +275,15 @@ def lease_lost_api(tmp_path: Path):
     ``test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500``, which
     prove only the translation, not that the write path actually revives (or
     correctly refuses to) per ADR 0050.
+
+    A real ``ReconciliationSweep`` is wired into the runtime (not started --
+    the write path calls its ``revive_now()`` directly, never the background
+    heartbeat loop) so the panel action's revival runs through the one
+    supervised entry point production uses, with an ``on_lease_revived`` hook
+    the test can observe fired exactly like ``BotTaskRegistry.run_lease_recovery``
+    would in production (B1: proving the hook fires, not just that the retry
+    succeeds, is the whole point of routing through the sweep instead of the
+    bare repository CAS).
     """
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
@@ -302,11 +312,25 @@ def lease_lost_api(tmp_path: Path):
         read=port,  # type: ignore[arg-type]
         trade=port,  # type: ignore[arg-type]
     )
-    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    hook_calls: list[int] = []
+
+    async def _on_lease_revived() -> None:
+        hook_calls.append(repo.clock())
+
+    sweep = ReconciliationSweep(
+        repo=repo,
+        read=port,  # type: ignore[arg-type]
+        trade=port,  # type: ignore[arg-type]
+        intake=facade.intake,
+        on_lease_revived=_on_lease_revived,
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, sweep=sweep)
+    )
     app = FastAPI()
     app.include_router(router)
     try:
-        yield app, repo, clock
+        yield app, repo, clock, hook_calls
     finally:
         set_active_clerk_runtime(None)
         set_bot_task_registry(None)
@@ -899,7 +923,7 @@ async def test_write_path_revives_an_expired_lease_when_nobody_else_took_it(
     FAILS BEFORE THE FIX: the action returns 503
     EXECUTION_LEASE_LOST instead of completing.
     """
-    app, repo, clock = lease_lost_api
+    app, repo, clock, hook_calls = lease_lost_api
     clock.advance(5_000)  # freeze past the 1 s TTL; nobody else takes the lease
 
     response = await _post_stop_bot_decisions(app, idempotency_key="lease-revival-success")
@@ -914,6 +938,14 @@ async def test_write_path_revives_an_expired_lease_when_nobody_else_took_it(
     registry = get_bot_task_registry()
     assert registry is not None and registry._running is False  # type: ignore[attr-defined]
 
+    # B1: the revival went through ReconciliationSweep.revive_now() -- the
+    # same entry point the lease heartbeat uses -- so the ADR 0050 §3
+    # post-revival recovery hook fired exactly once. Before this fix the
+    # write path called the repository CAS directly and no hook existed to
+    # fire at all: a run that died on the dead handle would keep projecting
+    # as active custody until the next container restart.
+    assert len(hook_calls) == 1
+
 
 async def test_write_path_keeps_the_restart_cure_when_revival_is_refused(
     lease_lost_api,
@@ -925,7 +957,7 @@ async def test_write_path_keeps_the_restart_cure_when_revival_is_refused(
     refusal reason and must not claim "no control on this panel can
     re-acquire it": this panel action just tried, and the store said no.
     """
-    app, repo, clock = lease_lost_api
+    app, repo, clock, hook_calls = lease_lost_api
     repo._conn.execute(
         "UPDATE control_meta SET execution_lease_owner = 'someone-else', "
         "execution_lease_expires_at_ms = ? WHERE id = 1",
@@ -946,6 +978,10 @@ async def test_write_path_keeps_the_restart_cure_when_revival_is_refused(
     assert "restart" in detail["why"].lower()
     assert "no control on this panel can re-acquire it" not in detail["why"].lower()
     assert "another writer" in detail["why"].lower()
+
+    # The refused CAS never reached the success branch, so the post-revival
+    # recovery hook must not have fired.
+    assert hook_calls == []
 
 
 async def test_poisoned_authority_is_not_reported_as_a_lost_lease(

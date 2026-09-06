@@ -187,7 +187,9 @@ async def test_account_scoped_authority_loss_ends_the_batch_early(
     async def fake_run_action(broker, account_id, sid, request, *, operator_identity):
         attempted.append(sid)
         if sid == _COHORT_SIDS[1]:
-            raise ExecutionAuthorityLostError()
+            raise ExecutionAuthorityLostError(
+                revival_outcome="a synthetic revival outcome for this test"
+            )
         return _applied()
 
     monkeypatch.setattr(panel_data_source, "run_action", fake_run_action)
