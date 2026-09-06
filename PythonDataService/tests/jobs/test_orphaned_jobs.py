@@ -16,7 +16,7 @@ import pytest
 import redis
 
 from app.jobs import progress
-from app.jobs.progress import ORPHANED_JOB_CODE, fail_jobs_without_a_worker
+from app.jobs.progress import JOB_STORE_CONNECT_TIMEOUT_SECONDS, ORPHANED_JOB_CODE, fail_jobs_without_a_worker
 from app.research.persistence import lifecycle
 
 ACTIVE = "jobs:active"
@@ -131,3 +131,12 @@ def test_the_research_record_behind_a_failed_job_reads_as_interrupted(fake: _Fak
     fail_jobs_without_a_worker()
 
     assert lifecycle.presented_status(row, live=lifecycle.job_is_live(row.job_id)) == "interrupted"
+
+
+def test_connecting_to_the_job_store_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The startup sweep runs before the listener opens; a Redis that drops packets must not hold boot for the OS TCP timeout."""
+    monkeypatch.setattr(progress, "_pool", None)
+
+    client = progress.get_redis()
+
+    assert client.connection_pool.connection_kwargs["socket_connect_timeout"] == JOB_STORE_CONNECT_TIMEOUT_SECONDS == 5.0

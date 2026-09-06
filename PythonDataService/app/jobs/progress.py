@@ -43,6 +43,9 @@ JOB_TTL_SECONDS = 60 * 60 * 24
 # 50k events at ~200 bytes each = ~10 MB; plenty for a long backtest.
 MAX_STREAM_LENGTH = 50_000
 
+# How long any caller waits to connect to the job store before giving up.
+JOB_STORE_CONNECT_TIMEOUT_SECONDS = 5.0
+
 
 def _redis_url() -> str:
     return os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -68,6 +71,12 @@ def get_redis() -> redis.Redis:
                     _redis_url(),
                     decode_responses=True,
                     max_connections=32,
+                    # Connecting is bounded so a Redis endpoint that drops packets
+                    # cannot hold a caller for the OS TCP timeout — the startup
+                    # sweep runs before the listener opens and must stay best-effort.
+                    # Reads are not bounded here: the SSE endpoint's XREAD BLOCK is
+                    # meant to wait.
+                    socket_connect_timeout=JOB_STORE_CONNECT_TIMEOUT_SECONDS,
                 )
     return redis.Redis(connection_pool=_pool)
 
@@ -329,7 +338,8 @@ def fail_jobs_without_a_worker() -> list[str]:
     behind it (a grid search, a walk-forward study) would present as running
     and refuse Finish. An id whose state has expired, or that reached a terminal
     status without leaving the set, is only dropped from the set. Redis being
-    unreachable is logged and leaves everything alone; the service still boots.
+    unreachable is logged and leaves everything alone; the service still boots,
+    and the wait is bounded by the pool's connect timeout.
     Returns the ids failed.
     """
     r = get_redis()
