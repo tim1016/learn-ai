@@ -6,11 +6,16 @@ from datetime import datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.data_lake.derived_daily import (
     aggregate_minute_to_daily,
     build_daily_zip_bytes,
+    rth_daily_closes,
 )
 from app.data_lake.lean_writer import MinuteTradeBar
+from app.lean_sidecar import trading_calendar
+from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
 
 ET = ZoneInfo("America/New_York")
 
@@ -76,3 +81,55 @@ def test_build_daily_zip_is_deterministic():
     a = build_daily_zip_bytes("SPY", aggs)
     b = build_daily_zip_bytes("SPY", aggs)
     assert a == b
+
+
+# ── rth_daily_closes ──────────────────────────────────────────────────────
+
+# Two spans: all-EDT with Memorial Day (no session) and July 3rd (13:00 ET close); and
+# across the November offset change with Thanksgiving (no session) and Black Friday (13:00 ET close).
+_SPANS = (
+    ("2024-05-17", "2024-05-20", "2024-05-27", "2024-07-03"),
+    ("2025-10-31", "2025-11-03", "2025-11-27", "2025-11-28"),
+)
+_CLOCK = ((4, 0), (9, 29), (9, 30), (12, 59), (13, 0), (15, 59), (16, 0), (19, 59))
+
+
+def _span_bars(dates: tuple[str, ...]) -> list[MinuteTradeBar]:
+    return [_bar(d, h, m, 100.0 + i) for d in dates for i, (h, m) in enumerate(_CLOCK)]
+
+
+@pytest.mark.parametrize("dates", _SPANS, ids=("edt-holiday-half-day", "dst-change-thanksgiving-half-day"))
+def test_rth_daily_closes_matches_the_per_bar_calendar_rule(dates: tuple[str, ...]):
+    """Identical to filtering every bar through the canonical per-instant rule."""
+    bars = _span_bars(dates)
+    expected: dict = {}
+    for bar in bars:
+        if is_regular_session_ms_utc(int(bar.bar_start_et.timestamp() * 1000)):
+            expected[bar.bar_start_et.date()] = bar.close
+
+    closes = rth_daily_closes(bars)
+
+    assert closes == expected
+    assert [d.isoformat() for d in closes] == [dates[0], dates[1], dates[3]]  # the holiday has no close
+    assert closes[bars[0].bar_start_et.date()] == Decimal("105.0")  # 15:59 is the last regular-session bar
+    assert closes[bars[-1].bar_start_et.date()] == Decimal("103.0")  # 12:59 on the 13:00 early close
+
+
+def test_rth_daily_closes_builds_one_calendar_schedule_for_the_whole_span(monkeypatch):
+    """Regression for issue #1943: one schedule for the span, not one per minute bar."""
+    real = trading_calendar._schedule
+    calls: list[tuple] = []
+
+    def counting(start, end):
+        calls.append((start, end))
+        return real(start, end)
+
+    monkeypatch.setattr(trading_calendar, "_schedule", counting)
+
+    rth_daily_closes(_span_bars(_SPANS[1]))
+
+    assert len(calls) == 1
+
+
+def test_rth_daily_closes_of_nothing_is_empty():
+    assert rth_daily_closes([]) == {}
