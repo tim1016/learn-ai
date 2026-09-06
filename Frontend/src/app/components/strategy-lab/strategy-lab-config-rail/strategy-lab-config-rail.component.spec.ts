@@ -129,6 +129,39 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(root.querySelector<HTMLButtonElement>("[aria-label='Expand configuration']")).not.toBeNull();
   });
 
+  it("shows a blocked launcher's status and detail outside the collapsed Advanced block", async () => {
+    // #1976: with the launcher down the primary button became "Check launcher"
+    // while the status, the diagnose detail and the start command stayed inside
+    // <details class="advanced">, collapsed, so the rail never said why.
+    const fixture = await createRail();
+    fixture.componentRef.setInput("launcherBlocksRun", true);
+    fixture.componentRef.setInput("launcherStatus", "blocked");
+    fixture.componentRef.setInput("launcherDetail", "launcher_unreachable: connection refused");
+    fixture.componentRef.setInput("launcherCommand", "uvicorn app.lean_sidecar.launcher.app:app");
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+
+    const launcher = root.querySelector<HTMLElement>(".lean-launcher");
+    expect(launcher).not.toBeNull();
+    expect(launcher?.closest("details")).toBeNull();
+    expect(launcher?.textContent).toContain("blocked");
+    expect(launcher?.textContent).toContain("launcher_unreachable: connection refused");
+    expect(launcher?.textContent).toContain("uvicorn app.lean_sidecar.launcher.app:app");
+    expect(root.querySelectorAll(".lean-launcher")).toHaveLength(1);
+  });
+
+  it("keeps a ready launcher's status inside the Advanced block", async () => {
+    const fixture = await createRail();
+    fixture.componentRef.setInput("launcherBlocksRun", false);
+    fixture.componentRef.setInput("launcherStatus", "ready");
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+
+    const launcher = root.querySelector<HTMLElement>(".lean-launcher");
+    expect(launcher?.closest("details.advanced")).not.toBeNull();
+    expect(root.querySelectorAll(".lean-launcher")).toHaveLength(1);
+  });
+
   it("keeps the launcher recovery action clickable when LEAN is blocked", async () => {
     const fixture = await createRail();
     const launcherCheckRequested = vi.fn();

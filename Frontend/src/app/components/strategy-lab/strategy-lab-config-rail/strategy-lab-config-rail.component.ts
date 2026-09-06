@@ -1,3 +1,4 @@
+import { NgTemplateOutlet } from "@angular/common";
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from "@angular/core";
 
 import type { DataPolicy } from "../../../models/data-policy";
@@ -22,7 +23,7 @@ interface StrategyLabPrimaryAction {
 
 @Component({
   selector: "app-strategy-lab-config-rail",
-  imports: [InstrumentCardComponent, TimeWindowCardComponent],
+  imports: [NgTemplateOutlet, InstrumentCardComponent, TimeWindowCardComponent],
   templateUrl: "./strategy-lab-config-rail.component.html",
   styleUrl: "./strategy-lab-config-rail.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
