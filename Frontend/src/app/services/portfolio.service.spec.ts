@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { firstValueFrom } from 'rxjs';
 import { PortfolioService } from './portfolio.service';
+import type { Account, PortfolioState } from '../graphql/portfolio-types';
 import { environment } from '../../environments/environment';
 
 const GRAPHQL_URL = environment.backendUrl;
@@ -34,9 +35,9 @@ describe('PortfolioService', () => {
     });
 
     it('should map response to Account array', async () => {
-      const mockAccounts = [
-        { id: 'acc-1', name: 'Paper Trading', type: 'Paper', baseCurrency: 'USD', initialCash: 100000, cash: 95000, createdAt: '2026-01-01' },
-        { id: 'acc-2', name: 'Live Account', type: 'Live', baseCurrency: 'USD', initialCash: 50000, cash: 52000, createdAt: '2026-02-01' },
+      const mockAccounts: Account[] = [
+        { id: 'acc-1', name: 'Paper Trading', type: 'PAPER', baseCurrency: 'USD', initialCash: 100000, cash: 95000, createdAt: '2026-01-01' },
+        { id: 'acc-2', name: 'Backtest Account', type: 'BACKTEST', baseCurrency: 'USD', initialCash: 50000, cash: 52000, createdAt: '2026-02-01' },
       ];
 
       const promise = firstValueFrom(service.getAccounts());
@@ -45,7 +46,7 @@ describe('PortfolioService', () => {
       const result = await promise;
       expect(result.length).toBe(2);
       expect(result[0].name).toBe('Paper Trading');
-      expect(result[1].type).toBe('Live');
+      expect(result[1].type).toBe('BACKTEST');
     });
 
     it('should return empty array when no accounts exist', async () => {
@@ -61,12 +62,12 @@ describe('PortfolioService', () => {
 
   describe('createAccount', () => {
     it('should send mutation with correct variables', () => {
-      service.createAccount('Test Account', 'Paper', 50000).subscribe();
+      service.createAccount('Test Account', 'PAPER', 50000).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables).toEqual({
         name: 'Test Account',
-        type: 'Paper',
+        type: 'PAPER',
         initialCash: 50000,
       });
       expect(req.request.body.query).toContain('createAccount');
@@ -74,20 +75,20 @@ describe('PortfolioService', () => {
         data: {
           createAccount: {
             success: true, error: null,
-            account: { id: 'new-1', name: 'Test Account', type: 'Paper', cash: 50000, initialCash: 50000, createdAt: '2026-03-06' },
+            account: { id: 'new-1', name: 'Test Account', type: 'PAPER', cash: 50000, initialCash: 50000, createdAt: '2026-03-06' },
           },
         },
       });
     });
 
     it('should map successful response to AccountResult', async () => {
-      const promise = firstValueFrom(service.createAccount('My Account', 'Live', 100000));
+      const promise = firstValueFrom(service.createAccount('My Account', 'BACKTEST', 100000));
 
       httpMock.expectOne(GRAPHQL_URL).flush({
         data: {
           createAccount: {
             success: true, error: null,
-            account: { id: 'acc-99', name: 'My Account', type: 'Live', cash: 100000, initialCash: 100000, createdAt: '2026-03-06' },
+            account: { id: 'acc-99', name: 'My Account', type: 'BACKTEST', cash: 100000, initialCash: 100000, createdAt: '2026-03-06' },
           },
         },
       });
@@ -99,7 +100,7 @@ describe('PortfolioService', () => {
     });
 
     it('should map error response', async () => {
-      const promise = firstValueFrom(service.createAccount('', 'Paper', 0));
+      const promise = firstValueFrom(service.createAccount('', 'PAPER', 0));
 
       httpMock.expectOne(GRAPHQL_URL).flush({
         data: {
@@ -125,7 +126,7 @@ describe('PortfolioService', () => {
       req.flush({
         data: {
           getPortfolioState: {
-            account: { id: 'acc-1', name: 'Test', type: 'Paper', cash: 100000, initialCash: 100000, createdAt: '2026-01-01' },
+            account: { id: 'acc-1', name: 'Test', type: 'PAPER', cash: 100000, initialCash: 100000, createdAt: '2026-01-01' },
             positions: [],
             recentTrades: [],
           },
@@ -134,13 +135,13 @@ describe('PortfolioService', () => {
     });
 
     it('should map response with positions and trades', async () => {
-      const mockState = {
-        account: { id: 'acc-1', name: 'Test', type: 'Paper', cash: 95000, initialCash: 100000, createdAt: '2026-01-01' },
+      const mockState: PortfolioState = {
+        account: { id: 'acc-1', name: 'Test', type: 'PAPER', baseCurrency: 'USD', cash: 95000, initialCash: 100000, createdAt: '2026-01-01' },
         positions: [
-          { id: 'pos-1', tickerId: 1, assetType: 'Stock', netQuantity: 100, avgCostBasis: 150, realizedPnL: 0, status: 'Open', openedAt: '2026-02-01', ticker: { symbol: 'AAPL', name: 'Apple' } },
+          { id: 'pos-1', accountId: 'acc-1', tickerId: 1, assetType: 'STOCK', netQuantity: 100, avgCostBasis: 150, realizedPnL: 0, status: 'OPEN', openedAt: '2026-02-01', ticker: { symbol: 'AAPL', name: 'Apple' } },
         ],
         recentTrades: [
-          { id: 'trd-1', tickerId: 1, side: 'Buy', quantity: 100, price: 150, fees: 1, multiplier: 1, executionTimestamp: '2026-02-01T10:00:00Z', ticker: { symbol: 'AAPL', name: 'Apple' } },
+          { id: 'trd-1', accountId: 'acc-1', tickerId: 1, side: 'BUY', quantity: 100, price: 150, fees: 1, multiplier: 1, executionTimestamp: '2026-02-01T10:00:00Z', ticker: { symbol: 'AAPL', name: 'Apple' } },
         ],
       };
 
@@ -152,7 +153,7 @@ describe('PortfolioService', () => {
       expect(result.positions.length).toBe(1);
       expect(result.positions[0].ticker?.symbol).toBe('AAPL');
       expect(result.recentTrades.length).toBe(1);
-      expect(result.recentTrades[0].side).toBe('Buy');
+      expect(result.recentTrades[0].side).toBe('BUY');
     });
   });
 
@@ -160,17 +161,17 @@ describe('PortfolioService', () => {
 
   describe('recordTrade', () => {
     it('should send mutation with all parameters', () => {
-      service.recordTrade('acc-1', 'AAPL', 'Buy', 100, 155.50, 1.25, 'Stock', 1).subscribe();
+      service.recordTrade('acc-1', 'AAPL', 'BUY', 100, 155.50, 1.25, 'STOCK', 1).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables).toEqual({
         accountId: 'acc-1',
         symbol: 'AAPL',
-        side: 'Buy',
+        side: 'BUY',
         quantity: 100,
         price: 155.50,
         fees: 1.25,
-        assetType: 'Stock',
+        assetType: 'STOCK',
         multiplier: 1,
       });
       expect(req.request.body.query).toContain('recordTrade');
@@ -178,44 +179,44 @@ describe('PortfolioService', () => {
         data: {
           recordTrade: {
             success: true, error: null,
-            trade: { id: 'trd-1', side: 'Buy', quantity: 100, price: 155.50, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'AAPL' } },
+            trade: { id: 'trd-1', side: 'BUY', quantity: 100, price: 155.50, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'AAPL' } },
           },
         },
       });
     });
 
     it('should use default values for fees, assetType, multiplier', () => {
-      service.recordTrade('acc-1', 'MSFT', 'Sell', 50, 200).subscribe();
+      service.recordTrade('acc-1', 'MSFT', 'SELL', 50, 200).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables.fees).toBe(0);
-      expect(req.request.body.variables.assetType).toBe('Stock');
+      expect(req.request.body.variables.assetType).toBe('STOCK');
       expect(req.request.body.variables.multiplier).toBe(1);
       req.flush({
         data: {
           recordTrade: {
             success: true, error: null,
-            trade: { id: 'trd-2', side: 'Sell', quantity: 50, price: 200, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'MSFT' } },
+            trade: { id: 'trd-2', side: 'SELL', quantity: 50, price: 200, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'MSFT' } },
           },
         },
       });
     });
 
     it('should map successful trade result', async () => {
-      const promise = firstValueFrom(service.recordTrade('acc-1', 'AAPL', 'Buy', 100, 150));
+      const promise = firstValueFrom(service.recordTrade('acc-1', 'AAPL', 'BUY', 100, 150));
 
       httpMock.expectOne(GRAPHQL_URL).flush({
         data: {
           recordTrade: {
             success: true, error: null,
-            trade: { id: 'trd-1', side: 'Buy', quantity: 100, price: 150, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'AAPL' } },
+            trade: { id: 'trd-1', side: 'BUY', quantity: 100, price: 150, executionTimestamp: '2026-03-06T12:00:00Z', ticker: { symbol: 'AAPL' } },
           },
         },
       });
 
       const result = await promise;
       expect(result.success).toBe(true);
-      expect(result.trade?.side).toBe('Buy');
+      expect(result.trade?.side).toBe('BUY');
       expect(result.trade?.ticker?.symbol).toBe('AAPL');
     });
   });
@@ -303,7 +304,7 @@ describe('PortfolioService', () => {
     });
 
     it('should throw on GraphQL errors for mutations', async () => {
-      const promise = firstValueFrom(service.createAccount('Test', 'Paper', 100000));
+      const promise = firstValueFrom(service.createAccount('Test', 'PAPER', 100000));
 
       httpMock.expectOne(GRAPHQL_URL).flush({
         data: null,
@@ -350,8 +351,8 @@ describe('PortfolioService', () => {
     it('should map positions with lots', async () => {
       const mockPositions = [
         {
-          id: 'pos-1', tickerId: 1, assetType: 'Stock', netQuantity: 100, avgCostBasis: 150,
-          realizedPnL: 0, status: 'Open', openedAt: '2026-02-01', closedAt: null,
+          id: 'pos-1', tickerId: 1, assetType: 'STOCK', netQuantity: 100, avgCostBasis: 150,
+          realizedPnL: 0, status: 'OPEN', openedAt: '2026-02-01', closedAt: null,
           ticker: { symbol: 'AAPL', name: 'Apple' },
           lots: [{ id: 'lot-1', quantity: 100, entryPrice: 150, remainingQuantity: 100, realizedPnL: 0, openedAt: '2026-02-01', closedAt: null }],
         },

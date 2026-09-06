@@ -1,14 +1,13 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { Component, provideZonelessChangeDetection, signal } from '@angular/core';
-import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { TestBed } from '@angular/core/testing';
+import { render, screen } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import type { Position } from '../../../graphql/portfolio-types';
 import { PositionsComponent } from './positions.component';
-
-const GRAPHQL_URL = environment.backendUrl;
 
 /** Positions exactly as the .NET API serializes them: enum members upper-cased (#1973). */
 const POSITIONS: Position[] = [
@@ -24,51 +23,39 @@ const POSITIONS: Position[] = [
   },
 ];
 
-@Component({
-  imports: [PositionsComponent],
-  template: '<app-positions [accountId]="accountId()" />',
-})
-class HostComponent {
-  readonly accountId = signal('acc-1');
+async function renderPositions() {
+  const view = await render(PositionsComponent, {
+    inputs: { accountId: 'acc-1' },
+    providers: [provideHttpClient(), provideHttpClientTesting()],
+  });
+  const httpMock = TestBed.inject(HttpTestingController);
+  httpMock.expectOne(environment.backendUrl).flush({ data: { getPositions: POSITIONS } });
+  await view.fixture.whenStable();
+  return { view, httpMock };
 }
 
 describe('PositionsComponent', () => {
-  let fixture: ComponentFixture<HostComponent>;
-  let httpMock: HttpTestingController;
+  afterEach(() => TestBed.inject(HttpTestingController).verify());
 
-  beforeEach(async () => {
-    TestBed.configureTestingModule({
-      imports: [HostComponent],
-      providers: [provideZonelessChangeDetection(), provideHttpClient(), provideHttpClientTesting()],
-    });
-    fixture = TestBed.createComponent(HostComponent);
-    httpMock = TestBed.inject(HttpTestingController);
-    await fixture.whenStable();
-    httpMock.expectOne(GRAPHQL_URL).flush({ data: { getPositions: POSITIONS } });
-    await fixture.whenStable();
-  });
-
-  afterEach(() => httpMock.verify());
-
-  const rows = (): string[] =>
-    Array.from(fixture.nativeElement.querySelectorAll('tbody tr') as NodeListOf<HTMLElement>)
-      .map((row) => row.textContent?.replace(/\s+/g, ' ').trim() ?? '')
-      .filter((text) => text.length > 0);
-
-  it('lists the open position the API serializes as OPEN', () => {
+  it('lists the open position the API serializes as OPEN', async () => {
     // Before #1973 the filter compared against 'Open', so an account with an
     // open position rendered "No positions found."
-    expect(fixture.nativeElement.textContent).not.toContain('No positions found');
-    expect(rows()).toHaveLength(1);
-    expect(rows()[0]).toContain('SPY');
-    expect(fixture.nativeElement.querySelector('.status-badge.open')).not.toBeNull();
+    await renderPositions();
+
+    expect(screen.queryByText('No positions found.')).toBeNull();
+    const rows = screen.getAllByRole('row');
+    expect(rows).toHaveLength(2); // header + the open position
+    expect(rows[1].textContent).toContain('SPY');
+    expect(screen.getByText('OPEN').className).toContain('open');
   });
 
   it('reveals the CLOSED position when Show closed is ticked', async () => {
-    (fixture.nativeElement.querySelector('input[type=checkbox]') as HTMLInputElement).click();
-    await fixture.whenStable();
+    const { view } = await renderPositions();
 
-    expect(rows()).toHaveLength(2);
-    expect(fixture.nativeElement.querySelector('.status-badge.closed')).not.toBeNull();
+    await userEvent.click(screen.getByLabelText('Show closed'));
+    await view.fixture.whenStable();
+
+    expect(screen.getAllByRole('row')).toHaveLength(3);
+    expect(screen.getByText('CLOSED').className).toContain('closed');
   });
 });

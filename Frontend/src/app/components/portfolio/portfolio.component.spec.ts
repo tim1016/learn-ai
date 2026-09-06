@@ -9,7 +9,7 @@ const GRAPHQL_URL = environment.backendUrl;
 
 const mockAccounts: Account[] = [
   { id: 'acc-1', name: 'Paper Trading', type: 'PAPER', baseCurrency: 'USD', initialCash: 100000, cash: 95000, createdAt: '2026-01-01' },
-  { id: 'acc-2', name: 'Live Account', type: 'BACKTEST', baseCurrency: 'USD', initialCash: 50000, cash: 52000, createdAt: '2026-02-01' },
+  { id: 'acc-2', name: 'Backtest Account', type: 'BACKTEST', baseCurrency: 'USD', initialCash: 50000, cash: 52000, createdAt: '2026-02-01' },
 ];
 
 describe('PortfolioComponent', () => {
@@ -82,7 +82,7 @@ describe('PortfolioComponent', () => {
     const options = el.querySelectorAll('.account-selector select option');
     expect(options.length).toBe(2);
     expect(options[0].textContent).toContain('Paper Trading');
-    expect(options[1].textContent).toContain('Live Account');
+    expect(options[1].textContent).toContain('Backtest Account');
   });
 
   it('should toggle create form when button clicked', () => {
@@ -134,7 +134,7 @@ describe('PortfolioComponent', () => {
 
     component.showCreateForm.set(true);
     component.newAccountName.set('Backtest Account');
-    component.newAccountType.set('Backtest');
+    component.newAccountType.set('BACKTEST');
     component.newAccountCash.set(25000);
 
     component.createAccount();
@@ -143,7 +143,7 @@ describe('PortfolioComponent', () => {
     expect(req.request.body.query).toContain('createAccount');
     expect(req.request.body.variables).toEqual({
       name: 'Backtest Account',
-      type: 'Backtest',
+      type: 'BACKTEST',
       initialCash: 25000,
     });
 

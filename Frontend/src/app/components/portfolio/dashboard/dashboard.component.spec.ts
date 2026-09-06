@@ -15,12 +15,12 @@ const mockState: PortfolioState = {
   },
   positions: [
     {
-      id: 'pos-1', accountId: 'acc-1', tickerId: 1, assetType: 'Stock',
+      id: 'pos-1', accountId: 'acc-1', tickerId: 1, assetType: 'STOCK',
       netQuantity: 100, avgCostBasis: 150, realizedPnL: 0, status: 'OPEN',
       openedAt: '2026-02-01', ticker: { symbol: 'AAPL', name: 'Apple' },
     },
     {
-      id: 'pos-2', accountId: 'acc-1', tickerId: 2, assetType: 'Stock',
+      id: 'pos-2', accountId: 'acc-1', tickerId: 2, assetType: 'STOCK',
       netQuantity: 0, avgCostBasis: 200, realizedPnL: 500, status: 'CLOSED',
       openedAt: '2026-01-15', closedAt: '2026-02-15', ticker: { symbol: 'MSFT', name: 'Microsoft' },
     },
@@ -236,11 +236,13 @@ describe('DashboardComponent', () => {
     const firstRow = rows[0].textContent ?? '';
     expect(firstRow).toContain('AAPL');
     expect(firstRow).toContain('BUY');
+    expect(rows[0].querySelector('td.buy')).not.toBeNull();
     expect(firstRow).toContain('100');
 
     const secondRow = rows[1].textContent ?? '';
     expect(secondRow).toContain('MSFT');
     expect(secondRow).toContain('SELL');
+    expect(rows[1].querySelector('td.sell')).not.toBeNull();
 
     const identities = el.querySelectorAll('app-asset-identity');
     expect(identities).toHaveLength(2);
@@ -283,7 +285,7 @@ describe('DashboardComponent', () => {
 
     const dashboard = getDashboard();
     dashboard.tradeSymbol.set('AAPL');
-    dashboard.tradeSide.set('Buy');
+    dashboard.tradeSide.set('BUY');
     dashboard.tradeQty.set(50);
     dashboard.tradePrice.set(175);
     dashboard.tradeFees.set(2.5);
@@ -294,7 +296,7 @@ describe('DashboardComponent', () => {
     expect(req.request.body.query).toContain('recordTrade');
     expect(req.request.body.variables.accountId).toBe('acc-1');
     expect(req.request.body.variables.symbol).toBe('AAPL');
-    expect(req.request.body.variables.side).toBe('Buy');
+    expect(req.request.body.variables.side).toBe('BUY');
     expect(req.request.body.variables.quantity).toBe(50);
     expect(req.request.body.variables.price).toBe(175);
     expect(req.request.body.variables.fees).toBe(2.5);

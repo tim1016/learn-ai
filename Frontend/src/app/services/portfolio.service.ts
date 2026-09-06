@@ -3,11 +3,27 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, map, tap } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
-  Account, AccountResult, PortfolioState, PortfolioValuation,
-  PortfolioSnapshot, DrawdownPoint, PortfolioMetrics, Position, RiskRule, RiskRuleResult, DollarDeltaResult,
-  RiskViolation, ScenarioResult, ReconciliationReport,
-  SnapshotResultGql, TradeResult, RebuildResult,
+  Account,
+  AccountResult,
+  PortfolioState,
+  PortfolioValuation,
+  PortfolioSnapshot,
+  DrawdownPoint,
+  PortfolioMetrics,
+  Position,
+  RiskRule,
+  RiskRuleResult,
+  DollarDeltaResult,
+  RiskViolation,
+  ScenarioResult,
+  ReconciliationReport,
+  SnapshotResultGql,
+  TradeResult,
+  RebuildResult,
   ValidationSuiteResult,
+  PortfolioAccountType,
+  PortfolioAssetType,
+  PortfolioOrderSide,
 } from '../graphql/portfolio-types';
 
 const GRAPHQL_URL = environment.backendUrl;
@@ -36,7 +52,7 @@ export class PortfolioService {
     `).pipe(map(d => d.getAccounts));
   }
 
-  createAccount(name: string, type: string, initialCash: number): Observable<AccountResult> {
+  createAccount(name: string, type: PortfolioAccountType, initialCash: number): Observable<AccountResult> {
     return gql<{ createAccount: AccountResult }>(this.http, `
       mutation CreateAccount($name: String!, $type: String!, $initialCash: Decimal!) {
         createAccount(name: $name, type: $type, initialCash: $initialCash) {
@@ -82,8 +98,8 @@ export class PortfolioService {
 
   // ── Trades ──
 
-  recordTrade(accountId: string, symbol: string, side: string, quantity: number,
-    price: number, fees = 0, assetType = 'Stock', multiplier = 1): Observable<TradeResult> {
+  recordTrade(accountId: string, symbol: string, side: PortfolioOrderSide, quantity: number,
+    price: number, fees = 0, assetType: PortfolioAssetType = 'STOCK', multiplier = 1): Observable<TradeResult> {
     return gql<{ recordTrade: TradeResult }>(this.http, `
       mutation RecordTrade($accountId: UUID!, $symbol: String!, $side: String!,
         $quantity: Decimal!, $price: Decimal!, $fees: Decimal!,
