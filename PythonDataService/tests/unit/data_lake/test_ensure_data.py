@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from datetime import date
 from pathlib import Path
 from uuid import UUID
@@ -801,12 +802,12 @@ async def test_daily_artifact_rebuild_failure_restores_the_prior_complete_state(
         a for a in result_narrow.artifacts if a.artifact_kind == "time_series_bars" and a.resolution == "daily"
     )
 
-    from app.data_lake import ensure_data as ensure_data_module
+    from app.data_lake import derived_daily as derived_daily_module
 
     def _boom(*args, **kwargs):
         raise OSError("simulated corrupt source zip")
 
-    monkeypatch.setattr(ensure_data_module, "_read_minute_trade_bars", _boom)
+    monkeypatch.setattr(derived_daily_module, "read_minute_trade_bars", _boom)
 
     result_wide = await ensure_data(_spec_wide(["SPY"]))
     io_failures = [
@@ -828,3 +829,52 @@ async def test_daily_artifact_rebuild_failure_restores_the_prior_complete_state(
     assert restored is not None, "the row must still be 'complete' — a failed rebuild must not strand it"
     assert restored.data_contract_hash == daily_narrow.data_contract_hash
     assert restored.file_sha256 == daily_narrow.file_sha256
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_whole_history_artifact_builds_never_run_on_the_event_loop(
+    clean_artifacts, pool, tmp_lake, monkeypatch
+):
+    """#1943: parsing a symbol's whole minute history froze every route for minutes.
+
+    The factor file and the daily-trade artifact each read every captured
+    minute zip for the symbol's window — hundreds of them for a real backfill,
+    ~960 bars in each once extended hours are captured — and both used to do it
+    inline on whichever loop called ``ensure_data``. For the backfill job that
+    is the request loop by design (``_bridge_ensure_fn`` keeps catalog calls on
+    the pool's loop), so ``/health``, the strategy dropdown and every SSE stream
+    stopped being served while the parse ran.
+
+    The measurement is thread identity, not elapsed time: this asserts the
+    reads happened *somewhere else*, which is the property that keeps the loop
+    free regardless of how long they take.
+    """
+    respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake)
+    )
+    _mock_corpus_actions_and_events()
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
+        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+    )
+
+    from app.data_lake import derived_daily as derived_daily_module
+
+    loop_thread = threading.current_thread()
+    reader_threads: list[threading.Thread] = []
+    real_reader = derived_daily_module.read_minute_trade_bars
+
+    def recording_reader(file_path: str, lake_root: Path) -> list[object]:
+        reader_threads.append(threading.current_thread())
+        return real_reader(file_path, lake_root)
+
+    # Patched where the whole-history reductions call it, so the per-day quote
+    # read — one zip, correctly still inline — is not counted here.
+    monkeypatch.setattr(derived_daily_module, "read_minute_trade_bars", recording_reader)
+
+    result = await ensure_data(_spec_narrow(["SPY"]))
+    assert result.overall_status == "complete", f"setup failed: {result.failures}"
+
+    assert reader_threads, "no minute zip was read; the test proved nothing"
+    on_the_loop = [t.name for t in reader_threads if t is loop_thread]
+    assert on_the_loop == [], f"{len(on_the_loop)} whole-history read(s) ran on the event loop"

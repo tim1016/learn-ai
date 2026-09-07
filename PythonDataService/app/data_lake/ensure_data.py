@@ -20,12 +20,12 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
 import time
-import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -37,9 +37,10 @@ from app.data_lake import catalog_client
 from app.data_lake.atomic import ArtifactLeaseLostError, publish_artifact
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
-    aggregate_minute_to_daily,
-    build_daily_zip_bytes,
-    rth_daily_closes,
+    MinuteBarReadError,
+    daily_zip_from_minute_history,
+    factor_file_reference_closes,
+    read_minute_trade_bars,
 )
 from app.data_lake.derived_quote import build_minute_quote_zip_bytes
 from app.data_lake.factor_files import FactorFileReferenceError, build_factor_file_bytes
@@ -453,71 +454,6 @@ def _polygon_bar_to_minute_trade_bar(pb: PolygonBar) -> MinuteTradeBar:
     )
 
 
-def _read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeBar]:
-    """Read a complete minute-trade artifact from disk and reconstruct MinuteTradeBar list.
-
-    The zip contains one CSV: <yyyymmdd>_<sym>_minute_trade.csv. Each row:
-      ms_since_midnight_et, open*10000, high*10000, low*10000, close*10000, volume
-
-    The trading date is inferred from the file path (equity/<mkt>/minute/<sym>/<yyyymmdd>_trade.zip).
-    """
-    full_path = lake_root / Path(*PurePosixPath(file_path).parts)
-    with zipfile.ZipFile(full_path) as zf:
-        names = zf.namelist()
-        if not names:
-            return []
-        csv_bytes = zf.read(names[0])
-
-    # Parse the date and symbol from the CSV filename: <yyyymmdd>_<sym>_minute_trade.csv
-    csv_name = names[0]
-    date_part = csv_name[:8]
-    trading_year = int(date_part[:4])
-    trading_month = int(date_part[4:6])
-    trading_day = int(date_part[6:8])
-
-    bars: list[MinuteTradeBar] = []
-    for line in csv_bytes.decode("ascii").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(",")
-        ms_since_midnight = int(parts[0])
-        open_dc = int(parts[1])
-        high_dc = int(parts[2])
-        low_dc = int(parts[3])
-        close_dc = int(parts[4])
-        volume = int(parts[5])
-
-        # Reconstruct bar_start_et from ms_since_midnight and the trading date.
-        hours = ms_since_midnight // 3_600_000
-        minutes = (ms_since_midnight % 3_600_000) // 60_000
-        bar_start_et = datetime(
-            trading_year,
-            trading_month,
-            trading_day,
-            hours,
-            minutes,
-            0,
-            tzinfo=_ET,
-        )
-        bars.append(
-            MinuteTradeBar(
-                bar_start_et=bar_start_et,
-                open=Decimal(open_dc) / Decimal(10_000),
-                high=Decimal(high_dc) / Decimal(10_000),
-                low=Decimal(low_dc) / Decimal(10_000),
-                close=Decimal(close_dc) / Decimal(10_000),
-                volume=volume,
-            )
-        )
-    return bars
-
-
-# ---------------------------------------------------------------------------
-# Pass 1 helpers
-# ---------------------------------------------------------------------------
-
-
 async def _process_minute_trade_artifact(
     identity: ArtifactIdentity,
     spec: DataRunSpec,
@@ -892,25 +828,28 @@ async def _process_factor_file_artifact(
     # captured minute bars (RTH closes only). A factor file with a
     # zero/missing reference price silently truncates LEAN backtests at
     # the first in-window dividend.
-    all_bars: list[MinuteTradeBar] = []
-    for src in sorted(minute_trade_records, key=lambda r: r.trading_date or spec.start_trading_date):
-        try:
-            all_bars.extend(_read_minute_trade_bars(src.file_path, lake_root))
-        except Exception as e:
-            await _fail_or_restore("io_error", str(e))
-            return (
-                None,
-                ArtifactFailure(
-                    artifact_kind=identity.artifact_kind,
-                    symbol=identity.symbol,
-                    trading_date=None,
-                    data_type=None,
-                    reason="io_error",
-                    detail=f"failed to read minute bars for factor-file reference prices: {e}",
-                    attempt_count=1,
-                ),
-                "fetched",
-            )
+    try:
+        daily_closes = await asyncio.to_thread(
+            factor_file_reference_closes,
+            minute_trade_records,
+            lake_root=lake_root,
+            fallback_date=spec.start_trading_date,
+        )
+    except MinuteBarReadError as e:
+        await _fail_or_restore("io_error", str(e))
+        return (
+            None,
+            ArtifactFailure(
+                artifact_kind=identity.artifact_kind,
+                symbol=identity.symbol,
+                trading_date=None,
+                data_type=None,
+                reason="io_error",
+                detail=f"failed to read minute bars for factor-file reference prices: {e}",
+                attempt_count=1,
+            ),
+            "fetched",
+        )
 
     try:
         payload = build_factor_file_bytes(
@@ -919,7 +858,7 @@ async def _process_factor_file_artifact(
             dividends=dividends,
             history_start=spec.start_trading_date,
             history_end=spec.end_trading_date,
-            daily_closes=rth_daily_closes(all_bars),
+            daily_closes=daily_closes,
         )
     except FactorFileReferenceError as e:
         await _fail_or_restore("internal_error", str(e))
@@ -1153,7 +1092,7 @@ async def _process_minute_quote_artifact(
 
     # Read source trade bars from disk.
     try:
-        trade_bars = _read_minute_trade_bars(source_trade_record.file_path, lake_root)
+        trade_bars = read_minute_trade_bars(source_trade_record.file_path, lake_root)
     except Exception as e:
         await catalog_client.fail_artifact(artifact_id, "io_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (
@@ -1249,6 +1188,41 @@ async def _process_daily_trade_artifact(
     source_shas = [r.file_sha256 for r in source_trade_records]
     dch = _daily_dch(source_ids, source_shas, spec.price_adjustment_mode)
 
+    # Build before claiming, deliberately. The payload is a pure function of
+    # ``source_trade_records`` and the bytes on disk, both already in hand, and
+    # reading a multi-year history is hundreds of zips — seconds of CPU that
+    # must not run on the event loop (#1943). Doing it here keeps
+    # claim → publish free of await points, which is what stops a second
+    # ensure_data on the same loop observing this row mid-flight and reporting
+    # ``lease_timeout`` for an artifact that is being written right now
+    # (``test_two_concurrent_runs_coalesce_onto_one_fetch``). Losing the claim
+    # race wastes one build; observing a torn intermediate state costs the
+    # operator a false "the lake reports itself incomplete", with no recovery
+    # path for this row class.
+    try:
+        payload, row_count = await asyncio.to_thread(
+            daily_zip_from_minute_history,
+            source_trade_records,
+            symbol=identity.symbol or "",
+            lake_root=lake_root,
+            fallback_date=spec.start_trading_date,
+        )
+    except MinuteBarReadError as e:
+        # Nothing is claimed yet, so there is no lease to fail or restore.
+        return (
+            None,
+            ArtifactFailure(
+                artifact_kind=identity.artifact_kind,
+                symbol=identity.symbol,
+                trading_date=None,
+                data_type=identity.data_type,
+                reason="io_error",
+                detail=f"failed to read source trade bars from {e.file_path}: {e}",
+                attempt_count=1,
+            ),
+            "fetched",
+        )
+
     outcome: Literal["fetched", "reused", "refreshed"] = "fetched"
     artifact_id = await catalog_client.claim_aggregated_bar_artifact(
         identity=identity,
@@ -1306,39 +1280,7 @@ async def _process_daily_trade_artifact(
                 "fetched",
             )
 
-    # Read all source trade bars from disk.
-    all_bars: list[MinuteTradeBar] = []
-    for src in sorted(source_trade_records, key=lambda r: r.trading_date or spec.start_trading_date):
-        try:
-            bars = _read_minute_trade_bars(src.file_path, lake_root)
-            all_bars.extend(bars)
-        except Exception as e:
-            # A rebuild (outcome == "refreshed") that fails here hasn't
-            # written anything new yet — restore the previously-complete
-            # artifact rather than marking it 'failed' with no retry path
-            # (steal_or_retry_minute_bar doesn't cover aggregated-bar rows).
-            if outcome == "refreshed":
-                await catalog_client.restore_complete_artifact(artifact_id, _WORKER_ID, lease_generation)
-            else:
-                await catalog_client.fail_artifact(artifact_id, "io_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
-            return (
-                None,
-                ArtifactFailure(
-                    artifact_kind=identity.artifact_kind,
-                    symbol=identity.symbol,
-                    trading_date=None,
-                    data_type=identity.data_type,
-                    reason="io_error",
-                    detail=f"failed to read source trade bars from {src.file_path}: {e}",
-                    attempt_count=1,
-                ),
-                "fetched",
-            )
-
-    aggregates = aggregate_minute_to_daily(all_bars)
-    payload = build_daily_zip_bytes(symbol=identity.symbol or "", aggregates=aggregates)
     staging_root = resolve_staging_root(spec.price_adjustment_mode)
-    row_count = len(aggregates)
     file_sha, lease_failure = await _publish_under_lease(
         identity=identity,
         payload=payload,
