@@ -11,7 +11,7 @@ import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { within } from "@testing-library/angular";
 import { BehaviorSubject, of, throwError } from "rxjs";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail } from "../../services/backtest-runs.types";
 import { BacktestRunsService } from "../../services/backtest-runs.service";
@@ -22,7 +22,7 @@ import {
   provideFakeTickerCatalog,
 } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { StrategyLabComponent } from "./strategy-lab.component";
-import { toStrategyLabConfiguration } from "./strategy-lab.models";
+import { inputsFromBacktestJob, inputsFromSavedRun } from "./strategy-lab.models";
 
 function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
   return {
@@ -81,6 +81,25 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     notes: null,
     parityVerdicts: [],
     ...overrides,
+  };
+}
+
+/** The `engine_backtest` payload `StrategyLabRunner.runPython` submits for the run above
+ *  (the runner spec pins that the real payload reads back the same way). */
+function backtestPayload(): Record<string, unknown> {
+  return {
+    strategy_name: "ema_crossover_signal",
+    requested_engine: "both",
+    fill_mode: "next_bar_open",
+    initial_cash: 75_000,
+    commission_per_order: 0.35,
+    params: { symbol: "QQQ", lookback: 8 },
+    auto_fetch: true,
+    resolution: "minute",
+    compatibility_profile: "us-equity-raw-ibkr-v1",
+    data_policy: run().dataPolicy,
+    start_date: "2026-03-02",
+    end_date: "2026-04-02",
   };
 }
 
@@ -215,6 +234,10 @@ async function createLab(
 }
 
 describe("Strategy Lab Workbench", () => {
+  // Each lab is a fresh tab: the runner's own-job marker must not leak from
+  // one test's adoption into the next one's.
+  beforeEach(() => sessionStorage.clear());
+
   it("starts with Workbench and History tabs instead of repeated page framing", async () => {
     const { fixture, http } = await createLab();
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
@@ -260,6 +283,59 @@ describe("Strategy Lab Workbench", () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(runButton()?.disabled).toBe(true);
+    http.verify();
+  });
+
+  it("describes a resumed backtest's own inputs on the rail while it runs", async () => {
+    // #1953: after a reload the store is rebuilt with defaults, so until the
+    // persisted report arrived the rail labelled "Exact run inputs" described
+    // SPY over the default window, not the QQQ run actually in flight.
+    const { fixture, http, activeJobs } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const field = (label: string | RegExp): HTMLInputElement => within(root).getAllByLabelText(label)[0] as HTMLInputElement;
+    expect(field("Start date").value).not.toBe("2026-03-02");
+
+    activeJobs.set([{
+      id: "resumed-1", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0,
+      parameters: { backtest: backtestPayload() },
+    }]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(field("Start date").value).toBe("2026-03-02");
+    expect(field("End date").value).toBe("2026-04-02");
+    expect(field(/^lookback/).value).toBe("8");
+    expect(field(/^Initial cash/).value).toBe("75000");
+    expect(field(/^Commission/).value).toBe("0.35");
+    expect((root.querySelector("#strategy-picker") as HTMLSelectElement).value).toBe("ema_crossover_signal");
+    expect(root.querySelector(".ticker-box__symbol")?.textContent).toContain("QQQ");
+    http.verify();
+  });
+
+  it("keeps a loaded report's inputs on the rail when a job from elsewhere is adopted", async () => {
+    const { fixture, http, activeJobs } = await createLab({ activeRun: 91, backtestRun: run() });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    // A loaded report collapses the rail to its facts strip.
+    const facts = (): string => root.querySelector(".config-strip__facts")?.textContent ?? "";
+    expect(facts()).toContain("2026-03-02 → 2026-04-02");
+
+    activeJobs.set([{
+      id: "other-tab", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0,
+      parameters: { backtest: { ...backtestPayload(), start_date: "2025-01-06", end_date: "2025-02-06" } },
+    }]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(facts()).toContain("2026-03-02 → 2026-04-02");
+    expect(facts()).not.toContain("2025-01-06");
     http.verify();
   });
 
@@ -665,8 +741,36 @@ describe("Strategy Lab saved configuration", () => {
     http.verify();
   });
 
+  it("reads a backtest job's payload back into the inputs the rail shows", () => {
+    const inputs = inputsFromBacktestJob({ backtest: backtestPayload() }, {
+      symbol: "SPY", from: "2020-01-01", to: "2020-02-01", resolution: "minute", autoFetch: true,
+    });
+
+    expect(inputs).toMatchObject({
+      strategyName: "ema_crossover_signal",
+      engine: "both",
+      range: { symbol: "QQQ", from: "2026-03-02", to: "2026-04-02", resolution: "minute", multiplier: 1, session: "rth", autoFetch: true },
+      parameters: { symbol: "QQQ", lookback: 8 },
+      fillMode: "next_bar_open",
+      initialCash: 75_000,
+      commissionPerOrder: 0.35,
+    });
+    expect(inputs?.dataPolicy?.symbol).toBe("QQQ");
+  });
+
+  it("leaves the rail alone for a payload it did not compose, including a LEAN-only run's", () => {
+    const range = { symbol: "SPY", from: "2020-01-01", to: "2020-02-01", resolution: "minute" as const, autoFetch: true };
+
+    expect(inputsFromBacktestJob(undefined, range)).toBeNull();
+    expect(inputsFromBacktestJob({ request: { run_id: "strategy_lab_spy_x1", start_ms_utc: 1, end_ms_utc: 2 } }, range)).toBeNull();
+    expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), strategy_name: undefined } }, range)).toBeNull();
+    expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), requested_engine: "rust" } }, range)).toBeNull();
+    expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), data_policy: null } }, range)).toBeNull();
+    expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), start_date: "March 2" } }, range)).toBeNull();
+  });
+
   it("restores every persisted control without inferring away the Both selection", () => {
-    const configuration = toStrategyLabConfiguration(run(), {
+    const configuration = inputsFromSavedRun(run(), {
       symbol: "SPY",
       from: "2025-01-01",
       to: "2025-01-02",
@@ -675,6 +779,7 @@ describe("Strategy Lab saved configuration", () => {
     });
 
     expect(configuration).toEqual({
+      strategyName: "ema_crossover_signal",
       engine: "both",
       range: {
         symbol: "QQQ",
@@ -694,7 +799,7 @@ describe("Strategy Lab saved configuration", () => {
   });
 
   it("rejects malformed persisted parameters instead of enabling a changed rerun", () => {
-    expect(() => toStrategyLabConfiguration(run({ parameters: "{" }), {
+    expect(() => inputsFromSavedRun(run({ parameters: "{" }), {
       symbol: "SPY",
       from: "2025-01-01",
       to: "2025-01-02",

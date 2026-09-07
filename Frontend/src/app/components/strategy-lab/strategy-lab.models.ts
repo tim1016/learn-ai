@@ -119,7 +119,9 @@ export interface StrategyLabParityView {
   } | null;
 }
 
-export interface StrategyLabConfiguration {
+/** What the rail shows for a run: its configuration and the strategy it belongs to. */
+export interface StrategyLabRunInputs {
+  strategyName: string;
   engine: EngineChoice;
   range: TickerRange;
   parameters: Record<string, unknown>;
@@ -127,6 +129,110 @@ export interface StrategyLabConfiguration {
   initialCash: number;
   commissionPerOrder: number;
   dataPolicy: DataPolicy | null;
+}
+
+/** What a saved run and a submitted job payload each state about a run, before the rail's shape is composed from it. */
+interface RunFacts {
+  strategyName: string;
+  engine: EngineChoice;
+  symbol: string;
+  from: string;
+  to: string;
+  parameters: Record<string, StrategyParameterValue>;
+  fillMode: unknown;
+  initialCash: number;
+  commissionPerOrder: number | null | undefined;
+  policy: DataPolicy | null;
+  autoFetch: boolean;
+}
+
+/** The one derivation of the rail's inputs, so a saved run and an in-flight job cannot drift apart. */
+function runInputsFrom(facts: RunFacts, currentRange: TickerRange): StrategyLabRunInputs {
+  const symbol = facts.symbol.toUpperCase();
+  const timespan = facts.policy?.input_bars.timespan;
+  return {
+    strategyName: facts.strategyName,
+    engine: facts.engine,
+    range: {
+      ...currentRange,
+      symbol,
+      from: facts.from,
+      to: facts.to,
+      resolution: timespan === "day" ? "daily" : timespan ?? "minute",
+      multiplier: facts.policy?.input_bars.multiplier ?? 1,
+      session: facts.policy?.session === "extended" ? "extended" : "rth",
+      autoFetch: facts.autoFetch,
+    },
+    parameters: { ...facts.parameters, symbol },
+    fillMode: facts.fillMode === "next_bar_open" ? "next_bar_open" : "signal_bar_close",
+    initialCash: facts.initialCash,
+    commissionPerOrder: facts.commissionPerOrder ?? 0,
+    dataPolicy: facts.policy,
+  };
+}
+
+/** The inputs a saved run was produced with. Throws when its persisted parameters are malformed. */
+export function inputsFromSavedRun(run: BacktestRunDetail, currentRange: TickerRange): StrategyLabRunInputs {
+  const parameters = parseStrategyParameters(run.parameters);
+  const policy = run.dataPolicy ?? null;
+  return runInputsFrom({
+    strategyName: run.strategyName,
+    engine: run.requestedEngine ?? inferRequestedEngine(run),
+    symbol: policy?.symbol ?? run.symbol ?? readString(parameters, "symbol") ?? "SPY",
+    from: runWindowDate(run.startDate),
+    to: runWindowDate(run.endDate),
+    parameters,
+    fillMode: run.fillMode,
+    initialCash: run.initialCash,
+    commissionPerOrder: run.commissionPerOrder,
+    policy,
+    autoFetch: policy?.provider_kind !== "fixture",
+  }, currentRange);
+}
+
+/**
+ * The inputs an in-flight `engine_backtest` job was started with, read back
+ * from the payload `StrategyLabRunner.runPython` submitted (#1953). `null`
+ * for anything but a complete payload of that shape — the rail is then left
+ * alone rather than describing a guess. LEAN-only jobs are deliberately not
+ * read: their request carries the window as session-open instants with an
+ * exclusive end, and only the trading calendar can turn that back into the
+ * end date the operator chose; the persisted run reconciles the rail once
+ * the job completes.
+ */
+export function inputsFromBacktestJob(
+  jobParameters: Readonly<Record<string, unknown>> | undefined,
+  currentRange: TickerRange,
+): StrategyLabRunInputs | null {
+  const backtest = jobParameters?.["backtest"];
+  if (!isRecord(backtest)) return null;
+  const strategyName = readString(backtest, "strategy_name");
+  const engine = backtest["requested_engine"];
+  const from = readIsoDate(backtest, "start_date");
+  const to = readIsoDate(backtest, "end_date");
+  const initialCash = backtest["initial_cash"];
+  const policy = backtest["data_policy"];
+  const parameters = backtest["params"];
+  if (
+    strategyName === null || !isEngineChoice(engine) || from === null || to === null ||
+    typeof initialCash !== "number" || !isDataPolicyPayload(policy) || !isParameterRecord(parameters)
+  ) {
+    return null;
+  }
+  const commission = backtest["commission_per_order"];
+  return runInputsFrom({
+    strategyName,
+    engine,
+    symbol: policy.symbol,
+    from,
+    to,
+    parameters,
+    fillMode: backtest["fill_mode"],
+    initialCash,
+    commissionPerOrder: typeof commission === "number" ? commission : null,
+    policy,
+    autoFetch: backtest["auto_fetch"] === true,
+  }, currentRange);
 }
 
 export interface ParsedRunVerdict {
@@ -148,34 +254,6 @@ export function parseRunVerdictEnvelope(value: string | null): ParsedRunVerdict 
   } catch {
     return { verdict: null, error: "Persisted verdict data is malformed." };
   }
-}
-
-export function toStrategyLabConfiguration(
-  run: BacktestRunDetail,
-  currentRange: TickerRange,
-): StrategyLabConfiguration {
-  const parameters = parseStrategyParameters(run.parameters);
-  const symbol = run.dataPolicy?.symbol ?? run.symbol ?? readString(parameters, "symbol") ?? "SPY";
-  const policy = run.dataPolicy;
-  const timespan = policy?.input_bars.timespan;
-  return {
-    engine: run.requestedEngine ?? inferRequestedEngine(run),
-    range: {
-      ...currentRange,
-      symbol: symbol.toUpperCase(),
-      from: runWindowDate(run.startDate),
-      to: runWindowDate(run.endDate),
-      resolution: timespan === "day" ? "daily" : timespan ?? "minute",
-      multiplier: policy?.input_bars.multiplier ?? 1,
-      session: policy?.session === "extended" ? "extended" : "rth",
-      autoFetch: policy?.provider_kind !== "fixture",
-    },
-    parameters: { ...parameters, symbol: symbol.toUpperCase() },
-    fillMode: run.fillMode === "next_bar_open" ? "next_bar_open" : "signal_bar_close",
-    initialCash: run.initialCash,
-    commissionPerOrder: run.commissionPerOrder ?? 0,
-    dataPolicy: policy ?? null,
-  };
 }
 
 export function parseStrategyParameters(value: string | null): Record<string, StrategyParameterValue> {
@@ -268,6 +346,32 @@ function isRunVerdictSubScore(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isEngineChoice(value: unknown): value is EngineChoice {
+  return value === "python" || value === "lean" || value === "both";
+}
+
+/** `YYYY-MM-DD`, the shape `TickerRange.from`/`to` hold. */
+function readIsoDate(value: Record<string, unknown>, key: string): string | null {
+  const candidate = readString(value, key);
+  return candidate !== null && /^\d{4}-\d{2}-\d{2}$/.test(candidate) ? candidate : null;
+}
+
+function isBarsSpec(value: unknown): boolean {
+  return isRecord(value) && typeof value["timespan"] === "string" && typeof value["multiplier"] === "number";
+}
+
+/** The policy `StrategyLabConfigStore.composeDataPolicy` submits, as it comes back from a job snapshot. */
+function isDataPolicyPayload(value: unknown): value is DataPolicy {
+  return (
+    isRecord(value) &&
+    typeof value["symbol"] === "string" &&
+    typeof value["session"] === "string" &&
+    typeof value["provider_kind"] === "string" &&
+    isBarsSpec(value["input_bars"]) &&
+    isBarsSpec(value["strategy_bars"])
+  );
 }
 
 function isNullableNumber(value: unknown): boolean {

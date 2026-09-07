@@ -16,18 +16,17 @@ import {
   RUN_DOCK_SOURCE,
   RUN_DOCK_STORAGE_KEY,
 } from "../../shared/run-dock/run-dock-source";
-import type { BacktestRunDetail } from "../../services/backtest-runs.types";
 import { EngineLabRunHistoryComponent } from "../lean-engine/engine-lab-run-history/engine-lab-run-history.component";
 import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
 import { LeanSourceEditorComponent } from "./lean-source-editor/lean-source-editor.component";
 import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail/strategy-lab-config-rail.component";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { JobsService } from "../../services/jobs.service";
-import { StrategyLabRunner } from "./strategy-lab-runner.service";
+import { StrategyLabRunner, type AdoptedJob } from "./strategy-lab-runner.service";
 import { StrategyLabRunReport } from "./strategy-lab-run-report.service";
 import { StrategyLabRunStatsComponent } from "./run-stats/strategy-lab-run-stats.component";
 import { StrategyLabStageComponent } from "./strategy-lab-stage/strategy-lab-stage.component";
-import { toStrategyLabConfiguration } from "./strategy-lab.models";
+import { inputsFromBacktestJob, inputsFromSavedRun, type StrategyLabRunInputs } from "./strategy-lab.models";
 
 /**
  * Strategy Lab's focused product shell. Configuration and run orchestration
@@ -101,6 +100,12 @@ export class StrategyLabComponent {
     });
 
     effect(() => {
+      const job = this.runs.adoptedJob();
+      if (job === null) return;
+      untracked(() => void this.describeAdoptedJob(job, strategiesReady));
+    });
+
+    effect(() => {
       if (this.loadedRunId() === null) return;
       // The run id is the whole tracked dependency. Everything adoption does
       // — reading and clearing `justProducedRunId`, collapsing the rail,
@@ -152,7 +157,8 @@ export class StrategyLabComponent {
     if (this.report.activeRunId() !== run.id) return;
     if (justProduced) this.runs.justProducedRunId.set(null);
     try {
-      this.restoreConfiguration(run);
+      this.applyRunInputs(inputsFromSavedRun(run, this.config.range()));
+      this.runs.runError.set(null);
       if (submittedSource !== null) this.config.customLeanSource.set(submittedSource);
     } catch (error) {
       const message = error instanceof Error
@@ -163,18 +169,32 @@ export class StrategyLabComponent {
     }
   }
 
-  private restoreConfiguration(run: BacktestRunDetail): void {
-    const configuration = toStrategyLabConfiguration(run, this.config.range());
+  /**
+   * Bring the rail in line with a job this tab adopted rather than started
+   * (#1953). After a reload the store is rebuilt with defaults while the
+   * resumed job runs with the inputs it was submitted with, so the rail
+   * labelled "Exact run inputs" would describe the defaults until the
+   * persisted report reconciled them. A loaded report keeps the rail — its
+   * inputs describe what is on the stage — and a payload this workbench
+   * cannot read leaves the rail alone rather than guessing.
+   */
+  private async describeAdoptedJob(job: AdoptedJob, strategiesReady: Promise<void>): Promise<void> {
+    const inputs = inputsFromBacktestJob(job.parameters, this.config.range());
+    if (inputs === null) return;
+    await strategiesReady;
+    if (this.report.activeRunId() !== null) return;
+    this.applyRunInputs(inputs);
+  }
 
-    this.config.engine.set(configuration.engine);
-    this.config.range.set(configuration.range);
-    this.config.restoreStrategy(run.strategyName);
-    this.config.paramValues.set({ ...this.config.paramValues(), ...configuration.parameters });
-    this.config.fillMode.set(configuration.fillMode);
-    this.config.initialCash.set(configuration.initialCash);
-    this.config.commissionPerOrder.set(configuration.commissionPerOrder);
-    this.config.restoreDataPolicy(configuration.dataPolicy);
-    this.runs.runError.set(null);
+  private applyRunInputs(inputs: StrategyLabRunInputs): void {
+    this.config.engine.set(inputs.engine);
+    this.config.range.set(inputs.range);
+    this.config.restoreStrategy(inputs.strategyName);
+    this.config.paramValues.set({ ...this.config.paramValues(), ...inputs.parameters });
+    this.config.fillMode.set(inputs.fillMode);
+    this.config.initialCash.set(inputs.initialCash);
+    this.config.commissionPerOrder.set(inputs.commissionPerOrder);
+    this.config.restoreDataPolicy(inputs.dataPolicy);
   }
 
   selectStrategy(name: string): void {

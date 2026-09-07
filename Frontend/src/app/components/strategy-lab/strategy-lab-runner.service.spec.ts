@@ -10,7 +10,7 @@ import type { JobState, JobStatus } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
-import type { StrategyInfo } from "./strategy-lab.models";
+import { inputsFromBacktestJob, type StrategyInfo } from "./strategy-lab.models";
 
 const TERMINAL_JOB_STATUSES: JobStatus[] = ["completed", "failed", "cancelled"];
 
@@ -338,6 +338,45 @@ describe("StrategyLab configuration and runner", () => {
       TestBed.tick();
 
       expect(runner.running()).toBe(true);
+    });
+
+    it("exposes the job it adopted, and never one this tab started itself", async () => {
+      // #1953: the workbench describes an adopted job's inputs on the rail;
+      // a run this tab started already has its inputs on screen.
+      await runner.run();
+      expect(runner.adoptedJob()).toBeNull();
+
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running", parameters: { backtest: { strategy_name: "ema_crossover_signal" } } }));
+      TestBed.tick();
+
+      expect(reloaded.adoptedJob()?.id).toBe("job-1");
+      expect(reloaded.adoptedJob()?.parameters).toEqual({ backtest: { strategy_name: "ema_crossover_signal" } });
+    });
+
+    it("reads the payload it submits back into the same inputs, so nothing added to the run is lost on the rail", async () => {
+      config.engine.set("both");
+      config.range.update((range) => ({ ...range, from: "2026-01-05", to: "2026-02-05" }));
+      config.initialCash.set(75_000);
+      config.commissionPerOrder.set(0.35);
+      config.fillMode.set("next_bar_open");
+      await runner.run();
+
+      const [type, payload] = startJob.mock.calls[0] as [string, Record<string, unknown>];
+      expect(type).toBe("engine_backtest");
+      // The symbol travels in the data policy, and the policy's bars come
+      // back as the range's multiplier and session.
+      const symbol = config.effectiveSymbol();
+      expect(inputsFromBacktestJob(payload, config.range())).toEqual({
+        strategyName: STRATEGY.name,
+        engine: "both",
+        range: { ...config.range(), symbol, multiplier: 1, session: "rth" },
+        parameters: { ...config.paramValues(), symbol },
+        fillMode: "next_bar_open",
+        initialCash: 75_000,
+        commissionPerOrder: 0.35,
+        dataPolicy: config.dataPolicy(),
+      });
     });
 
     it("adopts an active lean_engine_run job discovered after construction and reports running", () => {
