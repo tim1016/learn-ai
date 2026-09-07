@@ -143,3 +143,16 @@ def test_clerk_authority_literal_tracks_the_runtime_kind() -> None:
     from app.schemas.alpaca_live_verdict import ClerkAuthority
 
     assert set(get_args(ClerkAuthority)) == set(get_args(RuntimeAuthorityKind)) | {"not_installed"}
+
+
+def test_observed_at_ms_is_bounded_to_the_canonical_epoch_range() -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
+    from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+    base = alpaca_live_verdict(settings=_paper(), runtime=None, now_ms=_NOW).model_dump()
+
+    AlpacaLiveVerdict(**{**base, "observed_at_ms": MAX_TIMESTAMP_MS})
+    with pytest.raises(ValidationError):
+        AlpacaLiveVerdict(**{**base, "observed_at_ms": MAX_TIMESTAMP_MS + 1})

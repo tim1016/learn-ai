@@ -128,3 +128,17 @@ def test_invalid_configuration_clears_stale_clerk_without_logging_secrets(
     finally:
         reset_alpaca_clerk_for_testing()
         reset_alpaca_settings_for_testing()
+
+
+@pytest.mark.parametrize(
+    "field", ["live_loss_fraction", "live_loss_usd", "live_xh_entry_bps", "live_xh_exit_bps"]
+)
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")])
+def test_live_values_must_be_finite(field: str, bad: float) -> None:
+    # `inf` satisfies `gt=0` unless finiteness is required: an unbounded loss
+    # limit would be an envelope in name only (ADR 0059 D4).
+    values = dict(_LIVE_REQUIRED)
+    values[field] = bad
+
+    with pytest.raises(ValidationError):
+        AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **values)

@@ -13,6 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.clerk.models import EpochMs
+
 ConfiguredMode = Literal["paper", "live", "unconfigured"]
 ModeAgreement = Literal["agreed", "disagreed", "unobserved"]
 ClerkAuthority = Literal["sqlite", "synthetic", "unavailable", "not_installed"]
@@ -36,4 +38,4 @@ class AlpacaLiveVerdict(BaseModel):
     # Operator copy is authored here, not in the client (CLAUDE.md hard rule).
     headline: str = Field(min_length=1)
     detail: str = Field(min_length=1)
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: EpochMs

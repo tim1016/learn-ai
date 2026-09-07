@@ -207,3 +207,14 @@ def test_single_authority_aggregate_enforces_selected_account_namespace_when_emp
             authority_kind="real_paper",
             rows=(),
         )
+
+
+@pytest.mark.parametrize(
+    ("account_id", "authority_kind"),
+    [("sim:", "synthetic"), ("shadow:", "shadow")],
+)
+def test_bare_reserved_prefixes_are_refused_at_the_wire(account_id: str, authority_kind: str) -> None:
+    # The canonical require_* helpers refuse a prefix that names no account;
+    # the wire boundary must agree, or malformed evidence passes as an authority.
+    with pytest.raises(ValidationError, match="name one account"):
+        AuthorityScopedRow(account_id=account_id, authority_kind=authority_kind)  # type: ignore[arg-type]

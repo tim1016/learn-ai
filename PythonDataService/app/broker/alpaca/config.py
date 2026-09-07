@@ -75,14 +75,15 @@ class AlpacaSettings(BaseSettings):
 
     # The live envelope and ceremony values (ADR 0059 D4). Required when
     # ``mode == "live"``; deliberately no defaults in code — a number nobody
-    # chose must never bound real money. Sealed into the arming record by
+    # chose must never bound real money, and neither may an infinite or
+    # NaN one (`inf` satisfies `gt=0`). Sealed into the arming record by
     # slice 6; read here so the service refuses to boot live without them.
-    live_loss_fraction: float | None = Field(default=None, gt=0, lt=1)
-    live_loss_usd: float | None = Field(default=None, gt=0)
+    live_loss_fraction: float | None = Field(default=None, gt=0, lt=1, allow_inf_nan=False)
+    live_loss_usd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     live_shadow_sessions: int | None = Field(default=None, ge=1)
     live_arming_max_sessions: int | None = Field(default=None, ge=1)
-    live_xh_entry_bps: float | None = Field(default=None, ge=0)
-    live_xh_exit_bps: float | None = Field(default=None, ge=0)
+    live_xh_entry_bps: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    live_xh_exit_bps: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _enforce_mode_agreement(self) -> AlpacaSettings:

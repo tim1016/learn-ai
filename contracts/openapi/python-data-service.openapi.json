@@ -685,6 +685,8 @@
             "title": "Observed Account Id"
           },
           "observed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Observed At Ms",
             "type": "integer"

@@ -5264,7 +5264,10 @@ export interface components {
             mode_agreement: "agreed" | "disagreed" | "unobserved";
             /** Observed Account Id */
             observed_account_id: string | null;
-            /** Observed At Ms */
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
             observed_at_ms: number;
             /**
              * Shadow State
