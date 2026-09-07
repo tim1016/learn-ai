@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 
 import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
@@ -39,7 +39,6 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
         [class.is-live-armed]="v.final_verdict === 'live-armed'"
         [class.is-unknown]="v.final_verdict === 'unknown'"
         role="status"
-        [attr.aria-label]="ariaLabel()"
         [attr.title]="v.detail"
       >
         <span class="alpaca-banner__kicker">Alpaca</span>
@@ -58,9 +57,4 @@ export class AlpacaLiveBannerComponent {
   private readonly service = inject(AlpacaLiveVerdictService);
 
   protected readonly verdict = this.service.verdict;
-
-  protected readonly ariaLabel = computed(() => {
-    const v = this.verdict();
-    return v ? `Alpaca: ${v.headline}` : '';
-  });
 }

@@ -22,8 +22,10 @@ export class AlpacaLiveVerdictService {
   private readonly brokers = inject(BrokersService);
   private readonly destroyRef = inject(DestroyRef);
 
-  readonly verdict = signal<AlpacaLiveVerdict | null>(null);
-  readonly lastError = signal<unknown | null>(null);
+  private readonly _verdict = signal<AlpacaLiveVerdict | null>(null);
+  private readonly _lastError = signal<unknown>(null);
+  readonly verdict = this._verdict.asReadonly();
+  readonly lastError = this._lastError.asReadonly();
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
@@ -42,13 +44,13 @@ export class AlpacaLiveVerdictService {
 
   async refresh(): Promise<void> {
     try {
-      this.verdict.set(await this.brokers.getLiveVerdict());
-      this.lastError.set(null);
+      this._verdict.set(await this.brokers.getLiveVerdict());
+      this._lastError.set(null);
     } catch (err) {
       // A failed read means the verdict is unknown to this client; never
       // keep rendering a stale "paper" over a network fault.
-      this.lastError.set(err);
-      this.verdict.set(null);
+      this._lastError.set(err);
+      this._verdict.set(null);
     }
   }
 

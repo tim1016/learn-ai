@@ -59,7 +59,7 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.className).toContain('is-live-unarmed');
     expect(status.textContent).toContain('9LIVE0001');
     expect(status.textContent).toContain('0 armed');
-    expect(status.getAttribute('aria-label')).toContain('real money');
+    expect(status.textContent).toContain('real money');
   });
 
   it('renders unknown as a warning that names the disagreement code', async () => {
