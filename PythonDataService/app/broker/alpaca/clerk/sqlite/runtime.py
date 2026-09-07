@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
-    require_real_paper_account_id,
+    require_real_account_id,
     require_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
@@ -202,7 +202,7 @@ class SqliteAlpacaClerkFacade:
             if account_mode != "paper":
                 raise AccountAuthorityIdentityError("a synthetic authority is a paper environment")
         else:
-            require_real_paper_account_id(repo.account_id)
+            require_real_account_id(repo.account_id)
         self._repo = repo
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
