@@ -27,6 +27,7 @@ from app.engine.engine import BacktestEngine, BacktestResult, EquitySnapshot
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.results.statistics import EquityPoint, summarize
+from app.engine.run_gate import one_backtest_in_flight
 from app.engine.strategy.base import LoggedTrade
 from app.engine.strategy.spec import SpecAlgorithm, StrategySpec
 from app.research.runs.hashing import hash_payload, make_data_snapshot_id
@@ -291,253 +292,260 @@ def run_strategy_spec(
     ``resolve_data_root_revision()``; tests pass a deterministic value
     so the ledger identity is stable across runs.
     """
-    spec = request.spec
-    # Normalize the fill mode early so the ledger and the engine see the
-    # same canonical form, and accept the same hyphen/case variants the
-    # HTTP layer accepts.
-    fill_mode_norm = _normalize_fill_mode(request.fill_mode)
-    if fill_mode_norm not in _VALID_FILL_MODES:
-        raise ValueError(f"unknown fill_mode {request.fill_mode!r} — expected one of {sorted(_VALID_FILL_MODES)}")
-    if request.start_ms >= request.end_ms:
-        raise ValueError(
-            f"start_ms must be strictly before end_ms (got start={request.start_ms}, end={request.end_ms})"
-        )
-    data_start_ms = request.warmup_start_ms if request.warmup_start_ms is not None else request.start_ms
-    if data_start_ms > request.start_ms:
-        raise ValueError(
-            f"warmup_start_ms must be on or before start_ms (got warmup={data_start_ms}, start={request.start_ms})"
-        )
-    start_date = _ms_to_run_date(request.start_ms)
-    end_date = _ms_to_run_date(request.end_ms)
-    data_start_date = _ms_to_run_date(data_start_ms)
-    # ``StrategySpec`` validates ``len(symbols) == 1`` at construction (Phase 1
-    # boundary), so multi-symbol specs can't reach here. Still guard against
-    # an empty list — that's the one shape Pydantic admits at the type level
-    # but the engine can't run.
-    if not spec.symbols:
-        raise ValueError("StrategySpec.symbols must contain exactly one symbol")
-
-    symbol = spec.symbols[0]
-    resolution = spec.resolution.period_minutes
-    start_ms = request.start_ms
-    end_ms = request.end_ms
-    warmup_start_ms = data_start_ms
-    # Truthy check rather than ``is not None``: an empty string would
-    # produce a trailing-pipe ``data_snapshot_id`` indistinguishable
-    # from a regression in ``resolve_data_root_revision``. Treat it as
-    # missing and resolve the real revision.
-    # TODO(phase-e): memoize ``resolve_data_root_revision()`` keyed on
-    # ``LEAN_DATA_ROOT`` so 10×10 sensitivity sweeps don't pay for 100
-    # ``git rev-parse`` subprocess starts.
-    revision = (
-        data_root_revision
-        if data_root_revision
-        else resolve_data_root_revision(
-            symbol=symbol,
-            start_date=data_start_date,
-            end_date=end_date,
-        )
-    )
-
-    spec_dump = spec.model_dump(mode="json")
-    spec_hash = hash_payload(spec_dump)
-    snapshot_id = make_data_snapshot_id(
-        symbol=symbol,
-        resolution_minutes=resolution,
-        start_ms=warmup_start_ms,
-        end_ms=end_ms,
-        data_root_revision=revision,
-    )
-
-    rid = run_id or uuid.uuid4().hex
-    window_summary = summarize_window(start_date, end_date)
-    ledger = RunLedger(
-        run_id=rid,
-        parent_run_id=request.parent_run_id,
-        parent_spec_hash=request.parent_spec_hash,
-        strategy_spec_id=request.strategy_spec_id or spec.name,
-        strategy_spec_hash=spec_hash,
-        strategy_spec_json=spec_dump,
-        engine_git_commit=_capture_git_commit(),
-        symbol=symbol,
-        resolution_minutes=resolution,
-        start_ms=start_ms,
-        end_ms=end_ms,
-        warmup_start_ms=(warmup_start_ms if data_start_ms < request.start_ms else None),
-        initial_cash=request.initial_cash,
-        fill_mode=fill_mode_norm,
-        commission_per_order=request.commission_per_order,
-        slippage_per_share=request.slippage_per_share,
-        random_seed=request.random_seed,
-        data_snapshot_id=snapshot_id,
-        window_summary=window_summary,
-    )
-
-    # Build the data source. Failures here are infrastructure errors,
-    # not strategy errors — surface as a failed-status ledger rather
-    # than a thrown exception so the caller can persist the failure.
-    try:
-        data_source = data_source_factory(symbol, data_start_date, end_date)
-    except Exception as exc:
-        logger.exception("[RUNS] data source unavailable for %s", symbol)
-        return _failed(ledger, f"data source unavailable: {exc}")
-
-    # ML predictions-as-data (v0.5): if the spec references a prediction
-    # set, load + validate it before constructing the strategy so the
-    # runner can fail-fast with a ``failed`` ledger rather than letting
-    # the SpecAlgorithm constructor raise. Coverage is checked here too:
-    # the loader knows nothing about which bars the engine will see; the
-    # runner does (data source + resolution).
-    prediction_set = None
-    prediction_set_hash: str | None = None
-    if spec.predictions:
-        from app.research.ml.coverage import (
-            assert_bar_clock_coverage,
-            iter_consolidated_bars,
-        )
-        from app.research.ml.loader import PredictionSet
-
-        # v0.5 admits at most one prediction_set_id per spec (validated by
-        # ``StrategySpec._check_phase1_boundaries``); take the first.
-        set_id = spec.predictions[0].prediction_set_id
-        artifact_dir = _prediction_artifacts_root() / set_id
-        try:
-            prediction_set = PredictionSet.load(artifact_dir)
-        except Exception as exc:
-            logger.exception("[RUNS] prediction set load failed: %s", set_id)
-            return _failed(ledger, f"prediction set {set_id!r} failed to load: {exc}")
-        try:
-            prediction_set.assert_pairs_with(spec)
-        except Exception as exc:
-            return _failed(
-                ledger,
-                f"prediction set {set_id!r} does not pair with spec: {exc}",
+    # The gate spans the whole call, not just ``engine.run``. The run's
+    # memory outlives the simulation — the result holds every bar and this
+    # function shapes reports from it — so releasing at the engine's boundary
+    # would let a second run allocate on top of what this one still holds.
+    # ``BacktestEngine.run`` takes the gate again inside; that acquire passes
+    # through this one (#1990).
+    with one_backtest_in_flight():
+        spec = request.spec
+        # Normalize the fill mode early so the ledger and the engine see the
+        # same canonical form, and accept the same hyphen/case variants the
+        # HTTP layer accepts.
+        fill_mode_norm = _normalize_fill_mode(request.fill_mode)
+        if fill_mode_norm not in _VALID_FILL_MODES:
+            raise ValueError(f"unknown fill_mode {request.fill_mode!r} — expected one of {sorted(_VALID_FILL_MODES)}")
+        if request.start_ms >= request.end_ms:
+            raise ValueError(
+                f"start_ms must be strictly before end_ms (got start={request.start_ms}, end={request.end_ms})"
             )
-        try:
-            bar_stream = iter_consolidated_bars(
-                data_source,
+        data_start_ms = request.warmup_start_ms if request.warmup_start_ms is not None else request.start_ms
+        if data_start_ms > request.start_ms:
+            raise ValueError(
+                f"warmup_start_ms must be on or before start_ms (got warmup={data_start_ms}, start={request.start_ms})"
+            )
+        start_date = _ms_to_run_date(request.start_ms)
+        end_date = _ms_to_run_date(request.end_ms)
+        data_start_date = _ms_to_run_date(data_start_ms)
+        # ``StrategySpec`` validates ``len(symbols) == 1`` at construction (Phase 1
+        # boundary), so multi-symbol specs can't reach here. Still guard against
+        # an empty list — that's the one shape Pydantic admits at the type level
+        # but the engine can't run.
+        if not spec.symbols:
+            raise ValueError("StrategySpec.symbols must contain exactly one symbol")
+
+        symbol = spec.symbols[0]
+        resolution = spec.resolution.period_minutes
+        start_ms = request.start_ms
+        end_ms = request.end_ms
+        warmup_start_ms = data_start_ms
+        # Truthy check rather than ``is not None``: an empty string would
+        # produce a trailing-pipe ``data_snapshot_id`` indistinguishable
+        # from a regression in ``resolve_data_root_revision``. Treat it as
+        # missing and resolve the real revision.
+        # TODO(phase-e): memoize ``resolve_data_root_revision()`` keyed on
+        # ``LEAN_DATA_ROOT`` so 10×10 sensitivity sweeps don't pay for 100
+        # ``git rev-parse`` subprocess starts.
+        revision = (
+            data_root_revision
+            if data_root_revision
+            else resolve_data_root_revision(
                 symbol=symbol,
                 start_date=data_start_date,
                 end_date=end_date,
-                resolution_minutes=resolution,
             )
-            assert_bar_clock_coverage(prediction_set, bar_stream, refs=spec.predictions)
+        )
+
+        spec_dump = spec.model_dump(mode="json")
+        spec_hash = hash_payload(spec_dump)
+        snapshot_id = make_data_snapshot_id(
+            symbol=symbol,
+            resolution_minutes=resolution,
+            start_ms=warmup_start_ms,
+            end_ms=end_ms,
+            data_root_revision=revision,
+        )
+
+        rid = run_id or uuid.uuid4().hex
+        window_summary = summarize_window(start_date, end_date)
+        ledger = RunLedger(
+            run_id=rid,
+            parent_run_id=request.parent_run_id,
+            parent_spec_hash=request.parent_spec_hash,
+            strategy_spec_id=request.strategy_spec_id or spec.name,
+            strategy_spec_hash=spec_hash,
+            strategy_spec_json=spec_dump,
+            engine_git_commit=_capture_git_commit(),
+            symbol=symbol,
+            resolution_minutes=resolution,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            warmup_start_ms=(warmup_start_ms if data_start_ms < request.start_ms else None),
+            initial_cash=request.initial_cash,
+            fill_mode=fill_mode_norm,
+            commission_per_order=request.commission_per_order,
+            slippage_per_share=request.slippage_per_share,
+            random_seed=request.random_seed,
+            data_snapshot_id=snapshot_id,
+            window_summary=window_summary,
+        )
+
+        # Build the data source. Failures here are infrastructure errors,
+        # not strategy errors — surface as a failed-status ledger rather
+        # than a thrown exception so the caller can persist the failure.
+        try:
+            data_source = data_source_factory(symbol, data_start_date, end_date)
         except Exception as exc:
-            return _failed(
-                ledger,
-                f"prediction set {set_id!r}: bar-clock coverage failed: {exc}",
+            logger.exception("[RUNS] data source unavailable for %s", symbol)
+            return _failed(ledger, f"data source unavailable: {exc}")
+
+        # ML predictions-as-data (v0.5): if the spec references a prediction
+        # set, load + validate it before constructing the strategy so the
+        # runner can fail-fast with a ``failed`` ledger rather than letting
+        # the SpecAlgorithm constructor raise. Coverage is checked here too:
+        # the loader knows nothing about which bars the engine will see; the
+        # runner does (data source + resolution).
+        prediction_set = None
+        prediction_set_hash: str | None = None
+        if spec.predictions:
+            from app.research.ml.coverage import (
+                assert_bar_clock_coverage,
+                iter_consolidated_bars,
+            )
+            from app.research.ml.loader import PredictionSet
+
+            # v0.5 admits at most one prediction_set_id per spec (validated by
+            # ``StrategySpec._check_phase1_boundaries``); take the first.
+            set_id = spec.predictions[0].prediction_set_id
+            artifact_dir = _prediction_artifacts_root() / set_id
+            try:
+                prediction_set = PredictionSet.load(artifact_dir)
+            except Exception as exc:
+                logger.exception("[RUNS] prediction set load failed: %s", set_id)
+                return _failed(ledger, f"prediction set {set_id!r} failed to load: {exc}")
+            try:
+                prediction_set.assert_pairs_with(spec)
+            except Exception as exc:
+                return _failed(
+                    ledger,
+                    f"prediction set {set_id!r} does not pair with spec: {exc}",
+                )
+            try:
+                bar_stream = iter_consolidated_bars(
+                    data_source,
+                    symbol=symbol,
+                    start_date=data_start_date,
+                    end_date=end_date,
+                    resolution_minutes=resolution,
+                )
+                assert_bar_clock_coverage(prediction_set, bar_stream, refs=spec.predictions)
+            except Exception as exc:
+                return _failed(
+                    ledger,
+                    f"prediction set {set_id!r}: bar-clock coverage failed: {exc}",
+                )
+
+            prediction_set_hash = prediction_set.manifest.prediction_set_hash
+            ledger = ledger.model_copy(update={"prediction_set_hash": prediction_set_hash})
+
+        # Construct the spec algorithm; the constructor raises NotImplementedError
+        # for forward-compat spec features (FixedContracts, OPTION_TEMPLATE,
+        # non-CLOSE_ALL survival actions, pyramiding != 1) and that propagates.
+        try:
+            strategy = SpecAlgorithm(
+                spec,
+                prediction_set=prediction_set,
+                entry_start_ms=(start_ms if data_start_ms < request.start_ms else None),
+            )
+        except NotImplementedError as exc:
+            return _failed(ledger, f"spec uses unsupported feature: {exc}")
+
+        # Patch the strategy's initialize to honor the request's date window
+        # and cash override. Same trick as spec_strategy.py's router.
+        orig_init = strategy.initialize
+
+        def _patched_init() -> None:
+            orig_init()
+            strategy.set_start_date(data_start_date.year, data_start_date.month, data_start_date.day)
+            strategy.set_end_date(end_date.year, end_date.month, end_date.day)
+            strategy.set_cash(request.initial_cash)
+
+        strategy.initialize = _patched_init  # type: ignore[assignment]
+
+        fill_mode = _parse_fill_mode(fill_mode_norm)
+        engine = BacktestEngine(
+            data_source=data_source,
+            fill_model=FillModel(
+                mode=fill_mode,
+                commission_per_order=Decimal(str(request.commission_per_order)),
+                slippage_per_share=Decimal(str(request.slippage_per_share)),
+            ),
+        )
+
+        try:
+            engine_result: BacktestResult = engine.run(strategy)
+        except NotImplementedError as exc:
+            return _failed(ledger, f"spec uses unsupported feature at runtime: {exc}")
+        except Exception as exc:
+            logger.exception("[RUNS] backtest failed for run_id=%s spec=%s", rid, spec.name)
+            return _failed(ledger, f"backtest run failed: {exc}")
+
+        # Pre-roll bars exist only to advance indicators and stateful primitives.
+        # Keep every persisted/result statistic strictly inside the requested
+        # trading window so flat warmup days cannot dilute Sharpe or exposure.
+        report_equity_curve = [snap for snap in engine_result.equity_curve if snap.timestamp_ms >= start_ms]
+        report_bars = [bar for bar in engine_result.bars if bar.end_ms >= start_ms]
+        trades = [trade for trade in strategy.trade_log if trade.entry_time_ms >= start_ms]
+        bars_held_total = sum(_bars_held(t.entry_time_ms, t.exit_time_ms, resolution) for t in trades)
+        total_bars = len(report_equity_curve)
+        # ``engine_result.bars`` is appended once per minute bar pulled from
+        # the data source's ``iter_bars`` loop — the engine-input layer. That
+        # is the count we want to surface (not consolidated-bar updates, not
+        # indicator ticks): a "0 bars consumed" signal means the LEAN cache
+        # was empty or the window filtered everything out, which would
+        # otherwise be indistinguishable from "strategy didn't fire".
+        bars_consumed = len(report_bars)
+
+        metrics = _summarize_metrics(
+            initial_cash=float(engine_result.initial_cash),
+            final_equity=float(engine_result.final_equity),
+            trades=trades,
+            equity_curve=report_equity_curve,
+            bars_held_total=bars_held_total,
+            total_bars=total_bars,
+            resolution_minutes=resolution,
+        )
+
+        warnings: list[str] = []
+        if bars_consumed == 0:
+            warnings.append(
+                "no input bars consumed for the requested window — check LEAN data root / cache or your symbol+date filters"
             )
 
-        prediction_set_hash = prediction_set.manifest.prediction_set_hash
-        ledger = ledger.model_copy(update={"prediction_set_hash": prediction_set_hash})
-
-    # Construct the spec algorithm; the constructor raises NotImplementedError
-    # for forward-compat spec features (FixedContracts, OPTION_TEMPLATE,
-    # non-CLOSE_ALL survival actions, pyramiding != 1) and that propagates.
-    try:
-        strategy = SpecAlgorithm(
-            spec,
-            prediction_set=prediction_set,
-            entry_start_ms=(start_ms if data_start_ms < request.start_ms else None),
-        )
-    except NotImplementedError as exc:
-        return _failed(ledger, f"spec uses unsupported feature: {exc}")
-
-    # Patch the strategy's initialize to honor the request's date window
-    # and cash override. Same trick as spec_strategy.py's router.
-    orig_init = strategy.initialize
-
-    def _patched_init() -> None:
-        orig_init()
-        strategy.set_start_date(data_start_date.year, data_start_date.month, data_start_date.day)
-        strategy.set_end_date(end_date.year, end_date.month, end_date.day)
-        strategy.set_cash(request.initial_cash)
-
-    strategy.initialize = _patched_init  # type: ignore[assignment]
-
-    fill_mode = _parse_fill_mode(fill_mode_norm)
-    engine = BacktestEngine(
-        data_source=data_source,
-        fill_model=FillModel(
-            mode=fill_mode,
-            commission_per_order=Decimal(str(request.commission_per_order)),
-            slippage_per_share=Decimal(str(request.slippage_per_share)),
-        ),
-    )
-
-    try:
-        engine_result: BacktestResult = engine.run(strategy)
-    except NotImplementedError as exc:
-        return _failed(ledger, f"spec uses unsupported feature at runtime: {exc}")
-    except Exception as exc:
-        logger.exception("[RUNS] backtest failed for run_id=%s spec=%s", rid, spec.name)
-        return _failed(ledger, f"backtest run failed: {exc}")
-
-    # Pre-roll bars exist only to advance indicators and stateful primitives.
-    # Keep every persisted/result statistic strictly inside the requested
-    # trading window so flat warmup days cannot dilute Sharpe or exposure.
-    report_equity_curve = [snap for snap in engine_result.equity_curve if snap.timestamp_ms >= start_ms]
-    report_bars = [bar for bar in engine_result.bars if bar.end_ms >= start_ms]
-    trades = [trade for trade in strategy.trade_log if trade.entry_time_ms >= start_ms]
-    bars_held_total = sum(_bars_held(t.entry_time_ms, t.exit_time_ms, resolution) for t in trades)
-    total_bars = len(report_equity_curve)
-    # ``engine_result.bars`` is appended once per minute bar pulled from
-    # the data source's ``iter_bars`` loop — the engine-input layer. That
-    # is the count we want to surface (not consolidated-bar updates, not
-    # indicator ticks): a "0 bars consumed" signal means the LEAN cache
-    # was empty or the window filtered everything out, which would
-    # otherwise be indistinguishable from "strategy didn't fire".
-    bars_consumed = len(report_bars)
-
-    metrics = _summarize_metrics(
-        initial_cash=float(engine_result.initial_cash),
-        final_equity=float(engine_result.final_equity),
-        trades=trades,
-        equity_curve=report_equity_curve,
-        bars_held_total=bars_held_total,
-        total_bars=total_bars,
-        resolution_minutes=resolution,
-    )
-
-    warnings: list[str] = []
-    if bars_consumed == 0:
-        warnings.append(
-            "no input bars consumed for the requested window — check LEAN data root / cache or your symbol+date filters"
+        result = BacktestRunResult(
+            run_id=rid,
+            initial_cash=float(engine_result.initial_cash),
+            final_equity=float(engine_result.final_equity),
+            equity_curve=[
+                EquityCurvePoint(timestamp_ms=s.timestamp_ms, equity=float(s.equity)) for s in report_equity_curve
+            ],
+            drawdown_curve=_build_drawdown_curve(report_equity_curve),
+            trades=[_trade_to_run_trade(i, t, resolution) for i, t in enumerate(trades)],
+            metrics=metrics,
+            log_lines=list(engine_result.log_lines),
+            warnings=warnings,
+            bars_consumed=bars_consumed,
         )
 
-    result = BacktestRunResult(
-        run_id=rid,
-        initial_cash=float(engine_result.initial_cash),
-        final_equity=float(engine_result.final_equity),
-        equity_curve=[
-            EquityCurvePoint(timestamp_ms=s.timestamp_ms, equity=float(s.equity)) for s in report_equity_curve
-        ],
-        drawdown_curve=_build_drawdown_curve(report_equity_curve),
-        trades=[_trade_to_run_trade(i, t, resolution) for i, t in enumerate(trades)],
-        metrics=metrics,
-        log_lines=list(engine_result.log_lines),
-        warnings=warnings,
-        bars_consumed=bars_consumed,
-    )
+        # Hash the result subcomponents. ``run_id`` is excluded so two runs
+        # with the same inputs but different UUIDs share a ``result_hash``;
+        # ``log_lines`` is excluded because human-formatted timestamps drift
+        # across replays even when the math is identical.
+        result_payload = result.model_dump(mode="json", exclude={"run_id", "log_lines"})
+        trade_payload = [t.model_dump(mode="json") for t in result.trades]
+        metrics_payload = result.metrics.model_dump(mode="json")
 
-    # Hash the result subcomponents. ``run_id`` is excluded so two runs
-    # with the same inputs but different UUIDs share a ``result_hash``;
-    # ``log_lines`` is excluded because human-formatted timestamps drift
-    # across replays even when the math is identical.
-    result_payload = result.model_dump(mode="json", exclude={"run_id", "log_lines"})
-    trade_payload = [t.model_dump(mode="json") for t in result.trades]
-    metrics_payload = result.metrics.model_dump(mode="json")
-
-    ledger = ledger.model_copy(
-        update={
-            "result_hash": hash_payload(result_payload),
-            "trade_log_hash": hash_payload(trade_payload),
-            "metrics_hash": hash_payload(metrics_payload),
-            "completed_at_ms": now_ms_utc(),
-            "status": "completed",
-        }
-    )
-    return ledger, result
+        ledger = ledger.model_copy(
+            update={
+                "result_hash": hash_payload(result_payload),
+                "trade_log_hash": hash_payload(trade_payload),
+                "metrics_hash": hash_payload(metrics_payload),
+                "completed_at_ms": now_ms_utc(),
+                "status": "completed",
+            }
+        )
+        return ledger, result
 
 
 def _failed(ledger: RunLedger, reason: str) -> tuple[RunLedger, BacktestRunResult]:

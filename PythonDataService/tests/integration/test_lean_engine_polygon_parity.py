@@ -19,6 +19,7 @@ ingest the same Polygon bars and produce equal state.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import os
@@ -269,7 +270,10 @@ async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
             commission_per_order=Decimal("0"),
         ),
     )
-    engine.run(algo)
+    # In a thread: the engine gate refuses an event-loop caller, and this is
+    # an ``async def`` test (#1990). Every production caller runs the engine
+    # off the loop, so the test should exercise the same shape.
+    await asyncio.to_thread(engine.run, algo)
 
     # Assert state-trace parity (indicator + decision state).
     assert_state_traces_match(lean_rows, algo.decision_rows, atol=1e-9, rtol=0.0)
