@@ -313,9 +313,9 @@ public class PortfolioRiskService : IPortfolioRiskService
 
             var grid = new PortfolioScenarioGridDto
             {
-                SpotShocks = [scenario.PriceChangePercent ?? 0m],
+                SpotShocks = [scenario.SpotShock ?? 0m],
                 TimeShiftsDays = [(decimal)(scenario.TimeDaysForward ?? 0)],
-                IvShifts = [scenario.IvChangePercent ?? 0m],
+                IvShifts = [scenario.IvShift ?? 0m],
             };
 
             var pythonResult = await _polygonService.PortfolioScenarioAsync(

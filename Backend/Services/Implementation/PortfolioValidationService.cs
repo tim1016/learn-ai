@@ -553,6 +553,13 @@ public class PortfolioValidationService : IPortfolioValidationService
 
     // ─── Test 9: Scenario Engine ─────────────────────────────
 
+    /// <summary>
+    /// The -10% shock Test 9 applies, as a fraction of spot. It once read -10 (a
+    /// percent), which the engine refused as a -1000% move (#1975); the unit test
+    /// pins that it stays a fraction a positive spot can survive.
+    /// </summary>
+    public static readonly ScenarioInput Test9Shock = new() { SpotShock = -0.10m };
+
     private static async Task<List<ValidationAssertion>> Test9_ScenarioEngine(
         IPortfolioService portfolioService, IPortfolioRiskService riskService,
         AppDbContext db, Guid accountId, CancellationToken ct)
@@ -585,8 +592,7 @@ public class PortfolioValidationService : IPortfolioValidationService
                 prices[pos.Ticker.Symbol] = pos.AvgCostBasis; // use cost basis as current price
         }
 
-        var scenario = new ScenarioInput { PriceChangePercent = -10m };
-        var result = await riskService.RunScenarioAsync(accountId, prices, scenario, ct);
+        var result = await riskService.RunScenarioAsync(accountId, prices, Test9Shock, ct);
 
         var assertions = new List<ValidationAssertion>
         {

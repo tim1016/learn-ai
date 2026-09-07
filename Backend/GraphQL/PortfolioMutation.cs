@@ -254,10 +254,12 @@ public class PortfolioMutation
         int? timeDaysForward = null)
     {
         var priceDict = prices.ToDictionary(p => p.Symbol, p => p.Price);
+        // The GraphQL arguments keep their historical names, but the Scenario
+        // Explorer sends fractions (it divides its percent inputs by 100).
         var scenario = new ScenarioInput
         {
-            PriceChangePercent = priceChangePercent,
-            IvChangePercent = ivChangePercent,
+            SpotShock = priceChangePercent,
+            IvShift = ivChangePercent,
             TimeDaysForward = timeDaysForward,
         };
         return await riskService.RunScenarioAsync(accountId, priceDict, scenario);

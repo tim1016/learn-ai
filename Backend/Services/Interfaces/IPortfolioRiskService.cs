@@ -35,10 +35,15 @@ public class RiskViolation
     public string Message { get; set; } = "";
 }
 
+/// <summary>
+/// A what-if shock in the Python scenario engine's own units: <see cref="SpotShock"/> is a
+/// multiplicative fraction of spot (-0.10 is a 10% drop) and <see cref="IvShift"/> an additive
+/// vol-point delta (0.05 is +5 vol points). Both are forwarded unchanged.
+/// </summary>
 public class ScenarioInput
 {
-    public decimal? PriceChangePercent { get; set; }
-    public decimal? IvChangePercent { get; set; }
+    public decimal? SpotShock { get; set; }
+    public decimal? IvShift { get; set; }
     public int? TimeDaysForward { get; set; }
 }
 
