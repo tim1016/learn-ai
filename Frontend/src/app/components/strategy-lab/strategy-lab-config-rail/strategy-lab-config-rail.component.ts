@@ -45,6 +45,8 @@ export class StrategyLabConfigRailComponent {
   /** A Strategy Lab backtest is in flight in some tab. Blocks submitting
    *  another one; launcher recovery is not a submission and stays available. */
   readonly engineBusy = input(false);
+  /** Why the job registry could not be read, if it could not: runs from other tabs may then be invisible (#1956). */
+  readonly registryError = input<string | null>(null);
   /** The lake tree this run reads; the instrument card offers only that tree. */
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
   readonly runBlocked = input(false);

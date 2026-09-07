@@ -258,3 +258,10 @@ input {
   border-color: var(--accent);
   color: var(--text-primary);
 }
+
+.config-rail__registry-note {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--warn);
+}

@@ -22,6 +22,7 @@ import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
 import { LeanSourceEditorComponent } from "./lean-source-editor/lean-source-editor.component";
 import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail/strategy-lab-config-rail.component";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
+import { JobsService } from "../../services/jobs.service";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
 import { StrategyLabRunReport } from "./strategy-lab-run-report.service";
 import { StrategyLabRunStatsComponent } from "./run-stats/strategy-lab-run-stats.component";
@@ -65,6 +66,7 @@ export class StrategyLabComponent {
   private readonly router = inject(Router);
   readonly config = inject(StrategyLabConfigStore);
   readonly runs = inject(StrategyLabRunner);
+  readonly jobs = inject(JobsService);
   readonly report = inject(StrategyLabRunReport);
 
   protected readonly leanSourceOpen = signal(false);
