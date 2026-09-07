@@ -11,7 +11,7 @@
         <span class="account-identity__label">Account</span>
         <strong class="account-identity__id">{{ acct.account_id }}</strong>
         <div class="account-identity__badges">
-          <p-tag severity="warn" value="Paper" />
+          <p-tag [severity]="acct.account_mode === 'live' ? 'danger' : 'warn'" [value]="acct.account_mode | receiptLabel" />
           <p-tag severity="info" [value]="acct.account_status | receiptLabel" />
         </div>
       </div>
@@ -34,6 +34,8 @@
           <dd><app-timestamp-display [value]="acct.observed_at_ms" mode="local" /></dd>
         </div>
       </dl>
+
+      <app-alpaca-account-margin [account]="acct" />
 
       <button
         type="button"

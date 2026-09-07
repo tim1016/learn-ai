@@ -1,0 +1,31 @@
+@let acct = account();
+<dl class="headline-metrics">
+  <div>
+    <dt>Multiplier</dt>
+    <dd>{{ acct.multiplier ?? '—' }}</dd>
+  </div>
+  <div>
+    <dt>Reg T BP</dt>
+    <dd>{{ acct.regt_buying_power === null || acct.regt_buying_power === undefined ? '—' : (acct.regt_buying_power | currency: acct.currency) }}</dd>
+  </div>
+  <div>
+    <dt>Day-trading BP</dt>
+    <dd>{{ acct.daytrading_buying_power === null || acct.daytrading_buying_power === undefined ? '—' : (acct.daytrading_buying_power | currency: acct.currency) }}</dd>
+  </div>
+  <div>
+    <dt>Maintenance margin</dt>
+    <dd>{{ acct.maintenance_margin === null || acct.maintenance_margin === undefined ? '—' : (acct.maintenance_margin | currency: acct.currency) }}</dd>
+  </div>
+  <div>
+    <dt>Initial margin</dt>
+    <dd>{{ acct.initial_margin === null || acct.initial_margin === undefined ? '—' : (acct.initial_margin | currency: acct.currency) }}</dd>
+  </div>
+  <div>
+    <dt>SMA</dt>
+    <dd>{{ acct.sma === null || acct.sma === undefined ? '—' : (acct.sma | currency: acct.currency) }}</dd>
+  </div>
+  <div>
+    <dt>Last equity</dt>
+    <dd>{{ acct.last_equity === null || acct.last_equity === undefined ? '—' : (acct.last_equity | currency: acct.currency) }}</dd>
+  </div>
+</dl>
