@@ -102,7 +102,10 @@ export class BrokersService {
    * shell. The client renders it and never composes one (ADR 0011 §7).
    */
   getLiveVerdict(): Promise<AlpacaLiveVerdict> {
-    return firstValueFrom(this.http.get<AlpacaLiveVerdict>(`${this.base}/alpaca/live-verdict`));
+    // Polled from the shell every 5 s, so it shares the scheduler every
+    // polled read goes through (#1912) rather than adding a fifth
+    // independent poller to the roster's tick.
+    return this.polls.get<AlpacaLiveVerdict>(`${this.base}/alpaca/live-verdict`);
   }
 
   listPositions(broker = 'alpaca'): Promise<BrokerPosition[]> {
