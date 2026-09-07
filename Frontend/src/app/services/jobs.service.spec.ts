@@ -101,14 +101,14 @@ describe('JobsService.resumed', () => {
     expect(service.resumed()).toBe(true);
   });
 
-  it('settles as true when the snapshot request fails, so absence is not mistaken for "not yet known" forever', async () => {
+  it('stays false when the snapshot request fails: absence from an empty registry proves nothing', async () => {
     const service = TestBed.inject(JobsService);
     const httpMock = TestBed.inject(HttpTestingController);
 
     httpMock.expectOne((r) => r.url === '/api/jobs').flush({ error: 'down' }, { status: 503, statusText: 'Service Unavailable' });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(service.resumed()).toBe(true);
+    expect(service.resumed()).toBe(false);
   });
 });
 

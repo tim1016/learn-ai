@@ -133,9 +133,10 @@ export class JobsService {
 
   readonly hasActive = computed(() => this.activeJobs().length > 0);
 
-  /** True once the startup `/api/jobs?active=true` snapshot has been applied
-   *  (or failed): from then on, a job absent from `activeJobs()` is genuinely
-   *  not running rather than not yet known (#1954). */
+  /** True once the startup `/api/jobs?active=true` snapshot has been applied:
+   *  from then on, a job absent from `activeJobs()` is genuinely not running
+   *  rather than not yet known (#1954). A snapshot that could not be fetched
+   *  leaves this false — absence from an empty registry proves nothing. */
   private readonly _resumed = signal(false);
   readonly resumed = this._resumed.asReadonly();
 
@@ -235,11 +236,10 @@ export class JobsService {
           this.openStream(s.id);
         }
       }
+      this._resumed.set(true);
     } catch {
       // Backend might not be up yet; the page still works without
       // resumption — newly-started jobs will register normally.
-    } finally {
-      this._resumed.set(true);
     }
   }
 

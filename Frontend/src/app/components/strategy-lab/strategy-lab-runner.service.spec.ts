@@ -393,6 +393,31 @@ describe("StrategyLab configuration and runner", () => {
       expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
     });
 
+    it("honours the previous frontend's bare-id marker once, telling the engine apart by the result's shape", async () => {
+      sessionStorage.setItem("strategyLab.ownJobId", "job-old");
+      fetchResult.mockResolvedValue({ strategy_execution_id: 808, exit_code: 0 });
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fetchResult).toHaveBeenCalledWith("job-old");
+      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 808 } }));
+      expect(sessionStorage.getItem("strategyLab.ownJobId")).toBeNull();
+      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("names LEAN when a remembered LEAN result cannot be read", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "lean-9", type: "lean_engine_run" }));
+      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(runner.runStatusBanner()).toBe("LEAN result unavailable");
+    });
+
     it("reads a stored failure the same way the live path does", async () => {
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockResolvedValue({ success: false, error: "boom" });

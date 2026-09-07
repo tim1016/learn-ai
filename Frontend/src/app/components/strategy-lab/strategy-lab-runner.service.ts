@@ -26,6 +26,8 @@ const COMPATIBILITY_PROFILE = "us-equity-raw-ibkr-v1";
  * falls back to adopting any active job of the right type.
  */
 const OWN_JOB_KEY = "strategyLab.ownJob";
+/** The marker's previous shape: a bare job id with no type. Read once and retired. */
+const LEGACY_OWN_JOB_KEY = "strategyLab.ownJobId";
 
 const STRATEGY_LAB_JOB_TYPES = ["engine_backtest", "lean_engine_run"] as const;
 type StrategyLabJobType = (typeof STRATEGY_LAB_JOB_TYPES)[number];
@@ -34,7 +36,8 @@ type StrategyLabJob = JobState & { type: StrategyLabJobType };
 /** The job this tab started or adopted: enough to read its result back after a reload. */
 interface OwnJob {
   readonly id: string;
-  readonly type: StrategyLabJobType;
+  /** Null only for a marker written before the type was recorded; the result's shape then says which engine ran. */
+  readonly type: StrategyLabJobType | null;
 }
 
 function isStrategyLabJobType(type: string): type is StrategyLabJobType {
@@ -70,9 +73,18 @@ function ownJob(): OwnJob | null {
   try {
     if (typeof sessionStorage === "undefined") return null;
     const raw = sessionStorage.getItem(OWN_JOB_KEY);
-    if (raw === null) return null;
-    const parsed: unknown = JSON.parse(raw);
-    return isOwnJob(parsed) ? parsed : null;
+    if (raw !== null) {
+      const parsed: unknown = JSON.parse(raw);
+      return isOwnJob(parsed) ? parsed : null;
+    }
+    // A tab that started its job on the previous frontend still carries the
+    // bare-id marker; it is honoured once, under the new key.
+    const legacy = sessionStorage.getItem(LEGACY_OWN_JOB_KEY);
+    if (legacy === null) return null;
+    sessionStorage.removeItem(LEGACY_OWN_JOB_KEY);
+    const migrated: OwnJob = { id: legacy, type: null };
+    sessionStorage.setItem(OWN_JOB_KEY, JSON.stringify(migrated));
+    return migrated;
   } catch {
     return null;
   }
@@ -81,7 +93,7 @@ function ownJob(): OwnJob | null {
 function isOwnJob(value: unknown): value is OwnJob {
   if (typeof value !== "object" || value === null) return false;
   const { id, type } = value as Record<string, unknown>;
-  return typeof id === "string" && typeof type === "string" && isStrategyLabJobType(type);
+  return typeof id === "string" && (type === null || (typeof type === "string" && isStrategyLabJobType(type)));
 }
 
 function forgetOwnJob(): void {
@@ -364,7 +376,8 @@ export class StrategyLabRunner {
         // during the reload (#1954); its stored result is read once instead.
         const known = this.jobs.job(own.id);
         if (known !== undefined && known !== null) {
-          this.reattach({ ...known, type: own.type });
+          const type = own.type ?? known.type;
+          if (isStrategyLabJobType(type)) this.reattach({ ...known, type });
         } else if (this.jobs.resumed()) {
           this.adoptionSettled = true;
           void this.openFinishedOwnJob(own);
@@ -501,21 +514,21 @@ export class StrategyLabRunner {
    */
   private async openFinishedOwnJob(own: OwnJob): Promise<void> {
     try {
-      if (own.type === "engine_backtest") {
-        const response = await this.jobs.fetchResult<EngineBacktestResponse>(own.id);
-        forgetOwnJob();
-        await this.applyEngineResult(response);
-      } else {
-        const response = await this.jobs.fetchResult<TrustedRunResponse>(own.id);
-        forgetOwnJob();
-        await this.applyLeanResult(response);
-      }
+      const response = await this.jobs.fetchResult<EngineBacktestResponse | TrustedRunResponse>(own.id);
+      forgetOwnJob();
+      // A marker from before the type was recorded is told apart by the result's shape.
+      const isLean = own.type === "lean_engine_run" || (own.type === null && "strategy_execution_id" in response);
+      await (isLean ? this.applyLeanResult(response as TrustedRunResponse) : this.applyEngineResult(response as EngineBacktestResponse));
     } catch (error) {
       if (error instanceof HttpErrorResponse && error.status === 404) {
         forgetOwnJob();
         return;
       }
-      this.fail("Failed to fetch backtest result", errorMessage(error, "Failed to fetch backtest result"));
+      if (own.type === "lean_engine_run") {
+        this.fail("LEAN result unavailable", error instanceof Error ? error.message : "Failed to fetch LEAN run result");
+      } else {
+        this.fail("Failed to fetch backtest result", errorMessage(error, "Failed to fetch backtest result"));
+      }
     } finally {
       this.updateRunningState();
     }
