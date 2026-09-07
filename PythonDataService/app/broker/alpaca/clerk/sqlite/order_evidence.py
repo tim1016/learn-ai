@@ -65,10 +65,10 @@ __all__ = [
 
 def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
     """Read an entry's symbol from its immutable acceptance fact."""
-    for transition in repo.transitions_for_order(order_ref):
-        if transition["transition_kind"] == "ENTER_ACCEPTED":
-            return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
-    raise AssertionError(f"no ENTER_ACCEPTED transition found for {order_ref!r}")
+    transition = repo.first_order_transition(order_ref=order_ref, transition_kind="ENTER_ACCEPTED")
+    if transition is None:
+        raise AssertionError(f"no ENTER_ACCEPTED transition found for {order_ref!r}")
+    return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
 
 
 def fold_order_evidence(
@@ -177,15 +177,7 @@ def fold_order_acknowledgement(
     assert effect is not None
     order_ref = order.client_order_id
     assert order_ref is not None
-    transitions = repo.transitions_for_order(order_ref)
-    latest_ack = next(
-        (
-            transition
-            for transition in reversed(transitions)
-            if transition["transition_kind"] == "ORDER_SUBMIT_ACKED"
-        ),
-        None,
-    )
+    latest_ack = repo.last_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_ACKED")
     ack_changed = latest_ack is None or (
         latest_ack["broker_order_id"] != order.order_id
         or latest_ack["broker_state"] != order.status
@@ -409,14 +401,18 @@ def entry_never_accepted_durably(repo: ClerkSqliteRepository, order: OrderResour
     """
     if order.broker_order_id is not None:
         return False
-    transitions = repo.transitions_for_order(order.order_ref)
-    if any(transition["transition_kind"] == "ENTRY_NEVER_ACCEPTED" for transition in transitions):
+    if repo.has_order_transition(order_ref=order.order_ref, transition_kind="ENTRY_NEVER_ACCEPTED"):
         return True
     owner = repo.effect_operation(order.effect_operation_id)
     if owner is None or owner.state != "failed" or owner.terminal_receipt_id is None:
         return False
+    # ``summary_code`` is not indexed, so this one still scans the order's
+    # history — but only past the two guards above, which is the rare path
+    # (a failed ENTER that reached its terminal receipt), not the per-order,
+    # per-pass one (#1942).
     return any(
-        transition["summary_code"] == SUBMIT_ABSENCE_SUMMARY_CODE for transition in transitions
+        transition["summary_code"] == SUBMIT_ABSENCE_SUMMARY_CODE
+        for transition in repo.transitions_for_order(order.order_ref)
     )
 
 
@@ -560,5 +556,7 @@ async def resolve_order_submission(
 
 def _uncertain_since_ms(repo: ClerkSqliteRepository, order_ref: str) -> int:
     """Find the durable accept boundary for the exact order's outcome."""
-    transitions = repo.transitions_for_order(order_ref)
-    return transitions[0]["recorded_at_ms"]
+    first = repo.first_order_transition(order_ref=order_ref)
+    if first is None:
+        raise AssertionError(f"no transition at all for {order_ref!r}")
+    return first["recorded_at_ms"]
