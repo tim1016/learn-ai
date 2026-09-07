@@ -382,10 +382,10 @@ so they survive a broker change.
   boundary for an explicitly activated `sim:` account. It may exercise Clerk
   custody semantics for a Dry Run, but it has no claim on a broker-reported
   account or its exposure.
-- **Authority kind** — the closed account-world label `real_paper` or
-  `synthetic` carried with an authority-scoped read. It prevents an operator
-  view or aggregate from presenting simulated and broker-paper facts as one
-  account truth.
+- **Authority kind** — the closed account-world label `real_paper`, `real_live`,
+  `shadow`, or `synthetic` carried with an authority-scoped read. It prevents an
+  operator view or aggregate from presenting simulated, shadow, broker-paper and
+  broker-live facts as one account truth. (Sharpened 2026-09-07, ADR 0059.)
 - **Sealed account** — the exact account identity committed by a bot's
   immutable configuration. A run can register only with the same Account
   Authority; a mismatch is a refusal before any run or custody work exists.
@@ -456,6 +456,59 @@ so they survive a broker change.
   order attributable to a known retired bot but lacking an active manager. It
   is known rather than foreign, yet blocks ordinary account trading until
   revived, resolved, or explicitly overridden.
+
+## Live account, shadow, and risk envelope (sharpened 2026-09-07)
+
+**Lineage: live.** Decision record: ADR 0059.
+
+- **Live Account Authority** — the Broker Account Authority for one
+  broker-reported real-money account. It is the same seam as a paper authority
+  with a different world label; nothing about it is a separate runtime.
+  _Avoid_: live mode, production account, real account
+- **Shadow Account Authority** — an isolated `shadow:` custody authority that
+  reads one real-money account and synthesizes every fill under an explicit
+  fill model. It never submits. _Avoid_: dry run on live, paper on live,
+  observation mode
+- **Mode agreement** — the three-way match of configured mode, live activation,
+  and broker-observed mode that a live authority requires before it can exist.
+  A disagreement is a refusal, never a guess. _Avoid_: live flag, live toggle,
+  live switch
+- **Shadow gate** — the per-instance requirement that a bounded number of
+  shadow sessions complete and reconcile against the instance's paper twin
+  before the instance may arm. _Avoid_: warm-up, trial period, soak
+- **Shadow receipt** — the durable, sealed per-instance proof that the shadow
+  gate passed, naming the sessions and the reconciliation.
+- **Arming** — the supervised ceremony that permits real-money submission for
+  one sealed instance under one envelope. It is bound to the seal and the
+  envelope it named and lapses after the operator-configured number of
+  sessions. Operator intent (PAUSE / STOP) is orthogonal to it. _Avoid_: enabling live, going
+  live, turning on live
+- **Risk envelope** — the account-scoped pair of bounds every live ENTER is
+  admitted against: the cash bound and the daily loss limit. Its values are
+  operator environment settings, required when live and sealed at arming; a
+  difference between the two is a refusal. EXIT is never subject to it;
+  no symbol, session, or per-order size is restricted by it. _Avoid_: risk limits, guardrails (ADR
+  0021's word for a different thing), safety rails
+- **Cash bound** — the envelope rule that gross long exposure after an ENTER
+  may not exceed broker-observed cash. It reads cash, not buying power, so it
+  is the same on a cash account and a margin account. _Avoid_: no margin,
+  1× leverage, cash-only
+- **Envelope refusal** — the per-order refusal of one ENTER that would breach
+  the cash bound. No other state changes.
+- **Loss hold** — the account-wide state entered when day P&L breaches the
+  daily loss limit, in which every ENTER on the account is refused and every
+  EXIT still runs until a guarded operator action clears it. It does not clear
+  at session rollover. _Avoid_: kill switch, freeze, halt, circuit breaker
+- **Day P&L** — Clerk-projected realized session P&L plus broker-observed
+  unrealized P&L. It is unknown, not zero, when marks are incomplete.
+- **Regulatory fee schedule** — the dated table of pass-through fees on Alpaca
+  equities. Fees the broker charged are the truth; the schedule predicts them.
+  _Avoid_: commission, trading fee, broker fee
+- **Marketable limit anchor** — the price a program leg carries outside the
+  regular session: the decision bar's close moved by an operator-set allowance
+  in the direction of the trade, as a day limit flagged for extended hours.
+  Inside the regular session a program leg stays a market order. _Avoid_:
+  slippage limit, aggressive limit, extended-hours price
 
 ## Instance console mechanics (sharpened 2026-05-30)
 
