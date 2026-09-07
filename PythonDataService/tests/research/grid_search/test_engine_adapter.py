@@ -9,6 +9,7 @@ is checked field by field against that response.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from pathlib import Path
 
@@ -59,15 +60,25 @@ async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_ar
     candidate = next(iter(expand_grid([StrategyGridConfig(strategy_key="sma_crossover", param_ranges=dict(stored.param_ranges))], ["SPY"])))
     table = created.receipt["interval_table"]
 
-    # The cell, as the runner executes it.
+    # The cell, as the runner executes it. Both calls go through a thread
+    # because that is where every production caller runs one: the engine gate
+    # refuses an event-loop caller outright, since a blocking acquire on the
+    # app loop would stall every route (#1957).
     cell_request = engine_adapter.engine_request(created, stored, candidate)
-    cell_response = execute_engine_backtest(request=cell_request, on_phase=_noop, on_log=_noop, data_manifest=created.receipt["data_snapshot"]["artifacts"])
+    cell_response = await asyncio.to_thread(
+        execute_engine_backtest,
+        request=cell_request,
+        on_phase=_noop,
+        on_log=_noop,
+        data_manifest=created.receipt["data_snapshot"]["artifacts"],
+    )
     cell = engine_adapter.cell_from_response(candidate, cell_response)
 
     # A direct call built by hand from the receipt's interval table.
     data_start, _ = service.window_dates(table["data_start_ms"], table["evaluation_end_ms"])
     evaluation_start, evaluation_end = service.window_dates(table["evaluation_start_ms"], table["evaluation_end_ms"])
-    direct = execute_engine_backtest(
+    direct = await asyncio.to_thread(
+        execute_engine_backtest,
         request=EngineBacktestRequest(
             strategy_name="sma_crossover",
             params={"symbol": "SPY", "short_window": 2, "long_window": 5, "resolution_minutes": 60},

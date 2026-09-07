@@ -19,6 +19,12 @@ the service mid-search and left its record reading ``running`` for a day
 (2026-09-05). A thread count cannot lift the GIL, so this module keeps no
 pool; more throughput would take a process pool, which re-loads the bars in
 every process and so costs memory first.
+
+That limit is no longer this module's to enforce. Running cells one at a time
+only ever counted the cells of one sweep; ``app.engine.run_gate`` is the
+canonical enforcer across sweeps, Strategy Lab tabs and the sync endpoint
+alike (#1957). This loop stays sequential because a pool would buy nothing
+here, not because it is what keeps concurrent runs apart.
 """
 
 from __future__ import annotations

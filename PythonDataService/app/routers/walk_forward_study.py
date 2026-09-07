@@ -193,7 +193,7 @@ async def start_walk_forward_study_job(req: WalkForwardStudyJobRequest) -> dict[
         outcome = service.execute(
             study_id,
             job_id=req.job_id,
-            cell_executor=default_execute_cell,
+            cell_executor=partial(default_execute_cell, cancel_check=cancel.raise_if_cancelled),
             cancel_check=cancel.raise_if_cancelled,
             on_phase=emit.phase,
             on_progress=lambda done, total: emit.progress(done, total, unit="backtests"),

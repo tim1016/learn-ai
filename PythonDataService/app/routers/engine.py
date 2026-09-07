@@ -46,6 +46,7 @@ from app.engine.execution.sizing import LeanSetHoldingsSizing
 from app.engine.results.lean_statistics import compute_lean_statistics
 from app.engine.results.statistics import summarize
 from app.engine.results.trade_record import TradeRecord
+from app.engine.run_gate import one_backtest_in_flight
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.registry import (
     _STRATEGY_REGISTRY,
@@ -54,6 +55,7 @@ from app.engine.strategy.registry import (
     hidden_params_present,
     public_params_schema,
 )
+from app.jobs.phases import friendly
 from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
@@ -559,7 +561,8 @@ class ResolvedRunConfiguration(BaseModel):
 # Phase callbacks
 #
 # Both the synchronous /backtest endpoint and the Jobs-system worker call
-# the same ``_execute_engine_backtest_core`` to do the actual run. They
+# ``execute_engine_backtest`` (which gates, then runs
+# ``_execute_engine_backtest_core``) to do the actual run. They
 # differ only in how progress is reported: the sync path passes no-op
 # callbacks (the response is the only signal); the Jobs worker forwards
 # every phase/log into a ProgressEmitter that writes Redis events the
@@ -1224,6 +1227,7 @@ def execute_engine_backtest(
     on_phase: PhaseCallback,
     on_log: LogCallback,
     data_manifest: Mapping[str, str] | None = None,
+    while_waiting: Callable[[], None] = lambda: None,
 ) -> EngineBacktestResponse:
     """Core backtest workflow shared by the sync POST and the Jobs worker.
 
@@ -1238,7 +1242,44 @@ def execute_engine_backtest(
     bytes: a sweep cell whose lake artifact changed after the snapshot
     fails rather than consuming unreceipted data (PRD #1926 F05). Absent
     for ordinary runs, which read whatever the lake currently holds.
+
+    This is where the process-wide "one backtest in flight" gate is held: a
+    run costs ~480 MB against a 2 GiB container, and nothing outside a single
+    sweep used to count them (``app.engine.run_gate``, #1957). A caller that
+    has to wait reports the ``waiting_for_engine`` phase and then queues.
+    The gate covers this function's five callers, not every path to
+    ``BacktestEngine`` — ``run_gate`` names the three that still run
+    ungated, and #1990 tracks closing that.
+
+    ``while_waiting`` runs about once a second for as long as the caller is
+    queued, and is where a job worker puts its cancellation check; raising
+    from it abandons the wait. Without it a queued run could not be
+    cancelled until the run ahead of it finished.
     """
+    with one_backtest_in_flight(on_wait=lambda: _report_waiting(on_phase, on_log), while_waiting=while_waiting):
+        return _execute_engine_backtest_core(
+            request=request,
+            on_phase=on_phase,
+            on_log=on_log,
+            data_manifest=data_manifest,
+        )
+
+
+def _report_waiting(on_phase: PhaseCallback, on_log: LogCallback) -> None:
+    # The copy comes from the phase vocabulary rather than being written
+    # again here, so there is one label per phase id (``app.jobs.phases``).
+    on_phase("waiting_for_engine")
+    on_log(friendly("engine_backtest", "waiting_for_engine"))
+
+
+def _execute_engine_backtest_core(
+    *,
+    request: EngineBacktestRequest,
+    on_phase: PhaseCallback,
+    on_log: LogCallback,
+    data_manifest: Mapping[str, str] | None = None,
+) -> EngineBacktestResponse:
+    """The workflow itself, under the gate :func:`execute_engine_backtest` holds."""
     _run_start = time.time()
     registration = _STRATEGY_REGISTRY.get(request.strategy_name)
     if registration is None:

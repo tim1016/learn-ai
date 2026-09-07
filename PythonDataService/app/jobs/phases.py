@@ -79,6 +79,12 @@ SIGNAL_ENGINE_PHASES: tuple[Phase, ...] = (
 # fires when ``auto_fetch=True``; the other phases always fire on the
 # success path.
 ENGINE_BACKTEST_PHASES: tuple[Phase, ...] = (
+    # Only reported when the process-wide engine gate is already held, so a
+    # run that starts straight away never shows it. ``execute_engine_backtest``
+    # reads this label back through ``friendly()`` for the log line it emits
+    # alongside the phase event, so the copy lives here and nowhere else
+    # (#1957).
+    Phase("waiting_for_engine", "Waiting for the backtest already running", 1),
     Phase("fetching_data", "Fetching bars from data provider", 2),
     Phase("consolidating_bars", "Consolidating bars to strategy resolution", 1),
     Phase("running_indicators", "Running indicators and strategy logic", 4),

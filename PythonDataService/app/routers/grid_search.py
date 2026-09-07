@@ -245,7 +245,7 @@ async def start_grid_search_job(req: GridSearchJobRequest) -> dict[str, Any]:
         outcome = service.execute(
             search_id,
             job_id=req.job_id,
-            execute_cell=default_execute_cell(row, spec),
+            execute_cell=default_execute_cell(row, spec, cancel_check=cancel.raise_if_cancelled),
             cancel_check=cancel.raise_if_cancelled,
             on_phase=emit.phase,
             on_progress=lambda done, total: emit.progress(done, total, unit="backtests"),

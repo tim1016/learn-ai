@@ -56,6 +56,33 @@ const STRATEGY_LAB_RUN_ID_PREFIX = "strategy_lab_";
 /** How often an open Strategy Lab asks the registry about jobs other tabs started (#1956). */
 const ACTIVE_JOBS_REFRESH_MS = 10_000;
 
+// Run-banner copy per backend phase id, hoisted out of the job effects so it
+// is built once rather than on every emission. Engine ids track
+// ``ENGINE_BACKTEST_PHASES`` and LEAN ids ``LEAN_ENGINE_RUN_PHASES`` in
+// PythonDataService/app/jobs/phases.py; an id with no entry here falls back
+// to its raw form, which is the signal that the two have drifted.
+const ENGINE_PHASE_HEADLINES: Record<string, string> = {
+  connecting: "Submitting backtest…",
+  waiting_for_engine: "Waiting for the backtest already running…",
+  fetching_data: "Fetching bars from data provider…",
+  consolidating_bars: "Consolidating bars to strategy resolution…",
+  running_indicators: "Running indicators and strategy logic…",
+  aggregating_results: "Aggregating results and statistics…",
+  persisting: "Persisting run to history…",
+  loading_bars: "Loading bars from cache & Polygon…",
+  simulating: "Running engine — consolidating bars and evaluating signals…",
+  computing_stats: "Computing statistics & saving study…",
+};
+
+const LEAN_PHASE_HEADLINES: Record<string, string> = {
+  connecting: "Submitting LEAN run…",
+  staging_data: "Staging LEAN data fixtures…",
+  launching_sidecar: "Submitting launch request to the LEAN sidecar…",
+  sidecar_running: "LEAN container running…",
+  parsing_results: "Parsing LEAN output…",
+  persisting: "Persisting run to history…",
+};
+
 function isStrategyLabJob(job: JobState): job is StrategyLabJob {
   if (job.type === "engine_backtest") return true;
   if (job.type !== "lean_engine_run") return false;
@@ -457,18 +484,7 @@ export class StrategyLabRunner {
       const lastLog = job.recentLogs[job.recentLogs.length - 1]?.message ?? "";
       if (job.status === "queued" || job.status === "running") {
         const phase = (job.phase ?? "connecting") as StrategyLabRunPhase;
-        const headlines: Record<string, string> = {
-          connecting: "Submitting backtest…",
-          fetching_data: "Fetching bars from data provider…",
-          consolidating_bars: "Consolidating bars to strategy resolution…",
-          running_indicators: "Running indicators and strategy logic…",
-          aggregating_results: "Aggregating results and statistics…",
-          persisting: "Persisting run to history…",
-          loading_bars: "Loading bars from cache & Polygon…",
-          simulating: "Running engine — consolidating bars and evaluating signals…",
-          computing_stats: "Computing statistics & saving study…",
-        };
-        this.setRunStatus(phase, headlines[phase] ?? `Phase: ${phase}`, lastLog);
+        this.setRunStatus(phase, ENGINE_PHASE_HEADLINES[phase] ?? `Phase: ${phase}`, lastLog);
         return;
       }
       if (job.status === "failed") {
@@ -502,21 +518,13 @@ export class StrategyLabRunner {
       const lastLog = job.recentLogs[job.recentLogs.length - 1]?.message ?? "";
       if (job.status === "queued" || job.status === "running") {
         const phase = job.phase ?? "connecting";
-        const headlines: Record<string, string> = {
-          connecting: "Submitting LEAN run…",
-          staging_data: "Staging LEAN data fixtures…",
-          launching_sidecar: "Submitting launch request to the LEAN sidecar…",
-          sidecar_running: "LEAN container running…",
-          parsing_results: "Parsing LEAN output…",
-          persisting: "Persisting run to history…",
-        };
         const coarse: StrategyLabRunPhase =
           phase === "connecting"
             ? "connecting"
             : phase === "persisting" || phase === "parsing_results"
               ? "computing_stats"
               : "simulating";
-        this.setRunStatus(coarse, headlines[phase] ?? `Phase: ${phase}`, lastLog);
+        this.setRunStatus(coarse, LEAN_PHASE_HEADLINES[phase] ?? `Phase: ${phase}`, lastLog);
         return;
       }
       if (job.status === "failed") {
