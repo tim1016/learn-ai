@@ -7,7 +7,6 @@ import json
 from collections.abc import Mapping
 from typing import Literal
 
-INT64_MAX = 9_223_372_036_854_775_807
 PaperQualificationStatus = Literal["NOT_RUN"]
 
 
@@ -24,7 +23,6 @@ def account_custody_qualification_payload_sha256(payload: Mapping[str, object]) 
 
 
 __all__ = [
-    "INT64_MAX",
     "PaperQualificationStatus",
     "account_custody_qualification_payload_sha256",
 ]

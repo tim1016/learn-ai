@@ -21,13 +21,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
 from app.schemas.operator_blocker import AccountOperatorPosture
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-MAX_EPOCH_MS = 9_223_372_036_854_775_807
 EpochMs = Annotated[
     int,
     Field(
         ge=0,
-        le=MAX_EPOCH_MS,
+        le=MAX_TIMESTAMP_MS,
         json_schema_extra={"format": "int64"},
     ),
 ]

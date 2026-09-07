@@ -24,6 +24,7 @@ from app.engine.live import durable_append_log
 from app.engine.live.account_artifacts import AccountArtifactError, account_artifacts_root
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.utils.advisory_lock import advisory_file_lock
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 PRODUCER_OPERATIONAL_LOGS_DIRECTORY = "producer_operational_logs"
@@ -55,9 +56,9 @@ class ProducerOperationalLogRecord(BaseModel):
     producer_seq: int = Field(ge=1)
     idempotency_key: str = Field(min_length=1, max_length=256)
     event_type: str = Field(min_length=1, max_length=128)
-    event_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
-    arrived_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
-    recorded_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    event_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    arrived_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     payload: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -92,8 +93,8 @@ class _ProducerOperationalReceiptClaim(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=256)
     event_type: str = Field(min_length=1, max_length=128)
     payload: dict[str, object] = Field(default_factory=dict)
-    event_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
-    arrived_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    event_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    arrived_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     producer_boot_id: str = Field(min_length=1, max_length=128)
     recorded: bool = False
 
@@ -107,10 +108,10 @@ class MergedOperationalHistoryEvent(BaseModel):
     source: Literal["legacy_account_events", "producer_operational_log", "clerk_journal"]
     account_id: str = Field(min_length=1, max_length=64)
     event_type: str = Field(min_length=1, max_length=128)
-    display_clock_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
-    event_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
-    arrived_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
-    recorded_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    display_clock_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    event_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    arrived_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     producer: str = Field(min_length=1, max_length=128)
     producer_boot_id: str = Field(min_length=1, max_length=128)
     producer_seq: int = Field(ge=1)

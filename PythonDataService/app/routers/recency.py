@@ -21,7 +21,7 @@ from app.schemas.recency import (
     RecencyRunMutationResponse,
     RecencyTradeResponse,
 )
-from app.utils.session_anchors import INT64_MS_MAX
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 
@@ -33,8 +33,8 @@ def _window(from_ms: int, to_ms: int) -> None:
 
 @router.get("/trades", response_model=list[RecencyTradeResponse])
 async def list_recency_trades(
-    from_ms: int = Query(ge=0, le=INT64_MS_MAX),
-    to_ms: int = Query(ge=0, le=INT64_MS_MAX),
+    from_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
+    to_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
     symbols: list[str] | None = Query(None),
     strategies: list[str] | None = Query(None),
 ) -> list[RecencyTradeResponse]:
@@ -46,8 +46,8 @@ async def list_recency_trades(
 
 @router.get("/hero", response_model=RecencyHeroResponse)
 async def recency_heroes(
-    from_ms: int = Query(ge=0, le=INT64_MS_MAX),
-    to_ms: int = Query(ge=0, le=INT64_MS_MAX),
+    from_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
+    to_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
     symbols: list[str] | None = Query(None),
     strategies: list[str] | None = Query(None),
 ) -> RecencyHeroResponse:

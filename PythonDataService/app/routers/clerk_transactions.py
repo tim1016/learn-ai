@@ -22,9 +22,9 @@ from app.services.sqlite_clerk_transaction_projection import (
     sqlite_transaction_detail,
     sqlite_transaction_history,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter(prefix="/api/accounts", tags=["clerk-transactions"])
-_MAX_INT64_MS = 2**63 - 1
 
 
 @router.post(
@@ -69,8 +69,8 @@ async def get_clerk_transaction_history(
     lifecycle_state: str | None = Query(default=None, min_length=1, max_length=64),
     strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=128),
     run_id: str | None = Query(default=None, min_length=1, max_length=128),
-    from_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
-    to_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
+    from_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
+    to_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
 ) -> ClerkTransactionHistoryResponse:
     """Read one indexed keyset page without broker, Account Truth, or journal I/O."""
 

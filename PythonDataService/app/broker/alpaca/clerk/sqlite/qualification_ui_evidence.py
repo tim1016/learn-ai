@@ -18,7 +18,6 @@ from app.broker.alpaca.clerk.sqlite.qualification_ui_campaign_contract import (
     UI_CAMPAIGN_CONTRACT_SHA256,
     BoundedUiCampaignContract,
 )
-from app.schemas.account_custody_qualification import INT64_MAX
 from app.schemas.account_custody_synthetic_qualification import (
     SyntheticUiCorrelationEvidence,
     SyntheticUiCorrelationRecord,
@@ -27,6 +26,7 @@ from app.services.account_custody_synthetic_scenarios import (
     SyntheticScenarioId,
     synthetic_scenario,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _UI_SCENARIO = synthetic_scenario(SyntheticScenarioId.EVIDENCE_CONTROLS_READ_ONLY)
 if len(_UI_SCENARIO.test_refs) != 1:
@@ -77,7 +77,7 @@ class PreverifiedUiReceiptV5(BaseModel):
     git_commit_sha: str = Field(pattern=_GIT_COMMIT_SHA_PATTERN)
     test_source_sha256: str = Field(pattern=_SHA256_PATTERN)
     campaign_contract_sha256: str = Field(pattern=_SHA256_PATTERN)
-    executed_at_ms: int = Field(ge=1_000_000_000_000, le=INT64_MAX)
+    executed_at_ms: int = Field(ge=1_000_000_000_000, le=MAX_TIMESTAMP_MS)
     duration_ms: int = Field(
         ge=1,
         le=BOUNDED_UI_CAMPAIGN.timeout_seconds * 1_000,

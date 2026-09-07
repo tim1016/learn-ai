@@ -16,9 +16,9 @@ from app.schemas.signal_program_seal import (
     semantic_payload_hash,
     strip_absent_git_provenance,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
-_INT64_MAX = 9_223_372_036_854_775_807
 
 
 class CanaryActivationEvidence(BaseModel):
@@ -33,7 +33,7 @@ class CanaryActivationEvidence(BaseModel):
     running_artifact_digest: str = Field(pattern=_SHA256_PATTERN)
     qualification_receipt_hash: str = Field(pattern=_SHA256_PATTERN)
     qualification_suite: str = Field(min_length=1)
-    qualified_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    qualified_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # The reviewed receipt's recorded git lineage, copied verbatim so the
     # human enabling Paper sees whether the qualified bytes were ever
     # committed. Optional: receipts minted before the field carry none, and
@@ -54,8 +54,8 @@ class CanaryActivationPlan(BaseModel):
     account_id: str = Field(min_length=1)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-    created_at_ms: int = Field(ge=0, le=_INT64_MAX)
-    expires_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    created_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    expires_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     ledger_path: str = Field(min_length=1)
     expected_ledger_head_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     evidence: CanaryActivationEvidence
@@ -103,7 +103,7 @@ class CanaryAdmissionEvent(BaseModel):
     account_id: str = Field(min_length=1)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-    recorded_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     evidence: CanaryActivationEvidence | None = None
     previous_event_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     event_hash: str = Field(pattern=_SHA256_PATTERN)
@@ -169,7 +169,7 @@ class CanaryRollbackDecision(BaseModel):
         "STOP_REQUIRES_FLATTEN",
         "STOPPED_CUSTODY_UNPROVABLE",
     ]
-    evaluated_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    evaluated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 __all__ = [

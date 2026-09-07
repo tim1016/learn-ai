@@ -22,6 +22,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 
 class StockPosition(BaseModel):
     """A long or short stock position."""
@@ -43,7 +45,7 @@ class OptionPosition(BaseModel):
     expiration_ms: int = Field(
         ...,
         ge=0,
-        le=9_223_372_036_854_775_807,  # 2**63 - 1 (max int64)
+        le=MAX_TIMESTAMP_MS,
         description="Expiration as int64 ms since Unix epoch UTC",
     )
     quantity: float = Field(..., description="Net quantity in *contracts* (negative for short)")
