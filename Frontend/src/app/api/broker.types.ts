@@ -1507,6 +1507,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/live-verdict": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Live Verdict
+         * @description The server-derived live verdict (ADR 0059 D8). Pure; never contacts the broker.
+         */
+        get: operations["get_live_verdict_api_brokers__broker__live_verdict_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/order-groups": {
         parameters: {
             query?: never;
@@ -5207,6 +5227,54 @@ export interface components {
             schema_version: "1.0";
             trader: components["schemas"]["TraderDiagnosticView"];
         };
+        /** AlpacaLiveVerdict */
+        AlpacaLiveVerdict: {
+            /** Armed Instance Count */
+            armed_instance_count: number;
+            /**
+             * Clerk Authority
+             * @enum {string}
+             */
+            clerk_authority: "sqlite" | "synthetic" | "unavailable" | "not_installed";
+            /** Clerk Refusal Reason Code */
+            clerk_refusal_reason_code: string | null;
+            /**
+             * Configured Mode
+             * @enum {string}
+             */
+            configured_mode: "paper" | "live" | "unconfigured";
+            /** Detail */
+            detail: string;
+            /**
+             * Envelope State
+             * @enum {string}
+             */
+            envelope_state: "not_applicable" | "configured_unsealed" | "sealed";
+            /**
+             * Final Verdict
+             * @enum {string}
+             */
+            final_verdict: "paper" | "live-unarmed" | "live-armed" | "unknown";
+            /** Headline */
+            headline: string;
+            /**
+             * Mode Agreement
+             * @enum {string}
+             */
+            mode_agreement: "agreed" | "disagreed" | "unobserved";
+            /** Observed Account Id */
+            observed_account_id: string | null;
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
+            observed_at_ms: number;
+            /**
+             * Shadow State
+             * @enum {string}
+             */
+            shadow_state: "not_applicable" | "none" | "in_progress" | "complete";
+        };
         /**
          * AlpacaPaperDeployEligibility
          * @description Backend-authored launch verdict rendered verbatim by Angular.
@@ -6912,18 +6980,32 @@ export interface components {
             created_at_ms: number | null;
             /** Currency */
             currency: string;
+            /** Daytrading Buying Power */
+            daytrading_buying_power?: number | null;
             /** Equity */
             equity: number;
+            /** Initial Margin */
+            initial_margin?: number | null;
+            /** Last Equity */
+            last_equity?: number | null;
             /** Long Market Value */
             long_market_value: number;
+            /** Maintenance Margin */
+            maintenance_margin?: number | null;
+            /** Multiplier */
+            multiplier?: number | null;
             /** Observed At Ms */
             observed_at_ms: number;
             /** Pattern Day Trader */
             pattern_day_trader: boolean | null;
             /** Portfolio Value */
             portfolio_value: number;
+            /** Regt Buying Power */
+            regt_buying_power?: number | null;
             /** Short Market Value */
             short_market_value: number;
+            /** Sma */
+            sma?: number | null;
             /** Trading Blocked */
             trading_blocked: boolean;
         };
@@ -8121,7 +8203,7 @@ export interface components {
              * @default real_paper
              * @enum {string}
              */
-            authority_kind?: "real_paper" | "synthetic";
+            authority_kind?: "real_paper" | "real_live" | "shadow" | "synthetic";
             /** Broker */
             broker: string;
             /** Channel Healths */
@@ -9067,7 +9149,7 @@ export interface components {
              * @default real_paper
              * @enum {string}
              */
-            authority_kind?: "real_paper" | "synthetic";
+            authority_kind?: "real_paper" | "real_live" | "shadow" | "synthetic";
             /** Blocked Reason */
             blocked_reason?: string | null;
             /**
@@ -16409,7 +16491,7 @@ export interface components {
             /** Authority Account Id */
             authority_account_id?: string | null;
             /** Authority Kind */
-            authority_kind?: ("real_paper" | "synthetic") | null;
+            authority_kind?: ("real_paper" | "real_live" | "shadow" | "synthetic") | null;
             /** Bar Ref */
             bar_ref: string;
             /** Decision Id */
@@ -16449,7 +16531,7 @@ export interface components {
             /** Authority Account Id */
             authority_account_id?: string | null;
             /** Authority Kind */
-            authority_kind?: ("real_paper" | "synthetic") | null;
+            authority_kind?: ("real_paper" | "real_live" | "shadow" | "synthetic") | null;
             /** Filled At Ms */
             filled_at_ms: number;
             /** Order Ref */
@@ -25190,6 +25272,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerClockEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_live_verdict_api_brokers__broker__live_verdict_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlpacaLiveVerdict"];
                 };
             };
             /** @description Validation Error */

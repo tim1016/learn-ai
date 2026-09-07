@@ -10,7 +10,6 @@ import {
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
-import { TagModule } from 'primeng/tag';
 import { DialogModule } from 'primeng/dialog';
 
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
@@ -91,7 +90,6 @@ function timelineQueryFromRoute(params: { get(name: string): string | null }): S
     AlpacaOrderEntryComponent,
     AlpacaTraderLensComponent,
     DialogModule,
-    TagModule,
   ],
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',

@@ -73,6 +73,13 @@
   color: var(--info);
 }
 
+.posture-badge--live {
+  border-color: rgba(239, 83, 80, 0.55);
+  background: var(--bear-soft);
+  color: var(--bear);
+  font-weight: 600;
+}
+
 // ── Alerts and non-happy states ────────────────────────────────────────────
 
 .custody-alert,

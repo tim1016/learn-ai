@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { PolledReadScheduler } from './polled-read-scheduler';
 
 import type {
+  AlpacaLiveVerdict,
   BrokerAccountSnapshot,
   BrokerActivity,
   BrokerOrder,
@@ -93,6 +94,18 @@ export class BrokersService {
       }
     });
     return promise;
+  }
+
+  /**
+   * The server-derived Alpaca live verdict (ADR 0059 D8). Pure on the
+   * server — it never contacts the broker — so it is safe to poll from the
+   * shell. The client renders it and never composes one (ADR 0011 §7).
+   */
+  getLiveVerdict(): Promise<AlpacaLiveVerdict> {
+    // Polled from the shell every 5 s, so it shares the scheduler every
+    // polled read goes through (#1912) rather than adding a fifth
+    // independent poller to the roster's tick.
+    return this.polls.get<AlpacaLiveVerdict>(`${this.base}/alpaca/live-verdict`);
   }
 
   listPositions(broker = 'alpaca'): Promise<BrokerPosition[]> {

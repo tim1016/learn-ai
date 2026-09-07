@@ -11,7 +11,7 @@
         <span class="account-identity__label">Account</span>
         <strong class="account-identity__id">{{ acct.account_id }}</strong>
         <div class="account-identity__badges">
-          <p-tag severity="warn" value="Paper" />
+          <p-tag [severity]="acct.account_mode === 'live' ? 'danger' : 'warn'" [value]="acct.account_mode | receiptLabel" />
           <p-tag severity="info" [value]="acct.account_status | receiptLabel" />
         </div>
       </div>
@@ -45,6 +45,8 @@
         <span>{{ expanded() ? 'Hide details' : 'Account details' }}</span>
         <i class="pi pi-chevron-down" aria-hidden="true"></i>
       </button>
+
+      <app-alpaca-account-margin [account]="acct" />
     </div>
 
     <div id="alpaca-account-details" class="account-strip__details" [attr.aria-hidden]="!expanded()">

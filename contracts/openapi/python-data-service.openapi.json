@@ -597,6 +597,128 @@
         "title": "AlpacaBotControlFixtureEnvelope",
         "type": "object"
       },
+      "AlpacaLiveVerdict": {
+        "additionalProperties": false,
+        "properties": {
+          "armed_instance_count": {
+            "minimum": 0.0,
+            "title": "Armed Instance Count",
+            "type": "integer"
+          },
+          "clerk_authority": {
+            "enum": [
+              "sqlite",
+              "synthetic",
+              "unavailable",
+              "not_installed"
+            ],
+            "title": "Clerk Authority",
+            "type": "string"
+          },
+          "clerk_refusal_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Refusal Reason Code"
+          },
+          "configured_mode": {
+            "enum": [
+              "paper",
+              "live",
+              "unconfigured"
+            ],
+            "title": "Configured Mode",
+            "type": "string"
+          },
+          "detail": {
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          },
+          "envelope_state": {
+            "enum": [
+              "not_applicable",
+              "configured_unsealed",
+              "sealed"
+            ],
+            "title": "Envelope State",
+            "type": "string"
+          },
+          "final_verdict": {
+            "enum": [
+              "paper",
+              "live-unarmed",
+              "live-armed",
+              "unknown"
+            ],
+            "title": "Final Verdict",
+            "type": "string"
+          },
+          "headline": {
+            "minLength": 1,
+            "title": "Headline",
+            "type": "string"
+          },
+          "mode_agreement": {
+            "enum": [
+              "agreed",
+              "disagreed",
+              "unobserved"
+            ],
+            "title": "Mode Agreement",
+            "type": "string"
+          },
+          "observed_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Account Id"
+          },
+          "observed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "shadow_state": {
+            "enum": [
+              "not_applicable",
+              "none",
+              "in_progress",
+              "complete"
+            ],
+            "title": "Shadow State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured_mode",
+          "observed_account_id",
+          "mode_agreement",
+          "clerk_authority",
+          "clerk_refusal_reason_code",
+          "armed_instance_count",
+          "envelope_state",
+          "shadow_state",
+          "final_verdict",
+          "headline",
+          "detail",
+          "observed_at_ms"
+        ],
+        "title": "AlpacaLiveVerdict",
+        "type": "object"
+      },
       "AlpacaPaperDeployEligibility": {
         "additionalProperties": false,
         "description": "Backend-authored launch verdict rendered verbatim by Angular.",
@@ -4694,13 +4816,68 @@
             "title": "Currency",
             "type": "string"
           },
+          "daytrading_buying_power": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daytrading Buying Power"
+          },
           "equity": {
             "title": "Equity",
             "type": "number"
           },
+          "initial_margin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Margin"
+          },
+          "last_equity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Equity"
+          },
           "long_market_value": {
             "title": "Long Market Value",
             "type": "number"
+          },
+          "maintenance_margin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Margin"
+          },
+          "multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplier"
           },
           "observed_at_ms": {
             "title": "Observed At Ms",
@@ -4721,9 +4898,31 @@
             "title": "Portfolio Value",
             "type": "number"
           },
+          "regt_buying_power": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regt Buying Power"
+          },
           "short_market_value": {
             "title": "Short Market Value",
             "type": "number"
+          },
+          "sma": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sma"
           },
           "trading_blocked": {
             "title": "Trading Blocked",
@@ -7861,6 +8060,8 @@
             "default": "real_paper",
             "enum": [
               "real_paper",
+              "real_live",
+              "shadow",
               "synthetic"
             ],
             "title": "Authority Kind",
@@ -10212,6 +10413,8 @@
             "default": "real_paper",
             "enum": [
               "real_paper",
+              "real_live",
+              "shadow",
               "synthetic"
             ],
             "title": "Authority Kind",
@@ -26121,6 +26324,8 @@
               {
                 "enum": [
                   "real_paper",
+                  "real_live",
+                  "shadow",
                   "synthetic"
                 ],
                 "type": "string"
@@ -26239,6 +26444,8 @@
               {
                 "enum": [
                   "real_paper",
+                  "real_live",
+                  "shadow",
                   "synthetic"
                 ],
                 "type": "string"
@@ -45602,6 +45809,65 @@
           }
         },
         "summary": "Get Clock Evidence",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/live-verdict": {
+      "get": {
+        "description": "The server-derived live verdict (ADR 0059 D8). Pure; never contacts the broker.",
+        "operationId": "get_live_verdict_api_brokers__broker__live_verdict_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlpacaLiveVerdict"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Live Verdict",
         "tags": [
           "brokers-v2"
         ]

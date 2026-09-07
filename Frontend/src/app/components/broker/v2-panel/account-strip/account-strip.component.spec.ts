@@ -69,7 +69,7 @@ describe('AccountStripComponent', () => {
   it('renders an explicit loading state before account posture is known', async () => {
     await render(AccountStripComponent, { componentInputs: { loading: true } });
 
-    expect(screen.getByRole('status').textContent).toContain('Resolving paper account');
+    expect(screen.getByRole('status').textContent).toContain('Resolving account');
   });
 
   it('keeps an account lookup failure explicit without claiming the fleet is hidden', async () => {
@@ -271,6 +271,17 @@ describe('AccountStripComponent', () => {
 
     expect(screen.getByText(/Showing the last broker observation/)).toBeTruthy();
     expect(screen.getByText(/Showing the last Clerk observation/)).toBeTruthy();
+  });
+
+  it('renders a live account with live chrome, never paper chrome', async () => {
+    await render(AccountStripComponent, {
+      inputs: { account: { ...account, account_id: '9LIVE0001', account_mode: 'live' }, clerkStatus: null },
+      providers: [provideRouter([])],
+    });
+
+    const badge = screen.getByText('Live');
+    expect(badge.className).toContain('posture-badge--live');
+    expect(badge.className).not.toContain('posture-badge--paper');
   });
 
   it('renders account freeze ahead of an active hold', async () => {

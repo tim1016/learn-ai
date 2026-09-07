@@ -9,18 +9,31 @@ the constructible ``OrderType`` so the two cannot silently drift apart.
 
 from __future__ import annotations
 
-from app.broker.alpaca.broker import ALPACA_PAPER_CAPABILITIES
+from unittest.mock import MagicMock
+
+import pytest
+
+from app.broker.alpaca.broker import (
+    ALPACA_LIVE_CAPABILITIES,
+    ALPACA_PAPER_CAPABILITIES,
+    AlpacaBroker,
+)
+from app.broker.alpaca.config import AlpacaSettings
 from app.broker.contract.models import BrokerOrderLeg, OrderType
 
+_DESCRIPTORS = [ALPACA_PAPER_CAPABILITIES, ALPACA_LIVE_CAPABILITIES]
 
-def test_advertised_order_types_match_the_constructible_enum() -> None:
+
+@pytest.mark.parametrize("capabilities", _DESCRIPTORS)
+def test_advertised_order_types_match_the_constructible_enum(capabilities) -> None:
     buildable = {member.value for member in OrderType}
 
-    assert set(ALPACA_PAPER_CAPABILITIES.supported_order_types) == buildable
+    assert set(capabilities.supported_order_types) == buildable
 
 
-def test_every_advertised_order_type_builds_a_valid_leg() -> None:
-    for order_type in ALPACA_PAPER_CAPABILITIES.supported_order_types:
+@pytest.mark.parametrize("capabilities", _DESCRIPTORS)
+def test_every_advertised_order_type_builds_a_valid_leg(capabilities) -> None:
+    for order_type in capabilities.supported_order_types:
         kwargs: dict[str, object] = {
             "symbol": "SPY",
             "side": "buy",
@@ -30,6 +43,29 @@ def test_every_advertised_order_type_builds_a_valid_leg() -> None:
         if order_type == "limit":
             kwargs["limit_price"] = 100.0
 
-        # Must not raise: an advertised type that cannot construct a leg is a
-        # dishonest capability descriptor.
         BrokerOrderLeg(**kwargs)
+
+
+def test_live_descriptor_differs_from_paper_only_in_paper_only() -> None:
+    assert ALPACA_PAPER_CAPABILITIES.paper_only is True
+    assert ALPACA_LIVE_CAPABILITIES.paper_only is False
+    assert ALPACA_LIVE_CAPABILITIES.model_dump(exclude={"paper_only"}) == (
+        ALPACA_PAPER_CAPABILITIES.model_dump(exclude={"paper_only"})
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [("paper", ALPACA_PAPER_CAPABILITIES), ("live", ALPACA_LIVE_CAPABILITIES)],
+)
+def test_capabilities_select_by_settings_mode(
+    monkeypatch: pytest.MonkeyPatch, mode: str, expected
+) -> None:
+    live_values = {
+        "live_loss_fraction": 0.02, "live_loss_usd": 500.0, "live_shadow_sessions": 5,
+        "live_arming_max_sessions": 20, "live_xh_entry_bps": 10.0, "live_xh_exit_bps": 10.0,
+    }
+    settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode=mode, **(live_values if mode == "live" else {}))
+    monkeypatch.setattr("app.broker.alpaca.broker.get_alpaca_settings", lambda: settings)
+
+    assert AlpacaBroker(client=MagicMock()).capabilities() is expected

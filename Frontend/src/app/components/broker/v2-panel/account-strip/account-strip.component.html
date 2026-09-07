@@ -5,7 +5,7 @@
 >
   @if (loading() && !account()) {
     <div class="account-posture__skeleton" role="status">
-      <span>Resolving paper account</span>
+      <span>Resolving account</span>
       <span class="skeleton-line" aria-hidden="true"></span>
     </div>
   } @else if (accountUnavailable() && !account()) {
@@ -16,7 +16,11 @@
   } @else if (account(); as snap) {
     <div class="posture-summary">
       <strong class="posture-summary__account">{{ snap.account_id }}</strong>
-      <span class="posture-badge posture-badge--paper">{{ snap.account_mode | receiptLabel }}</span>
+      <span
+        class="posture-badge"
+        [class.posture-badge--paper]="snap.account_mode === 'paper'"
+        [class.posture-badge--live]="snap.account_mode === 'live'"
+      >{{ snap.account_mode | receiptLabel }}</span>
 
       <span class="posture-summary__facts">
         <span>Equity <strong>{{ fmtCurrency(snap.equity) }}</strong></span>

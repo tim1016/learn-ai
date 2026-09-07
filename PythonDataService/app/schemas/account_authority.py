@@ -6,16 +6,25 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-AuthorityKind = Literal["real_paper", "synthetic"]
+AuthorityKind = Literal["real_paper", "real_live", "shadow", "synthetic"]
 
 
 def _validate_account_authority(account_id: str, authority_kind: AuthorityKind) -> None:
     """Keep account namespace and authority kind inseparable at the wire boundary."""
-    is_synthetic_account = account_id.startswith("sim:")
-    if is_synthetic_account and authority_kind != "synthetic":
-        raise ValueError("sim: account ids require synthetic authority")
-    if not is_synthetic_account and authority_kind != "real_paper":
-        raise ValueError("real-paper account ids require real_paper authority")
+    if account_id.startswith("sim:"):
+        if authority_kind != "synthetic":
+            raise ValueError("sim: account ids require synthetic authority")
+        if account_id == "sim:":
+            raise ValueError("sim: account identity must name one account")
+        return
+    if account_id.startswith("shadow:"):
+        if authority_kind != "shadow":
+            raise ValueError("shadow: account ids require shadow authority")
+        if account_id == "shadow:":
+            raise ValueError("shadow: account identity must name one account")
+        return
+    if authority_kind not in ("real_paper", "real_live"):
+        raise ValueError("real account ids require real_paper or real_live authority")
 
 
 class AuthorityScopedRow(BaseModel):

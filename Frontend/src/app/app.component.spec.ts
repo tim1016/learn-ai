@@ -7,6 +7,7 @@ import { vi } from 'vitest';
 import axe from 'axe-core';
 import { AppComponent } from './app.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
 
 class FakeBrokerHealthService {
   readonly health = signal(null);
@@ -15,6 +16,12 @@ class FakeBrokerHealthService {
   start = vi.fn();
   connect = vi.fn().mockResolvedValue(undefined);
   disconnect = vi.fn().mockResolvedValue(undefined);
+}
+
+class FakeAlpacaLiveVerdictService {
+  verdict = signal(null);
+  lastError = signal(null);
+  start = vi.fn();
 }
 
 @Component({ template: '<p>Route body</p>', changeDetection: ChangeDetectionStrategy.OnPush })
@@ -41,6 +48,7 @@ describe('AppComponent', () => {
       providers: [
         MessageService,
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: AlpacaLiveVerdictService, useClass: FakeAlpacaLiveVerdictService },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(AppComponent);

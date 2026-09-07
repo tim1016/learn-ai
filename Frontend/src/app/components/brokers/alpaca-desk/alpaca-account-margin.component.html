@@ -1,0 +1,14 @@
+<dl class="headline-metrics">
+  @for (row of rows(); track row.label) {
+    <div>
+      <dt>{{ row.label }}</dt>
+      @if (row.value === null || row.value === undefined) {
+        <dd>—</dd>
+      } @else if (row.currency) {
+        <dd>{{ row.value | currency: account().currency }}</dd>
+      } @else {
+        <dd>{{ row.value }}</dd>
+      }
+    </div>
+  }
+</dl>

@@ -293,6 +293,27 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         await route.fulfill({ status: 404, json: { detail: 'No current run fixture.' } });
         return;
       }
+      if (path === '/api/brokers/alpaca/live-verdict') {
+        // The shell's root-scoped verdict poll (ADR 0059 D8): a read-only
+        // paper verdict, so the banner renders and the campaign stays read-only.
+        await route.fulfill({
+          json: {
+            configured_mode: 'paper',
+            observed_account_id: ACCOUNT_ID,
+            mode_agreement: 'agreed',
+            clerk_authority: 'sqlite',
+            clerk_refusal_reason_code: null,
+            armed_instance_count: 0,
+            envelope_state: 'not_applicable',
+            shadow_state: 'not_applicable',
+            final_verdict: 'paper',
+            headline: `Paper account ${ACCOUNT_ID} — no real money at risk`,
+            detail: "ALPACA_MODE=paper. Orders reach Alpaca's paper endpoint only.",
+            observed_at_ms: 1_700_000_000_000,
+          },
+        });
+        return;
+      }
       if (path === '/api/broker/health') {
         await route.fulfill({
           json: {

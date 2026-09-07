@@ -61,4 +61,41 @@ describe('AlpacaAccountCardComponent', () => {
     // receiptLabel title-cases the code identifier.
     expect(await screen.findByText('Active')).toBeTruthy();
   });
+
+  it('tags a live account as Live with danger severity, never a hardcoded Paper', async () => {
+    await renderCard(() => Promise.resolve(fakeAccount({ account_id: '9LIVE0001', account_mode: 'live' })));
+
+    expect(await screen.findByText('9LIVE0001')).toBeTruthy();
+    expect(screen.getByText('Live')).toBeTruthy();
+    expect(screen.queryByText('Paper')).toBeNull();
+  });
+
+  it('renders the margin facts read-only, with a dash for an unknown value', async () => {
+    await renderCard(() =>
+      Promise.resolve(
+        fakeAccount({
+          multiplier: 4,
+          regt_buying_power: 200_000,
+          daytrading_buying_power: null,
+          maintenance_margin: 0,
+          initial_margin: 0,
+          sma: 100_000,
+          last_equity: 100_000,
+        }),
+      ),
+    );
+
+    expect(await screen.findByText('Multiplier')).toBeTruthy();
+    expect(screen.getByText('Multiplier').nextElementSibling?.textContent).toContain('4');
+    expect(screen.getByText('Day-trading BP').nextElementSibling?.textContent).toContain('—');
+  });
+
+  it('seats the margin panel after the disclosure toggle in DOM order', async () => {
+    const { container } = await renderCard(() => Promise.resolve(fakeAccount({ multiplier: 4 })));
+
+    const multiplier = await screen.findByText('Multiplier');
+    const toggle = container.querySelector('.account-toggle');
+    if (!(toggle instanceof HTMLElement)) throw new Error('account toggle not rendered');
+    expect(Boolean(toggle.compareDocumentPosition(multiplier) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
 });

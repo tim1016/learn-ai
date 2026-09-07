@@ -1,0 +1,36 @@
+:host {
+  display: block;
+  /* A full-width row of the card's `.account-strip__primary` grid: the parent
+     keeps its three row-1 columns (identity · headline metrics · toggle) and
+     the margin panel reads as its own row beneath them. It is the card's last
+     child in DOM order on purpose — a definite-column item is auto-placed at
+     the cursor, so seated earlier it would take the toggle's cell and push the
+     toggle to a new row; an explicit `grid-row` would instead collide with the
+     one-column layout, where the headline metrics already own row 2. */
+  grid-column: 1 / -1;
+}
+
+.headline-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: clamp(0.75rem, 2vw, 2rem);
+  margin: var(--space-3) 0 0;
+}
+
+.headline-metrics dt {
+  color: var(--text-muted);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.headline-metrics dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(0.95rem, 1.5vw, 1.2rem);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-tight);
+}

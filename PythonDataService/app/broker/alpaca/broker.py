@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from app.broker.alpaca import adapter
 from app.broker.alpaca.client import AlpacaTradingClient
-from app.broker.alpaca.config import BROKER_ID
+from app.broker.alpaca.config import BROKER_ID, get_alpaca_settings
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -52,6 +52,12 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
     rest_rate_limit_per_min=200,
 )
 
+# The real-money descriptor differs only in paper_only (ADR 0059 D9). Every
+# other fact — IEX feed, stream caps, rate limit, buildable order types — is
+# the same account tier; keeping one literal per mode makes the difference
+# reviewable instead of a boolean flip buried in a constructor.
+ALPACA_LIVE_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.model_copy(update={"paper_only": False})
+
 _PORTFOLIO_HISTORY_QUERY: dict[PortfolioHistoryRange, tuple[str, str]] = {
     PortfolioHistoryRange.ONE_DAY: ("1D", "1Min"),
     PortfolioHistoryRange.THIRTY_DAYS: ("30D", "1D"),
@@ -68,11 +74,17 @@ class AlpacaBroker:
         self._client = client or AlpacaTradingClient()
 
     def capabilities(self) -> BrokerCapabilities:
-        return ALPACA_PAPER_CAPABILITIES
+        return (
+            ALPACA_LIVE_CAPABILITIES
+            if get_alpaca_settings().is_live
+            else ALPACA_PAPER_CAPABILITIES
+        )
 
     async def get_account(self) -> BrokerAccountSnapshot:
         payload = await self._client.get_account()
-        return adapter.from_alpaca_account(payload)
+        # The mode that selected the endpoint is the only source of the
+        # account's mode (ADR 0059 D1); the adapter refuses a disagreeing shape.
+        return adapter.from_alpaca_account(payload, account_mode=get_alpaca_settings().mode)
 
     async def list_positions(self) -> list[BrokerPosition]:
         payloads = await self._client.list_positions()

@@ -14,8 +14,6 @@ lets the idempotency key make double-clicks safe (§11).
 
 from __future__ import annotations
 
-from typing import Literal
-
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
@@ -27,6 +25,7 @@ from app.broker.v2panel.vocabulary import (
     duty_outcome_copy_key,
     hold_reason_for,
 )
+from app.schemas.account_authority import AuthorityKind
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotHealthCard,
@@ -319,7 +318,7 @@ def _recent_decision_views(
     limit: int = 8,
     simulated: bool = False,
     authority_account_id: str | None = None,
-    authority_kind: Literal["real_paper", "synthetic"] | None = None,
+    authority_kind: AuthorityKind | None = None,
 ) -> list[RecentDecisionView]:
     return [
         RecentDecisionView(
@@ -345,7 +344,7 @@ def _recent_fill_views(
     *,
     limit: int = 8,
     authority_account_id: str | None = None,
-    authority_kind: Literal["real_paper", "synthetic"] | None = None,
+    authority_kind: AuthorityKind | None = None,
 ) -> list[RecentFillView]:
     fills = project_instance_fills(sid, entries)
     return [
@@ -490,7 +489,7 @@ def _recent_activity_views(
     dry_run_activity: list[DryRunActivity],
     *,
     authority_account_id: str,
-    authority_kind: Literal["real_paper", "synthetic"],
+    authority_kind: AuthorityKind,
 ) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
     """Project real or simulated activity behind one explicit mode boundary.
 

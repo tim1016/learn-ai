@@ -5,6 +5,7 @@ import { TagModule } from 'primeng/tag';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../services/brokers.service';
+import { AlpacaAccountMarginComponent } from './alpaca-account-margin.component';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 
 /**
@@ -15,7 +16,7 @@ import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service
 @Component({
   selector: 'app-alpaca-account-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, ReceiptLabelPipe, TagModule, TimestampDisplayComponent],
+  imports: [AlpacaAccountMarginComponent, CurrencyPipe, ReceiptLabelPipe, TagModule, TimestampDisplayComponent],
   templateUrl: './alpaca-account-card.component.html',
   styleUrl: './alpaca-account-card.component.scss',
   host: { class: 'block' },

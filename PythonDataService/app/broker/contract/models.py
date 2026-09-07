@@ -145,6 +145,16 @@ class BrokerAccountSnapshot(_ContractModel):
     portfolio_value: float
     long_market_value: float
     short_market_value: float
+    # Margin facts, ingested so an operator can see exposure sits under cash
+    # (ADR 0059 D7). Nullable: absence is unknown. The live envelope reads
+    # ``cash`` and never any of these.
+    multiplier: float | None = None
+    regt_buying_power: float | None = None
+    daytrading_buying_power: float | None = None
+    maintenance_margin: float | None = None
+    initial_margin: float | None = None
+    sma: float | None = None
+    last_equity: float | None = None
     # Alpaca omits this field for some paper accounts; absence is unknown, not false.
     pattern_day_trader: bool | None
     trading_blocked: bool

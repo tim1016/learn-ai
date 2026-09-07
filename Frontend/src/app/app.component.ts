@@ -3,8 +3,10 @@ import { Title } from '@angular/platform-browser';
 import { ActivatedRouteSnapshot, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { BrokerBannerComponent } from './shell/broker-banner.component';
+import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
@@ -22,6 +24,7 @@ import { CurrentUrlService } from './shell/current-url.service';
     RouterOutlet,
     AppMenubarComponent,
     BrokerBannerComponent,
+    AlpacaLiveBannerComponent,
     TopBarComponent,
     PageBodyComponent,
     MarkdownDrawerHostComponent,
@@ -70,6 +73,7 @@ import { CurrentUrlService } from './shell/current-url.service';
       <app-top-bar>
         <app-menubar shell-nav />
         <app-broker-banner shell-connection />
+        <app-alpaca-live-banner shell-connection />
       </app-top-bar>
       <main class="main">
         <div class="main-content">
@@ -85,6 +89,7 @@ import { CurrentUrlService } from './shell/current-url.service';
 })
 export class AppComponent {
   private readonly brokerHealth = inject(BrokerHealthService);
+  private readonly alpacaLive = inject(AlpacaLiveVerdictService);
   private readonly title = inject(Title);
   private readonly router = inject(Router);
   private readonly currentUrl = inject(CurrentUrlService).url;
@@ -100,6 +105,10 @@ export class AppComponent {
     // read ``BrokerHealthService.health()`` instead of polling
     // /api/broker/health from per-page mounts.
     this.brokerHealth.start();
+    // The Alpaca account-mode banner is the ADR 0011 trust anchor for the
+    // Alpaca path (ADR 0059 D8): one root poll, rendered from the server
+    // verdict, never composed on the client.
+    this.alpacaLive.start();
   }
 }
 
