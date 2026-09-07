@@ -7,6 +7,7 @@
 import type { components } from './broker.types';
 
 export type BrokerAccountSnapshot = components['schemas']['BrokerAccountSnapshot'];
+export type AlpacaLiveVerdict = components['schemas']['AlpacaLiveVerdict'];
 export type BrokerActivity = components['schemas']['BrokerActivity'];
 export type BrokerPosition = components['schemas']['BrokerPosition'];
 export type BrokerOrder = components['schemas']['BrokerOrder'];
