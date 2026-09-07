@@ -132,10 +132,17 @@ input {
   color: var(--text-subtle);
   font-size: var(--fs-xs);
 
+  // Shown outside the Advanced block while the launcher blocks the run.
+  &--blocking {
+    border-top: 0;
+    border-left: 2px solid var(--warn);
+    padding-left: var(--space-3);
+    strong { color: var(--text-primary); }
+  }
+
   div { display: flex; justify-content: space-between; }
   p { margin: 0; }
   code { overflow-wrap: anywhere; color: var(--text-muted); font-size: 9px; }
-  button { justify-self: start; }
 }
 
 .config-rail__footer {

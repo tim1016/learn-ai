@@ -76,6 +76,9 @@ async function createRail(
 describe("StrategyLabConfigRailComponent", () => {
   it("renders exactly the four primary flat inputs and keeps parameters in Advanced", async () => {
     const fixture = await createRail();
+    // A launcher that has passed its check lives in Advanced; an unchecked one is on the rail (#1976).
+    fixture.componentRef.setInput("launcherStatus", "ready");
+    fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
 
     expect(root.textContent).toContain("Engine");
@@ -129,11 +132,43 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(root.querySelector<HTMLButtonElement>("[aria-label='Expand configuration']")).not.toBeNull();
   });
 
+  it("shows a blocked launcher's status and detail outside the collapsed Advanced block", async () => {
+    // #1976: with the launcher down the primary button became "Check launcher"
+    // while the status, the diagnose detail and the start command stayed inside
+    // <details class="advanced">, collapsed, so the rail never said why.
+    const fixture = await createRail();
+    fixture.componentRef.setInput("launcherStatus", "blocked");
+    fixture.componentRef.setInput("launcherDetail", "launcher_unreachable: connection refused");
+    fixture.componentRef.setInput("launcherCommand", "uvicorn app.lean_sidecar.launcher.app:app");
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+
+    const launcher = root.querySelector<HTMLElement>(".lean-launcher");
+    expect(launcher).not.toBeNull();
+    expect(launcher?.closest("details")).toBeNull();
+    expect(launcher?.textContent).toContain("blocked");
+    expect(launcher?.textContent).toContain("launcher_unreachable: connection refused");
+    expect(launcher?.textContent).toContain("uvicorn app.lean_sidecar.launcher.app:app");
+    expect(root.querySelectorAll(".lean-launcher")).toHaveLength(1);
+  });
+
+  it("keeps a ready launcher's status inside the Advanced block", async () => {
+    const fixture = await createRail();
+    fixture.componentRef.setInput("launcherStatus", "ready");
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+
+    const launcher = root.querySelector<HTMLElement>(".lean-launcher");
+    expect(launcher).not.toBeNull();
+    expect(launcher?.closest("details.advanced")).not.toBeNull();
+    expect(root.querySelectorAll(".lean-launcher")).toHaveLength(1);
+  });
+
   it("keeps the launcher recovery action clickable when LEAN is blocked", async () => {
     const fixture = await createRail();
     const launcherCheckRequested = vi.fn();
     const runRequested = vi.fn();
-    fixture.componentRef.setInput("launcherBlocksRun", true);
+    fixture.componentRef.setInput("launcherStatus", "blocked");
     fixture.componentInstance.launcherCheckRequested.subscribe(launcherCheckRequested);
     fixture.componentInstance.runRequested.subscribe(runRequested);
     fixture.detectChanges();
@@ -150,7 +185,7 @@ describe("StrategyLabConfigRailComponent", () => {
   it("blocks Run while another tab's backtest is busy, but keeps launcher recovery clickable", async () => {
     const fixture = await createRail();
     fixture.componentRef.setInput("engineBusy", true);
-    fixture.componentRef.setInput("launcherBlocksRun", true);
+    fixture.componentRef.setInput("launcherStatus", "blocked");
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
 
@@ -158,7 +193,7 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(launcher?.textContent).toContain("Check launcher");
     expect(launcher?.disabled).toBe(false);
 
-    fixture.componentRef.setInput("launcherBlocksRun", false);
+    fixture.componentRef.setInput("launcherStatus", "ready");
     fixture.detectChanges();
     const run = root.querySelector<HTMLButtonElement>(".run-button");
     expect(run?.textContent).toContain("Run validation");
@@ -167,7 +202,7 @@ describe("StrategyLabConfigRailComponent", () => {
 
   it("disables rerun when the restored strategy is no longer selectable", async () => {
     const fixture = await createRail();
-    fixture.componentRef.setInput("launcherBlocksRun", false);
+    fixture.componentRef.setInput("launcherStatus", "ready");
     fixture.componentRef.setInput("selectedStrategyName", "retired_strategy");
     fixture.detectChanges();
 
@@ -177,7 +212,7 @@ describe("StrategyLabConfigRailComponent", () => {
 
   it("does not offer launcher recovery for a configuration that cannot be rerun", async () => {
     const fixture = await createRail();
-    fixture.componentRef.setInput("launcherBlocksRun", true);
+    fixture.componentRef.setInput("launcherStatus", "blocked");
     fixture.componentRef.setInput("runBlocked", true);
     fixture.componentRef.setInput("selectedStrategyName", "retired_strategy");
     fixture.detectChanges();
@@ -225,6 +260,8 @@ describe("StrategyLabConfigRailComponent", () => {
 
   it("hides the QCAlgorithm editor in Both mode, which cannot carry a custom source", async () => {
     const fixture = await createRail(false, "both");
+    fixture.componentRef.setInput("launcherStatus", "ready");
+    fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
 
     // `StrategyLabRunner.run()` routes `both` through `runPython()`, whose

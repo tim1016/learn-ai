@@ -1,3 +1,4 @@
+import { NgTemplateOutlet } from "@angular/common";
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from "@angular/core";
 
 import type { DataPolicy } from "../../../models/data-policy";
@@ -6,7 +7,7 @@ import type { PriceAdjustmentMode } from '../../../shared/data-lake';
 import { InstrumentCardComponent } from "../../../shared/ticker-range-picker/parts/instrument-card.component";
 import { TimeWindowCardComponent } from "../../../shared/ticker-range-picker/parts/time-window-card.component";
 import type { TickerRange } from "../../../shared/ticker-range-picker/ticker-range-picker.types";
-import type { EngineChoice, StrategyInfo } from "../strategy-lab.models";
+import type { EngineChoice, LeanLauncherStatus, StrategyInfo } from "../strategy-lab.models";
 
 export interface StrategyParameterChange {
   field: string;
@@ -22,7 +23,7 @@ interface StrategyLabPrimaryAction {
 
 @Component({
   selector: "app-strategy-lab-config-rail",
-  imports: [InstrumentCardComponent, TimeWindowCardComponent],
+  imports: [NgTemplateOutlet, InstrumentCardComponent, TimeWindowCardComponent],
   templateUrl: "./strategy-lab-config-rail.component.html",
   styleUrl: "./strategy-lab-config-rail.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -47,8 +48,7 @@ export class StrategyLabConfigRailComponent {
   /** The lake tree this run reads; the instrument card offers only that tree. */
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
   readonly runBlocked = input(false);
-  readonly launcherBlocksRun = input(false);
-  readonly launcherStatus = input("unknown");
+  readonly launcherStatus = input<LeanLauncherStatus>("unknown");
   readonly launcherDetail = input("");
   readonly launcherCommand = input("");
   readonly leanTemplateLabel = input<string | null>(null);
@@ -93,6 +93,17 @@ export class StrategyLabConfigRailComponent {
       : policy.source;
     return `${sampling} · ${session} · ${provider}`;
   });
+
+  /**
+   * Where the launcher section lives: hidden for Python runs, inside the
+   * Advanced block once the launcher is ready, and out on the rail while it
+   * is the reason Run is unavailable (#1976). One three-valued signal, so the
+   * section can render in exactly one place.
+   */
+  readonly launcherPlacement = computed<"hidden" | "advanced" | "rail">(() =>
+    this.engine() === "python" ? "hidden" : this.launcherStatus() === "ready" ? "advanced" : "rail",
+  );
+  readonly launcherBlocksRun = computed(() => this.launcherPlacement() === "rail");
 
   readonly primaryAction = computed<StrategyLabPrimaryAction>(() => {
     const unavailableStrategy = this.selectedStrategy() === null;

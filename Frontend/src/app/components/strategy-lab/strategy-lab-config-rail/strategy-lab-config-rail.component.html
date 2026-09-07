@@ -124,16 +124,26 @@
         </button>
       }
 
-      @if (engine() !== "python") {
-        <section class="lean-launcher" aria-label="LEAN launcher">
-          <div><span>LEAN launcher</span><strong>{{ launcherStatus() }}</strong></div>
-          @if (leanTemplateLabel()) { <p>{{ leanTemplateLabel() }}</p> }
-          @if (launcherDetail()) { <p>{{ launcherDetail() }}</p> }
-          <code>{{ launcherCommand() }}</code>
-          <button type="button" (click)="launcherCheckRequested.emit()">Check launcher</button>
-        </section>
+      @if (launcherPlacement() === "advanced") {
+        <ng-container *ngTemplateOutlet="leanLauncher" />
       }
     </details>
+
+    <!-- A blocked launcher is the reason Run is unavailable, so it is shown
+         here, outside the collapsed Advanced block, until the check passes.
+         The footer's primary action is the one recovery control. -->
+    @if (launcherPlacement() === "rail") {
+      <ng-container *ngTemplateOutlet="leanLauncher" />
+    }
+
+    <ng-template #leanLauncher>
+      <section class="lean-launcher" [class.lean-launcher--blocking]="launcherBlocksRun()" aria-label="LEAN launcher">
+        <div><span>LEAN launcher</span><strong>{{ launcherStatus() }}</strong></div>
+        @if (leanTemplateLabel()) { <p>{{ leanTemplateLabel() }}</p> }
+        @if (launcherDetail()) { <p>{{ launcherDetail() }}</p> }
+        <code>{{ launcherCommand() }}</code>
+      </section>
+    </ng-template>
 
     <footer class="config-rail__footer">
       <button
