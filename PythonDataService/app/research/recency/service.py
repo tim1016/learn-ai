@@ -11,6 +11,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
@@ -117,7 +118,9 @@ def window_date(ms: int) -> str:
     return ms_to_et_date_string(ms)
 
 
-def _execute_backtest(run_spec: RunSpec, config: RecencyLaunchConfig) -> Any:
+def _execute_backtest(
+    run_spec: RunSpec, config: RecencyLaunchConfig, *, cancel_check: Callable[[], object] = lambda: None
+) -> Any:
     params = {**run_spec.params, "symbol": run_spec.symbol}
     request = EngineBacktestRequest(
         strategy_name=run_spec.strategy_key,
@@ -127,7 +130,14 @@ def _execute_backtest(run_spec: RunSpec, config: RecencyLaunchConfig) -> Any:
         fill_mode=config.fill_mode,
         commission_per_order=config.commission_per_order,
     )
-    return execute_engine_backtest(request=request, on_phase=lambda phase: None, on_log=lambda message: None)
+    return execute_engine_backtest(
+        request=request,
+        on_phase=lambda phase: None,
+        on_log=lambda message: None,
+        # The run may queue behind another process-wide backtest before it
+        # starts; this is what lets a cancel reach it while it waits (#1957).
+        while_waiting=cancel_check,
+    )
 
 
 def _persist(snapshot: RecencyRunSnapshot) -> None:
@@ -158,13 +168,20 @@ def run_launch(
     *,
     emit: ProgressEmitter,
     cancel: CancellationCheck,
-    execute_backtest: Callable[[RunSpec, RecencyLaunchConfig], Any] = _execute_backtest,
+    execute_backtest: Callable[[RunSpec, RecencyLaunchConfig], Any] | None = None,
 ) -> dict[str, Any]:
-    """The worker body: run the grid, persist each run, record the launch's terminal state, return the summary."""
+    """The worker body: run the grid, persist each run, record the launch's terminal state, return the summary.
+
+    ``execute_backtest`` defaults to the real engine call wired to *this* job's
+    cancellation check, so a run still queued behind another process-wide
+    backtest can be cancelled before it starts (#1957). A test injects a plain
+    ``(run_spec, config)`` fake and nothing else changes.
+    """
+    execute = execute_backtest or partial(_execute_backtest, cancel_check=cancel.raise_if_cancelled)
     try:
         summary = run_recency(
             config,
-            execute_backtest_fn=execute_backtest,
+            execute_backtest_fn=execute,
             persist_fn=_persist,
             strategy_code_version_fn=lambda strategy_key: resolved_code_revision(),
             on_phase=emit.phase,

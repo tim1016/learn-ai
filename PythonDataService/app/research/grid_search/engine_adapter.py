@@ -62,7 +62,20 @@ def cell_from_response(candidate: RunSpec, response: EngineBacktestResponse) -> 
     )
 
 
-def default_execute_cell(row: SearchRow, spec: GridSearchSpec) -> Callable[[RunSpec], CellResult]:
+def default_execute_cell(
+    row: SearchRow,
+    spec: GridSearchSpec,
+    *,
+    cancel_check: Callable[[], object] = lambda: None,
+) -> Callable[[RunSpec], CellResult]:
+    """One cell, as one engine call.
+
+    ``cancel_check`` is the sweep loop's own raise-only check, forwarded into
+    the engine gate. The loop polls it between cells; a cell that is *queued*
+    behind another process-wide backtest has not started, and without this the
+    only thing that could end its wait was the run ahead of it finishing
+    (#1957, #1942-adjacent). Raising abandons the wait without taking the gate.
+    """
     manifest = row.receipt["data_snapshot"]["artifacts"]
 
     def _execute(candidate: RunSpec) -> CellResult:
@@ -71,6 +84,7 @@ def default_execute_cell(row: SearchRow, spec: GridSearchSpec) -> Callable[[RunS
             on_phase=lambda phase: None,
             on_log=lambda message: None,
             data_manifest=manifest,
+            while_waiting=cancel_check,
         )
         return cell_from_response(candidate, response)
 

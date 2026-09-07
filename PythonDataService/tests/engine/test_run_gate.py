@@ -39,30 +39,38 @@ def _join(*threads: threading.Thread) -> None:
 
 
 def test_a_second_backtest_waits_for_the_one_in_flight() -> None:
-    first_exited = threading.Event()
-    first_inside = threading.Event()
+    """Counted from inside the gate, so no marker can be set on the wrong side of it.
+
+    A marker set *after* the ``with`` block races the waiter it is meant to
+    order against: the gate is already released, so the second run can
+    legitimately enter before the marker lands and read the wrong answer.
+    Counting occupancy under a lock has no such window.
+    """
     release_first = threading.Event()
-    saw_first_exited: list[bool] = []
+    first_inside = threading.Event()
+    occupancy = threading.Lock()
+    inside = 0
+    high_water = 0
 
-    def first() -> None:
+    def a_run(hold_until: threading.Event | None) -> None:
+        nonlocal inside, high_water
         with one_backtest_in_flight():
-            first_inside.set()
-            release_first.wait(timeout=5)
-        first_exited.set()
+            with occupancy:
+                inside += 1
+                high_water = max(high_water, inside)
+            if hold_until is not None:
+                first_inside.set()
+                hold_until.wait(timeout=5)
+            with occupancy:
+                inside -= 1
 
-    def second() -> None:
-        with one_backtest_in_flight():
-            # Recorded from inside the gate: if the second run got in while the
-            # first still held it, this is False and no timing can hide it.
-            saw_first_exited.append(first_exited.is_set())
-
-    a = _spawn(first, name="first")
+    a = _spawn(lambda: a_run(release_first), name="first")
     assert first_inside.wait(timeout=5)
-    b = _spawn(second, name="second")
+    b = _spawn(lambda: a_run(None), name="second")
 
     release_first.set()
     _join(a, b)
-    assert saw_first_exited == [True]
+    assert high_water == 1, f"{high_water} backtests were inside the gate at once"
 
 
 def test_a_caller_that_waits_is_told_once_before_it_blocks() -> None:
