@@ -923,8 +923,11 @@ def _failed_run_payload(
         "lean_run_id": run_id,
         "source": "lean-sidecar",
         "requested_engine": requested_engine,
+        # Set as a pair: the detail is what tells the persist path to settle
+        # the group at ``run_failed`` instead of comparing, so it is meaningless
+        # without a group to settle.
         "parity_group_id": parity_group_id,
-        "parity_failure_detail": error,
+        "parity_failure_detail": error if parity_group_id is not None else None,
         "strategy_name": algorithm_name,
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},

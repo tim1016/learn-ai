@@ -1569,4 +1569,7 @@ def test_a_lean_run_without_a_parity_group_carries_no_group_on_its_failed_row(tm
         end_date_ms=1_700_000_600_000,
     )
 
+    # Set as a pair: the detail routes a group's settle, so it is meaningless
+    # without one (#1977).
     assert payload["parity_group_id"] is None
+    assert payload["parity_failure_detail"] is None

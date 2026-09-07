@@ -52,15 +52,29 @@ So:
    an `unavailable` disposition are still never overwritten.
 2. **A companion that produced no comparable result settles its group at
    `run_failed`.** Its failed row now carries `parity_group_id` *and*
-   `parity_failure_detail`; the persist path reads the second and marks the group
-   instead of comparing. Carrying the group without the detail would compare a
+   `parity_failure_detail`; the latter is validated onto `BacktestRunRecord` and
+   routes the settle. Carrying the group without the detail would compare a
    zero-trade row against a real Python run and report a divergence that never
    happened.
-3. **The settle is chained onto the insert on the writer loop**, not made a
+3. **Both outcomes travel one write.** `settle_parity_for_lean_run` shapes either
+   the computed verdict or `failed_companion_verdict(...)` and freezes it through
+   `freeze_parity_verdict`. There is no second write with its own guards: the
+   failure path inherits insert-if-missing (a group whose best-effort `pending`
+   row was lost still settles, where the conditional `mark_parity_failed` UPDATE
+   would have matched nothing and silently left it unsettled) and records
+   `right_run_id` on the failed row like any other. Its three phases take
+   separate connections, so the compare pins none.
+4. **The settle is chained onto the insert on the writer loop**, not made a
    second hop from the calling thread, so it still runs when the caller has
-   stopped waiting — `run_sync` does not cancel on timeout. A timeout is
-   therefore reported as *outcome unknown*, distinct from *not persisted*.
+   stopped waiting — `run_sync` does not cancel on timeout.
+5. **Only the caller's own wait is outcome-unknown.** Since Python 3.11
+   `asyncio.TimeoutError` *is* `TimeoutError`, so asyncpg's `command_timeout`
+   raising from inside the coroutine is indistinguishable at the call site from
+   the wait expiring — yet the first means the write stopped and rolled back.
+   `run_on_background_loop` now raises `CallerStoppedWaitingError` for its own
+   timeout and lets everything the coroutine raised propagate unchanged, so a
+   failed write keeps its traceback.
 
 Because every dispatch mark is now provisional, the ordering between a timed-out
 caller's mark and the writer loop's settle no longer matters: either order
-converges on the verdict computed from the rows.
+converges on the verdict the landed row justifies.

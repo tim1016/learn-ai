@@ -65,6 +65,10 @@ class BacktestRunRecord:
     requested_engine: RequestedEngine | None
     lean_run_id: str | None
     parity_group_id: str | None
+    # Not a column: the LEAN failed-run shape sets this to say the companion
+    # produced no comparable result, so its group settles at ``run_failed``
+    # rather than being compared against a real Python run (#1977).
+    parity_failure_detail: str | None
     strategy_name: str
     symbol: str
     parameters: dict[str, Any]
@@ -140,6 +144,7 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
         requested_engine=requested_engine,
         lean_run_id=lean_run_id,
         parity_group_id=payload.get("parity_group_id") or None,
+        parity_failure_detail=_parity_failure_detail(payload, source=source),
         strategy_name=str(payload.get("strategy_name") or ""),
         symbol=symbol,
         parameters=parameters,
@@ -194,6 +199,18 @@ def synthesize_legacy_data_policy(symbol: str) -> str:
             "fixture_sha256": None,
         }
     )
+
+
+def _parity_failure_detail(payload: Mapping[str, Any], *, source: str) -> str | None:
+    """Why the LEAN companion produced no comparable result, when it did not."""
+    detail = payload.get("parity_failure_detail")
+    if detail is None or detail == "":
+        return None
+    if not isinstance(detail, str):
+        raise RunPayloadError("parity_failure_detail must be a string")
+    if source != "lean-sidecar":
+        raise RunPayloadError("parity_failure_detail is only meaningful for source='lean-sidecar'")
+    return detail
 
 
 def _iso_date(payload: Mapping[str, Any], key: str) -> date:

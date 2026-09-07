@@ -9,6 +9,8 @@ import pytest
 
 from app.research.backtest_runs import repository as repo
 from app.research.backtest_runs import service
+from app.research.backtest_runs.records import RunPayloadError, record_from_payload
+from app.utils.background_loop import CallerStoppedWaitingError
 from tests.research.backtest_runs.payloads import engine_payload, lean_payload
 
 
@@ -44,12 +46,14 @@ def test_an_invalid_payload_never_reaches_the_writer(
 def test_a_failed_settle_is_logged_and_leaves_the_run_persisted(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    async def exploding_settle(fn, /, *args, **kwargs):
-        if fn.__name__ == "insert_run":
-            return repo.InsertOutcome(run_id=5, created=True)
+    async def stub_insert(fn, /, *args, **kwargs):
+        return repo.InsertOutcome(run_id=5, created=True)
+
+    async def exploding_settle(**kwargs):
         raise RuntimeError("compare exploded")
 
-    monkeypatch.setattr(service, "with_connection", exploding_settle)
+    monkeypatch.setattr(service, "with_connection", stub_insert)
+    monkeypatch.setattr(service, "settle_parity_for_lean_run", exploding_settle)
     monkeypatch.setattr(service, "run_sync", asyncio.run)
 
     with caplog.at_level(logging.ERROR):
@@ -64,13 +68,13 @@ def test_a_failed_settle_is_logged_and_leaves_the_run_persisted(
 def test_a_caller_that_stops_waiting_is_not_told_the_run_failed(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """#1977: ``run_sync`` does not cancel, so a timeout is outcome-unknown, not failure."""
+    """#1977: ``run_sync`` does not cancel, so this is outcome-unknown, not failure."""
 
-    def timing_out_run_sync(coroutine):
+    def abandoning_run_sync(coroutine):
         coroutine.close()
-        raise TimeoutError
+        raise CallerStoppedWaitingError("still running")
 
-    monkeypatch.setattr(service, "run_sync", timing_out_run_sync)
+    monkeypatch.setattr(service, "run_sync", abandoning_run_sync)
 
     with caplog.at_level(logging.WARNING):
         run_id = service.persist_run_payload_sync(engine_payload())
@@ -80,33 +84,46 @@ def test_a_caller_that_stops_waiting_is_not_told_the_run_failed(
     assert "Run not persisted" not in caplog.text
 
 
-def test_the_insert_and_the_settle_reach_the_writer_loop_as_one_coroutine(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#1977: chained on the writer loop, the settle survives a caller that timed out."""
-    submitted: list = []
+def test_a_write_that_timed_out_on_the_database_is_still_reported_as_a_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1977 M1: ``asyncio.TimeoutError`` *is* ``TimeoutError`` since 3.11.
 
-    def capturing_run_sync(coroutine):
-        submitted.append(coroutine)
+    asyncpg raises it for the pool's ``command_timeout``, from inside the
+    coroutine — the write stopped and rolled back. Reporting that as
+    outcome-unknown would drop the traceback exactly when an operator is
+    chasing a lost run.
+    """
+
+    def command_timeout_run_sync(coroutine):
         coroutine.close()
-        raise TimeoutError
+        raise TimeoutError("query timed out")
 
-    monkeypatch.setattr(service, "run_sync", capturing_run_sync)
+    monkeypatch.setattr(service, "run_sync", command_timeout_run_sync)
 
-    service.persist_run_payload_sync(engine_payload())
+    with caplog.at_level(logging.WARNING):
+        run_id = service.persist_run_payload_sync(engine_payload())
 
-    assert [c.__qualname__ for c in submitted] == ["_insert_and_settle"]
+    assert run_id is None
+    assert "Run not persisted" in caplog.text
+    assert "outcome unknown" not in caplog.text
 
 
-def test_a_companion_that_produced_no_result_settles_its_group_instead_of_comparing(
+def test_the_companions_failure_detail_reaches_the_settle_from_the_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1977: a zero-trade failed row must not be compared against a real Python run."""
-    calls: list[tuple[str, dict]] = []
+    """#1977: the payload's failure detail is validated onto the record, then routed."""
+    settled: list[dict] = []
 
-    async def recording_with_connection(fn, /, *args, **kwargs):
-        calls.append((fn.__name__, {"args": args, "kwargs": kwargs}))
-        return (None, False) if fn.__name__ == "mark_parity_failed" else repo.InsertOutcome(run_id=5, created=True)
+    async def stub_insert(fn, /, *args, **kwargs):
+        return repo.InsertOutcome(run_id=5, created=True)
 
-    monkeypatch.setattr(service, "with_connection", recording_with_connection)
+    async def stub_settle(**kwargs):
+        settled.append(kwargs)
+        return True
+
+    monkeypatch.setattr(service, "with_connection", stub_insert)
+    monkeypatch.setattr(service, "settle_parity_for_lean_run", stub_settle)
     monkeypatch.setattr(service, "run_sync", asyncio.run)
 
     run_id = service.persist_run_payload_sync(
@@ -119,26 +136,38 @@ def test_a_companion_that_produced_no_result_settles_its_group_instead_of_compar
     )
 
     assert run_id == 5
-    assert [name for name, _ in calls] == ["insert_run", "mark_parity_failed"]
-    assert calls[1][1]["kwargs"]["status"] == "run_failed"
+    assert settled == [
+        {
+            "right_run_id": 5,
+            "parity_group_id": "pg-1",
+            "failure_detail": "No normalized/result.json — LEAN run did not produce output",
+        }
+    ]
 
 
-def test_a_companion_with_a_real_result_still_freezes_the_comparison(monkeypatch: pytest.MonkeyPatch) -> None:
-    called: list[str] = []
+def test_a_companion_with_a_real_result_carries_no_failure_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    settled: list[dict] = []
 
-    async def recording_with_connection(fn, /, *args, **kwargs):
-        called.append(fn.__name__)
-        return repo.InsertOutcome(run_id=5, created=True) if fn.__name__ == "insert_run" else True
+    async def stub_insert(fn, /, *args, **kwargs):
+        return repo.InsertOutcome(run_id=5, created=True)
 
-    monkeypatch.setattr(service, "with_connection", recording_with_connection)
+    async def stub_settle(**kwargs):
+        settled.append(kwargs)
+        return True
+
+    monkeypatch.setattr(service, "with_connection", stub_insert)
+    monkeypatch.setattr(service, "settle_parity_for_lean_run", stub_settle)
     monkeypatch.setattr(service, "run_sync", asyncio.run)
 
-    run_id = service.persist_run_payload_sync(
-        lean_payload("companion-pg-2", parity_group_id="pg-2", requested_engine="both")
-    )
+    service.persist_run_payload_sync(lean_payload("companion-pg-2", parity_group_id="pg-2", requested_engine="both"))
 
-    assert run_id == 5
-    assert called == ["insert_run", "freeze_parity_for_lean_run"]
+    assert settled == [{"right_run_id": 5, "parity_group_id": "pg-2", "failure_detail": None}]
+
+
+def test_a_failure_detail_without_a_group_is_refused_by_the_converter() -> None:
+    """The detail is a routing instruction for a parity group; it needs one."""
+    with pytest.raises(RunPayloadError, match="lean-sidecar"):
+        record_from_payload(engine_payload() | {"parity_failure_detail": "boom"})
 
 
 @pytest.mark.asyncio

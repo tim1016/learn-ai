@@ -8,8 +8,10 @@ established, kept exactly: a LEAN run is idempotent on its ``lean_run_id``
 ``requested_engine``), an engine run has no external key and every persist is
 a new row; history reads newest-first; the detail read carries the newest
 five hundred trades in entry order and says when it truncated; a run backing
-a live Recency Chart run cannot be hard-deleted; a parity verdict reaches one
-terminal state and is never overwritten.
+a live Recency Chart run cannot be hard-deleted. A parity verdict written from
+a landed companion row is never overwritten; the provisional failure the
+dispatch path writes before any companion exists is superseded by one
+(ADR 0058 as amended by #1977).
 
 Rows come back as frozen dataclasses built straight from the selected
 columns (the SELECT lists name exactly their fields); the views the wire

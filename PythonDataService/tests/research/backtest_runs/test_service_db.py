@@ -14,6 +14,7 @@ import pytest
 
 from app.research.backtest_runs import repository as repo
 from app.research.backtest_runs import service
+from app.research.persistence import db
 from tests.research.backtest_runs.payloads import engine_payload, lean_payload
 
 pytestmark = pytest.mark.asyncio
@@ -142,3 +143,49 @@ async def test_a_landed_companion_supersedes_the_dispatch_failure_that_said_none
     verdict = await repo.get_parity_verdict(conn, group)
     assert verdict is not None and verdict.status in {"agree", "diverged"}
     assert verdict.right_run_id == right
+
+
+async def test_the_settle_completes_after_the_caller_has_stopped_waiting(
+    conn, unique: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1977: the ADR's claim, exercised — not asserted through a private name.
+
+    ``run_sync`` does not cancel on timeout, so an insert that outruns the
+    caller's budget still commits *and* still settles its group on the writer
+    loop. Before the settle was chained onto the insert it was a second hop
+    from the calling thread, and that hop never ran.
+    """
+    group = f"pg-{unique}"
+    left = await service.persist_run_payload(
+        engine_payload(symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+    assert left is not None
+    await asyncio.to_thread(
+        service.record_parity_disposition_sync,
+        parity_group_id=group,
+        left_run_id=left,
+        status="pending",
+        verdict_json="{}",
+    )
+
+    slow_insert = repo.insert_run
+
+    async def insert_after_the_caller_gives_up(connection, record):
+        await asyncio.sleep(0.3)
+        return await slow_insert(connection, record)
+
+    monkeypatch.setattr(repo, "insert_run", insert_after_the_caller_gives_up)
+    monkeypatch.setattr(db, "DB_CALL_TIMEOUT_SECONDS", 0.05)
+
+    run_id = await service.persist_run_payload(
+        lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+
+    assert run_id is None  # the caller was told nothing, not that it failed
+    for _ in range(100):
+        verdict = await repo.get_parity_verdict(conn, group)
+        if verdict is not None and verdict.status != "pending":
+            break
+        await asyncio.sleep(0.05)
+    assert verdict is not None and verdict.status in {"agree", "diverged"}
+    assert verdict.right_run_id is not None  # the row landed and settled its own group
