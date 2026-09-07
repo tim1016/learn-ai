@@ -6,6 +6,7 @@ const frontendRoot = path.join(__dirname, "..");
 const guardCommands = [
   ["proxy control guard", "node", ["scripts/verify-proxy-control-guard.cjs"]],
   ["chart timestamp guard", "node", ["scripts/verify-chart-timestamp-guard.cjs"]],
+  ["run dock space guard", "node", ["scripts/verify-run-dock-space-guard.cjs"]],
 ];
 
 for (const [label, command, args] of guardCommands) {

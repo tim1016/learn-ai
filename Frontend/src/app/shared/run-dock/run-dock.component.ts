@@ -1,13 +1,4 @@
-import {
-  Component,
-  ChangeDetectionStrategy,
-  computed,
-  effect,
-  inject,
-  signal,
-  viewChild,
-  ElementRef,
-} from '@angular/core';
+import { Component, ChangeDetectionStrategy, computed, effect, inject, signal, viewChild, ElementRef, DestroyRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import {
   RUN_DOCK_SOURCE,
@@ -141,11 +132,14 @@ export class RunDockComponent {
     // Publish the dock's current height to a CSS variable on :root so
     // the host page can reserve bottom padding equal to whatever the
     // dock is occupying right now (expanded 320 px vs collapsed 36 px).
-    // Otherwise the last form controls hide under the dock.
+    // Otherwise the last form controls hide under the dock. The variable
+    // is retracted with the dock, so a page without one (an IDE-grid page
+    // reached from here, say) never sizes against a dock that is gone.
     effect(() => {
       const height = this.expanded() ? '320px' : '36px';
       document.documentElement.style.setProperty('--run-dock-height', height);
     });
+    inject(DestroyRef).onDestroy(() => document.documentElement.style.removeProperty('--run-dock-height'));
   }
 
   /** Scroll listener (bound in the template) so we know whether to keep

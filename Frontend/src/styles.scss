@@ -335,7 +335,7 @@ code {
     position: sticky;
     top: var(--subnav-h, 0px);
     align-self: start;
-    max-height: calc(100vh - var(--subnav-h, 0px) - var(--run-dock-height, 36px) - 1rem);
+    max-height: calc(100vh - var(--subnav-h, 0px) - var(--run-dock-height, 0px) - 1rem);
     overflow-y: auto;
   }
 }
@@ -351,7 +351,7 @@ code {
     position: sticky;
     top: var(--subnav-h, 0px);
     align-self: start;
-    max-height: calc(100vh - var(--subnav-h, 0px) - var(--run-dock-height, 36px) - 1rem);
+    max-height: calc(100vh - var(--subnav-h, 0px) - var(--run-dock-height, 0px) - 1rem);
     overflow-y: auto;
   }
 }
