@@ -1,20 +1,15 @@
-import { ChangeDetectionStrategy, Component, computed, input, model } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, model } from "@angular/core";
 import { ButtonModule } from "primeng/button";
 import { InputText } from "primeng/inputtext";
-import type { LowHighStepRange, ParamRange, ValueListRange } from "./param-range";
-
-function parseValuesList(raw: string): number[] {
-  return raw
-    .split(",")
-    .map((s) => Number(s.trim()))
-    .filter((n) => !Number.isNaN(n));
-}
+import { parseValueList, type LowHighStepRange, type ParamRange, type ValueListRange } from "./param-range";
 
 /**
  * One numeric strategy parameter's sweep-range editor: value-list or
  * low/high/step (design spec D4). A plain model()-bound presentational
- * control, not a Signal Forms field — the compound value has no
- * validation surface beyond what the two modes' inputs already enforce.
+ * control, not a Signal Forms field. Its one validation surface is the
+ * value list: text that does not parse stays in the field, is marked
+ * invalid with the entry named, and publishes an empty list, which
+ * `rangeProblem` reports to every consumer (#1940).
  */
 @Component({
   selector: "app-param-range-input",
@@ -24,6 +19,10 @@ function parseValuesList(raw: string): number[] {
   styleUrl: "./param-range-input.component.scss",
 })
 export class ParamRangeInputComponent {
+  private static nextInstance = 0;
+  /** Element ids are per instance: several selected strategies may expose the same parameter name. */
+  protected readonly idPrefix = `param-range-${ParamRangeInputComponent.nextInstance++}`;
+
   readonly paramName = input.required<string>();
   readonly title = input<string>("");
   readonly defaultValue = input<number>(0);
@@ -33,9 +32,17 @@ export class ParamRangeInputComponent {
   readonly isListMode = computed(() => this.range().type === "value_list");
   readonly isRangeMode = computed(() => this.range().type === "low_high_step");
 
-  readonly valuesText = computed(() => {
+  /** The field's text: what the operator typed, until the parent writes a new range. */
+  readonly valuesText = linkedSignal(() => {
     const r = this.range();
     return r.type === "value_list" ? r.values.join(", ") : "";
+  });
+
+  /** Why the typed list is refused, naming the entry; null while it parses. */
+  readonly valuesProblem = computed(() => {
+    if (!this.isListMode()) return null;
+    const parsed = parseValueList(this.valuesText());
+    return "problem" in parsed ? parsed.problem : null;
   });
 
   readonly lowValue = computed(() => {
@@ -66,7 +73,11 @@ export class ParamRangeInputComponent {
   }
 
   onValuesTextInput(raw: string): void {
-    this.range.set({ type: "value_list", values: parseValuesList(raw) });
+    // A refused list is published as an empty one (see ValueListRange); the
+    // field keeps the raw text so the operator can see and fix the entry.
+    const parsed = parseValueList(raw);
+    this.range.set({ type: "value_list", values: "values" in parsed ? parsed.values : [] });
+    this.valuesText.set(raw);
   }
 
   onLowInput(raw: string): void {

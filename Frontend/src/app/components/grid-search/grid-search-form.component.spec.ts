@@ -72,6 +72,24 @@ describe('GridSearchFormComponent', () => {
     expect(screen.getByText(/run-up uses the first 2 trading days/)).not.toBeNull();
   });
 
+  it('refuses a malformed value list client-side: names the entry, disables launch, never preflights it', async () => {
+    // #1940: ".3..4" was dropped silently and the shrunken grid was preflighted and launchable.
+    const preflight = vi.fn(async (_spec: GridSearchSpecRequest) => PLAN);
+    const view = await renderForm([strategy()], { preflight });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /short window/i }));
+    await view.fixture.whenStable();
+    const calls = preflight.mock.calls.length;
+
+    fireEvent.input(screen.getByLabelText(/values \(comma-separated\)/i), { target: { value: '5,.3..4,15' } });
+    await view.fixture.whenStable();
+
+    await waitFor(() => expect(screen.getAllByRole('alert').map((el) => el.textContent).join(' ')).toContain('".3..4" is not a number.'));
+    await waitFor(() => expect(screen.getAllByRole('alert').map((el) => el.textContent).join(' ')).toMatch(/fix the values for/i));
+    expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(preflight.mock.calls.length).toBe(calls);
+  });
+
   it('surfaces a refusal and disables launch', async () => {
     const preflight = vi.fn(async (_spec: GridSearchSpecRequest) => {
       throw new GridSearchRefusedError({ code: 'WORKLOAD_LIMIT', message: '6000 backtests exceed the limit of 5000; narrow the grid' });

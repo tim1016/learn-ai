@@ -13,6 +13,11 @@ import type { ParamProperty, StrategyInfo } from "../../components/strategy-lab/
 
 export interface ValueListRange {
   type: "value_list";
+  /**
+   * Empty only while the range editor is refusing the text in its field
+   * (#1940); every consumer asks `rangeProblem` before building a request,
+   * and both request schemas reject an empty list (`min_length=1`) besides.
+   */
   values: number[];
 }
 
@@ -38,6 +43,36 @@ export function defaultNumericValue(property: ParamProperty): number {
 
 export function defaultRangeForParameter(property: ParamProperty): ParamRange {
   return { type: "value_list", values: [defaultNumericValue(property)] };
+}
+
+/** A comma-separated value list as typed, or why it cannot become one (the first offending entry, named). */
+export type ParsedValueList = { readonly values: number[] } | { readonly problem: string };
+
+/**
+ * Parse the value-list field's text. Nothing is dropped or repaired: an entry
+ * that is not a finite number, an empty entry, or an empty list is reported
+ * so the field can refuse it (#1940) — a silently shrunken grid would launch
+ * an experiment other than the one the operator typed.
+ */
+export function parseValueList(raw: string): ParsedValueList {
+  if (raw.trim() === "") return { problem: "Enter at least one value." };
+  const values: number[] = [];
+  for (const entry of raw.split(",").map((part) => part.trim())) {
+    if (entry === "") return { problem: "Remove the empty entry next to a comma." };
+    const value = Number(entry);
+    if (!Number.isFinite(value)) return { problem: `"${entry}" is not a number.` };
+    values.push(value);
+  }
+  return { values };
+}
+
+/**
+ * Why a stored range cannot be launched, or null. The one place that reads
+ * the refused-list encoding above; Grid Search, Walk-Forward and the Recency
+ * timeline all ask this before they build a request.
+ */
+export function rangeProblem(range: ParamRange): string | null {
+  return range.type === "value_list" && range.values.length === 0 ? "the value list needs fixing" : null;
 }
 
 /** Whether a stored range sweeps more than one value (a single-value list is a fixed setting). */

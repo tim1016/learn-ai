@@ -10,13 +10,7 @@ import type { StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
 import { AssetIdentityComponent } from "../../../../shared/asset-identity";
 import { RecencyDurationInputComponent, type DurationPreset } from "./recency-duration-input.component";
 import { RecencyStrategySelectionComponent } from "./recency-strategy-selection.component";
-import {
-  computeGridSize,
-  defaultRangeForParameter,
-  numericStrategyParams,
-  type ParamRange,
-  type StrategyRangeConfig,
-} from "../../../../shared/param-range/param-range";
+import { computeGridSize, defaultRangeForParameter, numericStrategyParams, type ParamRange, type StrategyRangeConfig, rangeProblem } from "../../../../shared/param-range/param-range";
 
 const PRESET_MONTHS: Record<Exclude<DurationPreset, "custom">, number> = { "3m": 3, "6m": 6, "12m": 12, "24m": 24 };
 const MAX_MONTHS = 24;
@@ -73,6 +67,22 @@ export class RecencyLaunchConfigComponent {
   readonly symbolValidationMessage = computed(() =>
     this.attemptedLaunch() && this.symbols().length === 0 ? "Add at least one symbol before launching the timeline." : null,
   );
+  /** The first selected parameter whose range the editor is refusing (#1940), named for the operator. */
+  private readonly refusedParameter = computed(() => {
+    for (const strategy of this.strategyConfigs()) {
+      const refused = Object.entries(strategy.paramRanges).find(([, range]) => rangeProblem(range) !== null);
+      if (refused === undefined) continue;
+      const [paramName] = refused;
+      const info = this.allStrategies().find((s) => s.name === strategy.strategyKey);
+      const title = info?.params_schema.properties?.[paramName]?.title;
+      return `${info?.display_name ?? strategy.strategyKey} · ${title ?? paramName}`;
+    }
+    return null;
+  });
+  readonly rangeValidationMessage = computed(() => {
+    const refused = this.refusedParameter();
+    return this.attemptedLaunch() && refused !== null ? `Fix the values for ${refused} before launching the timeline.` : null;
+  });
 
   readonly selectedStrategyKeys = signal<string[]>([]);
   readonly rangesByStrategy = signal<Record<string, Record<string, ParamRange>>>({});
@@ -223,6 +233,7 @@ export class RecencyLaunchConfigComponent {
     // strategy list and no local error.
     if (this.strategyConfigs().length === 0) return;
     if (this.customMonthsError() !== null) return;
+    if (this.rangeValidationMessage() !== null) return;
 
     const windowEndMs = Date.now();
     const windowStartMs = windowEndMs - this.windowMonths() * 30 * MS_PER_DAY;
