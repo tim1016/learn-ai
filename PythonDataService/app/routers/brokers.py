@@ -17,6 +17,7 @@ from typing import Literal, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ClerkStatus
@@ -40,7 +41,9 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
 from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.config import get_alpaca_settings
 from app.broker.contract.errors import (
+    BrokerAccountModeDisagreement,
     BrokerError,
     BrokerRateLimited,
     BrokerSubmissionHeld,
@@ -65,6 +68,7 @@ from app.schemas.account_pnl_attribution import (
     AccountPnlReconciliationResponse,
     PortfolioHistoryProofResponse,
 )
+from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.clerk_custody import CustodyDiagnosis
 from app.schemas.manual_orders import (
     ManualOrderCancellationResponse,
@@ -80,6 +84,7 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret_always,
 )
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
+from app.services.alpaca_live_verdict import alpaca_live_verdict
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
@@ -122,6 +127,9 @@ def _raise_http(error: BrokerError) -> NoReturn:
     # renders through ``receiptLabel`` — surface it so the desk can offer the
     # clear-hold exit rather than a generic 409.
     if isinstance(error, BrokerSubmissionHeld):
+        detail["reason_code"] = error.reason_code
+    # A mode disagreement carries its own code so the desk can name it (ADR 0059 D1).
+    if isinstance(error, BrokerAccountModeDisagreement):
         detail["reason_code"] = error.reason_code
     raise HTTPException(
         status_code=error.http_status,
@@ -639,6 +647,26 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
         projection,
         channel_healths=sqlite.channel_health_snapshot(),
         account=account,
+    )
+
+
+@router.get("/{broker}/live-verdict", response_model=AlpacaLiveVerdict)
+async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
+    """The server-derived live verdict (ADR 0059 D8). Pure; never contacts the broker."""
+    if broker != "alpaca":
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "live_verdict_unsupported_broker", "message": f"No live verdict for broker '{broker}'."},
+        )
+    try:
+        alpaca_settings = get_alpaca_settings()
+    except ValidationError:
+        # Invalid settings are a verdict input ("unconfigured"), not a 500.
+        alpaca_settings = None
+    return alpaca_live_verdict(
+        settings=alpaca_settings,
+        runtime=get_active_clerk_runtime(),
+        now_ms=now_ms_utc(),
     )
 
 
