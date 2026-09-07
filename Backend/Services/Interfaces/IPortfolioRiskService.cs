@@ -36,26 +36,15 @@ public class RiskViolation
 }
 
 /// <summary>
-/// A what-if shock. Despite the property names, <see cref="PriceChangePercent"/> and
-/// <see cref="IvChangePercent"/> are <b>fractional</b> moves (-0.10 is a 10% drop): the
-/// risk service forwards them unchanged as the Python scenario engine's spot and IV
-/// shocks, and the Scenario Explorer divides its percent inputs by 100 before calling
-/// the mutation. Callers holding a percent go through <see cref="FromPercent"/>.
+/// A what-if shock in the Python scenario engine's own units: <see cref="SpotShock"/> is a
+/// multiplicative fraction of spot (-0.10 is a 10% drop) and <see cref="IvShift"/> an additive
+/// vol-point delta (0.05 is +5 vol points). Both are forwarded unchanged.
 /// </summary>
 public class ScenarioInput
 {
-    public decimal? PriceChangePercent { get; set; }
-    public decimal? IvChangePercent { get; set; }
+    public decimal? SpotShock { get; set; }
+    public decimal? IvShift { get; set; }
     public int? TimeDaysForward { get; set; }
-
-    /// <summary>Build a shock from percent figures (-10 for a 10% drop), converting to the fractions the engine expects.</summary>
-    public static ScenarioInput FromPercent(decimal? priceChangePercent, decimal? ivChangePercent = null, int? timeDaysForward = null) =>
-        new()
-        {
-            PriceChangePercent = priceChangePercent / 100m,
-            IvChangePercent = ivChangePercent / 100m,
-            TimeDaysForward = timeDaysForward,
-        };
 }
 
 public class ScenarioResult

@@ -585,9 +585,9 @@ public class PortfolioValidationService : IPortfolioValidationService
                 prices[pos.Ticker.Symbol] = pos.AvgCostBasis; // use cost basis as current price
         }
 
-        // The shock is a fraction on the wire (#1975); -10 as written sent a
-        // -1000% move and the engine refused the negative spot with 400.
-        var scenario = ScenarioInput.FromPercent(-10m);
+        // A fraction of spot (#1975): -10 here once meant a -1000% move, which
+        // the engine refused as a negative spot with 400.
+        var scenario = new ScenarioInput { SpotShock = -0.10m };
         var result = await riskService.RunScenarioAsync(accountId, prices, scenario, ct);
 
         var assertions = new List<ValidationAssertion>

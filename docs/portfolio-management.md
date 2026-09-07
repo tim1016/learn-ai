@@ -513,23 +513,20 @@ A violation is emitted when `ActualValue > rule.Threshold`. The rule's `LastTrig
 
 Applies hypothetical shocks and returns the portfolio impact:
 
+The shock units are the Python scenario engine's own (`app/services/portfolio_scenario.py`), and .NET forwards them unchanged: `priceChangePercent` is a **fraction** of spot (`-0.10` is a 10% drop; the Scenario Explorer divides its percent input by 100 before calling the mutation), `ivChangePercent` is an **additive vol-point delta** (`0.05` is +5 points), and `timeDaysForward` moves the valuation date.
+
 ```
-For each position p:
-    scenarioPrice = currentPrice * (1 + priceChangePercent / 100)
-    scenarioValue = scenarioPrice * p.NetQuantity * p.Multiplier
+For each position p (grouped by underlying, one engine call per group):
+    scenarioSpot  = spot * (1 + spotShock)
+    scenarioIv    = currentIv + ivShift          (options only)
+    scenarioValue = enginePrice(p, scenarioSpot, scenarioIv, asOf + timeDaysForward) * p.NetQuantity * p.Multiplier
 
-    // IV shock (options only, via vega approximation):
-    scenarioValue += p.Vega * (ivChangePercent / 100) * p.NetQuantity * p.Multiplier
-
-    // Theta decay (options only):
-    scenarioValue += p.Theta * timeDaysForward * p.NetQuantity * p.Multiplier
-
-ScenarioEquity  = account.Cash + sum(scenarioValue)
-PnLImpact       = ScenarioEquity - CurrentEquity
-PnLImpactPercent = PnLImpact / CurrentEquity * 100
+ScenarioEquity   = account.Cash + sum(scenarioValue)
+PnLImpact        = ScenarioEquity - CurrentEquity
+PnLImpactPercent = PnLImpact / CurrentEquity
 ```
 
-> **Assumption**: Scenario uses linear approximations via Greeks (delta-1 for price, vega for IV, theta for time). This is a first-order approximation and does not account for gamma convexity, vanna, or volga effects.
+> Options are repriced by the engine at the shocked spot, IV and date rather than by a linear Greek approximation.
 
 ---
 

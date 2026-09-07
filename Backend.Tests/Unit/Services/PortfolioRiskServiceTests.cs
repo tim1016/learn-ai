@@ -66,19 +66,6 @@ public class PortfolioRiskServiceTests
     #region DollarDelta — Stocks
 
     [Fact]
-    public void ScenarioInput_FromPercent_ConvertsToTheFractionsTheEngineExpects()
-    {
-        // #1975: the validation harness passed -10 (a percent) straight through as a
-        // spot shock, which the Python engine reads as a fraction (-1000%) and refuses.
-        var scenario = ScenarioInput.FromPercent(-10m, ivChangePercent: 20m, timeDaysForward: 5);
-
-        Assert.Equal(-0.10m, scenario.PriceChangePercent);
-        Assert.Equal(0.20m, scenario.IvChangePercent);
-        Assert.Equal(5, scenario.TimeDaysForward);
-        Assert.Null(ScenarioInput.FromPercent(null).PriceChangePercent);
-    }
-
-    [Fact]
     public async Task ComputeDollarDelta_Stock_DeltaIsOne()
     {
         var (service, context, _, _) = CreateServiceWithContext();
@@ -320,12 +307,16 @@ public class PortfolioRiskServiceTests
         // ScenarioPoint with a stock leg at theoretical_price = 450 (i.e. -10%).
         // LegId echoes the position id so RunScenarioAsync's identity-based
         // join (Phase 2.2 round-2 fix) finds the leg.
+        Backend.Models.DTOs.PolygonResponses.PortfolioScenarioGridDto? forwardedGrid = null;
         polygonMock
             .Setup(p => p.PortfolioScenarioAsync(
                 It.IsAny<long>(), It.IsAny<decimal>(),
                 It.IsAny<List<Backend.Models.DTOs.PolygonResponses.PortfolioScenarioPositionDto>>(),
                 It.IsAny<Backend.Models.DTOs.PolygonResponses.PortfolioScenarioGridDto>(),
                 It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .Callback<long, decimal, List<Backend.Models.DTOs.PolygonResponses.PortfolioScenarioPositionDto>,
+                Backend.Models.DTOs.PolygonResponses.PortfolioScenarioGridDto?, decimal, decimal, CancellationToken>(
+                (_, _, _, grid, _, _, _) => forwardedGrid = grid)
             .ReturnsAsync(new Backend.Models.DTOs.PolygonResponses.PortfolioScenarioResponseDto
             {
                 Symbol = "SPY",
@@ -351,9 +342,16 @@ public class PortfolioRiskServiceTests
             });
 
         var prices = new Dictionary<string, decimal> { ["SPY"] = 500m };
-        var scenario = new ScenarioInput { PriceChangePercent = -0.10m };
+        var scenario = new ScenarioInput { SpotShock = -0.10m };
 
         var result = await service.RunScenarioAsync(account.Id, prices, scenario);
+
+        // #1975: the shock is the Python engine's spot_shock as given — a fraction,
+        // no unit conversion on the way through. The validation harness once sent
+        // -10 here and the engine refused the negative spot with 400.
+        Assert.NotNull(forwardedGrid);
+        Assert.Equal([-0.10m], forwardedGrid!.SpotShocks);
+        Assert.Equal([0m], forwardedGrid.IvShifts);
 
         // Stock leg: 100 shares × 450 × multiplier 1 = 45,000.
         // Cash 50,000 + scenario market value 45,000 = 95,000 equity.
@@ -375,7 +373,7 @@ public class PortfolioRiskServiceTests
 
         // Empty prices dictionary → no underlying spot known → Python is never called.
         var prices = new Dictionary<string, decimal>();
-        var scenario = new ScenarioInput { PriceChangePercent = -0.10m };
+        var scenario = new ScenarioInput { SpotShock = -0.10m };
 
         var result = await service.RunScenarioAsync(account.Id, prices, scenario);
 
