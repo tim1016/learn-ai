@@ -37,7 +37,7 @@ from app.engine.data.policy_store import (
     resolve_data_roots,
 )
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine
+from app.engine.engine import BacktestEngine, BacktestResult
 from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.fill_model import FillModel
@@ -48,6 +48,7 @@ from app.engine.results.statistics import summarize
 from app.engine.results.trade_record import TradeRecord
 from app.engine.run_gate import one_backtest_in_flight
 from app.engine.strategy.base import Strategy
+from app.engine.strategy.params import StrategyParamsBase
 from app.engine.strategy.registry import (
     _STRATEGY_REGISTRY,
     ChartParamRef,
@@ -1428,6 +1429,64 @@ def _execute_engine_backtest_core(
         on_log(f"Engine error: {exc}")
         return _failed_backtest_response(request, str(exc))
 
+    response = _aggregate_backtest_response(
+        result=result,
+        request=request,
+        strategy=strategy,
+        lake_manifest=lake_manifest,
+        on_phase=on_phase,
+        on_log=on_log,
+    )
+    if not response.success:
+        # A reported failure is never written to history. Before this workflow
+        # was split, the aggregation half's ``return`` left the function
+        # outright and persistence was simply unreachable; the split turns that
+        # into an explicit guard rather than a property of where the ``return``
+        # happened to sit.
+        return response
+
+    return _persist_and_dispatch_companion(
+        response=response,
+        request=request,
+        registration=registration,
+        validated_params=validated_params,
+        strategy=strategy,
+        run_started_at=_run_start,
+        on_phase=on_phase,
+        on_log=on_log,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backtest workflow stages, in the order a run walks them
+# ---------------------------------------------------------------------------
+def _aggregate_backtest_response(
+    *,
+    result: BacktestResult,
+    request: EngineBacktestRequest,
+    strategy: Strategy,
+    lake_manifest: str | None,
+    on_phase: PhaseCallback,
+    on_log: LogCallback,
+) -> EngineBacktestResponse:
+    """Everything between the engine returning and the row being written.
+
+    Statistics, LEAN-comparable statistics, the equity envelope, the chart
+    bars, the run verdict and the validation analytics — the whole wire
+    response, from one completed :class:`BacktestResult` and the strategy that
+    produced it.
+
+    **It also corrects ``request.data_policy.strategy_bars`` in place**, to the
+    consolidation cadence the strategy actually ran at
+    (:func:`_record_actual_strategy_bars`). That is not incidental: the LEAN
+    companion dispatch inside :func:`_persist_and_dispatch_companion`
+    serializes ``request.data_policy``, so this half must run first. Dispatch
+    the companion against the uncorrected policy and the twin is asked to
+    reproduce a run at ``minute/1`` that executed at ``minute/15`` — the pair
+    then grades two different data policies and reports a divergence that never
+    happened, which ``parity_companion`` calls the worst possible output from a
+    parity harness because it looks like a finding.
+    """
     on_phase("aggregating_results")
     on_log(
         f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; aggregating results and statistics"
@@ -1636,7 +1695,27 @@ def _execute_engine_backtest_core(
         lake_data_availability_hash=lake_manifest,
         evaluation_window=evaluation_window.response(),
     )
+    return response
 
+
+def _persist_and_dispatch_companion(
+    *,
+    response: EngineBacktestResponse,
+    request: EngineBacktestRequest,
+    registration: StrategyRegistration,
+    validated_params: StrategyParamsBase,
+    strategy: Strategy,
+    run_started_at: float,
+    on_phase: PhaseCallback,
+    on_log: LogCallback,
+) -> EngineBacktestResponse:
+    """Write the run to history and dispatch its parity companion.
+
+    Mutates ``response.study_id`` in place and hands the same object back, so
+    a caller that ignores the return value still sees the id. Best-effort by
+    contract: a storage failure leaves ``study_id`` None and logs, and never
+    fails the backtest that produced the response.
+    """
     # ── Persist the run (synchronous so we can return the id) ──
     # Used by the Engine Lab to enable the Replay tab right after a run
     # without a second round-trip. The save itself is best-effort — a
@@ -1668,7 +1747,7 @@ def _execute_engine_backtest_core(
         end_date=resolved_configuration.end_date,
         resolution=resolved_configuration.resolution,
         parameters=resolved_configuration.parameters,
-        duration_ms=int((time.time() - _run_start) * 1000),
+        duration_ms=int((time.time() - run_started_at) * 1000),
         commission_per_order=float(request.commission_per_order),
         compatibility_profile=request.compatibility_profile,
         requested_engine=request.requested_engine,
