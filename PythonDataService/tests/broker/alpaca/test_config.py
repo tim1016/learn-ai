@@ -18,7 +18,6 @@ from app.broker.alpaca.config import (
 )
 from app.main import _alpaca_clerk_configuration_is_valid
 
-
 _LIVE_REQUIRED = {
     "live_loss_fraction": 0.02,
     "live_loss_usd": 500.0,
