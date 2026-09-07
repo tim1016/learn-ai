@@ -27,7 +27,7 @@ export class PositionsComponent {
 
   get filteredPositions(): Position[] {
     const all = this.positions();
-    return this.showClosed() ? all : all.filter(p => p.status === 'Open');
+    return this.showClosed() ? all : all.filter(p => p.status === 'OPEN');
   }
 
   constructor() {

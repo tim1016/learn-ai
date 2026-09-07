@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 import { PortfolioService } from '../../services/portfolio.service';
-import { Account } from '../../graphql/portfolio-types';
+import { Account, PortfolioAccountType } from '../../graphql/portfolio-types';
 import { DashboardComponent } from './dashboard/dashboard.component';
 import { PositionsComponent } from './positions/positions.component';
 import { EquityChartComponent } from './equity-chart/equity-chart.component';
@@ -44,7 +44,7 @@ export class PortfolioComponent implements OnInit {
   // New account form
   showCreateForm = signal(false);
   newAccountName = signal('');
-  newAccountType = signal('Paper');
+  newAccountType = signal<PortfolioAccountType>('PAPER');
   newAccountCash = signal(100_000);
   creating = signal(false);
 
@@ -53,7 +53,8 @@ export class PortfolioComponent implements OnInit {
     return this.accounts().find(a => a.id === id) ?? null;
   });
 
-  accountTypes = ['Paper', 'Live', 'Backtest'];
+  // The schema's AccountType members; a 'Live' entry used to be offered and failed to parse server-side.
+  accountTypes: readonly PortfolioAccountType[] = ['PAPER', 'BACKTEST'];
 
   ngOnInit(): void {
     this.loadAccounts();

@@ -1,9 +1,22 @@
 // Portfolio Management System Types
 
+/**
+ * Enum values as the .NET GraphQL API serializes them (the `enum` blocks in
+ * contracts/graphql/backend.schema.graphql): Hot Chocolate emits members
+ * upper-cased (`OPEN`, `BUY`, `PAPER`), never the C# casing. Every comparison
+ * against these fields, and every value sent to a mutation, uses these
+ * literals (#1973). The names carry a Portfolio prefix where the Alpaca API
+ * types already export the bare name with different values.
+ */
+export type PortfolioAccountType = 'PAPER' | 'BACKTEST';
+export type PortfolioAssetType = 'STOCK' | 'OPTION';
+export type PositionStatus = 'OPEN' | 'CLOSED';
+export type PortfolioOrderSide = 'BUY' | 'SELL';
+
 export interface Account {
   id: string;
   name: string;
-  type: string;
+  type: PortfolioAccountType;
   baseCurrency: string;
   initialCash: number;
   cash: number;
@@ -14,11 +27,11 @@ export interface Position {
   id: string;
   accountId: string;
   tickerId: number;
-  assetType: string;
+  assetType: PortfolioAssetType;
   netQuantity: number;
   avgCostBasis: number;
   realizedPnL: number;
-  status: string;
+  status: PositionStatus;
   openedAt: string;
   closedAt?: string;
   ticker?: { symbol: string; name: string };
@@ -41,7 +54,7 @@ export interface PortfolioTrade {
   id: string;
   accountId: string;
   tickerId: number;
-  side: string;
+  side: PortfolioOrderSide;
   quantity: number;
   price: number;
   fees: number;

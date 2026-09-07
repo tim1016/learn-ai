@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of, forkJoin } from 'rxjs';
 import { PortfolioService } from '../../../services/portfolio.service';
-import { PortfolioState, PortfolioValuation, PortfolioMetrics } from '../../../graphql/portfolio-types';
+import { PortfolioState, PortfolioValuation, PortfolioMetrics, PortfolioOrderSide } from '../../../graphql/portfolio-types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 @Component({
@@ -29,14 +29,14 @@ export class DashboardComponent {
 
   // Trade form
   tradeSymbol = signal('');
-  tradeSide = signal('Buy');
+  tradeSide = signal<PortfolioOrderSide>('BUY');
   tradeQty = signal(100);
   tradePrice = signal(0);
   tradeFees = signal(0);
   recording = signal(false);
 
   get openPositionCount(): number {
-    return this.state()?.positions.filter(p => p.status === 'Open').length ?? 0;
+    return this.state()?.positions.filter(p => p.status === 'OPEN').length ?? 0;
   }
 
   constructor() {
