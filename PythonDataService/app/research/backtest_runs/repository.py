@@ -39,6 +39,11 @@ _ENGINE_BY_SOURCE: dict[str, Engine] = {"engine": "PYTHON", "lean-sidecar": "LEA
 
 PARITY_CREATE_STATUSES: frozenset[str] = frozenset({"pending", "unavailable"})
 PARITY_FAILURE_STATUSES: frozenset[str] = frozenset({"run_failed", "persist_failed"})
+# The dispatch path writes these before any companion row exists, so each is a
+# claim about the future ("no comparable companion is coming") rather than a
+# comparison. A companion row that does land falsifies the claim and supersedes
+# it; a computed verdict never is superseded (ADR 0058, amended by #1977).
+PARITY_SUPERSEDABLE_STATUSES: frozenset[str] = frozenset({"pending"}) | PARITY_FAILURE_STATUSES
 PARITY_VERDICT_VERSION = 2
 
 DeleteOutcome = Literal["deleted", "not_found", "recency_member"]
@@ -471,10 +476,13 @@ async def freeze_parity_verdict(
     status: str,
     verdict_json: str,
 ) -> bool:
-    """Freeze the terminal verdict onto the pending row, inserting it if the pending row was lost.
+    """Freeze the computed verdict onto the group's row, inserting it if the row was lost.
 
-    Returns whether the verdict was written; ``False`` means the group was
-    already terminal (first terminal state wins).
+    Returns whether the verdict was written. ``False`` means the group already
+    carries a verdict this one may not replace: another computed comparison, or
+    the ``unavailable`` disposition of a group that never dispatched a
+    companion. A provisional dispatch failure (:data:`PARITY_FAILURE_STATUSES`)
+    *is* replaced — the companion row in hand disproves it (#1977).
     """
     async with conn.transaction():
         existing = await conn.fetchrow(
@@ -496,7 +504,7 @@ async def freeze_parity_verdict(
                 now_ms_utc(),
             )
             return True
-        if existing["status"] != "pending":
+        if existing["status"] not in PARITY_SUPERSEDABLE_STATUSES:
             return False
         await conn.execute(
             """

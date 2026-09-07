@@ -315,11 +315,38 @@ async def test_freezing_agree_onto_the_pending_row(conn, unique: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_terminal_row_is_never_overwritten(conn, unique: str) -> None:
-    group, _, right = await _seed_group(conn, unique, pending="run_failed")
+@pytest.mark.parametrize("provisional", ["run_failed", "persist_failed"])
+async def test_a_provisional_dispatch_failure_is_superseded_by_the_companion_that_landed(
+    conn, unique: str, provisional: str
+) -> None:
+    """#1977: the dispatch mark claims no companion is coming; this one came."""
+    group, left, right = await _seed_group(conn, f"{unique}{provisional[0]}", pending=provisional)
+
+    assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is True
+
+    row = await repo.get_parity_verdict(conn, group)
+    assert row is not None and row.status == "agree" and row.left_run_id == left and row.right_run_id == right
+
+
+@pytest.mark.asyncio
+async def test_a_computed_verdict_is_never_overwritten(conn, unique: str) -> None:
+    group, _, right = await _seed_group(conn, unique)
+    assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is True
 
     assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is False
-    assert (await repo.get_parity_verdict(conn, group)).status == "run_failed"
+    assert (await repo.get_parity_verdict(conn, group)).status == "agree"
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_disposition_is_never_overwritten(conn, unique: str) -> None:
+    """A group that was never eligible for a companion keeps its honest reason."""
+    group, left, right = await _seed_group(conn, unique, pending=None)
+    await repo.create_parity_verdict(
+        conn, parity_group_id=group, left_run_id=left, status="unavailable", verdict_json="{}"
+    )
+
+    assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is False
+    assert (await repo.get_parity_verdict(conn, group)).status == "unavailable"
 
 
 @pytest.mark.asyncio

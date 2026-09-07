@@ -21,6 +21,7 @@ Backend.Tests/Unit/Services/ParityVerdictServiceTests.cs).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Mapping
@@ -304,7 +305,9 @@ async def freeze_parity_for_lean_run(conn: asyncpg.Connection, *, right_run_id: 
 
     Returns whether a verdict was written. A group whose Python run cannot be
     found stays pending (the report shows the stall honestly); a group that
-    already reached a terminal state is left alone.
+    already carries a computed verdict, or the ``unavailable`` disposition of a
+    group that never dispatched a companion, is left alone. A provisional
+    dispatch failure is superseded — see :func:`repository.freeze_parity_verdict`.
     """
     right = await repo.get_run(conn, right_run_id, trade_limit=None)
     left_id = await repo.find_left_run_id(conn, parity_group_id)
@@ -317,7 +320,10 @@ async def freeze_parity_for_lean_run(conn: asyncpg.Connection, *, right_run_id: 
             right is not None,
         )
         return False
-    verdict = compute_parity_verdict(parity_group_id=parity_group_id, left=left, right=right)
+    # The compare walks both trade lists with Decimal arithmetic. On the shared
+    # writer loop that is CPU held against every other worker-side write, so it
+    # runs in a thread and the loop stays free (#1977).
+    verdict = await asyncio.to_thread(compute_parity_verdict, parity_group_id=parity_group_id, left=left, right=right)
     written = await repo.freeze_parity_verdict(
         conn,
         parity_group_id=parity_group_id,

@@ -75,3 +75,70 @@ async def test_marking_a_group_failed_through_the_service_transitions_only_a_pen
     )
 
     assert (await repo.get_parity_verdict(conn, group)).status == "unavailable"  # already terminal: untouched
+
+
+async def test_a_companion_that_produced_no_result_settles_its_group_at_run_failed(conn, unique: str) -> None:
+    """#1977: the group used to sit at ``pending`` for ever and the report polled it for ever."""
+    group = f"pg-{unique}"
+    left = await service.persist_run_payload(
+        engine_payload(symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+    assert left is not None
+    await asyncio.to_thread(
+        service.record_parity_disposition_sync,
+        parity_group_id=group,
+        left_run_id=left,
+        status="pending",
+        verdict_json="{}",
+    )
+
+    right = await service.persist_run_payload(
+        lean_payload(
+            f"companion-{group}",
+            symbol=unique,
+            parity_group_id=group,
+            requested_engine="both",
+            total_trades=0,
+            winning_trades=0,
+            losing_trades=0,
+            total_pnl=0.0,
+            win_rate=0.0,
+            trades=[],
+            parity_failure_detail="No normalized/result.json — LEAN run did not produce output",
+        )
+    )
+
+    assert right is not None  # the failed row still persists into run history
+    verdict = await repo.get_parity_verdict(conn, group)
+    assert verdict is not None and verdict.status == "run_failed"
+    assert "No normalized/result.json" in verdict.verdict_json
+
+
+async def test_a_landed_companion_supersedes_the_dispatch_failure_that_said_none_was_coming(
+    conn, unique: str
+) -> None:
+    """#1977: a companion read timeout marked the group failed while the run was still going."""
+    group = f"pg-{unique}"
+    left = await service.persist_run_payload(
+        engine_payload(symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+    assert left is not None
+    await asyncio.to_thread(
+        service.record_parity_disposition_sync,
+        parity_group_id=group,
+        left_run_id=left,
+        status="pending",
+        verdict_json="{}",
+    )
+    await asyncio.to_thread(
+        service.mark_parity_failed_sync, group, status="run_failed", detail="companion dispatch failed: ReadTimeout"
+    )
+
+    right = await service.persist_run_payload(
+        lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+
+    assert right is not None
+    verdict = await repo.get_parity_verdict(conn, group)
+    assert verdict is not None and verdict.status in {"agree", "diverged"}
+    assert verdict.right_run_id == right
