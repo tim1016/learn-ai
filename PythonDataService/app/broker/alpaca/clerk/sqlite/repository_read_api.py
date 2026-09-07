@@ -182,6 +182,59 @@ class ClerkSqliteRepositoryReadApi:
             ).fetchall()
             return [writes.row_to_payload(row) for row in rows]
 
+    def first_order_transition(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str,
+        transition_kind: str | None = None,
+    ) -> dict | None:
+        """The earliest transition for one order — of ``transition_kind`` if given.
+
+        With :meth:`last_order_transition`, this is how a caller that wants one
+        fact out of an order's history should ask for it. Seven callers instead
+        fetched *every* transition for the order and scanned the list in
+        Python; one reconciliation pass over a 10k-transition ledger did that
+        per order, per effect, and held the event loop for minutes (#1942).
+
+        Distinct from :meth:`has_order_transition`, which answers the same
+        ``WHERE`` with ``SELECT 1``: an existence check should not build a
+        22-column dict, so both exist. Callers that only need a yes/no keep
+        using that one.
+
+        ``sequence`` is the table's ``INTEGER PRIMARY KEY``, so
+        ``ix_custody_transitions_order_ref`` yields sequence order for free and
+        ``LIMIT 1`` genuinely short-circuits (no temp b-tree).
+        """
+        return self._one_order_transition(order_ref, transition_kind, "ASC")
+
+    def last_order_transition(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str,
+        transition_kind: str | None = None,
+    ) -> dict | None:
+        """The latest transition for one order — the mirror of :meth:`first_order_transition`."""
+        return self._one_order_transition(order_ref, transition_kind, "DESC")
+
+    def _one_order_transition(
+        self: ClerkSqliteRepository,
+        order_ref: str,
+        transition_kind: str | None,
+        direction: Literal["ASC", "DESC"],
+    ) -> dict | None:
+        clauses = ["order_ref = ?"]
+        params: list[str] = [order_ref]
+        if transition_kind is not None:
+            clauses.append("transition_kind = ?")
+            params.append(transition_kind)
+        with self._write_lock:
+            row = self._conn.execute(
+                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
+                f"WHERE {' AND '.join(clauses)} ORDER BY sequence {direction} LIMIT 1",
+                tuple(params),
+            ).fetchone()
+            return None if row is None else writes.row_to_payload(row)
+
     def has_order_transition(
         self: ClerkSqliteRepository,
         *,

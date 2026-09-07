@@ -408,10 +408,7 @@ def _prove_never_accepted(
             effect_operation_id=entry.effect_operation_id,
             order_ref=entry.order_ref,
         )
-    if any(
-        transition["transition_kind"] == "ENTRY_NEVER_ACCEPTED"
-        for transition in repo.transitions_for_order(entry.order_ref)
-    ):
+    if repo.has_order_transition(order_ref=entry.order_ref, transition_kind="ENTRY_NEVER_ACCEPTED"):
         return
     fold_entry_never_accepted(
         repo,
@@ -651,36 +648,32 @@ def _fold_attributed_flat(repo: ClerkSqliteRepository, effect_operation_id: str,
 
 def _primary_entry_ref(repo: ClerkSqliteRepository, entries: list[OrderResource]) -> str:
     for entry in entries:
-        for transition in repo.transitions_for_order(entry.order_ref):
-            if transition["transition_kind"] == "EXIT_ACCEPTED":
-                return ExitAcceptedFacts.from_facts_json(transition["facts_json"]).entry_order_ref
+        transition = repo.first_order_transition(order_ref=entry.order_ref, transition_kind="EXIT_ACCEPTED")
+        if transition is not None:
+            return ExitAcceptedFacts.from_facts_json(transition["facts_json"]).entry_order_ref
     return entries[0].order_ref
 
 
 def _reducing_order_facts(repo: ClerkSqliteRepository, order_ref: str) -> ExitReducingOrderCreatedFacts:
-    for transition in repo.transitions_for_order(order_ref):
-        if transition["transition_kind"] == "EXIT_REDUCING_ORDER_CREATED":
-            return ExitReducingOrderCreatedFacts.from_facts_json(transition["facts_json"])
-    raise AssertionError(f"no reducing-order creation fact for {order_ref!r}")
+    transition = repo.first_order_transition(order_ref=order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED")
+    if transition is None:
+        raise AssertionError(f"no reducing-order creation fact for {order_ref!r}")
+    return ExitReducingOrderCreatedFacts.from_facts_json(transition["facts_json"])
 
 
 def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
-    transitions = repo.transitions_for_order(order_ref)
-    uncertainty_times = [
-        transition["recorded_at_ms"]
-        for transition in transitions
-        if transition["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
-    ]
-    if uncertainty_times:
-        anchor_ms = max(uncertainty_times)
+    # The latest uncertainty is the anchor when there is one. ``sequence`` is
+    # monotonic per append, so the last row of that kind is the latest — the
+    # former ``max()`` over every recorded_at_ms said the same thing after
+    # reading the order's whole history (#1942).
+    latest_uncertainty = repo.last_order_transition(
+        order_ref=order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN"
+    )
+    if latest_uncertainty is not None:
+        anchor_ms = latest_uncertainty["recorded_at_ms"]
     else:
-        created = next(
-            (
-                transition
-                for transition in transitions
-                if transition["transition_kind"] == "EXIT_REDUCING_ORDER_CREATED"
-            ),
-            None,
+        created = repo.first_order_transition(
+            order_ref=order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
         )
         if created is None:
             raise AssertionError(f"no reducing-order creation transition for {order_ref!r}")
