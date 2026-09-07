@@ -1,0 +1,81 @@
+import { signal } from '@angular/core';
+import { render, screen } from '@testing-library/angular';
+import { describe, expect, it } from 'vitest';
+
+import type { AlpacaLiveVerdict } from '../api/alpaca.types';
+import { AlpacaLiveVerdictService } from '../services/alpaca-live-verdict.service';
+import { AlpacaLiveBannerComponent } from './alpaca-live-banner.component';
+
+function verdict(overrides: Partial<AlpacaLiveVerdict>): AlpacaLiveVerdict {
+  return {
+    configured_mode: 'paper',
+    observed_account_id: 'PA9',
+    mode_agreement: 'agreed',
+    clerk_authority: 'sqlite',
+    clerk_refusal_reason_code: null,
+    armed_instance_count: 0,
+    envelope_state: 'not_applicable',
+    shadow_state: 'not_applicable',
+    final_verdict: 'paper',
+    headline: 'Paper account PA9 — no real money at risk',
+    detail: 'ALPACA_MODE=paper.',
+    observed_at_ms: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
+async function renderWith(v: AlpacaLiveVerdict | null) {
+  return render(AlpacaLiveBannerComponent, {
+    providers: [{ provide: AlpacaLiveVerdictService, useValue: { verdict: signal(v), lastError: signal(null) } }],
+  });
+}
+
+describe('AlpacaLiveBannerComponent', () => {
+  it('renders nothing before the first verdict', async () => {
+    await renderWith(null);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('renders the server headline for a paper account, quietly', async () => {
+    await renderWith(verdict({}));
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('Paper account PA9');
+    expect(status.className).toContain('is-paper');
+  });
+
+  it('renders a live-unarmed account loudly with the account id and armed count', async () => {
+    await renderWith(
+      verdict({
+        configured_mode: 'live',
+        observed_account_id: '9LIVE0001',
+        envelope_state: 'configured_unsealed',
+        shadow_state: 'none',
+        final_verdict: 'live-unarmed',
+        headline: 'LIVE account 9LIVE0001 — real money, no instance armed',
+        detail: 'Every order path refuses.',
+      }),
+    );
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-live-unarmed');
+    expect(status.textContent).toContain('9LIVE0001');
+    expect(status.textContent).toContain('0 armed');
+    expect(status.getAttribute('aria-label')).toContain('real money');
+  });
+
+  it('renders unknown as a warning that names the disagreement code', async () => {
+    await renderWith(
+      verdict({
+        configured_mode: 'live',
+        observed_account_id: null,
+        mode_agreement: 'disagreed',
+        clerk_refusal_reason_code: 'LIVE_MODE_DISAGREEMENT',
+        final_verdict: 'unknown',
+        headline: 'Live mode configured — account state unknown',
+        detail: 'the configured mode and the observed account disagree',
+      }),
+    );
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-unknown');
+    expect(status.textContent).toContain('Live Mode Disagreement');
+  });
+});
