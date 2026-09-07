@@ -90,6 +90,7 @@ from app.services.sqlite_clerk_compat import (
     sqlite_custody_diagnosis,
     sqlite_projection,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
@@ -105,7 +106,6 @@ _ACCOUNT_SNAPSHOT_TIMEOUT_S = 15.0
 _DEFAULT_READ_LIMIT = 100
 _MAX_READ_LIMIT = 500
 _MAX_ACTIVITY_LIMIT = 100
-_MAX_INT64_MS = 2**63 - 1
 
 
 def _raise_http(error: BrokerError) -> NoReturn:
@@ -257,7 +257,7 @@ async def list_orders(
     broker: str,
     status: Literal["open", "closed", "all"] | None = None,
     limit: int | None = Query(default=None, ge=1, le=_MAX_READ_LIMIT),
-    after_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
+    after_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
 ) -> list[BrokerOrder]:
     return await _run(
         broker,
@@ -270,7 +270,7 @@ async def list_order_groups(
     broker: str,
     status: Literal["open", "closed", "all"] | None = None,
     limit: int | None = Query(default=None, ge=1, le=_MAX_READ_LIMIT),
-    after_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
+    after_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
 ) -> list[BrokerOrderGroup]:
     """Return recent orders grouped by symbol with Python-owned quantity totals."""
     orders = await _run(
@@ -284,7 +284,7 @@ async def list_order_groups(
 async def list_activities(
     broker: str,
     limit: int = Query(default=_DEFAULT_READ_LIMIT, ge=1, le=_MAX_ACTIVITY_LIMIT),
-    after_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
+    after_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
     current_session: bool = Query(default=False),
 ) -> list[BrokerActivity]:
     if current_session and after_ms is not None:

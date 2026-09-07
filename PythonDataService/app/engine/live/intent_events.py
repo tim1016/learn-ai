@@ -21,6 +21,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 # PR 3 / operator-notice — typed reason carried on INTENT_DROPPED_BEFORE_SUBMIT.
 # Kept as a module-level type alias so callers can annotate without importing
 # the full event model.
@@ -133,13 +135,15 @@ class IntentEvent(BaseModel):
     # All other event types must have drop_reason = None.
     drop_reason: DropReason | None = None
 
-    # Human-facing provenance. NEVER the fold cursor (use seq). Bounded to
-    # int64 ms UTC: it is serialized into the WAL, so it must honor the repo's
-    # int64-ms boundary contract rather than accept an arbitrary-width Python int.
+    # Human-facing provenance. NEVER the fold cursor (use seq). Bounded to the
+    # admissible instant range: it is serialized into the WAL, so it must honor
+    # the repo's temporal contract rather than accept an arbitrary-width Python
+    # int. The ceiling is the end of year 9999, not the int64 width — the width
+    # was only ever the storage type (#1936).
     ts_ms: int | None = Field(
         default=None,
         ge=0,
-        le=9_223_372_036_854_775_807,
+        le=MAX_TIMESTAMP_MS,
         description="int64 ms UTC epoch timestamp (provenance only).",
     )
 
@@ -155,7 +159,7 @@ class IntentEvent(BaseModel):
     appended_at_ms: int | None = Field(
         default=None,
         ge=0,
-        le=9_223_372_036_854_775_807,
+        le=MAX_TIMESTAMP_MS,
         description="Process wall-clock ms at WAL append time (not bar time).",
     )
 

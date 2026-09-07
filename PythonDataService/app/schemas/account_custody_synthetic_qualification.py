@@ -15,10 +15,10 @@ from app.models.account_custody_synthetic import (
     synthetic_abort_cause_for_scenario,
 )
 from app.schemas.account_custody_qualification import (
-    INT64_MAX,
     PaperQualificationStatus,
     account_custody_qualification_payload_sha256,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 SyntheticAbortClass = Literal[
     "NONE",
@@ -83,7 +83,7 @@ class SyntheticBrokerProof(BaseModel):
 
     proof_kind: Literal["SIMULATED_BROKER_SNAPSHOT", "NOT_APPLICABLE"]
     proof_reference: str = Field(min_length=1, max_length=512)
-    observed_at_ms: int = Field(ge=0, le=INT64_MAX)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     positions: dict[str, str] = Field(default_factory=dict)
     open_order_ids: tuple[str, ...] = ()
     orders: tuple[SyntheticBrokerOrderProof, ...] = ()
@@ -112,9 +112,9 @@ class SyntheticEvidenceWorksheet(BaseModel):
     order_refs: tuple[str, ...] = ()
     broker_order_ids: tuple[str, ...] = ()
     receipt_ids: tuple[str, ...] = Field(min_length=1)
-    source_event_at_ms: int | None = Field(default=None, ge=0, le=INT64_MAX)
-    clerk_observed_at_ms: int | None = Field(default=None, ge=0, le=INT64_MAX)
-    recorded_at_ms: int | None = Field(default=None, ge=0, le=INT64_MAX)
+    source_event_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    clerk_observed_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    recorded_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     expected_state: str = Field(min_length=1, max_length=1_024)
     observed_state: str = Field(min_length=1, max_length=1_024)
     operator_action: str = Field(min_length=1, max_length=640)
@@ -347,7 +347,7 @@ class SyntheticUiCorrelationEvidence(BaseModel):
     git_commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     test_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     campaign_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    executed_at_ms: int = Field(ge=0, le=INT64_MAX)
+    executed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     duration_ms: int = Field(
         ge=1,
         le=BOUNDED_UI_CAMPAIGN.timeout_seconds * 1_000,
@@ -427,7 +427,7 @@ class SyntheticCustodyRehearsalReport(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1] = 1
-    generated_at_ms: int = Field(ge=0, le=INT64_MAX)
+    generated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     label: Literal["PRE_LIVE_REHEARSAL_SYNTHETIC"] = "PRE_LIVE_REHEARSAL_SYNTHETIC"
     live_environment_status: PaperQualificationStatus = "NOT_RUN"
     adr_0035_status: Literal["PROPOSED"] = "PROPOSED"
@@ -486,7 +486,7 @@ class SyntheticHarnessAbortReport(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1] = 1
-    generated_at_ms: int = Field(ge=0, le=INT64_MAX)
+    generated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     label: Literal["PRE_LIVE_REHEARSAL_SYNTHETIC_ABORT"] = "PRE_LIVE_REHEARSAL_SYNTHETIC_ABORT"
     live_environment_status: PaperQualificationStatus = "NOT_RUN"
     adr_0035_status: Literal["PROPOSED"] = "PROPOSED"

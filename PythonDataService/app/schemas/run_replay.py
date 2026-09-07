@@ -9,8 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-_INT64_MAX = 2**63 - 1
-"""Signed int64 ceiling: persisted ms-UTC values must fit the wire/storage contract."""
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 RunReplayStatus = Literal[
     "pending",
@@ -40,7 +39,7 @@ class RunReplayDivergenceModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     evaluation_id: str
-    bar_close_ms: int = Field(ge=0, le=_INT64_MAX)
+    bar_close_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     classification: Literal["expected_live_effect", "drift"]
     reason_code: str
     replay_staged: str | None
@@ -75,7 +74,7 @@ class RunReplayReceipt(BaseModel):
     divergences: list[RunReplayDivergenceModel]
     program_version: str | None
     sealed_program_hash: str | None
-    generated_at_ms: int = Field(ge=0, le=_INT64_MAX)
+    generated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     error: str | None = None
     # The continuity facts (#1921) the replayed input sits among, and the
     # journal position both were read at. Optional so a receipt written before

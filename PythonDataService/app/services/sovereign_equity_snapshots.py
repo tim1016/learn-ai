@@ -25,11 +25,11 @@ from app.lean_sidecar.trading_calendar import (
     previous_completed_session_close_ms,
     session_windows_ms_utc,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-_MAX_INT64 = 9_223_372_036_854_775_807
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
 _SESSION_LOOKAHEAD_DAYS = 14
 _CAPTURE_RETRY_DELAY_SECONDS = 60.0
@@ -279,8 +279,8 @@ def _validate_ms(value: int, *, field_name: str, allow_zero: bool = False) -> No
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{field_name} must be an int64 ms UTC value")
     minimum = 0 if allow_zero else 1
-    if not minimum <= value <= _MAX_INT64:
-        raise ValueError(f"{field_name} must be an int64 ms UTC value")
+    if not minimum <= value <= MAX_TIMESTAMP_MS:
+        raise ValueError(f"{field_name} must be an ms-UTC instant between {minimum} and {MAX_TIMESTAMP_MS}")
 
 
 __all__ = [

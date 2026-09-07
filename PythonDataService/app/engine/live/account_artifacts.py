@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.live_runs import GateResult
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
 ACCOUNT_EVENTS_FILENAME = "account_events.jsonl"
@@ -113,7 +114,7 @@ class AccountEventRecord(BaseModel):
     account_id: str = Field(min_length=1, max_length=64)
     event_type: str = Field(min_length=1, max_length=128)
     seq: int = Field(ge=1)
-    ts_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    ts_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class AccountFreezeEvidence(BaseModel):

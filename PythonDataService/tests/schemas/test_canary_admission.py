@@ -1,4 +1,11 @@
-"""Boundary tests for canary-admission wire timestamps."""
+"""Boundary tests for canary-admission wire timestamps.
+
+The ceiling is the end of year 9999, not the int64 maximum. ``2**63 - 1`` ms is
+the year 292 million — never anyone's real bound, only the widest number the
+storage type could hold — and it is not representable in a float64, so
+publishing it in the OpenAPI contract stated a ceiling one higher than the one
+enforced (#1936).
+"""
 
 from __future__ import annotations
 
@@ -12,8 +19,8 @@ from app.schemas.canary_admission import (
     CanaryRollbackDecision,
 )
 from app.schemas.signal_program_seal import semantic_payload_hash
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-_INT64_MAX = 9_223_372_036_854_775_807
 _SHA = "a" * 64
 
 
@@ -63,30 +70,30 @@ def _event_payload(*, recorded_at_ms: int) -> dict[str, object]:
     return {"event_hash": semantic_payload_hash(payload), **payload}
 
 
-def test_canary_evidence_accepts_int64_max_and_rejects_overflow() -> None:
+def test_canary_evidence_accepts_the_domain_ceiling_and_rejects_beyond_it() -> None:
     assert (
         CanaryActivationEvidence.model_validate(
-            _evidence_payload(qualified_at_ms=_INT64_MAX)
+            _evidence_payload(qualified_at_ms=MAX_TIMESTAMP_MS)
         ).qualified_at_ms
-        == _INT64_MAX
+        == MAX_TIMESTAMP_MS
     )
 
     with pytest.raises(ValidationError):
         CanaryActivationEvidence.model_validate(
-            _evidence_payload(qualified_at_ms=_INT64_MAX + 1)
+            _evidence_payload(qualified_at_ms=MAX_TIMESTAMP_MS + 1)
         )
 
 
-def test_canary_plan_enforces_int64_bounds_for_creation_and_expiry() -> None:
+def test_canary_plan_enforces_the_domain_ceiling_for_creation_and_expiry() -> None:
     plan = CanaryActivationPlan.model_validate(
-        _plan_payload(created_at_ms=_INT64_MAX - 1, expires_at_ms=_INT64_MAX)
+        _plan_payload(created_at_ms=MAX_TIMESTAMP_MS - 1, expires_at_ms=MAX_TIMESTAMP_MS)
     )
-    assert plan.created_at_ms == _INT64_MAX - 1
-    assert plan.expires_at_ms == _INT64_MAX
+    assert plan.created_at_ms == MAX_TIMESTAMP_MS - 1
+    assert plan.expires_at_ms == MAX_TIMESTAMP_MS
 
     with pytest.raises(ValidationError) as created_error:
         CanaryActivationPlan.model_validate(
-            _plan_payload(created_at_ms=_INT64_MAX + 1, expires_at_ms=_INT64_MAX)
+            _plan_payload(created_at_ms=MAX_TIMESTAMP_MS + 1, expires_at_ms=MAX_TIMESTAMP_MS)
         )
     assert ("created_at_ms",) in {
         error["loc"] for error in created_error.value.errors()
@@ -94,7 +101,7 @@ def test_canary_plan_enforces_int64_bounds_for_creation_and_expiry() -> None:
 
     with pytest.raises(ValidationError) as expiry_error:
         CanaryActivationPlan.model_validate(
-            _plan_payload(created_at_ms=_INT64_MAX, expires_at_ms=_INT64_MAX + 1)
+            _plan_payload(created_at_ms=MAX_TIMESTAMP_MS, expires_at_ms=MAX_TIMESTAMP_MS + 1)
         )
     assert ("expires_at_ms",) in {
         error["loc"] for error in expiry_error.value.errors()
@@ -104,21 +111,21 @@ def test_canary_plan_enforces_int64_bounds_for_creation_and_expiry() -> None:
     }
 
 
-def test_canary_event_accepts_int64_max_and_rejects_overflow() -> None:
+def test_canary_event_accepts_the_domain_ceiling_and_rejects_beyond_it() -> None:
     assert (
         CanaryAdmissionEvent.model_validate(
-            _event_payload(recorded_at_ms=_INT64_MAX)
+            _event_payload(recorded_at_ms=MAX_TIMESTAMP_MS)
         ).recorded_at_ms
-        == _INT64_MAX
+        == MAX_TIMESTAMP_MS
     )
 
     with pytest.raises(ValidationError):
         CanaryAdmissionEvent.model_validate(
-            _event_payload(recorded_at_ms=_INT64_MAX + 1)
+            _event_payload(recorded_at_ms=MAX_TIMESTAMP_MS + 1)
         )
 
 
-def test_canary_rollback_decision_accepts_int64_max_and_rejects_overflow() -> None:
+def test_canary_rollback_decision_accepts_the_domain_ceiling_and_rejects_beyond_it() -> None:
     payload = {
         "strategy_instance_id": "instance-1",
         "allowed": True,
@@ -129,12 +136,12 @@ def test_canary_rollback_decision_accepts_int64_max_and_rejects_overflow() -> No
     }
     assert (
         CanaryRollbackDecision.model_validate(
-            {**payload, "evaluated_at_ms": _INT64_MAX}
+            {**payload, "evaluated_at_ms": MAX_TIMESTAMP_MS}
         ).evaluated_at_ms
-        == _INT64_MAX
+        == MAX_TIMESTAMP_MS
     )
 
     with pytest.raises(ValidationError):
         CanaryRollbackDecision.model_validate(
-            {**payload, "evaluated_at_ms": _INT64_MAX + 1}
+            {**payload, "evaluated_at_ms": MAX_TIMESTAMP_MS + 1}
         )

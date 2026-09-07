@@ -19,8 +19,7 @@ from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent
 from app.engine.live.account_effect_models import AccountEffectEvidence
 from app.engine.live.account_epoch import AccountEpoch
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
-
-_MAX_INT64 = 9_223_372_036_854_775_807
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class AccountClerkJournalCorruptError(RuntimeError):
@@ -48,11 +47,11 @@ class AccountClerkInboxEntry(BaseModel):
 
     schema_version: Literal[1] = 1
     seq: int = Field(ge=1)
-    received_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    received_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # The RPC server supplies this local arrival fact when it has one. Direct
     # Clerk callers intentionally leave it absent rather than relabelling the
     # intent creation time as transport evidence.
-    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     # This mode is part of the durable A0 receipt, not a follow-up queue
     # marker. Keeping it in the inbox also preserves it across the inbox-to-
     # journal crash boundary.
@@ -78,7 +77,7 @@ class AccountClerkOperatorAdjustment(BaseModel):
     reason: str = Field(min_length=1, max_length=512)
     evidence_refs: tuple[str, ...] = Field(min_length=1)
     idempotency_key: str = Field(min_length=1, max_length=160)
-    recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
     @model_validator(mode="after")
     def validate_signed_quantity(self) -> AccountClerkOperatorAdjustment:
@@ -100,7 +99,7 @@ class AccountClerkPositionEvidence(BaseModel):
 
     symbol: str = Field(min_length=1, max_length=32)
     signed_quantity: float
-    evidence_observed_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    evidence_observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
     @model_validator(mode="after")
     def validate_signed_quantity(self) -> AccountClerkPositionEvidence:
@@ -115,7 +114,7 @@ class AccountClerkBrokerEvidenceBaseline(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     account_id: str = Field(min_length=1, max_length=64)
-    observed_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     positions: tuple[AccountClerkPositionEvidence, ...] = ()
 
 
@@ -129,8 +128,8 @@ class AccountClerkEmergencyAuthorization(BaseModel):
     operation_id: str = Field(min_length=1, max_length=128)
     confirmation_token: Literal["FLATTEN"]
     reconciliation_evidence_version: str = Field(min_length=1, max_length=128)
-    evidence_observed_at_ms: int = Field(ge=0, le=_MAX_INT64)
-    expires_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    evidence_observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    expires_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     no_exact_recovery_candidate: Literal[True]
 
     @model_validator(mode="after")
@@ -210,7 +209,7 @@ class AccountClerkJournalEntry(BaseModel):
         "emergency_operation",
         "broker_evidence_baseline",
     ] = "recorded"
-    recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # All intent lifecycle entries are attributed. A broker callback without a
     # durable Clerk intent remains an account fact, never a guessed namespace.
     intent: AccountOwnerSubmitIntent | None = None
@@ -229,9 +228,9 @@ class AccountClerkJournalEntry(BaseModel):
     # S1 custody instrumentation. These are optional to keep older durable
     # journal rows replayable and to represent clocks that this process did not
     # observe. ``seq`` remains serialization order, never a timestamp.
-    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
-    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
-    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     # Epoch provenance is optional for the durable migration boundary. A
     # missing value means this legacy fact's proof horizon is explicitly
     # unknown; readers must never synthesize it from journal sequence/order.
@@ -376,10 +375,10 @@ class AccountClerkRecordedReceipt(BaseModel):
     intent_id: str = Field(min_length=1)
     order_ref: str = Field(min_length=1)
     journal_seq: int = Field(ge=1)
-    recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
-    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
-    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
-    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     origin_epoch: AccountEpoch | None = None
     observed_epoch: AccountEpoch | None = None
     reconciliation_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -479,7 +478,7 @@ class AccountClerkCustodyStatus(BaseModel):
     lane: Literal["entry", "risk_reducing"] | None = None
     recorded: AccountClerkRecordedReceipt
     broker_acked: AccountClerkBrokerAckReceipt | None = None
-    updated_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    updated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class AccountClerkPendingCancelReceipt(BaseModel):
@@ -490,7 +489,7 @@ class AccountClerkPendingCancelReceipt(BaseModel):
     status: Literal["cancelled_before_submit"] = "cancelled_before_submit"
     recorded: AccountClerkRecordedReceipt
     cancelled_journal_seq: int = Field(ge=1)
-    cancelled_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    cancelled_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class AccountClerkRecoveryFlattenReceipt(BaseModel):
@@ -514,7 +513,7 @@ class AccountClerkEmergencyFlattenReceipt(BaseModel):
     operation_id: str = Field(min_length=1, max_length=128)
     cancelled_order_ids: tuple[int, ...]
     broker_acked: tuple[AccountClerkBrokerAckReceipt, ...]
-    observed_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class AccountClerkCancelNamespaceReceipt(BaseModel):

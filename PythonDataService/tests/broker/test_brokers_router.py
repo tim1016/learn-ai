@@ -36,6 +36,7 @@ from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
 from app.services.broker_v2_panel.panel_scope import resolve_account_id
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 @pytest.fixture(autouse=True)
@@ -480,13 +481,13 @@ async def test_activities_rejects_mixed_explicit_and_session_windows() -> None:
     "path",
     [
         "/api/brokers/alpaca/orders?after_ms=-1",
-        "/api/brokers/alpaca/orders?after_ms=9223372036854775808",
+        f"/api/brokers/alpaca/orders?after_ms={MAX_TIMESTAMP_MS + 1}",
         "/api/brokers/alpaca/activities?after_ms=-1",
-        "/api/brokers/alpaca/activities?after_ms=9223372036854775808",
+        f"/api/brokers/alpaca/activities?after_ms={MAX_TIMESTAMP_MS + 1}",
         "/api/brokers/alpaca/activities?limit=101",
     ],
 )
-async def test_timestamp_cursors_reject_values_outside_non_negative_int64_ms(
+async def test_timestamp_cursors_reject_values_outside_the_representable_ms_range(
     path: str,
 ) -> None:
     get_broker_registry().register(_FakePort())
@@ -504,20 +505,20 @@ async def test_timestamp_cursors_reject_values_outside_non_negative_int64_ms(
             {"status": None, "limit": None, "after_ms": 0},
         ),
         (
-            "/api/brokers/alpaca/orders?after_ms=9223372036854775807",
-            {"status": None, "limit": None, "after_ms": 9_223_372_036_854_775_807},
+            f"/api/brokers/alpaca/orders?after_ms={MAX_TIMESTAMP_MS}",
+            {"status": None, "limit": None, "after_ms": MAX_TIMESTAMP_MS},
         ),
         (
             "/api/brokers/alpaca/activities?after_ms=0",
             {"after_ms": 0, "limit": 100},
         ),
         (
-            "/api/brokers/alpaca/activities?after_ms=9223372036854775807",
-            {"after_ms": 9_223_372_036_854_775_807, "limit": 100},
+            f"/api/brokers/alpaca/activities?after_ms={MAX_TIMESTAMP_MS}",
+            {"after_ms": MAX_TIMESTAMP_MS, "limit": 100},
         ),
     ],
 )
-async def test_timestamp_cursors_accept_non_negative_int64_bounds(
+async def test_timestamp_cursors_accept_the_whole_representable_ms_range(
     path: str,
     expected_call: dict[str, str | int | None],
 ) -> None:

@@ -27,6 +27,18 @@ Rationale: four different wire formats were in flight before this rule (`int ms`
 
 When you consume a time from an external API (Polygon, IBKR, FRED), snap it to the **closest `int64 ms UTC` you can construct** for that value, at the ingestion boundary, and store that. The closest constructible instant is the most accurate durable representation — never keep the vendor's string.
 
+### The admissible range
+
+The int64 width is the *storage type*, not the bound. The largest instant this
+domain admits is `MAX_TIMESTAMP_MS` (`app/utils/session_anchors.py`) —
+`253402300799999`, the end of 9999-12-31 UTC, which is also the end of the
+range `datetime` can represent. Every `*_ms` schema field declares that
+ceiling; `le=2**63 - 1` is not a domain statement and must not appear in a
+schema bound. It is also not representable in a float64, so publishing it made
+the OpenAPI contract state a ceiling one higher than the one enforced (#1936).
+`2**63` still belongs in *representability* guards inside functions — "does
+this value fit an int64 column?" — which is a different question.
+
 ### Date-anchored and wall-clock values
 
 Some values are semantically a **date** (option expiry `2026-06-19`, a "trading date") or a **wall-clock session boundary** (`09:30` open on some date), not a point-in-time. They are **still one `int64 ms UTC` field** — there is no second date type. Construct them at a **defined ET session anchor** so the instant is unambiguous:
