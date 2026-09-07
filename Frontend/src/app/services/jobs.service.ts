@@ -1,5 +1,5 @@
 import { Injectable, computed, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
@@ -139,6 +139,11 @@ export class JobsService {
    *  leaves this false — absence from an empty registry proves nothing. */
   private readonly _resumed = signal(false);
   readonly resumed = this._resumed.asReadonly();
+  /** Why the last registry read failed, or null once one has succeeded (#1956).
+   *  While set, `activeJobs` describes only the jobs this tab has already seen. */
+  private readonly _registryError = signal<string | null>(null);
+  readonly registryError = this._registryError.asReadonly();
+  private refreshInFlight: Promise<void> | null = null;
 
   constructor() {
     void this.resumeActive();
@@ -216,30 +221,54 @@ export class JobsService {
   // ---------------------------------------------------------------------
 
   private async resumeActive(): Promise<void> {
+    await this.refreshActive();
+    // A failed boot read proves nothing about absence: the page still works,
+    // newly started jobs register normally, and `resumed` stays false.
+    if (this._registryError() === null) this._resumed.set(true);
+  }
+
+  /**
+   * Bring jobs other tabs started into this tab's registry (#1956); the boot
+   * snapshot is the first such read. Only jobs this tab does not know yet are
+   * added — a known job's state comes from its own event stream, which the
+   * registry's coarser view would reset — and each new job's stream is
+   * opened so its outcome is followed like any other. One read runs at a
+   * time; a failed read is recorded on `registryError` until the next succeeds.
+   */
+  refreshActive(): Promise<void> {
+    this.refreshInFlight ??= this.readUnknownActive().finally(() => {
+      this.refreshInFlight = null;
+    });
+    return this.refreshInFlight;
+  }
+
+  private async readUnknownActive(): Promise<void> {
+    let list: ServerJobState[];
     try {
-      const list = await firstValueFrom(
+      list = await firstValueFrom(
         this.http.get<ServerJobState[]>('/api/jobs', { params: { active: 'true' } }),
       );
-      for (const s of list) {
-        const status = (s.status as JobStatus) ?? 'queued';
-        this.upsert({
-          id: s.id,
-          type: s.type,
-          status,
-          parameters: parseJobParameters(s.params),
-          phase: s.phase,
-          startedAt: s.started_at ? Number(s.started_at) : undefined,
-          recentLogs: [],
-          logSeq: 0,
-        });
-        if (!TERMINAL.includes(status)) {
-          this.openStream(s.id);
-        }
+    } catch (error) {
+      this._registryError.set(describeRegistryError(error));
+      return;
+    }
+    this._registryError.set(null);
+    for (const s of list) {
+      if (this._jobs().has(s.id)) continue;
+      const status = (s.status as JobStatus) ?? 'queued';
+      this.upsert({
+        id: s.id,
+        type: s.type,
+        status,
+        parameters: parseJobParameters(s.params),
+        phase: s.phase,
+        startedAt: s.started_at ? Number(s.started_at) : undefined,
+        recentLogs: [],
+        logSeq: 0,
+      });
+      if (!TERMINAL.includes(status)) {
+        this.openStream(s.id);
       }
-      this._resumed.set(true);
-    } catch {
-      // Backend might not be up yet; the page still works without
-      // resumption — newly-started jobs will register normally.
     }
   }
 
@@ -307,6 +336,13 @@ export class JobsService {
       return next;
     });
   }
+}
+
+function describeRegistryError(error: unknown): string {
+  if (error instanceof HttpErrorResponse) {
+    return error.status === 0 ? 'the data service did not answer' : `the data service answered ${error.status}`;
+  }
+  return error instanceof Error ? error.message : 'the job registry could not be read';
 }
 
 function parseJobParameters(value: string | undefined): Readonly<Record<string, unknown>> | undefined {

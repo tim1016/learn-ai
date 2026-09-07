@@ -180,6 +180,8 @@ async function createLab(
           resumed: signal(true),
           startJob: vi.fn(),
           fetchResult: vi.fn(),
+          refreshActive: vi.fn(async () => undefined),
+          registryError: signal<string | null>(null),
           cancelJob: vi.fn(),
         },
       },

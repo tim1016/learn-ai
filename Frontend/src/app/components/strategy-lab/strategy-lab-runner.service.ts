@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from "@angular/common/http";
-import { computed, effect, inject, Injectable, signal } from "@angular/core";
+import { DOCUMENT } from "@angular/common";
+import { computed, DestroyRef, effect, inject, Injectable, signal } from "@angular/core";
 import { Router } from "@angular/router";
 
 import { JobsService, type JobState } from "../../services/jobs.service";
@@ -48,6 +49,9 @@ function isStrategyLabJobType(type: string): type is StrategyLabJobType {
  *  parity companion submits `lean_engine_run` jobs through the same public
  *  route with a `companion-…` id, and those must never be adopted here. */
 const STRATEGY_LAB_RUN_ID_PREFIX = "strategy_lab_";
+
+/** How often an open Strategy Lab asks the registry about jobs other tabs started (#1956). */
+const ACTIVE_JOBS_REFRESH_MS = 10_000;
 
 function isStrategyLabJob(job: JobState): job is StrategyLabJob {
   if (job.type === "engine_backtest") return true;
@@ -117,6 +121,8 @@ export class StrategyLabRunner {
   private readonly jobs = inject(JobsService);
   private readonly leanSidecar = inject(LeanSidecarService);
   private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly document = inject(DOCUMENT);
   private readonly engineJobId = signal<string | null>(null);
   private readonly leanJobId = signal<string | null>(null);
 
@@ -144,6 +150,28 @@ export class StrategyLabRunner {
     this.wireJobAdoptionEffect();
     this.wireEngineJobEffect();
     this.wireLeanJobEffect();
+    this.wireActiveJobsRefresh();
+  }
+
+  /**
+   * A tab open before another tab starts a backtest would otherwise never
+   * learn the container is busy (#1956): the registry is read once at load,
+   * after which only this tab's own jobs and their streams reach it. The lab
+   * reads it again on open, whenever the tab becomes visible, and
+   * periodically while visible, so a job started anywhere disables Run here
+   * too. A read that fails is recorded by JobsService and shown by the rail.
+   */
+  private wireActiveJobsRefresh(): void {
+    const refreshWhenVisible = (): void => {
+      if (this.document.visibilityState === "visible") void this.jobs.refreshActive();
+    };
+    refreshWhenVisible();
+    const timer = setInterval(refreshWhenVisible, ACTIVE_JOBS_REFRESH_MS);
+    this.document.addEventListener("visibilitychange", refreshWhenVisible);
+    this.destroyRef.onDestroy(() => {
+      clearInterval(timer);
+      this.document.removeEventListener("visibilitychange", refreshWhenVisible);
+    });
   }
 
   clearRunError(): void {

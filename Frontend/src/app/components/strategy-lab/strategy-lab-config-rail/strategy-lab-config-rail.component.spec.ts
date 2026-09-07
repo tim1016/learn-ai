@@ -200,6 +200,18 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(run?.disabled).toBe(true);
   });
 
+  it("says when runs from other tabs may be invisible because the registry could not be read", async () => {
+    const fixture = await createRail();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector(".config-rail__registry-note")).toBeNull();
+
+    fixture.componentRef.setInput("registryError", "the data service answered 503");
+    fixture.detectChanges();
+
+    expect(root.querySelector(".config-rail__registry-note")?.textContent)
+      .toContain("Runs from other tabs may not be visible: the data service answered 503.");
+  });
+
   it("disables rerun when the restored strategy is no longer selectable", async () => {
     const fixture = await createRail();
     fixture.componentRef.setInput("launcherStatus", "ready");

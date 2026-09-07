@@ -77,10 +77,43 @@ describe('JobsService SSE reducer', () => {
 // including a domain event type outside JobEvent's own closed union.
 
 interface ControllableEventSource {
+  url: string;
   onmessage: ((ev: { data: string; lastEventId?: string }) => void) | null;
   onerror: (() => void) | null;
   close: () => void;
   dispatch: (payload: Record<string, unknown>, lastEventId?: string) => void;
+}
+
+/** Replaces the browser's EventSource with a stub the test can drive; `last()` is the most recently opened stream. */
+function installEventSourceStub(): { last: () => ControllableEventSource | null; restore: () => void } {
+  const originalEventSource = globalThis.EventSource;
+  let lastSource: ControllableEventSource | null = null;
+  const setLastSource = (instance: ControllableEventSource): void => {
+    lastSource = instance;
+  };
+  class StubEventSource implements ControllableEventSource {
+    onmessage: ((ev: { data: string; lastEventId?: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(readonly url: string) {
+      // Storing the reference via a setter keeps the lint rule against
+      // `this` aliasing happy without disabling it.
+      setLastSource(this);
+    }
+    close(): void {
+      // No-op: the service's close() call flips its own bookkeeping.
+    }
+    dispatch(payload: Record<string, unknown>, lastEventId = ''): void {
+      this.onmessage?.({ data: JSON.stringify(payload), lastEventId });
+    }
+  }
+  (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
+    StubEventSource as unknown as typeof EventSource;
+  return {
+    last: () => lastSource,
+    restore: () => {
+      (globalThis as unknown as { EventSource: typeof EventSource }).EventSource = originalEventSource;
+    },
+  };
 }
 
 describe('JobsService.resumed', () => {
@@ -109,38 +142,39 @@ describe('JobsService.resumed', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(service.resumed()).toBe(false);
+    expect(service.registryError()).toBe('the data service answered 503');
+  });
+
+  it('leaves a job this tab started before the snapshot answered to its own stream', async () => {
+    // The snapshot lists that job too, at the registry's coarser view; folding
+    // it in would reset the log buffer the stream has already filled.
+    const eventSource = installEventSourceStub();
+    try {
+      const service = TestBed.inject(JobsService);
+      const httpMock = TestBed.inject(HttpTestingController);
+      const started = service.startJob('dataset-zip', { ticker: 'SPY' });
+      httpMock.expectOne('/api/jobs/dataset-zip').flush({ id: 'job-1', status: 'queued' });
+      await started;
+      const own = service.job('job-1');
+
+      httpMock.expectOne((r) => r.url === '/api/jobs').flush([{ id: 'job-1', type: 'dataset-zip', status: 'running' }]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(service.job('job-1')).toBe(own);
+      expect(service.resumed()).toBe(true);
+    } finally {
+      eventSource.restore();
+    }
   });
 });
 
 describe('JobsService.onEvent', () => {
   let service: JobsService;
   let httpMock: HttpTestingController;
-  let originalEventSource: typeof EventSource;
-  let lastSource: ControllableEventSource | null;
+  let eventSource: ReturnType<typeof installEventSourceStub>;
 
   beforeEach(() => {
-    lastSource = null;
-    originalEventSource = globalThis.EventSource;
-    const setLastSource = (instance: ControllableEventSource): void => {
-      lastSource = instance;
-    };
-    class StubEventSource implements ControllableEventSource {
-      onmessage: ((ev: { data: string; lastEventId?: string }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      constructor() {
-        // Storing the reference via a setter keeps the lint rule against
-        // `this` aliasing happy without disabling it.
-        setLastSource(this);
-      }
-      close(): void {
-        // No-op: the service's close() call flips its own bookkeeping.
-      }
-      dispatch(payload: Record<string, unknown>, lastEventId = ''): void {
-        this.onmessage?.({ data: JSON.stringify(payload), lastEventId });
-      }
-    }
-    (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-      StubEventSource as unknown as typeof EventSource;
+    eventSource = installEventSourceStub();
 
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],
@@ -153,17 +187,59 @@ describe('JobsService.onEvent', () => {
   });
 
   afterEach(() => {
-    (globalThis as unknown as { EventSource: typeof EventSource }).EventSource = originalEventSource;
+    eventSource.restore();
     httpMock.verify();
     vi.restoreAllMocks();
+  });
+
+  it('refreshActive adds a job another tab started and opens its stream, leaving known jobs untouched', async () => {
+    // #1956: a tab open before another tab starts a backtest only ever saw
+    // its own jobs; the periodic read must not reset the ones it streams.
+    const ownSource = await startJobAndGrabSource();
+    const ownBefore = service.job('job-1');
+
+    const refresh = service.refreshActive();
+    httpMock.expectOne((r) => r.url === '/api/jobs').flush([
+      { id: 'job-1', type: 'dataset-zip', status: 'running' },
+      { id: 'other-tab', type: 'engine_backtest', status: 'running', params: '{"backtest":{"strategy_name":"ema"}}' },
+    ]);
+    await refresh;
+
+    expect(service.job('job-1')).toBe(ownBefore);
+    expect(service.activeJobs().map((job) => job.id)).toEqual(['job-1', 'other-tab']);
+    expect(service.job('other-tab')?.parameters).toEqual({ backtest: { strategy_name: 'ema' } });
+    expect(eventSource.last()?.url).toBe('/api/jobs/other-tab/events');
+    expect(eventSource.last()).not.toBe(ownSource);
+  });
+
+  it('refreshActive records a failed read on registryError until the next read succeeds', async () => {
+    const failed = service.refreshActive();
+    httpMock.expectOne((r) => r.url === '/api/jobs').flush({ error: 'down' }, { status: 503, statusText: 'Service Unavailable' });
+    await failed;
+    expect(service.registryError()).toBe('the data service answered 503');
+
+    const recovered = service.refreshActive();
+    httpMock.expectOne((r) => r.url === '/api/jobs').flush([]);
+    await recovered;
+    expect(service.registryError()).toBeNull();
+  });
+
+  it('refreshActive coalesces overlapping reads into one request', async () => {
+    const first = service.refreshActive();
+    const second = service.refreshActive();
+    expect(second).toBe(first);
+
+    httpMock.expectOne((r) => r.url === '/api/jobs').flush([]);
+    await Promise.all([first, second]);
   });
 
   async function startJobAndGrabSource(): Promise<ControllableEventSource> {
     const startPromise = service.startJob('dataset-zip', { ticker: 'SPY' });
     httpMock.expectOne('/api/jobs/dataset-zip').flush({ id: 'job-1', status: 'queued' });
     await startPromise;
-    if (!lastSource) throw new Error('EventSource stub was not constructed');
-    return lastSource;
+    const source = eventSource.last();
+    if (!source) throw new Error('EventSource stub was not constructed');
+    return source;
   }
 
   it('delivers a raw frame to a registered handler, including a domain type outside JobEventType', async () => {

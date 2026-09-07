@@ -3,7 +3,7 @@ import { computed, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { of } from "rxjs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { JobsService } from "../../services/jobs.service";
 import type { JobState, JobStatus } from "../../services/jobs.service";
@@ -51,6 +51,7 @@ describe("StrategyLab configuration and runner", () => {
   let runner: StrategyLabRunner;
   let startJob: ReturnType<typeof vi.fn>;
   let fetchResult: ReturnType<typeof vi.fn>;
+  let refreshActive: ReturnType<typeof vi.fn>;
   let nextTradingDayOpen: ReturnType<typeof vi.fn>;
   let diagnose: ReturnType<typeof vi.fn>;
   let navigate: ReturnType<typeof vi.fn>;
@@ -68,20 +69,7 @@ describe("StrategyLab configuration and runner", () => {
     });
   }
 
-  beforeEach(() => {
-    sessionStorage.clear();
-    startJob = vi.fn(async () => "job-1");
-    fetchResult = vi.fn();
-    navigate = vi.fn(async () => true);
-    jobsById = signal(new Map<string, JobState>());
-    resumed = signal(false);
-    diagnose = vi.fn(async () => ({
-      overall_status: "pass",
-      checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
-    }));
-    nextTradingDayOpen = vi.fn(async (date: string) => ({
-      session_open_ms_utc: date === "2026-01-04" ? 1_767_624_600_000 : 1_768_000_000_000,
-    }));
+  function configureLab(): void {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
@@ -100,6 +88,7 @@ describe("StrategyLab configuration and runner", () => {
             resumed,
             startJob,
             fetchResult,
+            refreshActive,
           },
         },
         {
@@ -111,6 +100,24 @@ describe("StrategyLab configuration and runner", () => {
         },
       ],
     });
+  }
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    startJob = vi.fn(async () => "job-1");
+    fetchResult = vi.fn();
+    refreshActive = vi.fn(async () => undefined);
+    navigate = vi.fn(async () => true);
+    jobsById = signal(new Map<string, JobState>());
+    resumed = signal(false);
+    diagnose = vi.fn(async () => ({
+      overall_status: "pass",
+      checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
+    }));
+    nextTradingDayOpen = vi.fn(async (date: string) => ({
+      session_open_ms_utc: date === "2026-01-04" ? 1_767_624_600_000 : 1_768_000_000_000,
+    }));
+    configureLab();
     config = TestBed.inject(StrategyLabConfigStore);
     runner = TestBed.inject(StrategyLabRunner);
     config.strategies.set([STRATEGY]);
@@ -272,6 +279,52 @@ describe("StrategyLab configuration and runner", () => {
     expect(runner.runError()).toBe("Load or enter a QCAlgorithm before running custom source.");
     expect(diagnose).not.toHaveBeenCalled();
     expect(startJob).not.toHaveBeenCalled();
+  });
+
+  describe("learning about jobs other tabs start (#1956)", () => {
+    let lab: StrategyLabRunner;
+    let visibility: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      // Timers are faked before this runner exists, so its interval is the faked one.
+      vi.useFakeTimers();
+      TestBed.resetTestingModule();
+      configureLab();
+      visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+      refreshActive.mockClear();
+      lab = TestBed.inject(StrategyLabRunner);
+    });
+
+    afterEach(() => {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it("reads the registry on open and again periodically while the tab is visible", async () => {
+      expect(lab).toBeDefined();
+      expect(refreshActive).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(refreshActive).toHaveBeenCalledTimes(2);
+
+      visibility.mockReturnValue("hidden");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(refreshActive).toHaveBeenCalledTimes(2);
+
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(refreshActive).toHaveBeenCalledTimes(3);
+    });
+
+    it("stops reading once the lab closes", async () => {
+      expect(lab).toBeDefined();
+      TestBed.resetTestingModule();
+      refreshActive.mockClear();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(refreshActive).not.toHaveBeenCalled();
+    });
   });
 
   describe("resuming a job JobsService already had in flight (e.g. after a page reload)", () => {
