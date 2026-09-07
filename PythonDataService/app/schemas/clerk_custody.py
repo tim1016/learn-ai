@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from app.broker.alpaca.clerk.models import EpochMs
+from app.schemas.account_authority import AuthorityKind
 
 CustodyDivergenceKind = Literal[
     "exposure_attribution_mismatch",
@@ -60,7 +61,7 @@ class CustodyDiagnosis(BaseModel):
     resolution_posture: Literal["paper", "live"] = "paper"
     resolvable: bool = False
     blocked_reason: str | None = None
-    authority_kind: Literal["real_paper", "real_live", "shadow", "synthetic"] = "real_paper"
+    authority_kind: AuthorityKind = "real_paper"
     divergences: tuple[CustodyDivergence, ...] = ()
     resolution_plan: tuple[CustodyResolutionStep, ...] = ()
 

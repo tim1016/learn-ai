@@ -15,8 +15,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.schemas.account_authority import AuthorityKind
 
-AccountAuthorityKind = Literal["real_paper", "real_live", "shadow", "synthetic"]
+# The clerk-side name for the one canonical account-world kind (ADR 0059 D1).
+AccountAuthorityKind = AuthorityKind
 SIM_ACCOUNT_PREFIX = "sim:"
 SHADOW_ACCOUNT_PREFIX = "shadow:"
 _RESERVED_PREFIXES: tuple[str, ...] = (SIM_ACCOUNT_PREFIX, SHADOW_ACCOUNT_PREFIX)
