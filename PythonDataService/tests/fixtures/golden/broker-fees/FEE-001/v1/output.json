@@ -1,0 +1,60 @@
+{
+  "fills": {
+    "sell_2026": {
+      "sec": "0.515000000",
+      "taf": "0.019500",
+      "cat": "0.000300"
+    },
+    "buy_2026": {
+      "sec": "0",
+      "taf": "0",
+      "cat": "0.000300"
+    },
+    "sell_above_taf_cap": {
+      "sec": "12.360000000",
+      "taf": "9.79",
+      "cat": "0.180000"
+    },
+    "sell_at_taf_cap_boundary": {
+      "sec": "1.034223000",
+      "taf": "9.789975",
+      "cat": "0.150615"
+    },
+    "sell_just_over_taf_cap": {
+      "sec": "1.034243600",
+      "taf": "9.79",
+      "cat": "0.150618"
+    },
+    "fractional_buy": {
+      "sec": "0",
+      "taf": "0",
+      "cat": "0.0000015"
+    },
+    "sell_sec_zero_regime_2025": {
+      "sec": "0.00",
+      "taf": "0.016600",
+      "cat": null
+    },
+    "sell_sec_2780_regime_2024": {
+      "sec": "1.390000000",
+      "taf": "0.166000",
+      "cat": null
+    },
+    "sell_before_sec_pin_2024": {
+      "sec": null,
+      "taf": "0.001660",
+      "cat": null
+    },
+    "buy_before_cat_pin_2025": {
+      "sec": "0",
+      "taf": "0",
+      "cat": null
+    }
+  },
+  "session": {
+    "sec": "14.95",
+    "taf": "29.39",
+    "cat": "0.49",
+    "total": "44.83"
+  }
+}

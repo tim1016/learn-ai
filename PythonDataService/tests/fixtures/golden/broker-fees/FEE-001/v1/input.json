@@ -1,0 +1,85 @@
+{
+  "fills": [
+    {
+      "case": "sell_2026",
+      "trade_date_ms": 1788874200000,
+      "side": "sell",
+      "quantity": "100",
+      "fill_price": "250.00"
+    },
+    {
+      "case": "buy_2026",
+      "trade_date_ms": 1788874200000,
+      "side": "buy",
+      "quantity": "100",
+      "fill_price": "250.00"
+    },
+    {
+      "case": "sell_above_taf_cap",
+      "trade_date_ms": 1788874200000,
+      "side": "sell",
+      "quantity": "60000",
+      "fill_price": "10.00"
+    },
+    {
+      "case": "sell_at_taf_cap_boundary",
+      "trade_date_ms": 1788874200000,
+      "side": "sell",
+      "quantity": "50205",
+      "fill_price": "1.00"
+    },
+    {
+      "case": "sell_just_over_taf_cap",
+      "trade_date_ms": 1788874200000,
+      "side": "sell",
+      "quantity": "50206",
+      "fill_price": "1.00"
+    },
+    {
+      "case": "fractional_buy",
+      "trade_date_ms": 1788874200000,
+      "side": "buy",
+      "quantity": "0.5",
+      "fill_price": "400.00"
+    },
+    {
+      "case": "sell_sec_zero_regime_2025",
+      "trade_date_ms": 1748871000000,
+      "side": "sell",
+      "quantity": "100",
+      "fill_price": "250.00"
+    },
+    {
+      "case": "sell_sec_2780_regime_2024",
+      "trade_date_ms": 1717421400000,
+      "side": "sell",
+      "quantity": "1000",
+      "fill_price": "50.00"
+    },
+    {
+      "case": "sell_before_sec_pin_2024",
+      "trade_date_ms": 1709303400000,
+      "side": "sell",
+      "quantity": "10",
+      "fill_price": "100.00"
+    },
+    {
+      "case": "buy_before_cat_pin_2025",
+      "trade_date_ms": 1748871000000,
+      "side": "buy",
+      "quantity": "10",
+      "fill_price": "100.00"
+    }
+  ],
+  "session": {
+    "trade_date_ms": 1788874200000,
+    "cases": [
+      "sell_2026",
+      "buy_2026",
+      "sell_above_taf_cap",
+      "sell_at_taf_cap_boundary",
+      "sell_just_over_taf_cap",
+      "fractional_buy"
+    ]
+  }
+}
