@@ -53,6 +53,13 @@ export class StrategyLabConfigStore {
    * mechanisms over one query string, and folding them together would make
    * every run load re-apply the launch params.
    */
+  /** True once any launch parameters in the URL have been applied (or there are none),
+   *  so a later application cannot reset inputs restored from a run or a job. */
+  readonly launchParamsSettled = computed(() => {
+    const key = launchParamsKey(this.launchParams());
+    return key === "||||||" || key === this.appliedLaunchParamsKey();
+  });
+
   readonly activeRunParam = toSignal(
     this.route.queryParamMap.pipe(
       map((params) => parseRunId(params.get("run") ?? params.get("restoreRun"))),

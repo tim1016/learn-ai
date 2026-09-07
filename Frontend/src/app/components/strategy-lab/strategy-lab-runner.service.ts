@@ -34,6 +34,9 @@ const STRATEGY_LAB_JOB_TYPES = ["engine_backtest", "lean_engine_run"] as const;
 type StrategyLabJobType = (typeof STRATEGY_LAB_JOB_TYPES)[number];
 type StrategyLabJob = JobState & { type: StrategyLabJobType };
 
+/** The job this tab adopted, as it was when adopted: its live state is read from `JobsService.job()`. */
+export type AdoptedJob = Pick<StrategyLabJob, "id" | "type" | "parameters">;
+
 /** The job this tab started or adopted: enough to read its result back after a reload. */
 interface OwnJob {
   readonly id: string;
@@ -132,6 +135,14 @@ export class StrategyLabRunner {
   readonly leanLauncherStatus = signal<LeanLauncherStatus>("unknown");
   readonly leanLauncherDetail = signal("");
   readonly running = signal(false);
+  private readonly _adoptedJob = signal<AdoptedJob | null>(null);
+  /** The job this tab adopted rather than started, while it is still in
+   *  flight, so the workbench can describe its inputs on the rail (#1953).
+   *  Once the job ends the rail is the operator's, or the persisted run's. */
+  readonly adoptedJob = computed(() => {
+    const adopted = this._adoptedJob();
+    return adopted !== null && this.jobs.activeJobs().some((job) => job.id === adopted.id) ? adopted : null;
+  });
   /** A Strategy Lab job is in flight somewhere — this tab's or another's.
    *  The rail keeps Run disabled on it, so ambiguity between several
    *  experiments never re-enables a third backtest on the busy container. */
@@ -427,6 +438,7 @@ export class StrategyLabRunner {
   private reattach(job: StrategyLabJob): void {
     this.adoptionSettled = true;
     rememberOwnJob({ id: job.id, type: job.type });
+    this._adoptedJob.set({ id: job.id, type: job.type, parameters: job.parameters });
     if (job.type === "engine_backtest") {
       this.beginRun("Reattaching to backtest…", "");
       this.engineJobId.set(job.id);
