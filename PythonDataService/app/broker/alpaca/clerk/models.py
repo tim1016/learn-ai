@@ -493,8 +493,8 @@ class ClerkStatus(BaseModel):
     # (distinct from "installed and healthy").
     channel_healths: list[ChannelHealth] | None = None
     # This is the authority namespace, not the SQLite implementation detail.
-    # Consumers must never blend rows from these two account worlds.
-    authority_kind: Literal["real_paper", "synthetic"] = "real_paper"
+    # Consumers must never blend rows from these four account worlds.
+    authority_kind: Literal["real_paper", "real_live", "shadow", "synthetic"] = "real_paper"
     # #1664: the one canonical account-level operator decision, authored from
     # this same evidence cut. See app/broker/alpaca/clerk/sqlite/
     # account_operator_posture.py. Account Desk and Account Strip render only

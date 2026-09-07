@@ -490,7 +490,7 @@ def _recent_activity_views(
     dry_run_activity: list[DryRunActivity],
     *,
     authority_account_id: str,
-    authority_kind: Literal["real_paper", "synthetic"],
+    authority_kind: Literal["real_paper", "real_live", "shadow", "synthetic"],
 ) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
     """Project real or simulated activity behind one explicit mode boundary.
 

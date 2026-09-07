@@ -38,7 +38,7 @@ def _validate_simulated_authority_metadata(
     *,
     simulated: bool,
     authority_account_id: str | None,
-    authority_kind: Literal["real_paper", "synthetic"] | None,
+    authority_kind: Literal["real_paper", "real_live", "shadow", "synthetic"] | None,
 ) -> None:
     """Require simulated panel evidence to name its isolated synthetic authority."""
     if simulated and (
@@ -396,7 +396,7 @@ class RecentDecisionView(BaseModel):
     )
     simulated: bool = False
     authority_account_id: str | None = None
-    authority_kind: Literal["real_paper", "synthetic"] | None = None
+    authority_kind: Literal["real_paper", "real_live", "shadow", "synthetic"] | None = None
 
     @model_validator(mode="after")
     def simulated_row_has_synthetic_authority(self) -> RecentDecisionView:
@@ -421,7 +421,7 @@ class RecentFillView(BaseModel):
     filled_at_ms: int
     simulated: bool = False
     authority_account_id: str | None = None
-    authority_kind: Literal["real_paper", "synthetic"] | None = None
+    authority_kind: Literal["real_paper", "real_live", "shadow", "synthetic"] | None = None
 
     @model_validator(mode="after")
     def simulated_row_has_synthetic_authority(self) -> RecentFillView:

@@ -165,7 +165,13 @@ def test_single_authority_aggregate_rejects_mixed_real_and_synthetic_rows() -> N
     ("account_id", "authority_kind"),
     [
         ("sim:ema-1", "real_paper"),
+        ("sim:ema-1", "real_live"),
+        ("sim:ema-1", "shadow"),
+        ("shadow:9LIVE0001", "real_paper"),
+        ("shadow:9LIVE0001", "real_live"),
+        ("shadow:9LIVE0001", "synthetic"),
         ("PA-REAL", "synthetic"),
+        ("PA-REAL", "shadow"),
     ],
 )
 def test_authority_scoped_rows_enforce_account_namespace_at_model_boundary(
@@ -177,6 +183,21 @@ def test_authority_scoped_rows_enforce_account_namespace_at_model_boundary(
             account_id=account_id,
             authority_kind=authority_kind,  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize(
+    ("account_id", "authority_kind"),
+    [
+        ("PA-REAL", "real_paper"),
+        ("9LIVE0001", "real_live"),
+        ("shadow:9LIVE0001", "shadow"),
+        ("sim:ema-1", "synthetic"),
+    ],
+)
+def test_every_world_accepts_its_own_namespace(account_id: str, authority_kind: str) -> None:
+    row = AuthorityScopedRow(account_id=account_id, authority_kind=authority_kind)  # type: ignore[arg-type]
+
+    assert row.authority_kind == authority_kind
 
 
 def test_single_authority_aggregate_enforces_selected_account_namespace_when_empty() -> None:
