@@ -92,13 +92,29 @@ def _persist_sync(make_record: Callable[[], BacktestRunRecord], *, source: str) 
         logger.exception("[RUNS] Payload rejected, run not persisted (source=%s)", source)
         return None
     try:
-        outcome = run_sync(_insert_and_settle(record))
+        inserted: list[repo.InsertOutcome] = []
+        outcome = run_sync(_insert_and_settle(record, inserted))
     except CallerStoppedWaitingError as exc:
-        # Only this exact case is outcome-unknown: the write is *still going*
-        # on the writer loop, uncancelled, and settles its own parity group
-        # when it lands. A ``TimeoutError`` the coroutine raised itself — an
-        # asyncpg ``command_timeout``, say — means the write stopped, and falls
-        # through to the failure below where it belongs (#1977).
+        # The work is *still going* on the writer loop, uncancelled, and
+        # settles its own parity group when it lands. A ``TimeoutError`` the
+        # coroutine raised itself — an asyncpg ``command_timeout``, say —
+        # means the write stopped, and falls through to the failure below
+        # where it belongs (#1977).
+        #
+        # Which half is still going decides what the caller is told. The
+        # coroutine records the insert's outcome the moment it commits, so if
+        # that is present the row is on disk and only the comparison is
+        # outstanding: hand back the id. Folding both halves into one verdict
+        # meant a slow comparison — two full trade ledgers loaded and diffed —
+        # made the caller report ``None`` for a row it could see in history.
+        if inserted:
+            logger.warning(
+                "[RUNS] Run persisted (id=%s, source=%s); its parity settle is still running: %s",
+                inserted[0].run_id,
+                source,
+                exc,
+            )
+            return inserted[0].run_id
         logger.warning("[RUNS] Run persistence outcome unknown (source=%s): %s", source, exc)
         return None
     except Exception:
@@ -112,7 +128,7 @@ async def persist_run_payload(payload: Mapping[str, Any]) -> int | None:
     return await asyncio.to_thread(persist_run_payload_sync, payload)
 
 
-async def _insert_and_settle(record: BacktestRunRecord) -> repo.InsertOutcome:
+async def _insert_and_settle(record: BacktestRunRecord, inserted: list[repo.InsertOutcome]) -> repo.InsertOutcome:
     """Write the row, then settle its parity group — both on the writer loop.
 
     Chaining the settle here rather than making it a second hop from the
@@ -120,8 +136,13 @@ async def _insert_and_settle(record: BacktestRunRecord) -> repo.InsertOutcome:
     the coroutine is not cancelled on timeout, so a group whose companion
     landed still reaches its terminal state (#1977). The settle is best-effort
     on its own, so the run row persists even when it fails.
+
+    ``inserted`` is how the caller learns the row committed even when the
+    settle outruns its wait: appended the instant the insert returns, read
+    only after the wait has already expired.
     """
     outcome = await with_connection(repo.insert_run, record)
+    inserted.append(outcome)
     logger.info("[RUNS] Run persisted (id=%s, source=%s, created=%s)", outcome.run_id, record.source, outcome.created)
     if record.source == "lean-sidecar" and record.parity_group_id:
         try:

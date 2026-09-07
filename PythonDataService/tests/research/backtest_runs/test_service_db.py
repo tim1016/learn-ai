@@ -145,6 +145,55 @@ async def test_a_landed_companion_supersedes_the_dispatch_failure_that_said_none
     assert verdict.right_run_id == right
 
 
+async def test_a_committed_row_reports_its_id_even_when_the_settle_outruns_the_wait(
+    conn, unique: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow comparison must not make a committed row look unpersisted.
+
+    The insert and the settle share one coroutine so the settle survives a
+    caller that gives up (the test below). They must not share one verdict:
+    the comparison loads and diffs two full trade ledgers, and when that
+    outruns the budget the row is already on disk and visible in history. The
+    caller is told the id, and told the settle is still running.
+    """
+    group = f"pg-slowsettle-{unique}"
+    left = await service.persist_run_payload(
+        engine_payload(symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+    assert left is not None
+    await asyncio.to_thread(
+        service.record_parity_disposition_sync,
+        parity_group_id=group,
+        left_run_id=left,
+        status="pending",
+        verdict_json="{}",
+    )
+
+    real_settle = service.settle_parity_for_lean_run
+
+    async def settle_after_the_caller_gives_up(**kwargs):
+        await asyncio.sleep(0.3)
+        return await real_settle(**kwargs)
+
+    monkeypatch.setattr(service, "settle_parity_for_lean_run", settle_after_the_caller_gives_up)
+    monkeypatch.setattr(db, "DB_CALL_TIMEOUT_SECONDS", 0.05)
+
+    run_id = await service.persist_run_payload(
+        lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+
+    assert run_id is not None, "a committed row was reported as unpersisted"
+    assert await repo.get_run(conn, run_id, trade_limit=None) is not None
+
+    # And the settle it outran still lands.
+    for _ in range(100):
+        verdict = await repo.get_parity_verdict(conn, group)
+        if verdict is not None and verdict.status != "pending":
+            break
+        await asyncio.sleep(0.05)
+    assert verdict is not None and verdict.status in {"agree", "diverged"}
+
+
 async def test_the_settle_completes_after_the_caller_has_stopped_waiting(
     conn, unique: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
