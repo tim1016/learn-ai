@@ -1,5 +1,9 @@
 :host {
   display: block;
+  /* A full-width row of the card's `.account-strip__primary` grid: the parent
+     keeps its three row-1 columns (identity · headline metrics · toggle) and
+     the margin panel reads as its own row beneath them. */
+  grid-column: 1 / -1;
 }
 
 .headline-metrics {
