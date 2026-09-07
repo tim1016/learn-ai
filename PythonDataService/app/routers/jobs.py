@@ -485,6 +485,10 @@ async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
         # before the data load and before invoking engine.run(). Once
         # the simulator starts, it runs to completion (typically
         # seconds-to-low-minutes for the strategies registered today).
+        # A run that is *queued* behind another one is different: it has
+        # not started, so it is cancellable throughout, and
+        # ``while_waiting`` is what makes the Cancel button reach it
+        # (#1957).
         cancel.raise_if_cancelled()
 
         def on_phase(phase: str) -> None:
@@ -498,6 +502,7 @@ async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
             request=backtest_req,
             on_phase=on_phase,
             on_log=on_log,
+            while_waiting=cancel.raise_if_cancelled,
         )
         cancel.raise_if_cancelled()
 
@@ -506,7 +511,12 @@ async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
         # /api/engine/backtest endpoint.
         return response.model_dump(mode="json")
 
-    run_in_thread(req.job_id, work, thread_name=f"engine-{req.job_id[:8]}")
+    # ``cancel_check_every_n=1`` to match every other job type: the default
+    # of 1000 means the first 999 checks answer "not cancelled" from a
+    # counter rather than from Redis, and this worker makes about eight —
+    # so cancelling was inert. The gate's per-second ``while_waiting`` poll
+    # makes that visible, and needs a check that actually reads Redis.
+    run_in_thread(req.job_id, work, thread_name=f"engine-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "status": "queued"}
 
 

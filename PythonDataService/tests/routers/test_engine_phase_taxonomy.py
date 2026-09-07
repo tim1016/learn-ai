@@ -10,10 +10,10 @@ These tests pin the contract two ways:
 
 1. The phase registry exposes the agreed taxonomy in the agreed order
    with sane friendly labels.
-2. The ``on_phase("...")`` literals inside ``execute_engine_backtest``
+2. The ``on_phase("...")`` literals inside ``_execute_engine_backtest_core``
    appear in the same order and use no phase ids outside the registry.
    This is a static-source inspection rather than a runtime exercise —
-   ``execute_engine_backtest`` requires a registered strategy, a data
+   the workflow requires a registered strategy, a data
    reader, the LEAN data root, and the .NET persistence shim, which
    are too expensive and brittle to mock from a unit test. The static
    check still catches the regression we care about (someone editing
@@ -26,7 +26,7 @@ import inspect
 import re
 
 from app.jobs.phases import ENGINE_BACKTEST_PHASES, JOB_PHASES, friendly
-from app.routers.engine import execute_engine_backtest
+from app.routers.engine import _execute_engine_backtest_core, _report_waiting
 
 EXPECTED_PHASE_IDS = (
     "fetching_data",
@@ -44,13 +44,14 @@ class TestEngineBacktestPhaseRegistry:
 
     def test_phase_ids_in_expected_order(self) -> None:
         ids = tuple(p.id for p in ENGINE_BACKTEST_PHASES)
-        # The terminal ``done`` phase is part of the registry (frontend
-        # progress-fraction relies on it) but is not emitted by
-        # ``on_phase`` — the framework's ``job.completed`` event fills
-        # that role. So the on_phase emission sequence is a prefix of
-        # the registry ids.
-        assert ids[: len(EXPECTED_PHASE_IDS)] == EXPECTED_PHASE_IDS
-        assert ids[-1] == "done"
+        # Two registry ids bracket the run and are not part of the workflow's
+        # own emission sequence. ``waiting_for_engine`` leads it but fires only
+        # when the process-wide engine gate is already held (#1957), so a run
+        # that starts straight away never emits it. The terminal ``done`` is in
+        # the registry because the frontend progress-fraction relies on it, but
+        # the framework's ``job.completed`` event fills that role instead. What
+        # remains between them is the workflow sequence.
+        assert ids == ("waiting_for_engine", *EXPECTED_PHASE_IDS, "done")
 
     def test_friendly_labels_are_present_and_sentence_case(self) -> None:
         for phase in ENGINE_BACKTEST_PHASES:
@@ -74,10 +75,10 @@ class TestEngineBacktestPhaseRegistry:
 
 class TestExecuteEngineBacktestPhaseSequence:
     """Static-source check: the on_phase emissions inside
-    ``execute_engine_backtest`` follow the agreed sequence."""
+    ``_execute_engine_backtest_core`` follow the agreed sequence."""
 
     def test_on_phase_calls_match_expected_sequence(self) -> None:
-        source = inspect.getsource(execute_engine_backtest)
+        source = inspect.getsource(_execute_engine_backtest_core)
         emitted = re.findall(r'on_phase\("([a-z_]+)"\)', source)
         assert emitted == list(EXPECTED_PHASE_IDS), (
             f"phase emission sequence drifted from the registry; "
@@ -86,11 +87,22 @@ class TestExecuteEngineBacktestPhaseSequence:
             f"on_phase(...) call sites in app/routers/engine.py together."
         )
 
+    def test_the_gate_reports_the_wait_before_the_workflow_starts(self) -> None:
+        """``waiting_for_engine`` is the gate's, not the workflow's (#1957)."""
+        assert 'on_phase("waiting_for_engine")' in inspect.getsource(_report_waiting)
+        assert "waiting_for_engine" not in inspect.getsource(_execute_engine_backtest_core)
+
+    def test_the_wait_log_line_comes_from_the_registry_not_a_second_copy(self) -> None:
+        """One label per phase id — a hand-written duplicate is how the two drift."""
+        source = inspect.getsource(_report_waiting)
+        assert 'friendly("engine_backtest", "waiting_for_engine")' in source
+        assert friendly("engine_backtest", "waiting_for_engine") == "Waiting for the backtest already running"
+
     def test_no_legacy_phase_ids_remain(self) -> None:
         """Catch a future edit that re-adds the pre-#471 phase ids."""
-        source = inspect.getsource(execute_engine_backtest)
+        source = inspect.getsource(_execute_engine_backtest_core)
         for legacy in ("loading_bars", "simulating", "computing_stats"):
             assert f'on_phase("{legacy}")' not in source, (
-                f"legacy phase id {legacy!r} re-appeared in execute_engine_backtest; "
+                f"legacy phase id {legacy!r} re-appeared in the engine workflow; "
                 f"#471 retired it — use the new taxonomy instead."
             )

@@ -20,6 +20,7 @@ export type StrategyParameterValue =
 export type StrategyLabRunPhase =
   | "idle"
   | "connecting"
+  | "waiting_for_engine"
   | "fetching_data"
   | "consolidating_bars"
   | "running_indicators"
