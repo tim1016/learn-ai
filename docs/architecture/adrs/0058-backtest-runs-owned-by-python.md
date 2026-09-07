@@ -47,9 +47,14 @@ the verdict stayed `pending` and the run report polled it every 5 s for ever.
 
 So:
 
-1. **A landed companion row supersedes a dispatch claim.** `freeze_parity_verdict`
-   overwrites `pending`, `run_failed` and `persist_failed`; a computed verdict and
-   an `unavailable` disposition are still never overwritten.
+1. **A landed companion row supersedes a dispatch claim.** The discriminator is
+   `right_run_id`, not the status: a verdict written before any companion row
+   existed carries none, and that is what makes it a claim rather than a record.
+   So `freeze_parity_verdict` overwrites `pending`, and `run_failed` /
+   `persist_failed` **only while `right_run_id` is null**. A computed verdict, an
+   `unavailable` disposition, and a `run_failed` written *from* a landed
+   companion (decision 2 — same status, but a companion did land, and its
+   `right_run_id` says so) are never overwritten.
 2. **A companion that produced no comparable result settles its group at
    `run_failed`.** Its failed row now carries `parity_group_id` *and*
    `parity_failure_detail`; the latter is validated onto `BacktestRunRecord` and
