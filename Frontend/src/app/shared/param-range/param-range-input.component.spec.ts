@@ -1,3 +1,4 @@
+import { Component } from "@angular/core";
 import { fireEvent, render, screen } from "@testing-library/angular";
 import { describe, expect, it } from "vitest";
 
@@ -83,15 +84,25 @@ describe("ParamRangeInputComponent", () => {
   });
 
   it("gives each instance its own element ids, so same-named parameters of two strategies do not collide", async () => {
-    const first = await renderInput({ type: "value_list", values: [2] });
-    const firstId = (first.container.querySelector("input[type=text]") as HTMLInputElement).id;
-    const second = await renderInput({ type: "value_list", values: [3] });
-    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("input[type=text]"));
+    // Codex review on #1982: two selected Recency strategies exposing the same
+    // parameter name rendered the same field and problem ids.
+    @Component({
+      imports: [ParamRangeInputComponent],
+      template: `
+        <app-param-range-input paramName="rsi_period" [range]="first" />
+        <app-param-range-input paramName="rsi_period" [range]="second" />
+      `,
+    })
+    class TwoEditorsHost {
+      first: ParamRange = { type: "value_list", values: [14] };
+      second: ParamRange = { type: "value_list", values: [21] };
+    }
+    const view = await render(TwoEditorsHost);
 
+    const inputs = Array.from(view.container.querySelectorAll<HTMLInputElement>("input[type=text]"));
     expect(inputs).toHaveLength(2);
     expect(new Set(inputs.map((el) => el.id)).size).toBe(2);
-    expect(firstId).toContain("values");
-    second.fixture.destroy();
+    expect(screen.getAllByLabelText(/values/i).map((el) => el.id)).toEqual(inputs.map((el) => el.id));
   });
 
   it("switches to low/high/step mode and updates the model", async () => {
