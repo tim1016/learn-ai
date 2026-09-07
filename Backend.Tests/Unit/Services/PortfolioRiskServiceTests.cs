@@ -267,6 +267,18 @@ public class PortfolioRiskServiceTests
 
     #endregion
 
+    [Fact]
+    public void ValidationHarness_Test9Shock_IsAFractionASpotCanSurvive()
+    {
+        // #1975: the harness once built its shock as -10 (a percent). The engine
+        // applies spot * (1 + shock), so anything at or below -1 is a negative
+        // spot and is refused; restoring the percent fails here.
+        var shock = PortfolioValidationService.Test9Shock.SpotShock;
+
+        Assert.NotNull(shock);
+        Assert.InRange(shock!.Value, -0.99m, -0.01m);
+    }
+
     #region RunScenario — Python passthrough (Phase 2.2 of migration plan)
 
     // The two old tests in this region (RunScenario_PriceDown10Percent_EquityDrops,
