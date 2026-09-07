@@ -21,6 +21,7 @@ prefer (Polygon, LEAN data dump, synthetic).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -258,8 +259,12 @@ async def run_spec_against_bars_and_persist(
     resolved_name = strategy_name or spec.name
 
     # Re-run by calling the sync version; it doesn't need to re-load the
-    # spec since load_spec_from_path is cheap and stateless.
-    result = run_spec_against_bars(
+    # spec since load_spec_from_path is cheap and stateless. In a thread: a
+    # full backtest is seconds of CPU, and the engine gate refuses an
+    # event-loop caller outright — a blocking acquire on the app loop would
+    # stall every route, ``/health`` included (#1990).
+    result = await asyncio.to_thread(
+        run_spec_against_bars,
         spec_path=spec_path,
         symbol=symbol,
         bars=bars,

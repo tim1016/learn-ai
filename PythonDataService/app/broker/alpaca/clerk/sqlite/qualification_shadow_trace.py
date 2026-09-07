@@ -39,6 +39,7 @@ cannot prove trace parity is refused outright, not admitted with a warning
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -317,7 +318,9 @@ async def run_shadow_trace_evaluation(
     """
     registration = _registered_signal_program(strategy_key)
     params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})
-    expected = _reference_backtest_traces(strategy_key, params, bars)
+    # In a thread: the reference run is a full backtest, and the engine gate
+    # refuses an event-loop caller outright (#1990).
+    expected = await asyncio.to_thread(_reference_backtest_traces, strategy_key, params, bars)
     observed = await _live_adapter_traces(strategy_key, symbol, strategy_params, bars)
     compare_canonical_traces(expected, observed)
     return ShadowTraceEvaluation(

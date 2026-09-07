@@ -13,6 +13,7 @@ and refused here with a clear note in the OpenAPI schema.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, date, datetime, timedelta
@@ -1577,7 +1578,11 @@ async def post_cross_reconcile(
             )
 
     try:
-        cross_result = run_engine_lab_on_workspace(
+        # In a thread: a full backtest is seconds of CPU, and the engine gate
+        # refuses an event-loop caller outright — a blocking acquire on the app
+        # loop would stall every route, ``/health`` included (#1990).
+        cross_result = await asyncio.to_thread(
+            run_engine_lab_on_workspace,
             workspace.workspace_dir,
             payload.engine_lab_strategy_class,
             symbol=cross_inputs["symbol"],

@@ -1244,13 +1244,13 @@ def execute_engine_backtest(
     fails rather than consuming unreceipted data (PRD #1926 F05). Absent
     for ordinary runs, which read whatever the lake currently holds.
 
-    This is where the process-wide "one backtest in flight" gate is held: a
-    run costs ~480 MB against a 2 GiB container, and nothing outside a single
-    sweep used to count them (``app.engine.run_gate``, #1957). A caller that
-    has to wait reports the ``waiting_for_engine`` phase and then queues.
-    The gate covers this function's five callers, not every path to
-    ``BacktestEngine`` — ``run_gate`` names the three that still run
-    ungated, and #1990 tracks closing that.
+    This holds the *outer* of the two engine-gate holds. ``BacktestEngine.run``
+    holds the gate too, which is what makes every engine run counted (#1990);
+    this one is wider on purpose, because a run's ~480 MB is live through the
+    auto-fetch that precedes it and the response that outlives it, not just the
+    simulation (``app.engine.run_gate``, #1957). The inner acquire passes
+    through this one. A caller that has to wait reports the
+    ``waiting_for_engine`` phase and then queues.
 
     ``while_waiting`` runs about once a second for as long as the caller is
     queued, and is where a job worker puts its cancellation check; raising
