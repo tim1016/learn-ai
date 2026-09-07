@@ -767,6 +767,9 @@ describe("Strategy Lab saved configuration", () => {
     expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), requested_engine: "rust" } }, range)).toBeNull();
     expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), data_policy: null } }, range)).toBeNull();
     expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), start_date: "March 2" } }, range)).toBeNull();
+    expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), end_date: "2026-02-30" } }, range)).toBeNull();
+    expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), data_policy: { ...run().dataPolicy, session: "overnight" } } }, range)).toBeNull();
+    expect(inputsFromBacktestJob({ backtest: { ...backtestPayload(), data_policy: { ...run().dataPolicy, input_bars: { timespan: "minute", multiplier: 0 } } } }, range)).toBeNull();
   });
 
   it("restores every persisted control without inferring away the Both selection", () => {

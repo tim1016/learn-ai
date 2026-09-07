@@ -352,25 +352,38 @@ function isEngineChoice(value: unknown): value is EngineChoice {
   return value === "python" || value === "lean" || value === "both";
 }
 
-/** `YYYY-MM-DD`, the shape `TickerRange.from`/`to` hold. */
+/** A calendar date as `YYYY-MM-DD`, the shape `TickerRange.from`/`to` hold. */
 function readIsoDate(value: Record<string, unknown>, key: string): string | null {
   const candidate = readString(value, key);
-  return candidate !== null && /^\d{4}-\d{2}-\d{2}$/.test(candidate) ? candidate : null;
+  if (candidate === null || !/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return null;
+  const [year, month, day] = candidate.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  const exists = parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+  return exists ? candidate : null;
 }
 
-function isBarsSpec(value: unknown): boolean {
-  return isRecord(value) && typeof value["timespan"] === "string" && typeof value["multiplier"] === "number";
+function isBarsSpec(value: unknown): value is DataPolicy["input_bars"] {
+  if (!isRecord(value)) return false;
+  const { timespan, multiplier } = value;
+  return (timespan === "minute" || timespan === "hour" || timespan === "day") &&
+    typeof multiplier === "number" && Number.isInteger(multiplier) && multiplier > 0;
 }
 
-/** The policy `StrategyLabConfigStore.composeDataPolicy` submits, as it comes back from a job snapshot. */
+/** The complete policy `StrategyLabConfigStore.composeDataPolicy` submits, as it comes back from a job snapshot. */
 function isDataPolicyPayload(value: unknown): value is DataPolicy {
+  if (!isRecord(value)) return false;
   return (
-    isRecord(value) &&
+    (value["source"] === "polygon" || value["source"] === "synthetic") &&
     typeof value["symbol"] === "string" &&
-    typeof value["session"] === "string" &&
-    typeof value["provider_kind"] === "string" &&
+    typeof value["adjusted"] === "boolean" &&
+    (value["session"] === "regular" || value["session"] === "extended") &&
     isBarsSpec(value["input_bars"]) &&
-    isBarsSpec(value["strategy_bars"])
+    isBarsSpec(value["strategy_bars"]) &&
+    value["timestamp_policy"] === "bar_close_ms_utc" &&
+    value["timezone"] === "America/New_York" &&
+    (value["provider_kind"] === "live" || value["provider_kind"] === "fixture") &&
+    isNullableString(value["fixture_id"]) &&
+    isNullableString(value["fixture_sha256"])
   );
 }
 
