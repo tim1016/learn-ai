@@ -96,9 +96,11 @@ function isOwnJob(value: unknown): value is OwnJob {
   return typeof id === "string" && (type === null || (typeof type === "string" && isStrategyLabJobType(type)));
 }
 
-function forgetOwnJob(): void {
+/** Retire the marker — or, given `only`, retire it only while it still names that job, so a run started meanwhile keeps its own. */
+function forgetOwnJob(only?: OwnJob): void {
   try {
     if (typeof sessionStorage === "undefined") return;
+    if (only !== undefined && ownJob()?.id !== only.id) return;
     sessionStorage.removeItem(OWN_JOB_KEY);
   } catch {
     // A marker that outlives its job is ignored by the reattach rule anyway.
@@ -515,20 +517,22 @@ export class StrategyLabRunner {
   private async openFinishedOwnJob(own: OwnJob): Promise<void> {
     try {
       const response = await this.jobs.fetchResult<EngineBacktestResponse | TrustedRunResponse>(own.id);
-      forgetOwnJob();
+      // Only this marker is retired: a run started while the read was in
+      // flight has already replaced it with its own.
+      forgetOwnJob(own);
       // A marker from before the type was recorded is told apart by the result's shape.
       const isLean = own.type === "lean_engine_run" || (own.type === null && "strategy_execution_id" in response);
       await (isLean ? this.applyLeanResult(response as TrustedRunResponse) : this.applyEngineResult(response as EngineBacktestResponse));
     } catch (error) {
       if (error instanceof HttpErrorResponse && error.status === 404) {
-        forgetOwnJob();
+        forgetOwnJob(own);
         return;
       }
-      if (own.type === "lean_engine_run") {
-        this.fail("LEAN result unavailable", error instanceof Error ? error.message : "Failed to fetch LEAN run result");
-      } else {
-        this.fail("Failed to fetch backtest result", errorMessage(error, "Failed to fetch backtest result"));
-      }
+      const headline =
+        own.type === "lean_engine_run" ? "LEAN result unavailable"
+        : own.type === "engine_backtest" ? "Failed to fetch backtest result"
+        : "Result of the run in flight unavailable";
+      this.fail(headline, errorMessage(error, headline));
     } finally {
       this.updateRunningState();
     }

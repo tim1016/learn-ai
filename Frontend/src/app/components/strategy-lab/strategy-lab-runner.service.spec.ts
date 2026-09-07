@@ -418,6 +418,38 @@ describe("StrategyLab configuration and runner", () => {
       expect(runner.runStatusBanner()).toBe("LEAN result unavailable");
     });
 
+    it("uses an engine-neutral headline when a migrated marker's result cannot be read", async () => {
+      sessionStorage.setItem("strategyLab.ownJobId", "job-old");
+      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(runner.runStatusBanner()).toBe("Result of the run in flight unavailable");
+      expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
+    });
+
+    it("keeps the marker of a run started while the remembered result was still being read", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      let settle: (value: unknown) => void = () => undefined;
+      fetchResult.mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+
+      // The operator starts a new run before the old result arrives.
+      await runner.run();
+      expect(JSON.parse(sessionStorage.getItem("strategyLab.ownJob") ?? "{}").id).toBe("job-1");
+
+      settle({ success: true, study_id: 321, total_trades: 4, net_profit: 12 });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(JSON.parse(sessionStorage.getItem("strategyLab.ownJob") ?? "{}").id).toBe("job-1");
+    });
+
     it("reads a stored failure the same way the live path does", async () => {
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockResolvedValue({ success: false, error: "boom" });
