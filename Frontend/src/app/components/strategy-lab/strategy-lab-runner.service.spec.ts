@@ -345,10 +345,11 @@ describe("StrategyLab configuration and runner", () => {
     it("opens the study of a remembered job that finished during the reload", async () => {
       // #1954: the tab's job completed between the reload and the active-jobs
       // snapshot, so it never appears in activeJobs() and no terminal event
-      // arrives; the saved study was reachable only through History.
+      // arrives; the saved study was reachable only through History. The
+      // runner from beforeEach has not ticked yet, so it stands in for the
+      // freshly loaded tab (a second instance would share this tab's marker).
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockResolvedValue({ success: true, study_id: 321, total_trades: 4, net_profit: 12 });
-      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
       TestBed.tick();
 
       // Until the snapshot settles, absence means "not yet known": nothing is read.
@@ -361,7 +362,7 @@ describe("StrategyLab configuration and runner", () => {
 
       expect(fetchResult).toHaveBeenCalledWith("job-9");
       expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 321 } }));
-      expect(reloaded.running()).toBe(false);
+      expect(runner.running()).toBe(false);
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
     });
 
@@ -369,14 +370,13 @@ describe("StrategyLab configuration and runner", () => {
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 404, statusText: "Not Found", error: { error: "result not found or expired" } }));
       resumed.set(true);
-      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
       TestBed.tick();
       await Promise.resolve();
       await Promise.resolve();
 
       expect(fetchResult).toHaveBeenCalledWith("job-9");
       expect(navigate).not.toHaveBeenCalled();
-      expect(reloaded.runError()).toBeNull();
+      expect(runner.runError()).toBeNull();
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
     });
 
@@ -384,13 +384,12 @@ describe("StrategyLab configuration and runner", () => {
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
       resumed.set(true);
-      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
       TestBed.tick();
       await Promise.resolve();
       await Promise.resolve();
 
       expect(navigate).not.toHaveBeenCalled();
-      expect(reloaded.runError()).not.toBeNull();
+      expect(runner.runError()).not.toBeNull();
       expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
     });
 
@@ -398,13 +397,12 @@ describe("StrategyLab configuration and runner", () => {
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
       fetchResult.mockResolvedValue({ success: false, error: "boom" });
       resumed.set(true);
-      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
       TestBed.tick();
       await Promise.resolve();
       await Promise.resolve();
 
       expect(navigate).not.toHaveBeenCalled();
-      expect(reloaded.runError()).toBe("boom");
+      expect(runner.runError()).toBe("boom");
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
     });
 
@@ -416,7 +414,6 @@ describe("StrategyLab configuration and runner", () => {
       fetchResult.mockResolvedValue({ success: true, study_id: 555, total_trades: 1, net_profit: 1 });
       putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "completed" }));
       resumed.set(true);
-      TestBed.runInInjectionContext(() => new StrategyLabRunner());
       TestBed.tick();
       await Promise.resolve();
       await Promise.resolve();
@@ -428,23 +425,20 @@ describe("StrategyLab configuration and runner", () => {
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
       putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "failed", errorMessage: "engine crashed" }));
       resumed.set(true);
-      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
       TestBed.tick(); // adoption reattaches by id …
       TestBed.tick(); // … and the job effect reports the terminal state
-      console.log("DEBUG1954", JSON.stringify({ phase: reloaded.runPhase(), running: reloaded.running(), banner: reloaded.runStatusBanner(), detail: reloaded.runPhaseDetail(), marker: sessionStorage.getItem("strategyLab.ownJob"), known: TestBed.inject(JobsService).job("job-9")?.status }));
 
       expect(fetchResult).not.toHaveBeenCalled();
-      expect(reloaded.runError()).toBe("engine crashed");
+      expect(runner.runError()).toBe("engine crashed");
     });
 
     it("still prefers the remembered job while it is active, even after the snapshot settles", () => {
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
       resumed.set(true);
-      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
       putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "running" }));
       TestBed.tick();
 
-      expect(reloaded.running()).toBe(true);
+      expect(runner.running()).toBe(true);
       expect(fetchResult).not.toHaveBeenCalled();
     });
 
