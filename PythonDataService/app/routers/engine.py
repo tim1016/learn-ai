@@ -47,7 +47,7 @@ from app.engine.results.lean_statistics import compute_lean_statistics
 from app.engine.results.statistics import summarize
 from app.engine.results.trade_record import TradeRecord
 from app.engine.run_gate import one_backtest_in_flight
-from app.engine.strategy.base import Strategy
+from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.params import StrategyParamsBase
 from app.engine.strategy.registry import (
     _STRATEGY_REGISTRY,
@@ -1460,6 +1460,128 @@ def _execute_engine_backtest_core(
 # ---------------------------------------------------------------------------
 # Backtest workflow stages, in the order a run walks them
 # ---------------------------------------------------------------------------
+def _lean_parity_statistics(*, result: BacktestResult, trades: list[LoggedTrade]) -> LeanStatisticsResponse | None:
+    """LEAN-comparable statistics for this run, or ``None`` when they cannot be had.
+
+    Best-effort by contract, which is the reason it is a function rather than
+    a block: buried mid-aggregation its ``except Exception: log`` read as a
+    shrug and there was no name for what a caller gets when it fires. ``None``
+    means the comparison is unavailable for this run — no bars, no trades, or
+    the computation itself refused — and the response carries that absence
+    rather than a wrong number.
+    """
+    lean_stats_resp: LeanStatisticsResponse | None = None
+    if result.bars and trades:
+        try:
+            # Convert retained TradeBar objects → DataFrame with timestamp + close
+            bar_records = [
+                {
+                    "timestamp": b.start_ms,
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": int(b.volume),
+                }
+                for b in result.bars
+            ]
+            df = pd.DataFrame(bar_records)
+
+            # Convert LoggedTrade → TradeRecord
+            cum_pnl = 0.0
+            trade_records: list[TradeRecord] = []
+            for i, t in enumerate(trades):
+                cum_pnl += float(t.pnl_pct)
+                trade_records.append(_format_trade_record(i + 1, t, cum_pnl))
+
+            lean_stats = compute_lean_statistics(
+                df=df,
+                trades=trade_records,
+                start_capital=float(result.initial_cash),
+                risk_free_rate=0.0,
+                benchmark_returns=None,
+            )
+
+            from dataclasses import asdict as _dc_asdict
+
+            lean_stats_resp = LeanStatisticsResponse(
+                portfolio=LeanPortfolioStatsResponse(**_dc_asdict(lean_stats.portfolio)),
+                trade=LeanTradeStatsResponse(**_dc_asdict(lean_stats.trade)),
+                runtime=LeanRuntimeStatsResponse(
+                    equity=lean_stats.equity,
+                    fees=lean_stats.fees,
+                    net_profit=lean_stats.net_profit,
+                    total_return=lean_stats.total_return,
+                    total_orders=lean_stats.total_orders,
+                ),
+            )
+        except Exception:
+            logger.exception("[ENGINE] LEAN statistics computation failed — returning without")
+
+    return lean_stats_resp
+
+
+def _validation_analytics(
+    *,
+    result: BacktestResult,
+    request: EngineBacktestRequest,
+    strategy: Strategy,
+    formatted_trades: list[EngineTradeResponse],
+    equity_curve: list[dict[str, Any]],
+    on_log: LogCallback,
+) -> EngineValidationAnalyticsResponse | None:
+    """The Python-authored validation analytics, or ``None`` when the engine's output is not shaped for them.
+
+    Best-effort like :func:`_lean_parity_statistics`, and absent for the same
+    reason: an analytics failure is a missing panel, never a failed backtest.
+    The operator hears about it through ``on_log`` rather than inferring it
+    from an empty section.
+    """
+    validation_analytics: EngineValidationAnalyticsResponse | None = None
+    try:
+        validation_trades = [
+            ValidationTrade(
+                trade_number=trade.trade_number,
+                entry_ms_utc=trade.entry_time,
+                exit_ms_utc=trade.exit_time,
+                pnl_pct=trade.pnl_pct,
+                is_synthetic_exit=trade.is_synthetic_exit,
+            )
+            for trade in formatted_trades
+        ]
+        validation_equity = [
+            ValidationEquityPoint(
+                timestamp_ms_utc=point["timestamp"],
+                equity=point["equity"],
+            )
+            for point in equity_curve
+        ]
+        performance_equity = validation_equity
+        if (
+            request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
+            and request.from_date is not None
+            and request.to_date is not None
+        ):
+            start_day = date.fromisoformat(request.from_date)
+            end_day = date.fromisoformat(request.to_date) + timedelta(days=1)
+            validation_equity = build_compatibility_equity_curve(
+                validation_trades,
+                start_ms_utc=int(datetime.combine(start_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
+                end_ms_utc=int(datetime.combine(end_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
+                initial_equity=float(result.initial_cash),
+            )
+        validation_analytics = compute_engine_validation_analytics(
+            trades=validation_trades,
+            equity_curve=validation_equity,
+            performance_equity_curve=performance_equity,
+        )
+    except Exception as exc:
+        logger.exception("[ENGINE] Validation analytics rejected engine output")
+        on_log(f"Validation analytics unavailable: {exc}")
+
+    return validation_analytics
+
+
 def _aggregate_backtest_response(
     *,
     result: BacktestResult,
@@ -1541,54 +1663,8 @@ def _aggregate_backtest_response(
         on_log(f"Trade accounting error: {exc}")
         return _failed_backtest_response(request, f"trade accounting failed: {exc}")
 
-    # ── LEAN-parity statistics ──────────────────────────────────────
-    lean_stats_resp: LeanStatisticsResponse | None = None
-    if result.bars and trades:
-        try:
-            # Convert retained TradeBar objects → DataFrame with timestamp + close
-            bar_records = [
-                {
-                    "timestamp": b.start_ms,
-                    "open": float(b.open),
-                    "high": float(b.high),
-                    "low": float(b.low),
-                    "close": float(b.close),
-                    "volume": int(b.volume),
-                }
-                for b in result.bars
-            ]
-            df = pd.DataFrame(bar_records)
-
-            # Convert LoggedTrade → TradeRecord
-            cum_pnl = 0.0
-            trade_records: list[TradeRecord] = []
-            for i, t in enumerate(trades):
-                cum_pnl += float(t.pnl_pct)
-                trade_records.append(_format_trade_record(i + 1, t, cum_pnl))
-
-            lean_stats = compute_lean_statistics(
-                df=df,
-                trades=trade_records,
-                start_capital=float(result.initial_cash),
-                risk_free_rate=0.0,
-                benchmark_returns=None,
-            )
-
-            from dataclasses import asdict as _dc_asdict
-
-            lean_stats_resp = LeanStatisticsResponse(
-                portfolio=LeanPortfolioStatsResponse(**_dc_asdict(lean_stats.portfolio)),
-                trade=LeanTradeStatsResponse(**_dc_asdict(lean_stats.trade)),
-                runtime=LeanRuntimeStatsResponse(
-                    equity=lean_stats.equity,
-                    fees=lean_stats.fees,
-                    net_profit=lean_stats.net_profit,
-                    total_return=lean_stats.total_return,
-                    total_orders=lean_stats.total_orders,
-                ),
-            )
-        except Exception:
-            logger.exception("[ENGINE] LEAN statistics computation failed — returning without")
+    # ── LEAN-parity statistics ──
+    lean_stats_resp = _lean_parity_statistics(result=result, trades=trades)
 
     equity_curve_dicts = [
         {
@@ -1615,47 +1691,14 @@ def _aggregate_backtest_response(
     # ── Serialize insights ──
     insights_dicts = [i.to_dict() for i in result.insights]
 
-    validation_analytics: EngineValidationAnalyticsResponse | None = None
-    try:
-        validation_trades = [
-            ValidationTrade(
-                trade_number=trade.trade_number,
-                entry_ms_utc=trade.entry_time,
-                exit_ms_utc=trade.exit_time,
-                pnl_pct=trade.pnl_pct,
-                is_synthetic_exit=trade.is_synthetic_exit,
-            )
-            for trade in formatted
-        ]
-        validation_equity = [
-            ValidationEquityPoint(
-                timestamp_ms_utc=point["timestamp"],
-                equity=point["equity"],
-            )
-            for point in equity_curve_dicts
-        ]
-        performance_equity = validation_equity
-        if (
-            request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
-            and request.from_date is not None
-            and request.to_date is not None
-        ):
-            start_day = date.fromisoformat(request.from_date)
-            end_day = date.fromisoformat(request.to_date) + timedelta(days=1)
-            validation_equity = build_compatibility_equity_curve(
-                validation_trades,
-                start_ms_utc=int(datetime.combine(start_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
-                end_ms_utc=int(datetime.combine(end_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
-                initial_equity=float(result.initial_cash),
-            )
-        validation_analytics = compute_engine_validation_analytics(
-            trades=validation_trades,
-            equity_curve=validation_equity,
-            performance_equity_curve=performance_equity,
-        )
-    except Exception as exc:
-        logger.exception("[ENGINE] Validation analytics rejected engine output")
-        on_log(f"Validation analytics unavailable: {exc}")
+    validation_analytics = _validation_analytics(
+        result=result,
+        request=request,
+        strategy=strategy,
+        formatted_trades=formatted,
+        equity_curve=equity_curve_dicts,
+        on_log=on_log,
+    )
 
     run_verdict = compute_run_verdict(
         {
