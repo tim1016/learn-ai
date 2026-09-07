@@ -662,16 +662,16 @@ def _reducing_order_facts(repo: ClerkSqliteRepository, order_ref: str) -> ExitRe
 
 
 def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
-    # The latest uncertainty is the anchor when there is one. ``sequence`` is
-    # monotonic per append, so the last row of that kind is the latest — the
-    # former ``max()`` over every recorded_at_ms said the same thing after
-    # reading the order's whole history (#1942).
-    latest_uncertainty = repo.last_order_transition(
+    # The greatest recorded uncertainty is the anchor when there is one — the
+    # maximum, not the last by sequence: ``recorded_at_ms`` is wall time, so a
+    # host clock that steps backwards and rebounds can leave the newest row
+    # holding an older timestamp, and a grace window must not shorten because
+    # of that. SQLite computes it over the index; the former ``max()`` did it
+    # after reading the order's whole history in Python (#1942).
+    anchor_ms = repo.max_order_transition_recorded_at_ms(
         order_ref=order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN"
     )
-    if latest_uncertainty is not None:
-        anchor_ms = latest_uncertainty["recorded_at_ms"]
-    else:
+    if anchor_ms is None:
         created = repo.first_order_transition(
             order_ref=order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
         )

@@ -24,6 +24,7 @@ import pytest
 from app.broker.alpaca.clerk.sqlite import writes
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from tests.broker.alpaca.clerk.sqlite.conftest import _broker_leg, _clock_at, _FakeTradePort
@@ -129,3 +130,79 @@ async def test_the_lookup_short_circuits_on_the_index(repo: ClerkSqliteRepositor
 
     assert "ix_custody_transitions_order_ref" in detail, detail
     assert "TEMP B-TREE" not in detail.upper(), f"the sort is not free: {detail}"
+
+
+@pytest.mark.asyncio
+async def test_the_grace_anchor_is_the_greatest_timestamp_not_the_last_row(
+    tmp_path: Path,
+) -> None:
+    """``recorded_at_ms`` is wall time; ``sequence`` is append order. They can disagree.
+
+    A host clock that steps backwards and rebounds leaves the newest row by
+    sequence holding an *older* timestamp than an earlier one. A grace window
+    anchored on "the most recent uncertainty" must not shorten because of
+    that, so it asks for the maximum rather than the last row.
+    """
+    clock = _clock_at(1_700_000_000_000)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    try:
+        repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        order_ref = await _an_order_with_history(repo)
+
+        # Reuse a real row's custody columns rather than inventing enum values;
+        # only the kind and the clock differ.
+        template = repo.transitions_for_order(order_ref)[0]
+
+        def an_uncertainty() -> None:
+            repo.append_transition(
+                TransitionInput(
+                    transition_kind="ORDER_SUBMIT_UNCERTAIN",
+                    custody_owner=template["custody_owner"],
+                    execution_authority=template["execution_authority"],
+                    operation_state=template["operation_state"],
+                    clerk_observed_at_ms=clock(),
+                    summary_code="ORDER_SUBMIT_UNCERTAIN",
+                    facts_json="{}",
+                    strategy_instance_id=template["strategy_instance_id"],
+                    run_id=template["run_id"],
+                    command_id=template["command_id"],
+                    effect_operation_id=template["effect_operation_id"],
+                    order_ref=order_ref,
+                )
+            )
+
+        an_uncertainty()
+        clock.advance(-60_000)  # the host clock steps backwards
+        an_uncertainty()
+
+        rows = [
+            row
+            for row in repo.transitions_for_order(order_ref)
+            if row["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
+        ]
+        assert len(rows) == 2
+        assert rows[-1]["recorded_at_ms"] < rows[0]["recorded_at_ms"], (
+            "the fixture failed to make sequence order and wall-clock order disagree"
+        )
+
+        greatest = max(row["recorded_at_ms"] for row in rows)
+        assert (
+            repo.max_order_transition_recorded_at_ms(
+                order_ref=order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN"
+            )
+            == greatest
+        )
+        # The mirror method answers the other question, and answers it differently.
+        last = repo.last_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN")
+        assert last is not None and last["recorded_at_ms"] != greatest
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_the_greatest_timestamp_of_an_absent_kind_is_none(repo: ClerkSqliteRepository) -> None:
+    order_ref = await _an_order_with_history(repo)
+    assert repo.max_order_transition_recorded_at_ms(order_ref=order_ref, transition_kind="NO_SUCH") is None

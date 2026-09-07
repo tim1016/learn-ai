@@ -235,6 +235,29 @@ class ClerkSqliteRepositoryReadApi:
             ).fetchone()
             return None if row is None else writes.row_to_payload(row)
 
+    def max_order_transition_recorded_at_ms(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str,
+        transition_kind: str,
+    ) -> int | None:
+        """The greatest ``recorded_at_ms`` among an order's transitions of one kind.
+
+        Distinct from :meth:`last_order_transition` on purpose. ``sequence`` is
+        append order; ``recorded_at_ms`` comes from the repository clock, which
+        is wall time. A host clock that steps backwards and rebounds can leave
+        the latest-by-sequence row holding a *lower* timestamp than an earlier
+        one, so a grace window anchored on "the most recent uncertainty" has to
+        ask for the maximum rather than the last (#1942).
+        """
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT MAX(recorded_at_ms) FROM custody_transitions "
+                "WHERE order_ref = ? AND transition_kind = ?",
+                (order_ref, transition_kind),
+            ).fetchone()
+            return None if row is None else row[0]
+
     def has_order_transition(
         self: ClerkSqliteRepository,
         *,
