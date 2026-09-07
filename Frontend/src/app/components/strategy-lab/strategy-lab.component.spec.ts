@@ -146,6 +146,8 @@ async function createLab(
   options: {
     restoreRun?: number;
     activeRun?: number;
+    /** Strategy Lab launch parameters (`strategy`, `symbol`, `from`, `to`, …) carried by the URL. */
+    launch?: Record<string, string>;
     backtestRun?: BacktestRunDetail | null;
     /** Makes the run-detail read surface a transport error, which is a
      *  different failure from the fetched run being unrestorable. */
@@ -156,7 +158,7 @@ async function createLab(
   const activeJobs = signal<JobState[]>([]);
   const navigate = vi.fn(async () => true);
   const diagnose = vi.fn();
-  const query: Record<string, string> = {};
+  const query: Record<string, string> = { ...options.launch };
   if (options.activeRun) query["run"] = String(options.activeRun);
   if (options.restoreRun) query["restoreRun"] = String(options.restoreRun);
   // A subject, not `of(...)`: the query string is the workbench's only run
@@ -336,6 +338,70 @@ describe("Strategy Lab Workbench", () => {
 
     expect(facts()).toContain("2026-03-02 → 2026-04-02");
     expect(facts()).not.toContain("2025-01-06");
+    http.verify();
+  });
+
+  it("describes the adopted job once a loaded report is cleared with Back", async () => {
+    const { fixture, http, activeJobs, navigateToQuery } = await createLab({ activeRun: 91, backtestRun: run() });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const facts = (): string => root.querySelector(".config-strip__facts")?.textContent ?? "";
+    activeJobs.set([{
+      id: "other-tab", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0,
+      parameters: { backtest: { ...backtestPayload(), start_date: "2025-01-06", end_date: "2025-02-06" } },
+    }]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(facts()).toContain("2026-03-02 → 2026-04-02");
+
+    navigateToQuery({});
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(facts()).toContain("2025-01-06 → 2025-02-06");
+    http.verify();
+  });
+
+  it("describes the adopted job when the selected report cannot be found", async () => {
+    const { fixture, http, activeJobs } = await createLab({ activeRun: 404, backtestRun: null });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+
+    activeJobs.set([{
+      id: "resumed-1", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0,
+      parameters: { backtest: backtestPayload() },
+    }]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect((within(root).getAllByLabelText("Start date")[0] as HTMLInputElement).value).toBe("2026-03-02");
+    http.verify();
+  });
+
+  it("applies launch parameters before the adopted job's inputs, so they cannot reset them", async () => {
+    const { fixture, http, activeJobs } = await createLab({
+      launch: { strategy: "ema_crossover_signal", symbol: "SPY", from: "2025-05-01", to: "2025-06-01" },
+    });
+    activeJobs.set([{
+      id: "resumed-1", type: "engine_backtest", status: "running", recentLogs: [], logSeq: 0,
+      parameters: { backtest: backtestPayload() },
+    }]);
+    fixture.detectChanges();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const field = (label: string | RegExp): HTMLInputElement => within(root).getAllByLabelText(label)[0] as HTMLInputElement;
+
+    expect(field("Start date").value).toBe("2026-03-02");
+    expect(field("End date").value).toBe("2026-04-02");
+    expect(field(/^lookback/).value).toBe("8");
     http.verify();
   });
 

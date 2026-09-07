@@ -68,6 +68,11 @@ export class StrategyLabRunReport {
   readonly notFound = computed(
     () => this.activeRunId() !== null && !this.loading() && !this.loadError() && this.run() === null,
   );
+  /** A selected run holds the stage from selection until it fails to load;
+   *  the configuration rail describes it meanwhile, not a job in flight. */
+  readonly runOnStage = computed(
+    () => this.activeRunId() !== null && !this.notFound() && this.loadError() === undefined,
+  );
 
   /**
    * The run the page presents, which is not always the run it is loading.

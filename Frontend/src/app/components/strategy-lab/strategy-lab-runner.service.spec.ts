@@ -352,6 +352,10 @@ describe("StrategyLab configuration and runner", () => {
 
       expect(reloaded.adoptedJob()?.id).toBe("job-1");
       expect(reloaded.adoptedJob()?.parameters).toEqual({ backtest: { strategy_name: "ema_crossover_signal" } });
+
+      // Once the job ends the rail is no longer the adopted job's to describe.
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+      expect(reloaded.adoptedJob()).toBeNull();
     });
 
     it("reads the payload it submits back into the same inputs, so nothing added to the run is lost on the rail", async () => {

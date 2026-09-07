@@ -100,8 +100,12 @@ export class StrategyLabComponent {
     });
 
     effect(() => {
+      // Re-evaluated when the adopted job ends, when a report leaves the
+      // stage (Back, a load that fails), and once launch parameters are
+      // applied — so the job's inputs are neither hidden behind a report
+      // that is gone nor reset by a later launch-parameter application.
       const job = this.runs.adoptedJob();
-      if (job === null) return;
+      if (job === null || this.report.runOnStage() || !this.config.launchParamsSettled()) return;
       untracked(() => void this.describeAdoptedJob(job, strategiesReady));
     });
 
@@ -174,15 +178,15 @@ export class StrategyLabComponent {
    * (#1953). After a reload the store is rebuilt with defaults while the
    * resumed job runs with the inputs it was submitted with, so the rail
    * labelled "Exact run inputs" would describe the defaults until the
-   * persisted report reconciled them. A loaded report keeps the rail — its
-   * inputs describe what is on the stage — and a payload this workbench
-   * cannot read leaves the rail alone rather than guessing.
+   * persisted report reconciled them. A report on the stage keeps the rail —
+   * its inputs describe what is shown — and a payload this workbench cannot
+   * read leaves the rail alone rather than guessing.
    */
   private async describeAdoptedJob(job: AdoptedJob, strategiesReady: Promise<void>): Promise<void> {
     const inputs = inputsFromBacktestJob(job.parameters, this.config.range());
     if (inputs === null) return;
     await strategiesReady;
-    if (this.report.activeRunId() !== null) return;
+    if (this.runs.adoptedJob() !== job || this.report.runOnStage()) return;
     this.applyRunInputs(inputs);
   }
 
