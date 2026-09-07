@@ -110,3 +110,36 @@ def test_every_verdict_carries_server_authored_copy(final: str) -> None:
 
     assert verdict.final_verdict == final
     assert verdict.headline and verdict.detail
+
+
+def test_paper_with_mode_disagreement_is_unknown_not_reassuring() -> None:
+    runtime = _failure("LIVE_MODE_DISAGREEMENT", None)
+
+    verdict = alpaca_live_verdict(settings=_paper(), runtime=runtime, now_ms=_NOW)
+
+    assert verdict.configured_mode == "paper"
+    assert verdict.mode_agreement == "disagreed"
+    assert verdict.final_verdict == "unknown"
+    assert "no real money" not in verdict.headline
+    assert verdict.clerk_refusal_reason_code == "LIVE_MODE_DISAGREEMENT"
+
+
+def test_clean_paper_selection_is_the_normal_path() -> None:
+    runtime = ActiveClerkRuntime(authority_kind="sqlite", account_id="PA0SANITIZED00001")
+
+    verdict = alpaca_live_verdict(settings=_paper(), runtime=runtime, now_ms=_NOW)
+
+    assert verdict.clerk_authority == "sqlite"
+    assert verdict.clerk_refusal_reason_code is None
+    assert verdict.mode_agreement == "agreed"
+    assert verdict.final_verdict == "paper"
+    assert "PA0SANITIZED00001" in verdict.headline
+
+
+def test_clerk_authority_literal_tracks_the_runtime_kind() -> None:
+    from typing import get_args
+
+    from app.broker.alpaca.clerk.active_authority import AuthorityKind as RuntimeAuthorityKind
+    from app.schemas.alpaca_live_verdict import ClerkAuthority
+
+    assert set(get_args(ClerkAuthority)) == set(get_args(RuntimeAuthorityKind)) | {"not_installed"}
