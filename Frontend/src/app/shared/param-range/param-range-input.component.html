@@ -21,57 +21,57 @@
   </div>
 
   @if (isListMode()) {
-    <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-values'">
+    <label class="grid gap-1 text-xs text-slate-400" [attr.for]="idPrefix + '-values'">
       <span>Values (comma-separated)</span>
       <input
         #valuesInput
         pInputText
         type="text"
         class="w-full"
-        [id]="paramName() + '-values'"
+        [id]="idPrefix + '-values'"
         [value]="valuesText()"
         [attr.aria-invalid]="valuesProblem() ? 'true' : null"
-        [attr.aria-describedby]="valuesProblem() ? paramName() + '-values-problem' : null"
+        [attr.aria-describedby]="valuesProblem() ? idPrefix + '-values-problem' : null"
         (input)="onValuesTextInput(valuesInput.value)"
       />
     </label>
     @if (valuesProblem(); as problem) {
-      <p class="mb-0 mt-1 text-xs text-red-300" role="alert" [id]="paramName() + '-values-problem'">{{ problem }}</p>
+      <p class="mb-0 mt-1 text-xs text-red-300" role="alert" [id]="idPrefix + '-values-problem'">{{ problem }}</p>
     }
   } @else {
     <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
-      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-low'">
+      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="idPrefix + '-low'">
         <span>Low</span>
         <input
           #lowInput
           pInputText
           type="number"
           class="min-w-0 w-full"
-          [id]="paramName() + '-low'"
+          [id]="idPrefix + '-low'"
           [value]="lowValue()"
           (input)="onLowInput(lowInput.value)"
         />
       </label>
-      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-high'">
+      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="idPrefix + '-high'">
         <span>High</span>
         <input
           #highInput
           pInputText
           type="number"
           class="min-w-0 w-full"
-          [id]="paramName() + '-high'"
+          [id]="idPrefix + '-high'"
           [value]="highValue()"
           (input)="onHighInput(highInput.value)"
         />
       </label>
-      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-step'">
+      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="idPrefix + '-step'">
         <span>Step</span>
         <input
           #stepInput
           pInputText
           type="number"
           class="min-w-0 w-full"
-          [id]="paramName() + '-step'"
+          [id]="idPrefix + '-step'"
           [value]="stepValue()"
           (input)="onStepInput(stepInput.value)"
         />

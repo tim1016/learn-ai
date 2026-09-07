@@ -82,6 +82,18 @@ describe("ParamRangeInputComponent", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("gives each instance its own element ids, so same-named parameters of two strategies do not collide", async () => {
+    const first = await renderInput({ type: "value_list", values: [2] });
+    const firstId = (first.container.querySelector("input[type=text]") as HTMLInputElement).id;
+    const second = await renderInput({ type: "value_list", values: [3] });
+    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("input[type=text]"));
+
+    expect(inputs).toHaveLength(2);
+    expect(new Set(inputs.map((el) => el.id)).size).toBe(2);
+    expect(firstId).toContain("values");
+    second.fixture.destroy();
+  });
+
   it("switches to low/high/step mode and updates the model", async () => {
     const view = await renderInput({ type: "value_list", values: [2] });
 

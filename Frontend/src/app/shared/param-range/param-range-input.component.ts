@@ -19,6 +19,10 @@ import { parseValueList, type LowHighStepRange, type ParamRange, type ValueListR
   styleUrl: "./param-range-input.component.scss",
 })
 export class ParamRangeInputComponent {
+  private static nextInstance = 0;
+  /** Element ids are per instance: several selected strategies may expose the same parameter name. */
+  protected readonly idPrefix = `param-range-${ParamRangeInputComponent.nextInstance++}`;
+
   readonly paramName = input.required<string>();
   readonly title = input<string>("");
   readonly defaultValue = input<number>(0);
