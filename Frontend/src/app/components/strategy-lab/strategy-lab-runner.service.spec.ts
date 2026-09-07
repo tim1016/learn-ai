@@ -1,4 +1,4 @@
-import { provideHttpClient } from "@angular/common/http";
+import { HttpErrorResponse, provideHttpClient } from "@angular/common/http";
 import { computed, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
@@ -55,6 +55,7 @@ describe("StrategyLab configuration and runner", () => {
   let diagnose: ReturnType<typeof vi.fn>;
   let navigate: ReturnType<typeof vi.fn>;
   let jobsById: ReturnType<typeof signal<Map<string, JobState>>>;
+  let resumed: ReturnType<typeof signal<boolean>>;
 
   /** Adds/replaces a job the way `JobsService` itself would — used to
    *  simulate a job `resumeActive()` discovered rather than one this
@@ -73,6 +74,7 @@ describe("StrategyLab configuration and runner", () => {
     fetchResult = vi.fn();
     navigate = vi.fn(async () => true);
     jobsById = signal(new Map<string, JobState>());
+    resumed = signal(false);
     diagnose = vi.fn(async () => ({
       overall_status: "pass",
       checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
@@ -95,6 +97,7 @@ describe("StrategyLab configuration and runner", () => {
               Array.from(jobsById().values()).filter((job) => !TERMINAL_JOB_STATUSES.includes(job.status)),
             ),
             job: (id: string) => jobsById().get(id) ?? null,
+            resumed,
             startJob,
             fetchResult,
           },
@@ -337,6 +340,188 @@ describe("StrategyLab configuration and runner", () => {
         ["/strategy-lab"],
         expect.objectContaining({ queryParams: { run: 224 } }),
       );
+    });
+
+    it("opens the study of a remembered job that finished during the reload", async () => {
+      // #1954: the tab's job completed between the reload and the active-jobs
+      // snapshot, so it never appears in activeJobs() and no terminal event
+      // arrives; the saved study was reachable only through History. The
+      // runner from beforeEach has not ticked yet, so it stands in for the
+      // freshly loaded tab (a second instance would share this tab's marker).
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockResolvedValue({ success: true, study_id: 321, total_trades: 4, net_profit: 12 });
+      TestBed.tick();
+
+      // Until the snapshot settles, absence means "not yet known": nothing is read.
+      expect(fetchResult).not.toHaveBeenCalled();
+
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fetchResult).toHaveBeenCalledWith("job-9");
+      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 321 } }));
+      expect(runner.running()).toBe(false);
+      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("retires the marker and reports nothing when the remembered job's result is gone (404)", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 404, statusText: "Not Found", error: { error: "result not found or expired" } }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fetchResult).toHaveBeenCalledWith("job-9");
+      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.runError()).toBeNull();
+      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("reports any other read failure and keeps the marker for a later reload", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.runError()).not.toBeNull();
+      expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
+    });
+
+    it("honours the previous frontend's bare-id marker once, telling the engine apart by the result's shape", async () => {
+      sessionStorage.setItem("strategyLab.ownJobId", "job-old");
+      fetchResult.mockResolvedValue({ strategy_execution_id: 808, exit_code: 0 });
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fetchResult).toHaveBeenCalledWith("job-old");
+      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 808 } }));
+      expect(sessionStorage.getItem("strategyLab.ownJobId")).toBeNull();
+      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("names LEAN when a remembered LEAN result cannot be read", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "lean-9", type: "lean_engine_run" }));
+      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(runner.runStatusBanner()).toBe("LEAN result unavailable");
+    });
+
+    it("uses an engine-neutral headline when a migrated marker's result cannot be read", async () => {
+      sessionStorage.setItem("strategyLab.ownJobId", "job-old");
+      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(runner.runStatusBanner()).toBe("Result of the run in flight unavailable");
+      expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
+    });
+
+    it("discards the remembered result when a run started while it was still being read", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      let settle: (value: unknown) => void = () => undefined;
+      fetchResult.mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+
+      // The operator starts a new run before the old result arrives.
+      await runner.run();
+      expect(JSON.parse(sessionStorage.getItem("strategyLab.ownJob") ?? "{}").id).toBe("job-1");
+      const phase = runner.runPhase();
+      const banner = runner.runStatusBanner();
+
+      settle({ success: true, study_id: 321, total_trades: 4, net_profit: 12 });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The new run keeps its marker and its status; the old study is not opened over it.
+      expect(JSON.parse(sessionStorage.getItem("strategyLab.ownJob") ?? "{}").id).toBe("job-1");
+      expect(runner.runPhase()).toBe(phase);
+      expect(runner.runStatusBanner()).toBe(banner);
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("does not report a superseded remembered result's read failure against the new run", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      let reject: (reason: unknown) => void = () => undefined;
+      fetchResult.mockReturnValueOnce(new Promise((_, rej) => { reject = rej; }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+
+      await runner.run();
+      reject(new HttpErrorResponse({ status: 500, statusText: "Server Error" }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(runner.runError()).toBeNull();
+      expect(runner.runPhase()).not.toBe("failed");
+      expect(JSON.parse(sessionStorage.getItem("strategyLab.ownJob") ?? "{}").id).toBe("job-1");
+    });
+
+    it("reads a stored failure the same way the live path does", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockResolvedValue({ success: false, error: "boom" });
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(navigate).not.toHaveBeenCalled();
+      expect(runner.runError()).toBe("boom");
+      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("lets the job effects report a remembered job the registry already holds as terminal", async () => {
+      // The snapshot can list the job in a terminal state (state is patched
+      // before the active-set removal); the registry knows the outcome, so
+      // no result is probed until the effect handles completion itself.
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockResolvedValue({ success: true, study_id: 555, total_trades: 1, net_profit: 1 });
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "completed" }));
+      resumed.set(true);
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 555 } }));
+    });
+
+    it("reports a remembered job the registry holds as failed, without probing its result", () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "failed", errorMessage: "engine crashed" }));
+      resumed.set(true);
+      TestBed.tick(); // adoption reattaches by id …
+      TestBed.tick(); // … and the job effect reports the terminal state
+
+      expect(fetchResult).not.toHaveBeenCalled();
+      expect(runner.runError()).toBe("engine crashed");
+    });
+
+    it("still prefers the remembered job while it is active, even after the snapshot settles", () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      resumed.set(true);
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "running" }));
+      TestBed.tick();
+
+      expect(runner.running()).toBe(true);
+      expect(fetchResult).not.toHaveBeenCalled();
     });
 
     it("leaves a parity companion's LEAN job alone even though it shares the job type", () => {

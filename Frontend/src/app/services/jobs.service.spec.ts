@@ -83,6 +83,35 @@ interface ControllableEventSource {
   dispatch: (payload: Record<string, unknown>, lastEventId?: string) => void;
 }
 
+describe('JobsService.resumed', () => {
+  beforeEach(() => {
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+  });
+
+  afterEach(() => TestBed.inject(HttpTestingController).verify());
+
+  it('is false until the startup active-job snapshot has been applied, then true', async () => {
+    const service = TestBed.inject(JobsService);
+    const httpMock = TestBed.inject(HttpTestingController);
+
+    expect(service.resumed()).toBe(false);
+    httpMock.expectOne((r) => r.url === '/api/jobs').flush([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(service.resumed()).toBe(true);
+  });
+
+  it('stays false when the snapshot request fails: absence from an empty registry proves nothing', async () => {
+    const service = TestBed.inject(JobsService);
+    const httpMock = TestBed.inject(HttpTestingController);
+
+    httpMock.expectOne((r) => r.url === '/api/jobs').flush({ error: 'down' }, { status: 503, statusText: 'Service Unavailable' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(service.resumed()).toBe(false);
+  });
+});
+
 describe('JobsService.onEvent', () => {
   let service: JobsService;
   let httpMock: HttpTestingController;

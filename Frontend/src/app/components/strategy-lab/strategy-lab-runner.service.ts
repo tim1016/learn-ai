@@ -25,14 +25,31 @@ const COMPATIBILITY_PROFILE = "us-equity-raw-ibkr-v1";
  * convenience, not execution state: when it is unavailable the runner
  * falls back to adopting any active job of the right type.
  */
-const OWN_JOB_KEY = "strategyLab.ownJobId";
+const OWN_JOB_KEY = "strategyLab.ownJob";
+/** The marker's previous shape: a bare job id with no type. Read once and retired. */
+const LEGACY_OWN_JOB_KEY = "strategyLab.ownJobId";
+
+const STRATEGY_LAB_JOB_TYPES = ["engine_backtest", "lean_engine_run"] as const;
+type StrategyLabJobType = (typeof STRATEGY_LAB_JOB_TYPES)[number];
+type StrategyLabJob = JobState & { type: StrategyLabJobType };
+
+/** The job this tab started or adopted: enough to read its result back after a reload. */
+interface OwnJob {
+  readonly id: string;
+  /** Null only for a marker written before the type was recorded; the result's shape then says which engine ran. */
+  readonly type: StrategyLabJobType | null;
+}
+
+function isStrategyLabJobType(type: string): type is StrategyLabJobType {
+  return (STRATEGY_LAB_JOB_TYPES as readonly string[]).includes(type);
+}
 
 /** Every LEAN run this workbench submits carries this `run_id` prefix; the
  *  parity companion submits `lean_engine_run` jobs through the same public
  *  route with a `companion-…` id, and those must never be adopted here. */
 const STRATEGY_LAB_RUN_ID_PREFIX = "strategy_lab_";
 
-function isStrategyLabJob(job: JobState): boolean {
+function isStrategyLabJob(job: JobState): job is StrategyLabJob {
   if (job.type === "engine_backtest") return true;
   if (job.type !== "lean_engine_run") return false;
   const request = job.parameters?.["request"];
@@ -42,28 +59,53 @@ function isStrategyLabJob(job: JobState): boolean {
   return typeof runId === "string" && runId.startsWith(STRATEGY_LAB_RUN_ID_PREFIX);
 }
 
-function rememberOwnJob(id: string): void {
+function rememberOwnJob(job: OwnJob): void {
   try {
     if (typeof sessionStorage === "undefined") return;
-    sessionStorage.setItem(OWN_JOB_KEY, id);
+    sessionStorage.setItem(OWN_JOB_KEY, JSON.stringify(job));
   } catch {
     // Denied storage only loses the marker; `wireJobAdoptionEffect` then
     // reattaches solely to an unambiguous single job, never a guess.
   }
 }
 
-function ownJobId(): string | null {
+function ownJob(): OwnJob | null {
   try {
     if (typeof sessionStorage === "undefined") return null;
-    return sessionStorage.getItem(OWN_JOB_KEY);
+    const raw = sessionStorage.getItem(OWN_JOB_KEY);
+    if (raw !== null) {
+      const parsed: unknown = JSON.parse(raw);
+      return isOwnJob(parsed) ? parsed : null;
+    }
+    // A tab that started its job on the previous frontend still carries the
+    // bare-id marker; it is honoured once, under the new key.
+    const legacy = sessionStorage.getItem(LEGACY_OWN_JOB_KEY);
+    if (legacy === null) return null;
+    sessionStorage.removeItem(LEGACY_OWN_JOB_KEY);
+    const migrated: OwnJob = { id: legacy, type: null };
+    sessionStorage.setItem(OWN_JOB_KEY, JSON.stringify(migrated));
+    return migrated;
   } catch {
     return null;
   }
 }
 
-function forgetOwnJob(): void {
+function isOwnJob(value: unknown): value is OwnJob {
+  if (typeof value !== "object" || value === null) return false;
+  const { id, type } = value as Record<string, unknown>;
+  return typeof id === "string" && (type === null || (typeof type === "string" && isStrategyLabJobType(type)));
+}
+
+/** Whether the marker still names `job` — false once a run started meanwhile has replaced it with its own. */
+function ownJobIs(job: OwnJob): boolean {
+  return ownJob()?.id === job.id;
+}
+
+/** Retire the marker — or, given `only`, retire it only while it still names that job, so a run started meanwhile keeps its own. */
+function forgetOwnJob(only?: OwnJob): void {
   try {
     if (typeof sessionStorage === "undefined") return;
+    if (only !== undefined && !ownJobIs(only)) return;
     sessionStorage.removeItem(OWN_JOB_KEY);
   } catch {
     // A marker that outlives its job is ignored by the reattach rule anyway.
@@ -198,7 +240,7 @@ export class StrategyLabRunner {
     };
     try {
       const jobId = await this.jobs.startJob("engine_backtest", { backtest });
-      rememberOwnJob(jobId);
+      rememberOwnJob({ id: jobId, type: "engine_backtest" });
       this.adoptionSettled = true;
       this.engineJobId.set(jobId);
     } catch (error) {
@@ -262,7 +304,7 @@ export class StrategyLabRunner {
           ...algorithm,
         },
       });
-      rememberOwnJob(leanJobId);
+      rememberOwnJob({ id: leanJobId, type: "lean_engine_run" });
       this.adoptionSettled = true;
       this.leanJobId.set(leanJobId);
     } catch (error) {
@@ -330,26 +372,40 @@ export class StrategyLabRunner {
   private wireJobAdoptionEffect(): void {
     effect(() => {
       if (this.adoptionSettled || this.engineJobId() !== null || this.leanJobId() !== null) return;
-      const active = this.jobs.activeJobs().filter(isStrategyLabJob);
-      const own = ownJobId();
-      // This tab's own job wins. A tab with no marker at all adopts only an
-      // unambiguous single candidate; a marker whose job is no longer active
-      // (the tab was closed before the run ended) adopts nothing — never a
-      // guess between experiments.
-      const job = own === null ? (active.length === 1 ? active[0] : undefined) : active.find((candidate) => candidate.id === own);
-      if (job === undefined) return;
-      this.adoptionSettled = true;
-      // A fallback-adopted job becomes this tab's own, so a later reload
-      // prefers it even once other experiments are active.
-      rememberOwnJob(job.id);
-      if (job.type === "engine_backtest") {
-        this.beginRun("Reattaching to backtest…", "");
-        this.engineJobId.set(job.id);
-      } else {
-        this.beginRun("Reattaching to LEAN run…", "");
-        this.leanJobId.set(job.id);
+      const own = ownJob();
+      if (own !== null) {
+        // This tab's own job is its own by construction: it is resolved by id,
+        // whatever its state, and the job effects then report it as they
+        // would have live. One the settled snapshot does not know finished
+        // during the reload (#1954); its stored result is read once instead.
+        const known = this.jobs.job(own.id);
+        if (known !== undefined && known !== null) {
+          const type = own.type ?? known.type;
+          if (isStrategyLabJobType(type)) this.reattach({ ...known, type });
+        } else if (this.jobs.resumed()) {
+          this.adoptionSettled = true;
+          void this.openFinishedOwnJob(own);
+        }
+        return;
       }
+      // A tab with no marker adopts only an unambiguous single candidate —
+      // never a guess between experiments.
+      const active = this.jobs.activeJobs().filter(isStrategyLabJob);
+      if (active.length === 1) this.reattach(active[0]);
     });
+  }
+
+  /** Track a job as this tab's own; the job effects take it from here. */
+  private reattach(job: StrategyLabJob): void {
+    this.adoptionSettled = true;
+    rememberOwnJob({ id: job.id, type: job.type });
+    if (job.type === "engine_backtest") {
+      this.beginRun("Reattaching to backtest…", "");
+      this.engineJobId.set(job.id);
+    } else {
+      this.beginRun("Reattaching to LEAN run…", "");
+      this.leanJobId.set(job.id);
+    }
   }
 
   private wireEngineJobEffect(): void {
@@ -445,29 +501,51 @@ export class StrategyLabRunner {
     });
   }
 
+  /** Navigate to a study this runner produced; the workbench keeps the configuration that produced it. */
+  private openStudy(runId: number): Promise<boolean> {
+    this.justProducedRunId.set(runId);
+    return this.router.navigate(["/strategy-lab"], { queryParams: { run: runId }, queryParamsHandling: "merge" });
+  }
+
+  /**
+   * The outcome of a remembered job that finished while this tab was
+   * reloading, read from its stored result and interpreted exactly as the
+   * live path interprets it. A 404 is the one expected miss — the job
+   * failed, was cancelled, or its result expired — and retires the marker
+   * with nothing to report, since the reload already showed no run in
+   * flight. Any other failure is reported and keeps the marker, so a later
+   * reload can try again once the backend answers. A run started while the
+   * read was in flight has replaced the marker with its own and owns the
+   * tab's outcome from then on: whatever the read returns is discarded, so
+   * it can neither navigate away from nor restate the newer run.
+   */
+  private async openFinishedOwnJob(own: OwnJob): Promise<void> {
+    try {
+      const response = await this.jobs.fetchResult<EngineBacktestResponse | TrustedRunResponse>(own.id);
+      if (!ownJobIs(own)) return;
+      forgetOwnJob();
+      // A marker from before the type was recorded is told apart by the result's shape.
+      const isLean = own.type === "lean_engine_run" || (own.type === null && "strategy_execution_id" in response);
+      await (isLean ? this.applyLeanResult(response as TrustedRunResponse) : this.applyEngineResult(response as EngineBacktestResponse));
+    } catch (error) {
+      if (!ownJobIs(own)) return;
+      if (error instanceof HttpErrorResponse && error.status === 404) {
+        forgetOwnJob();
+        return;
+      }
+      const headline =
+        own.type === "lean_engine_run" ? "LEAN result unavailable"
+        : own.type === "engine_backtest" ? "Failed to fetch backtest result"
+        : "Result of the run in flight unavailable";
+      this.fail(headline, errorMessage(error, headline));
+    } finally {
+      this.updateRunningState();
+    }
+  }
+
   private async handleEngineJobCompleted(jobId: string): Promise<void> {
     try {
-      const response = await this.jobs.fetchResult<EngineBacktestResponse>(jobId);
-      if (response.error) {
-        this.fail("Backtest failed", response.error);
-      } else if (response.success) {
-        this.setRunStatus(
-          "completed",
-          `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${formatCurrency(response.net_profit)}`,
-        );
-        if (response.study_id != null) {
-          this.justProducedRunId.set(response.study_id);
-          await this.router.navigate(["/strategy-lab"], {
-            queryParams: { run: response.study_id },
-            queryParamsHandling: "merge",
-          });
-        }
-        else {
-          this.runError.set(
-            "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
-          );
-        }
-      }
+      await this.applyEngineResult(await this.jobs.fetchResult<EngineBacktestResponse>(jobId));
     } catch (error) {
       this.fail(
         "Failed to fetch backtest result",
@@ -480,24 +558,7 @@ export class StrategyLabRunner {
 
   private async handleLeanJobCompleted(jobId: string): Promise<void> {
     try {
-      const response = await this.jobs.fetchResult<TrustedRunResponse>(jobId);
-      if (response.strategy_execution_id !== null) {
-        this.setRunStatus(
-          "completed",
-          "LEAN run finished",
-          `Persisted as study #${response.strategy_execution_id}.`,
-        );
-        this.justProducedRunId.set(response.strategy_execution_id);
-        await this.router.navigate(["/strategy-lab"], {
-          queryParams: { run: response.strategy_execution_id },
-          queryParamsHandling: "merge",
-        });
-      } else {
-        this.runError.set(
-          "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
-        );
-        this.setRunStatus("completed", "LEAN run finished", "Run completed without a persisted study ID.");
-      }
+      await this.applyLeanResult(await this.jobs.fetchResult<TrustedRunResponse>(jobId));
     } catch (error) {
       this.fail(
         "LEAN result unavailable",
@@ -506,6 +567,37 @@ export class StrategyLabRunner {
     } finally {
       this.updateRunningState();
     }
+  }
+
+  /** The one reading of an engine result: a reported failure, a saved study, or a run that saved nothing. */
+  private applyEngineResult(response: EngineBacktestResponse): Promise<unknown> {
+    if (response.error) {
+      this.fail("Backtest failed", response.error);
+      return Promise.resolve();
+    }
+    if (!response.success) return Promise.resolve();
+    this.setRunStatus(
+      "completed",
+      `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${formatCurrency(response.net_profit)}`,
+    );
+    if (response.study_id != null) return this.openStudy(response.study_id);
+    this.runError.set(
+      "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
+    );
+    return Promise.resolve();
+  }
+
+  /** The one reading of a LEAN result: a saved study, or a run that saved nothing. */
+  private applyLeanResult(response: TrustedRunResponse): Promise<unknown> {
+    if (response.strategy_execution_id !== null) {
+      this.setRunStatus("completed", "LEAN run finished", `Persisted as study #${response.strategy_execution_id}.`);
+      return this.openStudy(response.strategy_execution_id);
+    }
+    this.runError.set(
+      "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
+    );
+    this.setRunStatus("completed", "LEAN run finished", "Run completed without a persisted study ID.");
+    return Promise.resolve();
   }
 
   private updateRunningState(): void {
