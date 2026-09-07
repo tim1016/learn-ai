@@ -52,6 +52,12 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
     rest_rate_limit_per_min=200,
 )
 
+# The real-money descriptor differs only in paper_only (ADR 0059 D9). Every
+# other fact — IEX feed, stream caps, rate limit, buildable order types — is
+# the same account tier; keeping one literal per mode makes the difference
+# reviewable instead of a boolean flip buried in a constructor.
+ALPACA_LIVE_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.model_copy(update={"paper_only": False})
+
 _PORTFOLIO_HISTORY_QUERY: dict[PortfolioHistoryRange, tuple[str, str]] = {
     PortfolioHistoryRange.ONE_DAY: ("1D", "1Min"),
     PortfolioHistoryRange.THIRTY_DAYS: ("30D", "1D"),
@@ -68,7 +74,11 @@ class AlpacaBroker:
         self._client = client or AlpacaTradingClient()
 
     def capabilities(self) -> BrokerCapabilities:
-        return ALPACA_PAPER_CAPABILITIES
+        return (
+            ALPACA_LIVE_CAPABILITIES
+            if get_alpaca_settings().is_live
+            else ALPACA_PAPER_CAPABILITIES
+        )
 
     async def get_account(self) -> BrokerAccountSnapshot:
         payload = await self._client.get_account()
