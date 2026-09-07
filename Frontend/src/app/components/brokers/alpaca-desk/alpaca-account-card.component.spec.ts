@@ -89,4 +89,13 @@ describe('AlpacaAccountCardComponent', () => {
     expect(screen.getByText('Multiplier').nextElementSibling?.textContent).toContain('4');
     expect(screen.getByText('Day-trading BP').nextElementSibling?.textContent).toContain('—');
   });
+
+  it('seats the margin panel after the disclosure toggle in DOM order', async () => {
+    const { container } = await renderCard(() => Promise.resolve(fakeAccount({ multiplier: 4 })));
+
+    const multiplier = await screen.findByText('Multiplier');
+    const toggle = container.querySelector('.account-toggle');
+    if (!(toggle instanceof HTMLElement)) throw new Error('account toggle not rendered');
+    expect(Boolean(toggle.compareDocumentPosition(multiplier) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
 });

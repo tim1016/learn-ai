@@ -35,8 +35,6 @@
         </div>
       </dl>
 
-      <app-alpaca-account-margin [account]="acct" />
-
       <button
         type="button"
         class="account-toggle"
@@ -47,6 +45,8 @@
         <span>{{ expanded() ? 'Hide details' : 'Account details' }}</span>
         <i class="pi pi-chevron-down" aria-hidden="true"></i>
       </button>
+
+      <app-alpaca-account-margin [account]="acct" />
     </div>
 
     <div id="alpaca-account-details" class="account-strip__details" [attr.aria-hidden]="!expanded()">

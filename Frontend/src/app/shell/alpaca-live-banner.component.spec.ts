@@ -78,4 +78,18 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(status.className).toContain('is-unknown');
     expect(status.textContent).toContain('Live Mode Disagreement');
   });
+
+  it('keeps an explicit unavailable state on screen when the last read failed', async () => {
+    await render(AlpacaLiveBannerComponent, {
+      providers: [
+        {
+          provide: AlpacaLiveVerdictService,
+          useValue: { verdict: signal(null), lastError: signal(new Error('down')) },
+        },
+      ],
+    });
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('is-unknown');
+    expect(status.textContent).toContain('unavailable');
+  });
 });

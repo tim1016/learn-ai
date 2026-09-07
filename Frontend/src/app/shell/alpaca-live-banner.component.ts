@@ -50,6 +50,11 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
           <span>· {{ v.clerk_refusal_reason_code | receiptLabel }}</span>
         }
       </div>
+    } @else if (lastError()) {
+      <div class="alpaca-banner is-unknown" role="status" [attr.title]="unavailableDetail">
+        <span class="alpaca-banner__kicker">Alpaca</span>
+        <span>{{ unavailableHeadline }}</span>
+      </div>
     }
   `,
 })
@@ -57,4 +62,11 @@ export class AlpacaLiveBannerComponent {
   private readonly service = inject(AlpacaLiveVerdictService);
 
   protected readonly verdict = this.service.verdict;
+  protected readonly lastError = this.service.lastError;
+  // Closed operator copy for a transport fact the server cannot author — the
+  // poll itself failed. The trust anchor degrades to an explicit unknown,
+  // never to silence (ADR 0011 §2).
+  protected readonly unavailableHeadline = 'Account verdict unavailable — the last read failed';
+  protected readonly unavailableDetail =
+    'The shell could not read the Alpaca live verdict. No mode is assumed until a read succeeds.';
 }
