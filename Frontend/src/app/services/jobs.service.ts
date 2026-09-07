@@ -221,10 +221,10 @@ export class JobsService {
   // ---------------------------------------------------------------------
 
   private async resumeActive(): Promise<void> {
-    await this.refreshActive();
     // A failed boot read proves nothing about absence: the page still works,
-    // newly started jobs register normally, and `resumed` stays false.
-    if (this._registryError() === null) this._resumed.set(true);
+    // newly started jobs register normally, and `resumed` turns true with
+    // the first read that succeeds, whichever caller makes it.
+    await this.refreshActive();
   }
 
   /**
@@ -253,6 +253,7 @@ export class JobsService {
       return;
     }
     this._registryError.set(null);
+    this._resumed.set(true);
     for (const s of list) {
       if (this._jobs().has(s.id)) continue;
       const status = (s.status as JobStatus) ?? 'queued';

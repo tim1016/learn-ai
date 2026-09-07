@@ -208,8 +208,10 @@ describe("StrategyLabConfigRailComponent", () => {
     fixture.componentRef.setInput("registryError", "the data service answered 503");
     fixture.detectChanges();
 
-    expect(root.querySelector(".config-rail__registry-note")?.textContent)
-      .toContain("Runs from other tabs may not be visible: the data service answered 503.");
+    const note = root.querySelector(".config-rail__registry-note");
+    expect(note?.textContent).toContain("Runs from other tabs may not be visible: the data service answered 503.");
+    // Inserted while the operator may be elsewhere on the page: announced, not just rendered.
+    expect(note?.getAttribute("role")).toBe("alert");
   });
 
   it("disables rerun when the restored strategy is no longer selectable", async () => {

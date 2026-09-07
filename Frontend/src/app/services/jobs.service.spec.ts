@@ -143,6 +143,12 @@ describe('JobsService.resumed', () => {
 
     expect(service.resumed()).toBe(false);
     expect(service.registryError()).toBe('the data service answered 503');
+
+    // A later read that succeeds settles the registry's view for the recovery path too.
+    const recovered = service.refreshActive();
+    httpMock.expectOne((r) => r.url === '/api/jobs').flush([]);
+    await recovered;
+    expect(service.resumed()).toBe(true);
   });
 
   it('leaves a job this tab started before the snapshot answered to its own stream', async () => {

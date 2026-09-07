@@ -147,7 +147,7 @@
 
     <footer class="config-rail__footer">
       @if (registryError(); as registryError) {
-        <p class="config-rail__registry-note">Runs from other tabs may not be visible: {{ registryError }}.</p>
+        <p class="config-rail__registry-note" role="alert">Runs from other tabs may not be visible: {{ registryError }}.</p>
       }
       <button
         type="button"
