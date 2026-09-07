@@ -124,3 +124,16 @@ class BrokerSubmissionHeld(BrokerError):
     ) -> None:
         super().__init__(message, broker=broker, detail=detail)
         self.reason_code = reason_code
+
+
+class BrokerAccountModeDisagreement(BrokerError):
+    """The configured mode and the broker-observed account disagree (ADR 0059 D1).
+
+    Raised at the ingestion boundary when an account-number shape contradicts
+    the mode that selected the endpoint. Shape never *grants* a mode; it only
+    refuses one. Surfaced as ``409`` with ``reason_code`` so the desk can name
+    the disagreement rather than a generic broker error.
+    """
+
+    http_status: ClassVar[int] = 409
+    reason_code: ClassVar[str] = "LIVE_MODE_DISAGREEMENT"

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from app.broker.alpaca import adapter
 from app.broker.alpaca.client import AlpacaTradingClient
-from app.broker.alpaca.config import BROKER_ID
+from app.broker.alpaca.config import BROKER_ID, get_alpaca_settings
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -72,7 +72,9 @@ class AlpacaBroker:
 
     async def get_account(self) -> BrokerAccountSnapshot:
         payload = await self._client.get_account()
-        return adapter.from_alpaca_account(payload)
+        # The mode that selected the endpoint is the only source of the
+        # account's mode (ADR 0059 D1); the adapter refuses a disagreeing shape.
+        return adapter.from_alpaca_account(payload, account_mode=get_alpaca_settings().mode)
 
     async def list_positions(self) -> list[BrokerPosition]:
         payloads = await self._client.list_positions()

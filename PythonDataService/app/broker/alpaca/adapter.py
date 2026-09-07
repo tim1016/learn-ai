@@ -19,10 +19,11 @@ import re
 from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.config import BROKER_ID
+from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -169,18 +170,38 @@ def _observed(observed_at_ms: int | None) -> int:
 # ── Per-model mappers ───────────────────────────────────────────────────────
 
 
+_PAPER_ACCOUNT_NUMBER_PREFIX = "PA"
+
+
 def from_alpaca_account(
     payload: Mapping[str, Any],
     *,
+    account_mode: Literal["paper", "live"],
     observed_at_ms: int | None = None,
 ) -> BrokerAccountSnapshot:
-    """Map a raw Alpaca account payload to a ``BrokerAccountSnapshot``."""
+    """Map a raw Alpaca account payload to a ``BrokerAccountSnapshot``.
+
+    ``account_mode`` is the settings mode that selected the endpoint — backend
+    configuration truth, never inferred from the payload (ADR 0059 D1). The
+    account-number shape is a refusal input only: a paper-shaped number under
+    ``live``, or a live-shaped number under ``paper``, is a disagreement.
+    """
+    account_number = str(payload["account_number"])
+    looks_paper = account_number.startswith(_PAPER_ACCOUNT_NUMBER_PREFIX)
+    if looks_paper != (account_mode == "paper"):
+        raise BrokerAccountModeDisagreement(
+            "The configured Alpaca mode and the observed account disagree.",
+            broker=BROKER_ID,
+            detail=(
+                f"ALPACA_MODE={account_mode!r} but the account number "
+                f"{'begins' if looks_paper else 'does not begin'} with "
+                f"{_PAPER_ACCOUNT_NUMBER_PREFIX!r}, which is the paper-account shape."
+            ),
+        )
     return BrokerAccountSnapshot(
         broker=BROKER_ID,
-        account_id=str(payload["account_number"]),
-        # AlpacaSettings rejects live mode during service startup. This posture
-        # is therefore backend configuration truth, never an account-id guess.
-        account_mode="paper",
+        account_id=account_number,
+        account_mode=account_mode,
         account_status=str(payload["status"]),
         currency=str(payload.get("currency") or "USD"),
         cash=to_float(payload["cash"]),
@@ -189,6 +210,13 @@ def from_alpaca_account(
         portfolio_value=to_float(payload["portfolio_value"]),
         long_market_value=to_float(payload["long_market_value"]),
         short_market_value=to_float(payload["short_market_value"]),
+        multiplier=opt_float(payload.get("multiplier")),
+        regt_buying_power=opt_float(payload.get("regt_buying_power")),
+        daytrading_buying_power=opt_float(payload.get("daytrading_buying_power")),
+        maintenance_margin=opt_float(payload.get("maintenance_margin")),
+        initial_margin=opt_float(payload.get("initial_margin")),
+        sma=opt_float(payload.get("sma")),
+        last_equity=opt_float(payload.get("last_equity")),
         pattern_day_trader=opt_bool(payload.get("pattern_day_trader")),
         trading_blocked=to_bool(payload["trading_blocked"]),
         account_blocked=to_bool(payload["account_blocked"]),
