@@ -1491,3 +1491,85 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     assert equity["schema_version"] == 2
     assert equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"
     assert equity["realized"]["error"] == "No normalized/result.json — LEAN run did not produce output"
+
+
+def test_a_failed_run_payload_keeps_its_parity_group_and_names_the_failure(tmp_path: Path) -> None:
+    """#1977: the group must reach ``run_failed``, not poll ``pending`` for ever.
+
+    A LEAN companion that exits 0 without a parseable result still persists a
+    row. Dropping ``parity_group_id`` from that row left the group with nothing
+    to settle it; carrying it *without* ``parity_failure_detail`` would compare
+    a zero-trade row against a real Python run and report a divergence that
+    never happened.
+    """
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = tmp_path / "companion_no_output"
+    ws.mkdir()  # no normalized/result.json
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="companion_no_output",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
+        start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
+        end_date_ms=1_700_000_600_000,
+        parity_group_id="pg-abc",
+        requested_engine="both",
+    )
+
+    assert payload["parity_group_id"] == "pg-abc"
+    assert payload["parity_failure_detail"] == "No normalized/result.json — LEAN run did not produce output"
+
+
+def test_an_unparseable_result_keeps_its_parity_group_and_names_the_failure(tmp_path: Path) -> None:
+    """The second failed-payload call site (#1977): normalization blew up."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = tmp_path / "companion_bad_output"
+    (ws / "normalized").mkdir(parents=True)
+    (ws / "normalized" / "result.json").write_text("{not json")
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="companion_bad_output",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
+        start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
+        end_date_ms=1_700_000_600_000,
+        parity_group_id="pg-def",
+        requested_engine="both",
+    )
+
+    assert payload["parity_group_id"] == "pg-def"
+    assert payload["parity_failure_detail"].startswith("normalization_error:")
+
+
+def test_a_lean_run_without_a_parity_group_carries_no_group_on_its_failed_row(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = tmp_path / "solo_run_no_output"
+    ws.mkdir()
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="solo_run_no_output",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
+        start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
+        end_date_ms=1_700_000_600_000,
+    )
+
+    # Set as a pair: the detail routes a group's settle, so it is meaningless
+    # without one (#1977).
+    assert payload["parity_group_id"] is None
+    assert payload["parity_failure_detail"] is None

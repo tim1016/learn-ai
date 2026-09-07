@@ -8,8 +8,10 @@ established, kept exactly: a LEAN run is idempotent on its ``lean_run_id``
 ``requested_engine``), an engine run has no external key and every persist is
 a new row; history reads newest-first; the detail read carries the newest
 five hundred trades in entry order and says when it truncated; a run backing
-a live Recency Chart run cannot be hard-deleted; a parity verdict reaches one
-terminal state and is never overwritten.
+a live Recency Chart run cannot be hard-deleted. A parity verdict written from
+a landed companion row is never overwritten; the provisional failure the
+dispatch path writes before any companion exists is superseded by one
+(ADR 0058 as amended by #1977).
 
 Rows come back as frozen dataclasses built straight from the selected
 columns (the SELECT lists name exactly their fields); the views the wire
@@ -24,8 +26,9 @@ Validated against: tests/research/backtest_runs/test_repository.py.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import asyncpg
 
@@ -39,9 +42,24 @@ _ENGINE_BY_SOURCE: dict[str, Engine] = {"engine": "PYTHON", "lean-sidecar": "LEA
 
 PARITY_CREATE_STATUSES: frozenset[str] = frozenset({"pending", "unavailable"})
 PARITY_FAILURE_STATUSES: frozenset[str] = frozenset({"run_failed", "persist_failed"})
+# What a verdict may be replaced by depends on whether a companion had landed
+# when it was written, and ``right_run_id`` is the record of that: the dispatch
+# path writes a failure with no companion row and so no ``right_run_id``, which
+# makes it a claim about the future ("no comparable companion is coming") that a
+# companion landing falsifies. The same two statuses written *from* a landed
+# companion — one whose payload said it produced no comparable result — carry
+# its ``right_run_id`` and are as settled as a comparison. So the rule is not
+# "these statuses are provisional" but "a verdict with no companion behind it
+# is" (ADR 0058, amended by #1977).
+PARITY_SUPERSEDABLE_STATUSES: frozenset[str] = frozenset({"pending"}) | PARITY_FAILURE_STATUSES
 PARITY_VERDICT_VERSION = 2
 
 DeleteOutcome = Literal["deleted", "not_found", "recency_member"]
+
+
+def _may_be_superseded(existing: Mapping[str, Any]) -> bool:
+    """Whether a landed companion's verdict may replace the row already there."""
+    return existing["status"] in PARITY_SUPERSEDABLE_STATUSES and existing["right_run_id"] is None
 
 
 class RunConflictError(ValueError):
@@ -471,14 +489,19 @@ async def freeze_parity_verdict(
     status: str,
     verdict_json: str,
 ) -> bool:
-    """Freeze the terminal verdict onto the pending row, inserting it if the pending row was lost.
+    """Freeze the computed verdict onto the group's row, inserting it if the row was lost.
 
-    Returns whether the verdict was written; ``False`` means the group was
-    already terminal (first terminal state wins).
+    Returns whether the verdict was written. ``False`` means the group already
+    carries a verdict this one may not replace: any verdict a companion had
+    already landed for, or the ``unavailable`` disposition of a group that
+    never dispatched one. A dispatch-time failure — written before any
+    companion row existed, and so carrying no ``right_run_id`` — *is* replaced;
+    the companion row in hand disproves it (#1977).
     """
     async with conn.transaction():
         existing = await conn.fetchrow(
-            "SELECT status FROM research_parity_verdicts WHERE parity_group_id = $1 FOR UPDATE", parity_group_id
+            "SELECT status, right_run_id FROM research_parity_verdicts WHERE parity_group_id = $1 FOR UPDATE",
+            parity_group_id,
         )
         if existing is None:
             await conn.execute(
@@ -496,7 +519,7 @@ async def freeze_parity_verdict(
                 now_ms_utc(),
             )
             return True
-        if existing["status"] != "pending":
+        if not _may_be_superseded(existing):
             return False
         await conn.execute(
             """

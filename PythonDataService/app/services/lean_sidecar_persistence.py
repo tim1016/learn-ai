@@ -594,6 +594,7 @@ def build_persist_payload(
             manifest=manifest,
             requested_engine=requested_engine,
             parameters=parameters,
+            parity_group_id=parity_group_id,
         )
 
     try:
@@ -632,6 +633,7 @@ def build_persist_payload(
             manifest=manifest,
             requested_engine=requested_engine,
             parameters=parameters,
+            parity_group_id=parity_group_id,
         )
 
     lean_statistics = _normalized_to_lean_statistics_response(
@@ -757,9 +759,10 @@ def build_persist_payload(
             end_date_ms=end_date_ms,
             compatibility_mode=parity_group_id is not None,
         ),
-        # Engine Lab parity — only successful runs carry the group id.
-        # Failed runs never trigger verdict computation at persist time;
-        # the job worker marks the group run_failed instead.
+        # Engine Lab parity — a run with a comparable result is the one the
+        # persist path compares. A failed run carries the group too, but with
+        # ``parity_failure_detail`` alongside, which settles the group at
+        # ``run_failed`` instead of comparing a zero-trade row (#1977).
         "parity_group_id": parity_group_id,
     } | _run_verdict_fields(
         total_trades=agg.total_trades,
@@ -906,13 +909,25 @@ def _failed_run_payload(
     manifest: RunManifest | Mapping[str, Any] | None = None,
     requested_engine: Literal["python", "lean", "both"] = "lean",
     parameters: Mapping[str, Any] | None = None,
+    parity_group_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build a zero-trade payload for a LEAN run that failed or produced no result."""
+    """Build a zero-trade payload for a LEAN run that failed or produced no result.
+
+    The row still belongs to its parity group, and ``parity_failure_detail``
+    tells the persist path to settle that group at ``run_failed`` rather than
+    compare a zero-trade row against a real Python run. Without both the group
+    stayed ``pending`` for ever and the report polled it for ever (#1977).
+    """
     failed_verdict = failed_run_verdict(error)
     return {
         "lean_run_id": run_id,
         "source": "lean-sidecar",
         "requested_engine": requested_engine,
+        # Set as a pair: the detail is what tells the persist path to settle
+        # the group at ``run_failed`` instead of comparing, so it is meaningless
+        # without a group to settle.
+        "parity_group_id": parity_group_id,
+        "parity_failure_detail": error if parity_group_id is not None else None,
         "strategy_name": algorithm_name,
         "symbol": symbol,
         "parameters": {"symbol": symbol, **dict(parameters or {})},

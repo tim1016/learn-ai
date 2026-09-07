@@ -5,16 +5,20 @@ Every persisted Python engine run gets a parity disposition:
 - Eligible runs (registered ``lean_twin``, raw bars, minute resolution,
   explicit window) spawn an async LEAN run through the public jobs
   surface, sharing a ``parity_group_id``. A ``pending`` parity verdict
-  row is written immediately; the companion's persist step freezes it to
-  ``agree``/``diverged`` when the LEAN row lands.
+  row is written immediately; the companion's persist step settles it to
+  ``agree``/``diverged``, or to ``run_failed`` when the LEAN row that lands
+  carries no comparable result.
 - Ineligible runs get an honest ``unavailable`` verdict row carrying the
   reason — never a fake pass, never silence.
 
 Failure surfacing: the LEAN job worker calls :func:`mark_parity_failed`
 when the companion run fails or its persistence returns no row id,
-transitioning ``pending → run_failed | persist_failed``. The repository
-makes that transition conditional, so a verdict that already froze is
-never overwritten (first terminal state wins).
+transitioning ``pending → run_failed | persist_failed``. Those marks are
+**provisional** — written from the dispatch side before any companion row
+exists, they claim only that none is coming. A companion row that does land
+supersedes them (ADR 0058 as amended by #1977); a verdict computed from two
+rows never is. This matters most for the dispatch below, whose 5 s read
+timeout marks ``run_failed`` for a LEAN job that had already started.
 
 The verdict rows are Python-owned direct writes (PRD #1929); the companion
 launch still goes through the .NET jobs surface over HTTP. Everything here
@@ -196,8 +200,10 @@ def dispatch_parity_companion(
 def mark_parity_failed(parity_group_id: str, *, status: str, detail: str) -> None:
     """Transition the group's verdict ``pending → run_failed|persist_failed``.
 
-    No-ops when the verdict already reached a terminal state — first
-    terminal state wins. Never raises.
+    Provisional: it says no comparable companion is coming, from the dispatch
+    side, before any companion row exists. No-ops once a verdict has been
+    written from a landed row, and is itself superseded when one lands later
+    (#1977). Never raises.
     """
     mark_parity_failed_sync(parity_group_id, status=status, detail=detail)
 

@@ -9,10 +9,14 @@ production-readiness envelopes, and the compatibility inputs (data policy,
 cash, window, fill mode). Nothing numerical is recomputed here; the
 receipts are verified, not re-derived.
 
-State machine: ``pending -> agree | diverged | unavailable`` here;
-``pending -> run_failed | persist_failed`` via the mark-failed write in the
-repository. Every transition is conditional on ``pending`` — the first
-terminal state wins and is never overwritten.
+State machine: the **dispatch** path writes ``pending``, ``unavailable``, and
+the provisional ``run_failed`` / ``persist_failed`` (the last two claim that no
+comparable companion is coming). This module writes what a landed companion
+row justifies — ``agree``, ``diverged``, ``unavailable``, or ``run_failed``
+when the companion produced no comparable result — and that supersedes a
+provisional claim. A verdict computed here, and the ``unavailable``
+disposition of a group that never dispatched a companion, are never
+overwritten (ADR 0058 as amended by #1977).
 
 Canonical implementation: this file.
 Validated against: tests/research/backtest_runs/test_parity.py (ported from
@@ -28,11 +32,10 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from typing import Any
 
-import asyncpg
-
 from app.research.backtest_runs import repository as repo
 from app.research.backtest_runs.records import trades_as_compare_payload
 from app.research.backtest_runs.repository import RunDetail
+from app.research.persistence.db import connection
 from app.services.lean_sidecar_compare_service import reconcile_trade_lists
 from app.utils.timestamps import now_ms_utc
 
@@ -299,35 +302,80 @@ def _integer(parent: Mapping[str, Any], name: str) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-async def freeze_parity_for_lean_run(conn: asyncpg.Connection, *, right_run_id: int, parity_group_id: str) -> bool:
-    """Compute and freeze the group's verdict once its LEAN companion is persisted.
+def failed_companion_verdict(*, parity_group_id: str, detail: str) -> ParityVerdict:
+    """The terminal verdict a companion that produced no comparable result justifies.
+
+    Its row exists and carries the group, but a zero-trade failed run is not a
+    comparison: reconciling it against a real Python run would report a
+    divergence that did not happen. ``run_failed`` is the honest answer, and it
+    is a verdict like any other so it travels the one freeze path (#1977).
+    """
+    return ParityVerdict(
+        status="run_failed",
+        verdict_json=json.dumps(
+            {
+                "schema_version": 1,
+                "parity_group_id": parity_group_id,
+                "status": "run_failed",
+                "reason": detail,
+                "computed_at_ms": now_ms_utc(),
+            }
+        ),
+    )
+
+
+async def settle_parity_for_lean_run(
+    *, right_run_id: int, parity_group_id: str, failure_detail: str | None = None
+) -> bool:
+    """Settle the group from the LEAN companion row that just landed.
 
     Returns whether a verdict was written. A group whose Python run cannot be
     found stays pending (the report shows the stall honestly); a group that
-    already reached a terminal state is left alone.
+    already carries a computed verdict, or the ``unavailable`` disposition of a
+    group that never dispatched a companion, is left alone. A provisional
+    dispatch failure is superseded — see :func:`repository.freeze_parity_verdict`.
+
+    The three phases take their own connections rather than one spanning the
+    whole call: the compare is pure CPU that would otherwise pin a pooled
+    connection for its duration, and nothing here spans a transaction —
+    ``freeze_parity_verdict`` opens its own (#1977).
+
+    Load-bearing guard three modules away: a companion that failed and was then
+    re-run under the *same* ``lean_run_id`` would have ``insert_run`` hand back
+    the original zero-trade row, and this would compare it and manufacture a
+    ``diverged`` over an honest ``run_failed``. It cannot happen because
+    ``lean_sidecar_service`` refuses a ``run_id`` whose workspace still exists
+    (``RunIdAlreadyUsedError``), and the LEAN backfill CLI never passes a
+    ``parity_group_id`` at all. Relax either and this needs a freshness check.
     """
-    right = await repo.get_run(conn, right_run_id, trade_limit=None)
-    left_id = await repo.find_left_run_id(conn, parity_group_id)
-    left = None if left_id is None else await repo.get_run(conn, left_id, trade_limit=None)
-    if right is None or left is None:
-        logger.warning(
-            "[PARITY] Cannot compute verdict for group %s: left=%s right=%s",
-            parity_group_id,
-            left is not None,
-            right is not None,
-        )
+    async with connection() as conn:
+        left_id = await repo.find_left_run_id(conn, parity_group_id)
+        left = None if left_id is None else await repo.get_run(conn, left_id, trade_limit=None)
+        # A failed companion is never compared, so its row is never read back.
+        right = None if failure_detail is not None else await repo.get_run(conn, right_run_id, trade_limit=None)
+
+    if left is None:
+        logger.warning("[PARITY] Cannot settle group %s: it has no Python run", parity_group_id)
         return False
-    verdict = compute_parity_verdict(parity_group_id=parity_group_id, left=left, right=right)
-    written = await repo.freeze_parity_verdict(
-        conn,
-        parity_group_id=parity_group_id,
-        left_run_id=left.id,
-        right_run_id=right.id,
-        status=verdict.status,
-        verdict_json=verdict.verdict_json,
-    )
-    if written:
-        logger.info("[PARITY] Frozen verdict for group %s: %s", parity_group_id, verdict.status)
+    if failure_detail is not None:
+        verdict = failed_companion_verdict(parity_group_id=parity_group_id, detail=failure_detail)
+    elif right is None:
+        logger.warning("[PARITY] Cannot settle group %s: companion run %s not found", parity_group_id, right_run_id)
+        return False
     else:
-        logger.info("[PARITY] Verdict for group %s already terminal; not overwriting", parity_group_id)
+        verdict = compute_parity_verdict(parity_group_id=parity_group_id, left=left, right=right)
+
+    async with connection() as conn:
+        written = await repo.freeze_parity_verdict(
+            conn,
+            parity_group_id=parity_group_id,
+            left_run_id=left.id,
+            right_run_id=right_run_id,
+            status=verdict.status,
+            verdict_json=verdict.verdict_json,
+        )
+    if written:
+        logger.info("[PARITY] Settled group %s: %s", parity_group_id, verdict.status)
+    else:
+        logger.info("[PARITY] Verdict for group %s is already computed; not overwriting", parity_group_id)
     return written

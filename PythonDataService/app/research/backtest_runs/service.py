@@ -23,9 +23,10 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from app.research.backtest_runs import repository as repo
 from app.research.backtest_runs.engine_payload import build_engine_run_payload
-from app.research.backtest_runs.parity import freeze_parity_for_lean_run
+from app.research.backtest_runs.parity import settle_parity_for_lean_run
 from app.research.backtest_runs.records import BacktestRunRecord, record_from_payload
 from app.research.persistence.db import run_sync, with_connection
+from app.utils.background_loop import CallerStoppedWaitingError
 
 if TYPE_CHECKING:
     from app.routers.engine import EngineBacktestResponse
@@ -79,22 +80,46 @@ def persist_engine_response_sync(
 
 
 def _persist_sync(make_record: Callable[[], BacktestRunRecord], *, source: str) -> int | None:
-    """The one best-effort write. A LEAN companion also freezes its parity group afterwards.
+    """The one best-effort write. A LEAN companion also settles its parity group afterwards.
 
-    Shaping the record and writing it sit under one guard because both
-    failures mean the same thing to the caller: the run was not persisted.
-    The freeze runs after the row is committed and is best-effort on its own,
-    so the run row persists even when the comparison fails.
+    A payload the converter refuses and a write that fails mean the same thing
+    to the caller — the run was not persisted — but a caller that stops waiting
+    means something else again, so the timeout is reported apart from both.
     """
     try:
         record = make_record()
-        outcome = run_sync(with_connection(repo.insert_run, record))
+    except Exception:
+        logger.exception("[RUNS] Payload rejected, run not persisted (source=%s)", source)
+        return None
+    try:
+        inserted: list[repo.InsertOutcome] = []
+        outcome = run_sync(_insert_and_settle(record, inserted))
+    except CallerStoppedWaitingError as exc:
+        # The work is *still going* on the writer loop, uncancelled, and
+        # settles its own parity group when it lands. A ``TimeoutError`` the
+        # coroutine raised itself — an asyncpg ``command_timeout``, say —
+        # means the write stopped, and falls through to the failure below
+        # where it belongs (#1977).
+        #
+        # Which half is still going decides what the caller is told. The
+        # coroutine records the insert's outcome the moment it commits, so if
+        # that is present the row is on disk and only the comparison is
+        # outstanding: hand back the id. Folding both halves into one verdict
+        # meant a slow comparison — two full trade ledgers loaded and diffed —
+        # made the caller report ``None`` for a row it could see in history.
+        if inserted:
+            logger.warning(
+                "[RUNS] Run persisted (id=%s, source=%s); its parity settle is still running: %s",
+                inserted[0].run_id,
+                source,
+                exc,
+            )
+            return inserted[0].run_id
+        logger.warning("[RUNS] Run persistence outcome unknown (source=%s): %s", source, exc)
+        return None
     except Exception:
         logger.exception("[RUNS] Run not persisted (source=%s)", source)
         return None
-    logger.info("[RUNS] Run persisted (id=%s, source=%s, created=%s)", outcome.run_id, record.source, outcome.created)
-    if record.source == "lean-sidecar" and record.parity_group_id:
-        freeze_parity_sync(right_run_id=outcome.run_id, parity_group_id=record.parity_group_id)
     return outcome.run_id
 
 
@@ -103,18 +128,36 @@ async def persist_run_payload(payload: Mapping[str, Any]) -> int | None:
     return await asyncio.to_thread(persist_run_payload_sync, payload)
 
 
-def freeze_parity_sync(*, right_run_id: int, parity_group_id: str) -> None:
-    """Freeze a parity verdict from a worker thread; a failure leaves it pending and logs."""
-    try:
-        run_sync(
-            with_connection(freeze_parity_for_lean_run, right_run_id=right_run_id, parity_group_id=parity_group_id)
-        )
-    except Exception:
-        logger.exception(
-            "[PARITY] Verdict computation failed for group %s (right=%s); verdict left pending",
-            parity_group_id,
-            right_run_id,
-        )
+async def _insert_and_settle(record: BacktestRunRecord, inserted: list[repo.InsertOutcome]) -> repo.InsertOutcome:
+    """Write the row, then settle its parity group — both on the writer loop.
+
+    Chaining the settle here rather than making it a second hop from the
+    calling thread is what makes it survive a caller that has stopped waiting:
+    the coroutine is not cancelled on timeout, so a group whose companion
+    landed still reaches its terminal state (#1977). The settle is best-effort
+    on its own, so the run row persists even when it fails.
+
+    ``inserted`` is how the caller learns the row committed even when the
+    settle outruns its wait: appended the instant the insert returns, read
+    only after the wait has already expired.
+    """
+    outcome = await with_connection(repo.insert_run, record)
+    inserted.append(outcome)
+    logger.info("[RUNS] Run persisted (id=%s, source=%s, created=%s)", outcome.run_id, record.source, outcome.created)
+    if record.source == "lean-sidecar" and record.parity_group_id:
+        try:
+            await settle_parity_for_lean_run(
+                right_run_id=outcome.run_id,
+                parity_group_id=record.parity_group_id,
+                failure_detail=record.parity_failure_detail,
+            )
+        except Exception:
+            logger.exception(
+                "[PARITY] Settle failed for group %s (right=%s); verdict left as it stands",
+                record.parity_group_id,
+                outcome.run_id,
+            )
+    return outcome
 
 
 def record_parity_disposition_sync(*, parity_group_id: str, left_run_id: int, status: str, verdict_json: str) -> None:

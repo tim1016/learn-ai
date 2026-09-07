@@ -14,6 +14,7 @@ import pytest
 
 from app.research.backtest_runs import repository as repo
 from app.research.backtest_runs import service
+from app.research.persistence import db
 from tests.research.backtest_runs.payloads import engine_payload, lean_payload
 
 pytestmark = pytest.mark.asyncio
@@ -75,3 +76,165 @@ async def test_marking_a_group_failed_through_the_service_transitions_only_a_pen
     )
 
     assert (await repo.get_parity_verdict(conn, group)).status == "unavailable"  # already terminal: untouched
+
+
+async def test_a_companion_that_produced_no_result_settles_its_group_at_run_failed(conn, unique: str) -> None:
+    """#1977: the group used to sit at ``pending`` for ever and the report polled it for ever."""
+    group = f"pg-{unique}"
+    left = await service.persist_run_payload(
+        engine_payload(symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+    assert left is not None
+    await asyncio.to_thread(
+        service.record_parity_disposition_sync,
+        parity_group_id=group,
+        left_run_id=left,
+        status="pending",
+        verdict_json="{}",
+    )
+
+    right = await service.persist_run_payload(
+        lean_payload(
+            f"companion-{group}",
+            symbol=unique,
+            parity_group_id=group,
+            requested_engine="both",
+            total_trades=0,
+            winning_trades=0,
+            losing_trades=0,
+            total_pnl=0.0,
+            win_rate=0.0,
+            trades=[],
+            parity_failure_detail="No normalized/result.json — LEAN run did not produce output",
+        )
+    )
+
+    assert right is not None  # the failed row still persists into run history
+    verdict = await repo.get_parity_verdict(conn, group)
+    assert verdict is not None and verdict.status == "run_failed"
+    assert "No normalized/result.json" in verdict.verdict_json
+
+
+async def test_a_landed_companion_supersedes_the_dispatch_failure_that_said_none_was_coming(
+    conn, unique: str
+) -> None:
+    """#1977: a companion read timeout marked the group failed while the run was still going."""
+    group = f"pg-{unique}"
+    left = await service.persist_run_payload(
+        engine_payload(symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+    assert left is not None
+    await asyncio.to_thread(
+        service.record_parity_disposition_sync,
+        parity_group_id=group,
+        left_run_id=left,
+        status="pending",
+        verdict_json="{}",
+    )
+    await asyncio.to_thread(
+        service.mark_parity_failed_sync, group, status="run_failed", detail="companion dispatch failed: ReadTimeout"
+    )
+
+    right = await service.persist_run_payload(
+        lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+
+    assert right is not None
+    verdict = await repo.get_parity_verdict(conn, group)
+    assert verdict is not None and verdict.status in {"agree", "diverged"}
+    assert verdict.right_run_id == right
+
+
+async def test_a_committed_row_reports_its_id_even_when_the_settle_outruns_the_wait(
+    conn, unique: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow comparison must not make a committed row look unpersisted.
+
+    The insert and the settle share one coroutine so the settle survives a
+    caller that gives up (the test below). They must not share one verdict:
+    the comparison loads and diffs two full trade ledgers, and when that
+    outruns the budget the row is already on disk and visible in history. The
+    caller is told the id, and told the settle is still running.
+    """
+    group = f"pg-slowsettle-{unique}"
+    left = await service.persist_run_payload(
+        engine_payload(symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+    assert left is not None
+    await asyncio.to_thread(
+        service.record_parity_disposition_sync,
+        parity_group_id=group,
+        left_run_id=left,
+        status="pending",
+        verdict_json="{}",
+    )
+
+    real_settle = service.settle_parity_for_lean_run
+
+    async def settle_after_the_caller_gives_up(**kwargs):
+        await asyncio.sleep(0.3)
+        return await real_settle(**kwargs)
+
+    monkeypatch.setattr(service, "settle_parity_for_lean_run", settle_after_the_caller_gives_up)
+    monkeypatch.setattr(db, "DB_CALL_TIMEOUT_SECONDS", 0.05)
+
+    run_id = await service.persist_run_payload(
+        lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+
+    assert run_id is not None, "a committed row was reported as unpersisted"
+    assert await repo.get_run(conn, run_id, trade_limit=None) is not None
+
+    # And the settle it outran still lands.
+    for _ in range(100):
+        verdict = await repo.get_parity_verdict(conn, group)
+        if verdict is not None and verdict.status != "pending":
+            break
+        await asyncio.sleep(0.05)
+    assert verdict is not None and verdict.status in {"agree", "diverged"}
+
+
+async def test_the_settle_completes_after_the_caller_has_stopped_waiting(
+    conn, unique: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1977: the ADR's claim, exercised — not asserted through a private name.
+
+    ``run_sync`` does not cancel on timeout, so an insert that outruns the
+    caller's budget still commits *and* still settles its group on the writer
+    loop. Before the settle was chained onto the insert it was a second hop
+    from the calling thread, and that hop never ran.
+    """
+    group = f"pg-{unique}"
+    left = await service.persist_run_payload(
+        engine_payload(symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+    assert left is not None
+    await asyncio.to_thread(
+        service.record_parity_disposition_sync,
+        parity_group_id=group,
+        left_run_id=left,
+        status="pending",
+        verdict_json="{}",
+    )
+
+    slow_insert = repo.insert_run
+
+    async def insert_after_the_caller_gives_up(connection, record):
+        await asyncio.sleep(0.3)
+        return await slow_insert(connection, record)
+
+    monkeypatch.setattr(repo, "insert_run", insert_after_the_caller_gives_up)
+    monkeypatch.setattr(db, "DB_CALL_TIMEOUT_SECONDS", 0.05)
+
+    run_id = await service.persist_run_payload(
+        lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group, requested_engine="both")
+    )
+
+    assert run_id is None  # the caller was told nothing, not that it failed
+    for _ in range(100):
+        verdict = await repo.get_parity_verdict(conn, group)
+        if verdict is not None and verdict.status != "pending":
+            break
+        await asyncio.sleep(0.05)
+    assert verdict is not None and verdict.status in {"agree", "diverged"}
+    assert verdict.right_run_id is not None  # the row landed and settled its own group

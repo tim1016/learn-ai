@@ -8,7 +8,7 @@ from datetime import date
 import pytest
 
 from app.research.backtest_runs import repository as repo
-from app.research.backtest_runs.parity import compute_parity_verdict, freeze_parity_for_lean_run
+from app.research.backtest_runs.parity import compute_parity_verdict, settle_parity_for_lean_run
 from app.research.backtest_runs.records import record_from_payload
 from app.research.backtest_runs.repository import RunDetail, TradeRow
 from app.utils.session_anchors import et_midnight_ms
@@ -307,7 +307,7 @@ async def _seed_group(conn, unique: str, *, pending: str | None = "pending") -> 
 async def test_freezing_agree_onto_the_pending_row(conn, unique: str) -> None:
     group, left, right = await _seed_group(conn, unique)
 
-    assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is True
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group) is True
 
     row = await repo.get_parity_verdict(conn, group)
     assert row is not None and row.status == "agree" and row.left_run_id == left and row.right_run_id == right
@@ -315,18 +315,45 @@ async def test_freezing_agree_onto_the_pending_row(conn, unique: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_terminal_row_is_never_overwritten(conn, unique: str) -> None:
-    group, _, right = await _seed_group(conn, unique, pending="run_failed")
+@pytest.mark.parametrize("provisional", ["run_failed", "persist_failed"])
+async def test_a_provisional_dispatch_failure_is_superseded_by_the_companion_that_landed(
+    conn, unique: str, provisional: str
+) -> None:
+    """#1977: the dispatch mark claims no companion is coming; this one came."""
+    group, left, right = await _seed_group(conn, f"{unique}{provisional[0]}", pending=provisional)
 
-    assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is False
-    assert (await repo.get_parity_verdict(conn, group)).status == "run_failed"
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group) is True
+
+    row = await repo.get_parity_verdict(conn, group)
+    assert row is not None and row.status == "agree" and row.left_run_id == left and row.right_run_id == right
+
+
+@pytest.mark.asyncio
+async def test_a_computed_verdict_is_never_overwritten(conn, unique: str) -> None:
+    group, _, right = await _seed_group(conn, unique)
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group) is True
+
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group) is False
+    assert (await repo.get_parity_verdict(conn, group)).status == "agree"
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_disposition_is_never_overwritten(conn, unique: str) -> None:
+    """A group that was never eligible for a companion keeps its honest reason."""
+    group, left, right = await _seed_group(conn, unique, pending=None)
+    await repo.create_parity_verdict(
+        conn, parity_group_id=group, left_run_id=left, status="unavailable", verdict_json="{}"
+    )
+
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group) is False
+    assert (await repo.get_parity_verdict(conn, group)).status == "unavailable"
 
 
 @pytest.mark.asyncio
 async def test_a_lost_pending_row_gets_the_terminal_verdict_inserted(conn, unique: str) -> None:
     group, _, right = await _seed_group(conn, unique, pending=None)
 
-    assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is True
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group) is True
     assert (await repo.get_parity_verdict(conn, group)).status == "agree"
 
 
@@ -339,5 +366,81 @@ async def test_a_missing_python_run_leaves_the_group_without_a_verdict(conn, uni
         )
     ).run_id
 
-    assert await freeze_parity_for_lean_run(conn, right_run_id=right, parity_group_id=group) is False
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group) is False
+    assert await repo.get_parity_verdict(conn, group) is None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_companion_settles_a_group_whose_pending_row_was_lost(conn, unique: str) -> None:
+    """#1977 M2: the failure path self-heals like the comparison path does.
+
+    ``record_parity_disposition_sync`` is best-effort, so a group with no
+    verdict row at all is a live state. Settling through the one freeze path
+    inserts the row rather than no-opping and leaving the group unsettled.
+    """
+    group, left, right = await _seed_group(conn, unique, pending=None)
+    assert await repo.get_parity_verdict(conn, group) is None
+
+    written = await settle_parity_for_lean_run(
+        right_run_id=right, parity_group_id=group, failure_detail="No normalized/result.json"
+    )
+
+    assert written is True
+    row = await repo.get_parity_verdict(conn, group)
+    assert row is not None and row.status == "run_failed"
+    assert row.left_run_id == left and row.right_run_id == right  # the failed row is linkable
+    assert json.loads(row.verdict_json)["reason"] == "No normalized/result.json"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_companion_does_not_compare_a_zero_trade_row(conn, unique: str) -> None:
+    group, _, right = await _seed_group(conn, unique)
+
+    await settle_parity_for_lean_run(
+        right_run_id=right, parity_group_id=group, failure_detail="normalization_error: ValueError: boom"
+    )
+
+    row = await repo.get_parity_verdict(conn, group)
+    assert row is not None and row.status == "run_failed"  # never 'diverged'
+
+
+@pytest.mark.asyncio
+async def test_a_landed_companions_failure_is_not_superseded_the_way_a_dispatch_mark_is(conn, unique: str) -> None:
+    """Two verdicts read ``run_failed``; only one of them is a claim about the future.
+
+    The dispatch mark says "no comparable companion is coming" before any
+    companion row exists, so a row that lands disproves it. This one was
+    written *from* a companion that landed and said it produced no comparable
+    result — as settled as a comparison, and its ``right_run_id`` is what
+    records the difference. A retry must not rewrite it, and a later differently
+    shaped settle must not replace it.
+    """
+    group, left, right = await _seed_group(conn, unique)
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group, failure_detail="boom") is True
+    landed = await repo.get_parity_verdict(conn, group)
+    assert landed is not None and landed.status == "run_failed" and landed.right_run_id == right
+
+    # A redelivery of the same failure, and a comparison arriving afterwards,
+    # both find the group already settled.
+    assert (
+        await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group, failure_detail="boom again")
+        is False
+    )
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group) is False
+
+    row = await repo.get_parity_verdict(conn, group)
+    assert row is not None and row.status == "run_failed" and row.left_run_id == left
+    assert json.loads(row.verdict_json)["reason"] == "boom"  # the original reason, not the retry's
+
+
+@pytest.mark.asyncio
+async def test_a_group_with_no_python_run_stays_unsettled(conn, unique: str) -> None:
+    group = f"pg-orphan-failed-{unique}"
+    right = (
+        await repo.insert_run(
+            conn, record_from_payload(lean_payload(f"companion-{group}", symbol=unique, parity_group_id=group))
+        )
+    ).run_id
+
+    assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group, failure_detail="boom") is False
     assert await repo.get_parity_verdict(conn, group) is None

@@ -24,3 +24,62 @@
 - `tests/research/backtest_runs/` pins the converter, the repository round trip and guards, the parity port (ported from the .NET tests) and the best-effort semantics; `tests/routers/test_backtest_runs_endpoints.py` pins the HTTP contract against the ephemeral database. Twelve .NET test files leave with their subjects.
 - A future change to these tables is a new numbered statement list in `schema.py`, never an EF migration.
 - `docs/engine-persistence-authority.md` describes the new path; the LEAN backfill CLI writes through the same repository.
+
+## Amendment 2026-09-07 — "first terminal state wins" becomes "the companion that landed wins"
+
+**Provenance:** [#1977](https://github.com/tim1016/learn-ai/issues/1977), from a read-only audit of the parity port.
+
+Decision 5 above said *first terminal state wins*, which read the four verdict
+states as peers. They are not. `run_failed` and `persist_failed` are written by
+the **dispatch** path — the job worker and the companion dispatcher — before any
+companion row exists, so each is a claim about the future: *no comparable
+companion is coming*. `agree` and `diverged` are **computed** from two rows in
+hand, and `unavailable` records that no companion was ever dispatched.
+
+Treating the dispatch claims as terminal left three wrong outcomes. A companion
+dispatch whose HTTP read timed out after the job had started marked the group
+`run_failed`, and the real LEAN row that landed minutes later was then refused —
+a wrong verdict on two comparable runs. A slow insert that outran the caller's
+60 s budget marked the group `persist_failed` while the row was still
+committing. And a companion that exited 0 without a parseable result persisted a
+row that carried no `parity_group_id` at all, so nothing ever settled the group:
+the verdict stayed `pending` and the run report polled it every 5 s for ever.
+
+So:
+
+1. **A landed companion row supersedes a dispatch claim.** The discriminator is
+   `right_run_id`, not the status: a verdict written before any companion row
+   existed carries none, and that is what makes it a claim rather than a record.
+   So `freeze_parity_verdict` overwrites `pending`, and `run_failed` /
+   `persist_failed` **only while `right_run_id` is null**. A computed verdict, an
+   `unavailable` disposition, and a `run_failed` written *from* a landed
+   companion (decision 2 — same status, but a companion did land, and its
+   `right_run_id` says so) are never overwritten.
+2. **A companion that produced no comparable result settles its group at
+   `run_failed`.** Its failed row now carries `parity_group_id` *and*
+   `parity_failure_detail`; the latter is validated onto `BacktestRunRecord` and
+   routes the settle. Carrying the group without the detail would compare a
+   zero-trade row against a real Python run and report a divergence that never
+   happened.
+3. **Both outcomes travel one write.** `settle_parity_for_lean_run` shapes either
+   the computed verdict or `failed_companion_verdict(...)` and freezes it through
+   `freeze_parity_verdict`. There is no second write with its own guards: the
+   failure path inherits insert-if-missing (a group whose best-effort `pending`
+   row was lost still settles, where the conditional `mark_parity_failed` UPDATE
+   would have matched nothing and silently left it unsettled) and records
+   `right_run_id` on the failed row like any other. Its three phases take
+   separate connections, so the compare pins none.
+4. **The settle is chained onto the insert on the writer loop**, not made a
+   second hop from the calling thread, so it still runs when the caller has
+   stopped waiting — `run_sync` does not cancel on timeout.
+5. **Only the caller's own wait is outcome-unknown.** Since Python 3.11
+   `asyncio.TimeoutError` *is* `TimeoutError`, so asyncpg's `command_timeout`
+   raising from inside the coroutine is indistinguishable at the call site from
+   the wait expiring — yet the first means the write stopped and rolled back.
+   `run_on_background_loop` now raises `CallerStoppedWaitingError` for its own
+   timeout and lets everything the coroutine raised propagate unchanged, so a
+   failed write keeps its traceback.
+
+Because every dispatch mark is now provisional, the ordering between a timed-out
+caller's mark and the writer loop's settle no longer matters: either order
+converges on the verdict the landed row justifies.

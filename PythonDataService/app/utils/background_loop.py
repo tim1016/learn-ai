@@ -22,6 +22,19 @@ import threading
 from collections.abc import Coroutine
 from typing import Any
 
+
+class CallerStoppedWaitingError(RuntimeError):
+    """``timeout`` elapsed while the coroutine was still running on the shared loop.
+
+    Distinct from every ``TimeoutError`` a coroutine raises from inside
+    itself — an asyncpg ``command_timeout``, say — which means the work
+    *stopped*. Since Python 3.11 ``asyncio.TimeoutError`` is a builtin
+    ``TimeoutError``, so those are indistinguishable from the wait's own
+    timeout at the call site; this type is what tells the caller "the work is
+    still going, you just stopped waiting for it" (#1977).
+    """
+
+
 _loop_lock = threading.Lock()
 _loop: asyncio.AbstractEventLoop | None = None
 THREAD_NAME = "background-loop"
@@ -43,10 +56,11 @@ def run_on_background_loop[T](coroutine: Coroutine[Any, Any, T], *, timeout: flo
     """Run ``coroutine`` on the shared loop and block the calling thread for its result.
 
     Must be called from a thread that is not itself running an event loop —
-    a caller with a loop should ``await`` instead. On timeout the
-    ``TimeoutError`` propagates but the coroutine is not cancelled: it keeps
-    running on the shared loop to its own conclusion, which is the accepted
-    trade-off for idempotent work whose result nobody is left waiting for.
+    a caller with a loop should ``await`` instead. On timeout the coroutine is
+    not cancelled: it keeps running on the shared loop to its own conclusion,
+    which is the accepted trade-off for idempotent work whose result nobody is
+    left waiting for. That case raises :class:`CallerStoppedWaitingError`;
+    anything the coroutine itself raised propagates unchanged.
     """
     try:
         asyncio.get_running_loop()
@@ -55,4 +69,14 @@ def run_on_background_loop[T](coroutine: Coroutine[Any, Any, T], *, timeout: flo
     else:
         raise RuntimeError("run_on_background_loop was called from a running event loop; await the coroutine instead")
     future = asyncio.run_coroutine_threadsafe(coroutine, background_loop())
-    return future.result(timeout=timeout)
+    try:
+        return future.result(timeout=timeout)
+    except TimeoutError:
+        if future.done():
+            # Either the coroutine raised a TimeoutError of its own, or it
+            # finished between the wait expiring and this check. Both are real
+            # outcomes; hand back the one that happened.
+            return future.result()
+        raise CallerStoppedWaitingError(
+            f"still running on the {THREAD_NAME} after {timeout}s; the caller stopped waiting"
+        ) from None
