@@ -27,7 +27,9 @@ const COMPATIBILITY_PROFILE = "us-equity-raw-ibkr-v1";
  */
 const OWN_JOB_KEY = "strategyLab.ownJob";
 
-type StrategyLabJobType = "engine_backtest" | "lean_engine_run";
+const STRATEGY_LAB_JOB_TYPES = ["engine_backtest", "lean_engine_run"] as const;
+type StrategyLabJobType = (typeof STRATEGY_LAB_JOB_TYPES)[number];
+type StrategyLabJob = JobState & { type: StrategyLabJobType };
 
 /** The job this tab started or adopted: enough to read its result back after a reload. */
 interface OwnJob {
@@ -35,12 +37,16 @@ interface OwnJob {
   readonly type: StrategyLabJobType;
 }
 
+function isStrategyLabJobType(type: string): type is StrategyLabJobType {
+  return (STRATEGY_LAB_JOB_TYPES as readonly string[]).includes(type);
+}
+
 /** Every LEAN run this workbench submits carries this `run_id` prefix; the
  *  parity companion submits `lean_engine_run` jobs through the same public
  *  route with a `companion-…` id, and those must never be adopted here. */
 const STRATEGY_LAB_RUN_ID_PREFIX = "strategy_lab_";
 
-function isStrategyLabJob(job: JobState): boolean {
+function isStrategyLabJob(job: JobState): job is StrategyLabJob {
   if (job.type === "engine_backtest") return true;
   if (job.type !== "lean_engine_run") return false;
   const request = job.parameters?.["request"];
@@ -75,7 +81,7 @@ function ownJob(): OwnJob | null {
 function isOwnJob(value: unknown): value is OwnJob {
   if (typeof value !== "object" || value === null) return false;
   const { id, type } = value as Record<string, unknown>;
-  return typeof id === "string" && (type === "engine_backtest" || type === "lean_engine_run");
+  return typeof id === "string" && typeof type === "string" && isStrategyLabJobType(type);
 }
 
 function forgetOwnJob(): void {
@@ -350,35 +356,39 @@ export class StrategyLabRunner {
   private wireJobAdoptionEffect(): void {
     effect(() => {
       if (this.adoptionSettled || this.engineJobId() !== null || this.leanJobId() !== null) return;
-      const active = this.jobs.activeJobs().filter(isStrategyLabJob);
       const own = ownJob();
-      // This tab's own job wins. A tab with no marker at all adopts only an
-      // unambiguous single candidate; a marker whose job is no longer active
-      // adopts nothing — never a guess between experiments.
-      const job = own === null ? (active.length === 1 ? active[0] : undefined) : active.find((candidate) => candidate.id === own.id);
-      if (job === undefined) {
-        // A remembered job missing from the settled snapshot finished during
-        // the reload (#1954): read its result once and open the study it
-        // saved, exactly as its terminal event would have.
-        if (own !== null && this.jobs.resumed()) {
+      if (own !== null) {
+        // This tab's own job is its own by construction: it is resolved by id,
+        // whatever its state, and the job effects then report it as they
+        // would have live. One the settled snapshot does not know finished
+        // during the reload (#1954); its stored result is read once instead.
+        const known = this.jobs.job(own.id);
+        if (known !== undefined && known !== null) {
+          this.reattach({ ...known, type: own.type });
+        } else if (this.jobs.resumed()) {
           this.adoptionSettled = true;
-          forgetOwnJob();
           void this.openFinishedOwnJob(own);
         }
         return;
       }
-      this.adoptionSettled = true;
-      // A fallback-adopted job becomes this tab's own, so a later reload
-      // prefers it even once other experiments are active.
-      rememberOwnJob({ id: job.id, type: job.type === "engine_backtest" ? "engine_backtest" : "lean_engine_run" });
-      if (job.type === "engine_backtest") {
-        this.beginRun("Reattaching to backtest…", "");
-        this.engineJobId.set(job.id);
-      } else {
-        this.beginRun("Reattaching to LEAN run…", "");
-        this.leanJobId.set(job.id);
-      }
+      // A tab with no marker adopts only an unambiguous single candidate —
+      // never a guess between experiments.
+      const active = this.jobs.activeJobs().filter(isStrategyLabJob);
+      if (active.length === 1) this.reattach(active[0]);
     });
+  }
+
+  /** Track a job as this tab's own; the job effects take it from here. */
+  private reattach(job: StrategyLabJob): void {
+    this.adoptionSettled = true;
+    rememberOwnJob({ id: job.id, type: job.type });
+    if (job.type === "engine_backtest") {
+      this.beginRun("Reattaching to backtest…", "");
+      this.engineJobId.set(job.id);
+    } else {
+      this.beginRun("Reattaching to LEAN run…", "");
+      this.leanJobId.set(job.id);
+    }
   }
 
   private wireEngineJobEffect(): void {
@@ -481,46 +491,39 @@ export class StrategyLabRunner {
   }
 
   /**
-   * The study a remembered job saved while this tab was reloading. A job
-   * whose result is gone (it failed, was cancelled, or its result expired)
-   * has nothing to open, and reports nothing: the reload already showed no
-   * run in flight.
+   * The outcome of a remembered job that finished while this tab was
+   * reloading, read from its stored result and interpreted exactly as the
+   * live path interprets it. A 404 is the one expected miss — the job
+   * failed, was cancelled, or its result expired — and retires the marker
+   * with nothing to report, since the reload already showed no run in
+   * flight. Any other failure is reported and keeps the marker, so a later
+   * reload can try again once the backend answers.
    */
   private async openFinishedOwnJob(own: OwnJob): Promise<void> {
-    let runId: number | null;
     try {
       if (own.type === "engine_backtest") {
         const response = await this.jobs.fetchResult<EngineBacktestResponse>(own.id);
-        runId = response.success ? response.study_id ?? null : null;
+        forgetOwnJob();
+        await this.applyEngineResult(response);
       } else {
         const response = await this.jobs.fetchResult<TrustedRunResponse>(own.id);
-        runId = response.strategy_execution_id;
+        forgetOwnJob();
+        await this.applyLeanResult(response);
       }
-    } catch {
-      return;
+    } catch (error) {
+      if (error instanceof HttpErrorResponse && error.status === 404) {
+        forgetOwnJob();
+        return;
+      }
+      this.fail("Failed to fetch backtest result", errorMessage(error, "Failed to fetch backtest result"));
+    } finally {
+      this.updateRunningState();
     }
-    if (runId !== null) await this.openStudy(runId);
   }
 
   private async handleEngineJobCompleted(jobId: string): Promise<void> {
     try {
-      const response = await this.jobs.fetchResult<EngineBacktestResponse>(jobId);
-      if (response.error) {
-        this.fail("Backtest failed", response.error);
-      } else if (response.success) {
-        this.setRunStatus(
-          "completed",
-          `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${formatCurrency(response.net_profit)}`,
-        );
-        if (response.study_id != null) {
-          await this.openStudy(response.study_id);
-        }
-        else {
-          this.runError.set(
-            "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
-          );
-        }
-      }
+      await this.applyEngineResult(await this.jobs.fetchResult<EngineBacktestResponse>(jobId));
     } catch (error) {
       this.fail(
         "Failed to fetch backtest result",
@@ -533,20 +536,7 @@ export class StrategyLabRunner {
 
   private async handleLeanJobCompleted(jobId: string): Promise<void> {
     try {
-      const response = await this.jobs.fetchResult<TrustedRunResponse>(jobId);
-      if (response.strategy_execution_id !== null) {
-        this.setRunStatus(
-          "completed",
-          "LEAN run finished",
-          `Persisted as study #${response.strategy_execution_id}.`,
-        );
-        await this.openStudy(response.strategy_execution_id);
-      } else {
-        this.runError.set(
-          "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
-        );
-        this.setRunStatus("completed", "LEAN run finished", "Run completed without a persisted study ID.");
-      }
+      await this.applyLeanResult(await this.jobs.fetchResult<TrustedRunResponse>(jobId));
     } catch (error) {
       this.fail(
         "LEAN result unavailable",
@@ -555,6 +545,37 @@ export class StrategyLabRunner {
     } finally {
       this.updateRunningState();
     }
+  }
+
+  /** The one reading of an engine result: a reported failure, a saved study, or a run that saved nothing. */
+  private applyEngineResult(response: EngineBacktestResponse): Promise<unknown> {
+    if (response.error) {
+      this.fail("Backtest failed", response.error);
+      return Promise.resolve();
+    }
+    if (!response.success) return Promise.resolve();
+    this.setRunStatus(
+      "completed",
+      `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${formatCurrency(response.net_profit)}`,
+    );
+    if (response.study_id != null) return this.openStudy(response.study_id);
+    this.runError.set(
+      "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
+    );
+    return Promise.resolve();
+  }
+
+  /** The one reading of a LEAN result: a saved study, or a run that saved nothing. */
+  private applyLeanResult(response: TrustedRunResponse): Promise<unknown> {
+    if (response.strategy_execution_id !== null) {
+      this.setRunStatus("completed", "LEAN run finished", `Persisted as study #${response.strategy_execution_id}.`);
+      return this.openStudy(response.strategy_execution_id);
+    }
+    this.runError.set(
+      "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
+    );
+    this.setRunStatus("completed", "LEAN run finished", "Run completed without a persisted study ID.");
+    return Promise.resolve();
   }
 
   private updateRunningState(): void {

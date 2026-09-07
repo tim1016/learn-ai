@@ -136,7 +136,8 @@ export class JobsService {
   /** True once the startup `/api/jobs?active=true` snapshot has been applied
    *  (or failed): from then on, a job absent from `activeJobs()` is genuinely
    *  not running rather than not yet known (#1954). */
-  readonly resumed = signal(false);
+  private readonly _resumed = signal(false);
+  readonly resumed = this._resumed.asReadonly();
 
   constructor() {
     void this.resumeActive();
@@ -238,7 +239,7 @@ export class JobsService {
       // Backend might not be up yet; the page still works without
       // resumption — newly-started jobs will register normally.
     } finally {
-      this.resumed.set(true);
+      this._resumed.set(true);
     }
   }
 

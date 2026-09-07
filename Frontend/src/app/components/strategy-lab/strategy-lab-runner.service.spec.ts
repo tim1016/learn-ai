@@ -1,4 +1,4 @@
-import { provideHttpClient } from "@angular/common/http";
+import { HttpErrorResponse, provideHttpClient } from "@angular/common/http";
 import { computed, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
@@ -365,9 +365,9 @@ describe("StrategyLab configuration and runner", () => {
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
     });
 
-    it("reports nothing when the remembered job left no result behind", async () => {
+    it("retires the marker and reports nothing when the remembered job's result is gone (404)", async () => {
       sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
-      fetchResult.mockRejectedValue(new Error("404 result not found or expired"));
+      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 404, statusText: "Not Found", error: { error: "result not found or expired" } }));
       resumed.set(true);
       const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
       TestBed.tick();
@@ -378,6 +378,63 @@ describe("StrategyLab configuration and runner", () => {
       expect(navigate).not.toHaveBeenCalled();
       expect(reloaded.runError()).toBeNull();
       expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("reports any other read failure and keeps the marker for a later reload", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockRejectedValue(new HttpErrorResponse({ status: 503, statusText: "Service Unavailable" }));
+      resumed.set(true);
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(navigate).not.toHaveBeenCalled();
+      expect(reloaded.runError()).not.toBeNull();
+      expect(sessionStorage.getItem("strategyLab.ownJob")).not.toBeNull();
+    });
+
+    it("reads a stored failure the same way the live path does", async () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockResolvedValue({ success: false, error: "boom" });
+      resumed.set(true);
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(navigate).not.toHaveBeenCalled();
+      expect(reloaded.runError()).toBe("boom");
+      expect(sessionStorage.getItem("strategyLab.ownJob")).toBeNull();
+    });
+
+    it("lets the job effects report a remembered job the registry already holds as terminal", async () => {
+      // The snapshot can list the job in a terminal state (state is patched
+      // before the active-set removal); the registry knows the outcome, so
+      // no result is probed until the effect handles completion itself.
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      fetchResult.mockResolvedValue({ success: true, study_id: 555, total_trades: 1, net_profit: 1 });
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "completed" }));
+      resumed.set(true);
+      TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      TestBed.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(navigate).toHaveBeenCalledWith(["/strategy-lab"], expect.objectContaining({ queryParams: { run: 555 } }));
+    });
+
+    it("reports a remembered job the registry holds as failed, without probing its result", () => {
+      sessionStorage.setItem("strategyLab.ownJob", JSON.stringify({ id: "job-9", type: "engine_backtest" }));
+      putJob(makeJobState({ id: "job-9", type: "engine_backtest", status: "failed", errorMessage: "engine crashed" }));
+      resumed.set(true);
+      const reloaded = TestBed.runInInjectionContext(() => new StrategyLabRunner());
+      TestBed.tick(); // adoption reattaches by id …
+      TestBed.tick(); // … and the job effect reports the terminal state
+      console.log("DEBUG1954", JSON.stringify({ phase: reloaded.runPhase(), running: reloaded.running(), banner: reloaded.runStatusBanner(), detail: reloaded.runPhaseDetail(), marker: sessionStorage.getItem("strategyLab.ownJob"), known: TestBed.inject(JobsService).job("job-9")?.status }));
+
+      expect(fetchResult).not.toHaveBeenCalled();
+      expect(reloaded.runError()).toBe("engine crashed");
     });
 
     it("still prefers the remembered job while it is active, even after the snapshot settles", () => {
