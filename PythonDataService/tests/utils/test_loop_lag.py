@@ -51,6 +51,37 @@ async def test_a_blocked_loop_is_reported_with_the_duration_it_was_blocked(
 
 
 @pytest.mark.asyncio
+async def test_the_sampling_interval_is_short_enough_to_catch_the_threshold() -> None:
+    """A block only shows as lag to the extent it outlasts the deadline it hit.
+
+    A block of B seconds starting t into an interval of I reports ``t + B - I``,
+    so the worst case reports ``B - I``. Sampling at the threshold would leave a
+    block of exactly the threshold reported or missed depending on when it
+    happened to start; sampling well under it makes detection unconditional
+    from ``I + W`` upward.
+    """
+    assert loop_lag.DEFAULT_INTERVAL_SECONDS < loop_lag.DEFAULT_WARN_AFTER_SECONDS / 2
+
+
+@pytest.mark.asyncio
+async def test_a_block_that_starts_at_the_worst_moment_is_still_caught(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """t = 0 — the block begins the instant the sleep does, hiding one interval of it."""
+    interval, warn = 0.05, 0.1
+    with caplog.at_level(logging.WARNING, logger="app.utils.loop_lag"):
+
+        async def block_immediately() -> None:
+            time.sleep(interval + warn + 0.05)
+
+        blocker = asyncio.create_task(block_immediately())
+        await loop_lag.watch_loop_lag(interval_seconds=interval, warn_after_seconds=warn, iterations=2)
+        await blocker
+
+    assert caplog.records, "a block longer than interval + threshold was not reported"
+
+
+@pytest.mark.asyncio
 async def test_a_later_report_still_names_the_worst_stall_seen(caplog: pytest.LogCaptureFixture) -> None:
     """An operator reading any one line learns the worst so far, not just the latest."""
 

@@ -9,7 +9,9 @@ a running container while one was happening.
 
 The measurement is the oldest one there is: sleep a known interval, and see how
 much later than that you wake. The excess is time this task was not free to
-run. It costs one timer wakeup per interval and no allocation.
+run — a lower bound on the block, since whatever part of it fell before the
+deadline is invisible. It costs one timer wakeup per interval and no
+allocation.
 
 What it deliberately does **not** do is name a cause. The measurement cannot
 tell a coroutine holding the loop from the process being descheduled by the
@@ -37,7 +39,15 @@ logger = logging.getLogger(__name__)
 # and far below the tens of seconds it takes for a stall to become someone
 # else's incident.
 DEFAULT_WARN_AFTER_SECONDS = 1.0
-DEFAULT_INTERVAL_SECONDS = 1.0
+
+# Sampled well under the threshold, because a block only shows up as lag to the
+# extent that it outlasts the deadline it interrupted. A block of B seconds
+# starting t into an interval of I reports ``t + B - I``, so the worst case
+# (t = 0) reports ``B - I``: sampling at the threshold would leave every block
+# between 1 s and 2 s detected or missed depending on when it happened to
+# start. At 0.25 s, anything past 1.25 s is caught however it lands, and the
+# number in the log is a lower bound on the block — never an overstatement.
+DEFAULT_INTERVAL_SECONDS = 0.25
 
 
 async def watch_loop_lag(
@@ -64,7 +74,7 @@ async def watch_loop_lag(
         stalls += 1
         worst = max(worst, lag)
         logger.warning(
-            "[LOOP] Event loop went unserved for %.1fs (worst so far %.1fs, %d this process). "
+            "[LOOP] Event loop went unserved for at least %.1fs (worst so far %.1fs, %d this process). "
             "Either something held the loop, a worker thread held the GIL, or the process "
             "itself was descheduled — this measures the gap, not the cause.",
             lag,
