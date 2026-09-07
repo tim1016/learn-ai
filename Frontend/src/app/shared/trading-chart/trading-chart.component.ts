@@ -161,9 +161,26 @@ export class TradingChartComponent implements OnDestroy {
   readonly paneHeights = computed<number[]>(() => {
     const weights = this.panes().map((pane) => pane.height);
     const weightTotal = weights.reduce((total, weight) => total + weight, 0);
-    const available = this.availableHeight();
+    // Floored here too, not only in the observer: this is a public signal, and
+    // the panes must sum to a whole number of pixels whoever set it.
+    const available = Math.floor(this.availableHeight());
     if (available <= 0 || weightTotal === 0) return weights;
-    const scaled = weights.map((weight) => Math.round((weight / weightTotal) * available));
+    // The panes are the canvas's height, so they must sum to `available`
+    // exactly: one pixel over and the canvas is taller than the box it was
+    // measured from, which puts a scrollbar on the wrap. Rounding each share
+    // on its own sums above `available` whenever the fractions round up
+    // together (three panes at 556px round to 557). Rounding the running
+    // boundary instead and taking the difference telescopes to `available` by
+    // construction, whatever the weights.
+    let used = 0;
+    let cumulative = 0;
+    const scaled = weights.map((weight) => {
+      cumulative += weight;
+      const boundary = Math.round((cumulative / weightTotal) * available);
+      const height = boundary - used;
+      used = boundary;
+      return height;
+    });
     return scaled.some((height) => height < MIN_PANE_HEIGHT) ? weights : scaled;
   });
 
@@ -208,10 +225,25 @@ export class TradingChartComponent implements OnDestroy {
         // The wrap's height is layout-driven; the canvas's is driven by
         // chartHeight, so observing the canvas would be a feedback loop.
         const box = entries[0]?.contentRect;
-        const height = box?.height ?? wrap.nativeElement.clientHeight;
-        if (height > 0) this.availableHeight.set(Math.round(height));
-        const width = box?.width ?? wrap.nativeElement.clientWidth;
-        if (width > 0) this.availableWidth.set(Math.round(width));
+        // Floor, and ignore a one-pixel *growth*. Flooring keeps the canvas
+        // from being sized to height the element does not have — a fractional
+        // box (589.5625px at a fractional device pixel ratio) rounded up is an
+        // instant overflow. The dead band is the second guard: this observer's
+        // own reaction resizes the element it watches, so a pixel of churn
+        // must not re-enter that cycle.
+        //
+        // Only growth is guarded. Ignoring a one-pixel *shrink* would leave
+        // the canvas a pixel taller than its box until some larger change
+        // arrived — a permanent scrollbar, which is the very state this guards
+        // against. A shrink is always honoured, and honouring it cannot
+        // reopen the cycle: the panes are sized from the height alone, and
+        // neither scrollbar can move this box any more.
+        const height = Math.floor(box?.height ?? wrap.nativeElement.clientHeight);
+        const measuredHeight = this.availableHeight();
+        if (height > 0 && (height < measuredHeight || height - measuredHeight > 1)) this.availableHeight.set(height);
+        const width = Math.floor(box?.width ?? wrap.nativeElement.clientWidth);
+        const measuredWidth = this.availableWidth();
+        if (width > 0 && (width < measuredWidth || width - measuredWidth > 1)) this.availableWidth.set(width);
       });
       observer.observe(wrap.nativeElement);
       onCleanup(() => observer.disconnect());

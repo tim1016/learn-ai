@@ -9,6 +9,11 @@ const EQUITY = [{
   points: [{ timeMs: 1_700_000_000_000, value: 100_100 }],
 }];
 
+const SUB_PANES = [{
+  id: "rsi", label: "RSI", referenceLevels: [30, 70],
+  series: [{ id: "rsi", name: "RSI", type: "line", color: "#abc", points: [{ timeMs: 1_700_000_000_000, value: 55 }] }],
+}];
+
 const chartHarness: {
   options: Record<string, unknown> | null;
   addSeries: ReturnType<typeof vi.fn>;
@@ -60,6 +65,38 @@ describe("TradingChartComponent", () => {
       providers: [provideZonelessChangeDetection(), { provide: TRADING_CHART_FACTORY, useValue: createChart }],
     }).compileComponents();
     return TestBed.createComponent(TradingChartComponent);
+  }
+
+  /**
+   * Runs `body` with a ResizeObserver stub in place, handing it a `measure`
+   * that drives the component's own observer callback. The DOM never resizes
+   * anything here, so the measurement is the test's to state.
+   */
+  async function withMeasuredChart(
+    body: (
+      fixture: Awaited<ReturnType<typeof createComponent>>,
+      measure: (height: number, width: number) => void,
+    ) => void,
+  ): Promise<void> {
+    const observers: ResizeObserverCallback[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { observers.push(callback); }
+      observe(): void { /* the test drives the callback directly */ }
+      disconnect(): void { /* nothing to release */ }
+    });
+    try {
+      const fixture = await createComponent();
+      fixture.componentRef.setInput("equity", EQUITY);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      expect(observers).not.toHaveLength(0);
+      body(fixture, (height, width) => {
+        observers[0]([{ contentRect: { height, width } }] as unknown as ResizeObserverEntry[], {} as ResizeObserver);
+        fixture.detectChanges();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   }
 
   it("uses one native chart and assigns price, realized equity, and indicators to panes", async () => {
@@ -114,6 +151,71 @@ describe("TradingChartComponent", () => {
     root.querySelector<HTMLButtonElement>("[aria-label='Expand chart']")?.click();
     fixture.detectChanges();
     expect(root.querySelector(".trading-chart__rail")).not.toBeNull();
+  });
+
+  it("never sizes the canvas taller than the box it measured, so the wrap cannot gain a scrollbar", async () => {
+    // Three panes over weights 470:205:185 at a 556px box rounded to 304+133+120
+    // = 557: one pixel taller than the box the panes were measured from. The
+    // wrap is `overflow: auto`, so that pixel showed a scrollbar for the
+    // chart's whole lifetime and took 10px of width off it.
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("equity", EQUITY);
+    fixture.componentRef.setInput("subPanes", SUB_PANES);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    for (const available of [556, 561, 565, 700, 1350]) {
+      fixture.componentInstance.availableHeight.set(available);
+      fixture.detectChanges();
+      expect(fixture.componentInstance.chartHeight()).toBe(available);
+    }
+  });
+
+  it("floors a fractional measurement rather than claiming height the box does not have", async () => {
+    // A flex child at a fractional device pixel ratio measures like this;
+    // rounding 589.5625 up to 590 is a height the element does not have, and
+    // the canvas sized from it overflows its own box immediately.
+    await withMeasuredChart((fixture, measure) => {
+      measure(589.5625, 1204.4375);
+
+      expect(fixture.componentInstance.availableHeight()).toBe(589);
+      expect(fixture.componentInstance.availableWidth()).toBe(1204);
+      expect(fixture.componentInstance.chartHeight()).toBeLessThanOrEqual(589);
+    });
+  });
+
+  it("ignores a one-pixel growth, so its own resize cannot re-enter the observer", async () => {
+    // This observer's reaction resizes the element it observes. A scrollbar
+    // appearing or disappearing moved the measured box by a pixel and fed
+    // straight back in, resizing the chart every animation frame for as long
+    // as the page was open.
+    await withMeasuredChart((fixture, measure) => {
+      measure(880, 1200);
+      expect(fixture.componentInstance.availableHeight()).toBe(880);
+
+      measure(881, 1201);
+      expect(fixture.componentInstance.availableHeight()).toBe(880);
+      expect(fixture.componentInstance.availableWidth()).toBe(1200);
+
+      measure(700, 1000);
+      expect(fixture.componentInstance.availableHeight()).toBe(700);
+      expect(fixture.componentInstance.availableWidth()).toBe(1000);
+    });
+  });
+
+  it("still honours a one-pixel shrink, which would otherwise overflow the box for good", async () => {
+    // The dead band guards growth only. Swallowing a shrink would leave the
+    // canvas a pixel taller than its box until some larger change arrived —
+    // a permanent scrollbar, the very state the band exists to prevent.
+    await withMeasuredChart((fixture, measure) => {
+      measure(880, 1200);
+
+      measure(879, 1199);
+
+      expect(fixture.componentInstance.availableHeight()).toBe(879);
+      expect(fixture.componentInstance.availableWidth()).toBe(1199);
+      expect(fixture.componentInstance.chartHeight()).toBeLessThanOrEqual(879);
+    });
   });
 
   it("distributes measured height across panes proportionally to their weights", async () => {

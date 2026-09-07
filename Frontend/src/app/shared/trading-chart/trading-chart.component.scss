@@ -113,11 +113,30 @@
 .trading-chart__canvas-wrap {
   position: relative;
   min-width: 0;
-  overflow: auto;
+  // A scrollbar must never change this box's measured size. The component
+  // observes this element and sizes the canvas from `contentRect`, which
+  // excludes scrollbars — so a scrollbar that appears in response to the
+  // canvas growing feeds a smaller box back into the measurement, and the
+  // chart resizes every animation frame forever. Reserving the gutter keeps
+  // the measured width constant whether or not the bar is drawn, and the
+  // width is set explicitly so a horizontal bar is never wanted: with both,
+  // the loop cannot close. The vertical scroll itself stays, because the
+  // short-viewport fallback below deliberately overflows.
+  //
+  // `scrollbar-gutter` is ignored before Safari 18.2, which degrades safely:
+  // that engine draws overlay scrollbars, which do not change `contentRect`
+  // either, and `overflow-x: hidden` closes the height path regardless.
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   background: #131722;
 }
 
 .trading-chart__canvas {
+  // Block, not the default inline: an inline box adds a baseline gap, which
+  // made this element measure a pixel taller than the chart inside it and
+  // overflow the wrap on its own.
+  display: block;
   width: 100%;
   min-height: var(--chart-height);
 }
