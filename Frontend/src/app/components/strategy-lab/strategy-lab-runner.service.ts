@@ -96,11 +96,16 @@ function isOwnJob(value: unknown): value is OwnJob {
   return typeof id === "string" && (type === null || (typeof type === "string" && isStrategyLabJobType(type)));
 }
 
+/** Whether the marker still names `job` — false once a run started meanwhile has replaced it with its own. */
+function ownJobIs(job: OwnJob): boolean {
+  return ownJob()?.id === job.id;
+}
+
 /** Retire the marker — or, given `only`, retire it only while it still names that job, so a run started meanwhile keeps its own. */
 function forgetOwnJob(only?: OwnJob): void {
   try {
     if (typeof sessionStorage === "undefined") return;
-    if (only !== undefined && ownJob()?.id !== only.id) return;
+    if (only !== undefined && !ownJobIs(only)) return;
     sessionStorage.removeItem(OWN_JOB_KEY);
   } catch {
     // A marker that outlives its job is ignored by the reattach rule anyway.
@@ -512,20 +517,23 @@ export class StrategyLabRunner {
    * failed, was cancelled, or its result expired — and retires the marker
    * with nothing to report, since the reload already showed no run in
    * flight. Any other failure is reported and keeps the marker, so a later
-   * reload can try again once the backend answers.
+   * reload can try again once the backend answers. A run started while the
+   * read was in flight has replaced the marker with its own and owns the
+   * tab's outcome from then on: whatever the read returns is discarded, so
+   * it can neither navigate away from nor restate the newer run.
    */
   private async openFinishedOwnJob(own: OwnJob): Promise<void> {
     try {
       const response = await this.jobs.fetchResult<EngineBacktestResponse | TrustedRunResponse>(own.id);
-      // Only this marker is retired: a run started while the read was in
-      // flight has already replaced it with its own.
-      forgetOwnJob(own);
+      if (!ownJobIs(own)) return;
+      forgetOwnJob();
       // A marker from before the type was recorded is told apart by the result's shape.
       const isLean = own.type === "lean_engine_run" || (own.type === null && "strategy_execution_id" in response);
       await (isLean ? this.applyLeanResult(response as TrustedRunResponse) : this.applyEngineResult(response as EngineBacktestResponse));
     } catch (error) {
+      if (!ownJobIs(own)) return;
       if (error instanceof HttpErrorResponse && error.status === 404) {
-        forgetOwnJob(own);
+        forgetOwnJob();
         return;
       }
       const headline =
