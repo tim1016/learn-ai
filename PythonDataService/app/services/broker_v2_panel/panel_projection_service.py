@@ -319,7 +319,7 @@ def _recent_decision_views(
     limit: int = 8,
     simulated: bool = False,
     authority_account_id: str | None = None,
-    authority_kind: Literal["real_paper", "synthetic"] | None = None,
+    authority_kind: Literal["real_paper", "real_live", "shadow", "synthetic"] | None = None,
 ) -> list[RecentDecisionView]:
     return [
         RecentDecisionView(
@@ -345,7 +345,7 @@ def _recent_fill_views(
     *,
     limit: int = 8,
     authority_account_id: str | None = None,
-    authority_kind: Literal["real_paper", "synthetic"] | None = None,
+    authority_kind: Literal["real_paper", "real_live", "shadow", "synthetic"] | None = None,
 ) -> list[RecentFillView]:
     fills = project_instance_fills(sid, entries)
     return [
