@@ -585,7 +585,9 @@ public class PortfolioValidationService : IPortfolioValidationService
                 prices[pos.Ticker.Symbol] = pos.AvgCostBasis; // use cost basis as current price
         }
 
-        var scenario = new ScenarioInput { PriceChangePercent = -10m };
+        // The shock is a fraction on the wire (#1975); -10 as written sent a
+        // -1000% move and the engine refused the negative spot with 400.
+        var scenario = ScenarioInput.FromPercent(-10m);
         var result = await riskService.RunScenarioAsync(accountId, prices, scenario, ct);
 
         var assertions = new List<ValidationAssertion>

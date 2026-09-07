@@ -66,6 +66,19 @@ public class PortfolioRiskServiceTests
     #region DollarDelta — Stocks
 
     [Fact]
+    public void ScenarioInput_FromPercent_ConvertsToTheFractionsTheEngineExpects()
+    {
+        // #1975: the validation harness passed -10 (a percent) straight through as a
+        // spot shock, which the Python engine reads as a fraction (-1000%) and refuses.
+        var scenario = ScenarioInput.FromPercent(-10m, ivChangePercent: 20m, timeDaysForward: 5);
+
+        Assert.Equal(-0.10m, scenario.PriceChangePercent);
+        Assert.Equal(0.20m, scenario.IvChangePercent);
+        Assert.Equal(5, scenario.TimeDaysForward);
+        Assert.Null(ScenarioInput.FromPercent(null).PriceChangePercent);
+    }
+
+    [Fact]
     public async Task ComputeDollarDelta_Stock_DeltaIsOne()
     {
         var (service, context, _, _) = CreateServiceWithContext();
