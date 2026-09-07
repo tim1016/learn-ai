@@ -22,10 +22,10 @@ import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
       font-size: 0.8rem; line-height: 1.2; white-space: nowrap;
       border: 1px solid var(--border-strong); color: var(--text-secondary);
     }
-    .alpaca-banner.is-paper { background: var(--info-soft); color: var(--info); border-color: rgba(41, 182, 246, 0.42); }
-    .alpaca-banner.is-live-unarmed { background: var(--warn-soft, #fff3e0); color: var(--warn, #b45309); border-color: currentColor; font-weight: 600; }
-    .alpaca-banner.is-live-armed { background: var(--danger-soft, #fde8e8); color: var(--danger, #b91c1c); border-color: currentColor; font-weight: 700; }
-    .alpaca-banner.is-unknown { background: var(--surface-sunken, transparent); color: var(--text-secondary); border-style: dashed; }
+    .alpaca-banner.is-paper { background: var(--info-soft); color: var(--info); border-color: var(--info); }
+    .alpaca-banner.is-live-unarmed { background: var(--warn-soft); color: var(--warn); border-color: currentColor; font-weight: 600; }
+    .alpaca-banner.is-live-armed { background: var(--bear-soft); color: var(--bear); border-color: currentColor; font-weight: 700; }
+    .alpaca-banner.is-unknown { background: var(--bg-sunken); color: var(--text-secondary); border-style: dashed; }
     .alpaca-banner__kicker { font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.68rem; }
     .alpaca-banner__armed { opacity: 0.85; }
   `],
@@ -61,8 +61,6 @@ export class AlpacaLiveBannerComponent {
 
   protected readonly ariaLabel = computed(() => {
     const v = this.verdict();
-    if (!v) return '';
-    const money = v.configured_mode === 'live' ? 'real money' : 'no real money at risk';
-    return `Alpaca account mode: ${v.final_verdict}, ${money}. ${v.headline}`;
+    return v ? `Alpaca: ${v.headline}` : '';
   });
 }
