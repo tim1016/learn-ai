@@ -52,6 +52,7 @@ from app.broker.alpaca.clerk.trade_evidence import (
     TradeUpdateEvidenceSink,
 )
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
+from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.utils.timestamps import now_ms_utc
 
@@ -206,6 +207,16 @@ async def select_active_clerk_runtime(
     """
     try:
         account = await read.get_account()
+    except BrokerAccountModeDisagreement as exc:
+        logger.warning(
+            "Alpaca configured mode and observed account disagree; Clerk unavailable",
+            extra={"action": "active_clerk_mode_disagreement", "detail": exc.detail},
+        )
+        return _unavailable(
+            exc.reason_code,
+            account_id=None,
+            recovery=exc.detail or exc.message,
+        )
     except Exception as exc:
         logger.warning(
             "Alpaca account identity could not be resolved; Clerk unavailable",

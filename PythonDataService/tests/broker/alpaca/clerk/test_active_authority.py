@@ -402,3 +402,26 @@ async def test_activated_recovery_timeout_installs_no_authority(
     assert runtime.clerk is None
     assert runtime.startup_failure is not None
     assert runtime.startup_failure.reason_code == "SQLITE_CLERK_STARTUP_FAILED"
+
+
+async def test_mode_disagreement_is_named_not_folded_into_unavailable(tmp_path: Path) -> None:
+    from app.broker.contract.errors import BrokerAccountModeDisagreement
+
+    class _Read:
+        broker_id = "alpaca"
+
+        async def get_account(self):
+            raise BrokerAccountModeDisagreement(
+                "The configured Alpaca mode and the observed account disagree.",
+                broker="alpaca",
+                detail="ALPACA_MODE='live' but the account number begins with 'PA'",
+            )
+
+    runtime = await select_active_clerk_runtime(
+        read=_Read(), trade=_Read(), artifacts_root=tmp_path,
+    )
+
+    assert runtime.authority_kind == "unavailable"
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "LIVE_MODE_DISAGREEMENT"
+    assert "begins with 'PA'" in runtime.startup_failure.recovery
