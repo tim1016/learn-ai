@@ -428,7 +428,11 @@ async def _bench_fleet(
     port = _BenchBrokerPort()
     get_broker_registry().register(port)  # type: ignore[arg-type]
     set_bot_task_registry(_BenchRegistry(artifacts_root, sids, stopped_count))  # type: ignore[arg-type]
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=port, trade=port)  # type: ignore[arg-type]
+    # The bench builds a synthetic fleet against a fake broker port, so it is a
+    # paper authority by construction — same as every other in-repo constructor
+    # of this facade. ``account_mode`` became required so a live authority can
+    # never be selected by omission (#1924); this script was not updated with it.
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=port, trade=port, account_mode="paper")  # type: ignore[arg-type]
     set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
 
     app = FastAPI()
