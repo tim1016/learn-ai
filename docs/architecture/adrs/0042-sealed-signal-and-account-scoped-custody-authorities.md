@@ -1,6 +1,7 @@
 # ADR 0042: Sealed signal decisions meet account-scoped custody at one semantic seam
 
 **Status:** Accepted
+**Superseded in part by [ADR 0059](0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md) (2026-09-07, Accepted):** the Consequences statement that future real-money Live remains unreachable no longer stands. Every other part of this ADR — the one semantic seam, exact-identity authority selection, the refusal of cross-world ports and aggregates, and the global Paper carryover disable — is unchanged and is load-bearing for ADR 0059.
 
 - **Date:** 2026-08-21
 - **Context:** Sealed Signal Programs to Governed Alpaca Bots PRD, implementation tracker #1723.
