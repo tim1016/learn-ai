@@ -519,7 +519,7 @@ def verify_and_read_zip(zip_path: Path, symbol: str, trading_date: date) -> Veri
     """Strictly verify a cache zip and extract row-count / bar-range metadata.
 
     Unlike the lenient LEAN readers used elsewhere (``app.engine.data.lean_format``,
-    ``app.data_lake.ensure_data._read_minute_trade_bars``) — which skip malformed
+    ``app.data_lake.derived_daily.read_minute_trade_bars``) — which skip malformed
     rows when reading data this service itself already wrote — this import
     boundary is ingesting a pre-existing, unaudited cache and must fail fast on
     any row it cannot parse rather than silently importing a truncated day.
