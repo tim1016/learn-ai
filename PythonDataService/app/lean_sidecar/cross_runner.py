@@ -47,6 +47,7 @@ from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import OrderEvent
 from app.engine.execution.sizing import LeanSetHoldingsSizing
+from app.engine.run_gate import one_backtest_in_flight
 from app.engine.strategy.base import Strategy
 
 _ET = ZoneInfo("America/New_York")
@@ -274,86 +275,93 @@ def run_engine_lab_on_workspace(
     -------
     CrossRunResult with normalized order events ready for Phase 5g.3's
     diff against the LEAN-Lab run's parsed ``order_events``."""
-    # Resolve the strategy class first: a bad class name is a caller
-    # programming error and should surface as StrategyNotFoundError
-    # regardless of workspace state (it is a pure lookup, no I/O).
-    base_class = resolve_strategy_class(strategy_class_name)
+    # The gate spans the whole call, not just ``engine.run``. The run's
+    # memory outlives the simulation — the result holds every bar and this
+    # function shapes reports from it — so releasing at the engine's boundary
+    # would let a second run allocate on top of what this one still holds.
+    # ``BacktestEngine.run`` takes the gate again inside; that acquire passes
+    # through this one (#1990).
+    with one_backtest_in_flight():
+        # Resolve the strategy class first: a bad class name is a caller
+        # programming error and should surface as StrategyNotFoundError
+        # regardless of workspace state (it is a pure lookup, no I/O).
+        base_class = resolve_strategy_class(strategy_class_name)
 
-    # Prefer workspace_path/data (canonical workspace layout); fall back
-    # to workspace_path itself for capture roots where equity/ lives at
-    # the top level (e.g. _lean_data_capture/<TICKER>/). Either way the
-    # chosen root must actually contain the LEAN minute tree
-    # (equity/usa/minute/...) — without that check a pruned or empty
-    # workspace would silently produce a 0-bar run that looks successful.
-    _minute_subtree = Path("equity") / "usa" / "minute"
-    candidate_data = workspace_path / "data"
-    if (candidate_data / _minute_subtree).is_dir():
-        data_root = candidate_data
-    elif (workspace_path / _minute_subtree).is_dir():
-        data_root = workspace_path
-    else:
-        raise WorkspaceDataMissingError(
-            f"no LEAN minute tree found under {candidate_data} or {workspace_path} "
-            f"(expected <root>/{_minute_subtree.as_posix()}); "
-            "was the LEAN-Lab run staged? did the workspace get pruned?"
+        # Prefer workspace_path/data (canonical workspace layout); fall back
+        # to workspace_path itself for capture roots where equity/ lives at
+        # the top level (e.g. _lean_data_capture/<TICKER>/). Either way the
+        # chosen root must actually contain the LEAN minute tree
+        # (equity/usa/minute/...) — without that check a pruned or empty
+        # workspace would silently produce a 0-bar run that looks successful.
+        _minute_subtree = Path("equity") / "usa" / "minute"
+        candidate_data = workspace_path / "data"
+        if (candidate_data / _minute_subtree).is_dir():
+            data_root = candidate_data
+        elif (workspace_path / _minute_subtree).is_dir():
+            data_root = workspace_path
+        else:
+            raise WorkspaceDataMissingError(
+                f"no LEAN minute tree found under {candidate_data} or {workspace_path} "
+                f"(expected <root>/{_minute_subtree.as_posix()}); "
+                "was the LEAN-Lab run staged? did the workspace get pruned?"
+            )
+        # Pass output_dir to the strategy constructor when provided so it
+        # emits observations.csv + state.csv for the parity-matrix gates.
+        if output_dir is not None and "output_dir" in inspect.signature(base_class.__init__).parameters:
+            base_instance: Strategy = base_class(symbol=symbol.upper(), output_dir=output_dir)
+        else:
+            base_instance = _instantiate_with_symbol(base_class, symbol)
+
+        pinned_start = datetime(start_date.year, start_date.month, start_date.day, tzinfo=_ET)
+        pinned_end = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=_ET)
+        pinned_cash = Decimal(initial_cash)
+
+        # Capture the resolved class + the pinned values via closure into a
+        # subclass that runs the base initialize() THEN clobbers dates/cash.
+        # Done as a subclass (not by mutating attributes after the engine
+        # calls initialize) because the engine calls initialize() itself
+        # inside .run() — mutating the instance beforehand has no effect.
+        class _CrossRunStrategy(base_class):  # type: ignore[misc,valid-type]
+            def initialize(self) -> None:
+                super().initialize()
+                self.start_date = pinned_start
+                self.end_date = pinned_end
+                self.initial_cash = pinned_cash
+
+        # Reuse the symbol-pinned instance's ``__dict__`` so any
+        # constructor-time state (indicators, flags) is preserved when
+        # promoting to the cross-run subclass. Cheaper than re-instantiating
+        # the wrapper — and correct because both classes share the same
+        # constructor signature (the wrapper doesn't override __init__).
+        cross_instance = _CrossRunStrategy.__new__(_CrossRunStrategy)
+        cross_instance.__dict__.update(base_instance.__dict__)
+
+        reader = LeanMinuteDataReader(data_root=data_root)
+        # Cross-engine parity runs size positions like LEAN: SetHoldings reserves
+        # a free-portfolio-value buffer + the order fee. SimpleFloorSizing would
+        # buy one share more than LEAN (Gate 3 QUANTITY_MISMATCH).
+        # Matrix runs pin IBKR equity-tier commission on both sides:
+        #   * FillModel.fee_model → per-fill fee on OrderEvents
+        #   * LeanSetHoldingsSizing.fee_model → buying-power calc subtracts
+        #     the same per-fill fee, so the engine's qty matches LEAN's
+        #     SetHoldings under InteractiveBrokers brokerage.
+        engine = BacktestEngine(
+            data_source=reader,
+            sizing_model=LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()),
+            fill_model=FillModel(
+                fee_model=IbkrEquityCommissionModel(),
+                fill_stale_signal_at_current_open=True,
+            ),
         )
-    # Pass output_dir to the strategy constructor when provided so it
-    # emits observations.csv + state.csv for the parity-matrix gates.
-    if output_dir is not None and "output_dir" in inspect.signature(base_class.__init__).parameters:
-        base_instance: Strategy = base_class(symbol=symbol.upper(), output_dir=output_dir)
-    else:
-        base_instance = _instantiate_with_symbol(base_class, symbol)
+        result = engine.run(cross_instance)
 
-    pinned_start = datetime(start_date.year, start_date.month, start_date.day, tzinfo=_ET)
-    pinned_end = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=_ET)
-    pinned_cash = Decimal(initial_cash)
-
-    # Capture the resolved class + the pinned values via closure into a
-    # subclass that runs the base initialize() THEN clobbers dates/cash.
-    # Done as a subclass (not by mutating attributes after the engine
-    # calls initialize) because the engine calls initialize() itself
-    # inside .run() — mutating the instance beforehand has no effect.
-    class _CrossRunStrategy(base_class):  # type: ignore[misc,valid-type]
-        def initialize(self) -> None:
-            super().initialize()
-            self.start_date = pinned_start
-            self.end_date = pinned_end
-            self.initial_cash = pinned_cash
-
-    # Reuse the symbol-pinned instance's ``__dict__`` so any
-    # constructor-time state (indicators, flags) is preserved when
-    # promoting to the cross-run subclass. Cheaper than re-instantiating
-    # the wrapper — and correct because both classes share the same
-    # constructor signature (the wrapper doesn't override __init__).
-    cross_instance = _CrossRunStrategy.__new__(_CrossRunStrategy)
-    cross_instance.__dict__.update(base_instance.__dict__)
-
-    reader = LeanMinuteDataReader(data_root=data_root)
-    # Cross-engine parity runs size positions like LEAN: SetHoldings reserves
-    # a free-portfolio-value buffer + the order fee. SimpleFloorSizing would
-    # buy one share more than LEAN (Gate 3 QUANTITY_MISMATCH).
-    # Matrix runs pin IBKR equity-tier commission on both sides:
-    #   * FillModel.fee_model → per-fill fee on OrderEvents
-    #   * LeanSetHoldingsSizing.fee_model → buying-power calc subtracts
-    #     the same per-fill fee, so the engine's qty matches LEAN's
-    #     SetHoldings under InteractiveBrokers brokerage.
-    engine = BacktestEngine(
-        data_source=reader,
-        sizing_model=LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()),
-        fill_model=FillModel(
-            fee_model=IbkrEquityCommissionModel(),
-            fill_stale_signal_at_current_open=True,
-        ),
-    )
-    result = engine.run(cross_instance)
-
-    normalized = _normalize_order_events(result.order_events, symbol_default=symbol)
-    return CrossRunResult(
-        strategy_class_name=strategy_class_name,
-        symbol=symbol.upper(),
-        start_date=start_date,
-        end_date=end_date,
-        initial_cash=pinned_cash,
-        total_order_events=len(normalized),
-        order_events=normalized,
-    )
+        normalized = _normalize_order_events(result.order_events, symbol_default=symbol)
+        return CrossRunResult(
+            strategy_class_name=strategy_class_name,
+            symbol=symbol.upper(),
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=pinned_cash,
+            total_order_events=len(normalized),
+            order_events=normalized,
+        )

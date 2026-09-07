@@ -13,6 +13,7 @@ loaded, which is exactly when concurrency bugs show up.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import threading
 
@@ -201,25 +202,62 @@ def test_the_gate_is_released_when_a_backtest_raises() -> None:
     assert entered  # a leaked gate would deadlock the whole service
 
 
-def test_nesting_fails_loudly_instead_of_deadlocking() -> None:
-    with one_backtest_in_flight():
-        nested = _reentry_outcome()
+def test_a_thread_that_already_holds_the_gate_passes_through() -> None:
+    """Nesting is the normal case: the router's hold wraps the engine's.
 
-    assert isinstance(nested, RuntimeError) and "must not nest" in str(nested)
+    Taking the semaphore twice on one thread would deadlock, and refusing
+    would break the wider hold ``execute_engine_backtest`` needs across
+    auto-fetch and persistence. The outer hold already provides the
+    exclusivity, so the inner acquire is a no-op.
+    """
+    waits: list[str] = []
+    inner_ran = False
+    with one_backtest_in_flight(), one_backtest_in_flight(on_wait=lambda: waits.append("inner")):
+        inner_ran = True
+
+    assert inner_ran
+    assert waits == []  # a pass-through never queues, so it never reports a wait
 
     entered = False
     with one_backtest_in_flight():
         entered = True
-    assert entered  # the refused re-entry did not disturb the outer hold
+    assert entered  # the nested exit did not release the gate early
 
 
-def _reentry_outcome() -> BaseException | None:
-    """Re-enter the gate on a thread that already holds it, without hanging."""
-    try:
+def test_the_outer_hold_still_excludes_other_threads_while_nested() -> None:
+    """The pass-through must not weaken what the outer hold is for."""
+    inner_reached = threading.Event()
+    release_outer = threading.Event()
+    occupancy = threading.Lock()
+    inside = 0
+    high_water = 0
+
+    def nested_run() -> None:
+        nonlocal inside, high_water
         with one_backtest_in_flight():
-            return None
-    except RuntimeError as exc:
-        return exc
+            with occupancy:
+                inside += 1
+                high_water = max(high_water, inside)
+            with one_backtest_in_flight():  # the engine's acquire, inside the router's
+                inner_reached.set()
+                release_outer.wait(timeout=5)
+            with occupancy:
+                inside -= 1
+
+    def a_second_caller() -> None:
+        nonlocal inside, high_water
+        with one_backtest_in_flight(), occupancy:
+            inside += 1
+            high_water = max(high_water, inside)
+            inside -= 1
+
+    a = _spawn(nested_run, name="nested")
+    assert inner_reached.wait(timeout=5)
+    b = _spawn(a_second_caller, name="second")
+
+    release_outer.set()
+    _join(a, b)
+    assert high_water == 1, f"{high_water} backtests were inside the gate at once"
 
 
 def test_runs_that_never_overlap_pay_nothing() -> None:
@@ -283,6 +321,76 @@ def test_the_engine_entry_point_holds_the_gate_for_its_callers(monkeypatch: pyte
     assert max(concurrent) == 1, f"{max(concurrent)} backtests ran at once; the gate did not hold"
     assert len(concurrent) == 4  # all four still ran — the gate queues, it never refuses
     assert phases == ["waiting_for_engine"] * 3  # the three that queued said so, once each
+
+
+def test_every_engine_run_is_gated_wherever_it_is_built() -> None:
+    """The invariant #1990 closed: coverage by construction, not by convention.
+
+    The gate first sat at ``execute_engine_backtest``, which five callers
+    reached and three did not — ``/api/spec-strategy/backtest``,
+    ``/api/research-runs`` and ``/api/lean-sidecar/cross-reconcile`` each built
+    an engine of their own. Counting *those* callers is a list that rots; the
+    thing that cannot rot is that ``BacktestEngine.run`` itself takes the gate,
+    so this asserts that rather than enumerating call sites.
+    """
+    from app.engine.engine import BacktestEngine
+
+    # The call, not the name: the docstring names the gate too, so a bare
+    # substring check passes on prose alone after the `with` is deleted.
+    source = inspect.getsource(BacktestEngine.run)
+    assert "with one_backtest_in_flight():" in source, (
+        "BacktestEngine.run no longer holds the engine gate; every path that "
+        "builds an engine directly is ungated again (#1990)"
+    )
+    # The body moved to ``_run`` so ``run`` could stay a thin wrapper. If a
+    # future edit inlines it back, the gate has to come with it.
+    assert "self._run(" in source
+
+
+def test_an_engine_built_anywhere_still_runs_one_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Behavioural counterpart: two engines, built directly, never overlap."""
+    from app.engine.engine import BacktestEngine
+
+    concurrent: list[int] = []
+    running = 0
+    lock = threading.Lock()
+    queued = threading.Semaphore(0)
+
+    first_inside = threading.Event()
+
+    def counting_run(self: object, strategy: object, **kwargs: object) -> str:
+        nonlocal running
+        with lock:
+            running += 1
+            concurrent.append(running)
+            first = len(concurrent) == 1
+        if first:
+            # Hold until the second engine has been started and had its chance
+            # to overlap. Without this the two could run strictly in sequence
+            # and pass even with the gate removed.
+            first_inside.set()
+            assert queued.acquire(timeout=5), "the second engine neither ran nor queued"
+        with lock:
+            running -= 1
+        return "result"
+
+    monkeypatch.setattr(BacktestEngine, "_run", counting_run)
+
+    def a_direct_engine_run() -> None:
+        engine = BacktestEngine.__new__(BacktestEngine)  # no reader needed; _run is stubbed
+        engine.run(object())  # type: ignore[arg-type]
+
+    first_thread = _spawn(a_direct_engine_run, name="engine-0")
+    # An Event, not a spin: a busy-wait here hangs CI with no output when the
+    # gate is removed, and a hang is strictly worse than a failure.
+    assert first_inside.wait(timeout=5), "the first engine never started"
+    second_thread = _spawn(a_direct_engine_run, name="engine-1")
+
+    queued.release()
+    _join(first_thread, second_thread)
+
+    assert max(concurrent) == 1, f"{max(concurrent)} engines ran at once"
+    assert len(concurrent) == 2
 
 
 def test_only_the_engine_router_may_call_the_ungated_core() -> None:

@@ -29,6 +29,7 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalSymbolExecutor
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 from app.engine.framework.insight_manager import InsightManager
+from app.engine.run_gate import one_backtest_in_flight
 from app.engine.strategy.base import Strategy, StrategyContext
 from app.utils.timestamps import ny_datetime
 
@@ -101,7 +102,28 @@ class BacktestEngine:
         self.sizing_model = sizing_model or SimpleFloorSizing()
 
     def run(self, strategy: Strategy, *, evaluation_start_ms: int | None = None) -> BacktestResult:
-        """Execute ``strategy`` over its configured window.
+        """Execute ``strategy`` over its configured window, one run at a time.
+
+        This is the seam every engine run passes through, so it is where the
+        process-wide "one backtest in flight" gate is held (#1990). The gate
+        used to sit at ``routers.engine.execute_engine_backtest`` alone, which
+        counted five callers and missed three — ``/api/spec-strategy/backtest``,
+        ``/api/research-runs`` and ``/api/lean-sidecar/cross-reconcile`` each
+        built an engine of their own, so a run on any of them could still pair
+        with a gated run and reach the ~480 MB × 2 footprint that killed
+        uvicorn (#1957, #1944). Holding it here makes the count true by
+        construction rather than by remembering to route through one function.
+
+        The router keeps its own, wider hold: a run's memory is live through
+        auto-fetch and persistence, not just the simulation. That hold is the
+        outer one, and this acquire passes through it — see
+        ``run_gate.one_backtest_in_flight``.
+        """
+        with one_backtest_in_flight():
+            return self._run(strategy, evaluation_start_ms=evaluation_start_ms)
+
+    def _run(self, strategy: Strategy, *, evaluation_start_ms: int | None = None) -> BacktestResult:
+        """The simulation itself, under the gate :meth:`run` holds.
 
         ``evaluation_start_ms`` (``int64 ms UTC``, an ET-midnight session
         anchor) splits the window into a warmup and an evaluation phase. Bars

@@ -10,29 +10,58 @@ accounting, and three at once would repeat the failure #1944 fixed — the
 kernel kills uvicorn, the worker threads go with it, and the jobs behind them
 read ``running`` until their record expires.
 
-**What this gate covers, exactly.** It is held by
-``routers.engine.execute_engine_backtest``, and so by its five callers: the
-sync ``POST /api/engine/backtest`` endpoint, the Strategy Lab job worker, Grid
-Search and Walk-Forward cells, and the Recency runner. It is *not* the only
-way to reach ``BacktestEngine``. Three production paths still construct and run
-the engine without passing through here:
+**What this gate covers.** ``BacktestEngine.run`` holds it, so every engine
+run is counted by construction rather than by remembering to route through one
+function. It was first held only by
+``routers.engine.execute_engine_backtest``, which covered five callers and
+missed three — ``/api/spec-strategy/backtest``, ``/api/research-runs`` and
+``/api/lean-sidecar/cross-reconcile`` each built an engine of their own, so a
+run on any of them could still pair with a gated run and reach the footprint
+that killed uvicorn (#1990).
 
-* ``routers/spec_strategy.py`` (``POST /api/spec-strategy/backtest``)
-* ``research/runs/runner.py`` (``POST /api/research-runs``)
-* ``lean_sidecar/cross_runner.py`` (``POST /api/lean-sidecar/cross-reconcile``)
-
-so a run on one of those, concurrent with a gated run, still reaches #1957's
-footprint. Closing that gap means moving the gate down into
-``BacktestEngine.run`` — the seam every engine run really does pass through —
-which first requires those three callers to stop running the engine on the
-event loop (the last two do today, which is a separate pre-existing bug). That
-is tracked in #1990; do not read this module as proof the invariant is closed.
+``execute_engine_backtest`` keeps its own, wider hold. A run's memory is live
+well beyond the simulation: the auto-fetch that precedes it, and the response
+holding the equity curve while the row is written. Releasing at
+``engine.run``'s boundary would let a second run allocate on top of the first's
+retained half-gigabyte, which is the thing being prevented. So the two holds
+nest, and the inner one passes through — see the re-entrancy note below.
 
 **It queues; it does not refuse.** A sweep must run all of its cells, so a
 refusal would turn a memory guard into failed work. The half-gigabyte belongs
 to the run in flight, not to the ones waiting. The queue is unbounded, which is
 the right trade for a single-operator research tool: the cost of a waiter is
 its thread, and a bound would have to reject work that a human is watching.
+
+**Re-entrancy, and the one rule a maintainer has to check.** The gate is an
+``RLock``, so a thread that already holds it passes straight through: the
+outer hold provides the exclusivity the inner acquire would ask for. That
+ownership is per *thread*, which gives the rule:
+
+    A thread holding the gate must never hand engine work to another thread
+    and wait for it.
+
+That second thread does not queue — it wedges, permanently and silently. It
+blocks in ``RLock.acquire``, which is a C-level wait no ``asyncio.wait_for``
+timeout can rescue, and its caller is holding the very lock it waits on. The
+process does not error; it stops.
+
+Note what the rule does *not* say. Reaching the engine through
+``asyncio.to_thread`` is fine and three callers do exactly that
+(``post_cross_reconcile``, ``run_spec_against_bars_and_persist``,
+``run_shadow_trace_evaluation``) — they hop off the event loop *before* taking
+the gate, and hold nothing while they wait. ``scripts/run_replay_proof.py``
+reaches ``run_shadow_trace_evaluation`` the same way and is likewise safe. The
+hazard is only the hop taken *while holding*, and today nothing does that: the
+call is synchronous from the moment the gate is taken. Adding a ``to_thread``,
+a ``run_in_thread`` or a background-loop submit anywhere inside a gated call
+is the edit that breaks this.
+
+One thing re-entrancy gives up: a genuine backtest inside a backtest — an
+engine run started from within another engine run on the same thread — now
+passes through, so two runs' memory would be live while the gate reports one.
+Nothing constructs an engine from inside a strategy, and the guard that would
+catch it is the hand-rolled owner tracking ``RLock`` replaced. Stated so the
+trade is visible rather than discovered.
 
 A waiter is never silent and never uninterruptible:
 
@@ -49,11 +78,15 @@ Two costs worth naming. The wait is not FIFO: CPython wakes a waiter, but a
 thread calling ``acquire(blocking=False)`` in the window before that waiter
 retakes the condition lock takes the slot first, so a sweep releasing and
 re-acquiring per cell can in principle barge past a queued Lab run. It does
-real work between cells, so the waiter wins in practice. And a queued sync
-``/backtest`` request holds one of anyio's 40 threadpool tokens for the whole
-wait; enough of them would starve the service's other sync routes. The
-interactive path is the jobs worker, which has its own thread, so exposure is
-low — but it is a real edge of "queue rather than refuse".
+real work between cells, so the waiter wins in practice. And a queued caller holds a
+worker thread for the whole wait. A sync ``/backtest`` request holds one of
+anyio's 40 tokens; the three ``asyncio.to_thread`` callers hold one of the
+loop's *default* executor, which is ``min(32, cpu + 4)`` — **six** on the
+two-CPU container. Six concurrent cross-reconciles would occupy all of them
+(one running, five queued) and stall every other ``to_thread`` route in the
+process. ``/health`` is ``async def`` with no thread hop, so the container
+stays up; still, if that ever bites, ``anyio.CapacityLimiter`` is the idiom
+this repo already uses for it (``app/broker/alpaca/client.py``).
 
 The whole call is gated, rather than just the engine run. At the front, the
 auto-fetch immediately precedes the reader in the same call, so gating from the
@@ -75,11 +108,13 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-# Bounded, so a double release raises instead of quietly raising the permit
-# count to two and letting exactly the concurrency this module exists to
-# prevent through.
-_gate = threading.BoundedSemaphore(1)
-_held_by_this_thread = threading.local()
+# Re-entrant, because the two holds nest: the router's spans auto-fetch and
+# persistence, the engine's covers the run itself, and both are on one thread.
+# ``RLock`` owns that per-thread bookkeeping — a hand-rolled ``threading.local``
+# flag beside a semaphore said the same thing in fifteen more lines, and said
+# it in a comment rather than in the primitive. A release by a thread that does
+# not own it raises, as a double release did before.
+_gate = threading.RLock()
 
 # How often a waiter surfaces to run ``while_waiting``. Short enough that a
 # cancel feels immediate, long enough to be free next to a run measured in
@@ -99,8 +134,12 @@ def one_backtest_in_flight(
     held — so a caller that gets straight through pays nothing and reports
     nothing. ``while_waiting`` then fires roughly every
     :data:`WAIT_POLL_SECONDS` until the gate is taken; raising from either
-    abandons the wait, and neither can leak the gate because the semaphore is
-    not held while they run.
+    abandons the wait, and neither can leak the gate because the lock is not
+    held while they run.
+
+    A thread that already holds the gate re-acquires it without waiting, and
+    reports nothing — the nesting of the router's hold and the engine's is the
+    normal case, not a queue.
     """
     try:
         asyncio.get_running_loop()
@@ -113,13 +152,6 @@ def one_backtest_in_flight(
         # gate prevents. Run the backtest in a thread instead.
         raise RuntimeError("one_backtest_in_flight was entered from a running event loop; run the backtest in a thread")
 
-    if getattr(_held_by_this_thread, "held", False):
-        # Re-entering would block on a semaphore this thread already holds and
-        # hang forever. Nothing nests today; this makes it a loud failure if
-        # something starts to. It only catches nesting that stays on one
-        # thread — a nested run reached through ``asyncio.to_thread`` or the
-        # background loop lands elsewhere and would deadlock silently.
-        raise RuntimeError("the engine gate is already held by this thread; backtests must not nest")
 
     if not _gate.acquire(blocking=False):
         logger.info("[ENGINE] Queued behind the backtest in flight (waiter=%s)", threading.current_thread().name)
@@ -129,9 +161,7 @@ def one_backtest_in_flight(
             while_waiting()
         logger.info("[ENGINE] Waited %.1fs for the backtest in flight", time.monotonic() - waited_from)
 
-    _held_by_this_thread.held = True
     try:
         yield
     finally:
-        _held_by_this_thread.held = False
         _gate.release()

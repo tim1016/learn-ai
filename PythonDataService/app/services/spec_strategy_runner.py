@@ -21,6 +21,7 @@ prefer (Polygon, LEAN data dump, synthetic).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -33,6 +34,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode, OrderEvent
+from app.engine.run_gate import one_backtest_in_flight
 from app.engine.strategy.spec import SpecAlgorithm, load_spec_from_path
 from app.services.engine_persistence import EngineTrade, persist_engine_run
 from app.utils.timestamps import datetime_at_ms
@@ -198,37 +200,44 @@ def run_spec_against_bars(
     sizing and PnL computation use the same cash value that the persist layer
     records. When ``None``, the spec's default (typically 100 000) is used.
     """
-    spec = load_spec_from_path(spec_path)
-    captured: list[OrderEvent] = []
-    strategy = _RecordingSpecAlgorithm(spec, fill_events=captured)
-    strategy._symbol_name = symbol  # type: ignore[attr-defined]  # match symbol of provided bars
+    # The gate spans the whole call, not just ``engine.run``. The run's
+    # memory outlives the simulation — the result holds every bar and this
+    # function shapes reports from it — so releasing at the engine's boundary
+    # would let a second run allocate on top of what this one still holds.
+    # ``BacktestEngine.run`` takes the gate again inside; that acquire passes
+    # through this one (#1990).
+    with one_backtest_in_flight():
+        spec = load_spec_from_path(spec_path)
+        captured: list[OrderEvent] = []
+        strategy = _RecordingSpecAlgorithm(spec, fill_events=captured)
+        strategy._symbol_name = symbol  # type: ignore[attr-defined]  # match symbol of provided bars
 
-    orig_init = strategy.initialize
+        orig_init = strategy.initialize
 
-    def _patched_init() -> None:
-        orig_init()
-        strategy.set_start_date(*start_date)
-        strategy.set_end_date(*end_date)
-        if starting_cash is not None:
-            strategy.set_cash(float(starting_cash))
+        def _patched_init() -> None:
+            orig_init()
+            strategy.set_start_date(*start_date)
+            strategy.set_end_date(*end_date)
+            if starting_cash is not None:
+                strategy.set_cash(float(starting_cash))
 
-    strategy.initialize = _patched_init  # type: ignore[method-assign]
+        strategy.initialize = _patched_init  # type: ignore[method-assign]
 
-    reader = InMemoryDataReader(bars=bars)
-    engine = BacktestEngine(
-        data_source=reader,
-        fill_model=FillModel(mode=fill_mode, commission_per_order=commission_per_order),
-    )
-    engine.run(strategy)
+        reader = InMemoryDataReader(bars=bars)
+        engine = BacktestEngine(
+            data_source=reader,
+            fill_model=FillModel(mode=fill_mode, commission_per_order=commission_per_order),
+        )
+        engine.run(strategy)
 
-    trades = pair_engine_fills(captured)
-    total_fees = sum((e.fee for e in captured), start=Decimal("0"))
+        trades = pair_engine_fills(captured)
+        total_fees = sum((e.fee for e in captured), start=Decimal("0"))
 
-    return SpecRunResult(
-        trades=trades,
-        total_fees=total_fees,
-        captured_events=captured,
-    )
+        return SpecRunResult(
+            trades=trades,
+            total_fees=total_fees,
+            captured_events=captured,
+        )
 
 
 async def run_spec_against_bars_and_persist(
@@ -258,8 +267,12 @@ async def run_spec_against_bars_and_persist(
     resolved_name = strategy_name or spec.name
 
     # Re-run by calling the sync version; it doesn't need to re-load the
-    # spec since load_spec_from_path is cheap and stateless.
-    result = run_spec_against_bars(
+    # spec since load_spec_from_path is cheap and stateless. In a thread: a
+    # full backtest is seconds of CPU, and the engine gate refuses an
+    # event-loop caller outright — a blocking acquire on the app loop would
+    # stall every route, ``/health`` included (#1990).
+    result = await asyncio.to_thread(
+        run_spec_against_bars,
         spec_path=spec_path,
         symbol=symbol,
         bars=bars,
