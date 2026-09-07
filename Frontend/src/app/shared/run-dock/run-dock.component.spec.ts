@@ -121,9 +121,21 @@ describe('RunDockComponent', () => {
     const root = document.documentElement;
     expect(root.style.getPropertyValue('--run-dock-height')).toBe('36px');
 
-    fixture.nativeElement.querySelector<HTMLButtonElement>('.run-dock__strip')?.click();
+    const strip = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.run-dock__strip');
+    if (!strip) throw new Error('Expected the collapsed run dock strip');
+    strip.click();
     fixture.detectChanges();
     expect(root.style.getPropertyValue('--run-dock-height')).toBe('320px');
+  });
+
+  it('retracts --run-dock-height when it leaves the page, so a page without a dock is not sized against one', () => {
+    const { fixture } = configure('true');
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--run-dock-height')).toBe('320px');
+
+    fixture.destroy();
+
+    expect(root.style.getPropertyValue('--run-dock-height')).toBe('');
   });
 
   it('reflects the source headline in both collapsed and expanded modes', () => {

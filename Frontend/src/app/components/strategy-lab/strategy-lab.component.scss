@@ -5,11 +5,11 @@
 
 .strategy-lab {
   // The shell's top bar (this page renders inside it, not above it) + the
-  // tab list + whatever the run dock occupies right now. The dock is
-  // position:fixed and publishes its height as --run-dock-height (36px
-  // collapsed, 320px expanded); reserving it keeps the rail's last control
-  // reachable instead of hidden under the expanded dock (#1974).
-  --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + var(--run-dock-height, 36px));
+  // tab panel's top and bottom padding + the tab list. The bottom padding
+  // includes whatever the run dock occupies right now (see .p-tabpanel), so
+  // the wide workbench is sized above the dock and the narrow workbench and
+  // History, which flow in the page, pad clear of it (#1974).
+  --strategy-lab-chrome: calc(var(--topbar-h) + var(--page-pad-y) * 2 + 48px + var(--run-dock-height, 0px));
 
   display: grid;
   gap: var(--space-4);
@@ -60,7 +60,9 @@
 
 :host ::ng-deep .p-tabpanel {
   display: block;
-  padding: var(--page-pad-y) var(--page-pad-x);
+  // The dock is position:fixed and publishes --run-dock-height (36px
+  // collapsed, 320px expanded, unset when no dock is on the page).
+  padding: var(--page-pad-y) var(--page-pad-x) calc(var(--page-pad-y) + var(--run-dock-height, 0px));
   background: transparent;
 }
 

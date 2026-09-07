@@ -3,25 +3,30 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // The run dock is position:fixed at the viewport bottom and publishes its
-// current height (36px collapsed, 320px expanded) as --run-dock-height on
-// :root. Every page that hosts <app-run-dock> must reserve that height, or
-// the last controls hide under the expanded dock (#1974).
+// current height as --run-dock-height on :root (retracted with the dock).
+// Every page that hosts <app-run-dock> must reserve that height in its own
+// stylesheet, or the last controls hide under the expanded dock (#1974).
+// Hosts are found, not listed, so the next page that mounts the dock and
+// forgets is caught rather than skipped.
 
-const HOSTS = [
-  ['src/app/components/strategy-lab/strategy-lab.component.scss', 'Strategy Lab'],
-  ['src/app/components/data-lab/data-lab.component.scss', 'Data Lab'],
-];
+const appRoot = path.resolve(__dirname, '../src/app');
+const hosts = fs
+  .readdirSync(appRoot, { recursive: true })
+  .filter((entry) => entry.endsWith('.component.html'))
+  .map((entry) => path.join(appRoot, entry))
+  .filter((file) => fs.readFileSync(file, 'utf8').includes('<app-run-dock'));
 
-for (const [relativePath, label] of HOSTS) {
-  const source = fs.readFileSync(path.resolve(__dirname, '..', relativePath), 'utf8');
+assert.ok(hosts.length > 0, 'no template mounts <app-run-dock>; the scan is broken');
+
+for (const template of hosts) {
+  const stylesheet = template.replace(/\.component\.html$/, '.component.scss');
+  const relative = path.relative(appRoot, template);
+  assert.ok(fs.existsSync(stylesheet), `${relative} hosts the run dock but has no component stylesheet to reserve its height in.`);
   assert.match(
-    source,
+    fs.readFileSync(stylesheet, 'utf8'),
     /var\(--run-dock-height/,
-    `${label} (${relativePath}) hosts the run dock and must reserve var(--run-dock-height) instead of a fixed strip height.`,
+    `${relative} hosts the run dock; its stylesheet must reserve var(--run-dock-height) instead of a fixed strip height.`,
   );
 }
 
-const dock = fs.readFileSync(path.resolve(__dirname, '../src/app/shared/run-dock/run-dock.component.ts'), 'utf8');
-assert.match(dock, /setProperty\('--run-dock-height'/, 'run-dock.component.ts must publish --run-dock-height for its hosts.');
-
-process.stdout.write('run dock space guard ok\n');
+process.stdout.write(`run dock space guard ok (${hosts.length} hosts)\n`);
