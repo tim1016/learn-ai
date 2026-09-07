@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -450,9 +452,22 @@ async def lifespan(app: FastAPI):
     # Start the shared fleet snapshot before serving its REST/SSE readers.
     # Per-bot state is owned by the Alpaca Broker V2 projection runtime above.
 
+    # Last, so it measures the loop that is about to serve requests: one timer
+    # wakeup a second, reporting any that arrives late. A stall on this loop
+    # used to reach an operator only as a healthcheck streak, an expiring
+    # execution lease, or bots dying with FEED_DEATH — every symptom at one
+    # remove from the cause and none of them naming a duration (#1943, #1921,
+    # #1942).
+    from app.utils.loop_lag import watch_loop_lag
+
+    loop_lag_task = asyncio.create_task(watch_loop_lag(), name="loop-lag-monitor")
+
     try:
         yield
     finally:
+        loop_lag_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await loop_lag_task
         if sovereign_equity_snapshot_scheduler is not None:
             await sovereign_equity_snapshot_scheduler.stop()
         # Stop the in-container bot tasks first — they consume the shared
