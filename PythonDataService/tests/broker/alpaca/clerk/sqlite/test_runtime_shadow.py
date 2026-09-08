@@ -11,9 +11,13 @@ from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityEr
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
+from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger, ShadowSessionRecorder
+from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.services.session_authority import declared_session_bounds
 from app.services.source_bar_ledger import SourceBarLedger
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import (
@@ -22,7 +26,7 @@ from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import (
     _closed_clock,
     _stream_health,
 )
-from tests.broker.alpaca.clerk.test_shadow_broker import _LiveRead, _retain
+from tests.broker.alpaca.clerk.test_shadow_broker import DAY, _Clock, _LiveRead, _retain
 
 ACCOUNT_ID = "shadow:9LIVE0001"
 SID = "spy-bot"
@@ -200,3 +204,62 @@ async def test_a_closed_clock_admits_a_shadow_extended_enter_when_the_feed_is_pr
     )
 
     assert state is not EffectOperationState.REJECTED, explanation
+
+
+async def test_a_shadow_sweep_pass_journals_the_trading_day(tmp_path: Path) -> None:
+    """The recorder is reached through the sweep's own ``on_result``, not only unit-called.
+
+    Three properties nothing else pins: the listener really is composed into
+    ``ReconciliationSweep``; exactly one ``day_opened`` row is appended for a
+    trading-day instant; and the publisher runs *before* the listener observes
+    it, so the facade carries the verdict the journal recorded.
+    """
+    ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path
+    )
+    window = ports.read.capabilities().extended_hours_window
+    # Both instants come from the canonical calendar, never the wall clock and
+    # never a session-time literal: one minute into a known trading day, then
+    # that day's declared close.
+    open_ms = session_open_ms_utc(DAY)
+    bounds = declared_session_bounds(DAY, window)
+    assert bounds is not None
+    clock = _Clock(open_ms + 60_000)
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=ports.read,
+        trade=ports.trade,
+        authority_kind="shadow",
+        account_mode="live",
+    )
+    recorder = ShadowSessionRecorder(
+        ledger=ShadowSessionLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID),
+        window=window,
+        clock=clock,
+    )
+    publish = facade.publish_sweep_reconciliation
+    sweep = ReconciliationSweep(
+        repo=repo,
+        read=ports.read,
+        trade=ports.trade,
+        intake=facade.intake,
+        on_result=lambda result: recorder.record(publish(result)),
+    )
+    try:
+        assert await sweep._run_one_pass() is True
+        opened = ShadowSessionLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID).rows()
+        assert [(row.kind, row.verdict) for row in opened] == [("day_opened", "clean")]
+        # The sweep-attributed publisher ran before the recorder observed the
+        # result: only `publish_sweep_reconciliation` stamps this timestamp.
+        assert facade.recovery_evaluation_observation().last_pass_completed_at_ms is not None
+
+        clock.now_ms = bounds.close_ms
+        assert await sweep._run_one_pass() is True
+    finally:
+        await sweep.stop()
+        repo.close()
+
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
+    assert [row.kind for row in ledger.rows()] == ["day_opened", "session_closed_clean"]
+    assert ledger.completed_session_opens() == (open_ms,)
