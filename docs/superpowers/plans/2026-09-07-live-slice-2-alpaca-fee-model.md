@@ -1780,6 +1780,9 @@ State the exact commands, their exit codes, test counts, and any baseline-confir
 
 ## Rulings recorded while planning (carry into the SDD ledger)
 
+- Superseded by fix wave 1 (thermo MAJOR 1): the SQLite pager `session_fills` was deleted
+  in favour of `SqliteEconomicProjectionReader.account_fill_window`; `SessionFill` is now
+  built from `FillRecord`.
 - **Per-component pinning, not a single earliest date.** SEC and TAF are pinned back to 2024; CAT only from 2026-09-01. A single cut-off would make the model useless for any 2024–2026 backtest; a fabricated CAT history would violate "numerical claims require receipts". Cost if wrong: a `rate_unpinned` verdict on historical sessions until CAT history is pinned.
 - **Buys never owe SEC/TAF, so those are `0` for buys even where the sell rate is unpinned.** The formula is identically zero; refusing would be false uncertainty.
 - **Canonical settlement = end-of-day per-component ceiling** (the fee schedule, the primary source). The support page's per-trade reading is admitted through the tolerance, not a second policy. Cost if wrong: a `drift` on the first live session that the reconciliation itself will explain.

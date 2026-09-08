@@ -46,7 +46,10 @@ rounding can only push the observed charge *up* (`Σ ceil(aᵢ) ≥ ceil(Σ aᵢ
 bound admits the per-trade reading (at most one extra cent per sell for SEC and one for
 TAF) while only the three end-of-day component ceilings can explain an observation below
 the model. A live session decides which reading is true; tighten the upper bound to
-`$0.03` once observed sessions agree with one reading.
+`$0.03` once observed sessions agree with one reading. A wide band proves little on a
+high-sell-count session — the tolerance can dwarf the predicted charge itself — so the
+first validating live sessions must be low-sell-count ones, and the `$0.03` tightening
+happens once those sessions agree with one reading.
 
 ## Reconciliation
 
@@ -55,8 +58,11 @@ calendar's session open of a trading day, ET-anchored `int64 ms UTC`) prices eve
 *effective* SQLite fill dated that ET calendar day, sums the `FEE` activities Alpaca posted
 for that date, and returns a verdict: `within_tolerance`, `drift`, `pending` (no `FEE`
 posted yet, within 24 h after the day ends), `unobserved` (fills but no `FEE` after the
-grace period, or a `FEE` row without `net_amount`), `no_fills`, `rate_unpinned`, or
-`unavailable` (no active SQLite Clerk, or a broker other than Alpaca). Implementation:
+grace period, a `FEE` row without `net_amount`, or an incomplete activity read), `no_fills`,
+`rate_unpinned`, or `unavailable` (no active SQLite Clerk, or the SQLite Clerk refused the
+fill-window read — a row-count guard or a malformed row). A broker other than Alpaca is not
+`unavailable`: the endpoint refuses it before any verdict is computed, with HTTP 404 and
+reason `fee_reconciliation_unsupported_broker`. Implementation:
 `PythonDataService/app/services/alpaca_fee_reconciliation.py`.
 
 **Completeness is a precondition for comparing.** The activity read is bounded — the
@@ -93,4 +99,7 @@ The observed side is compared against the model through the asymmetric band abov
   `BrokerActivity` (today only the day's total is compared).
 - Port-level activity-read coverage signal (`covered_from_ms`) so the completeness check
   stops depending on an older activity existing.
+- Fills placed outside the Clerk (external orders) are not priced and would also show as
+  drift; consult the window's external-fill existence flag (`external_fill_exists` in the
+  economic projection) and downgrade the comparison when set.
 - CAT rate history before 2026-09-01.
