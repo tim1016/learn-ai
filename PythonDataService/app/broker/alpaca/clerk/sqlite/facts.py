@@ -218,6 +218,18 @@ class ExitAcceptedFacts:
         return cls(**json.loads(facts_json))
 
 
+# ADR 0059 D5.3: the regular-session leg shape. A reducing order at these
+# values omits them from its canonical JSON, so every row written before
+# slice 3 — and every regular-session row written after it — hashes
+# identically (hash-chained schema evolution).
+_REDUCING_SHAPE_DEFAULTS = {
+    "order_type": "market",
+    "time_in_force": "day",
+    "limit_price": None,
+    "extended_hours": False,
+}
+
+
 @dataclass(frozen=True)
 class ExitReducingOrderCreatedFacts:
     """``EXIT_REDUCING_ORDER_CREATED`` (#1379): the immutable inputs
@@ -225,14 +237,26 @@ class ExitReducingOrderCreatedFacts:
     for the reducing/close order — symbol and side are needed to place the
     order; ``quantity`` is the Clerk-proven remaining attributed quantity at
     the moment cancellation resolved (the acceptance criterion this fact
-    exists to prove — see ``docs/references/clerk-exit-reducing-quantity.md``)."""
+    exists to prove — see ``docs/references/clerk-exit-reducing-quantity.md``).
+    ``order_type``, ``time_in_force``, ``limit_price`` and ``extended_hours``
+    carry the decision's session-dependent leg shape (ADR 0059 D5.3), so a
+    resumed submission rebuilds the identical leg without being told it
+    again."""
 
     symbol: str
     side: str
     quantity: float
+    order_type: str = "market"
+    time_in_force: str = "day"
+    limit_price: float | None = None
+    extended_hours: bool = False
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        payload = asdict(self)
+        for name, default in _REDUCING_SHAPE_DEFAULTS.items():
+            if payload[name] == default:
+                payload.pop(name)
+        return canonicalize(payload)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExitReducingOrderCreatedFacts:

@@ -13,7 +13,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
@@ -35,6 +35,11 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationVerdict,
     RecoveryEvaluationObservation,
+)
+from app.broker.alpaca.clerk.program_leg import (
+    ProgramLegPolicy,
+    ProgramLegRefused,
+    shape_program_leg,
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
@@ -101,6 +106,7 @@ from app.broker.alpaca.clerk.stream_health import (
     StreamHealthGate,
     stream_health_refusal,
 )
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -128,6 +134,8 @@ _WORKING_ORDER_STATES = frozenset(
     }
 )
 _ENCODED_DECISION_PREFIX = "encoded-"
+# An EXIT reduces the program's own position, so its leg is the opposite side.
+_REDUCING_SIDE: Final = {OrderSide.BUY: OrderSide.SELL, OrderSide.SELL: OrderSide.BUY}
 logger = logging.getLogger(__name__)
 
 
@@ -196,6 +204,7 @@ class SqliteAlpacaClerkFacade:
         intake: ReentrantAsyncLock | None = None,
         authority_kind: Literal["sqlite", "synthetic"] = "sqlite",
         account_mode: Literal["paper", "live"],
+        program_leg_policy: ProgramLegPolicy | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -212,6 +221,10 @@ class SqliteAlpacaClerkFacade:
         # caller positively learned from the broker at activation, never a
         # guess from the account-id shape.
         self._account_mode = account_mode
+        # ADR 0059 D5.3: what this authority may shape an extended-session leg
+        # from. Passed in, never read off the ports here — the composition root
+        # owns which capabilities and which operator allowances apply.
+        self._program_leg_policy = program_leg_policy or ProgramLegPolicy.regular_only()
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -245,6 +258,14 @@ class SqliteAlpacaClerkFacade:
     @property
     def intake(self) -> ReentrantAsyncLock:
         return self._intake
+
+    @property
+    def program_leg_policy(self) -> ProgramLegPolicy:
+        return self._program_leg_policy
+
+    @property
+    def extended_hours_window(self) -> ExtendedHoursWindow | None:
+        return self._program_leg_policy.window
 
     def channel_health_snapshot(
         self,
@@ -686,9 +707,25 @@ class SqliteAlpacaClerkFacade:
                     ),
                 )
             )
-            operation_leg = BrokerOrderLeg(
+            program_side = OrderSide.BUY if entry.position == "long" else OrderSide.SELL
+            leg_side = program_side if purpose is EffectPurpose.ENTER else _REDUCING_SIDE[program_side]
+            try:
+                shape = shape_program_leg(
+                    side=leg_side,
+                    purpose=purpose,
+                    decision_session="rth" if use_rth else "extended",
+                    decision_bar=retained_source_bar,
+                    policy=self._program_leg_policy,
+                )
+            except ProgramLegRefused as exc:
+                return rejected(
+                    reason_code=exc.reason_code,
+                    explanation=exc.explanation,
+                    next_step=exc.next_step,
+                )
+            operation_leg = shape.apply(
                 symbol=entry.instrument.underlying,
-                side=(OrderSide.BUY if entry.position == "long" else OrderSide.SELL),
+                side=leg_side,
                 quantity=float(quantity * entry.qty_ratio),
             )
             if purpose is EffectPurpose.ENTER:
@@ -738,6 +775,7 @@ class SqliteAlpacaClerkFacade:
                             now_ms=self._repo.clock(),
                             symbol=entry.instrument.underlying,
                             account_id=capability_account_id,
+                            extended_window=self._program_leg_policy.window,
                         ),
                     ):
                         return rejected(
@@ -862,6 +900,7 @@ class SqliteAlpacaClerkFacade:
             self._repo,
             accepted=accepted_exit,
             trade=trade,
+            reducing_shape=shape,
         )
         order_refs = tuple(
             ref

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 
+from app.broker.alpaca.clerk.program_leg import REGULAR_SESSION_SHAPE, LegShape
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
@@ -47,14 +49,25 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 
+logger = logging.getLogger(__name__)
+
 
 async def resolve_exit(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
     trade: BrokerTradePort,
+    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
-    """Advance one EXIT under one exclusive, attempt-scoped broker claim."""
+    """Advance one EXIT under one exclusive, attempt-scoped broker claim.
+
+    ``reducing_shape`` is the shape the deciding program computed for this
+    EXIT (ADR 0059 D5.3). It applies only when *this* pass is the one that
+    creates the reducing order; every later pass rebuilds the leg from the
+    durable creation facts. Callers with no deciding program — the
+    reconciliation sweep, recovery, the manual paths — pass nothing and get
+    the regular-session market DAY leg.
+    """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     if effect.state in ("succeeded", "failed", "rejected"):
@@ -72,6 +85,7 @@ async def resolve_exit(
             repo,
             effect_operation_id=effect_operation_id,
             broker=broker,
+            reducing_shape=reducing_shape,
         )
     finally:
         repo.release_operation_claim(effect_operation_id=effect_operation_id, token=claim.token)
@@ -122,6 +136,7 @@ async def _resolve_claimed(
     *,
     effect_operation_id: str,
     broker: ClaimedBrokerIO,
+    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -174,6 +189,7 @@ async def _resolve_claimed(
             effect_operation_id=effect_operation_id,
             symbol=symbol,
             quantity=remaining_qty,
+            shape=reducing_shape,
         )
         await _submit_reducing_order(
             repo,
@@ -462,6 +478,7 @@ def _create_reducing_order(
     effect_operation_id: str,
     symbol: str,
     quantity: float,
+    shape: LegShape | None,
 ) -> OrderResource:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -470,10 +487,30 @@ def _create_reducing_order(
         build_bot_order_namespace(effect.strategy_instance_id),
         _deterministic_intent_id(effect_operation_id),
     )
+    # The shape was priced for the side the deciding program expected to
+    # reduce. Cancellation can resolve to the other one; a limit priced for
+    # the wrong side would be unmarketable, so the regular-session leg —
+    # which is always executable — takes over.
+    resolved = REGULAR_SESSION_SHAPE if shape is None else shape
+    if resolved.side is not None and resolved.side.value != side:
+        logger.warning(
+            "Reducing leg shape was priced for the other side; submitting a regular-session market leg instead",
+            extra={
+                "action": "reducing_leg_shape_side_mismatch",
+                "effect_operation_id": effect_operation_id,
+                "shaped_side": resolved.side.value,
+                "reducing_side": side,
+            },
+        )
+        resolved = REGULAR_SESSION_SHAPE
     facts = ExitReducingOrderCreatedFacts(
         symbol=symbol,
         side=side.upper(),
         quantity=abs(quantity),
+        order_type=resolved.order_type.value,
+        time_in_force=resolved.time_in_force.value,
+        limit_price=resolved.limit_price,
+        extended_hours=resolved.extended_hours,
     )
     repo.append_transition(
         TransitionInput(
@@ -543,6 +580,10 @@ async def _submit_reducing_order(
         symbol=facts.symbol,
         side=facts.side.lower(),
         quantity=facts.quantity,
+        order_type=facts.order_type,
+        time_in_force=facts.time_in_force,
+        limit_price=facts.limit_price,
+        extended_hours=facts.extended_hours,
     )
     _append_order_phase(repo, effect_operation_id, reducing, "ORDER_SUBMIT_REQUESTED")
     try:

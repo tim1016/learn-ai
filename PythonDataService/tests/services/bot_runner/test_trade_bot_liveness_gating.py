@@ -265,7 +265,7 @@ def test_closed_liveness_with_extended_phase_proven_does_not_block_entry(
     monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness) is False
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, None) is False
 
 
 def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
@@ -291,7 +291,7 @@ def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
     monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: False)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness) is True
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, None) is True
 
 
 def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding(
@@ -316,7 +316,7 @@ def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding(
     )
     binding = SimpleNamespace(use_rth=True, symbol="SPY")
 
-    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness) is True
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness, None) is True
 
 
 @pytest.mark.asyncio
@@ -358,7 +358,9 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
     monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", liveness)
     seen_account_ids: list[str] = []
 
-    def fake_extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str) -> bool:
+    def fake_extended_phase_proven_at_ms(
+        *, now_ms: int, symbol: str, account_id: str, extended_window: object | None = None
+    ) -> bool:
         seen_account_ids.append(account_id)
         return True
 

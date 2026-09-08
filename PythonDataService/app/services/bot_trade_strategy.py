@@ -330,6 +330,7 @@ def _liveness_blocks_entry(
     binding: BrokerBotBinding,
     capability_account_id: str | None,
     liveness: MarketLivenessFact,
+    extended_window: ExtendedHoursWindow | None,
 ) -> bool:
     """Decide whether the live liveness fact should block this ENTER.
 
@@ -345,12 +346,19 @@ def _liveness_blocks_entry(
     wrong one means the capability lookup never finds a match and every
     extended-hours entry is rejected. ``None`` (no capability account
     resolvable) fails closed — never proven.
+
+    ``extended_window`` is the executing authority's declared extended
+    session (ADR 0059 D5.2). It is not account-scoped, so when one is
+    declared it proves PRE/POST on its own, with no capability lookup.
     """
     return liveness_blocks_entry(
         liveness,
         use_rth=binding.use_rth,
         extended_phase_proven=lambda: extended_phase_proven_at_ms(
-            now_ms=now_ms_utc(), symbol=binding.symbol, account_id=capability_account_id
+            now_ms=now_ms_utc(),
+            symbol=binding.symbol,
+            account_id=capability_account_id,
+            extended_window=extended_window,
         ),
     )
 
@@ -750,9 +758,7 @@ async def run_trade_bot(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
-    # TODO(Task 5): read this through the clerk protocol once it declares the
-    # attribute; ``getattr`` is this task's stopgap only (plan ruling P1).
-    extended_window = getattr(clerk, "extended_hours_window", None)
+    extended_window = clerk.extended_hours_window
     run_feed = (
         feed
         if source_bars is None
@@ -816,7 +822,7 @@ async def run_trade_bot(
         # same way for the same reason.
         if intent.kind is SignalIntentKind.ENTER:
             liveness = market_liveness_fact(binding.symbol, now_ms_utc())
-            if _liveness_blocks_entry(binding, capability_account_id, liveness):
+            if _liveness_blocks_entry(binding, capability_account_id, liveness, extended_window):
                 # Settle the staged candidate as refused. The strategy has not
                 # taken the position — it mutates position custody only in
                 # ``commit_signal_decision``, which never ran — so DISCARD is
@@ -1040,9 +1046,7 @@ async def run_dry_run_bot(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
     )
-    # TODO(Task 5): read this through the clerk protocol once it declares the
-    # attribute; ``getattr`` is this task's stopgap only (plan ruling P1).
-    extended_window = getattr(clerk, "extended_hours_window", None)
+    extended_window = clerk.extended_hours_window
     retained_feed = _RetainedSourceBarFeed(
         feed,
         source_bars,

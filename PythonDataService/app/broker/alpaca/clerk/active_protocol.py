@@ -14,8 +14,10 @@ if TYPE_CHECKING:
         InstanceCustodyProof,
         ReconciliationVerdict,
     )
+    from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.models import OrderResource
+    from app.broker.contract.capabilities import ExtendedHoursWindow
     from app.schemas.action_plan import ActionPlan
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
@@ -44,6 +46,16 @@ class ActiveAlpacaClerk(Protocol):
 
     authority_kind: Literal["sqlite", "synthetic"]
     broker_id: str
+
+    @property
+    def program_leg_policy(self) -> ProgramLegPolicy:
+        """How this authority may shape an extended-session leg (ADR 0059 D5.3)."""
+        ...
+
+    @property
+    def extended_hours_window(self) -> ExtendedHoursWindow | None:
+        """The declared extended session, or ``None`` for a regular-only authority."""
+        ...
 
     async def recover(self) -> None: ...
 

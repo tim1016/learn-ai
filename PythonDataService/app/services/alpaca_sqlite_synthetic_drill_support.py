@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
+from app.broker.alpaca.broker import ALPACA_PAPER_CAPABILITIES
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.fault_injection import (
@@ -15,6 +16,7 @@ from app.broker.alpaca.fault_injection import (
     FrameFaultKind,
     WriteFaultKind,
 )
+from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
 from app.services.account_custody_synthetic_scenarios import SyntheticScenarioId
 
@@ -202,6 +204,16 @@ class SyntheticBroker:
         self.fill_during_cancel_quantity: float | None = None
         self.cancel_started: asyncio.Event | None = None
         self.cancel_release: asyncio.Event | None = None
+
+    def capabilities(self) -> BrokerCapabilities:
+        """The paper descriptor this simulation stands in for, verbatim.
+
+        The drills drive the real boot selector, which reads the executing
+        broker's declared capabilities (ADR 0059 D5.3); answering with
+        anything but Alpaca's own descriptor would rehearse a broker that
+        does not exist.
+        """
+        return ALPACA_PAPER_CAPABILITIES
 
     def proof(self) -> SimulatedBrokerProof:
         return SimulatedBrokerProof(

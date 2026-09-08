@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 
+from app.broker.alpaca.clerk.program_leg import LegShape
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
@@ -328,6 +329,7 @@ async def resolve_accepted_exit(
     *,
     accepted: ExitSubmission,
     trade: BrokerTradePort,
+    reducing_shape: LegShape | None = None,
 ) -> ExitSubmission:
     """Drive a previously accepted EXIT outside the intake decision segment.
 
@@ -338,6 +340,9 @@ async def resolve_accepted_exit(
     here is the F19 fix — the caller (runner or panel) sees an honest
     "accepted, await reconciliation" receipt instead of a crash. TERMINAL
     refusals still raise.
+
+    ``reducing_shape`` carries the deciding program's leg shape through to
+    the reducing order (ADR 0059 D5.3); see :func:`resolve_exit`.
     """
     assert accepted.effect_operation_id is not None
     try:
@@ -345,6 +350,7 @@ async def resolve_accepted_exit(
             repo,
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
+            reducing_shape=reducing_shape,
         )
     except OperationClaimError:
         if accepted.created:

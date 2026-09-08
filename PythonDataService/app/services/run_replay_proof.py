@@ -1124,9 +1124,8 @@ class RunReplayProofService:
         """The active SQLite Clerk's declared extended-hours window, when reachable.
 
         Mirrors ``_receipt_rows``'s live-authority resolution -- ``get_alpaca_clerk``
-        is the only clerk this module can reach today (Task 5 replaces this
-        ``getattr`` stopgap with a protocol attribute, plan ruling P1). Dry Run's
-        synthetic authority and the ``records_for_run`` test seam have no clerk in
+        is the only clerk this module can reach today. Dry Run's synthetic
+        authority and the ``records_for_run`` test seam have no clerk in
         scope here, so they resolve to ``None``; a ``use_rth=False`` binding through
         either path refuses replay in ``_compute`` rather than guessing (Task 4
         review finding 1).
@@ -1134,7 +1133,7 @@ class RunReplayProofService:
         if binding.mode == "dry_run" or self.records_for_run is not None:
             return None
         clerk = get_alpaca_clerk()
-        return getattr(clerk, "extended_hours_window", None)
+        return None if clerk is None else clerk.extended_hours_window
 
     def _skeleton(
         self,
