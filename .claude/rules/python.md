@@ -1,6 +1,6 @@
 # Python rules
 
-Targets Python 3.11+ with FastAPI, Pydantic v2, pandas. Read when writing or editing code under `PythonDataService/`.
+Targets Python 3.12+ (the Dockerfile, CI and ruff `target-version` are all 3.12; PEP 695 generics are in use) with FastAPI, Pydantic v2, pandas. Read when writing or editing code under `PythonDataService/`.
 
 **Authoritative references**:
 - https://fastapi.tiangolo.com
