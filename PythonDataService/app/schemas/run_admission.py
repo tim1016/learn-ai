@@ -51,7 +51,7 @@ class MarketDataAdmissionFact(BaseModel):
     stale: bool | None = None
     active_subscription_count: int | None = Field(default=None, ge=0)
     scheduled_phase: BarSessionPhase = "UNKNOWN"
-    session_authority_source: Literal["ibkr_capability", "nyse_calendar"] | None = None
+    session_authority_source: Literal["ibkr_capability", "nyse_calendar", "broker_declared_window"] | None = None
     extended_phase_proven: bool = False
 
 

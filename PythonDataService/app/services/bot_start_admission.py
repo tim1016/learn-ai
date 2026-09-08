@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_s
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, RecoveryEvaluationObservation
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
@@ -523,12 +524,14 @@ def market_data_admission_fact(
     use_rth: bool,
     capability: SessionDataCapability | None = None,
     account_id: str | None = None,
+    extended_window: ExtendedHoursWindow | None = None,
 ) -> MarketDataAdmissionFact:
     session = session_state_at_ms(
         now_ms=observed_at_ms,
         capability=capability,
         symbol=symbol,
         account_id=account_id,
+        extended_window=extended_window,
     )
     session_fields = {
         "scheduled_phase": session.phase,
@@ -565,6 +568,7 @@ def market_data_admission_fact(
         capability=capability,
         symbol=symbol,
         account_id=account_id,
+        extended_window=extended_window,
     )
     session_fields = {
         "scheduled_phase": session.phase,
