@@ -457,7 +457,7 @@ so they survive a broker change.
   is known rather than foreign, yet blocks ordinary account trading until
   revived, resolved, or explicitly overridden.
 
-## Live account, shadow, and risk envelope (sharpened 2026-09-07)
+## Live account, shadow, and risk envelope (sharpened 2026-09-08)
 
 **Lineage: live.** Decision record: ADR 0059.
 
