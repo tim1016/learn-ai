@@ -204,7 +204,20 @@ def bind_shadow_ports(
     read: BrokerReadPort,
     trade: BrokerTradePort,
 ) -> AccountBoundBrokerPorts:
-    """Create a shadow composition only for the reserved namespace (ADR 0059 D2)."""
+    """Create a shadow composition only for the reserved namespace (ADR 0059 D2).
+
+    The trade port is checked, not trusted: a shadow authority binds only
+    the no-submit port, so the live port its selector still holds in scope
+    cannot be wired here by a later edit that type-checks.
+    """
+    # Local import: ``shadow_broker`` imports this module for the namespace
+    # helpers, so a module-level import would cycle.
+    from app.broker.alpaca.clerk.shadow_broker import NoSubmitAlpacaTradePort
+
+    if not isinstance(trade, NoSubmitAlpacaTradePort):
+        raise AccountAuthorityIdentityError(
+            "shadow authorities bind only the no-submit trade port"
+        )
     return AccountBoundBrokerPorts(
         account_id=require_shadow_account_id(account_id),
         authority_kind="shadow",

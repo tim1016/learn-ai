@@ -7,13 +7,17 @@ caller's positively-learned mode, so the kind derivation takes it as input.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from app.broker.alpaca.broker import ALPACA_LIVE_CAPABILITIES
 from app.broker.alpaca.clerk.account_authority import (
     SHADOW_ACCOUNT_PREFIX,
     SHADOW_EVIDENCE_ACCOUNT_PREFIX,
     AccountAuthorityIdentityError,
     authority_kind_for_account,
+    bind_shadow_ports,
     evidence_account_id_for,
     is_shadow_account_id,
     is_shadow_evidence_account_id,
@@ -22,6 +26,8 @@ from app.broker.alpaca.clerk.account_authority import (
     shadow_account_id_for_live_account,
     shadow_evidence_account_id_for_strategy,
 )
+from app.broker.alpaca.clerk.shadow_broker import NoSubmitAlpacaTradePort, compose_shadow_ports
+from app.broker.contract.capabilities import BrokerCapabilities
 
 
 def test_shadow_prefix_is_reserved_and_distinct_from_sim() -> None:
@@ -81,3 +87,50 @@ def test_evidence_account_id_follows_mode_then_custody_world() -> None:
     # log_only retains into the world's instance namespace exactly as the
     # primary binding authority always did; replay refuses the mode itself.
     assert evidence_account_id_for(mode="log_only", strategy_instance_id="b", custody_kind="real_paper") == "paper:b"
+
+
+class _LiveTradePort:
+    """The live Alpaca port shape: a `submit` that would reach real money."""
+
+    broker_id = "alpaca"
+
+    def capabilities(self) -> BrokerCapabilities:
+        return ALPACA_LIVE_CAPABILITIES
+
+    async def get_account(self) -> None:  # pragma: no cover - never reached
+        raise AssertionError("the live account read must not be reached")
+
+    async def submit(self, leg: object, *, client_order_id: str) -> None:  # pragma: no cover
+        raise AssertionError("LIVE TRADE PORT WAS REACHED")
+
+    async def cancel(self, order_id: str) -> None:  # pragma: no cover
+        raise AssertionError("LIVE CANCEL WAS REACHED")
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> None:  # pragma: no cover
+        return None
+
+
+def test_a_shadow_composition_binds_only_the_no_submit_trade_port(tmp_path: Path) -> None:
+    """The branch's whole safety claim, made unbypassable at the binding.
+
+    ``bind_shadow_ports`` validated the account id and accepted any trade
+    port, so passing the live ``AlpacaBroker`` still in scope at the shadow
+    selector would type-check, lint clean and wire a real-money submit path.
+    """
+    ports = compose_shadow_ports(
+        live_read=_LiveTradePort(),  # type: ignore[arg-type]
+        live_account_id="9LIVE0001",
+        artifacts_root=tmp_path,
+    )
+
+    bound = bind_shadow_ports(
+        account_id=ports.account_id, read=ports.read, trade=ports.trade
+    )
+    assert isinstance(bound.trade, NoSubmitAlpacaTradePort)
+
+    with pytest.raises(AccountAuthorityIdentityError, match="no-submit trade port"):
+        bind_shadow_ports(
+            account_id=ports.account_id,
+            read=ports.read,
+            trade=_LiveTradePort(),  # type: ignore[arg-type]
+        )

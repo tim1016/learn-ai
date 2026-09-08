@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.active_authority import (
     activate_shadow_clerk_authority,
     select_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.shadow_broker import NoSubmitAlpacaTradePort
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
@@ -553,6 +554,14 @@ async def test_activated_live_account_composes_the_shadow_authority(tmp_path: Pa
         # The facade keeps the learned mode privately; a shadow authority
         # answers "live" because it reads a real-money account.
         assert runtime.clerk._account_mode == "live"
+        # The branch's central invariant, asserted on the composed runtime and
+        # not on the class: the facade's guarded trade port wraps the
+        # no-submit port, and the sweep -- which reconciles and cancels --
+        # holds that same object, never the live broker.
+        assert isinstance(runtime.clerk._trade._inner, NoSubmitAlpacaTradePort)
+        assert runtime.sweep is not None
+        assert runtime.sweep._trade._inner is runtime.clerk._trade._inner
+        assert runtime.clerk._trade._inner is not broker
         assert runtime.sqlite_repository is not None
         assert isinstance(runtime.evidence_sink, NullTradeUpdateEvidenceSink)
         # Synthesized custody, not the live account's: `_LiveBroker` has no
