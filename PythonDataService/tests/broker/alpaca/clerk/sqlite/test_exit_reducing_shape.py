@@ -35,9 +35,18 @@ _XH_SELL = LegShape(
 def test_reducing_facts_omit_the_shape_when_it_is_the_regular_default() -> None:
     regular = ExitReducingOrderCreatedFacts(symbol="SPY", side="SELL", quantity=10)
 
-    # Byte-identical to what a pre-slice-3 writer produced, so every sealed
-    # receipt over a regular-session reducing order still hashes the same.
+    # Proves the four shape keys (order_type/time_in_force/limit_price/
+    # extended_hours) are absent from the canonical JSON at their regular-
+    # session defaults. `quantity=10` here is a Python int, so this pins the
+    # int-quantity byte shape specifically; production always folds a float
+    # `remaining_qty` (see the next assertion for the shape it actually writes).
     assert regular.to_facts_json() == '{"quantity":10,"side":"SELL","symbol":"SPY"}'
+    # `_create_reducing_order` always writes a float quantity (`_resolve_claimed`'s
+    # `remaining_qty` is a float subtraction) — this is the byte shape a real
+    # reducing-order-created row hashes, so every sealed receipt over a
+    # regular-session reducing order still hashes the same.
+    float_regular = ExitReducingOrderCreatedFacts(symbol="SPY", side="SELL", quantity=10.0)
+    assert float_regular.to_facts_json() == '{"quantity":10.0,"side":"SELL","symbol":"SPY"}'
     assert (
         ExitReducingOrderCreatedFacts.from_facts_json(regular.to_facts_json()).to_facts_json()
         == regular.to_facts_json()

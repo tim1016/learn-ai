@@ -11,6 +11,7 @@ import pytest
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.program_leg import (
     REGULAR_SESSION_SHAPE,
+    LegShape,
     ProgramLegPolicy,
     ProgramLegRefused,
     shape_program_leg,
@@ -158,3 +159,17 @@ def test_allowance_unset_inside_the_regular_session_still_shapes_a_market_leg() 
         )
         is REGULAR_SESSION_SHAPE
     )
+
+
+def test_apply_rejects_a_side_the_shape_was_not_priced_for() -> None:
+    """Nothing else reconciles ``side`` with ``self.side``; ``apply`` must (review finding 5)."""
+    shape = LegShape(
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.DAY,
+        limit_price=100.10,
+        extended_hours=True,
+        side=OrderSide.BUY,
+    )
+
+    with pytest.raises(ValueError, match="priced for the other side"):
+        shape.apply(symbol="SPY", side=OrderSide.SELL, quantity=1.0)

@@ -47,6 +47,8 @@ class LegShape:
     side: OrderSide | None
 
     def apply(self, *, symbol: str, side: OrderSide, quantity: float) -> BrokerOrderLeg:
+        if self.side is not None and side is not self.side:
+            raise ValueError("this leg shape was priced for the other side")
         return BrokerOrderLeg(
             symbol=symbol,
             side=side,

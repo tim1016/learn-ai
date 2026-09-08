@@ -25,6 +25,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import to_ms_utc
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
+from tests.broker.alpaca.clerk.sqlite.test_exit import _make_entry
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -108,6 +109,83 @@ async def _enter(
     finally:
         repo.close()
     return trade, receipt.state, receipt.explanation
+
+
+async def _exit(
+    tmp_path: Path,
+    *,
+    use_rth: bool,
+    policy: ProgramLegPolicy,
+    retained_source_bar: RetainedSourceBar | None,
+) -> tuple[_FakeTradePort, EffectOperationState, str]:
+    """Drive one EXIT through the facade, after a filled ENTER, and report the port and the receipt."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    trade = _FakeTradePort()
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_FakeReadPort(),
+        trade=trade,
+        account_mode="paper",
+        program_leg_policy=policy,
+    )
+    binding = _binding(use_rth=use_rth)
+    await facade.register_strategy_run(binding)
+    # The filled ENTER is seeded directly in the repo (as test_exit_reducing_shape.py
+    # does), not through this facade's own trade port: only the EXIT's reducing
+    # submission below should land in `trade.submitted_legs`.
+    await _make_entry(repo, quantity=10, filled_quantity=10, status="filled")
+    try:
+        receipt = await facade.execute_for_instance(
+            strategy_instance_id=SID,
+            run_id=RUN_ID,
+            decision_id="decision-exit-1",
+            purpose=EffectPurpose.EXIT,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+            use_rth=use_rth,
+            retained_source_bar=retained_source_bar,
+        )
+    finally:
+        repo.close()
+    return trade, receipt.state, receipt.explanation
+
+
+async def test_an_extended_exit_decision_submits_a_marketable_day_limit_at_the_exit_allowance(
+    tmp_path: Path,
+) -> None:
+    """A filled ENTER plus an extended EXIT decision shapes the reducing leg (review finding 3a)."""
+    trade, state, _explanation = await _exit(
+        tmp_path,
+        use_rth=False,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(18, 30, phase="POST"),
+    )
+
+    assert state is not EffectOperationState.REJECTED
+    (leg,) = trade.submitted_legs
+    assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours, leg.side.value) == (
+        OrderType.LIMIT,
+        TimeInForce.DAY,
+        99.80,
+        True,
+        "sell",
+    )
+
+
+async def test_an_exit_decision_at_session_close_is_rejected_before_broker_contact(
+    tmp_path: Path,
+) -> None:
+    """No session accepts a program leg at 20:00 ET; the EXIT refuses, never submits (review finding 3b)."""
+    trade, state, explanation = await _exit(
+        tmp_path,
+        use_rth=False,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(20, 0, phase="CLOSED"),
+    )
+
+    assert state is EffectOperationState.REJECTED
+    assert explanation.startswith("SESSION_CLOSED_AT_DECISION:")
+    assert trade.submitted_legs == []
 
 
 async def test_an_extended_decision_outside_the_regular_session_submits_a_marketable_day_limit(

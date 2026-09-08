@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
     bind_real_alpaca_ports,
@@ -64,6 +65,37 @@ async def test_synthetic_authority_requires_explicit_durable_activation(tmp_path
         assert runtime.selected_account_authority_kind == "synthetic"
         assert runtime.selected_account_id == account_id
         assert runtime.sqlite_repository is not None
+    finally:
+        await runtime.close()
+
+
+async def test_synthetic_facades_leg_policy_is_built_from_the_read_ports_capabilities(
+    tmp_path: Path,
+) -> None:
+    """The `sim:` facade mirrors Alpaca's declared window (task-5 review finding 2).
+
+    ``select_synthetic_clerk_runtime`` builds ``program_leg_policy`` from
+    ``ports.read.capabilities()`` (ADR 0059 D5.3), not a hardcoded default —
+    intended by design, since the sim world rehearses the paper environment.
+    Pinned at the ``active_authority`` composition level, not one level down,
+    because the full construction is practical here: it is the same fixture
+    ``test_synthetic_authority_requires_explicit_durable_activation`` already
+    exercises above.
+    """
+    account_id = "sim:ema-3"
+    broker = SyntheticBroker(account_id=account_id)
+    await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path)
+
+    runtime = await select_synthetic_clerk_runtime(
+        account_id=account_id,
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+    )
+    try:
+        assert runtime.clerk is not None
+        assert runtime.clerk.extended_hours_window == ALPACA_EXTENDED_HOURS_WINDOW
+        assert runtime.clerk.program_leg_policy.window is runtime.clerk.extended_hours_window
     finally:
         await runtime.close()
 

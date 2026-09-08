@@ -106,7 +106,6 @@ from app.broker.alpaca.clerk.stream_health import (
     StreamHealthGate,
     stream_health_refusal,
 )
-from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -116,6 +115,7 @@ from app.services.market_data_capability_service import extended_phase_proven_at
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 
 if TYPE_CHECKING:
+    from app.broker.contract.capabilities import ExtendedHoursWindow
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
 
