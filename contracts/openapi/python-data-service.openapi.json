@@ -884,7 +884,8 @@
             "default": "paper",
             "enum": [
               "paper",
-              "dry_run"
+              "dry_run",
+              "shadow"
             ],
             "title": "Execution Mode",
             "type": "string"
@@ -984,7 +985,8 @@
             "default": "paper",
             "enum": [
               "paper",
-              "dry_run"
+              "dry_run",
+              "shadow"
             ],
             "title": "Execution Mode",
             "type": "string"
@@ -1031,7 +1033,8 @@
             "items": {
               "enum": [
                 "dry_run",
-                "paper"
+                "paper",
+                "shadow"
               ],
               "type": "string"
             },
@@ -1129,8 +1132,12 @@
             "type": "string"
           },
           "account_mode": {
-            "const": "paper",
-            "title": "Account Mode"
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Account Mode",
+            "type": "string"
           },
           "action_plan_explanation": {
             "title": "Action Plan Explanation",
@@ -1264,6 +1271,7 @@
             "enum": [
               "paper",
               "dry_run",
+              "shadow",
               "live"
             ],
             "title": "Mode",
@@ -46080,7 +46088,7 @@
     },
     "/api/brokers/{broker}/live-verdict": {
       "get": {
-        "description": "The server-derived live verdict (ADR 0059 D8). Pure; never contacts the broker.",
+        "description": "The server-derived live verdict (ADR 0059 D8).\n\nNever contacts the broker: settings, the clerk selection outcome, and a\nread of the durable shadow evidence are the only inputs.",
         "operationId": "get_live_verdict_api_brokers__broker__live_verdict_get",
         "parameters": [
           {
