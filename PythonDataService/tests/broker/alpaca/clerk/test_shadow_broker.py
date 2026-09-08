@@ -286,12 +286,59 @@ async def test_cancel_marks_a_resting_order_canceled_and_is_a_no_op_once_filled(
 
     # Later than the resting order's decision bar: one stream's retained
     # delivery is monotonic, so the second decision cannot precede the first.
-    filled_decision = _retain(bars, minute=1030, close="100.25", phase="POST")
+    filled_decision = _retain(bars, minute=1030, close="100.00", phase="POST")
     ports.trade.bind_evaluated_bar("learn-ai/ema-shadow-1/v1:f", filled_decision)
-    filled = await ports.trade.submit(_market_leg(), client_order_id="learn-ai/ema-shadow-1/v1:f")
+    filled = await ports.trade.submit(
+        _extended_leg(100.50), client_order_id="learn-ai/ema-shadow-1/v1:f"
+    )
+    touching = _retain(bars, minute=1031, close="100.60", low="100.40", phase="POST")
+    clock.now_ms = touching.end_ms + 1
+
     await ports.trade.cancel(filled.order_id)
     still_filled = await ports.trade.get_order_by_client_order_id("learn-ai/ema-shadow-1/v1:f")
-    assert still_filled is not None and still_filled.status == "filled"
+    assert still_filled is not None
+    assert (still_filled.status, still_filled.filled_avg_price) == ("filled", 100.5)
+
+
+async def test_a_decision_bar_outside_the_declared_window_cannot_rest_an_order(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    """Past the declared close the record would be temporally incoherent — an
+    order submitted after the instant it is recorded as cancelled, which no
+    later bar can ever fill. The gated Clerk path refuses a closed decision
+    instant first; this book is the last place the fact is checkable."""
+    ports, bars, _live, _clock = world
+    late = _retain(bars, minute=1250, close="100.00", phase="POST")  # 20:50 ET
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:late", late)
+
+    with pytest.raises(ShadowFillBindingError, match="declared window"):
+        await ports.trade.submit(_extended_leg(99.00), client_order_id=f"{NAMESPACE}:late")
+
+
+async def test_two_resting_orders_on_one_symbol_both_settle_on_one_touching_bar(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    ports, bars, _live, clock = world
+    decision = _retain(bars, minute=1020, close="100.00", phase="POST")
+    for suffix in ("one", "two"):
+        ports.trade.bind_evaluated_bar(f"{NAMESPACE}:{suffix}", decision)
+        await ports.trade.submit(_extended_leg(100.50), client_order_id=f"{NAMESPACE}:{suffix}")
+
+    touching = _retain(bars, minute=1021, close="100.60", low="100.40", phase="POST")
+    clock.now_ms = touching.end_ms + 1
+
+    assert sorted(order.status for order in await ports.read.list_orders()) == ["filled", "filled"]
+    assert [
+        (position.symbol, position.quantity) for position in await ports.read.list_positions()
+    ] == [("SPY", 2.0)]
+
+
+async def test_an_unknown_client_order_id_is_not_an_order(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    """A read never parses the ref: only minting a fill needs a program order."""
+    ports, _bars, _live, _clock = world
+    assert await ports.trade.get_order_by_client_order_id("unknown") is None
 
 
 async def test_read_port_serves_live_account_truth_and_synthesized_custody(world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock]) -> None:

@@ -6,8 +6,8 @@ trade port that never submits. Three objects live here:
 * ``ShadowOrderBook`` — the synthesized orders and their settlement. A
   regular-session leg fills at its decision bar's close (``decision_bar_close``,
   the same ``immediate_fill_price`` the sim world uses). An extended-session
-  limit leg rests and settles on every read under ``limit_touch`` (D5.5)
-  against the bars its own instance retained after the decision bar, and it
+  limit leg rests and settles on read under ``limit_touch`` (D5.5) against
+  the bars its own instance retained after the decision bar, and it
   cancels at the declared window's close for the decision's trading day — the
   instant the vendor would have cancelled a DAY extended order.
 * ``NoSubmitAlpacaTradePort`` — ``BrokerTradePort`` over the book. It holds no
@@ -206,7 +206,7 @@ def _fill_event(client_order_id: str, *, at_ms: int, price: float, quantity: flo
 
 
 class ShadowOrderBook:
-    """Synthesized orders for one shadow authority, settled on every read."""
+    """Synthesized orders for one shadow authority, settled on read while any rests."""
 
     def __init__(
         self,
@@ -378,6 +378,14 @@ class ShadowOrderBook:
         bounds = declared_session_bounds(et_date_at_ms(bar.end_ms), self._window)
         if bounds is None:
             raise ShadowFillBindingError("The decision bar does not fall on a trading day.")
+        if not bounds.open_ms < bar.end_ms < bounds.close_ms:
+            # Outside the window the record is incoherent: an order submitted at
+            # or after the instant it is recorded as cancelled, which no later
+            # bar can ever fill.
+            raise ShadowFillBindingError(
+                f"The decision bar closes at {bar.end_ms} ms, outside the declared window "
+                f"{bounds.open_ms}-{bounds.close_ms} ms; no resting order can be synthesized from it."
+            )
         at_ms = bar.end_ms
         order = BrokerOrder(
             broker=SHADOW_BROKER_ID,
