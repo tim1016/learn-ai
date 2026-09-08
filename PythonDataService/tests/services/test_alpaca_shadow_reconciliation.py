@@ -13,6 +13,7 @@ from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionUnavailable
 from app.broker.alpaca.clerk.sqlite.models import RunResource
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.research.parity.qc_reconciler import DivergenceCategory
 from app.schemas.signal_program_seal import SealedBotProgram
@@ -39,13 +40,14 @@ def _fill(
     minute: int,
     *,
     day: date = DAY,
+    symbol: str = "SPY",
     side: str = "buy",
     qty: str = "1",
     price: str = "100.00",
     ref: str = "a",
 ) -> TwinFill:
     return TwinFill(
-        symbol="SPY",
+        symbol=symbol,
         side=side,
         quantity=Decimal(qty),
         fill_price=Decimal(price),
@@ -82,6 +84,12 @@ def test_identical_days_pass_with_no_divergence_and_a_stable_digest() -> None:
     ("shadow", "twin", "category"),
     [
         ([_fill(600)], [], DivergenceCategory.DECISION_MISMATCH),
+        ([], [_fill(600)], DivergenceCategory.DECISION_MISMATCH),
+        (
+            [_fill(600)],
+            [_fill(600, symbol="QQQ")],
+            DivergenceCategory.DECISION_MISMATCH,
+        ),
         ([_fill(600)], [_fill(600, side="sell")], DivergenceCategory.DIRECTION_MISMATCH),
         ([_fill(600, qty="2")], [_fill(600, qty="1")], DivergenceCategory.QUANTITY_MISMATCH),
     ],
@@ -123,6 +131,11 @@ def test_twins_agree_on_the_configured_signal_and_plan_only() -> None:
     assert twins_agree(shadow, _seal(quantity=2)) is not None
     assert twins_agree(shadow, _seal(mode="dry_run")) is not None
     assert twins_agree(_seal(), _seal()) is not None  # the shadow side must be shadow-sealed
+    assert "not the paper account" in str(
+        twins_agree(shadow, _seal(sealed_account_id="shadow:9LIVE0002"))
+    )
+    assert "action plan" in str(twins_agree(shadow, _seal(action_plan=alpaca_v1_action_plan("QQQ"))))
+    assert "carryover policy" in str(twins_agree(shadow, _seal(carryover_policy="ALLOW")))
 
 
 UNREADABLE = "SQLite account fill evidence is incomplete for this window: a filled external order"
@@ -164,7 +177,7 @@ def _run(started_ms: int, stopped_ms: int | None) -> RunResource:
     )
 
 
-def _binding(sid: str, sealed: str) -> BrokerBotBinding:
+def _binding(sid: str, sealed: str, *, use_rth: bool = True) -> BrokerBotBinding:
     # ``model_construct`` on both halves: the validating constructor re-runs
     # ``SealedBotProgram``'s nested-hash validator, which needs a whole
     # configured-signal seal this gate never reads.
@@ -173,7 +186,7 @@ def _binding(sid: str, sealed: str) -> BrokerBotBinding:
         strategy_key="ema_crossover_signal",
         broker="alpaca",
         symbol="SPY",
-        use_rth=True,
+        use_rth=use_rth,
         mode="trade",
         quantity=1,
         action_plan=alpaca_v1_action_plan("SPY"),
@@ -206,17 +219,19 @@ def _evaluate(
     source: _Source,
     required: int = 1,
     now_ms: int | None = None,
+    use_rth: bool = True,
+    window: ExtendedHoursWindow | None = ALPACA_EXTENDED_HOURS_WINDOW,
 ):
     return evaluate_shadow_gate(
         live_account_id="9LIVE0001",
-        shadow_binding=_binding(SID, "shadow:9LIVE0001"),
-        twin_binding=_binding(TWIN, "PA-TEST"),
+        shadow_binding=_binding(SID, "shadow:9LIVE0001", use_rth=use_rth),
+        twin_binding=_binding(TWIN, "PA-TEST", use_rth=use_rth),
         twin_account_id="PA-TEST",
         required_sessions=required,
         session_ledger=ledger,
         shadow_source=source,
         twin_source=source,
-        window=ALPACA_EXTENDED_HOURS_WINDOW,
+        window=window,
         now_ms=et_minute_of_day_ms(date(2026, 9, 9), 60) if now_ms is None else now_ms,
     )
 
@@ -282,6 +297,90 @@ def test_an_unreadable_twin_day_is_not_evaluable_and_leaves_the_other_days_judge
     assert unreadable.reconciliation is None and unreadable.shadow_run_id == "run-1"
     assert readable.state == "counted"
     assert evaluation.counted == (readable,)
+
+
+DECLARED_OPEN_MINUTE = ALPACA_EXTENDED_HOURS_WINDOW.open_minute_et  # 04:00 ET
+
+
+def test_an_extended_run_is_judged_against_its_declared_open_not_the_calendar_open(
+    tmp_path: Path,
+) -> None:
+    # 05:00 ET is after the declared extended open and well before the calendar
+    # open, so only the decision-span comparison can catch this sweep as late.
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger, opened_minute=300)
+    source = _Source(
+        {SID: [_fill(600)], TWIN: [_fill(600, ref="p")]},
+        {SID: [_run(et_minute_of_day_ms(DAY, DECLARED_OPEN_MINUTE) - 1, None)]},
+    )
+
+    under_rth = _evaluate(tmp_path, ledger=ledger, source=source)
+    extended = _evaluate(tmp_path, ledger=ledger, source=source, use_rth=False)
+
+    assert [v.state for v in under_rth.sessions] == ["counted"]
+    [late] = extended.sessions
+    assert late.state == "sweep_opened_late"
+    assert late.session_open_ms == OPEN  # the journal key stays the calendar open
+
+
+def test_an_extended_binding_with_no_declared_window_is_not_evaluable(tmp_path: Path) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    source = _Source({SID: [_fill(600)], TWIN: [_fill(600, ref="p")]}, {SID: [_run(OPEN - 1, None)]})
+
+    evaluation = _evaluate(tmp_path, ledger=ledger, source=source, use_rth=False, window=None)
+
+    [verdict] = evaluation.sessions
+    assert verdict.state == "not_evaluable"
+    assert verdict.detail == "an extended-session binding has no declared window to judge against"
+    assert (verdict.session_open_ms, verdict.shadow_run_id) == (OPEN, None)
+    assert evaluation.satisfied is False
+
+
+@pytest.mark.parametrize(
+    ("rows", "detail"),
+    [
+        ((), "the sweep never opened the day"),
+        (("day_opened",), "the sweep did not close the day clean"),
+    ],
+)
+def test_every_incomplete_sweep_says_which_half_is_missing(
+    tmp_path: Path, rows: tuple[str, ...], detail: str
+) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    for kind in rows:
+        ledger.append(
+            kind=kind,
+            session_open_ms=OPEN,
+            observed_at_ms=et_minute_of_day_ms(DAY, 180),
+            verdict="clean",
+        )
+    source = _Source({}, {SID: [_run(OPEN - 1, None)]})
+
+    [verdict] = _evaluate(tmp_path, ledger=ledger, source=source).sessions
+
+    assert (verdict.state, verdict.detail) == ("sweep_not_clean", detail)
+
+
+def test_a_binding_with_no_sealed_program_is_refused(tmp_path: Path) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    source = _Source({}, {})
+
+    with pytest.raises(ShadowTwinMismatch, match="sealed program"):
+        evaluate_shadow_gate(
+            live_account_id="9LIVE0001",
+            shadow_binding=_binding(SID, "shadow:9LIVE0001").model_copy(
+                update={"sealed_program": None}
+            ),
+            twin_binding=_binding(TWIN, "PA-TEST"),
+            twin_account_id="PA-TEST",
+            required_sessions=1,
+            session_ledger=ledger,
+            shadow_source=source,
+            twin_source=source,
+            window=ALPACA_EXTENDED_HOURS_WINDOW,
+            now_ms=CLOSE + 1,
+        )
 
 
 def test_a_non_clean_day_and_a_seal_mismatch_are_named(tmp_path: Path) -> None:

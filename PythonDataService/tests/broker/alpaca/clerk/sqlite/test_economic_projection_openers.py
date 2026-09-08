@@ -247,6 +247,7 @@ def test_economic_fill_source_reads_one_instances_half_open_et_day(tmp_path: Pat
 
     source = EconomicFillSource.from_database_path(repo.db_path)
     try:
+        runs = source.runs_for_strategy(_SID)
         fills = read_twin_fills(
             source,
             strategy_instance_id=_SID,
@@ -255,6 +256,8 @@ def test_economic_fill_source_reads_one_instances_half_open_et_day(tmp_path: Pat
     finally:
         source.close()
         repo.close()
+
+    assert [run.run_id for run in runs] == [f"{_SID}:l-1"]
 
     # The ET day is half-open: its final millisecond is in, the next day's
     # first is out, and the other instance's fill never belonged to this one.
