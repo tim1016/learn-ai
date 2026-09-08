@@ -9,15 +9,17 @@ rules are the same code.
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
+from app.broker.alpaca.clerk.sealed_ledger import (
+    append_canonical_jsonl_line,
+    canonical_sha256,
+    read_canonical_jsonl_objects,
+)
 from app.broker.alpaca.paths import resolve_contained_path
 from app.utils.advisory_lock import advisory_file_lock
 
@@ -163,39 +165,21 @@ class IsolatedActivationStore:
             prior = self.latest(canonical.account_id)
             if prior is not None and canonical.authority_generation <= prior.authority_generation:
                 raise self.conflict_error(f"{self._label} generation must increase")
-            if self._path.is_symlink() or (self._path.exists() and not self._path.is_file()):
-                raise self.record_type.invalid_error(f"{self._label} ledger must be a regular file")
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            existed = self._path.exists()
-            with self._path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(asdict(canonical), sort_keys=True, separators=(",", ":")) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            if not existed:
-                directory_fd = os.open(self._path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+            append_canonical_jsonl_line(
+                self._path,
+                asdict(canonical),
+                invalid=self.record_type.invalid_error,
+                label=self._label,
+            )
 
     def _read_all(self) -> list[IsolatedActivationRecord]:
-        if self._path.is_symlink() or (self._path.exists() and not self._path.is_file()):
-            raise self.record_type.invalid_error(f"{self._label} ledger must be a regular file")
-        if not self._path.exists():
-            return []
-        records: list[IsolatedActivationRecord] = []
+        payloads = read_canonical_jsonl_objects(
+            self._path, invalid=self.record_type.invalid_error, label=self._label
+        )
         try:
-            for raw in self._path.read_text(encoding="utf-8").splitlines():
-                if raw:
-                    payload = json.loads(raw)
-                    if not isinstance(payload, Mapping):
-                        raise self.record_type.invalid_error(
-                            f"{self._label} record has an invalid JSON payload shape"
-                        )
-                    records.append(self.record_type.from_payload(payload))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, IsolatedActivationInvalid) as exc:
+            return [self.record_type.from_payload(payload) for payload in payloads]
+        except IsolatedActivationInvalid as exc:
             raise self.record_type.invalid_error(f"{self._label} ledger cannot be read") from exc
-        return records
 
 
 class SyntheticActivationStore(IsolatedActivationStore):
@@ -221,14 +205,6 @@ def _unsigned_payload(record: IsolatedActivationRecord) -> dict[str, Any]:
         "db_identity_token": record.db_identity_token,
         "activated_at_ms": record.activated_at_ms,
     }
-
-
-def canonical_sha256(payload: dict[str, Any]) -> str:
-    """sha256 over the canonical JSON of ``payload`` -- the one sealing function
-    every isolated-authority record uses."""
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-    ).hexdigest()
 
 
 __all__ = [

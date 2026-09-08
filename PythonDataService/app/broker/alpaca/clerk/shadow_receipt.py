@@ -9,20 +9,23 @@ opens in ``int64 ms UTC``.
 
 from __future__ import annotations
 
-import json
-import os
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import require_real_account_id
-from app.broker.alpaca.clerk.synthetic_activation import canonical_sha256
+from app.broker.alpaca.clerk.sealed_ledger import (
+    append_canonical_jsonl_line,
+    canonical_sha256,
+    read_canonical_jsonl_objects,
+)
 from app.broker.alpaca.paths import resolve_contained_path
 from app.utils.advisory_lock import advisory_file_lock
 
 SHADOW_RECEIPTS_FILENAME = "shadow_receipts.jsonl"
 _SHA256_LENGTH = 64
+_LABEL = "shadow receipt"
 
 
 class ShadowReceiptInvalid(ValueError):
@@ -127,20 +130,7 @@ class ShadowReceiptStore:
     def append(self, receipt: ShadowReceipt) -> None:
         canonical = ShadowReceipt.from_payload(asdict(receipt))
         with advisory_file_lock(self._path):
-            if self._path.is_symlink() or (self._path.exists() and not self._path.is_file()):
-                raise ShadowReceiptInvalid("shadow receipt ledger must be a regular file")
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            existed = self._path.exists()
-            with self._path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(asdict(canonical), sort_keys=True, separators=(",", ":")) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            if not existed:
-                directory_fd = os.open(self._path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+            append_canonical_jsonl_line(self._path, asdict(canonical), invalid=ShadowReceiptInvalid, label=_LABEL)
 
     def all_for(self, strategy_instance_id: str) -> tuple[ShadowReceipt, ...]:
         return tuple(r for r in self._read_all() if r.strategy_instance_id == strategy_instance_id)
@@ -166,18 +156,10 @@ class ShadowReceiptStore:
         return any(r.live_account_id == live_account_id for r in self._read_all())
 
     def _read_all(self) -> list[ShadowReceipt]:
-        if self._path.is_symlink() or (self._path.exists() and not self._path.is_file()):
-            raise ShadowReceiptInvalid("shadow receipt ledger must be a regular file")
-        if not self._path.exists():
-            return []
-        try:
-            return [
-                ShadowReceipt.from_payload(json.loads(raw))
-                for raw in self._path.read_text(encoding="utf-8").splitlines()
-                if raw
-            ]
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ShadowReceiptInvalid("shadow receipt ledger cannot be read") from exc
+        return [
+            ShadowReceipt.from_payload(payload)
+            for payload in read_canonical_jsonl_objects(self._path, invalid=ShadowReceiptInvalid, label=_LABEL)
+        ]
 
 
 __all__ = [
