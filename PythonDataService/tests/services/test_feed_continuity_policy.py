@@ -68,7 +68,8 @@ def test_continuity_policy_for_extended_binding_with_a_window_schedules_the_exte
     assert policy is not None and policy.decision_session == "extended"
     # The sealed binding declares a 15-minute decision clock (see
     # ``test_continuity_policy_for_sealed_rth_binding_...`` below): the
-    # bucket [17:00,17:15) force-flushes on the 17:16 source minute.
+    # bucket [17:00,17:15) fires on the 17:16 source minute (force-flush is
+    # reserved for the day's last bucket at the declared close).
     assert policy.is_trigger_ms(_et(date(2026, 9, 2), 17, 16)) is True
 
 

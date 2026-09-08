@@ -42,7 +42,8 @@ def _outcome(recorded_at_ms: int) -> BotRunOutcomeRecord:
 
 def _service(tmp_path: Path, evidence: LiveRunDecisionEvidence, *, running: bool = False,
              record: BotRunRecord | None = None,
-             outcome: BotRunOutcomeRecord | None = None) -> RunReplayProofService:
+             outcome: BotRunOutcomeRecord | None = None,
+             use_rth: bool = True) -> RunReplayProofService:
     async def _records_for_run(binding, run_id: str) -> LiveRunDecisionEvidence:
         del binding, run_id
         return evidence
@@ -50,7 +51,7 @@ def _service(tmp_path: Path, evidence: LiveRunDecisionEvidence, *, running: bool
     return RunReplayProofService(
         artifacts_root=tmp_path / "artifacts",
         instance_dir_for=lambda sid: tmp_path / "live_state" / sid,
-        binding_for=lambda broker, sid: _binding(run_id="run-1"),
+        binding_for=lambda broker, sid: _binding(run_id="run-1").model_copy(update={"use_rth": use_rth}),
         run_record_for=lambda sid, run_id: record,
         is_running=lambda sid: running,
         run_outcome_for=lambda sid, run_id: outcome,
@@ -99,6 +100,19 @@ async def test_generate_refuses_the_currently_live_run(tmp_path: Path) -> None:
     with pytest.raises(RunReplayUnavailableError) as excinfo:
         await service.generate("alpaca", _SID, "run-1")
     assert excinfo.value.http_status == 409
+
+
+@pytest.mark.asyncio
+async def test_generate_refuses_an_extended_binding_with_no_declared_window(tmp_path: Path) -> None:
+    """Task 4 review finding 1: a use_rth=False binding must refuse replay loudly
+    when no extended window is resolvable, instead of silently replaying zero
+    decidable bars into a receipt that looks like a proven parity result."""
+    evidence = LiveRunDecisionEvidence(records=(), crash_records=(), captured_decisions={}, truncated=False)
+    service = _service(tmp_path, evidence, record=_run_record(0), use_rth=False)
+
+    with pytest.raises(RunReplayUnavailableError, match="extended window") as excinfo:
+        await service.generate("alpaca", _SID, "run-1")
+    assert excinfo.value.http_status == 503
 
 
 @pytest.mark.asyncio

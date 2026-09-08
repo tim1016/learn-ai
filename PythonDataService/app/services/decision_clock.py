@@ -156,6 +156,12 @@ def extended_trigger_instants(session_date: date, *, timeframe_ms: int, window: 
     window: the run force-flushes the day's last bucket at the declared close,
     and the regular close is an ordinary bucket boundary inside the day.
 
+    At a one-minute timeframe the declared-close instant appears **twice**,
+    for the same reason as ``rth_trigger_instants``: the second-to-last
+    bucket's follow-on minute closes exactly at the declared close, and the
+    last bucket is force-flushed there too. Callers that treat this as a
+    schedule must tolerate the repeat (``next_trigger_ms`` does).
+
     Formula:
         for each bucket ``[b, b + timeframe_ms)`` from ``floor_et(xh_open)`` while
         ``b < xh_close``: ``xh_close`` if ``b + timeframe_ms >= xh_close`` else
@@ -197,15 +203,22 @@ def next_trigger_ms(
     later trigger. ``window`` is required for ``decision_session="extended"``.
 
     Formula:
-        ``min{t in rth_trigger_instants(d) : t > last_delivered_end_ms}`` over
-        trading days ``d`` from the ET date of ``last_delivered_end_ms`` forward.
+        ``min{t in S(d) : t > last_delivered_end_ms}`` over trading days ``d``
+        from the ET date of ``last_delivered_end_ms`` forward, where ``S(d)``
+        is ``rth_trigger_instants(d, ...)`` for ``decision_session="rth"`` or
+        ``extended_trigger_instants(d, ..., window)`` for
+        ``decision_session="extended"``.
     Reference:
-        As ``rth_trigger_instants`` (spec §4.4); trading days from the canonical
-        calendar ``app/lean_sidecar/trading_calendar.py``.
+        As ``rth_trigger_instants``/``extended_trigger_instants`` (spec §4.4;
+        ADR 0059 D5.2); trading days from the canonical calendar
+        ``app/lean_sidecar/trading_calendar.py``.
     Canonical implementation: this file.
     Validated against:
         ``tests/services/test_decision_clock.py::test_next_trigger_after_last_delivered_minute``,
-        ``::test_next_trigger_rolls_to_the_next_session``, ``::test_one_minute_timeframe``
+        ``::test_next_trigger_rolls_to_the_next_session``, ``::test_one_minute_timeframe``,
+        ``::test_extended_next_trigger_rolls_across_the_weekend``,
+        ``::test_extended_next_trigger_before_the_declared_open_is_the_first_bucket``,
+        ``::test_extended_requires_a_window``
     """
     triggers_for = _schedule(decision_session, timeframe_ms=timeframe_ms, window=window)
     session_date = ny_datetime(last_delivered_end_ms).date()

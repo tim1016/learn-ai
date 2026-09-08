@@ -497,6 +497,16 @@ async def _signal_strategy_evaluations(
     # streams -- Task 6); the force-flush below is simply skipped rather than
     # raising.
     session_close_known = decision_session == "rth" or extended_window is not None
+    if not session_close_known:
+        logger.info(
+            "Extended-session run streaming without a force-flush at session close",
+            extra={
+                "action": "decision_session_close_unknown",
+                "strategy_instance_id": binding.strategy_instance_id,
+                "run_id": binding.run_id,
+                "symbol": binding.symbol,
+            },
+        )
     runtime = _build_signal_strategy(
         binding.strategy_key, binding.symbol, binding.strategy_params, quarantine_receipts
     )
