@@ -34,6 +34,7 @@ from pathlib import Path
 from app.broker.alpaca.clerk.account_authority import (
     is_shadow_evidence_account_id,
     shadow_account_id_for_live_account,
+    shadow_evidence_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.fill_models import limit_touch_fill
 from app.broker.alpaca.clerk.sqlite.reconcile import MAX_OPEN_ORDER_SNAPSHOT
@@ -64,7 +65,13 @@ from app.broker.contract.models import (
     PortfolioHistoryRange,
 )
 from app.broker.contract.ports import BrokerReadPort
-from app.engine.live.order_identity import OrderRefParseError, parse_order_ref
+from app.engine.live.order_identity import (
+    NAMESPACE_ROOT,
+    NAMESPACE_SEP,
+    OrderRefParseError,
+    build_bot_order_namespace,
+    parse_order_ref,
+)
 from app.services.session_authority import declared_session_bounds
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.session_anchors import et_date_at_ms
@@ -165,9 +172,13 @@ class ShadowOrderBook:
         self._clock = clock
 
     def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
+        self._require_own_evidence(client_order_id, retained_bar)
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
 
     def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        # One book serves every instance on this authority, so the order's own
+        # namespace is the only thing that says whose evidence may price it.
+        self._evidence_namespace_for(client_order_id)
         with self._ledger.transaction() as records:
             self._settle_locked(records)
             existing = self._ledger.find_order(records, client_order_id)
@@ -181,6 +192,9 @@ class ShadowOrderBook:
                     "nothing is ever priced from a later bar."
                 )
             bar = self._ledger.verified_retained_bar(bound, symbol=leg.symbol)
+            # Belt and braces over the bind-time check: the durable anchor can
+            # never name another instance's evidence ledger.
+            self._require_own_evidence(client_order_id, bar)
             order, anchor = (
                 self._resting_order(leg, client_order_id=client_order_id, bar=bar)
                 if leg.extended_hours
@@ -236,6 +250,40 @@ class ShadowOrderBook:
 
     def close(self) -> None:
         self._evidence.close()
+
+    @staticmethod
+    def _evidence_namespace_for(client_order_id: str) -> str:
+        """The evidence ledger the instance that minted this order retains into.
+
+        A ``client_order_id`` on this authority is a program order ref —
+        ``learn-ai/<instance>/v1:<intent>`` — and that instance name is the only
+        statement of whose retained bars may price the order. A manual or
+        emergency namespace has no instance evidence ledger and so cannot
+        synthesize a fill here at all.
+        """
+        try:
+            namespace, _intent_id = parse_order_ref(client_order_id)
+            root, _, remainder = namespace.partition(NAMESPACE_SEP)
+            strategy_instance_id = remainder.rpartition(NAMESPACE_SEP)[0]
+            if root != NAMESPACE_ROOT or build_bot_order_namespace(strategy_instance_id) != namespace:
+                raise OrderRefParseError(client_order_id, "not a program order namespace")
+            return shadow_evidence_account_id_for_strategy(strategy_instance_id)
+        except ValueError as error:
+            raise ShadowFillBindingError(
+                "only a program order synthesizes a fill on the shadow authority; "
+                f"{client_order_id!r} is not one"
+            ) from error
+
+    @classmethod
+    def _require_own_evidence(cls, client_order_id: str, bar: RetainedSourceBar) -> None:
+        """Refuse a decision bar retained by any instance but this order's own."""
+        expected = cls._evidence_namespace_for(client_order_id)
+        if bar.account_id != expected:
+            raise ShadowFillBindingError(
+                f"the decision bar was retained by {bar.account_id!r}, not this order's evidence "
+                f"namespace {expected!r}; a shadow fill is never priced from another "
+                "instance's evidence"
+            )
 
     def _immediate_order(
         self, leg: BrokerOrderLeg, *, client_order_id: str, bar: RetainedSourceBar

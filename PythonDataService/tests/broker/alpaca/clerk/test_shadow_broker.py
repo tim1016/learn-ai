@@ -336,6 +336,38 @@ async def test_list_orders_speaks_the_vendors_query_category_not_an_order_status
         await ports.read.list_orders(status="filled")
 
 
+async def test_a_bar_retained_by_another_instance_cannot_be_bound(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], tmp_path: Path
+) -> None:
+    """One book serves every instance on the shadow authority, so the book is
+    the last place that can check whose evidence a fill is priced from: a
+    durable anchor naming another instance's ledger satisfies ADR 0002's third
+    invariant and is substantively wrong."""
+    ports, _bars, _live, _clock = world
+    other = SourceBarLedger(
+        artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy("some-other-bot")
+    )
+    stolen = _retain(other, minute=600, close="100.25")
+
+    with pytest.raises(ShadowFillBindingError) as refused:
+        ports.trade.bind_evaluated_bar(f"{NAMESPACE}:steal", stolen)
+
+    assert "shadow-evidence:some-other-bot" in str(refused.value)
+    assert EVIDENCE in str(refused.value)
+    other.close()
+
+
+async def test_only_a_program_order_synthesizes_a_shadow_fill(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
+) -> None:
+    ports, bars, _live, _clock = world
+    decision = _retain(bars, minute=600, close="100.25")
+    with pytest.raises(ShadowFillBindingError, match="only a program order"):
+        ports.trade.bind_evaluated_bar("manual/operator-7/v1:abc", decision)
+    with pytest.raises(ShadowFillBindingError, match="only a program order"):
+        await ports.trade.submit(_market_leg(), client_order_id="manual/operator-7/v1:abc")
+
+
 async def test_the_namespace_check_refuses_the_shadow_read_port(
     world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
 ) -> None:
