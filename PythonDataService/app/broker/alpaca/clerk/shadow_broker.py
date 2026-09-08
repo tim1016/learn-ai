@@ -626,10 +626,11 @@ async def verify_shadow_namespace_empty(read: BrokerReadPort) -> None:
     """ADR 0002 invariant 1, transferred: the live account holds no Clerk-minted order, ever.
 
     Bounded by what the read port can see — the newest page of the whole
-    history plus every open order. A full page proves nothing and refuses
-    (``SHADOW_NAMESPACE_UNPROVEN``), the same posture the sweep takes at its
-    own 500-row boundary; any Clerk-minted ``client_order_id`` is poisoned
-    state (``SHADOW_NAMESPACE_POISONED``).
+    history plus the newest page of open orders, both bounded by
+    ``MAX_OPEN_ORDER_SNAPSHOT``. A full *history* page proves nothing and
+    refuses (``SHADOW_NAMESPACE_UNPROVEN``), the same posture the sweep takes
+    at its own 500-row boundary; any Clerk-minted ``client_order_id`` in
+    either read is poisoned state (``SHADOW_NAMESPACE_POISONED``).
 
     The subject is the **live** account. Handed the shadow port instead, every
     category would answer from the synthesized book — empty at cold start — and
